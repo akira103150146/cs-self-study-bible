@@ -1,0 +1,1439 @@
+<!--meta
+title: 資料庫系統
+description: 從「用檔案存資料的痛」出發,完整學會關聯模型、SQL(DDL/DML/查詢/JOIN/聚合/子查詢)、正規化、索引、交易與 ACID、用 Python 連資料庫與防 SQL injection,以及 NoSQL 與 CAP 定理。
+-->
+
+
+      <div class="eyebrow">第八部 · 應用</div>
+      <h1>資料庫系統</h1>
+      <p class="subtitle">幾乎每一個你用過的 App,背後都躺著一個資料庫。它默默記住你是誰、你買過什麼、你的錢還剩多少。這一章,我們要學會跟它對話——用一種叫 SQL 的語言。</p>
+      <div class="byline">
+        <span class="tag">第 37 章</span>
+        <span>閱讀時間 ≈ 60 分鐘</span>
+        <span>難度:★★★☆☆</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>為什麼「直接用檔案存資料」會在並發、查詢、一致性與規模上全面崩潰,而 DBMS 解決了什麼</li>
+          <li>關聯模型(relational model):表、列、欄、主鍵、外鍵、綱要,以及怎麼畫 ER 圖</li>
+          <li>SQL 的三張臉:DDL 建結構、DML 改資料、SELECT 查資料(這是全章重頭戲,大量可執行範例)</li>
+          <li>進階查詢:四種 JOIN、GROUP BY 聚合、HAVING、子查詢與集合運算</li>
+          <li>正規化(1NF/2NF/3NF):把一張會出毛病的「肥表」一步步拆乾淨,以及何時刻意反正規化</li>
+          <li>索引為什麼讓查詢飛快(B 樹),又為什麼不能亂建</li>
+          <li>交易與 ACID:用一次轉帳,理解原子性、隔離級別與並發災難</li>
+          <li>用 Python 的 <code>sqlite3</code> 實際操作資料庫,並用參數化查詢擋下 SQL injection</li>
+          <li>NoSQL 家族、CAP 定理直覺,以及「該用 SQL 還是 NoSQL」的判斷</li>
+        </ul>
+      </div>
+
+      <h2>一個記帳本的災難</h2>
+      <p>
+        想像你開了一家小書店,決定用最樸素的方法管理庫存:開一個 <code>books.txt</code> 純文字檔,
+        一行記一本書——書名、作者、庫存、售價,用逗號隔開。一開始一切美好。直到——
+      </p>
+      <ul>
+        <li><strong>查詢的痛</strong>:老闆問「定價超過 500 元、而且還有庫存的書有哪些?」。你只能寫一支程式,
+        把整個檔案<strong>從頭到尾掃一遍</strong>,一行一行比對。十萬本書,每查一次都得讀十萬行。</li>
+        <li><strong>並發的痛</strong>:門市和網路訂單<strong>同時</strong>賣出最後一本《SICP》。兩支程式都讀到「庫存 = 1」,
+        都把它改成 0、各自寫回檔案——結果你賣了兩本不存在的書。這叫<strong>競態條件(race condition)</strong>。</li>
+        <li><strong>一致性的痛</strong>:程式寫到一半停電了。檔案只寫了一半,留下一行殘缺的亂碼,
+        整個檔案從此再也讀不回來。</li>
+        <li><strong>規模的痛</strong>:檔案大到 50 GB,記憶體根本裝不下。而且「書」和「訂單」「客戶」之間的關係,
+        用一堆平面文字檔,簡直是一場惡夢——你得在好幾個檔案之間手動對照編號。</li>
+      </ul>
+      <p>
+        這四種痛——<strong>查詢慢、並發亂、一致性崩、規模爆</strong>——不是你程式寫得爛,
+        而是「自己拿檔案硬幹」這條路<strong>本質上</strong>走不通。於是人們發明了一種專門的軟體,
+        把這些難題一次解決,它就是<strong>資料庫管理系統(DBMS,Database Management System)</strong>。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">DBMS 替你扛下的四件事</span>
+          <p><strong>持久化(persistence)</strong>:安全地把資料存進磁碟,當機也不弄壞。<br>
+          <strong>查詢(query)</strong>:你只要<em>宣告</em>「我要什麼」,它自己想辦法<em>怎麼</em>又快又省地找出來。<br>
+          <strong>交易(transaction)</strong>:把一串操作綁成「全做或全不做」的一包,杜絕做一半的殘局。<br>
+          <strong>並發控制(concurrency control)</strong>:讓成千上萬人同時讀寫,卻像排隊一樣不打架。<br>
+          後兩件事的底層,正是第 24 章作業系統那套<strong>鎖(lock)</strong>與同步機制——資料庫把它包裝成你用得起的承諾。</p>
+        </div>
+      </div>
+
+      <p>
+        本章我們聚焦在最主流、也最值得先學透的一種:<strong>關聯式資料庫(relational database)</strong>,
+        以及操作它的通用語言 <strong>SQL</strong>。為了讓你有個一以貫之的場景,整章我們都圍繞一個小例子:
+        <strong>一所學校</strong>——它有<strong>學生</strong>、有<strong>課程</strong>,學生會去<strong>選課</strong>。
+      </p>
+
+      <h2>關聯模型:把世界裝進表格</h2>
+      <p>
+        1970 年,IBM 的數學家 <strong>Edgar F. Codd</strong> 提出了一個影響至今的想法:
+        所有資料,都可以用最樸素的東西來表示——<strong>表格(table)</strong>。
+        這就是<strong>關聯模型(relational model)</strong>,它的威力來自簡單與嚴謹的數學基礎(集合與關係)。
+      </p>
+      <p>看一張「學生」表,你會發現你早就懂它了,只是還沒學會它的正式名字:</p>
+
+      <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>student_id</th><th>name</th><th>major</th><th>enrolled_year</th><th>gpa</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>1</td><td>王小明</td><td>資工</td><td>2023</td><td>3.8</td></tr>
+          <tr><td>2</td><td>林小美</td><td>電機</td><td>2023</td><td>3.5</td></tr>
+          <tr><td>3</td><td>陳大文</td><td>資工</td><td>2024</td><td>2.9</td></tr>
+        </tbody>
+      </table>
+      </div>
+
+      <ul>
+        <li><strong>表 / 關聯(table / relation)</strong>:整張表,代表一類事物的集合(所有學生)。</li>
+        <li><strong>列 / 元組(row / tuple)</strong>:橫的一行,代表一個個體(一名學生)。</li>
+        <li><strong>欄 / 屬性(column / attribute)</strong>:直的一行,代表一種性質(姓名、主修)。每欄有固定的<strong>資料型別</strong>。</li>
+        <li><strong>綱要(schema)</strong>:這張表「長什麼樣」的設計藍圖——有哪些欄、各是什麼型別、有哪些規則。綱要是<em>結構</em>,資料是<em>內容</em>。</li>
+      </ul>
+
+      <h3>鍵(key):每一列的身分證</h3>
+      <p>
+        如果有兩個學生都叫「王小明」,你怎麼分辨誰是誰?你需要一個<strong>保證唯一</strong>的欄位來當身分證。
+        這就是<strong>主鍵(primary key)</strong>:能唯一識別表中每一列的欄位(這裡是 <code>student_id</code>)。
+        主鍵不能重複、也不能是空值(NULL)。
+      </p>
+      <p>
+        但學校不只有學生,還有課程,而且學生會去<strong>選課</strong>——這是一種「關係」。
+        關聯模型怎麼表達「小明選了資料庫導論」?答案是再開一張<strong>選課表(enrollments)</strong>,
+        裡面用編號去<em>指向</em>另外兩張表:
+      </p>
+
+      <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>student_id ↘</th><th>course_id ↘</th><th>semester</th><th>score</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>1</td><td>CS101</td><td>2024-Fall</td><td>92</td></tr>
+          <tr><td>1</td><td>EE201</td><td>2024-Fall</td><td>85</td></tr>
+          <tr><td>2</td><td>CS101</td><td>2024-Fall</td><td>78</td></tr>
+        </tbody>
+      </table>
+      </div>
+
+      <p>
+        這裡的 <code>student_id</code> 與 <code>course_id</code> 就是<strong>外鍵(foreign key)</strong>:
+        它們不是這張表自己的身分證,而是<strong>指向別張表主鍵的「參照」</strong>。
+        「選課表的第一列,<code>student_id=1</code>」意思就是「這筆選課,屬於學生表裡 id 為 1 的那位(王小明)」。
+        外鍵就像一條無形的連線,把分散在不同表的資料串起來,而且資料庫會幫你維護
+        <strong>參照完整性(referential integrity)</strong>:它不會讓你新增一筆「選了根本不存在的課」的選課紀錄。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">關聯模型的精髓:不重複存,用鍵連起來</span>
+          <p>學生的姓名、主修只存<strong>一次</strong>(在學生表)。選課表只記「哪個 id 選了哪門課」。
+          要看完整資訊?用外鍵把它們<strong>接起來</strong>(這個動作叫 JOIN,稍後登場)。
+          這種「資料只存一份、靠鍵連結」的設計,正是避免資料矛盾的關鍵——也是「正規化」整節要講的事。</p>
+        </div>
+      </div>
+
+      <h3>用 ER 圖看清三表關係</h3>
+      <p>
+        設計資料庫時,我們常先畫一張<strong>實體關係圖(ER diagram,Entity-Relationship diagram)</strong>,
+        把有哪些表、各表有哪些欄、表跟表怎麼連,一眼攤開:
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 760 450" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="er-arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/></marker>
+  </defs>
+  <!-- students -->
+  <rect x="30" y="70" width="210" height="150" rx="8" fill="#fff" stroke="#2f6f6a" stroke-width="2"/>
+  <rect x="30" y="70" width="210" height="30" rx="8" fill="#2f6f6a"/>
+  <rect x="30" y="86" width="210" height="14" fill="#2f6f6a"/>
+  <text x="135" y="90" text-anchor="middle" font-size="14" font-weight="800" fill="#fff">students(學生)</text>
+  <text x="46" y="120" font-size="12.5" font-weight="700" fill="#b4541f">student_id</text>
+  <text x="224" y="120" text-anchor="end" font-size="10.5" font-weight="700" fill="#b4541f">PK</text>
+  <text x="46" y="150" font-size="12.5" fill="#1f2328">name</text>
+  <text x="46" y="180" font-size="12.5" fill="#1f2328">major</text>
+  <text x="46" y="210" font-size="12.5" fill="#1f2328">enrolled_year</text>
+  <line x1="30" y1="130" x2="240" y2="130" stroke="#e3efed"/>
+  <line x1="30" y1="160" x2="240" y2="160" stroke="#e3efed"/>
+  <line x1="30" y1="190" x2="240" y2="190" stroke="#e3efed"/>
+  <!-- courses -->
+  <rect x="520" y="70" width="210" height="150" rx="8" fill="#fff" stroke="#2f6f6a" stroke-width="2"/>
+  <rect x="520" y="70" width="210" height="30" rx="8" fill="#2f6f6a"/>
+  <rect x="520" y="86" width="210" height="14" fill="#2f6f6a"/>
+  <text x="625" y="90" text-anchor="middle" font-size="14" font-weight="800" fill="#fff">courses(課程)</text>
+  <text x="536" y="120" font-size="12.5" font-weight="700" fill="#b4541f">course_id</text>
+  <text x="714" y="120" text-anchor="end" font-size="10.5" font-weight="700" fill="#b4541f">PK</text>
+  <text x="536" y="150" font-size="12.5" fill="#1f2328">title</text>
+  <text x="536" y="180" font-size="12.5" fill="#1f2328">credits</text>
+  <text x="536" y="210" font-size="12.5" fill="#1f2328">department</text>
+  <line x1="520" y1="130" x2="730" y2="130" stroke="#e3efed"/>
+  <line x1="520" y1="160" x2="730" y2="160" stroke="#e3efed"/>
+  <line x1="520" y1="190" x2="730" y2="190" stroke="#e3efed"/>
+  <!-- enrollments -->
+  <rect x="275" y="280" width="210" height="150" rx="8" fill="#fff" stroke="#b4541f" stroke-width="2"/>
+  <rect x="275" y="280" width="210" height="30" rx="8" fill="#b4541f"/>
+  <rect x="275" y="296" width="210" height="14" fill="#b4541f"/>
+  <text x="380" y="300" text-anchor="middle" font-size="14" font-weight="800" fill="#fff">enrollments(選課)</text>
+  <text x="291" y="330" font-size="12.5" font-weight="700" fill="#2f6f6a">student_id</text>
+  <text x="469" y="330" text-anchor="end" font-size="10.5" font-weight="700" fill="#2f6f6a">PK,FK</text>
+  <text x="291" y="360" font-size="12.5" font-weight="700" fill="#2f6f6a">course_id</text>
+  <text x="469" y="360" text-anchor="end" font-size="10.5" font-weight="700" fill="#2f6f6a">PK,FK</text>
+  <text x="291" y="390" font-size="12.5" fill="#1f2328">semester</text>
+  <text x="291" y="420" font-size="12.5" fill="#1f2328">score</text>
+  <line x1="275" y1="340" x2="485" y2="340" stroke="#f6e7dd"/>
+  <line x1="275" y1="370" x2="485" y2="370" stroke="#f6e7dd"/>
+  <line x1="275" y1="400" x2="485" y2="400" stroke="#f6e7dd"/>
+  <!-- relations -->
+  <path d="M275,330 C190,330 135,260 135,224" fill="none" stroke="#8a929b" stroke-width="2" marker-end="url(#er-arrow)"/>
+  <path d="M485,360 C600,360 625,260 625,224" fill="none" stroke="#8a929b" stroke-width="2" marker-end="url(#er-arrow)"/>
+  <text x="250" y="278" font-size="12" font-weight="700" fill="#8a929b">N</text>
+  <text x="150" y="246" font-size="12" font-weight="700" fill="#8a929b">1</text>
+  <text x="505" y="300" font-size="12" font-weight="700" fill="#8a929b">N</text>
+  <text x="610" y="246" font-size="12" font-weight="700" fill="#8a929b">1</text>
+</svg>
+        <figcaption>圖 37-1:學校資料庫的 ER 圖。<code>students</code> 與 <code>courses</code> 是兩個實體,<code>enrollments</code> 是連接它們的「橋」。一個學生可以選多門課、一門課可以被多個學生選——這種<strong>多對多(many-to-many)</strong>關係,標準做法就是中間架一張橋表,用兩個外鍵分別指回兩端。圖中「1—N」表示「一名學生對應到多筆選課紀錄」。</figcaption>
+      </div>
+
+      <h2>SQL 第一張臉:DDL——蓋好房子的骨架</h2>
+      <p>
+        <strong>SQL(Structured Query Language)</strong>是操作關聯式資料庫的標準語言,
+        念作「sequel」或逐字母念都行。它有三張臉,我們一張一張認識。第一張是
+        <strong>DDL(Data Definition Language,資料定義語言)</strong>,用來<strong>定義結構</strong>——也就是「蓋表」。
+      </p>
+      <p>
+        本章所有範例都能在 <strong>SQLite</strong> 上跑。SQLite 是一個極輕量、零設定的資料庫,
+        整個資料庫就是一個檔案,而且 Python 內建,稍後我們就用它。先來建第一張表:
+      </p>
+
+      <pre><code class="language-sql">-- 建立學生表
+CREATE TABLE students (
+    student_id    INTEGER PRIMARY KEY,   -- 主鍵:唯一、不可空
+    name          TEXT    NOT NULL,      -- 不可空:每個學生都得有名字
+    major         TEXT,                  -- 可空:還沒決定主修也行
+    enrolled_year INTEGER,
+    gpa           REAL    CHECK (gpa &gt;= 0.0 AND gpa &lt;= 4.3)  -- 範圍檢查
+);</code></pre>
+
+      <p>每一欄都標了<strong>資料型別(data type)</strong>。SQLite 的型別相當寬鬆,核心就五種:</p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>型別</th><th>存什麼</th><th>例子</th></tr></thead>
+        <tbody>
+          <tr><td><code>INTEGER</code></td><td>整數</td><td>學號、年份、數量</td></tr>
+          <tr><td><code>REAL</code></td><td>浮點數</td><td>GPA、價格、平均</td></tr>
+          <tr><td><code>TEXT</code></td><td>文字字串</td><td>姓名、課名、日期字串</td></tr>
+          <tr><td><code>BLOB</code></td><td>原始位元組</td><td>圖片、檔案內容</td></tr>
+          <tr><td><code>NULL</code></td><td>「沒有值」(不是 0、也不是空字串)</td><td>還沒填的欄位</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>
+        (在 MySQL、PostgreSQL 等其他資料庫,型別更講究,例如 <code>VARCHAR(50)</code>、<code>DATE</code>、
+        <code>BOOLEAN</code>、<code>DECIMAL(10,2)</code> 等,概念相通。)
+      </p>
+
+      <h3>約束(constraint):讓壞資料進不來</h3>
+      <p>
+        DDL 最強大的地方,是你能在綱要層級設下<strong>約束(constraint)</strong>——一旦定好,
+        資料庫就會幫你<strong>強制把關</strong>,任何違反規則的寫入都會被擋下。這比在應用程式裡寫一堆 if 檢查可靠得多,
+        因為不管哪支程式來寫,都逃不過這道關。常見約束:
+      </p>
+      <ul>
+        <li><code>NOT NULL</code>:這欄一定要有值。</li>
+        <li><code>UNIQUE</code>:這欄(或這組欄)的值不能重複(例如 email)。</li>
+        <li><code>PRIMARY KEY</code>:主鍵 = <code>UNIQUE</code> + <code>NOT NULL</code>,每張表一個。</li>
+        <li><code>FOREIGN KEY</code>:外鍵,值必須是另一張表裡真實存在的主鍵。</li>
+        <li><code>CHECK(條件)</code>:自訂條件,例如分數必須介於 0 到 100。</li>
+        <li><code>DEFAULT 值</code>:沒給值時用的預設值。</li>
+      </ul>
+
+      <p>把課程表與選課表也建起來,這次用上外鍵與複合主鍵:</p>
+      <pre><code class="language-sql">-- 課程表:course_id 用字串當主鍵(像 'CS101')
+CREATE TABLE courses (
+    course_id  TEXT    PRIMARY KEY,
+    title      TEXT    NOT NULL,
+    credits    INTEGER DEFAULT 3,
+    department TEXT
+);
+
+-- 選課表:橋表,連接 students 與 courses
+CREATE TABLE enrollments (
+    student_id INTEGER NOT NULL,
+    course_id  TEXT    NOT NULL,
+    semester   TEXT    NOT NULL,
+    score      INTEGER CHECK (score &gt;= 0 AND score &lt;= 100),
+    -- 複合主鍵:同一個學生、同一門課、同一學期,只能有一筆
+    PRIMARY KEY (student_id, course_id, semester),
+    -- 外鍵:把這兩欄綁回 students / courses 的主鍵
+    FOREIGN KEY (student_id) REFERENCES students(student_id),
+    FOREIGN KEY (course_id)  REFERENCES courses(course_id)
+);</code></pre>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">複合主鍵(composite key)</span>
+          <p>選課表沒有單一欄能當身分證:同一個學生會選很多課,同一門課有很多人選。
+          但「<strong>哪個學生 + 哪門課 + 哪個學期</strong>」三者合起來就唯一了。
+          用多個欄一起當主鍵,就叫複合主鍵——它順便保證了「不能重複選同一門課同一學期」。</p>
+        </div>
+      </div>
+
+      <p>其他常用的 DDL 還有「改結構」與「砍表」:</p>
+      <pre><code class="language-sql">ALTER TABLE students ADD COLUMN email TEXT UNIQUE;  -- 加一欄
+DROP TABLE enrollments;   -- ⚠️ 整張表連同資料一起刪除,不可逆!</code></pre>
+
+      <h2>SQL 第二張臉:DML——把資料搬進搬出</h2>
+      <p>
+        結構蓋好了,房子還是空的。<strong>DML(Data Manipulation Language,資料操作語言)</strong>
+        負責新增、修改、刪除<em>資料本身</em>。先用 <code>INSERT</code> 把人塞進來:
+      </p>
+      <pre><code class="language-sql">-- 一次插一列(明確指定欄位,推薦這樣寫,順序與漏欄都不怕)
+INSERT INTO students (student_id, name, major, enrolled_year, gpa)
+VALUES (1, '王小明', '資工', 2023, 3.8);
+
+-- 一次插多列
+INSERT INTO students (student_id, name, major, enrolled_year, gpa) VALUES
+    (2, '林小美', '電機', 2023, 3.5),
+    (3, '陳大文', '資工', 2024, 2.9),
+    (4, '黃淑芬', '資工', 2024, 3.95),
+    (5, '張志豪', '數學', 2023, 3.2);
+
+INSERT INTO courses (course_id, title, credits, department) VALUES
+    ('CS101', '計算機概論', 3, '資工'),
+    ('CS202', '資料庫系統', 3, '資工'),
+    ('EE201', '電路學',     4, '電機'),
+    ('MA101', '微積分',     4, '數學');
+
+INSERT INTO enrollments (student_id, course_id, semester, score) VALUES
+    (1, 'CS101', '2024-Fall', 92),
+    (1, 'CS202', '2024-Fall', 88),
+    (2, 'CS101', '2024-Fall', 78),
+    (2, 'EE201', '2024-Fall', 85),
+    (3, 'CS101', '2024-Fall', 65),
+    (4, 'CS202', '2024-Fall', 95),
+    (4, 'MA101', '2024-Fall', 90);</code></pre>
+
+      <p><code>UPDATE</code> 修改既有資料,<code>DELETE</code> 刪除。兩者都<strong>務必</strong>配上 <code>WHERE</code>:</p>
+      <pre><code class="language-sql">-- 把陳大文的 GPA 改成 3.0
+UPDATE students SET gpa = 3.0 WHERE student_id = 3;
+
+-- 一次改多欄
+UPDATE students SET major = '資工', gpa = 3.1 WHERE student_id = 3;
+
+-- 刪除某一列
+DELETE FROM enrollments WHERE student_id = 3 AND course_id = 'CS101';</code></pre>
+
+      <div class="callout danger">
+        <div class="ico">⛔</div>
+        <div class="body">
+          <span class="c-title">忘了 WHERE = 全表災難</span>
+          <p><code>UPDATE students SET gpa = 0;</code> 沒有 <code>WHERE</code>,會把<strong>每一個</strong>學生的 GPA 都歸零。
+          <code>DELETE FROM students;</code> 沒有 <code>WHERE</code>,會刪光<strong>整張表的資料</strong>。
+          這是真實世界中最常見、最痛的事故之一。動 <code>UPDATE</code>/<code>DELETE</code> 前,
+          先把同樣的 <code>WHERE</code> 拿去 <code>SELECT</code> 一次,確認「正好命中你要的那幾列」再下手。</p>
+        </div>
+      </div>
+
+      <h2>SQL 第三張臉:SELECT——查詢的藝術</h2>
+      <p>
+        終於到了 SQL 最迷人的部分。<strong>SELECT</strong> 是<strong>宣告式(declarative)</strong>的:
+        你只說「<em>我要什麼</em>」,完全不必說「<em>怎麼找</em>」。資料庫內部有個<strong>查詢最佳化器(query optimizer)</strong>,
+        會自己盤算最快的執行方式。這正是第 1 章「宣告式 vs 命令式知識」的活生生範例——你描述目標,機器規劃步驟。
+      </p>
+      <p>最基本的形狀:<code>SELECT 要哪些欄 FROM 哪張表 WHERE 條件</code>。</p>
+      <pre><code class="language-sql">SELECT * FROM students;              -- * 代表「所有欄位」
+
+SELECT name, gpa FROM students;      -- 只要這兩欄
+
+-- WHERE:篩選列。注意 &gt;= 在 HTML 裡寫,實際打字就是 &gt;=
+SELECT name, gpa FROM students WHERE gpa &gt;= 3.5;
+
+-- 多個條件用 AND / OR;字串用單引號
+SELECT name FROM students WHERE major = '資工' AND gpa &gt; 3.0;
+
+-- 不等於:標準 SQL 寫 &lt;&gt;(也可用 !=)
+SELECT name FROM students WHERE major &lt;&gt; '資工';</code></pre>
+
+      <h3>WHERE 裡的好用運算子</h3>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>運算子</th><th>意思</th><th>例子</th></tr></thead>
+        <tbody>
+          <tr><td><code>= &lt;&gt; &lt; &lt;= &gt; &gt;=</code></td><td>比較</td><td><code>gpa &gt;= 3.5</code></td></tr>
+          <tr><td><code>BETWEEN a AND b</code></td><td>介於(含兩端)</td><td><code>score BETWEEN 60 AND 80</code></td></tr>
+          <tr><td><code>IN (...)</code></td><td>是清單之一</td><td><code>major IN ('資工','電機')</code></td></tr>
+          <tr><td><code>LIKE</code></td><td>模糊比對(<code>%</code>=任意多字,<code>_</code>=一個字)</td><td><code>name LIKE '王%'</code>(姓王)</td></tr>
+          <tr><td><code>IS NULL</code> / <code>IS NOT NULL</code></td><td>是否為空值</td><td><code>major IS NULL</code></td></tr>
+        </tbody>
+      </table>
+      </div>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">NULL 不是普通的值</span>
+          <p>NULL 代表「未知 / 沒有」,它有自己的詭異邏輯:<code>gpa = NULL</code> 永遠<strong>不成立</strong>
+          (連 <code>NULL = NULL</code> 都不為真!),因為「未知是否等於未知」答案也是未知。
+          要判斷空值,<strong>必須</strong>用 <code>IS NULL</code> / <code>IS NOT NULL</code>。這是初學 SQL 最常踩的坑。</p>
+        </div>
+      </div>
+
+      <h3>ORDER BY、LIMIT、DISTINCT</h3>
+      <pre><code class="language-sql">-- 排序:預設由小到大(ASC),DESC 由大到小
+SELECT name, gpa FROM students ORDER BY gpa DESC;
+
+-- 取前 N 名:排序後配 LIMIT,就是「成績排行榜前 3 名」
+SELECT name, gpa FROM students ORDER BY gpa DESC LIMIT 3;
+
+-- DISTINCT:去除重複,看「總共有哪幾種主修」
+SELECT DISTINCT major FROM students;
+
+-- 欄位可以運算 / 改名(AS 取別名)
+SELECT name, gpa * 25 AS percent_score FROM students;</code></pre>
+
+      <h3>常用內建函數</h3>
+      <p>SELECT 的欄位位置可以放函數,對每一列各算一次:</p>
+      <pre><code class="language-sql">SELECT
+    UPPER(name)          AS upper_name,    -- 轉大寫(對英文)
+    LENGTH(name)         AS name_len,      -- 字數
+    ROUND(gpa, 1)        AS gpa_rounded    -- 四捨五入到小數一位
+FROM students;
+
+-- 處理 NULL:COALESCE 回傳第一個非 NULL 的值
+SELECT name, COALESCE(major, '未定') AS major FROM students;</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">SELECT 子句的「思考順序」</span>
+          <p>雖然你寫的順序是 <code>SELECT … FROM … WHERE … GROUP BY … HAVING … ORDER BY … LIMIT</code>,
+          但資料庫<strong>實際執行</strong>的順序大致是:先 <code>FROM</code>(找來源)→ <code>WHERE</code>(篩列)
+          → <code>GROUP BY</code>(分組)→ <code>HAVING</code>(篩組)→ <code>SELECT</code>(算欄位)
+          → <code>ORDER BY</code>(排序)→ <code>LIMIT</code>(截斷)。記住這個順序,很多「為什麼這樣寫會錯」就通了。</p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 37.1 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>用上面的 <code>students</code> 表,寫一句 SQL:找出所有<strong>資工系、且 GPA 大於等於 3.5</strong> 的學生,
+          只回傳姓名與 GPA,並依 GPA <strong>由高到低</strong>排序。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-sql">SELECT name, gpa
+FROM students
+WHERE major = '資工' AND gpa &gt;= 3.5
+ORDER BY gpa DESC;</code></pre>
+              <p>結果會是黃淑芬(3.95)、王小明(3.8)。
+              注意 <code>WHERE</code> 同時用 <code>AND</code> 串了兩個條件,<code>ORDER BY ... DESC</code> 讓最高分排最前面。
+              這四個子句(SELECT / FROM / WHERE / ORDER BY)就是日常九成查詢的骨架。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>進階查詢:讓多張表開口說話</h2>
+      <p>
+        到目前為止,我們一次只問一張表。但真正的問題往往橫跨多表:
+        「<strong>每個學生選了哪些課、考幾分?</strong>」——學生姓名在 <code>students</code>,
+        課名在 <code>courses</code>,分數在 <code>enrollments</code>。把它們接起來,靠的是 <strong>JOIN</strong>。
+      </p>
+
+      <h3>INNER JOIN:取兩表的交集</h3>
+      <p>
+        <strong>JOIN</strong> 用一個條件(通常是「外鍵 = 主鍵」)把兩張表的列<strong>配對</strong>起來,拼成更寬的列。
+        最常用的 <strong>INNER JOIN</strong> 只保留「兩邊都配得上」的列:
+      </p>
+      <pre><code class="language-sql">-- 列出每筆選課的「學生姓名 + 課名 + 分數」
+SELECT s.name, c.title, e.score
+FROM enrollments AS e
+INNER JOIN students AS s ON e.student_id = s.student_id
+INNER JOIN courses  AS c ON e.course_id  = c.course_id
+ORDER BY s.name;</code></pre>
+      <p>
+        這裡用 <code>AS</code> 給每張表取了短別名(<code>e</code>、<code>s</code>、<code>c</code>),
+        之後用 <code>表.欄</code> 點出來自哪張表。<code>ON</code> 後面是<strong>配對條件</strong>:
+        「選課表的 student_id,等於學生表的 student_id」——這就是沿著外鍵把資料串回去。
+      </p>
+
+      <h3>四種 JOIN:差別在「配不上的列怎麼辦」</h3>
+      <p>
+        想像左右兩張表。INNER JOIN 只留交集;但有時你想保住某一邊「沒配對成功」的列(填上 NULL)。
+        這就分出了四種 JOIN:
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 210" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <clipPath id="clipA0"><circle cx="70" cy="120" r="42"/></clipPath>
+    <clipPath id="clipA3"><circle cx="610" cy="120" r="42"/></clipPath>
+  </defs>
+  <!-- INNER -->
+  <text x="90" y="36" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">INNER JOIN</text>
+  <circle cx="70"  cy="120" r="42" fill="none" stroke="#2f6f6a" stroke-width="2"/>
+  <circle cx="110" cy="120" r="42" fill="none" stroke="#2f6f6a" stroke-width="2"/>
+  <circle cx="110" cy="120" r="42" fill="#2f6f6a" fill-opacity="0.55" clip-path="url(#clipA0)"/>
+  <text x="90" y="190" text-anchor="middle" font-size="11" fill="#8a929b">只留兩邊都配上的</text>
+  <!-- LEFT -->
+  <text x="270" y="36" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">LEFT JOIN</text>
+  <circle cx="250" cy="120" r="42" fill="#2f6f6a" fill-opacity="0.55" stroke="#2f6f6a" stroke-width="2"/>
+  <circle cx="290" cy="120" r="42" fill="none" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="270" y="190" text-anchor="middle" font-size="11" fill="#8a929b">左表全留,右缺補 NULL</text>
+  <!-- RIGHT -->
+  <text x="450" y="36" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">RIGHT JOIN</text>
+  <circle cx="430" cy="120" r="42" fill="none" stroke="#2f6f6a" stroke-width="2"/>
+  <circle cx="470" cy="120" r="42" fill="#2f6f6a" fill-opacity="0.55" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="450" y="190" text-anchor="middle" font-size="11" fill="#8a929b">右表全留,左缺補 NULL</text>
+  <!-- FULL -->
+  <text x="630" y="36" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">FULL JOIN</text>
+  <circle cx="610" cy="120" r="42" fill="#2f6f6a" fill-opacity="0.55" stroke="#2f6f6a" stroke-width="2"/>
+  <circle cx="650" cy="120" r="42" fill="#2f6f6a" fill-opacity="0.55" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="630" y="190" text-anchor="middle" font-size="11" fill="#8a929b">兩邊全留,缺的補 NULL</text>
+</svg>
+        <figcaption>圖 37-2:四種 JOIN 的維恩圖直覺。左圓是「左表」、右圓是「右表」,著色處代表「結果會包含的列」。INNER 只取交集;LEFT/RIGHT 保住某一邊全部;FULL 兩邊都不丟。</figcaption>
+      </div>
+
+      <p>
+        <strong>LEFT JOIN</strong> 特別實用。例如「列出<strong>每一個</strong>學生與他選的課——<em>包含一門課都沒選的</em>」:
+        INNER JOIN 會讓沒選課的學生整個消失(因為他在選課表裡沒有任何配對列),LEFT JOIN 則會保住他、課名欄填 NULL:
+      </p>
+      <pre><code class="language-sql">SELECT s.name, c.title
+FROM students AS s
+LEFT JOIN enrollments AS e ON s.student_id = e.student_id
+LEFT JOIN courses     AS c ON e.course_id  = c.course_id
+ORDER BY s.name;
+-- 張志豪沒選任何課 → 仍會出現,title 欄是 NULL</code></pre>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">SQLite 與 RIGHT/FULL JOIN</span>
+          <p>舊版 SQLite 只支援 INNER 與 LEFT JOIN(新版 3.39+ 才補上 RIGHT/FULL)。
+          但其實任何 <code>RIGHT JOIN</code> 都能把左右表對調寫成 <code>LEFT JOIN</code>,所以實務上 LEFT JOIN 用得最多、最該熟練。</p>
+        </div>
+      </div>
+
+      <h3>GROUP BY 與聚合:從「一堆列」算出「一個數」</h3>
+      <p>
+        前面的查詢都是「列進、列出」。但我們常想要<strong>統計</strong>:每門課<em>幾個人</em>選?平均<em>幾分</em>?
+        這要靠<strong>聚合函數(aggregate function)</strong>搭配 <strong>GROUP BY</strong>。聚合函數把「一整組列」壓縮成一個值:
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>函數</th><th>算什麼</th></tr></thead>
+        <tbody>
+          <tr><td><code>COUNT(*)</code></td><td>列數(幾筆)</td></tr>
+          <tr><td><code>SUM(欄)</code></td><td>總和</td></tr>
+          <tr><td><code>AVG(欄)</code></td><td>平均</td></tr>
+          <tr><td><code>MAX(欄)</code> / <code>MIN(欄)</code></td><td>最大 / 最小</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <pre><code class="language-sql">-- 全校總共有幾個學生?
+SELECT COUNT(*) AS total_students FROM students;
+
+-- GROUP BY:把列依某欄分組,每組各算一次聚合
+-- 「每門課的選課人數與平均分數」
+SELECT course_id,
+       COUNT(*)        AS num_students,
+       ROUND(AVG(score), 1) AS avg_score
+FROM enrollments
+GROUP BY course_id
+ORDER BY num_students DESC;</code></pre>
+      <p>
+        想像 <code>GROUP BY course_id</code> 把選課表依課程「分堆」:CS101 一堆、CS202 一堆……
+        然後對<strong>每一堆</strong>分別數人數、算平均。沒有 GROUP BY 時,聚合函數會把整張表當成一大堆。
+      </p>
+
+      <h3>HAVING:篩選「組」,不是篩選「列」</h3>
+      <p>
+        <code>WHERE</code> 在分組<strong>之前</strong>篩列,<code>HAVING</code> 在分組<strong>之後</strong>篩組。
+        想找「平均分數低於 80 的課」,你不能用 WHERE(那時還沒算出平均),要用 HAVING:
+      </p>
+      <pre><code class="language-sql">SELECT course_id, ROUND(AVG(score), 1) AS avg_score
+FROM enrollments
+GROUP BY course_id
+HAVING AVG(score) &lt; 80      -- 篩「組」:只留平均不到 80 的課
+ORDER BY avg_score;</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">WHERE 對個體,HAVING 對群體</span>
+          <p>一句話記住:<strong>WHERE 篩的是「列」(分組前),HAVING 篩的是「組」(分組後)</strong>。
+          所以聚合函數(<code>AVG</code>、<code>COUNT</code>…)只能出現在 HAVING,不能出現在 WHERE。
+          兩者可以同時用:先 WHERE 把不要的列丟掉,再 GROUP BY,再 HAVING 篩剩下的組。</p>
+        </div>
+      </div>
+
+      <h3>子查詢(subquery):把一個查詢塞進另一個</h3>
+      <p>
+        有時你需要「查詢的結果」當作「另一個查詢的條件」。這就是<strong>子查詢</strong>——括號裡先算出一個答案,
+        外層再拿來用。例如「找出 GPA 高於<strong>全校平均</strong>的學生」:
+      </p>
+      <pre><code class="language-sql">SELECT name, gpa
+FROM students
+WHERE gpa &gt; (SELECT AVG(gpa) FROM students);   -- 括號裡先算出平均</code></pre>
+      <p>子查詢也常配 <code>IN</code> 用,先撈出「一串 id」,外層再依此篩選。「找出有選 CS202 的學生姓名」:</p>
+      <pre><code class="language-sql">SELECT name FROM students
+WHERE student_id IN (
+    SELECT student_id FROM enrollments WHERE course_id = 'CS202'
+);</code></pre>
+
+      <h3>集合運算:UNION 把兩份結果疊起來</h3>
+      <p>
+        如果兩個查詢的<strong>欄位數與型別相容</strong>,可以用 <code>UNION</code> 把結果上下疊在一起(自動去重複;
+        要保留重複用 <code>UNION ALL</code>)。其他集合運算還有 <code>INTERSECT</code>(交集)、<code>EXCEPT</code>(差集)。
+      </p>
+      <pre><code class="language-sql">-- 把「資工系學生」與「有選 CS101 的學生」兩份名單合併(去重)
+SELECT name FROM students WHERE major = '資工'
+UNION
+SELECT s.name FROM students s
+JOIN enrollments e ON s.student_id = e.student_id
+WHERE e.course_id = 'CS101';</code></pre>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 37.2 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>用 JOIN + GROUP BY 寫一句查詢:統計<strong>每個學生</strong>選了<strong>幾門課</strong>、<strong>平均分數</strong>是多少,
+          結果顯示學生姓名,並只列出「至少選了 2 門課」的學生,依平均分數由高到低排序。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>核心:用 JOIN 把姓名接進來、用 <code>GROUP BY s.student_id</code> 依學生分組、
+              用 <code>HAVING COUNT(*) &gt;= 2</code> 篩出選課數達標的人:</p>
+              <pre><code class="language-sql">SELECT s.name,
+       COUNT(*)              AS num_courses,
+       ROUND(AVG(e.score),1) AS avg_score
+FROM students AS s
+JOIN enrollments AS e ON s.student_id = e.student_id
+GROUP BY s.student_id, s.name
+HAVING COUNT(*) &gt;= 2
+ORDER BY avg_score DESC;</code></pre>
+              <p>用本章資料,王小明(CS101 92、CS202 88)、林小美(CS101 78、EE201 85)、
+              黃淑芬(CS202 95、MA101 90)都選了 2 門,會依平均排出。
+              注意:<code>GROUP BY</code> 同時放 <code>student_id, name</code> 是好習慣,確保 SELECT 的每個非聚合欄都在分組鍵裡。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>資料庫設計與正規化:把肥表拆乾淨</h2>
+      <p>
+        現在回到設計。假設有個菜鳥圖省事,把所有東西塞進<strong>一張肥表</strong> <code>big</code>:
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>student_id</th><th>name</th><th>major</th><th>advisor</th><th>course_id</th><th>title</th><th>score</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>1</td><td>王小明</td><td>資工</td><td>李教授</td><td>CS101</td><td>計算機概論</td><td>92</td></tr>
+          <tr><td>1</td><td>王小明</td><td>資工</td><td>李教授</td><td>CS202</td><td>資料庫系統</td><td>88</td></tr>
+          <tr><td>2</td><td>林小美</td><td>電機</td><td>陳教授</td><td>EE201</td><td>電路學</td><td>85</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>這張表看起來能用,卻埋了三顆地雷,統稱<strong>資料異常(anomaly)</strong>:</p>
+      <ul>
+        <li><strong>更新異常(update anomaly)</strong>:王小明改名,你得找出<strong>每一列</strong>有他的紀錄逐一改;
+        漏改一列,資料庫裡就同時存在兩個名字,自相矛盾。</li>
+        <li><strong>插入異常(insertion anomaly)</strong>:新開一門還沒人選的課,你<strong>沒辦法</strong>把它存進這張表
+        ——因為每列都得有個學生,你被迫塞假資料。</li>
+        <li><strong>刪除異常(deletion anomaly)</strong>:林小美退選了唯一的課,你刪掉那列,
+        結果連「電路學這門課存在」「林小美這個人存在」的資訊都<strong>一起消失</strong>了。</li>
+      </ul>
+
+      <h3>根源:函數相依(functional dependency)</h3>
+      <p>
+        這些異常的病根,是表裡混進了<strong>不該待在一起</strong>的資訊。要講清楚,得引入一個概念:
+        <strong>函數相依</strong>。我們寫 <code>A → B</code>,意思是「知道 A 就能唯一決定 B」。在這張肥表裡:
+      </p>
+      <pre><code class="language-text">student_id → name, major      (知道學號就知道姓名、主修)
+major      → advisor          (知道主修就知道指導教授)
+course_id  → title            (知道課號就知道課名)
+(student_id, course_id) → score   (知道「誰選了哪門課」才知道分數)</code></pre>
+      <p>
+        看出問題了嗎?只有最後那條 <code>score</code> 真正依賴「完整主鍵」。其他欄各自只依賴主鍵的<em>一部分</em>
+        (<code>name</code> 只靠 <code>student_id</code>),或<em>根本不依賴主鍵</em>(<code>advisor</code> 靠的是 <code>major</code>)。
+        <strong>正規化(normalization)</strong>就是一套規則,把這些「依賴錯對象」的欄位拆出去,讓每張表都「乾淨單純」。
+      </p>
+
+      <h3>逐步拆解:1NF → 2NF → 3NF</h3>
+      <p><strong>第一正規化(1NF)</strong>:每個欄位都是<strong>單一、不可再分</strong>的值,沒有「一格塞多筆」。</p>
+      <p>
+        假設原本有人把選課寫成 <code>courses = 'CS101, CS202'</code> 塞在一格——這違反 1NF。
+        修法:拆成多列,一列一門課(這正是我們上面那張 <code>big</code> 表的樣子)。1NF 達成。
+      </p>
+      <p>
+        <strong>第二正規化(2NF)</strong>:在 1NF 基礎上,消除「<strong>部分相依</strong>」——
+        非鍵欄位不可以只依賴<em>複合主鍵的一部分</em>。
+      </p>
+      <p>
+        <code>big</code> 的主鍵是 <code>(student_id, course_id)</code>。但 <code>name/major/advisor</code> 只靠 <code>student_id</code>,
+        <code>title</code> 只靠 <code>course_id</code>——都是部分相依。把它們<strong>各自搬出去</strong>:
+      </p>
+      <pre><code class="language-text">students (student_id PK, name, major, advisor)
+courses  (course_id  PK, title)
+enrollments (student_id, course_id, score)   主鍵 (student_id, course_id)</code></pre>
+      <p>
+        <strong>第三正規化(3NF)</strong>:在 2NF 基礎上,消除「<strong>遞移相依</strong>」——
+        非鍵欄位不可以依賴<em>另一個非鍵欄位</em>。
+      </p>
+      <p>
+        看 <code>students</code> 表:<code>advisor</code> 其實是靠 <code>major</code> 決定的
+        (<code>student_id → major → advisor</code>),而 <code>major</code> 不是鍵。
+        這條「繞了一手」的相依就是遞移相依——它正是更新異常的元兇(換系所的指導教授,要改一堆學生列)。
+        把它再拆出去:
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 300" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="nz-arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/></marker>
+  </defs>
+  <!-- big table -->
+  <rect x="90" y="24" width="540" height="48" rx="8" fill="#f6e7dd" stroke="#b4541f" stroke-width="2"/>
+  <text x="360" y="44" text-anchor="middle" font-size="12.5" font-weight="800" fill="#b4541f">未正規化的肥表 big</text>
+  <text x="360" y="62" text-anchor="middle" font-size="11" fill="#4a5159">student_id · name · major · advisor · course_id · title · score</text>
+  <!-- arrow -->
+  <line x1="360" y1="72" x2="360" y2="110" stroke="#8a929b" stroke-width="2" marker-end="url(#nz-arrow)"/>
+  <text x="378" y="96" font-size="11" fill="#8a929b">拆成 3NF</text>
+  <!-- four tables -->
+  <g>
+    <rect x="20" y="120" width="160" height="150" rx="8" fill="#fff" stroke="#2f6f6a" stroke-width="2"/>
+    <rect x="20" y="120" width="160" height="26" rx="8" fill="#2f6f6a"/>
+    <rect x="20" y="133" width="160" height="13" fill="#2f6f6a"/>
+    <text x="100" y="138" text-anchor="middle" font-size="12" font-weight="800" fill="#fff">students</text>
+    <text x="34" y="168" font-size="11.5" font-weight="700" fill="#b4541f">student_id (PK)</text>
+    <text x="34" y="192" font-size="11.5" fill="#1f2328">name</text>
+    <text x="34" y="216" font-size="11.5" font-weight="700" fill="#2f6f6a">major (FK)</text>
+  </g>
+  <g>
+    <rect x="200" y="120" width="160" height="150" rx="8" fill="#fff" stroke="#2f6f6a" stroke-width="2"/>
+    <rect x="200" y="120" width="160" height="26" rx="8" fill="#2f6f6a"/>
+    <rect x="200" y="133" width="160" height="13" fill="#2f6f6a"/>
+    <text x="280" y="138" text-anchor="middle" font-size="12" font-weight="800" fill="#fff">majors</text>
+    <text x="214" y="168" font-size="11.5" font-weight="700" fill="#b4541f">major (PK)</text>
+    <text x="214" y="192" font-size="11.5" fill="#1f2328">advisor</text>
+  </g>
+  <g>
+    <rect x="380" y="120" width="160" height="150" rx="8" fill="#fff" stroke="#2f6f6a" stroke-width="2"/>
+    <rect x="380" y="120" width="160" height="26" rx="8" fill="#2f6f6a"/>
+    <rect x="380" y="133" width="160" height="13" fill="#2f6f6a"/>
+    <text x="460" y="138" text-anchor="middle" font-size="12" font-weight="800" fill="#fff">courses</text>
+    <text x="394" y="168" font-size="11.5" font-weight="700" fill="#b4541f">course_id (PK)</text>
+    <text x="394" y="192" font-size="11.5" fill="#1f2328">title</text>
+  </g>
+  <g>
+    <rect x="560" y="120" width="150" height="150" rx="8" fill="#fff" stroke="#b4541f" stroke-width="2"/>
+    <rect x="560" y="120" width="150" height="26" rx="8" fill="#b4541f"/>
+    <rect x="560" y="133" width="150" height="13" fill="#b4541f"/>
+    <text x="635" y="138" text-anchor="middle" font-size="12" font-weight="800" fill="#fff">enrollments</text>
+    <text x="574" y="168" font-size="11.5" font-weight="700" fill="#2f6f6a">student_id (FK)</text>
+    <text x="574" y="192" font-size="11.5" font-weight="700" fill="#2f6f6a">course_id (FK)</text>
+    <text x="574" y="216" font-size="11.5" fill="#1f2328">score</text>
+  </g>
+</svg>
+        <figcaption>圖 37-3:正規化把一張會出毛病的肥表,拆成四張各司其職的乾淨表。每張表只描述「一種事物」,每個事實只存一份。<code>major</code> 從 students 指向 majors,把「主修→指導教授」這條遞移相依獨立出來——以後換指導教授,只要改 majors 表一列。</figcaption>
+      </div>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">3NF 的口訣</span>
+          <p>有個經典順口溜:每個非鍵欄位都必須描述
+          「<strong>the key(整把鍵)、the whole key(完整的鍵,不是一部分)、and nothing but the key(只有鍵,不繞別人)</strong>
+          ——so help me Codd」。對應的正是 1NF(有鍵)、2NF(完整的鍵)、3NF(只有鍵)。
+          記住這句,九成的日常設計就不會出大錯。</p>
+        </div>
+      </div>
+
+      <h3>反正規化:有時故意「弄髒」</h3>
+      <p>
+        正規化的代價是:資料拆得越散,查一份完整資訊就要 JOIN 越多張表,而 JOIN 是有成本的。
+        在<strong>讀取極度頻繁、效能至上</strong>的場景(例如報表系統、首頁排行榜),
+        工程師有時會刻意<strong>反正規化(denormalization)</strong>:把常一起查的欄位重複存一份、
+        或預先算好統計值存起來,用「資料冗餘」換「查詢速度」。
+      </p>
+      <p>
+        這不是「設計錯了」,而是<strong>清醒的取捨</strong>:你接受了「要小心維護重複資料的一致性」這個負擔,
+        換來查詢飛快。原則是——<strong>先正規化把結構做對,確定有效能瓶頸、且有資料佐證時,才針對性地反正規化</strong>。
+      </p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 37.3 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>有一張訂單肥表 <code>orders(order_id, customer_name, customer_phone, product_name, unit_price, qty)</code>。
+          指出它存在哪些資料異常,並把它正規化到 3NF(列出拆解後的各張表與主鍵/外鍵)。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>異常</strong>:同一個客戶下多筆訂單,<code>customer_name/phone</code> 會重複存(更新異常:客戶改電話要改一堆列);
+              新客戶還沒下單就無處可存(插入異常);客戶唯一一筆訂單被刪,客戶資料也跟著消失(刪除異常)。
+              此外 <code>product_name → unit_price</code> 是遞移相依。</p>
+              <p><strong>3NF 拆解</strong>:</p>
+              <pre><code class="language-text">customers (customer_id PK, customer_name, customer_phone)
+products  (product_id  PK, product_name, unit_price)
+orders    (order_id PK, customer_id FK)
+order_items (order_id FK, product_id FK, qty)   主鍵 (order_id, product_id)</code></pre>
+              <p>對應的 DDL 片段:</p>
+              <pre><code class="language-sql">CREATE TABLE customers (
+    customer_id    INTEGER PRIMARY KEY,
+    customer_name  TEXT NOT NULL,
+    customer_phone TEXT
+);
+CREATE TABLE products (
+    product_id   INTEGER PRIMARY KEY,
+    product_name TEXT NOT NULL,
+    unit_price   REAL CHECK (unit_price &gt;= 0)
+);
+CREATE TABLE orders (
+    order_id    INTEGER PRIMARY KEY,
+    customer_id INTEGER NOT NULL,
+    FOREIGN KEY (customer_id) REFERENCES customers(customer_id)
+);
+CREATE TABLE order_items (
+    order_id   INTEGER NOT NULL,
+    product_id INTEGER NOT NULL,
+    qty        INTEGER NOT NULL CHECK (qty &gt; 0),
+    PRIMARY KEY (order_id, product_id),
+    FOREIGN KEY (order_id)   REFERENCES orders(order_id),
+    FOREIGN KEY (product_id) REFERENCES products(product_id)
+);</code></pre>
+              <p>注意:<code>unit_price</code> 該存在 <code>products</code>(現價);若要保留「下單當時的價格」,
+              可以在 <code>order_items</code> 額外存一欄 <code>price_at_order</code>——這是一個合理的、刻意保留的冗餘,
+              因為歷史價格本來就是另一個獨立事實。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>索引:為什麼有時快、有時慢</h2>
+      <p>
+        回到開頭那本書店的「查詢慢」之痛。當你下 <code>SELECT * FROM students WHERE name = '王小明'</code>,
+        如果沒有特別安排,資料庫只能做<strong>全表掃描(full table scan)</strong>:一列一列翻,直到找到。
+        十萬列就翻十萬列,$O(n)$。資料一大,慢到無法忍受。
+      </p>
+      <p>
+        解法是<strong>索引(index)</strong>。它就像一本書後面的「索引頁」:你想查「遞迴」這個詞在哪幾頁,
+        不必把整本書讀一遍,翻到索引頁(已按筆畫排好),一下就定位。資料庫索引也一樣——
+        它替某個欄位額外維護一份<strong>排好序、可快速查找的結構</strong>。
+      </p>
+
+      <h3>底層通常是 B 樹</h3>
+      <p>
+        多數資料庫的索引,底層是一種叫 <strong>B 樹(B-tree)</strong> 的平衡樹
+        (更精確地說常是 B+ 樹)。你在第 29 章看過二元搜尋樹與平衡樹的概念;
+        B 樹是它面向磁碟的「加寬版」——<strong>每個節點存很多個鍵、有很多個分支</strong>,
+        因此樹非常矮胖。為什麼要矮?因為從磁碟讀一塊資料很慢,樹越矮,查一筆要讀的磁碟次數就越少。
+        百萬筆資料,B 樹高度也才三、四層,查找是 $O(\log n)$,快得驚人。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 700 250" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="bt-arrow" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#8a929b"/></marker>
+  </defs>
+  <!-- root -->
+  <rect x="290" y="30" width="120" height="40" rx="6" fill="#2f6f6a"/>
+  <line x1="330" y1="30" x2="330" y2="70" stroke="#fff"/><line x1="370" y1="30" x2="370" y2="70" stroke="#fff"/>
+  <text x="310" y="55" text-anchor="middle" font-size="14" font-weight="800" fill="#fff">30</text>
+  <text x="390" y="55" text-anchor="middle" font-size="14" font-weight="800" fill="#fff">60</text>
+  <!-- leaves -->
+  <rect x="60"  y="130" width="120" height="40" rx="6" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="120" y="155" text-anchor="middle" font-size="13" fill="#1f2328">10 · 20</text>
+  <rect x="290" y="130" width="120" height="40" rx="6" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="350" y="155" text-anchor="middle" font-size="13" fill="#1f2328">40 · 50</text>
+  <rect x="520" y="130" width="120" height="40" rx="6" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="580" y="155" text-anchor="middle" font-size="13" fill="#1f2328">70 · 90</text>
+  <!-- links -->
+  <line x1="310" y1="70" x2="120" y2="128" stroke="#8a929b" stroke-width="1.6" marker-end="url(#bt-arrow)"/>
+  <line x1="350" y1="70" x2="350" y2="128" stroke="#8a929b" stroke-width="1.6" marker-end="url(#bt-arrow)"/>
+  <line x1="390" y1="70" x2="580" y2="128" stroke="#8a929b" stroke-width="1.6" marker-end="url(#bt-arrow)"/>
+  <text x="200" y="108" text-anchor="middle" font-size="10.5" fill="#8a929b">小於 30</text>
+  <text x="350" y="108" text-anchor="middle" font-size="10.5" fill="#8a929b">30~60</text>
+  <text x="500" y="108" text-anchor="middle" font-size="10.5" fill="#8a929b">大於 60</text>
+  <!-- to rows -->
+  <line x1="120" y1="170" x2="120" y2="205" stroke="#b4541f" stroke-width="1.6" marker-end="url(#bt-arrow)"/>
+  <line x1="350" y1="170" x2="350" y2="205" stroke="#b4541f" stroke-width="1.6" marker-end="url(#bt-arrow)"/>
+  <line x1="580" y1="170" x2="580" y2="205" stroke="#b4541f" stroke-width="1.6" marker-end="url(#bt-arrow)"/>
+  <text x="350" y="228" text-anchor="middle" font-size="11.5" fill="#b4541f">葉節點指向實際的資料列</text>
+</svg>
+        <figcaption>圖 37-4:B 樹索引的直覺。要找鍵值 50:從根節點看「在 30 與 60 之間」→ 走中間分支 → 在葉節點找到 50 → 順著指標跳到那一筆資料列。每層只比幾下、只讀一塊磁碟,百萬筆也只要走幾層。</figcaption>
+      </div>
+
+      <pre><code class="language-sql">-- 在 name 欄上建索引,之後 WHERE name = ? 會飛快
+CREATE INDEX idx_students_name ON students(name);
+
+-- 也可建「複合索引」,加速同時用多欄的查詢
+CREATE INDEX idx_enroll_course ON enrollments(course_id, semester);</code></pre>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">索引不是免費的,別亂建</span>
+          <p>索引讓<strong>讀</strong>變快,卻讓<strong>寫</strong>變慢——每次 <code>INSERT</code>/<code>UPDATE</code>/<code>DELETE</code>,
+          資料庫都得<strong>順手維護每一個相關索引</strong>。索引也佔<strong>額外磁碟空間</strong>。
+          所以原則是:<strong>替「常用來查詢/JOIN/排序」的欄建索引</strong>(尤其外鍵、常用 WHERE 條件欄);
+          別替很少查、或寫入超頻繁的欄亂建。主鍵與 UNIQUE 欄,資料庫通常會自動幫你建索引。</p>
+        </div>
+      </div>
+
+      <h2>交易與 ACID:全做,或全不做</h2>
+      <p>
+        回到開頭「並發」與「一致性」的痛。考慮一個經典場景:從帳戶 A <strong>轉帳 300 元</strong>給帳戶 B。
+        這在 SQL 裡是<strong>兩個</strong>動作:
+      </p>
+      <pre><code class="language-sql">UPDATE accounts SET balance = balance - 300 WHERE id = 'A';  -- ① A 扣錢
+UPDATE accounts SET balance = balance + 300 WHERE id = 'B';  -- ② B 收錢</code></pre>
+      <p>
+        如果 ① 執行完、② 還沒執行時<strong>程式當機/停電</strong>了,會怎樣?A 的 300 元憑空蒸發,B 卻沒收到。
+        錢不見了。這種「做一半的殘局」絕對不能發生在銀行系統。
+      </p>
+      <p>
+        解法是<strong>交易(transaction)</strong>:把「一串應該被當成一個整體」的操作,用
+        <code>BEGIN ... COMMIT</code> 包起來。它要嘛<strong>全部成功生效</strong>(COMMIT),
+        要嘛<strong>全部當沒發生過</strong>(ROLLBACK,中途出錯時自動回復)。沒有中間狀態。
+      </p>
+      <pre><code class="language-sql">BEGIN TRANSACTION;
+    UPDATE accounts SET balance = balance - 300 WHERE id = 'A';
+    UPDATE accounts SET balance = balance + 300 WHERE id = 'B';
+COMMIT;     -- 兩步都成功,才一起「定案」生效
+
+-- 若中途偵測到問題(例如 A 餘額不足),可主動撤銷:
+-- ROLLBACK;  -- 撤回這個交易裡的所有改動,彷彿什麼都沒發生</code></pre>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 220" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="tx-arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/></marker>
+  </defs>
+  <!-- success path -->
+  <text x="20" y="48" font-size="12.5" font-weight="800" fill="#2f6f6a">順利:</text>
+  <rect x="80"  y="28" width="90" height="36" rx="6" fill="#e3efed" stroke="#2f6f6a"/><text x="125" y="51" text-anchor="middle" font-size="11.5" fill="#1f2328">BEGIN</text>
+  <rect x="200" y="28" width="110" height="36" rx="6" fill="#e3efed" stroke="#2f6f6a"/><text x="255" y="51" text-anchor="middle" font-size="11.5" fill="#1f2328">A −300</text>
+  <rect x="340" y="28" width="110" height="36" rx="6" fill="#e3efed" stroke="#2f6f6a"/><text x="395" y="51" text-anchor="middle" font-size="11.5" fill="#1f2328">B +300</text>
+  <rect x="480" y="28" width="120" height="36" rx="6" fill="#2f6f6a"/><text x="540" y="51" text-anchor="middle" font-size="11.5" font-weight="700" fill="#fff">COMMIT ✓</text>
+  <line x1="170" y1="46" x2="198" y2="46" stroke="#8a929b" stroke-width="1.6" marker-end="url(#tx-arrow)"/>
+  <line x1="310" y1="46" x2="338" y2="46" stroke="#8a929b" stroke-width="1.6" marker-end="url(#tx-arrow)"/>
+  <line x1="450" y1="46" x2="478" y2="46" stroke="#8a929b" stroke-width="1.6" marker-end="url(#tx-arrow)"/>
+  <text x="615" y="51" font-size="11.5" fill="#2f6f6a">錢正確轉移</text>
+  <!-- failure path -->
+  <text x="20" y="138" font-size="12.5" font-weight="800" fill="#b4541f">當機:</text>
+  <rect x="80"  y="118" width="90" height="36" rx="6" fill="#f6e7dd" stroke="#b4541f"/><text x="125" y="141" text-anchor="middle" font-size="11.5" fill="#1f2328">BEGIN</text>
+  <rect x="200" y="118" width="110" height="36" rx="6" fill="#f6e7dd" stroke="#b4541f"/><text x="255" y="141" text-anchor="middle" font-size="11.5" fill="#1f2328">A −300</text>
+  <rect x="340" y="118" width="110" height="36" rx="6" fill="#fff" stroke="#b4541f" stroke-dasharray="4 3"/><text x="395" y="135" text-anchor="middle" font-size="11.5" fill="#b4541f">B +300</text><text x="395" y="150" text-anchor="middle" font-size="10" fill="#b4541f">⚡未執行</text>
+  <rect x="480" y="118" width="120" height="36" rx="6" fill="#b4541f"/><text x="540" y="141" text-anchor="middle" font-size="11.5" font-weight="700" fill="#fff">ROLLBACK</text>
+  <line x1="170" y1="136" x2="198" y2="136" stroke="#8a929b" stroke-width="1.6" marker-end="url(#tx-arrow)"/>
+  <line x1="310" y1="136" x2="338" y2="136" stroke="#8a929b" stroke-width="1.6" marker-end="url(#tx-arrow)"/>
+  <line x1="450" y1="136" x2="478" y2="136" stroke="#8a929b" stroke-width="1.6" marker-end="url(#tx-arrow)"/>
+  <text x="540" y="178" text-anchor="middle" font-size="11" fill="#b4541f">A 的扣款被撤回</text>
+  <text x="360" y="205" text-anchor="middle" font-size="12" fill="#4a5159">原子性:絕不留下「A 扣了、B 沒收」的半套狀態</text>
+</svg>
+        <figcaption>圖 37-5:交易的原子性。上排順利走到 COMMIT,兩筆更新一起生效;下排在第二步前當機,資料庫自動 ROLLBACK,把 A 已扣的錢還原。最終結果只有「全成」或「全不成」兩種。</figcaption>
+      </div>
+
+      <h3>ACID:交易的四個保證</h3>
+      <p>交易帶來四個著名的保證,首字母合起來就是 <strong>ACID</strong>:</p>
+      <ul>
+        <li><strong>原子性(Atomicity)</strong>:全做或全不做,沒有半套(剛剛的轉帳)。</li>
+        <li><strong>一致性(Consistency)</strong>:交易前後,資料庫都滿足所有約束(外鍵、CHECK…)。轉帳前後總額不變。</li>
+        <li><strong>隔離性(Isolation)</strong>:多個交易並發執行時,彼此<strong>互不干擾</strong>,結果就像「一個接一個輪流跑」一樣。</li>
+        <li><strong>持久性(Durability)</strong>:一旦 COMMIT,資料就<strong>永久保存</strong>,即使下一秒停電也不會丟。</li>
+      </ul>
+
+      <h3>並發三大災難與隔離級別</h3>
+      <p>
+        「隔離性」最微妙。如果完全不隔離,多個交易同時讀寫同一筆資料,會冒出三種典型錯亂:
+      </p>
+      <ul>
+        <li><strong>髒讀(dirty read)</strong>:交易 B 讀到了交易 A <em>還沒 COMMIT</em> 的暫時資料,結果 A 後來 ROLLBACK,B 等於讀到了「不存在的數字」。</li>
+        <li><strong>不可重複讀(non-repeatable read)</strong>:同一個交易裡,前後讀同一列<strong>兩次,值卻不一樣</strong>(因為中間別人改了並 COMMIT)。</li>
+        <li><strong>幻讀(phantom read)</strong>:同一個交易裡,前後用同一條件查兩次,第二次<strong>多出 / 少了幾列</strong>(別人插入/刪除了符合條件的列)。</li>
+      </ul>
+      <p>
+        防得越嚴,效能越低。所以 SQL 提供<strong>隔離級別(isolation level)</strong>讓你權衡——
+        從寬鬆到嚴格,逐一堵住上面的災難:
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>隔離級別</th><th>髒讀</th><th>不可重複讀</th><th>幻讀</th></tr></thead>
+        <tbody>
+          <tr><td>Read Uncommitted</td><td>可能</td><td>可能</td><td>可能</td></tr>
+          <tr><td>Read Committed</td><td>✗ 杜絕</td><td>可能</td><td>可能</td></tr>
+          <tr><td>Repeatable Read</td><td>✗ 杜絕</td><td>✗ 杜絕</td><td>可能</td></tr>
+          <tr><td>Serializable</td><td>✗ 杜絕</td><td>✗ 杜絕</td><td>✗ 杜絕</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>
+        最嚴的 <strong>Serializable</strong> 保證「並發跑的結果,等同於某種一個接一個的順序」,最安全但最慢。
+        底層怎麼做到?靠的正是第 24 章那套<strong>鎖(lock)</strong>:交易在動一筆資料前先「上鎖」,
+        別人想動就得排隊等待。鎖用得太兇還會引發<strong>死結(deadlock)</strong>——
+        兩個交易各握著對方要的鎖、互相空等。資料庫會偵測死結,挑一個交易把它 ROLLBACK 來打破僵局。
+        (SQLite 比較單純,以整個資料庫層級的鎖來保證序列化,代價是並發寫入受限。)
+      </p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 37.4 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>演唱會搶票:某場次<strong>只剩最後 1 張</strong>票,卻有 5000 人在同一秒按下「購買」。
+          請說明:(a) 如果不用交易、各自「先讀庫存=1,再寫庫存=0」,會發生什麼?
+          (b) 交易的哪幾個 ACID 性質在這裡救了你?</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>(a)</strong> 典型的<strong>競態條件</strong>:多個請求<em>同時</em>讀到「庫存 = 1」,
+              都認為「還有票」,於是都把庫存寫成 0、都回覆使用者「購票成功」。結果<strong>超賣</strong>:
+              一張票賣給了好幾個人。這正是開頭書店「賣了兩本不存在的書」的同一個病。</p>
+              <p><strong>(b)</strong> 把「檢查庫存 → 扣庫存 → 建立訂單」包成一個交易,並讓資料庫<strong>對庫存那列上鎖</strong>:</p>
+              <pre><code class="language-sql">BEGIN TRANSACTION;
+    -- 讀並鎖住這列(寫法依資料庫而異,如 SELECT ... FOR UPDATE)
+    -- 只有庫存 &gt; 0 時這筆 UPDATE 才會真的改到一列
+    UPDATE tickets SET stock = stock - 1
+    WHERE event_id = 42 AND stock &gt; 0;
+    -- 接著依「實際改到幾列」決定成功或失敗;失敗就 ROLLBACK
+    INSERT INTO orders (event_id, user_id) VALUES (42, 777);
+COMMIT;</code></pre>
+              <ul>
+                <li><strong>隔離性</strong>:讓 5000 個交易實質上<strong>排隊</strong>,一次只有一個能改庫存,杜絕「同時讀到 1」。</li>
+                <li><strong>原子性</strong>:「扣庫存」與「建訂單」綁在一起,不會出現「扣了庫存卻沒建訂單」的鬼票。</li>
+                <li><strong>一致性</strong>:配合 <code>CHECK (stock &gt;= 0)</code> 之類約束,保證庫存永不為負——也就永不超賣。</li>
+                <li><strong>持久性</strong>:成功的訂單 COMMIT 後不會因當機消失。</li>
+              </ul>
+              <p>結論:第一個搶到鎖的交易把庫存改成 0、建好訂單;其餘 4999 個交易再去 <code>UPDATE ... WHERE stock &gt; 0</code>
+              時,<strong>一列都改不到</strong>,程式據此回覆「售罄」。沒有交易,這種高並發場景幾乎必定出事。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>從程式連資料庫:Python 的 sqlite3</h2>
+      <p>
+        SQL 很好,但真實應用是「程式」在跟資料庫對話。Python 內建了 <code>sqlite3</code> 模組,
+        不必安裝任何東西,就能完整建表、寫入、查詢。下面是一個<strong>從頭到尾可跑</strong>的完整範例:
+      </p>
+      <pre><code class="language-python">import sqlite3
+
+# 連線:檔案不存在就自動建立(用 ":memory:" 則建在記憶體,程式結束就消失)
+conn = sqlite3.connect("school.db")
+conn.execute("PRAGMA foreign_keys = ON")   # SQLite 預設不強制外鍵,手動開啟
+cur = conn.cursor()                          # cursor 是下指令、拿結果的把手
+
+# 1) 建表(DDL)。三引號字串方便寫多行 SQL
+cur.execute("""
+CREATE TABLE IF NOT EXISTS students (
+    student_id INTEGER PRIMARY KEY,
+    name       TEXT NOT NULL,
+    major      TEXT,
+    gpa        REAL
+)
+""")
+
+# 2) 插入資料(DML)。executemany 一次塞多列,? 是「參數佔位符」
+cur.executemany(
+    "INSERT INTO students (name, major, gpa) VALUES (?, ?, ?)",
+    [("王小明", "資工", 3.8),
+     ("林小美", "電機", 3.5),
+     ("陳大文", "資工", 2.9)]
+)
+conn.commit()    # 別忘了 commit,否則改動不會真正寫進檔案!
+
+# 3) 查詢(SELECT)。把使用者輸入透過參數傳入,千萬別用字串拼接
+threshold = 3.0
+cur.execute(
+    "SELECT name, gpa FROM students WHERE gpa &gt;= ? ORDER BY gpa DESC",
+    (threshold,)          # 參數一定要是 tuple,單一參數也要寫成 (x,)
+)
+for name, gpa in cur.fetchall():   # fetchall 取回所有列;fetchone 取一列
+    print(f"{name}: {gpa}")
+
+conn.close()    # 關閉連線
+# 輸出:
+# 王小明: 3.8
+# 林小美: 3.5</code></pre>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">幾個 sqlite3 慣用法</span>
+          <p><code>commit()</code> 才會把改動落地;<code>conn</code> 也能當<strong>context manager</strong>
+          (<code>with conn:</code> 區塊正常結束就自動 commit、出例外就自動 rollback——這正是交易!)。
+          取結果用 <code>fetchone()</code> / <code>fetchall()</code>,或直接 <code>for row in cur</code> 逐列迭代。
+          其他語言(Java 的 JDBC、Node 的各種 driver)概念完全一樣:連線 → 下 SQL → 取結果。</p>
+        </div>
+      </div>
+
+      <h3>參數化查詢:擋下 SQL injection</h3>
+      <p>
+        為什麼上面一直強調「用 <code>?</code> 傳參數,別用字串拼接」?因為字串拼接會打開一個惡名昭彰的安全漏洞:
+        <strong>SQL 注入(SQL injection)</strong>。看這個<strong>錯誤示範</strong>:
+      </p>
+      <pre><code class="language-python"># ⛔ 危險!絕對不要這樣寫
+name = input("請輸入要查詢的姓名:")
+cur.execute("SELECT * FROM students WHERE name = '" + name + "'")</code></pre>
+      <p>
+        如果使用者乖乖輸入「王小明」,組出來的 SQL 沒問題。但如果他輸入這一串:
+      </p>
+      <pre><code class="language-text">' OR '1'='1</code></pre>
+      <p>那麼拼接後的 SQL 變成:</p>
+      <pre><code class="language-sql">SELECT * FROM students WHERE name = '' OR '1'='1'</code></pre>
+      <p>
+        <code>'1'='1'</code> 永遠成立,於是<strong>整張表的資料全被撈出來</strong>!更狠的輸入甚至能
+        <code>'; DROP TABLE students; --</code> 把你整張表刪掉。攻擊者「把資料當成程式碼注入」的這一招,
+        多年來是 Web 應用最常見的重大漏洞之一(這部分我們會在第 36 章資訊安全深入)。
+      </p>
+      <p><strong>正確做法</strong>:用參數化查詢。把值交給 <code>?</code>,資料庫驅動會把它<strong>當成純資料</strong>,
+        絕不會被解讀成 SQL 語法——再怎麼刁鑽的輸入,都只是一個普通的字串值:</p>
+      <pre><code class="language-python"># ✅ 安全:用 ? 佔位,值另外傳
+name = input("請輸入要查詢的姓名:")
+cur.execute("SELECT * FROM students WHERE name = ?", (name,))</code></pre>
+
+      <div class="callout danger">
+        <div class="ico">⛔</div>
+        <div class="body">
+          <span class="c-title">一條鐵律</span>
+          <p><strong>永遠不要用字串拼接把使用者輸入塞進 SQL。永遠用參數化查詢(<code>?</code> 或具名參數)。</strong>
+          這不是「比較好的寫法」,而是「唯一可接受的寫法」。它同時還順便幫你處理引號跳脫、型別轉換,
+          一舉數得。把這條刻進肌肉記憶。</p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 37.5 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>用 Python 的 <code>sqlite3</code> 寫一支完整小程式:在記憶體資料庫(<code>:memory:</code>)裡建一張
+          <code>books(id, title, price, stock)</code> 表,插入至少 3 本書,然後用<strong>參數化查詢</strong>
+          找出「價格低於某金額、且還有庫存」的書並印出來。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">import sqlite3
+
+conn = sqlite3.connect(":memory:")   # 純記憶體,測試最方便
+cur = conn.cursor()
+
+cur.execute("""
+CREATE TABLE books (
+    id    INTEGER PRIMARY KEY,
+    title TEXT NOT NULL,
+    price REAL CHECK (price &gt;= 0),
+    stock INTEGER NOT NULL DEFAULT 0
+)
+""")
+
+cur.executemany(
+    "INSERT INTO books (title, price, stock) VALUES (?, ?, ?)",
+    [("SICP", 600, 3),
+     ("龍書(編譯器)", 450, 0),
+     ("CLRS 演算法", 700, 5),
+     ("Python 入門", 350, 8)]
+)
+conn.commit()
+
+max_price = 500
+cur.execute(
+    "SELECT title, price, stock FROM books WHERE price &lt; ? AND stock &gt; 0 ORDER BY price",
+    (max_price,)
+)
+for title, price, stock in cur.fetchall():
+    print(f"{title}:{price} 元,庫存 {stock}")
+
+conn.close()
+# 輸出:
+# Python 入門:350 元,庫存 8
+# (龍書雖然便宜但 stock=0 被排除;SICP/CLRS 太貴被排除)</code></pre>
+              <p>重點全在那句 <code>WHERE price &lt; ? AND stock &gt; 0</code> 與 <code>(max_price,)</code>:
+              條件值透過參數傳入,既安全又乾淨。<code>:memory:</code> 資料庫在 <code>close()</code> 後就消失,
+              很適合拿來練習與寫測試。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>當關聯模型不夠用:NoSQL 與半結構化資料</h2>
+      <p>
+        關聯模型優雅又嚴謹,但它有個前提:你的資料得能<strong>整齊地裝進固定欄位的表格</strong>。
+        現實中常有不那麼乖的資料:每筆商品的規格欄位都不一樣、社群貼文巢狀著留言又巢狀著回覆、
+        資料量大到一台機器塞不下……這時人們轉向<strong>半結構化資料</strong>與 <strong>NoSQL</strong>。
+      </p>
+
+      <h3>半結構化資料:JSON 與 XML</h3>
+      <p>
+        <strong>半結構化(semi-structured)</strong>資料沒有死板的表格綱要,而是用「自帶標籤」的格式描述自己。
+        最主流的是 <strong>JSON</strong>(JavaScript Object Notation):
+      </p>
+      <pre><code class="language-text">{
+  "student_id": 1,
+  "name": "王小明",
+  "major": "資工",
+  "courses": [                         // 巢狀!一個學生直接帶著他的選課陣列
+    { "id": "CS101", "score": 92 },
+    { "id": "CS202", "score": 88 }
+  ]
+}</code></pre>
+      <p>
+        看到差別了嗎?關聯模型要把選課拆到另一張表用外鍵連;JSON 直接把它<strong>巢狀</strong>進來,
+        一個物件就是一筆完整資料。較老的 <strong>XML</strong> 用成對標籤(<code>&lt;name&gt;王小明&lt;/name&gt;</code>)
+        表達同樣的階層結構。現代 SQL 資料庫其實也都支援存取 JSON 欄位了,界線越來越模糊。
+      </p>
+
+      <h3>NoSQL 四大家族</h3>
+      <p><strong>NoSQL</strong>(意為「不只是 SQL」)是一群「非關聯式」資料庫的統稱,各擅勝場,一句話認識它們:</p>
+      <ul>
+        <li><strong>文件資料庫(document store)</strong>,代表 <strong>MongoDB</strong>:直接存一份份 JSON 風格的文件,結構彈性,適合每筆欄位都可能不同的資料。</li>
+        <li><strong>鍵值資料庫(key-value store)</strong>,代表 <strong>Redis</strong>:就是一個超大、超快的字典(鍵 → 值),常拿來做快取與工作階段(session)。</li>
+        <li><strong>欄式資料庫(column-family / wide-column)</strong>,代表 <strong>Cassandra</strong>:資料按「欄」而非「列」儲存,極擅長海量寫入與大規模分析。</li>
+        <li><strong>圖資料庫(graph database)</strong>,代表 <strong>Neo4j</strong>:把資料存成「節點 + 邊」,專門對付社群網路、推薦、路徑這類關係密集的問題(正是第 15 章的圖論在工業界的化身)。</li>
+      </ul>
+
+      <h3>CAP 定理:分散式系統的「不可能三角」</h3>
+      <p>
+        當資料大到要分散在<strong>很多台機器</strong>上,就會撞上一個深刻的限制:<strong>CAP 定理</strong>。它說,
+        一個分散式系統最多只能<strong>同時保證三者中的兩者</strong>:
+      </p>
+      <div class="diagram">
+<svg viewBox="0 0 560 300" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <polygon points="280,40 90,240 470,240" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <circle cx="280" cy="40" r="6" fill="#2f6f6a"/>
+  <circle cx="90"  cy="240" r="6" fill="#2f6f6a"/>
+  <circle cx="470" cy="240" r="6" fill="#2f6f6a"/>
+  <text x="280" y="28" text-anchor="middle" font-size="13" font-weight="800" fill="#2f6f6a">C 一致性</text>
+  <text x="70"  y="262" text-anchor="middle" font-size="13" font-weight="800" fill="#2f6f6a">A 可用性</text>
+  <text x="490" y="262" text-anchor="middle" font-size="13" font-weight="800" fill="#2f6f6a">P 分區容錯</text>
+  <text x="280" y="155" text-anchor="middle" font-size="13" font-weight="800" fill="#b4541f">三者只能取二</text>
+  <text x="185" y="135" text-anchor="middle" font-size="11" fill="#4a5159" transform="rotate(-46 185 135)">CP</text>
+  <text x="378" y="135" text-anchor="middle" font-size="11" fill="#4a5159" transform="rotate(46 378 135)">AP</text>
+  <text x="280" y="255" text-anchor="middle" font-size="11" fill="#4a5159">CA(僅限不分區的單機/小叢集)</text>
+</svg>
+        <figcaption>圖 37-6:CAP 三角。C = 一致性(每次都讀到最新值)、A = 可用性(永遠有回應)、P = 分區容錯(網路斷成兩半仍能運作)。由於跨機器的網路<strong>必然</strong>偶爾故障,實務上 P 幾乎是必選,真正的取捨是在「斷線時要 C 還是要 A」——傳統 SQL 偏向 C(寧可拒絕服務也不給錯資料),許多 NoSQL 偏向 A(先回應,稍後再讓資料一致)。</figcaption>
+      </div>
+
+      <h3>所以,該用 SQL 還是 NoSQL?</h3>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>面向</th><th>關聯式(SQL)</th><th>NoSQL</th></tr></thead>
+        <tbody>
+          <tr><td>資料結構</td><td>固定綱要、表格</td><td>彈性、可巢狀、隨筆不同</td></tr>
+          <tr><td>關係 / JOIN</td><td>強項,外鍵 + JOIN</td><td>較弱,常靠應用端處理或反正規化</td></tr>
+          <tr><td>交易 / ACID</td><td>完整支援,強一致</td><td>多偏向「最終一致」,部分支援交易</td></tr>
+          <tr><td>水平擴展(多機)</td><td>較難(傳統上偏垂直擴展)</td><td>天生為分散式設計,易橫向擴展</td></tr>
+          <tr><td>查詢語言</td><td>標準 SQL,通用</td><td>各家自有 API/語法,不統一</td></tr>
+          <tr><td>最適合</td><td>資料關係複雜、需強一致(金融、ERP、後台)</td><td>海量、結構多變、可容忍弱一致(日誌、IoT、社群動態、快取)</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">務實的建議</span>
+          <p>對絕大多數應用,<strong>從關聯式資料庫開始,通常是對的選擇</strong>:它成熟、ACID 保證強、SQL 通用、
+          資料一致性最省心。等到你<em>真的</em>遇到關聯模型扛不住的特定問題(超大規模、極彈性結構),
+          再針對那個部分引入合適的 NoSQL。很多大型系統其實是<strong>兩者並用</strong>:核心交易用 SQL,
+          快取用 Redis,搜尋與日誌用別的——這叫「polyglot persistence(多元儲存)」。</p>
+        </div>
+      </div>
+
+      <h2>真實世界的最後一哩</h2>
+      <p>離開教室前,幾個你一定會在業界聽到的詞,各用一句話收進口袋:</p>
+      <ul>
+        <li><strong>OLTP vs OLAP</strong>:<strong>OLTP</strong>(線上交易處理)是「日常一筆筆的小讀寫」——下單、轉帳、登入,要求快與一致;
+        <strong>OLAP</strong>(線上分析處理)是「對海量歷史資料做大範圍統計分析」——本季各區營收趨勢,要求掃得廣、算得動。</li>
+        <li><strong>資料倉儲(data warehouse)</strong>:專為 OLAP 打造的大型資料庫,把各系統的歷史資料集中、整理、存起來,
+        供分析與決策使用(常搭配反正規化與欄式儲存來加速分析)。</li>
+        <li><strong>ORM(物件關聯對映)</strong>:像 Django ORM、SQLAlchemy、Hibernate 這類工具,
+        讓你用<strong>程式語言的物件</strong>來操作資料庫,自動幫你產生 SQL——寫起來更順手,
+        但仍建議懂底層 SQL,才不會寫出又慢又怪的查詢(這呼應第八部軟體工程「站在抽象之上,但別忘了抽象底下」的精神)。</li>
+      </ul>
+
+      <h2>動手練習</h2>
+      <p>SQL 是「越寫越通」的技能。下面幾題從建表一路到設計,請務必先打開 SQLite(或任何資料庫)親手敲過。</p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 37.6 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>從零寫出 <code>students</code> 與 <code>enrollments</code> 兩張表的完整 <code>CREATE TABLE</code>:
+          學生要有主鍵、姓名不可空;選課表要有複合主鍵、分數要有 0~100 的範圍檢查,並用外鍵連回學生表。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-sql">CREATE TABLE students (
+    student_id INTEGER PRIMARY KEY,
+    name       TEXT    NOT NULL,
+    major      TEXT,
+    gpa        REAL    CHECK (gpa &gt;= 0 AND gpa &lt;= 4.3)
+);
+
+CREATE TABLE enrollments (
+    student_id INTEGER NOT NULL,
+    course_id  TEXT    NOT NULL,
+    semester   TEXT    NOT NULL,
+    score      INTEGER CHECK (score &gt;= 0 AND score &lt;= 100),
+    PRIMARY KEY (student_id, course_id, semester),
+    FOREIGN KEY (student_id) REFERENCES students(student_id)
+);</code></pre>
+              <p>檢查清單:主鍵 ✓、<code>NOT NULL</code> ✓、複合主鍵 ✓、<code>CHECK</code> 範圍 ✓、外鍵 ✓。
+              這五樣是日常建表的標準配備。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 37.7 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>用本章的學校資料寫一句查詢:找出「<strong>選課平均分數最高</strong>的那一門課」,
+          顯示課名與平均分數。(提示:JOIN 取課名、GROUP BY 算平均、ORDER BY 配 LIMIT 取第一名。)</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-sql">SELECT c.title, ROUND(AVG(e.score), 1) AS avg_score
+FROM enrollments AS e
+JOIN courses AS c ON e.course_id = c.course_id
+GROUP BY e.course_id, c.title
+ORDER BY avg_score DESC
+LIMIT 1;</code></pre>
+              <p>思路:先把選課表依課程分組算平均,JOIN 進來課名,最後排序取榜首。
+              如果可能「並列第一」想全取,則要改用子查詢比對最大平均值,而非 <code>LIMIT 1</code>——
+              這是一個值得想想的延伸:<code>HAVING AVG(e.score) = (SELECT MAX(...) FROM ...)</code>。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 37.8 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>設計一個小型<strong>圖書館借閱系統</strong>的資料庫(達到 3NF),至少包含「書」「會員」「借閱紀錄」。
+          畫出表結構(欄位 + 主鍵/外鍵),並寫出三個查詢:
+          (1) 某會員目前還沒還的書;(2) 最熱門(被借次數最多)的前 3 本書;(3) 逾期未還的借閱紀錄。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>表結構</strong>(一本實體書可有多個館藏副本,故拆出 copies;借閱發生在「副本」上):</p>
+              <pre><code class="language-sql">CREATE TABLE books (
+    book_id   INTEGER PRIMARY KEY,
+    title     TEXT NOT NULL,
+    author    TEXT,
+    isbn      TEXT UNIQUE
+);
+CREATE TABLE members (
+    member_id INTEGER PRIMARY KEY,
+    name      TEXT NOT NULL,
+    phone     TEXT
+);
+CREATE TABLE copies (                       -- 每本書的實體館藏副本
+    copy_id INTEGER PRIMARY KEY,
+    book_id INTEGER NOT NULL,
+    FOREIGN KEY (book_id) REFERENCES books(book_id)
+);
+CREATE TABLE loans (                         -- 借閱紀錄
+    loan_id     INTEGER PRIMARY KEY,
+    copy_id     INTEGER NOT NULL,
+    member_id   INTEGER NOT NULL,
+    loan_date   TEXT NOT NULL,               -- 借出日 'YYYY-MM-DD'
+    due_date    TEXT NOT NULL,               -- 應還日
+    return_date TEXT,                        -- 還書日;NULL = 尚未歸還
+    FOREIGN KEY (copy_id)   REFERENCES copies(copy_id),
+    FOREIGN KEY (member_id) REFERENCES members(member_id)
+);</code></pre>
+              <p><strong>(1) 某會員(id=7)還沒還的書:</strong></p>
+              <pre><code class="language-sql">SELECT b.title, l.due_date
+FROM loans l
+JOIN copies c ON l.copy_id = c.copy_id
+JOIN books  b ON c.book_id = b.book_id
+WHERE l.member_id = 7 AND l.return_date IS NULL;</code></pre>
+              <p><strong>(2) 被借次數最多的前 3 本書:</strong></p>
+              <pre><code class="language-sql">SELECT b.title, COUNT(*) AS times_borrowed
+FROM loans l
+JOIN copies c ON l.copy_id = c.copy_id
+JOIN books  b ON c.book_id = b.book_id
+GROUP BY b.book_id, b.title
+ORDER BY times_borrowed DESC
+LIMIT 3;</code></pre>
+              <p><strong>(3) 逾期未還(應還日已過、卻還沒還):</strong></p>
+              <pre><code class="language-sql">SELECT m.name, b.title, l.due_date
+FROM loans l
+JOIN members m ON l.member_id = m.member_id
+JOIN copies  c ON l.copy_id   = c.copy_id
+JOIN books   b ON c.book_id   = b.book_id
+WHERE l.return_date IS NULL
+  AND l.due_date &lt; DATE('now');     -- DATE('now') 是 SQLite 的今天</code></pre>
+              <p>觀察:這三個查詢全都靠 <code>return_date IS NULL</code> 來表達「在借中」、靠多重 JOIN 串起
+              loans→copies→books,正是本章 JOIN + 聚合 + NULL 處理的綜合演練。
+              用 <code>copies</code> 把「書名」與「實體副本」分開,是為了正確支援「同一本書有多本」——這也是 3NF 的體現。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 37.9 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>你的查詢 <code>SELECT * FROM orders WHERE customer_id = ?</code> 在百萬筆訂單上慢到爆。
+          你想建一個索引解決。請說明:該在哪一欄建索引?建了之後「讀」與「寫」各會受什麼影響?
+          有沒有可能建了反而幫倒忙?</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>應在 <strong><code>customer_id</code></strong> 欄建索引(<code>CREATE INDEX idx_orders_cust ON orders(customer_id);</code>),
+              因為它是 WHERE 的篩選條件。建了之後:</p>
+              <ul>
+                <li><strong>讀</strong>:這類查詢從 $O(n)$ 全表掃描變成 $O(\log n)$ 的索引查找,巨幅加速。</li>
+                <li><strong>寫</strong>:每次對 orders 做 <code>INSERT</code>/<code>UPDATE customer_id</code>/<code>DELETE</code>,
+                資料庫都要順手更新這個索引,寫入略變慢;索引本身也佔額外磁碟空間。</li>
+              </ul>
+              <p><strong>可能幫倒忙的情況</strong>:(a) 若 <code>customer_id</code> 重複度極高
+              (例如全部訂單只屬於少數幾個大客戶,一查就回傳半張表),索引幫助有限,最佳化器甚至會放棄用它直接全掃。
+              (b) 若這張表寫入極度頻繁、查詢卻很少,維護索引的成本可能超過它省下的查詢時間。
+              所以索引要<strong>針對實際查詢模式</strong>來建,並用資料庫的 <code>EXPLAIN</code> 觀察它到底有沒有被用上。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="callout note"><div class="ico">🧭</div><div class="body"><span class="c-title">延伸:新軌道</span><p>結構化查詢之外,AI 應用需要一種全新的檢索方式。<a href="102-rag-from-scratch.html">第 96 章「手刻最小 RAG」</a>把向量嵌入與近似最近鄰搜尋和傳統 SQL 並列對照,展示向量檢索如何補足結構化查詢、擅長找「語意相似」的那塊拼圖。</p></div></div>
+
+      <h2>把這一章串起來</h2>
+      <p>我們從一本會釀災的 <code>books.txt</code> 出發,走完了關聯式資料庫的全貌。把這趟旅程收進腦海:</p>
+      <ul>
+        <li><strong>為什麼需要資料庫</strong>:檔案硬幹會在查詢、並發、一致性、規模上四面楚歌;DBMS 提供持久化、查詢、交易、並發控制。</li>
+        <li><strong>關聯模型</strong>:用表(列/欄)裝資料,用主鍵當身分證、外鍵作連線,用綱要定義結構;多對多關係靠一張橋表。</li>
+        <li><strong>SQL 三張臉</strong>:DDL 蓋結構(<code>CREATE TABLE</code> + 約束)、DML 改資料(<code>INSERT/UPDATE/DELETE</code>)、SELECT 查資料。</li>
+        <li><strong>進階查詢</strong>:JOIN 串多表(INNER/LEFT 最常用)、GROUP BY 配聚合做統計、HAVING 篩組、子查詢、UNION。</li>
+        <li><strong>正規化</strong>:用 1NF→2NF→3NF 消除更新/插入/刪除異常,讓每個事實只存一份;必要時才為效能反正規化。</li>
+        <li><strong>索引</strong>:B 樹讓查詢 $O(\log n)$,但會拖慢寫入、佔空間,要針對查詢模式精準地建。</li>
+        <li><strong>交易與 ACID</strong>:用 <code>BEGIN/COMMIT/ROLLBACK</code> 保證「全做或全不做」;隔離級別權衡並發災難(髒讀/不可重複讀/幻讀),底層靠鎖。</li>
+        <li><strong>從程式連</strong>:Python <code>sqlite3</code> 完整可跑;<strong>永遠用參數化查詢</strong>擋下 SQL injection。</li>
+        <li><strong>NoSQL 與 CAP</strong>:資料太彈性或太大時改用文件/鍵值/欄式/圖資料庫;分散式系統 C/A/P 三選二;多數場景「先 SQL,有特定需求再 NoSQL」。</li>
+      </ul>
+      <p>
+        資料庫是幾乎所有真實系統的地基。你現在不只會「用」它,還理解了它<strong>為什麼這樣設計</strong>——
+        從關聯代數的優雅,到交易的鐵血保證,再到分散式世界的無奈取捨。下一步,把這些 SQL 拿去接上你寫的程式,
+        你就擁有了打造一個真正「會記得事情」的應用的能力。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">📚</div>
+        <div class="body">
+          <span class="c-title">想更深入?延伸資源</span>
+          <p>本章對應 OSSU 的 <strong>Stanford Databases</strong> 系列——由 Jennifer Widom 主講的三門迷你課
+          <a href="https://www.edx.org/learn/databases/stanford-university-databases-modeling-and-theory">Databases: Modeling and Theory</a>(關聯模型、ER、正規化、關聯代數)、
+          <a href="https://www.edx.org/learn/relational-databases/stanford-university-databases-relational-databases-and-sql">Databases: Relational Databases and SQL</a>(SQL 重頭戲)、與
+          <a href="https://www.edx.org/learn/databases/stanford-university-databases-semistructured-data">Databases: Semistructured Data</a>(XML/JSON 半結構化資料)。
+          想要一本書,<em>Database System Concepts</em>(Silberschatz 等,俗稱「牛書」)是經典教科書;
+          想立刻動手,直接安裝 <a href="https://www.sqlite.org/">SQLite</a> 或在 <a href="https://sqliteonline.com/">SQLite Online</a>
+          上把本章每一段 SQL 都親手敲一遍——這是學資料庫最快的路。</p>
+        </div>
+      </div>
+
+    

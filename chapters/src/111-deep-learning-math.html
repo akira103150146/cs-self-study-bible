@@ -1,0 +1,842 @@
+<!--meta
+title: 深度學習的數學
+description: 綜合線性代數、微積分梯度與機率論,聚焦深度學習真正需要的數學:反向傳播=連鎖律、計算圖、Softmax+交叉熵導數、矩陣形式梯度下降、Jacobian,以及 RL 的期望梯度與對數技巧。
+-->
+
+      <div class="eyebrow">第二四部 · 進階人工智慧</div>
+      <h1>深度學習的數學</h1>
+      <p class="subtitle">你已經學過線性代數、微積分與機率——現在三條河要匯流了。從連鎖律到計算圖,從 softmax 導數到 REINFORCE,這一章把深度學習真正需要的數學串成一條線。</p>
+      <div class="byline">
+        <span class="tag">第 105 章</span>
+        <span>閱讀時間 ≈ 80 分鐘</span>
+        <span>難度:★★★★★</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>訓練神經網路本質上是在解一個<strong>非凸最佳化問題</strong>,損失曲面是你的地形圖</li>
+          <li><strong>計算圖(computational graph)</strong>如何讓微分變成一個可自動執行的圖上訊息傳遞</li>
+          <li><strong>反向傳播 = 連鎖律</strong>:如何逐層推導梯度,以及梯度為什麼要「逆流而上」</li>
+          <li><strong>Jacobian</strong> 是什麼,以及「梯度形狀法則」讓你再也不搞混維度</li>
+          <li>Softmax + 交叉熵損失的梯度為何如此優雅:$\hat{\mathbf{y}} - \mathbf{y}$,一步到位</li>
+          <li>批次/SGD/mini-batch 梯度下降的矩陣形式,以及 GPU 為何愛矩陣</li>
+          <li>機率視角:最大概似 = 最小負對數概似,KL 散度與交叉熵的深層關係</li>
+          <li>強化學習的對數技巧:REINFORCE 梯度估計背後那一行關鍵數學</li>
+        </ul>
+      </div>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">這是「黏合層」,不是入門章</span>
+          <p>本章<strong>不重新教</strong>線性代數、微積分或機率的基礎——
+          那些分別在
+          <a href="54-linear-algebra.html">第 54 章〈線性代數〉</a>、
+          <a href="12-calculus.html">第 12 章〈微積分精要〉</a>、
+          <a href="57-probability.html">第 57 章〈機率論〉</a>中已涵蓋。
+          這裡只做一件事:把那三門課在深度學習情境下<strong>串接起來</strong>,
+          用你在訓練模型時真正遇到的問題作為錨點。</p>
+        </div>
+      </div>
+
+      <h2>訓練一個神經網路,到底在解什麼數學問題?</h2>
+      <p>
+        想像你有一個函數 $f_\theta$——一個神經網路,用參數 $\theta$（數百萬個浮點數）描述。
+        給它一張貓的圖片,它輸出「這是貓的機率」。問題在於:你怎麼設定這幾百萬個 $\theta$,
+        讓它的輸出<em>對</em>?
+      </p>
+      <p>
+        答案是:你蒐集一堆已知答案的資料 $\{(\mathbf{x}_i, \mathbf{y}_i)\}_{i=1}^{N}$,
+        定義一個<strong>損失函數(loss function)</strong> $L(\theta)$,衡量「模型輸出 $f_\theta(\mathbf{x}_i)$ 和正確答案 $\mathbf{y}_i$ 有多遠」,
+        然後想辦法<strong>最小化</strong>這個損失:
+      </p>
+      <p>$$\theta^* = \arg\min_\theta \frac{1}{N} \sum_{i=1}^{N} \ell\!\left(f_\theta(\mathbf{x}_i),\, \mathbf{y}_i\right)$$</p>
+      <p>
+        這就是機器學習的核心最佳化問題。$\ell$ 是單筆的損失,平均起來就是訓練損失 $L(\theta)$。
+        到目前為止,我們在<a href="38-machine-learning.html">第 38 章〈機器學習〉</a>已見過這個框架。
+        但現在要深入探討:$\theta$ 有幾億個、$f_\theta$ 是幾十層非線性函數的合成——
+        我們怎麼算 $\frac{\partial L}{\partial \theta}$?
+      </p>
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">本章的一句話</span>
+          <p>訓練神經網路 = <strong>最小化損失函數</strong>。計算梯度的工具是<strong>連鎖律</strong>,
+          讓連鎖律可以自動執行的結構是<strong>計算圖</strong>。
+          其他一切——softmax、交叉熵、Adam、REINFORCE——都是這個核心的變體。</p>
+        </div>
+      </div>
+
+      <h2>符號速查:向量、矩陣、張量</h2>
+      <p>
+        本章用的符號規範和第 54 章一致,這裡只做最快的複習——如果你忘了某個概念,
+        立刻跳回<a href="54-linear-algebra.html">第 54 章</a>補齊再回來。
+      </p>
+      <ul>
+        <li><strong>純量(scalar)</strong>:一個數,如 $L \in \mathbb{R}$。</li>
+        <li><strong>向量(vector)</strong>:一排數,$\mathbf{x} \in \mathbb{R}^d$,預設直欄(column vector)。</li>
+        <li><strong>矩陣(matrix)</strong>:$\mathbf{W} \in \mathbb{R}^{m \times n}$,有 $m$ 列 $n$ 行。</li>
+        <li><strong>張量(tensor)</strong>:更高維的數組,如批次圖片 $\mathbf{X} \in \mathbb{R}^{B \times C \times H \times W}$。PyTorch、NumPy 都叫它 tensor。</li>
+        <li><strong>轉置(transpose)</strong>:$\mathbf{W}^\top$,將列行互換。</li>
+        <li><strong>Hadamard 乘積(element-wise product)</strong>:$\mathbf{a} \odot \mathbf{b}$,對應元素相乘,兩者形狀相同。</li>
+      </ul>
+      <p>
+        本章的「梯度」 $\nabla_\theta L$ 與 $\theta$ 同形狀——這是 ML 的習慣約定。
+        稍後我們會仔細說明為什麼這樣定義,以及它和 Jacobian 的關係。
+      </p>
+
+      <h2>前向傳播:矩陣乘法 + 非線性的疊加</h2>
+      <p>
+        一個有一層隱藏層的全連接網路(兩層權重)(fully-connected network)長這樣:
+        給一筆輸入 $\mathbf{x} \in \mathbb{R}^d$,
+      </p>
+      <p>
+        $$\mathbf{z}^{(1)} = \mathbf{W}^{(1)}\mathbf{x} + \mathbf{b}^{(1)}, \quad \mathbf{h}^{(1)} = \sigma\!\left(\mathbf{z}^{(1)}\right)$$
+        $$\mathbf{z}^{(2)} = \mathbf{W}^{(2)}\mathbf{h}^{(1)} + \mathbf{b}^{(2)}, \quad \hat{\mathbf{y}} = \text{softmax}\!\left(\mathbf{z}^{(2)}\right)$$
+        $$L = -\sum_k y_k \log \hat{y}_k \quad \text{(交叉熵損失)}$$
+      </p>
+      <p>
+        其中 $\mathbf{W}^{(1)} \in \mathbb{R}^{H \times d}$、$\mathbf{W}^{(2)} \in \mathbb{R}^{K \times H}$,
+        $H$ 是隱藏層寬度,$K$ 是類別數。
+        $\sigma$ 是逐元素的啟動函數(activation function),常用 ReLU、tanh、GELU 等。
+      </p>
+      <p>
+        注意每一步都是:<em>線性 → 非線性 → 線性 → 非線性 → ⋯</em>。
+        如果去掉非線性,多層線性堆疊等價於一層線性——那就白費功夫了。
+        非線性讓網路能逼近任意複雜的函數(萬能逼近定理,universal approximation theorem)。
+      </p>
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">維度追蹤的黃金法則</span>
+          <p>每次寫矩陣乘法,先<strong>對齊維度</strong>:
+          $\mathbf{W}^{(1)} \in \mathbb{R}^{H \times d}$ 乘以 $\mathbf{x} \in \mathbb{R}^{d}$,
+          得到 $\mathbf{z}^{(1)} \in \mathbb{R}^{H}$——內層的 $d$ 消掉了。
+          在 NumPy 裡養成習慣:矩陣運算後立刻 <code>.shape</code> 確認。</p>
+        </div>
+      </div>
+
+      <h2>計算圖與自動微分</h2>
+      <p>
+        如果每次改一點網路架構就要手推一遍梯度,那 PyTorch 就沒有存在的意義了。
+        現實中,框架幫你做一件事:<strong>自動微分(automatic differentiation,autodiff)</strong>。
+        它的核心思想是把計算過程用一張<strong>計算圖(computational graph)</strong>記錄下來,
+        然後沿著這張圖反方向傳遞梯度。
+      </p>
+      <p>
+        計算圖是一個有向無環圖(DAG)。<strong>節點</strong>代表變數(或操作的輸出),<strong>邊</strong>代表依賴關係。
+        前向傳播在圖上從左往右流動;反向傳播從損失節點往回流。
+        每個操作節點都要實作兩件事:<em>forward</em>(算值)與 <em>backward</em>(接收上游梯度、計算並傳遞下游梯度)。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 300" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif" font-size="13">
+  <defs>
+    <marker id="fwd" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#2f6f6a"/>
+    </marker>
+    <marker id="bwd" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#b4541f"/>
+    </marker>
+  </defs>
+
+  <!-- 標題 -->
+  <text x="360" y="22" text-anchor="middle" font-weight="700" font-size="14" fill="#1f2328">計算圖:前向(藍綠)與反向傳播(磚紅)</text>
+
+  <!-- 節點 -->
+  <!-- x -->
+  <circle cx="60" cy="150" r="28" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="60" y="154" text-anchor="middle" fill="#2f6f6a" font-weight="700">x</text>
+
+  <!-- W,b -->
+  <circle cx="60" cy="80" r="24" fill="#e3efed" stroke="#8a929b" stroke-width="1.5"/>
+  <text x="60" y="76" text-anchor="middle" fill="#4a5159" font-size="12">W,b</text>
+  <text x="60" y="90" text-anchor="middle" fill="#4a5159" font-size="11">(參數)</text>
+
+  <!-- z = Wx+b -->
+  <rect x="160" y="122" width="80" height="56" rx="12" fill="#2f6f6a"/>
+  <text x="200" y="146" text-anchor="middle" fill="#fff" font-weight="700">z=Wx+b</text>
+  <text x="200" y="163" text-anchor="middle" fill="#cfe6e2" font-size="11">線性</text>
+
+  <!-- h = σ(z) -->
+  <rect x="300" y="122" width="80" height="56" rx="12" fill="#2f6f6a"/>
+  <text x="340" y="146" text-anchor="middle" fill="#fff" font-weight="700">h=σ(z)</text>
+  <text x="340" y="163" text-anchor="middle" fill="#cfe6e2" font-size="11">非線性</text>
+
+  <!-- ŷ = softmax -->
+  <rect x="440" y="122" width="90" height="56" rx="12" fill="#2f6f6a"/>
+  <text x="485" y="143" text-anchor="middle" fill="#fff" font-weight="700">ŷ=softmax</text>
+  <text x="485" y="160" text-anchor="middle" fill="#cfe6e2" font-size="11">(W₂h+b₂)</text>
+
+  <!-- L -->
+  <circle cx="620" cy="150" r="30" fill="#b4541f"/>
+  <text x="620" y="146" text-anchor="middle" fill="#fff" font-weight="700" font-size="14">L</text>
+  <text x="620" y="162" text-anchor="middle" fill="#f6e7dd" font-size="11">CE損失</text>
+
+  <!-- y label -->
+  <circle cx="620" cy="80" r="20" fill="#e3efed" stroke="#8a929b" stroke-width="1.5"/>
+  <text x="620" y="85" text-anchor="middle" fill="#4a5159" font-size="12">y</text>
+
+  <!-- 前向邊 -->
+  <line x1="88" y1="150" x2="158" y2="150" stroke="#2f6f6a" stroke-width="2" marker-end="url(#fwd)"/>
+  <line x1="84" y1="90" x2="158" y2="135" stroke="#2f6f6a" stroke-width="1.5" marker-end="url(#fwd)" stroke-dasharray="4 3"/>
+  <line x1="240" y1="150" x2="298" y2="150" stroke="#2f6f6a" stroke-width="2" marker-end="url(#fwd)"/>
+  <line x1="380" y1="150" x2="438" y2="150" stroke="#2f6f6a" stroke-width="2" marker-end="url(#fwd)"/>
+  <line x1="530" y1="150" x2="587" y2="150" stroke="#2f6f6a" stroke-width="2" marker-end="url(#fwd)"/>
+  <line x1="620" y1="100" x2="620" y2="118" stroke="#2f6f6a" stroke-width="1.5" marker-end="url(#fwd)" stroke-dasharray="4 3"/>
+
+  <!-- 反向邊(磚紅,上方弧) -->
+  <path d="M 588 138 Q 510 95 472 120" fill="none" stroke="#b4541f" stroke-width="2" marker-end="url(#bwd)"/>
+  <path d="M 438 135 Q 388 95 382 120" fill="none" stroke="#b4541f" stroke-width="2" marker-end="url(#bwd)"/>
+  <path d="M 298 135 Q 248 95 242 120" fill="none" stroke="#b4541f" stroke-width="2" marker-end="url(#bwd)"/>
+  <path d="M 158 135 Q 108 95 90 140" fill="none" stroke="#b4541f" stroke-width="2" marker-end="url(#bwd)"/>
+  <path d="M 158 130 Q 100 70 86 82" fill="none" stroke="#b4541f" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#bwd)"/>
+
+  <!-- 標籤 -->
+  <text x="200" y="98" text-anchor="middle" fill="#b4541f" font-size="11">∂L/∂z</text>
+  <text x="320" y="98" text-anchor="middle" fill="#b4541f" font-size="11">∂L/∂h</text>
+  <text x="460" y="98" text-anchor="middle" fill="#b4541f" font-size="11">∂L/∂ŷ</text>
+  <text x="100" y="230" fill="#2f6f6a" font-size="12">→ 前向傳播</text>
+  <text x="100" y="248" fill="#b4541f" font-size="12">← 反向傳播(梯度)</text>
+</svg>
+        <figcaption>圖 105-1:計算圖的前向與反向傳播。藍綠色箭頭是前向傳播(計算值);磚紅色弧線是反向傳播(傳遞梯度)。每個節點的反向函數接收上游梯度,乘上本節點的局部梯度後,繼續往下游傳。</figcaption>
+      </div>
+
+      <p>
+        PyTorch 的 <code>autograd</code> 引擎就是自動建立這張圖、自動呼叫每個節點的 backward 函數。
+        你呼叫 <code>loss.backward()</code>,梯度就從 $L$ 節點逆流,沿途把每個參數的梯度填入 <code>.grad</code> 屬性。
+      </p>
+
+      <h2>反向傳播 = 連鎖律:逐層推導梯度</h2>
+      <p>
+        反向傳播(backpropagation)的數學核心是微積分的<strong>連鎖律(chain rule)</strong>。
+        你在<a href="12-calculus.html">第 12 章</a>學過純量版:若 $L = g(f(x))$,
+        則 $\frac{dL}{dx} = \frac{dL}{dg} \cdot \frac{dg}{df} \cdot \frac{df}{dx}$。
+        神經網路只是把這條鏈拉得非常長。
+      </p>
+      <p>
+        以剛才的兩層網路為例,用連鎖律逐層往回推:
+      </p>
+      <p>
+        $$\frac{\partial L}{\partial \mathbf{z}^{(2)}} = \hat{\mathbf{y}} - \mathbf{y} \quad \in \mathbb{R}^K \quad \text{(稍後證明)}$$
+      </p>
+      <p>
+        $$\frac{\partial L}{\partial \mathbf{W}^{(2)}} = \frac{\partial L}{\partial \mathbf{z}^{(2)}} \cdot \left(\mathbf{h}^{(1)}\right)^\top \quad \in \mathbb{R}^{K \times H}$$
+      </p>
+      <p>
+        $$\frac{\partial L}{\partial \mathbf{b}^{(2)}} = \frac{\partial L}{\partial \mathbf{z}^{(2)}} \quad \in \mathbb{R}^K$$
+      </p>
+      <p>
+        $$\frac{\partial L}{\partial \mathbf{h}^{(1)}} = \left(\mathbf{W}^{(2)}\right)^\top \frac{\partial L}{\partial \mathbf{z}^{(2)}} \quad \in \mathbb{R}^H$$
+      </p>
+      <p>
+        $$\frac{\partial L}{\partial \mathbf{z}^{(1)}} = \frac{\partial L}{\partial \mathbf{h}^{(1)}} \odot \sigma'\!\left(\mathbf{z}^{(1)}\right) \quad \in \mathbb{R}^H \quad \text{($\odot$ = element-wise)}$$
+      </p>
+      <p>
+        $$\frac{\partial L}{\partial \mathbf{W}^{(1)}} = \frac{\partial L}{\partial \mathbf{z}^{(1)}} \cdot \mathbf{x}^\top \quad \in \mathbb{R}^{H \times d}$$
+      </p>
+      <p>
+        每一步都是「上游梯度 × 本層局部梯度」。注意維度:
+        $\frac{\partial L}{\partial \mathbf{W}}$ 和 $\mathbf{W}$ 形狀相同,讓梯度下降 $\mathbf{W} \leftarrow \mathbf{W} - \eta \frac{\partial L}{\partial \mathbf{W}}$ 可以直接做。
+      </p>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">最常見的 bug:維度搞反</span>
+          <p>手推梯度時,最容易犯的錯是把外積(outer product)和矩陣乘積混淆。
+          記住:$\frac{\partial L}{\partial \mathbf{W}^{(2)}} = \boldsymbol{\delta}^{(2)} \cdot (\mathbf{h}^{(1)})^\top$
+          是一個 $(K \times 1)$ 乘以 $(1 \times H)$ 的<em>外積</em>,結果是 $K \times H$ 矩陣——
+          和 $\mathbf{W}^{(2)}$ 的形狀完全相同。若你得到的形狀不對,必是某個轉置遺漏了。</p>
+        </div>
+      </div>
+
+      <h2>Jacobian 與梯度形狀法則</h2>
+      <p>
+        當函數輸入輸出都是向量時,純量導數 $\frac{df}{dx}$ 就得升級成
+        <strong>Jacobian 矩陣(Jacobian matrix)</strong>。
+        對映射 $\mathbf{f}: \mathbb{R}^n \to \mathbb{R}^m$,Jacobian 定義為:
+      </p>
+      <p>
+        $$\mathbf{J}_{\mathbf{f}} = \frac{\partial \mathbf{f}}{\partial \mathbf{x}} \in \mathbb{R}^{m \times n}, \quad
+        (\mathbf{J}_{\mathbf{f}})_{ij} = \frac{\partial f_i}{\partial x_j}$$
+      </p>
+      <p>
+        用白話說:第 $i$ 列告訴你「輸出的第 $i$ 個元素」對「每一個輸入元素」的偏微分。
+        一個 softmax 輸出 $K$ 維、輸入 $K$ 維,它的 Jacobian 就是 $K \times K$ 的矩陣:
+      </p>
+      <p>
+        $$\frac{\partial \hat{y}_j}{\partial z_k} = \hat{y}_j\!\left(\delta_{jk} - \hat{y}_k\right)$$
+      </p>
+      <p>
+        其中 $\delta_{jk}$ 是克羅內克 $\delta$(Kronecker delta):$j=k$ 時為 1,否則為 0。
+        這個式子是推導交叉熵梯度的關鍵。
+      </p>
+
+      <h3>梯度形狀法則(ML 用)</h3>
+      <p>
+        在深度學習中,我們通常不直接操作 Jacobian,而是利用一個更方便的
+        <strong>「梯度與變數同形狀」</strong>的規定:
+        若 $L \in \mathbb{R}$ 是純量損失,$\mathbf{W} \in \mathbb{R}^{m \times n}$ 是參數,
+        則 $\frac{\partial L}{\partial \mathbf{W}} \in \mathbb{R}^{m \times n}$,
+        每個元素 $\left(\frac{\partial L}{\partial \mathbf{W}}\right)_{ij} = \frac{\partial L}{\partial W_{ij}}$。
+      </p>
+      <p>
+        這讓梯度下降更新 $\mathbf{W} \leftarrow \mathbf{W} - \eta \frac{\partial L}{\partial \mathbf{W}}$
+        在形狀上自然成立。Jacobian 和「梯度」的關係是:若 $\mathbf{z} = \mathbf{W}\mathbf{h}$,
+        則反向傳播算的 $\frac{\partial L}{\partial \mathbf{W}}$ 相當於 $\frac{\partial L}{\partial \mathbf{z}} \cdot \mathbf{h}^\top$(外積),
+        這正是連鎖律中 Jacobian 轉置(vector-Jacobian product,VJP)的矩陣版。
+      </p>
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">VJP 是 autograd 的引擎</span>
+          <p>現代 autodiff 框架(PyTorch、JAX)底層做的是<strong>向量-Jacobian 積(VJP)</strong>:
+          不計算整個 Jacobian 矩陣(太貴了),而是計算「上游梯度向量 $\mathbf{v}$ 左乘 Jacobian」。
+          這讓反向傳播的計算量只比前向略高一倍,無論網路有多少參數。</p>
+        </div>
+      </div>
+
+      <h2>Softmax 與交叉熵:為何導數如此乾淨?</h2>
+      <p>
+        Softmax 把一排分數(logit)$\mathbf{z} \in \mathbb{R}^K$ 變成機率分佈 $\hat{\mathbf{y}}$:
+      </p>
+      <p>
+        $$\hat{y}_k = \frac{e^{z_k}}{\sum_{j=1}^{K} e^{z_j}}$$
+      </p>
+      <p>
+        你已經在<a href="99-gpt-from-scratch.html">第 93 章〈從零打造 GPT〉</a>見過 softmax 在 Transformer 注意力中的角色。
+        這裡我們要做一件第 93 章略過的事:推導 softmax 配上<strong>交叉熵損失</strong>的完整梯度。
+      </p>
+      <p>
+        交叉熵損失(cross-entropy loss)對 one-hot 標籤 $\mathbf{y}$:
+      </p>
+      <p>
+        $$L = -\sum_{k=1}^{K} y_k \log \hat{y}_k$$
+      </p>
+
+      <h3>推導:$\partial L / \partial z_k = \hat{y}_k - y_k$</h3>
+      <p>
+        先算 $\frac{\partial L}{\partial \hat{y}_j} = -\frac{y_j}{\hat{y}_j}$。
+        再對 logit $z_k$ 用連鎖律:
+      </p>
+      <p>
+        $$\frac{\partial L}{\partial z_k} = \sum_{j=1}^{K} \frac{\partial L}{\partial \hat{y}_j} \cdot \frac{\partial \hat{y}_j}{\partial z_k}
+        = \sum_j \left(-\frac{y_j}{\hat{y}_j}\right) \cdot \hat{y}_j\!\left(\delta_{jk} - \hat{y}_k\right)$$
+      </p>
+      <p>
+        $$= -\sum_j y_j \left(\delta_{jk} - \hat{y}_k\right)
+        = -y_k + \hat{y}_k \sum_j y_j$$
+      </p>
+      <p>
+        因為 $\mathbf{y}$ 是 one-hot,所以 $\sum_j y_j = 1$,得到:
+      </p>
+      <p>
+        $$\boxed{\frac{\partial L}{\partial z_k} = \hat{y}_k - y_k}$$
+      </p>
+      <p>
+        向量形式就是 $\frac{\partial L}{\partial \mathbf{z}} = \hat{\mathbf{y}} - \mathbf{y}$。
+        這個結果美在兩點:第一,它<em>只用到</em> $\hat{\mathbf{y}}$ 和 $\mathbf{y}$,計算超快;
+        第二,直覺意義非常清楚——「模型機率超過標籤的部分就是要扣的梯度」。
+        Softmax 的 Jacobian 和交叉熵的梯度恰好抵銷了大量複雜度,給出這個一行答案。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 680 230" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif" font-size="13">
+  <defs>
+    <marker id="a2" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#b4541f"/>
+    </marker>
+  </defs>
+  <text x="340" y="22" text-anchor="middle" font-weight="700" font-size="14" fill="#1f2328">Softmax + 交叉熵的梯度流</text>
+
+  <!-- Logits -->
+  <rect x="30" y="50" width="100" height="130" rx="10" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="80" y="75" text-anchor="middle" fill="#2f6f6a" font-weight="700">Logits z</text>
+  <text x="80" y="98" text-anchor="middle" fill="#4a5159">[2.1]</text>
+  <text x="80" y="116" text-anchor="middle" fill="#4a5159">[1.4]</text>
+  <text x="80" y="134" text-anchor="middle" fill="#4a5159">[0.3]</text>
+  <text x="80" y="160" text-anchor="middle" fill="#8a929b" font-size="11">K=3 類</text>
+
+  <!-- arrow fwd -->
+  <line x1="130" y1="115" x2="188" y2="115" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="159" y="108" text-anchor="middle" fill="#2f6f6a" font-size="11">softmax</text>
+  <polygon points="188,112 198,115 188,118" fill="#2f6f6a"/>
+
+  <!-- ŷ -->
+  <rect x="200" y="50" width="110" height="130" rx="10" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="255" y="75" text-anchor="middle" fill="#2f6f6a" font-weight="700">ŷ(機率)</text>
+  <text x="255" y="98" text-anchor="middle" fill="#4a5159">[0.60]</text>
+  <text x="255" y="116" text-anchor="middle" fill="#4a5159">[0.30]</text>
+  <text x="255" y="134" text-anchor="middle" fill="#4a5159">[0.10]</text>
+  <text x="255" y="160" text-anchor="middle" fill="#8a929b" font-size="11">∑=1</text>
+
+  <!-- y (ground truth) -->
+  <rect x="200" y="195" width="110" height="30" rx="8" fill="#f6e7dd" stroke="#b4541f"/>
+  <text x="255" y="215" text-anchor="middle" fill="#b4541f" font-weight="700">y=[1,0,0]</text>
+
+  <!-- arrow fwd CE -->
+  <line x1="310" y1="115" x2="368" y2="115" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="339" y="108" text-anchor="middle" fill="#2f6f6a" font-size="11">-Σy log ŷ</text>
+  <polygon points="368,112 378,115 368,118" fill="#2f6f6a"/>
+
+  <!-- L -->
+  <circle cx="420" cy="115" r="36" fill="#b4541f"/>
+  <text x="420" y="111" text-anchor="middle" fill="#fff" font-weight="700" font-size="15">L</text>
+  <text x="420" y="128" text-anchor="middle" fill="#f6e7dd" font-size="11">≈ 0.51</text>
+
+  <!-- backward gradient -->
+  <line x1="370" y1="104" x2="314" y2="90" stroke="#b4541f" stroke-width="2" marker-end="url(#a2)"/>
+  <text x="345" y="85" text-anchor="middle" fill="#b4541f" font-size="11">∂L/∂ŷ</text>
+
+  <!-- combined gradient ŷ - y -->
+  <rect x="530" y="50" width="130" height="130" rx="10" fill="#8b5cf6" fill-opacity="0.12" stroke="#8b5cf6"/>
+  <text x="595" y="75" text-anchor="middle" fill="#8b5cf6" font-weight="700">ŷ − y</text>
+  <text x="595" y="98" text-anchor="middle" fill="#4a5159">[−0.40]</text>
+  <text x="595" y="116" text-anchor="middle" fill="#4a5159">[+0.30]</text>
+  <text x="595" y="134" text-anchor="middle" fill="#4a5159">[+0.10]</text>
+  <text x="595" y="160" text-anchor="middle" fill="#8b5cf6" font-size="11">= ∂L/∂z</text>
+
+  <line x1="380" y1="126" x2="528" y2="110" stroke="#b4541f" stroke-width="2.5" stroke-dasharray="5 3" marker-end="url(#a2)"/>
+  <text x="460" y="102" text-anchor="middle" fill="#b4541f" font-size="12" font-weight="700">兩層合併</text>
+  <text x="460" y="117" text-anchor="middle" fill="#b4541f" font-size="11">∂L/∂z = ŷ−y</text>
+</svg>
+        <figcaption>圖 105-2:Softmax + 交叉熵的梯度流。Logit 輸入 softmax 得到機率 ŷ,再算交叉熵損失 L。反向傳播時,softmax 的複雜 Jacobian 與交叉熵的梯度互相抵銷,直接給出 ∂L/∂z = ŷ − y。</figcaption>
+      </div>
+
+      <p>
+        以下程式碼用 NumPy 從頭實作完整的前向傳播與反向傳播,並手動驗證 softmax+CE 的梯度:
+      </p>
+      <pre><code class="language-python">import numpy as np
+
+# ── 工具函數 ──────────────────────────────────────────
+def relu(z):      return np.maximum(0, z)
+def relu_grad(z): return (z &gt; 0).astype(float)
+
+def softmax(z):
+    e = np.exp(z - z.max())   # 數值穩定:平移 max
+    return e / e.sum()
+
+def cross_entropy(y_hat, y):
+    return -np.sum(y * np.log(y_hat + 1e-15))
+
+# ── 前向傳播 (Forward Pass) ──────────────────────────
+np.random.seed(42)
+d, H, K = 4, 6, 3           # 輸入維度 / 隱藏層寬度 / 類別數
+
+W1 = np.random.randn(H, d) * 0.1
+b1 = np.zeros(H)
+W2 = np.random.randn(K, H) * 0.1
+b2 = np.zeros(K)
+
+x = np.random.randn(d)          # 一筆輸入  shape (4,)
+y = np.array([1., 0., 0.])      # one-hot 標籤,第 0 類
+
+z1   = W1 @ x + b1              # (H,)  線性
+h    = relu(z1)                  # (H,)  非線性
+z2   = W2 @ h + b2              # (K,)  線性
+yhat = softmax(z2)               # (K,)  機率輸出
+L    = cross_entropy(yhat, y)    # 純量
+
+print(f"ŷ = {yhat.round(4)}")
+print(f"L = {L:.4f}")
+
+# ── 反向傳播 (Backward Pass) ─────────────────────────
+dz2 = yhat - y                   # (K,)  softmax + CE 的神奇梯度
+dW2 = np.outer(dz2, h)          # (K, H) 外積
+db2 = dz2                        # (K,)
+
+dh  = W2.T @ dz2                 # (H,)
+dz1 = dh * relu_grad(z1)         # (H,)  逐元素乘 ReLU'
+dW1 = np.outer(dz1, x)          # (H, d) 外積
+db1 = dz1                        # (H,)
+
+print(f"\ndW2.shape = {dW2.shape}")   # (3, 6) = (K, H) ✓
+print(f"dW1.shape = {dW1.shape}")   # (6, 4) = (H, d) ✓
+</code></pre>
+
+      <div class="callout history">
+        <div class="ico">📜</div>
+        <div class="body">
+          <span class="c-title">Backprop 的誕生</span>
+          <p>反向傳播算法在 1986 年由 Rumelhart、Hinton 與 Williams 發表,讓多層神經網路第一次可以有效率地訓練。
+          但它的數學核心——連鎖律——早在 17 世紀就由萊布尼茲(Leibniz)確立,只是無人知曉它將來會在矽晶片上運行幾兆次。</p>
+        </div>
+      </div>
+
+      <h2>矩陣形式的梯度下降:批次、SGD、Mini-batch</h2>
+      <p>
+        實際訓練時,我們不是一次只看一筆資料——那樣既慢又不穩定。
+        我們把 $B$ 筆資料打包成一個<strong>批次(batch)</strong>,讓矩陣乘法可以平行計算:
+      </p>
+      <p>
+        $$\mathbf{X} \in \mathbb{R}^{B \times d}, \quad \mathbf{Z}^{(1)} = \mathbf{X} \mathbf{W}^{(1)\top} + \mathbf{1}\mathbf{b}^{(1)\top} \in \mathbb{R}^{B \times H}$$
+      </p>
+      <p>
+        批次梯度是每筆的梯度取平均:
+      </p>
+      <p>
+        $$\nabla_{\mathbf{W}} L = \frac{1}{B} \sum_{i=1}^{B} \frac{\partial \ell_i}{\partial \mathbf{W}}$$
+      </p>
+      <p>
+        三種常見的梯度下降策略:
+      </p>
+      <ul>
+        <li><strong>批次梯度下降(Batch GD)</strong>:用全部 $N$ 筆資料算一次梯度再更新。梯度準確但每步極慢;對大型資料集不可行。</li>
+        <li><strong>隨機梯度下降(SGD, Stochastic GD)</strong>:每步只用一筆資料。更新頻率高,但梯度雜訊大,損失曲線很震盪。</li>
+        <li><strong>Mini-batch SGD</strong>:折衷方案,每步用 $B = 32 \sim 512$ 筆。在實踐中幾乎普遍使用——雜訊適量(有助逃脫局部最小),又能充分利用 GPU 平行。</li>
+      </ul>
+      <p>
+        參數更新規則(最基本的 SGD):
+      </p>
+      <p>
+        $$\mathbf{W} \leftarrow \mathbf{W} - \eta \cdot \nabla_{\mathbf{W}} L_{\text{batch}}$$
+      </p>
+      <p>
+        $\eta$ 是學習率(learning rate)。
+        更進階的更新規則(Adam、RMSprop 等)在
+        <a href="109-optimization.html">第 103 章〈最佳化:線性規劃與凸優化〉</a>有詳細討論。
+      </p>
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">GPU 愛矩陣的原因</span>
+          <p>GPU 有幾千個計算核心,最適合做<strong>大矩陣乘法</strong>:把一個 batch 的所有輸入同時送進去,
+          一次算完 $B$ 筆的前向傳播與梯度——這正是 mini-batch 的意義。
+          第 112 章強化學習與未來的第 118 章 GPU 程式設計會更深入這個主題。</p>
+        </div>
+      </div>
+
+      <h2>機率視角:最大概似與 KL 散度</h2>
+      <p>
+        損失函數不只是「工程上的誤差衡量」,它有深刻的機率詮釋——而這個詮釋來自
+        <a href="57-probability.html">第 57 章</a>學過的機率論。
+      </p>
+      <h3>最大概似估計 = 最小化負對數概似</h3>
+      <p>
+        假設模型輸出 $\hat{\mathbf{y}} = p_\theta(\mathbf{y} \mid \mathbf{x})$ 是一個條件機率分佈。
+        給定訓練集 $\mathcal{D} = \{(\mathbf{x}_i, \mathbf{y}_i)\}$,
+        <strong>最大概似估計(Maximum Likelihood Estimation,MLE)</strong>找讓這批資料「最可能被生成」的 $\theta$:
+      </p>
+      <p>
+        $$\hat{\theta}_{\text{MLE}} = \arg\max_\theta \prod_{i=1}^{N} p_\theta(\mathbf{y}_i \mid \mathbf{x}_i)$$
+      </p>
+      <p>
+        取 $\log$(連乘 → 連加)再取負號:
+      </p>
+      <p>
+        $$\hat{\theta}_{\text{MLE}} = \arg\min_\theta \left[-\sum_{i=1}^{N} \log p_\theta(\mathbf{y}_i \mid \mathbf{x}_i)\right] = \arg\min_\theta L_{\text{NLL}}$$
+      </p>
+      <p>
+        這就是<strong>負對數概似(negative log-likelihood,NLL)</strong>。
+        對分類問題,模型輸出 $p_\theta(\mathbf{y} \mid \mathbf{x}) = \text{softmax}(\mathbf{z})$,
+        NLL 恰好等於交叉熵損失!這不是巧合——交叉熵正是 NLL 的分類版。
+      </p>
+      <p>
+        同理,對迴歸問題若假設殘差服從常態分佈,MLE 給出的損失就是均方誤差(MSE)。
+        這告訴我們:損失函數的選擇不是隨意的,它對應著你對數據生成過程的假設。
+      </p>
+
+      <h3>KL 散度與交叉熵的關係</h3>
+      <p>
+        <a href="108-information-theory.html">第 102 章〈資訊理論與資料壓縮〉</a>介紹了夏農熵。
+        這裡補上和 ML 直接相關的兩個概念:
+      </p>
+      <p>
+        <strong>KL 散度(Kullback-Leibler divergence)</strong>衡量兩個分佈 $p$、$q$ 的差距:
+      </p>
+      <p>
+        $$D_{\text{KL}}(p \,\Vert\, q) = \sum_k p_k \log \frac{p_k}{q_k} = \underbrace{-\sum_k p_k \log q_k}_{\text{交叉熵}} - \underbrace{\left(-\sum_k p_k \log p_k\right)}_{\text{真實熵 (常數)}}$$
+      </p>
+      <p>
+        對訓練集而言,$p$ 是真實標籤分佈(固定),$q$ 是模型預測。
+        最小化交叉熵等價於最小化 $D_{\text{KL}}(p \Vert q)$——讓模型分佈<em>靠近</em>真實分佈。
+        KL 散度恆 $\geq 0$(吉布斯不等式,Gibbs' inequality),等號成立 iff $p = q$。
+      </p>
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">損失函數 = 機率假設的選擇</span>
+          <p>交叉熵損失 ↔ 分類:假設類別服從 Categorical 分佈 → MLE → NLL 。<br>
+          均方誤差 ↔ 迴歸:假設殘差服從 Gaussian → MLE → NLL。<br>
+          知道這個等價,你就不再「記」損失函數,而是能從頭「推」出它。</p>
+        </div>
+      </div>
+
+      <h2>強化學習數學一瞥:期望梯度與對數技巧</h2>
+      <p>
+        在<strong>強化學習(Reinforcement Learning,RL)</strong>中,我們不再有「正確答案標籤」。
+        取而代之,智能體(agent)在環境中採取動作、獲得獎勵,目標是最大化<em>期望</em>長期回報。
+        這讓梯度計算多了一層難度:目標函數是期望值,而期望本身也依賴策略參數。
+      </p>
+      <p>
+        設策略(policy)$\pi_\theta(a \mid s)$ 是在狀態 $s$ 下採取動作 $a$ 的機率,
+        軌跡 $\tau = (s_0, a_0, s_1, a_1, \ldots)$ 的機率為 $\pi_\theta(\tau)$,
+        總回報為 $R(\tau)$。目標函數是:
+      </p>
+      <p>
+        $$J(\theta) = \mathbb{E}_{\tau \sim \pi_\theta}\!\left[R(\tau)\right] = \int \pi_\theta(\tau) R(\tau) \, d\tau$$
+      </p>
+      <p>
+        對 $\theta$ 求梯度:
+      </p>
+      <p>
+        $$\nabla_\theta J(\theta) = \int \nabla_\theta \pi_\theta(\tau) \cdot R(\tau) \, d\tau$$
+      </p>
+      <p>
+        問題來了:$R(\tau)$ 不可微(環境是黑盒),無法直接用反向傳播。
+        這時登場的是<strong>對數技巧(log-derivative trick)</strong>,又叫 REINFORCE:
+      </p>
+      <p>
+        $$\nabla_\theta \pi_\theta(\tau) = \pi_\theta(\tau) \cdot \nabla_\theta \log \pi_\theta(\tau)$$
+      </p>
+      <p>
+        因為 $\frac{d}{d\theta} \log f(\theta) = \frac{f'(\theta)}{f(\theta)}$,即 $f'(\theta) = f(\theta) \cdot (\log f)'(\theta)$。代入得:
+      </p>
+      <p>
+        $$\nabla_\theta J(\theta) = \int \pi_\theta(\tau) \cdot R(\tau) \cdot \nabla_\theta \log \pi_\theta(\tau) \, d\tau
+        = \mathbb{E}_{\tau \sim \pi_\theta}\!\left[R(\tau)\, \nabla_\theta \log \pi_\theta(\tau)\right]$$
+      </p>
+      <p>
+        這就是 <strong>REINFORCE 梯度估計式</strong>。實作上,我們抽樣幾條軌跡來估計這個期望:
+      </p>
+      <p>
+        $$\nabla_\theta J(\theta) \approx \frac{1}{M} \sum_{m=1}^{M} R(\tau^{(m)}) \cdot \nabla_\theta \log \pi_\theta(\tau^{(m)})$$
+      </p>
+      <p>
+        $\nabla_\theta \log \pi_\theta(\tau)$ 是可微的——它只涉及策略網路的輸出,可以用 backprop 計算。
+        環境本身不需要可微。這讓「在不可微環境中訓練神經網路策略」成為可能,是 RL 最核心的一個數學技巧。
+      </p>
+      <pre><code class="language-python">import numpy as np
+
+# 示範對數技巧:∇_θ log π(a|s) 的計算
+# 假設策略是 softmax(logits)
+
+def softmax(z):
+    e = np.exp(z - z.max())
+    return e / e.sum()
+
+logits = np.array([1.0, 2.0, 0.5])   # 策略網路輸出
+pi = softmax(logits)                   # 動作機率分佈
+a = 1                                  # 採取了動作 1
+
+# ∂ log π(a|s) / ∂ logits = one_hot(a) - π
+# (對 softmax 輸出取對數再微分,結果非常乾淨)
+one_hot_a = np.zeros(len(logits))
+one_hot_a[a] = 1.0
+grad_log_pi = one_hot_a - pi          # 對數技巧的梯度
+
+R = 2.5                               # 採取動作後收到的獎勵
+
+# REINFORCE 梯度更新量 = R * ∇ log π(a|s)
+grad_J_estimate = R * grad_log_pi
+
+print(f"π(a=1|s) = {pi[a]:.4f}")
+print(f"∇ log π(a|s) = {grad_log_pi.round(4)}")
+print(f"REINFORCE 梯度估計 = {grad_J_estimate.round(4)}")
+# 梯度是正的 → 增加 π(a=1) 的機率(因為 R &gt; 0,這個動作有回報)
+</code></pre>
+      <p>
+        第 112 章〈強化學習〉(即將撰寫)會把這個梯度估計式應用到 Actor-Critic、PPO 等現代 RL 算法中。
+      </p>
+
+      <h2>把這一章串起來</h2>
+      <p>
+        這一章我們完成了三條河流的匯流:
+      </p>
+      <ul>
+        <li><strong>線性代數(第 54 章)</strong>提供語言:向量、矩陣、張量、Jacobian。前向傳播就是矩陣乘法的疊加。</li>
+        <li><strong>微積分(第 12 章)</strong>提供工具:連鎖律讓梯度能從損失節點一路逆流回每個參數,形成反向傳播。</li>
+        <li><strong>機率論(第 57 章)</strong>提供意義:損失函數不是拍腦袋的,而是機率假設的 MLE 推論;KL 散度把「模型分佈靠近真實分佈」的目標量化。</li>
+      </ul>
+      <p>
+        三個結論值得特別記住:
+      </p>
+      <ol>
+        <li>反向傳播的核心是連鎖律的遞迴應用;計算圖讓這件事可以自動化。</li>
+        <li>Softmax + 交叉熵的梯度 = $\hat{\mathbf{y}} - \mathbf{y}$,來自兩個複雜公式的優美抵銷。</li>
+        <li>RL 對數技巧把「不可微環境」的問題轉化成策略的梯度問題,是 REINFORCE 的基礎。</li>
+      </ol>
+      <p>
+        往前看:第 93 章〈從零打造 GPT〉(<a href="99-gpt-from-scratch.html">第 93 章</a>)的 Transformer 訓練,
+        用的正是這裡的 softmax、交叉熵與反向傳播,只是規模放大了幾個數量級。
+        第 112 章〈強化學習〉會把對數技巧發展成 PPO 等現代算法。
+        第 118 章〈GPU 程式設計〉會解釋為何矩陣乘法在現代硬體上能如此快速地執行。
+      </p>
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">延伸閱讀</span>
+          <p>
+          <strong>《Mathematics for Machine Learning》</strong>(Deisenroth, Faisal, Ong,劍橋大學出版社,免費 PDF):
+          是本章所有內容的嚴謹版本,包含更完整的 Jacobian、特徵值分解與最佳化理論。<br><br>
+          <strong>Andrej Karpathy 的 <em>micrograd</em></strong>:200 行 Python 實作自動微分引擎,是理解計算圖最好的動手練習。<br><br>
+          <strong>Spinning Up in Deep RL(OpenAI)</strong>:對 REINFORCE 與 Actor-Critic 有清晰的數學推導。
+          </p>
+        </div>
+      </div>
+
+      <!-- ────── 練習題 ────── -->
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 105.1 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>
+            考慮一個兩層網路:輸入 $\mathbf{x} \in \mathbb{R}^2$,隱藏層寬度 $H=3$(ReLU 啟動),輸出 2 類(softmax + 交叉熵)。
+            固定以下參數值:
+          </p>
+          <p>
+            $\mathbf{W}^{(1)} = \begin{pmatrix} 1 &amp; 0 \\ 0 &amp; 1 \\ 1 &amp; 1 \end{pmatrix}$,
+            $\mathbf{b}^{(1)} = \mathbf{0}$,
+            $\mathbf{W}^{(2)} = \begin{pmatrix} 1 &amp; -1 &amp; 0 \\ 0 &amp; 1 &amp; -1 \end{pmatrix}$,
+            $\mathbf{b}^{(2)} = \mathbf{0}$,
+            $\mathbf{x} = (1, 2)^\top$,
+            $\mathbf{y} = (1, 0)^\top$。
+          </p>
+          <p>
+            (a) 手算前向傳播,得出 $\hat{\mathbf{y}}$ 和 $L$。<br>
+            (b) 手算反向傳播,得出 $\frac{\partial L}{\partial \mathbf{W}^{(1)}}$。<br>
+            (c) 用 NumPy 程式碼驗證你的答案。
+          </p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>(a) 前向傳播:</strong></p>
+              <p>$\mathbf{z}^{(1)} = \mathbf{W}^{(1)} \mathbf{x} = (1, 2, 3)^\top$</p>
+              <p>$\mathbf{h} = \text{ReLU}(\mathbf{z}^{(1)}) = (1, 2, 3)^\top$（全正,ReLU 不動）</p>
+              <p>$\mathbf{z}^{(2)} = \mathbf{W}^{(2)} \mathbf{h} = \begin{pmatrix}1\cdot1+(-1)\cdot2+0\cdot3\\0\cdot1+1\cdot2+(-1)\cdot3\end{pmatrix} = \begin{pmatrix}-1\\-1\end{pmatrix}$</p>
+              <p>$\hat{\mathbf{y}} = \text{softmax}(-1,-1) = (0.5, 0.5)^\top$（兩者相等,模型尚未學到任何東西）</p>
+              <p>$L = -\log(0.5) \approx 0.6931$</p>
+
+              <p><strong>(b) 反向傳播:</strong></p>
+              <p>$\frac{\partial L}{\partial \mathbf{z}^{(2)}} = \hat{\mathbf{y}} - \mathbf{y} = (0.5-1, 0.5-0)^\top = (-0.5, 0.5)^\top$</p>
+              <p>$\frac{\partial L}{\partial \mathbf{h}} = (\mathbf{W}^{(2)})^\top \cdot (-0.5, 0.5)^\top
+              = \begin{pmatrix}1&amp;0\\-1&amp;1\\0&amp;-1\end{pmatrix}\begin{pmatrix}-0.5\\0.5\end{pmatrix}
+              = \begin{pmatrix}-0.5\\1.0\\-0.5\end{pmatrix}$</p>
+              <p>$\frac{\partial L}{\partial \mathbf{z}^{(1)}} = \frac{\partial L}{\partial \mathbf{h}} \odot \text{ReLU}'(\mathbf{z}^{(1)})
+              = \begin{pmatrix}-0.5\\1.0\\-0.5\end{pmatrix} \odot \begin{pmatrix}1\\1\\1\end{pmatrix}
+              = \begin{pmatrix}-0.5\\1.0\\-0.5\end{pmatrix}$</p>
+              <p>$\frac{\partial L}{\partial \mathbf{W}^{(1)}} = \frac{\partial L}{\partial \mathbf{z}^{(1)}} \mathbf{x}^\top
+              = \begin{pmatrix}-0.5\\1.0\\-0.5\end{pmatrix}(1,2)
+              = \begin{pmatrix}-0.5&amp;-1.0\\1.0&amp;2.0\\-0.5&amp;-1.0\end{pmatrix}$</p>
+
+              <p><strong>(c) NumPy 驗證:</strong></p>
+              <pre><code class="language-python">import numpy as np
+
+W1 = np.array([[1.,0],[0,1],[1,1]])
+b1 = np.zeros(3)
+W2 = np.array([[1.,-1,0],[0,1,-1]])
+b2 = np.zeros(2)
+x  = np.array([1.,2])
+y  = np.array([1.,0])
+
+z1   = W1 @ x + b1
+h    = np.maximum(0, z1)
+z2   = W2 @ h + b2
+e    = np.exp(z2 - z2.max())
+yhat = e / e.sum()
+L    = -np.sum(y * np.log(yhat + 1e-15))
+
+dz2  = yhat - y
+dh   = W2.T @ dz2
+dz1  = dh * (z1 &gt; 0)
+dW1  = np.outer(dz1, x)
+
+print("ŷ =", yhat)       # [0.5 0.5]
+print("L =", L)           # 0.6931
+print("dW1 =\n", dW1)    # 應與手算相符
+</code></pre>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 105.2 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>
+            用數值梯度(finite difference)驗證 softmax + 交叉熵的解析梯度 $\hat{\mathbf{y}} - \mathbf{y}$。
+            具體步驟:對 logits $\mathbf{z} = (2.0, 1.0, 0.5)^\top$、標籤 $\mathbf{y} = (1,0,0)^\top$,
+            計算
+            $$\frac{\partial L}{\partial z_k} \approx \frac{L(\mathbf{z} + \varepsilon\mathbf{e}_k) - L(\mathbf{z} - \varepsilon\mathbf{e}_k)}{2\varepsilon}$$
+            取 $\varepsilon = 10^{-5}$,與解析梯度比較。說明誤差來源。
+          </p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">import numpy as np
+
+def softmax(z):
+    e = np.exp(z - z.max()); return e / e.sum()
+
+def loss(z, y):
+    return -np.sum(y * np.log(softmax(z) + 1e-15))
+
+z = np.array([2.0, 1.0, 0.5])
+y = np.array([1.0, 0.0, 0.0])
+eps = 1e-5
+
+# 數值梯度
+num_grad = np.zeros(3)
+for k in range(3):
+    zp = z.copy(); zp[k] += eps
+    zm = z.copy(); zm[k] -= eps
+    num_grad[k] = (loss(zp, y) - loss(zm, y)) / (2 * eps)
+
+# 解析梯度
+yhat = softmax(z)
+analytic_grad = yhat - y
+
+print("數值梯度:  ", num_grad.round(6))
+print("解析梯度:  ", analytic_grad.round(6))
+print("最大絕對誤差:", np.abs(num_grad - analytic_grad).max())
+# 通常誤差 &lt; 1e-8,遠小於 eps=1e-5,說明公式正確
+</code></pre>
+              <p>
+                誤差來源:數值微分用的是有限差分近似,截斷誤差為 $O(\varepsilon^2)$;
+                同時浮點運算本身有捨入誤差 $O(\varepsilon_{\text{machine}}/\varepsilon)$。
+                兩個誤差在 $\varepsilon \approx \sqrt{\varepsilon_{\text{machine}}} \approx 10^{-8}$ 時取得最佳平衡。
+                $\varepsilon = 10^{-5}$ 已夠驗證解析梯度的正確性。
+              </p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 105.3 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>
+            對 REINFORCE 的對數技巧做手推:設策略 $\pi_\theta$ 是一個 softmax 策略,
+            logits = $\mathbf{W} \mathbf{s}$($\mathbf{s}$ 是狀態向量,$\mathbf{W}$ 是策略的唯一參數)。
+            在狀態 $\mathbf{s}$ 下選了動作 $a$,獲得即時獎勵 $R$。
+          </p>
+          <p>
+            (a) 寫出 $\log \pi_\theta(a \mid \mathbf{s})$ 對 $\mathbf{W}$ 的梯度 $\nabla_\mathbf{W} \log \pi_\theta(a \mid \mathbf{s})$。<br>
+            (b) 寫出 REINFORCE 更新量 $\Delta \mathbf{W}$。<br>
+            (c) 解釋:若 $R > 0$,更新讓 $\pi_\theta(a \mid \mathbf{s})$ 增加還是減少?為什麼直覺上合理?
+          </p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>(a)</strong> 設 logits $\mathbf{z} = \mathbf{W}\mathbf{s}$,$\pi_k = \text{softmax}(\mathbf{z})_k$。</p>
+              <p>$\log \pi_\theta(a \mid \mathbf{s}) = z_a - \log \sum_j e^{z_j} = (\mathbf{W}\mathbf{s})_a - \log \sum_j e^{(\mathbf{W}\mathbf{s})_j}$</p>
+              <p>對 $\mathbf{W}$ 微分,利用連鎖律和對數技巧:</p>
+              <p>$\nabla_\mathbf{W} \log \pi_\theta(a \mid \mathbf{s})
+              = \frac{\partial \log \pi_\theta(a \mid \mathbf{s})}{\partial \mathbf{z}} \cdot \frac{\partial \mathbf{z}}{\partial \mathbf{W}}$</p>
+              <p>第一項是 $\frac{\partial \log \pi(a)}{\partial \mathbf{z}} = \mathbf{e}_a - \boldsymbol{\pi}$（one-hot 減去策略分佈）。</p>
+              <p>第二項 $\frac{\partial \mathbf{z}}{\partial W_{ij}} = s_j \mathbf{e}_i$,整合得:</p>
+              <p>$\nabla_\mathbf{W} \log \pi_\theta(a \mid \mathbf{s}) = (\mathbf{e}_a - \boldsymbol{\pi}) \mathbf{s}^\top \in \mathbb{R}^{K \times d}$</p>
+
+              <p><strong>(b)</strong> REINFORCE 更新(梯度上升,因為要最大化期望回報):</p>
+              <p>$\Delta \mathbf{W} = \eta \cdot R \cdot (\mathbf{e}_a - \boldsymbol{\pi}) \mathbf{s}^\top$</p>
+
+              <p><strong>(c)</strong> 若 $R &gt; 0$:更新量在動作 $a$ 所在列為 $\eta R (1 - \pi_a) \mathbf{s}^\top &gt; 0$,
+              讓動作 $a$ 的 logit 增加,從而 $\pi(a \mid \mathbf{s})$ <em>增加</em>。
+              直覺:這個動作帶來了正獎勵,下次遇到同樣狀態時應該更傾向選它。
+              若 $R &lt; 0$,則相反,壓低該動作的機率——這正是「試誤學習」的數學翻譯。</p>
+            </div>
+          </details>
+        </div>
+      </div>

@@ -1,0 +1,970 @@
+<!--meta
+title: 高效能平行演算法
+description: Work/Depth 模型、Brent 定理、map/reduce/scan/stencil 等平行 patterns、Hillis-Steele 與 Blelloch scan、平行排序、tiled 矩陣乘、Roofline 模型,以及大模型資料/張量/管線平行訓練的設計原則。
+-->
+
+      <div class="eyebrow">第二六部 · 高效能運算、GPU 與 WASM</div>
+      <h1>高效能平行演算法</h1>
+      <p class="subtitle">你加了更多 GPU 核心,程式卻沒變快——問題不在硬體,而在演算法本身就不是為平行而設計的。這一章帶你重新設計思維。</p>
+      <div class="byline">
+        <span class="tag">第 113 章</span>
+        <span>閱讀時間 ≈ 75 分鐘</span>
+        <span>難度:★★★★☆</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>如何用 <strong>Work / Depth 模型</strong>嚴謹分析平行演算法的成本,以及 Brent 定理給出的加速界限</li>
+          <li><strong>map、reduce、scan、stencil、gather/scatter</strong> 五種平行 patterns 各自的結構與適用場景</li>
+          <li>Hillis-Steele 與 Blelloch 兩種<strong>平行前綴和(parallel prefix sum / scan)</strong>的步驟、差異與 work-efficiency</li>
+          <li>平行排序的設計原則:Bitonic sort 的電路結構,以及用 scan 加速 Radix sort</li>
+          <li>Tiled 矩陣乘法如何突破記憶體牆,以及 <strong>Roofline 模型</strong>如何幫你定位程式瓶頸</li>
+          <li>大模型訓練的三種平行策略:資料平行、張量平行、管線平行,及其通訊開銷</li>
+        </ul>
+      </div>
+
+      <h2>平行不只是「開更多執行緒」</h2>
+
+      <p>
+        想像你要把 10 億個數字加總起來。你手邊有 1024 個 GPU 核心。
+        最直覺的做法:叫第一個核心從頭加到尾,其他 1023 個核心閒著等。
+        結果:跟單核心一樣慢——甚至更慢,因為你還多了排程的開銷。
+      </p>
+      <p>
+        這不是玩笑話,而是許多工程師面對的真實窘境。問題的根源在於:<strong>原始的演算法本身就是序列的(sequential)</strong>。
+        它假設「你只能一次做一件事」,把所有步驟串成一條鏈。
+        光是多開執行緒,不能讓一條鏈變成一張網。
+      </p>
+      <p>
+        高效能平行演算法(high-performance parallel algorithms)要解決的問題更根本:
+        <strong>從設計階段就讓計算具備可平行的結構</strong>。
+        這一章是從<a href="43-parallel.html">第 43 章「平行程式設計」</a>對 Amdahl 定律的介紹往上走一層——
+        我們不再滿足於「有多少 sequential fraction 就有多少天花板」,
+        而是要學會把演算法本身重新設計,讓那個 sequential fraction 趨近於零。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">核心觀念</span>
+          <p>平行效能的瓶頸,往往不是硬體,而是演算法的<strong>結構</strong>。
+          重新設計演算法,讓計算步驟可以平行展開,才是治本之道。</p>
+        </div>
+      </div>
+
+      <h2>Work / Depth 模型:給平行演算法的成本會計</h2>
+
+      <p>
+        分析序列演算法,我們有時間複雜度 $O(T(n))$——它衡量的是「做了多少事」。
+        但平行演算法有兩個維度要衡量,一個帳本不夠用,你需要兩本。
+      </p>
+
+      <h3>Work 與 Depth 的定義</h3>
+      <p>
+        把一個平行演算法的執行過程畫成一張 DAG(有向無環圖,directed acyclic graph):
+        每個節點是一個操作,每條邊代表「這個操作依賴那個操作的結果」。
+      </p>
+      <ul>
+        <li>
+          <strong>Work($W$,總工作量)</strong>:DAG 中的節點總數,也就是所有處理器做的操作加總。
+          如果你只有一個處理器,完成這個演算法需要 $W$ 個步驟。
+        </li>
+        <li>
+          <strong>Depth($D$,深度 / Span / 關鍵路徑)</strong>:DAG 中最長的路徑長度。
+          即使有無限多個處理器,也至少需要 $D$ 個步驟——因為關鍵路徑上的操作彼此依賴,無法並行。
+        </li>
+      </ul>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">Depth 又叫 Span</span>
+          <p>Depth 有時寫作 Span、Critical Path Length 或 $T_\infty$（無限多處理器時的最短執行時間）。
+          本章統一用 $D$；考資料或看論文時，這幾個名詞可互換。</p>
+        </div>
+      </div>
+
+      <h3>Brent 定理與實際執行時間</h3>
+      <p>
+        有了 $W$ 和 $D$,我們能給 $p$ 個處理器的執行時間 $T_p$ 定出上下界:
+      </p>
+      <p>
+        <strong>下界(lower bound)</strong>:
+        $$T_p \geq \max\!\left(\frac{W}{p},\; D\right)$$
+        直覺:$W/p$ 是把工作平均分配時的最佳狀況;$D$ 是關鍵路徑的硬限制——無論多少處理器都擋不住。
+      </p>
+      <p>
+        <strong>Brent 定理(Brent's theorem,上界)</strong>:
+        $$T_p \leq D + \frac{W - D}{p}$$
+        只要能做到好的排程,實際執行時間不會超過這個值。
+        當 $p = 1$ 時,右側變成 $W$——退回序列執行;當 $p \to \infty$ 時,右側趨向 $D$——逼近最短關鍵路徑。
+      </p>
+
+      <div class="callout history">
+        <div class="ico">📜</div>
+        <div class="body">
+          <span class="c-title">Richard Brent 與這條定理</span>
+          <p>澳洲電腦科學家 Richard P. Brent 在 1974 年的論文
+          <em>The Parallel Evaluation of General Arithmetic Expressions</em> 中提出這個上界。
+          那個年代並沒有現代 GPU——Brent 考慮的是純理論的平行計算模型(PRAM)。
+          半個世紀後,這條定理仍是 GPU kernel 設計的核心分析工具。</p>
+        </div>
+      </div>
+
+      <h3>與 Amdahl 定律的關係</h3>
+      <p>
+        <a href="43-parallel.html">第 43 章</a>的 Amdahl 定律告訴你:序列部分佔比 $f$ 會讓加速比上限為 $1/f$。
+        Work/Depth 模型更精確——它把「序列部分」量化為關鍵路徑 $D$,
+        讓你知道是哪些具體操作卡住了平行化,而不是一個黑盒的比例 $f$。
+      </p>
+      <p>
+        舉個例子:把長度 $n$ 的陣列求總和。
+        序列演算法:$W = O(n)$、$D = O(n)$——它就是一條鏈。
+        平行歸約(parallel reduction):$W = O(n)$、$D = O(\log n)$——關鍵路徑從線性縮到對數!
+        這就是重新設計演算法的威力。
+      </p>
+
+      <h2>平行 Patterns 總覽:五個基本積木</h2>
+
+      <p>
+        就像序列演算法有「排序、搜尋、遞迴」等基本積木,
+        平行演算法也有一套可複用的結構模式(patterns)。
+        掌握這五種 patterns,你就能像搭樂高一樣組合出複雜的平行程式。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 760 340" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif" font-size="13">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#2f6f6a"/>
+    </marker>
+  </defs>
+
+  <!-- MAP -->
+  <rect x="10" y="10" width="130" height="140" rx="10" fill="#e3efed" stroke="#2f6f6a" stroke-width="1.5"/>
+  <text x="75" y="30" text-anchor="middle" font-weight="700" fill="#2f6f6a">Map</text>
+  <rect x="20" y="40" width="25" height="20" rx="4" fill="#2f6f6a"/><text x="32" y="55" text-anchor="middle" fill="white" font-size="11">a</text>
+  <rect x="52" y="40" width="25" height="20" rx="4" fill="#2f6f6a"/><text x="64" y="55" text-anchor="middle" fill="white" font-size="11">b</text>
+  <rect x="84" y="40" width="25" height="20" rx="4" fill="#2f6f6a"/><text x="96" y="55" text-anchor="middle" fill="white" font-size="11">c</text>
+  <rect x="116" y="40" width="16" height="20" rx="4" fill="#2f6f6a"/><text x="124" y="55" text-anchor="middle" fill="white" font-size="11">d</text>
+  <line x1="32" y1="60" x2="32" y2="80" stroke="#2f6f6a" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="64" y1="60" x2="64" y2="80" stroke="#2f6f6a" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="96" y1="60" x2="96" y2="80" stroke="#2f6f6a" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="124" y1="60" x2="124" y2="80" stroke="#2f6f6a" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="75" y="73" text-anchor="middle" fill="#8a929b" font-size="11">f(x)</text>
+  <rect x="20" y="85" width="25" height="20" rx="4" fill="#b4541f"/><text x="32" y="100" text-anchor="middle" fill="white" font-size="11">f(a)</text>
+  <rect x="52" y="85" width="25" height="20" rx="4" fill="#b4541f"/><text x="64" y="100" text-anchor="middle" fill="white" font-size="11">f(b)</text>
+  <rect x="84" y="85" width="25" height="20" rx="4" fill="#b4541f"/><text x="96" y="100" text-anchor="middle" fill="white" font-size="11">f(c)</text>
+  <rect x="116" y="85" width="16" height="20" rx="4" fill="#b4541f"/><text x="124" y="100" text-anchor="middle" fill="white" font-size="11">f(d)</text>
+  <text x="75" y="130" text-anchor="middle" fill="#8a929b" font-size="11">W=O(n) D=O(1)</text>
+
+  <!-- REDUCE -->
+  <rect x="155" y="10" width="130" height="140" rx="10" fill="#e3efed" stroke="#2f6f6a" stroke-width="1.5"/>
+  <text x="220" y="30" text-anchor="middle" font-weight="700" fill="#2f6f6a">Reduce</text>
+  <rect x="163" y="40" width="18" height="18" rx="3" fill="#2f6f6a"/><text x="172" y="53" text-anchor="middle" fill="white" font-size="10">1</text>
+  <rect x="186" y="40" width="18" height="18" rx="3" fill="#2f6f6a"/><text x="195" y="53" text-anchor="middle" fill="white" font-size="10">2</text>
+  <rect x="209" y="40" width="18" height="18" rx="3" fill="#2f6f6a"/><text x="218" y="53" text-anchor="middle" fill="white" font-size="10">3</text>
+  <rect x="232" y="40" width="18" height="18" rx="3" fill="#2f6f6a"/><text x="241" y="53" text-anchor="middle" fill="white" font-size="10">4</text>
+  <line x1="172" y1="58" x2="195" y2="73" stroke="#2f6f6a" stroke-width="1.2" marker-end="url(#arr)"/>
+  <line x1="195" y1="58" x2="195" y2="73" stroke="#2f6f6a" stroke-width="1.2" marker-end="url(#arr)"/>
+  <line x1="218" y1="58" x2="241" y2="73" stroke="#2f6f6a" stroke-width="1.2" marker-end="url(#arr)"/>
+  <line x1="241" y1="58" x2="241" y2="73" stroke="#2f6f6a" stroke-width="1.2" marker-end="url(#arr)"/>
+  <rect x="183" y="75" width="25" height="18" rx="3" fill="#8b5cf6"/><text x="195" y="88" text-anchor="middle" fill="white" font-size="10">3</text>
+  <rect x="228" y="75" width="25" height="18" rx="3" fill="#8b5cf6"/><text x="241" y="88" text-anchor="middle" fill="white" font-size="10">7</text>
+  <line x1="195" y1="93" x2="218" y2="108" stroke="#2f6f6a" stroke-width="1.2" marker-end="url(#arr)"/>
+  <line x1="241" y1="93" x2="218" y2="108" stroke="#2f6f6a" stroke-width="1.2" marker-end="url(#arr)"/>
+  <rect x="205" y="110" width="25" height="18" rx="3" fill="#b4541f"/><text x="217" y="123" text-anchor="middle" fill="white" font-size="10">10</text>
+  <text x="220" y="143" text-anchor="middle" fill="#8a929b" font-size="11">W=O(n) D=O(log n)</text>
+
+  <!-- SCAN -->
+  <rect x="300" y="10" width="140" height="140" rx="10" fill="#e3efed" stroke="#2f6f6a" stroke-width="1.5"/>
+  <text x="370" y="30" text-anchor="middle" font-weight="700" fill="#2f6f6a">Scan (prefix sum)</text>
+  <text x="310" y="50" fill="#2f6f6a" font-size="11">in:</text>
+  <rect x="328" y="38" width="18" height="18" rx="3" fill="#2f6f6a"/><text x="337" y="51" text-anchor="middle" fill="white" font-size="10">1</text>
+  <rect x="350" y="38" width="18" height="18" rx="3" fill="#2f6f6a"/><text x="359" y="51" text-anchor="middle" fill="white" font-size="10">2</text>
+  <rect x="372" y="38" width="18" height="18" rx="3" fill="#2f6f6a"/><text x="381" y="51" text-anchor="middle" fill="white" font-size="10">3</text>
+  <rect x="394" y="38" width="18" height="18" rx="3" fill="#2f6f6a"/><text x="403" y="51" text-anchor="middle" fill="white" font-size="10">4</text>
+  <line x1="370" y1="60" x2="370" y2="78" stroke="#8a929b" stroke-width="1" stroke-dasharray="4,2"/>
+  <text x="310" y="95" fill="#2f6f6a" font-size="11">out:</text>
+  <rect x="328" y="83" width="18" height="18" rx="3" fill="#b4541f"/><text x="337" y="96" text-anchor="middle" fill="white" font-size="10">1</text>
+  <rect x="350" y="83" width="18" height="18" rx="3" fill="#b4541f"/><text x="359" y="96" text-anchor="middle" fill="white" font-size="10">3</text>
+  <rect x="372" y="83" width="18" height="18" rx="3" fill="#b4541f"/><text x="381" y="96" text-anchor="middle" fill="white" font-size="10">6</text>
+  <rect x="394" y="83" width="18" height="18" rx="3" fill="#b4541f"/><text x="403" y="96" text-anchor="middle" fill="white" font-size="10">10</text>
+  <text x="370" y="120" text-anchor="middle" fill="#8a929b" font-size="11">out[i] = sum(in[0..i])</text>
+  <text x="370" y="143" text-anchor="middle" fill="#8a929b" font-size="11">W=O(n) D=O(log n)</text>
+
+  <!-- STENCIL -->
+  <rect x="455" y="10" width="140" height="140" rx="10" fill="#e3efed" stroke="#2f6f6a" stroke-width="1.5"/>
+  <text x="525" y="30" text-anchor="middle" font-weight="700" fill="#2f6f6a">Stencil</text>
+  <rect x="463" y="40" width="18" height="18" rx="3" fill="#8a929b"/><text x="472" y="53" text-anchor="middle" fill="white" font-size="10">a</text>
+  <rect x="485" y="40" width="18" height="18" rx="3" fill="#2f6f6a"/><text x="494" y="53" text-anchor="middle" fill="white" font-size="10">b</text>
+  <rect x="507" y="40" width="18" height="18" rx="3" fill="#2f6f6a"/><text x="516" y="53" text-anchor="middle" fill="white" font-size="10">c</text>
+  <rect x="529" y="40" width="18" height="18" rx="3" fill="#2f6f6a"/><text x="538" y="53" text-anchor="middle" fill="white" font-size="10">d</text>
+  <rect x="551" y="40" width="18" height="18" rx="3" fill="#8a929b"/><text x="560" y="53" text-anchor="middle" fill="white" font-size="10">e</text>
+  <line x1="472" y1="58" x2="494" y2="78" stroke="#2f6f6a" stroke-width="1" marker-end="url(#arr)"/>
+  <line x1="494" y1="58" x2="494" y2="78" stroke="#2f6f6a" stroke-width="1" marker-end="url(#arr)"/>
+  <line x1="516" y1="58" x2="494" y2="78" stroke="#2f6f6a" stroke-width="1" marker-end="url(#arr)"/>
+  <rect x="482" y="80" width="25" height="18" rx="3" fill="#b4541f"/><text x="494" y="93" text-anchor="middle" fill="white" font-size="10">b'</text>
+  <text x="525" y="120" text-anchor="middle" fill="#8a929b" font-size="11">out[i]=f(in[i-1..i+1])</text>
+  <text x="525" y="143" text-anchor="middle" fill="#8a929b" font-size="11">鄰居依賴→D=O(1)/round</text>
+
+  <!-- GATHER/SCATTER -->
+  <rect x="608" y="10" width="140" height="140" rx="10" fill="#e3efed" stroke="#2f6f6a" stroke-width="1.5"/>
+  <text x="678" y="30" text-anchor="middle" font-weight="700" fill="#2f6f6a">Gather / Scatter</text>
+  <text x="618" y="52" fill="#2f6f6a" font-size="10">索引 [2,0,3,1]</text>
+  <rect x="618" y="58" width="18" height="18" rx="3" fill="#8b5cf6"/><text x="627" y="71" text-anchor="middle" fill="white" font-size="10">A</text>
+  <rect x="640" y="58" width="18" height="18" rx="3" fill="#8b5cf6"/><text x="649" y="71" text-anchor="middle" fill="white" font-size="10">B</text>
+  <rect x="662" y="58" width="18" height="18" rx="3" fill="#8b5cf6"/><text x="671" y="71" text-anchor="middle" fill="white" font-size="10">C</text>
+  <rect x="684" y="58" width="18" height="18" rx="3" fill="#8b5cf6"/><text x="693" y="71" text-anchor="middle" fill="white" font-size="10">D</text>
+  <line x1="671" y1="76" x2="627" y2="96" stroke="#2f6f6a" stroke-width="1" marker-end="url(#arr)"/>
+  <line x1="627" y1="76" x2="649" y2="96" stroke="#2f6f6a" stroke-width="1" marker-end="url(#arr)"/>
+  <line x1="693" y1="76" x2="671" y2="96" stroke="#2f6f6a" stroke-width="1" marker-end="url(#arr)"/>
+  <line x1="649" y1="76" x2="693" y2="96" stroke="#2f6f6a" stroke-width="1" marker-end="url(#arr)"/>
+  <rect x="618" y="98" width="18" height="18" rx="3" fill="#b4541f"/><text x="627" y="111" text-anchor="middle" fill="white" font-size="10">C</text>
+  <rect x="640" y="98" width="18" height="18" rx="3" fill="#b4541f"/><text x="649" y="111" text-anchor="middle" fill="white" font-size="10">A</text>
+  <rect x="662" y="98" width="18" height="18" rx="3" fill="#b4541f"/><text x="671" y="111" text-anchor="middle" fill="white" font-size="10">D</text>
+  <rect x="684" y="98" width="18" height="18" rx="3" fill="#b4541f"/><text x="693" y="111" text-anchor="middle" fill="white" font-size="10">B</text>
+  <text x="678" y="143" text-anchor="middle" fill="#8a929b" font-size="11">不規則存取 → 注意衝突</text>
+</svg>
+        <figcaption>圖 113-1:五種核心平行 patterns。Map 最單純(每個元素獨立);Reduce 形成樹狀;Scan 是本章重點;Stencil 依賴鄰居;Gather/Scatter 做不規則記憶體存取。</figcaption>
+      </div>
+
+      <ul>
+        <li>
+          <strong>Map(映射)</strong>:對陣列每個元素獨立套用函式 $f$。
+          完美平行:$W = O(n)$,$D = O(1)$。GPU 最擅長的事。
+        </li>
+        <li>
+          <strong>Reduce(歸約)</strong>:用結合律算子(如 $+$、$\max$、$\text{AND}$)把陣列摺成單一值。
+          樹狀展開:$W = O(n)$,$D = O(\log n)$。
+        </li>
+        <li>
+          <strong>Scan(前綴和/掃描)</strong>:輸出陣列第 $i$ 項 = 輸入前 $i$ 項的累積值。
+          $W = O(n)$,$D = O(\log n)$。看起來平凡,實際上是無數進階演算法的隱藏骨幹。(下節詳述)
+        </li>
+        <li>
+          <strong>Stencil(模板/鄰域計算)</strong>:每個輸出元素依賴對應輸入元素的「鄰居」。
+          偏微分方程的數值解法、影像模糊、CNN 卷積皆屬此類。
+          每個 round 的 depth 為 $O(1)$,但需要多個 round。
+        </li>
+        <li>
+          <strong>Gather / Scatter(收集/分散)</strong>:依索引陣列做不規則記憶體存取。
+          Gather 讀,Scatter 寫。Scatter 如果多個核心寫同一位置就需要原子操作或排序先解決衝突。
+        </li>
+      </ul>
+
+      <h2>平行歸約(Parallel Reduction):樹狀相加</h2>
+
+      <p>
+        序列求和的程式碼每個人都寫過:一個 for 迴圈,一個累加器。
+        這個累加器就是問題所在——每一步都必須等上一步完成,形成長度 $n$ 的依賴鏈,Depth = $O(n)$。
+      </p>
+      <p>
+        平行歸約(parallel reduction)的洞見:加法有<strong>結合律(associativity)</strong>。
+        $(a + b) + (c + d) = (a + b) + (c + d)$——你可以同時算左半和右半,再合併結果。
+        這就是樹狀展開:
+      </p>
+      <pre><code class="language-text">第一輪(同時執行 n/2 對加法):
+  [1, 2, 3, 4, 5, 6, 7, 8]
+   ↓+↓  ↓+↓  ↓+↓  ↓+↓
+  [ 3,    7,   11,   15  ]
+
+第二輪(同時執行 n/4 對加法):
+  [ 3,    7,   11,   15  ]
+    ↓+↓        ↓+↓
+  [ 10,        26        ]
+
+第三輪(最後合併):
+  [ 10,        26        ]
+        ↓+↓
+        36</code></pre>
+
+      <p>共需 $\lceil \log_2 n \rceil$ 輪,每輪的操作可完全平行。分析:</p>
+      <ul>
+        <li>$W = O(n)$:總共做了 $n/2 + n/4 + \cdots + 1 = n - 1$ 次加法</li>
+        <li>$D = O(\log n)$:樹的高度</li>
+      </ul>
+
+      <p>Python 模擬實作(展示概念,真實 GPU 實作請見第 112 章):</p>
+
+      <pre><code class="language-python">def parallel_reduction(arr):
+    """
+    模擬樹狀平行歸約。
+    實際 GPU 實作中，每輪的加法會由不同執行緒同步執行。
+    """
+    data = list(arr)
+    n = len(data)
+    stride = 1
+
+    while stride &lt; n:
+        # 這個迴圈的每次迭代模擬「一輪」同步平行操作
+        next_data = []
+        i = 0
+        while i + stride &lt; n:
+            next_data.append(data[i] + data[i + stride])
+            i += stride * 2
+        if i &lt; n:
+            next_data.append(data[i])  # 奇數元素直接帶下去
+        data = next_data
+        stride *= 2  # 下一輪步幅翻倍
+
+    return data[0]
+
+# 測試
+arr = [1, 2, 3, 4, 5, 6, 7, 8]
+print(parallel_reduction(arr))  # 36</code></pre>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">結合律是關鍵</span>
+          <p>平行歸約要求算子具備<strong>結合律</strong>($\text{op}(a, \text{op}(b, c)) = \text{op}(\text{op}(a,b), c)$)。
+          整數加法、乘法、min、max、AND、OR、XOR 都滿足。
+          浮點數加法在數學上結合律近似成立,但由於捨入誤差,多執行緒的加總結果可能每次略有不同——這是 GPU 程式的著名陷阱。</p>
+        </div>
+      </div>
+
+      <h2>平行前綴和(Scan / Prefix Sum):無數演算法的骨幹</h2>
+
+      <p>
+        平行前綴和(parallel prefix sum),又叫 scan,是平行演算法世界裡最令人驚喜的工具之一。
+        它看起來只是「把每個位置之前的元素全部加起來」,卻能構成以下演算法的核心元件:
+      </p>
+      <ul>
+        <li>串流壓縮(stream compaction):從陣列中過濾出滿足條件的元素,保持相對順序</li>
+        <li>平行基數排序(radix sort):每個 bit 位的前綴和決定元素的新位置</li>
+        <li>稀疏矩陣的 CSR 格式建構</li>
+        <li>平行快速排序的分割(partition)步驟</li>
+        <li>碰撞偵測中的 BVH 建樹</li>
+      </ul>
+      <p>
+        Scan 的定義:給定陣列 $[a_0, a_1, \ldots, a_{n-1}]$ 與結合律算子 $\oplus$,
+        <strong>inclusive scan</strong> 的第 $i$ 個輸出為 $a_0 \oplus a_1 \oplus \cdots \oplus a_i$;
+        <strong>exclusive scan</strong>(又叫 prescan)的第 $i$ 個輸出為 $a_0 \oplus \cdots \oplus a_{i-1}$(輸出不含自己本身,$\text{out}[0] = \text{identity}$)。
+      </p>
+
+      <h3>Hillis-Steele 演算法(步驟圖直覺)</h3>
+      <p>
+        1986 年,W. Daniel Hillis 與 Guy L. Steele Jr. 在 Connection Machine 上設計了第一個廣為人知的平行 scan。
+        概念非常直觀:每個元素把自己的值「往左看 $s$ 個位置」的值加進來,然後 $s$ 翻倍,重複 $\log n$ 次。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 290" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif" font-size="12">
+  <defs>
+    <marker id="sarr" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto">
+      <path d="M0,0 L6,3 L0,6 Z" fill="#b4541f"/>
+    </marker>
+  </defs>
+
+  <!-- Title -->
+  <text x="360" y="20" text-anchor="middle" font-size="14" font-weight="700" fill="#2f6f6a">Hillis-Steele Inclusive Scan  [1, 2, 3, 4, 5, 6, 7, 8]</text>
+
+  <!-- Row 0: input -->
+  <text x="10" y="52" fill="#8a929b">input:</text>
+  <g transform="translate(70,38)">
+    <rect x="0"  y="0" width="70" height="24" rx="4" fill="#2f6f6a"/><text x="35" y="16" text-anchor="middle" fill="white">1</text>
+    <rect x="80" y="0" width="70" height="24" rx="4" fill="#2f6f6a"/><text x="115" y="16" text-anchor="middle" fill="white">2</text>
+    <rect x="160" y="0" width="70" height="24" rx="4" fill="#2f6f6a"/><text x="195" y="16" text-anchor="middle" fill="white">3</text>
+    <rect x="240" y="0" width="70" height="24" rx="4" fill="#2f6f6a"/><text x="275" y="16" text-anchor="middle" fill="white">4</text>
+    <rect x="320" y="0" width="70" height="24" rx="4" fill="#2f6f6a"/><text x="355" y="16" text-anchor="middle" fill="white">5</text>
+    <rect x="400" y="0" width="70" height="24" rx="4" fill="#2f6f6a"/><text x="435" y="16" text-anchor="middle" fill="white">6</text>
+    <rect x="480" y="0" width="70" height="24" rx="4" fill="#2f6f6a"/><text x="515" y="16" text-anchor="middle" fill="white">7</text>
+    <rect x="560" y="0" width="70" height="24" rx="4" fill="#2f6f6a"/><text x="595" y="16" text-anchor="middle" fill="white">8</text>
+  </g>
+
+  <!-- Step 1: stride=1 -->
+  <text x="10" y="112" fill="#8a929b">s=1:</text>
+  <!-- arrows for step 1: each element i adds element i-1 -->
+  <line x1="105" y1="62" x2="185" y2="102" stroke="#b4541f" stroke-width="1.2" stroke-dasharray="3,2" marker-end="url(#sarr)"/>
+  <line x1="185" y1="62" x2="265" y2="102" stroke="#b4541f" stroke-width="1.2" stroke-dasharray="3,2" marker-end="url(#sarr)"/>
+  <line x1="265" y1="62" x2="345" y2="102" stroke="#b4541f" stroke-width="1.2" stroke-dasharray="3,2" marker-end="url(#sarr)"/>
+  <line x1="345" y1="62" x2="425" y2="102" stroke="#b4541f" stroke-width="1.2" stroke-dasharray="3,2" marker-end="url(#sarr)"/>
+  <line x1="425" y1="62" x2="505" y2="102" stroke="#b4541f" stroke-width="1.2" stroke-dasharray="3,2" marker-end="url(#sarr)"/>
+  <line x1="505" y1="62" x2="585" y2="102" stroke="#b4541f" stroke-width="1.2" stroke-dasharray="3,2" marker-end="url(#sarr)"/>
+  <line x1="585" y1="62" x2="665" y2="102" stroke="#b4541f" stroke-width="1.2" stroke-dasharray="3,2" marker-end="url(#sarr)"/>
+
+  <g transform="translate(70,98)">
+    <rect x="0"  y="0" width="70" height="24" rx="4" fill="#8b5cf6"/><text x="35" y="16" text-anchor="middle" fill="white">1</text>
+    <rect x="80" y="0" width="70" height="24" rx="4" fill="#8b5cf6"/><text x="115" y="16" text-anchor="middle" fill="white">3</text>
+    <rect x="160" y="0" width="70" height="24" rx="4" fill="#8b5cf6"/><text x="195" y="16" text-anchor="middle" fill="white">5</text>
+    <rect x="240" y="0" width="70" height="24" rx="4" fill="#8b5cf6"/><text x="275" y="16" text-anchor="middle" fill="white">7</text>
+    <rect x="320" y="0" width="70" height="24" rx="4" fill="#8b5cf6"/><text x="355" y="16" text-anchor="middle" fill="white">9</text>
+    <rect x="400" y="0" width="70" height="24" rx="4" fill="#8b5cf6"/><text x="435" y="16" text-anchor="middle" fill="white">11</text>
+    <rect x="480" y="0" width="70" height="24" rx="4" fill="#8b5cf6"/><text x="515" y="16" text-anchor="middle" fill="white">13</text>
+    <rect x="560" y="0" width="70" height="24" rx="4" fill="#8b5cf6"/><text x="595" y="16" text-anchor="middle" fill="white">15</text>
+  </g>
+
+  <!-- Step 2: stride=2 -->
+  <text x="10" y="172" fill="#8a929b">s=2:</text>
+  <line x1="105" y1="122" x2="265" y2="162" stroke="#b4541f" stroke-width="1.2" stroke-dasharray="3,2" marker-end="url(#sarr)"/>
+  <line x1="185" y1="122" x2="345" y2="162" stroke="#b4541f" stroke-width="1.2" stroke-dasharray="3,2" marker-end="url(#sarr)"/>
+  <line x1="265" y1="122" x2="425" y2="162" stroke="#b4541f" stroke-width="1.2" stroke-dasharray="3,2" marker-end="url(#sarr)"/>
+  <line x1="345" y1="122" x2="505" y2="162" stroke="#b4541f" stroke-width="1.2" stroke-dasharray="3,2" marker-end="url(#sarr)"/>
+  <line x1="425" y1="122" x2="585" y2="162" stroke="#b4541f" stroke-width="1.2" stroke-dasharray="3,2" marker-end="url(#sarr)"/>
+  <line x1="505" y1="122" x2="665" y2="162" stroke="#b4541f" stroke-width="1.2" stroke-dasharray="3,2" marker-end="url(#sarr)"/>
+
+  <g transform="translate(70,158)">
+    <rect x="0"  y="0" width="70" height="24" rx="4" fill="#8b5cf6"/><text x="35" y="16" text-anchor="middle" fill="white">1</text>
+    <rect x="80" y="0" width="70" height="24" rx="4" fill="#8b5cf6"/><text x="115" y="16" text-anchor="middle" fill="white">3</text>
+    <rect x="160" y="0" width="70" height="24" rx="4" fill="#8b5cf6"/><text x="195" y="16" text-anchor="middle" fill="white">6</text>
+    <rect x="240" y="0" width="70" height="24" rx="4" fill="#8b5cf6"/><text x="275" y="16" text-anchor="middle" fill="white">10</text>
+    <rect x="320" y="0" width="70" height="24" rx="4" fill="#8b5cf6"/><text x="355" y="16" text-anchor="middle" fill="white">14</text>
+    <rect x="400" y="0" width="70" height="24" rx="4" fill="#8b5cf6"/><text x="435" y="16" text-anchor="middle" fill="white">18</text>
+    <rect x="480" y="0" width="70" height="24" rx="4" fill="#8b5cf6"/><text x="515" y="16" text-anchor="middle" fill="white">22</text>
+    <rect x="560" y="0" width="70" height="24" rx="4" fill="#8b5cf6"/><text x="595" y="16" text-anchor="middle" fill="white">26</text>
+  </g>
+
+  <!-- Step 3: stride=4 -->
+  <text x="10" y="232" fill="#8a929b">s=4:</text>
+  <line x1="105" y1="182" x2="425" y2="222" stroke="#b4541f" stroke-width="1.2" stroke-dasharray="3,2" marker-end="url(#sarr)"/>
+  <line x1="185" y1="182" x2="505" y2="222" stroke="#b4541f" stroke-width="1.2" stroke-dasharray="3,2" marker-end="url(#sarr)"/>
+  <line x1="265" y1="182" x2="585" y2="222" stroke="#b4541f" stroke-width="1.2" stroke-dasharray="3,2" marker-end="url(#sarr)"/>
+  <line x1="345" y1="182" x2="665" y2="222" stroke="#b4541f" stroke-width="1.2" stroke-dasharray="3,2" marker-end="url(#sarr)"/>
+
+  <g transform="translate(70,218)">
+    <rect x="0"  y="0" width="70" height="24" rx="4" fill="#b4541f"/><text x="35" y="16" text-anchor="middle" fill="white">1</text>
+    <rect x="80" y="0" width="70" height="24" rx="4" fill="#b4541f"/><text x="115" y="16" text-anchor="middle" fill="white">3</text>
+    <rect x="160" y="0" width="70" height="24" rx="4" fill="#b4541f"/><text x="195" y="16" text-anchor="middle" fill="white">6</text>
+    <rect x="240" y="0" width="70" height="24" rx="4" fill="#b4541f"/><text x="275" y="16" text-anchor="middle" fill="white">10</text>
+    <rect x="320" y="0" width="70" height="24" rx="4" fill="#b4541f"/><text x="355" y="16" text-anchor="middle" fill="white">15</text>
+    <rect x="400" y="0" width="70" height="24" rx="4" fill="#b4541f"/><text x="435" y="16" text-anchor="middle" fill="white">21</text>
+    <rect x="480" y="0" width="70" height="24" rx="4" fill="#b4541f"/><text x="515" y="16" text-anchor="middle" fill="white">28</text>
+    <rect x="560" y="0" width="70" height="24" rx="4" fill="#b4541f"/><text x="595" y="16" text-anchor="middle" fill="white">36</text>
+  </g>
+  <text x="360" y="275" text-anchor="middle" fill="#8a929b" font-size="11">每個格子在同一 step 裡「平行」更新(只讀舊值)。虛線箭頭=加上左邊 stride 距離的舊值。</text>
+</svg>
+        <figcaption>圖 113-2:Hillis-Steele inclusive scan 對 [1,2,3,4,5,6,7,8] 的三輪操作。每輪 stride 翻倍,三輪後得到正確前綴和。注意:每一步讀的是「舊值」,更新是同步的。</figcaption>
+      </div>
+
+      <h3>Hillis-Steele 的代價</h3>
+      <p>
+        Hillis-Steele 的 Depth = $O(\log n)$,但 Work = $O(n \log n)$——比序列的 $O(n)$ 多了一個 $\log$ 因子。
+        這是因為每一輪,幾乎所有 $n$ 個元素都要做一次加法,共 $\log n$ 輪。
+        在 GPU 上,只要 $n$ 個並行執行緒的代價低於 $\log$ 倍的 work overhead,
+        這個演算法就划算。但在理論上,它並不是 work-efficient(工作效率最優)的。
+      </p>
+
+      <h3>Blelloch 演算法:Work-Efficient Scan</h3>
+      <p>
+        Guy Blelloch 在 1990 年提出了 work-efficient 的平行 scan:
+        兩個階段(up-sweep + down-sweep),Work = $O(n)$,Depth = $O(\log n)$。
+        代價:需要更多協調與同步,適合在記憶體頻寬昂貴的環境下使用。
+      </p>
+      <p>
+        <strong>Up-sweep(歸約樹)</strong>:從葉子往根,每個節點存左右子樹的和。完成後根節點 = 總和。
+        <br>
+        <strong>Down-sweep(分配)</strong>:從根往葉子。根設為 identity(0 for 加法),每個節點把自己的值分給左子(直接給),右子(加上左子的舊值)。
+      </p>
+
+      <pre><code class="language-python">def blelloch_scan(arr):
+    """
+    Blelloch work-efficient exclusive scan。
+    W = O(n), D = O(log n)。
+    """
+    n = len(arr)
+    # 為了方便，假設 n 是 2 的幂次
+    data = list(arr)
+
+    # ---- Up-sweep(reduce phase) ----
+    stride = 1
+    while stride &lt; n:
+        for i in range(n - 1, -1, -(stride * 2)):
+            if i &gt;= stride:
+                data[i] += data[i - stride]
+        stride *= 2
+    # 此時 data[n-1] = 全部元素的總和
+
+    # ---- Down-sweep phase ----
+    data[n - 1] = 0  # 設 identity
+    stride = n // 2
+    while stride &gt;= 1:
+        for i in range(stride - 1, n, stride * 2):
+            if i + stride &lt; n:
+                left_val = data[i]
+                data[i] = data[i + stride]          # 左子 ← 父節點值
+                data[i + stride] += left_val         # 右子 ← 父 + 左舊值
+        stride //= 2
+
+    return data  # exclusive scan 結果
+
+arr = [1, 2, 3, 4, 5, 6, 7, 8]
+print(blelloch_scan(arr))
+# [0, 1, 3, 6, 10, 15, 21, 28]  (exclusive: out[0]=0, out[i]=sum(arr[0..i-1]))</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">核心觀念</span>
+          <p>Scan 是許多高效平行演算法的「隱藏骨幹」:
+          每當你需要「每個元素都要知道前面所有元素的某個累積值」,都可以把它轉化成一次 scan,
+          然後用 $O(\log n)$ depth 解決,而不是 $O(n)$ 的序列掃描。</p>
+        </div>
+      </div>
+
+      <h3>串流壓縮:Scan 的典型應用</h3>
+      <p>
+        問題:從陣列中取出所有偶數,保持原始順序。序列做法 $O(n)$,但只有一條執行緒能做。
+        平行做法分兩步:
+      </p>
+      <ol>
+        <li><strong>Map</strong>:對每個元素建立 flag 陣列(偶數=1,奇數=0)</li>
+        <li><strong>Exclusive scan</strong> flag 陣列:得到每個偶數的「輸出位置」</li>
+        <li><strong>Scatter</strong>:flag=1 的元素依 scan 結果寫入輸出陣列</li>
+      </ol>
+      <p>
+        整體 Work = $O(n)$,Depth = $O(\log n)$。這個模式幾乎可以套用到任何需要「選取 + 壓縮」的場景。
+      </p>
+
+      <h2>平行排序:讓比較網路與 Scan 一起工作</h2>
+
+      <p>
+        序列排序最優 $O(n \log n)$,平行排序能做到多好?
+        若把 Work 視為衡量標準,理論最優仍是 $O(n \log n)$,
+        但 Depth 可以壓到 $O(\log^2 n)$ 甚至 $O(\log n)$(不同模型下)。
+      </p>
+
+      <h3>Bitonic Sort(雙調排序):比較網路的代表</h3>
+      <p>
+        Bitonic sort 是一種<strong>比較網路(sorting network)</strong>:
+        資料流進一個固定接線的硬體電路,不論輸入是什麼,出來都是排序好的。
+        電路結構在編譯期就確定,不需要條件分支——GPU 最喜歡這種事。
+      </p>
+      <p>
+        概念:先把陣列切成 2 元素一組,各自排成「雙調序列(先遞增後遞減或反之)」,
+        再用 butterfly 式的比較-交換網路逐層合併。
+        Work = $O(n \log^2 n)$,Depth = $O(\log^2 n)$。
+        在 GPU 上,Bitonic sort 通常跑得比理論上更優的演算法快,因為它的存取模式對硬體極友善。
+      </p>
+
+      <h3>平行基數排序:用 Scan 決定位置</h3>
+      <p>
+        基數排序(radix sort)本質上已經是平行友善的——它一次只看 $k$ 個 bits,
+        對每個 bit group 做一次計數排序(counting sort)。
+        計數排序的關鍵步驟「計算每個桶的起始位置」,正是一次<strong>前綴和(scan)</strong>。
+      </p>
+      <p>
+        流程(以 2-bit 為一組為例):
+      </p>
+      <ol>
+        <li>Map:取出每個元素的目前 2-bit group,得到 key 陣列 $[0,1,2,3,\ldots]$</li>
+        <li>對每個 key 值(0,1,2,3)建立 histogram:各桶有幾個元素</li>
+        <li>Exclusive scan histogram → 每個桶的起始偏移</li>
+        <li>Scatter:每個元素寫入自己桶的偏移位置(同時更新偏移)</li>
+        <li>重複 $\lceil 32/k \rceil$ 輪</li>
+      </ol>
+      <p>
+        整體:Work = $O(n \cdot 32/k)$,Depth = $O(\log n \cdot 32/k)$。
+        現代 GPU 排序庫(如 CUB、Thrust)幾乎都以這個架構為基礎。
+      </p>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">Scatter 的寫入衝突</span>
+          <p>在 Scatter 步驟,若兩個執行緒同時嘗試更新同一個桶的偏移計數器,就會發生競爭條件(race condition)。
+          解法是用 <strong>原子操作(atomic add)</strong> 保護偏移更新,或改用 warp-level prefix sum 讓同一 warp 的執行緒協調好再寫出。</p>
+        </div>
+      </div>
+
+      <h2>Tiled 矩陣乘法與 Roofline 模型</h2>
+
+      <p>
+        矩陣乘法(matrix multiplication)是 AI 訓練與推理最重要的核心操作,
+        在<a href="54-linear-algebra.html">第 54 章「線性代數」</a>中我們見過它的數學定義。
+        這裡我們關心:如何讓它在 GPU 上跑到接近硬體的理論峰值速度?
+      </p>
+
+      <h3>朴素矩陣乘的問題:記憶體牆</h3>
+      <p>
+        朴素的三層迴圈實作,$C[i][j] = \sum_k A[i][k] \cdot B[k][j]$,
+        做 $2n^3$ 次浮點運算(FLOP),但要從記憶體讀 $O(n^3)$ 次——
+        每次讀取 $A[i][k]$ 和 $B[k][j]$,如果 cache miss 率高,執行緒大半時間在等記憶體。
+        這種現象叫<strong>記憶體牆(memory wall)</strong>。
+      </p>
+
+      <h3>Tiling:用 Shared Memory 砍記憶體流量</h3>
+      <p>
+        GPU 的 shared memory(共享記憶體)是片上快取,延遲約是全域記憶體(global memory)的 100 倍以上。
+        Tiled 矩陣乘法的洞見:把輸出矩陣切成小方塊(tile),每個 tile 的計算只需要 $A$、$B$ 的對應小方塊——
+        把這些小方塊先載入 shared memory,就能重用。
+      </p>
+      <p>
+        設 tile 邊長為 $T$,每個 tile 從全域記憶體讀 $2T^2$ 個數,做 $2T^3$ 次 FLOP。
+        單次 tile 的<strong>運算強度(arithmetic intensity)</strong> $I = 2T^3 / (2T^2 \cdot 4\text{ bytes}) = T/4$ (FLOP/byte)。
+        $T = 32$ 時,$I = 8$ FLOP/byte,比朴素版的 $1/4$ FLOP/byte 好了 32 倍。
+      </p>
+
+      <h3>Roofline 模型:在圖上定位你的程式</h3>
+      <p>
+        Roofline 模型(roofline model)是一個用來判斷「程式的瓶頸在 compute 還是 memory」的視覺化工具。
+        它只有兩條線:
+      </p>
+      <ul>
+        <li><strong>記憶體頻寬斜線</strong>:$P = B \cdot I$,其中 $B$ 是記憶體頻寬(GB/s),$I$ 是運算強度(FLOP/byte)。在低 $I$ 區間,效能受頻寬限制。</li>
+        <li><strong>算力水平線</strong>:$P = P_{\text{peak}}$,硬體的理論峰值算力(GFLOPS)。在高 $I$ 區間,效能受算力限制。</li>
+      </ul>
+      <p>
+        兩線的交叉點叫做<strong>山脊點(ridge point)</strong>,$I_{\text{ridge}} = P_{\text{peak}} / B$。
+        在山脊點左側:程式是 <strong>memory-bound</strong>,優化方向是減少記憶體存取或提升資料重用。
+        在右側:程式是 <strong>compute-bound</strong>,優化方向是提升計算吞吐量(如用 Tensor Core、混合精度)。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 640 320" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif" font-size="12">
+  <!-- Axes -->
+  <line x1="80" y1="260" x2="600" y2="260" stroke="#333" stroke-width="2" marker-end="url(#arr2)"/>
+  <line x1="80" y1="260" x2="80" y2="30" stroke="#333" stroke-width="2" marker-end="url(#arr2)"/>
+  <defs>
+    <marker id="arr2" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#333"/>
+    </marker>
+  </defs>
+
+  <!-- Axis labels -->
+  <text x="590" y="278" fill="#333">I (FLOP/byte)</text>
+  <text x="10" y="140" fill="#333" transform="rotate(-90 25 140)">效能 (GFLOPS)</text>
+  <text x="320" y="300" text-anchor="middle" fill="#8a929b" font-size="11">(log scale)</text>
+
+  <!-- x-axis ticks (log scale, 0.25 → 128) -->
+  <line x1="120" y1="255" x2="120" y2="265" stroke="#333"/>
+  <text x="120" y="278" text-anchor="middle" fill="#8a929b" font-size="10">¼</text>
+  <line x1="180" y1="255" x2="180" y2="265" stroke="#333"/>
+  <text x="180" y="278" text-anchor="middle" fill="#8a929b" font-size="10">1</text>
+  <line x1="240" y1="255" x2="240" y2="265" stroke="#333"/>
+  <text x="240" y="278" text-anchor="middle" fill="#8a929b" font-size="10">4</text>
+  <line x1="300" y1="255" x2="300" y2="265" stroke="#333"/>
+  <text x="300" y="278" text-anchor="middle" fill="#8a929b" font-size="10">16</text>
+  <line x1="360" y1="255" x2="360" y2="265" stroke="#333"/>
+  <text x="360" y="278" text-anchor="middle" fill="#8a929b" font-size="10">32</text>
+  <line x1="420" y1="255" x2="420" y2="265" stroke="#333"/>
+  <text x="420" y="278" text-anchor="middle" fill="#8a929b" font-size="10">64</text>
+  <line x1="480" y1="255" x2="480" y2="265" stroke="#333"/>
+  <text x="480" y="278" text-anchor="middle" fill="#8a929b" font-size="10">128</text>
+
+  <!-- y-axis ticks -->
+  <line x1="75" y1="200" x2="85" y2="200" stroke="#333"/>
+  <text x="68" y="204" text-anchor="end" fill="#8a929b" font-size="10">50</text>
+  <line x1="75" y1="140" x2="85" y2="140" stroke="#333"/>
+  <text x="68" y="144" text-anchor="end" fill="#8a929b" font-size="10">500</text>
+  <line x1="75" y1="80" x2="85" y2="80" stroke="#333"/>
+  <text x="68" y="84" text-anchor="end" fill="#8a929b" font-size="10">5000</text>
+
+  <!-- Memory bandwidth slope line: from (0.25 → 50 GFLOPS) to ridge at (32 → ~5000 GFLOPS capped) -->
+  <!-- slope goes from (120,200) to (360,80) then cap at y=80 -->
+  <polyline points="120,200 360,80 560,80" stroke="#b4541f" stroke-width="2.5" fill="none"/>
+
+  <!-- Peak compute horizontal line -->
+  <line x1="80" y1="80" x2="120" y2="80" stroke="#8a929b" stroke-width="1" stroke-dasharray="4,2"/>
+
+  <!-- Roofline label -->
+  <text x="200" y="155" fill="#b4541f" font-size="11" transform="rotate(-26 200 155)">Memory bandwidth ceiling</text>
+  <text x="430" y="72" fill="#2f6f6a" font-size="11">Peak compute ceiling</text>
+
+  <!-- Ridge point -->
+  <circle cx="360" cy="80" r="5" fill="#333"/>
+  <line x1="360" y1="80" x2="360" y2="260" stroke="#333" stroke-width="1" stroke-dasharray="3,2"/>
+  <text x="365" y="130" fill="#333" font-size="11">山脊點</text>
+  <text x="365" y="143" fill="#8a929b" font-size="10">I_ridge = P_peak / B</text>
+
+  <!-- Region labels -->
+  <rect x="90" y="175" width="110" height="30" rx="6" fill="#fde8d8"/>
+  <text x="145" y="194" text-anchor="middle" fill="#b4541f" font-size="11">Memory-bound ← 這裡</text>
+  <rect x="400" y="90" width="110" height="30" rx="6" fill="#e3efed"/>
+  <text x="455" y="109" text-anchor="middle" fill="#2f6f6a" font-size="11">Compute-bound → 這裡</text>
+
+  <!-- Operation dots -->
+  <!-- 朴素矩陣乘 I≈0.25: x=120, y≈200 (memory-bound) -->
+  <circle cx="145" cy="195" r="7" fill="#8b5cf6"/>
+  <text x="100" y="185" fill="#8b5cf6" font-size="10">朴素 MatMul</text>
+
+  <!-- Tiled 矩陣乘 I=8: x=270(介於 I=4 與 I=16 之間), y=125(記憶體斜坡上, memory-bound) -->
+  <circle cx="270" cy="125" r="7" fill="#2f6f6a"/>
+  <text x="215" y="115" fill="#2f6f6a" font-size="10">Tiled MatMul</text>
+
+  <!-- DAXPY (y=ax+b) low intensity -->
+  <circle cx="120" cy="215" r="5" fill="#8a929b"/>
+  <text x="125" y="223" fill="#8a929b" font-size="10">DAXPY</text>
+
+  <text x="320" y="22" text-anchor="middle" font-size="13" font-weight="700" fill="#333">Roofline 模型</text>
+</svg>
+        <figcaption>圖 113-3:Roofline 模型示意圖。橫軸為運算強度(FLOP/byte,對數尺度),縱軸為效能(GFLOPS)。山脊點左側是記憶體瓶頸(memory-bound),右側是算力瓶頸(compute-bound)。朴素矩陣乘運算強度最低(約 1/4 FLOP/byte);Tiling 把運算強度從 1/4 提升到約 8 FLOP/byte——沿記憶體斜坡大幅右移、效能倍增,但對 ridge=32 的硬體<strong>仍屬 memory-bound</strong>;要進 compute-bound 需更大 tile / 更高運算強度。</figcaption>
+      </div>
+
+      <p>
+        Roofline 模型告訴你優化的方向:
+        如果程式在山脊點左側,增加算力(換更快的 GPU)沒有效果,應該降低記憶體流量或提升資料重用。
+        如果在右側,增加 Tensor Core 使用率、用 BF16 代替 FP32 才有效。
+      </p>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">找出你的山脊點</span>
+          <p>A100 GPU:Peak compute ≈ 312 TFLOPS(BF16),Memory bandwidth ≈ 2 TB/s。
+          山脊點 $I_{\text{ridge}} = 312\text{ T} / 2\text{ T} = 156$ FLOP/byte。
+          這表示只要運算強度不到 156 FLOP/byte,你的程式就是 memory-bound——
+          大多數 Transformer attention 操作就落在這個區間。</p>
+        </div>
+      </div>
+
+      <h2>大規模平行訓練:資料、張量與管線並行</h2>
+
+      <p>
+        當模型太大,單一 GPU 放不下;當資料太多,單機跑不完——
+        你必須把訓練工作拆散到數百甚至數千顆 GPU 上。
+        這是<a href="98-distributed-systems.html">第 92 章「分散式系統」</a>與平行演算法的交匯點。
+        大模型訓練有三種主要的平行策略,它們不互斥,現代訓練框架通常三者混用。
+      </p>
+
+      <h3>資料平行(Data Parallelism,DP)</h3>
+      <p>
+        最直覺的做法:每台 GPU 各有一份完整的模型副本,
+        把一個 batch 的資料切成 $N$ 份分給 $N$ 台 GPU 各自做 forward 與 backward,
+        然後把各 GPU 計算出的梯度<strong>全部加總</strong>,用加總後的梯度更新模型,再廣播新參數回去。
+      </p>
+      <p>
+        梯度加總的通訊算子叫做 <strong>All-Reduce</strong>:把 $N$ 台機器的向量逐元素加總,
+        讓每台機器都拿到結果。Ring All-Reduce 演算法讓通訊量與 GPU 數 $N$ 無關(固定 $O(M)$,$M$ 為模型大小),
+        是現代分散式訓練的通訊基礎。
+      </p>
+
+      <h3>張量平行(Tensor Parallelism,TP)</h3>
+      <p>
+        當模型參數太多,一張 GPU 根本放不下整個模型時,需要把<strong>模型本身</strong>切開。
+        張量平行沿著矩陣的行或列維度切割:例如把一個 $\text{hidden} \times 4\text{hidden}$ 的前饋網路
+        沿列切成 8 份,每台 GPU 只持有 $\text{hidden} \times \frac{4\text{hidden}}{8}$ 的參數,
+        做完矩陣乘之後再 All-Reduce 各 GPU 的局部結果。
+      </p>
+      <p>
+        Megatron-LM(NVIDIA)的論文系統化地展示了如何對 Transformer 的 Attention 與 MLP 層做張量切割,
+        每個 Transformer 層只需要 2 次 All-Reduce,通訊開銷可控。
+      </p>
+
+      <h3>管線平行(Pipeline Parallelism,PP)</h3>
+      <p>
+        把模型的層(layers)切成幾段,每段放在一組 GPU 上,資料像工廠流水線一樣流過去。
+        第一組 GPU 算完第 1–8 層,結果送給第二組算 9–16 層,依此類推。
+      </p>
+      <p>
+        挑戰:如果 batch 不切細,就會有大量時間空轉等待——叫做<strong>管線氣泡(pipeline bubble)</strong>。
+        解法是把 batch 切成若干 micro-batch,讓流水線一直填滿。
+        GPipe、PipeDream、1F1B 排程等論文分別提出了不同的氣泡縮小策略。
+      </p>
+
+      <h3>3D 混合平行與通訊拓撲</h3>
+      <p>
+        現代大模型(如 GPT-4、Llama 3)訓練同時使用三種平行策略——俗稱 3D parallelism:
+        TP 做 GPU 內部切割(NVLink 速度快),PP 做機器間切割(InfiniBand),DP 做資料切割。
+        各軸的切割數量是要根據通訊頻寬、模型架構與 batch size 精心調整的超參數。
+        高效 ML 的推理量化與部署細節可進一步參考<a href="115-efficient-ml.html">第 109 章「高效 ML」</a>。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">核心觀念</span>
+          <p>大模型訓練的平行策略選擇,本質上是把「通訊開銷」與「記憶體限制」之間的取捨最佳化。
+          沒有一種策略通吃所有情況——要根據模型規模、硬體拓撲、批次大小分別決定三個切割軸的比例。</p>
+        </div>
+      </div>
+
+      <!-- ============================================================ -->
+      <!--  EXERCISES                                                    -->
+      <!-- ============================================================ -->
+
+      <h2>動手練習</h2>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 113.1 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>
+            考慮以下兩個演算法,對長度 $n$ 的陣列求最大值:
+          </p>
+          <p>
+            <strong>演算法 A</strong>:序列掃描,依序比較每個元素。<br>
+            <strong>演算法 B</strong>:樹狀平行歸約,每輪兩兩比較,取較大值。
+          </p>
+          <p>
+            分別分析兩個演算法的 Work($W$) 與 Depth($D$)。
+            若有 $p = n/2$ 個處理器,用 Brent 定理估計演算法 B 的執行時間上界。
+            在什麼條件下,演算法 B 比演算法 A 更快?
+          </p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>演算法 A(序列掃描)</strong>:</p>
+              <ul>
+                <li>$W_A = O(n)$:做了 $n-1$ 次比較</li>
+                <li>$D_A = O(n)$:每次比較都依賴上一次的結果,形成長度 $n$ 的依賴鏈</li>
+              </ul>
+              <p><strong>演算法 B(樹狀歸約)</strong>:</p>
+              <ul>
+                <li>$W_B = O(n)$:每輪的比較次數為 $n/2, n/4, \ldots, 1$,總和 $= n-1$</li>
+                <li>$D_B = O(\log n)$:樹的高度為 $\lceil \log_2 n \rceil$</li>
+              </ul>
+              <p><strong>Brent 定理估計</strong>($p = n/2$ 個處理器):</p>
+              <p>$$T_p \leq D_B + \frac{W_B - D_B}{p} \approx \log n + \frac{n - \log n}{n/2} \approx \log n + 2$$</p>
+              <p>即 $T_p = O(\log n)$。</p>
+              <p><strong>快於演算法 A 的條件</strong>:演算法 A 在一個處理器上需要 $O(n)$ 時間;演算法 B 用 $p = n/2$ 個處理器需要 $O(\log n)$ 時間。只要 $p \geq 1$(至少一個額外的處理器)且能同步執行,演算法 B 的 depth 就更小。實際上,當 $n$ 夠大、可用處理器數 $p \geq \log n$ 時,演算法 B 就實質性更快。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 113.2 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>
+            手動模擬 Hillis-Steele <strong>inclusive scan</strong>,對以下陣列執行:
+          </p>
+          <p>$$[\,3,\; 1,\; 7,\; 0,\; 4,\; 2\,]$$</p>
+          <p>
+            依序列出每一輪(stride = 1, 2, 4)操作後的陣列狀態。
+            注意:每一輪中,所有更新都是基於<strong>本輪開始時的舊值</strong>(同步讀取)。
+            驗證最終結果是否等於 $[3, 4, 11, 11, 15, 17]$。
+          </p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>初始:</strong> $[3, 1, 7, 0, 4, 2]$(索引 0–5)</p>
+              <p><strong>Stride = 1</strong>:$\text{out}[i] = \text{old}[i] + \text{old}[i-1]$(若 $i \geq 1$)</p>
+              <ul>
+                <li>$i=0$:無左邊,保持 $3$</li>
+                <li>$i=1$:$1 + 3 = 4$</li>
+                <li>$i=2$:$7 + 1 = 8$</li>
+                <li>$i=3$:$0 + 7 = 7$</li>
+                <li>$i=4$:$4 + 0 = 4$</li>
+                <li>$i=5$:$2 + 4 = 6$</li>
+              </ul>
+              <p>第一輪後:$[3, 4, 8, 7, 4, 6]$</p>
+              <p><strong>Stride = 2</strong>:$\text{out}[i] = \text{old}[i] + \text{old}[i-2]$(若 $i \geq 2$)</p>
+              <ul>
+                <li>$i=0$:保持 $3$</li>
+                <li>$i=1$:保持 $4$</li>
+                <li>$i=2$:$8 + 3 = 11$</li>
+                <li>$i=3$:$7 + 4 = 11$</li>
+                <li>$i=4$:$4 + 8 = 12$</li>
+                <li>$i=5$:$6 + 7 = 13$</li>
+              </ul>
+              <p>第二輪後:$[3, 4, 11, 11, 12, 13]$</p>
+              <p><strong>Stride = 4</strong>:$\text{out}[i] = \text{old}[i] + \text{old}[i-4]$(若 $i \geq 4$)</p>
+              <ul>
+                <li>$i=0$ 到 $i=3$:保持不變 $[3, 4, 11, 11]$</li>
+                <li>$i=4$:$12 + 3 = 15$</li>
+                <li>$i=5$:$13 + 4 = 17$</li>
+              </ul>
+              <p>最終結果:$\mathbf{[3, 4, 11, 11, 15, 17]}$ ✓</p>
+              <p>驗算:原始陣列前綴和 $[3, 3{+}1, 3{+}1{+}7, 3{+}1{+}7{+}0, 3{+}1{+}7{+}0{+}4, 3{+}1{+}7{+}0{+}4{+}2] = [3, 4, 11, 11, 15, 17]$ ✓</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 113.3 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>
+            你正在分析一台假想 GPU,其規格如下:
+          </p>
+          <ul>
+            <li>Peak compute:$20$ TFLOPS(FP32)</li>
+            <li>Memory bandwidth:$500$ GB/s</li>
+          </ul>
+          <p>
+            請判斷以下三個操作,在這台 GPU 的 Roofline 圖上是 memory-bound 還是 compute-bound:
+          </p>
+          <ol type="a">
+            <li>向量加法(DAXPY):對長度 $n$ 的向量做 $y = \alpha x + y$,每個元素讀兩個數、寫一個數,做 2 次 FLOP。</li>
+            <li>朴素矩陣乘(naive MatMul):$n \times n$ 矩陣,$2n^3$ FLOP,從記憶體讀 $2n^2$ 個 FP32 元素。<br><small>（注:此處假設每個矩陣元素只被讀取一次,為理想化的單次讀取假設,忽略 cache 未命中造成的重複讀取;內文描述的 $O(n^3)$ 讀取次數反映最壞情況,兩者分析角度不同。）</small></li>
+            <li>Tiled 矩陣乘(tile=$32$):運算強度提升到 $T/4 = 8$ FLOP/byte。</li>
+          </ol>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>山脊點</strong>:$I_{\text{ridge}} = P_{\text{peak}} / B = 20{,}000 \text{ GFLOPS} / 500 \text{ GB/s} = 40$ FLOP/byte</p>
+              <p>若 $I &lt; 40$:memory-bound;$I &gt; 40$:compute-bound。</p>
+              <p><strong>(a) DAXPY</strong>:</p>
+              <p>每個元素:2 FLOP,讀/寫 3 個 FP32($3 \times 4 = 12$ bytes)。$I = 2/12 \approx 0.17$ FLOP/byte。
+              $0.17 \ll 40$,嚴重 <strong>memory-bound</strong>。換更快的 GPU 算力無效,要減少記憶體流量。</p>
+              <p><strong>(b) 朴素 MatMul</strong>:</p>
+              <p>FLOP = $2n^3$;讀取 $2n^2$ 個 FP32 = $8n^2$ bytes。$I = 2n^3 / 8n^2 = n/4$ FLOP/byte。
+              當 $n = 64$:$I = 16 &lt; 40$,還是 <strong>memory-bound</strong>。
+              當 $n = 200$:$I = 50 &gt; 40$,勉強進入 compute-bound 區間。
+              對小矩陣,朴素版幾乎永遠 memory-bound。</p>
+              <p><strong>(c) Tiled MatMul($T=32$)</strong>:</p>
+              <p>$I = T/4 = 8$ FLOP/byte。$8 &lt; 40$,仍是 <strong>memory-bound</strong>。
+              但比朴素版好了數倍。要達到 compute-bound,需要更大的 tile、更好的資料重用,或使用 Tensor Core(它以更高效率執行矩陣乘,等效地提升 $I$)。</p>
+              <p>這個結果說明了為何現代深度學習框架要用 BF16 + Tensor Core:Tensor Core 的等效 FLOP/byte 比 CUDA Core 高出數倍,讓矩陣乘能真正進入 compute-bound 區間。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ============================================================ -->
+      <!--  WRAP-UP                                                      -->
+      <!-- ============================================================ -->
+
+      <h2>把這一章串起來</h2>
+
+      <p>
+        這一章從一個挑釁出發——「加更多核心不夠,你要重新設計演算法」——然後給了你一整套工具:
+      </p>
+      <ul>
+        <li>
+          <strong>Work/Depth 模型 + Brent 定理</strong>:讓你能在紙上精確計算平行演算法的理論加速極限,
+          而不是憑感覺猜測。這是比 Amdahl 定律更精細的分析尺。
+        </li>
+        <li>
+          <strong>五種平行 patterns(map/reduce/scan/stencil/gather-scatter)</strong>:
+          就像 design patterns 是 OOP 的語言,這五種 pattern 是平行演算法的共同語言。
+          認識它們,你就能「看穿」陌生演算法的平行結構。
+        </li>
+        <li>
+          <strong>平行前綴和(scan)</strong>:看起來平凡,實際上威力巨大。
+          Hillis-Steele($O(n\log n)$ work,簡單)vs Blelloch($O(n)$ work,work-efficient)的選擇,
+          取決於你是受限於 depth 還是受限於 work/頻寬。
+        </li>
+        <li>
+          <strong>Roofline 模型</strong>:把效能瓶頸可視化。
+          在山脊點左側優化算力是白費力氣,在右側優化記憶體存取也是一樣。
+          先量,再優化。
+        </li>
+        <li>
+          <strong>大模型 3D 平行訓練</strong>:Data/Tensor/Pipeline Parallelism 各有適用場景,
+          現代框架(Megatron-LM、DeepSpeed、ColossalAI)三者混用,
+          再配合 All-Reduce、Ring-AllReduce 把通訊開銷壓到最低。
+        </li>
+      </ul>
+
+      <p>
+        這一章所有的演算法都有一個共同的精神:
+        <strong>先思考計算的依賴結構,再把沒有依賴關係的步驟平行化</strong>。
+        這與<a href="26-complexity.html">第 26 章「複雜度分析」</a>的精神是一致的——
+        在動手實作之前,先在紙上把問題想清楚。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">📚</div>
+        <div class="body">
+          <span class="c-title">延伸學習</span>
+          <p>
+            <strong>書籍</strong>:David Kirk &amp; Wen-mei Hwu 的
+            <em>Programming Massively Parallel Processors</em>(PMPP,4th ed.)是 GPU 平行演算法的標準教材,涵蓋本章所有主題並附 CUDA 實作。
+            Guy Blelloch 的原始論文
+            <em>Prefix Sums and Their Applications</em>(CMU, 1990)值得一讀。
+          </p>
+          <p>
+            <strong>線上課程</strong>:
+            <a href="https://github.com/cuda-mode/lectures" target="_blank">cuda-mode</a>
+            社群的 YouTube 課程深入講解 GPU kernel 最佳化,包含 Roofline 分析的實際量測。
+            <a href="https://github.com/hpcaitech/ColossalAI" target="_blank">ColossalAI</a>
+            是開源的大規模分散式訓練框架,程式碼讀起來是理解 3D 平行策略的最佳活教材。
+          </p>
+          <p>
+            <strong>接下來</strong>:第 112 章「GPU 架構與 CUDA 程式設計」(撰寫中)將帶你親手用 CUDA 實作本章的 scan 與 reduction;
+            第 114 章「WebAssembly」則示範如何在瀏覽器端也能跑接近原生速度的平行程式。
+          </p>
+        </div>
+      </div>

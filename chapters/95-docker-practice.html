@@ -1,0 +1,1074 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Docker 實戰:映像、網路與 Compose · CS 自學聖經</title>
+<meta name="description" content="從 Dockerfile 到映像分層快取、從容器生命週期到 volume 與網路、從 docker-compose.yml 到多容器一鍵起——這一章把第 88 章手寫的 runtime 骨架換成成熟的 Docker 工具鏈,學會把一個真實服務容器化。">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;700&family=Noto+Sans+TC:wght@400;700&family=Lora:ital,wght@0,400;0,600;0,700;1,400&family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <main class="main">
+    <article class="content">
+      <div class="eyebrow">第二一部 · 容器、虛擬化與雲原生底層</div>
+      <h1>Docker 實戰:映像、網路與 Compose</h1>
+      <p class="subtitle">你已經親手拼出了容器的骨架——現在換上成熟工具,把一個真實的服務用幾行 YAML 一鍵跑起來。</p>
+      <div class="byline">
+        <span class="tag">第 89 章</span>
+        <span>閱讀時間 ≈ 55 分鐘</span>
+        <span>難度:★★★☆☆</span>
+      </div>
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>如何寫一份正確的 Dockerfile,理解每條指令的語義與副作用</li>
+          <li>映像分層快取的工作原理,以及如何調整指令順序大幅加速建置</li>
+          <li>多階段建置(multi-stage build)如何把映像從幾百 MB 縮到幾十 MB</li>
+          <li>容器生命週期的完整指令:run / exec / logs / stop / rm</li>
+          <li>volume 與 bind mount 的差異,以及為何容器內檔案是短暫的</li>
+          <li>Docker 網路模式(bridge / host / none)與容器間名稱互連的原理</li>
+          <li>用 docker-compose.yml 宣告多容器服務,depends_on、networks、volumes 的用法</li>
+          <li>容器化安全最佳實踐:小映像、非 root 使用者、.dockerignore、不把祕密寫進映像</li>
+        </ul>
+      </div>
+
+      <!-- ==================== h2 ① ==================== -->
+      <h2>你已手寫過 runtime——現在用成熟工具</h2>
+
+      <p>
+        在<a href="94-mini-docker.html">第 88 章</a>，你用約 200 行 C 程式碼親手拼出了一個 container runtime:
+        <code>clone()</code> 開 namespace、<code>pivot_root</code> 換根、掛 <code>/proc</code>、
+        設定 cgroup 限制資源、OverlayFS 疊可寫層。你知道了 Docker 的底層骨架長什麼樣子。
+      </p>
+      <p>
+        但現實中沒有人每天用 <code>mydocker</code> 跑服務——因為一個完整的容器工具鏈需要的東西多得多:
+        映像格式與 registry、Dockerfile 建置系統、網路驅動、volume 管理、多容器編排……
+        這一章站在你已有的底層知識上,轉換視角:從「拼 syscall」切換到「用 Docker CLI 工作」。
+      </p>
+      <p>
+        你會看到每個 Docker 概念背後對應的底層機制——因為你在<a href="93-container-internals.html">第 87 章</a>
+        和<a href="94-mini-docker.html">第 88 章</a>已經認識了它們。這讓你不只是「會用指令」,
+        而是「知道指令在做什麼」。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">映像(image)vs 容器(container)</span>
+          <p>
+            <strong>映像</strong>是唯讀的模板——就像<a href="93-container-internals.html">第 87 章</a>的 OverlayFS lowerdir:
+            一疊唯讀層,每一層對應 Dockerfile 的一條指令。
+            <strong>容器</strong>是映像的執行實例——在映像的唯讀層上加了一個可寫層(upperdir),
+            讓容器可以寫入檔案,但不影響原始映像。
+            刪除容器,可寫層隨之消失;映像本身仍保持不變。
+          </p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ② ==================== -->
+      <h2>Dockerfile 基礎:FROM / RUN / COPY / CMD / ENTRYPOINT / EXPOSE</h2>
+
+      <p>
+        Dockerfile 是一份「如何建置映像」的食譜——每條指令告訴 Docker daemon 一個建置步驟。
+        讓我們從一個真實的 Node.js 應用程式 Dockerfile 出發,逐行解釋:
+      </p>
+
+      <pre><code class="language-text"># ── Node.js 應用程式 Dockerfile 範例 ──────────────────
+# FROM:指定基礎映像。alpine 是極小的 Linux 發行版(~5 MB)。
+FROM node:18-alpine
+
+# WORKDIR:設定容器內的工作目錄(不存在則自動建立)。
+# 後續所有 RUN / COPY / CMD 指令都在這個目錄下執行。
+WORKDIR /app
+
+# COPY:把 host 上的 package.json 與 package-lock.json 複製進映像。
+# 注意:先複製 package*.json,再 RUN npm ci,
+# 這樣只有 package.json 改變時才需要重新 npm install(快取優化,見下節)。
+COPY package*.json ./
+
+# RUN:在建置階段執行指令,結果固化成一個映像層。
+# --omit=dev 只安裝 production 依賴(等同舊版 --only=production)。
+RUN npm ci --omit=dev
+
+# 把應用程式碼複製進去(改了程式碼但沒改 package.json 時,此層重建而上層快取仍有效)
+COPY . .
+
+# EXPOSE:宣告容器監聽的埠。這只是文件說明,不自動對外公開——
+# 需要 docker run -p 才真正把 host 埠對應到容器埠。
+EXPOSE 3000
+
+# CMD:容器啟動時預設執行的指令(exec 格式,不透過 shell)。
+# 若 docker run 後面傳了指令,CMD 會被覆蓋。
+CMD ["node", "app.js"]</code></pre>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">CMD vs ENTRYPOINT</span>
+          <p>
+            <strong>CMD</strong> 是「預設指令」——<code>docker run myapp</code> 時執行 <code>node app.js</code>,
+            但 <code>docker run myapp sh</code> 會覆蓋 CMD 改為執行 <code>sh</code>。<br>
+            <strong>ENTRYPOINT</strong> 是「主程式骨幹」——<code>docker run myapp --port 4000</code>
+            會把 <code>--port 4000</code> 當作 ENTRYPOINT 的參數傳入,而不是替換它;若要替換 ENTRYPOINT 本身,需明確加上 <code>--entrypoint</code> 旗標,例如 <code>docker run --entrypoint sh myapp</code>。<br>
+            常見模式:ENTRYPOINT 設主程式,CMD 設預設參數。例如:
+            <code>ENTRYPOINT ["node"]</code> 配上 <code>CMD ["app.js"]</code>。
+          </p>
+        </div>
+      </div>
+
+      <p>其他常用 Dockerfile 指令:</p>
+      <ul>
+        <li><code>ENV NODE_ENV=production</code>:設定環境變數,建置期與執行期都有效。</li>
+        <li><code>ARG VERSION=1.0</code>:僅建置期有效的參數,可用 <code>docker build --build-arg VERSION=2.0</code> 覆蓋。</li>
+        <li><code>USER appuser</code>:切換執行身份(安全章節詳述)。</li>
+        <li><code>VOLUME ["/data"]</code>:宣告一個 volume 掛載點(啟動容器時自動建立匿名 volume)。</li>
+        <li><code>HEALTHCHECK CMD curl -f http://localhost:3000/health || exit 1</code>:定義健康檢查指令。</li>
+      </ul>
+
+      <!-- ==================== h2 ③ ==================== -->
+      <h2>映像分層與快取:加速建置的關鍵</h2>
+
+      <p>
+        Docker 映像是由多個「層(layer)」堆疊而成的——每條 <code>RUN</code>、<code>COPY</code>、<code>ADD</code>
+        指令都會產生一個新層。層是<strong>內容定址(content-addressed)</strong>的:
+        Docker 用每層的內容 SHA256 雜湊作為快取鍵。
+        只要輸入內容不變,同一層就可以從快取直接取用,不需要重新執行。
+      </p>
+      <p>
+        但快取有一個關鍵規則:<strong>某層快取失效,它之後的所有層都必須重建</strong>。
+        這就是為什麼 Dockerfile 的指令順序至關重要。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 760 520" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <rect width="760" height="520" fill="#f8fafb" rx="12"/>
+  <text x="380" y="28" text-anchor="middle" font-size="14" font-weight="700" fill="#1f2328">映像分層與快取:指令順序決定快取效率</text>
+
+  <!-- Left column: bad order -->
+  <text x="190" y="56" text-anchor="middle" font-size="12" font-weight="700" fill="#b4541f">❌ 順序不佳(常見錯誤)</text>
+  <rect x="40" y="66" width="300" height="38" rx="6" fill="#2f6f6a"/>
+  <text x="190" y="82" text-anchor="middle" font-size="11" font-weight="600" fill="#fff">FROM node:18-alpine</text>
+  <text x="190" y="97" text-anchor="middle" font-size="9" fill="#b8ddd9">Layer 1 — 快取命中 ✓</text>
+
+  <rect x="40" y="112" width="300" height="38" rx="6" fill="#b4541f"/>
+  <text x="190" y="128" text-anchor="middle" font-size="11" font-weight="600" fill="#fff">COPY . .</text>
+  <text x="190" y="143" text-anchor="middle" font-size="9" fill="#fde8dd">Layer 2 — 任何程式碼改動都使快取失效!</text>
+
+  <rect x="40" y="158" width="300" height="38" rx="6" fill="#b4541f"/>
+  <text x="190" y="174" text-anchor="middle" font-size="11" font-weight="600" fill="#fff">RUN npm ci</text>
+  <text x="190" y="189" text-anchor="middle" font-size="9" fill="#fde8dd">Layer 3 — 必須重新執行(費時!)</text>
+
+  <rect x="40" y="204" width="300" height="38" rx="6" fill="#b4541f"/>
+  <text x="190" y="220" text-anchor="middle" font-size="11" font-weight="600" fill="#fff">CMD ["node", "app.js"]</text>
+  <text x="190" y="235" text-anchor="middle" font-size="9" fill="#fde8dd">Layer 4 — 重建</text>
+
+  <text x="190" y="264" text-anchor="middle" font-size="10" fill="#b4541f" font-weight="600">每次改一行程式碼 → npm install 全部重跑</text>
+
+  <!-- Right column: good order -->
+  <text x="570" y="56" text-anchor="middle" font-size="12" font-weight="700" fill="#2f6f6a">✓ 正確順序(快取友善)</text>
+  <rect x="420" y="66" width="300" height="38" rx="6" fill="#2f6f6a"/>
+  <text x="570" y="82" text-anchor="middle" font-size="11" font-weight="600" fill="#fff">FROM node:18-alpine</text>
+  <text x="570" y="97" text-anchor="middle" font-size="9" fill="#b8ddd9">Layer 1 — 快取命中 ✓</text>
+
+  <rect x="420" y="112" width="300" height="38" rx="6" fill="#2f6f6a"/>
+  <text x="570" y="128" text-anchor="middle" font-size="11" font-weight="600" fill="#fff">COPY package*.json ./</text>
+  <text x="570" y="143" text-anchor="middle" font-size="9" fill="#b8ddd9">Layer 2 — 只有 package.json 改才失效</text>
+
+  <rect x="420" y="158" width="300" height="38" rx="6" fill="#2f6f6a"/>
+  <text x="570" y="174" text-anchor="middle" font-size="11" font-weight="600" fill="#fff">RUN npm ci --omit=dev</text>
+  <text x="570" y="189" text-anchor="middle" font-size="9" fill="#b8ddd9">Layer 3 — 快取命中 ✓(package.json 未改)</text>
+
+  <rect x="420" y="204" width="300" height="38" rx="6" fill="#8b5cf6"/>
+  <text x="570" y="220" text-anchor="middle" font-size="11" font-weight="600" fill="#fff">COPY . .</text>
+  <text x="570" y="235" text-anchor="middle" font-size="9" fill="#ddd6fe">Layer 4 — 只有這層重建</text>
+
+  <rect x="420" y="250" width="300" height="38" rx="6" fill="#8b5cf6"/>
+  <text x="570" y="266" text-anchor="middle" font-size="11" font-weight="600" fill="#fff">CMD ["node", "app.js"]</text>
+  <text x="570" y="281" text-anchor="middle" font-size="9" fill="#ddd6fe">Layer 5 — 重建</text>
+
+  <text x="570" y="310" text-anchor="middle" font-size="10" fill="#2f6f6a" font-weight="600">改程式碼 → Layer 3 快取命中 → npm install 跳過!</text>
+
+  <!-- Layer sharing annotation -->
+  <rect x="40" y="328" width="680" height="46" rx="8" fill="#e3efed" stroke="#2f6f6a" stroke-width="1"/>
+  <text x="380" y="347" text-anchor="middle" font-size="11" font-weight="700" fill="#2f6f6a">層共享(Layer Sharing)— 相同內容雜湊的層只存一份</text>
+  <text x="380" y="365" text-anchor="middle" font-size="10" fill="#4a5159">10 個容器用同一個 node:18-alpine 基礎映像 → 磁碟上只有一份 alpine 層;各容器共用唯讀層,各自只有可寫層是獨立的</text>
+
+  <!-- Cache invalidation rule -->
+  <rect x="40" y="388" width="680" height="44" rx="8" fill="#fff3cd" stroke="#d97706" stroke-width="1"/>
+  <text x="380" y="407" text-anchor="middle" font-size="11" font-weight="700" fill="#92400e">快取失效的連鎖反應(Cascading Cache Invalidation)</text>
+  <text x="380" y="424" text-anchor="middle" font-size="10" fill="#92400e">某層輸入改變 → 該層快取失效 → 其後所有層全部重建(即使後面層的內容沒有改變)</text>
+
+  <!-- Layer hash indicator -->
+  <rect x="40" y="446" width="680" height="58" rx="8" fill="#f1f5f9" stroke="#8a929b" stroke-width="1"/>
+  <text x="380" y="464" text-anchor="middle" font-size="10" fill="#4a5159">每層的快取鍵 = SHA256(父層雜湊 + 指令字串 + 複製內容雜湊)</text>
+  <text x="380" y="480" text-anchor="middle" font-size="10" fill="#4a5159">docker build --no-cache 強制跳過所有快取;--cache-from=image 可跨機器共用遠端快取</text>
+  <text x="380" y="496" text-anchor="middle" font-size="9" fill="#8a929b">docker history myapp:latest — 查看每層的大小與建立指令</text>
+</svg>
+        <figcaption>圖 89-1:映像分層與快取。左側是常見的錯誤順序——<code>COPY . .</code> 放在 <code>RUN npm ci</code> 之前,每次程式碼改動都觸發重新安裝依賴。右側把 package.json 與應用程式碼分開複製,依賴層可以長期快取。</figcaption>
+      </div>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">快取友善 Dockerfile 的黃金規則</span>
+          <p>
+            「變動頻率低的放前面,變動頻率高的放後面。」<br>
+            FROM 基礎映像 → 安裝系統工具 → 複製依賴清單(package.json / requirements.txt / go.mod)
+            → 安裝依賴 → 複製應用程式碼。<br>
+            依賴通常很少改,快取可長期有效;程式碼改動頻繁,但它後面沒有耗時步驟,重建成本低。
+          </p>
+        </div>
+      </div>
+
+      <p>另一個常見的「肥層」問題:在 <code>RUN</code> 安裝工具後忘記清除快取:</p>
+
+      <pre><code class="language-text"># ❌ 錯誤:apt 快取被永遠固化在層裡,映像變大
+RUN apt-get update
+RUN apt-get install -y curl
+
+# ✓ 正確:在同一條 RUN 指令內清除,快取不進入層
+RUN apt-get update &amp;&amp; \
+    apt-get install -y curl &amp;&amp; \
+    rm -rf /var/lib/apt/lists/*</code></pre>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">為何要在同一條 RUN 清除快取?</span>
+          <p>每條 <code>RUN</code> 生成一個獨立的層。如果在第一條 <code>RUN</code> 安裝後留下 apt 快取,
+          即使在後面一條 <code>RUN rm -rf /var/lib/apt/lists/*</code> 清掉,
+          快取的位元組仍存在於先前那個層裡——映像的總大小不縮小。
+          OverlayFS 的「刪除」只是在上層建立 whiteout 節點(<a href="93-container-internals.html">第 87 章</a>解釋過),
+          底層資料還在。把安裝和清除放在<strong>同一條 RUN</strong> 才能讓層不含快取。</p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ④ ==================== -->
+      <h2>多階段建置:把映像從幾百 MB 縮到幾十 MB</h2>
+
+      <p>
+        編譯型語言(Go、Rust、Java、TypeScript)有一個尷尬的問題:
+        <em>建置工具</em>只有建置時需要,但如果用同一個映像執行應用程式,
+        那些編譯器、linker、dev dependencies 就永遠跟著映像走——徒增映像大小和攻擊面。
+      </p>
+      <p>
+        <strong>多階段建置(multi-stage build)</strong> 讓你在同一份 Dockerfile 裡使用多個 <code>FROM</code>,
+        每個 <code>FROM</code> 是一個獨立的建置階段。最終映像只包含最後一個階段——用 <code>COPY --from</code>
+        把前面階段的產出物(binary、bundle)複製進來,整個編譯工具鏈都留在中間階段,不進最終映像。
+      </p>
+
+      <pre><code class="language-text"># ── Go 應用程式多階段建置範例 ────────────────────────────
+# 第一階段:build stage — 用完整的 Go 工具鏈編譯
+FROM golang:1.22-alpine AS builder
+
+WORKDIR /src
+# 先複製 go.mod / go.sum,快取 go mod download
+COPY go.mod go.sum ./
+RUN go mod download
+
+# 複製程式碼並編譯靜態 binary
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -o /app/server ./cmd/server
+
+# ──────────────────────────────────────────────────────────
+# 第二階段:final stage — 用極小的 distroless 映像
+FROM gcr.io/distroless/static:nonroot AS final
+
+# 從 builder 複製編譯好的 binary
+COPY --from=builder /app/server /server
+
+# distroless/nonroot 預設以非 root 使用者執行
+EXPOSE 8080
+ENTRYPOINT ["/server"]</code></pre>
+
+      <p>
+        效果對比:完整 Go 工具鏈映像約 350 MB;最終 distroless 映像通常在 10–20 MB 之間。
+        攻擊面大幅縮小——distroless 連 shell 都沒有。
+      </p>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">AS 命名讓 COPY --from 更清晰</span>
+          <p>
+            <code>FROM golang:1.22-alpine AS builder</code> 中的 <code>AS builder</code>
+            給這個階段取了名字,之後可用 <code>COPY --from=builder</code> 引用。
+            也可用數字 <code>COPY --from=0</code>(第一個 FROM)——但用名字更易維護。
+            <code>docker build --target builder .</code> 可只建置到指定階段,方便除錯中間產物。
+          </p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑤ ==================== -->
+      <h2>容器生命週期:run / ps / exec / logs / stop / rm</h2>
+
+      <p>
+        映像建好之後,真正的工作才開始。以下是容器日常操作的完整指令圖鑑:
+      </p>
+
+      <pre><code class="language-bash"># ── 建置映像 ───────────────────────────────────────────
+docker build -t myapp:latest .
+# -t myapp:latest  為映像打標籤(name:tag)
+# .               Dockerfile 所在目錄(build context)
+
+# ── 執行容器 ───────────────────────────────────────────
+docker run -d -p 3000:3000 --name web myapp:latest
+# -d              背景執行(detached)
+# -p 3000:3000    host:container 埠對應
+# --name web      為容器命名(方便後續引用)
+
+# 互動模式(進入容器 shell 除錯)
+docker run --rm -it myapp:latest sh
+# --rm            容器停止後自動刪除
+# -it             分配 TTY 並保持 stdin 開啟
+
+# ── 查看執行中的容器 ────────────────────────────────────
+docker ps             # 執行中的容器
+docker ps -a          # 所有容器(含已停止)
+
+# ── 進入執行中的容器 ────────────────────────────────────
+docker exec -it web sh
+# exec 不建立新容器,而是在現有容器的 namespace 裡開 shell
+
+# ── 查看日誌 ────────────────────────────────────────────
+docker logs web             # 查看容器輸出
+docker logs -f web          # 持續追蹤(-f = follow)
+docker logs --tail 50 web   # 只看最後 50 行
+
+# ── 停止與刪除 ──────────────────────────────────────────
+docker stop web       # 發送 SIGTERM,等 10 秒後 SIGKILL
+docker kill web       # 立即發送 SIGKILL
+docker rm web         # 刪除已停止的容器
+docker rm -f web      # 強制刪除執行中的容器(stop + rm)
+
+# ── 映像管理 ────────────────────────────────────────────
+docker images            # 列出本地映像
+docker rmi myapp:latest  # 刪除映像
+docker pull nginx:alpine # 從 registry 拉取映像
+docker push myapp:latest # 推送映像到 registry</code></pre>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">docker exec 的底層原理</span>
+          <p>
+            <code>docker exec -it web sh</code> 的底層是:找到容器 <code>web</code> 的各個 namespace inode,
+            然後用 <code>setns()</code> 系統呼叫加入那些 namespace,再 <code>exec sh</code>。
+            因此 <code>exec</code> 開的 shell 和容器的 PID 1 在<em>同一個 namespace 集合</em>裡——
+            能看到同樣的行程、網路、檔案系統。這是在<a href="93-container-internals.html">第 87 章</a>
+            介紹過的 <code>setns()</code> 的實際應用。
+          </p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑥ ==================== -->
+      <h2>資料持久化:volume 與 bind mount</h2>
+
+      <p>
+        你已經知道容器有一個可寫層(OverlayFS upperdir)——但在<a href="93-container-internals.html">第 87 章</a>
+        我們看到,這個可寫層是容器的一部分。<strong>容器刪除,可寫層隨之消失。</strong>
+        對於需要持久化的資料(資料庫、上傳的檔案、日誌),我們需要把儲存移到容器的 namespace 外面。
+      </p>
+      <p>Docker 提供兩種持久化方案:</p>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th></th><th>Volume</th><th>Bind Mount</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>儲存位置</td>
+              <td><code>/var/lib/docker/volumes/名稱/_data</code>(由 Docker 管理)</td>
+              <td>Host 上任意路徑(由你指定)</td>
+            </tr>
+            <tr>
+              <td>建立方式</td>
+              <td><code>docker volume create mydata</code> 或 <code>-v mydata:/app/data</code></td>
+              <td><code>-v /host/path:/container/path</code></td>
+            </tr>
+            <tr>
+              <td>適合場景</td>
+              <td>資料庫持久化、container 間共享資料</td>
+              <td>開發時把 host 原始碼掛進容器(hot reload)</td>
+            </tr>
+            <tr>
+              <td>可攜性</td>
+              <td>跨 OS 一致(Docker 管理路徑)</td>
+              <td>依 host 路徑,Windows/Mac 路徑不同</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <pre><code class="language-bash"># ── Volume 操作 ─────────────────────────────────────────
+# 建立命名 volume
+docker volume create pgdata
+
+# 使用 volume 跑 PostgreSQL(資料庫資料持久化)
+docker run -d \
+  --name postgres \
+  -e POSTGRES_PASSWORD=secret \
+  -v pgdata:/var/lib/postgresql/data \
+  postgres:16-alpine
+
+# 列出所有 volume
+docker volume ls
+
+# 查看 volume 詳情(包含實際路徑)
+docker volume inspect pgdata
+
+# 刪除容器後 volume 仍然保留
+docker rm -f postgres
+docker volume ls      # pgdata 還在
+
+# 刪除 volume
+docker volume rm pgdata
+
+# ── Bind Mount(開發用途)──────────────────────────────
+# 把 host 的 ./src 掛進容器 /app/src,方便即時看到程式碼改動
+docker run -d \
+  -p 3000:3000 \
+  -v "$(pwd)/src:/app/src" \
+  myapp:dev</code></pre>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">匿名 volume 的陷阱</span>
+          <p>如果 Dockerfile 裡有 <code>VOLUME ["/data"]</code>,或 <code>docker run -v /data</code>
+          沒有指定名稱,Docker 會建立一個<strong>匿名 volume</strong>——名稱是一串 UUID。
+          容器刪除後,匿名 volume 預設不自動清除(除非 <code>docker rm -v</code>),
+          隨時間累積會佔用大量磁碟空間。定期執行 <code>docker volume prune</code> 清除無主 volume。</p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑦ ==================== -->
+      <h2>網路:bridge / host / none、埠對應、容器間互連</h2>
+
+      <p>
+        在<a href="94-mini-docker.html">第 88 章</a>的 <code>mydocker</code> 裡,
+        我們手動用 veth pair + bridge 搭建了容器網路。Docker 把這個流程自動化了,
+        並提供三種預設的網路驅動:
+      </p>
+
+      <ul>
+        <li><strong>bridge(預設)</strong>:Docker 在主機上建立虛擬網橋 <code>docker0</code>,
+            容器加入這個網橋——和<a href="94-mini-docker.html">第 88 章</a>手動建的 <code>br0</code> 是同一個概念。
+            容器有自己的 IP(預設 172.17.0.0/16),靠 <code>-p</code> 把埠公開給主機。</li>
+        <li><strong>host</strong>:容器直接使用主機的網路 namespace——沒有網路隔離,
+            容器監聽 80 埠就是主機的 80 埠。效能最好,但隔離最差。</li>
+        <li><strong>none</strong>:容器只有 loopback,完全沒有外部網路。
+            適合不需要網路的計算容器。</li>
+      </ul>
+
+      <pre><code class="language-bash"># ── 預設 bridge 網路 ────────────────────────────────────
+docker run -d -p 8080:80 nginx
+# -p 8080:80:把 host 的 8080 埠對應到容器的 80 埠
+# curl http://localhost:8080 可以打到容器內的 nginx
+
+# ── host 網路 ───────────────────────────────────────────
+docker run -d --network host nginx
+# 直接用主機網路,nginx 監聽 host 的 80 埠
+
+# ── none 網路 ───────────────────────────────────────────
+docker run --rm --network none alpine ping google.com
+# ping: google.com: Name or service not known (無網路)
+
+# ── 查看網路 ────────────────────────────────────────────
+docker network ls
+docker network inspect bridge</code></pre>
+
+      <h3>容器間以名稱互連:user-defined bridge</h3>
+
+      <p>
+        預設的 <code>docker0</code> bridge 有一個限制:容器只能靠 IP 位址互相存取,
+        不支援以<em>容器名稱</em>解析。要讓 <code>web</code> 容器直接用 <code>db</code> 這個名稱連到資料庫,
+        需要建立一個 <strong>user-defined bridge network</strong>:
+      </p>
+
+      <pre><code class="language-bash"># 建立自訂網路
+docker network create mynet
+
+# 把兩個容器都加入這個網路
+docker run -d --name db --network mynet postgres:16-alpine
+docker run -d --name web --network mynet -p 3000:3000 myapp:latest
+
+# 現在 web 容器可以用 db 這個名稱連到 PostgreSQL
+docker exec -it web sh
+# /app # psql -h db -U postgres   (用容器名稱解析!)</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">User-defined bridge 的 DNS 解析</span>
+          <p>
+            Docker 在 user-defined bridge 上啟動了一個內嵌的 DNS 解析器(通常在 127.0.0.11)。
+            容器的 <code>/etc/resolv.conf</code> 指向這個 DNS,
+            所以容器名稱可以直接解析成 IP 位址。
+            預設的 <code>docker0</code> 不支援這個功能——這是建議用 Compose 或手動建 user-defined network 的主要原因之一。
+          </p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑧ ==================== -->
+      <h2>Docker Compose:用 YAML 宣告多容器服務</h2>
+
+      <p>
+        當你的應用程式有多個容器(web、db、cache、worker……),
+        每次手動 <code>docker run</code> 一個一個啟動既繁瑣又容易出錯。
+        <strong>Docker Compose</strong> 讓你把整個多容器環境宣告在一份 <code>docker-compose.yml</code> 裡,
+        一個指令啟動、停止或重建所有服務。
+      </p>
+
+      <pre><code class="language-text"># docker-compose.yml — web app + PostgreSQL 資料庫範例
+services:
+  web:
+    build: .                # 從當前目錄的 Dockerfile 建置
+    ports:
+      - "3000:3000"         # host:container
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgres://postgres:secret@db:5432/mydb
+    depends_on:
+      db:
+        condition: service_healthy   # 等 db 健康檢查通過才啟動 web
+    networks:
+      - appnet
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_PASSWORD=secret
+      - POSTGRES_DB=mydb
+    volumes:
+      - pgdata:/var/lib/postgresql/data   # 持久化資料庫資料
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - appnet
+
+volumes:
+  pgdata:          # 命名 volume,由 Docker 管理
+
+networks:
+  appnet:
+    driver: bridge</code></pre>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">Docker Compose V2 不再需要 version 欄位</span>
+          <p>
+            現代 Docker Compose V2 已把 <code>version</code> 視為純資訊性、官方建議省略。
+            舊版 schema 標記寫了也只是資訊性,直接從 <code>services:</code> 開始即可。
+            本章其他 Compose 範例也都移除了 <code>version</code> 欄位。
+          </p>
+        </div>
+      </div>
+
+      <pre><code class="language-bash"># ── Compose 常用指令 ────────────────────────────────────
+docker compose up -d           # 在背景啟動所有服務
+docker compose up --build      # 強制重新 build 後啟動
+docker compose down            # 停止並刪除容器(volume 保留)
+docker compose down -v         # 同上,並刪除 volume(資料會消失!)
+docker compose ps              # 查看服務狀態
+docker compose logs -f web     # 追蹤 web 服務的日誌
+docker compose exec web sh     # 進入 web 容器的 shell
+docker compose restart web     # 重啟 web 服務</code></pre>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">docker compose vs docker-compose</span>
+          <p>
+            較新版本的 Docker Desktop 和 Docker Engine 把 Compose 整合進 Docker CLI,
+            指令是 <code>docker compose</code>(中間沒有 hyphen)。
+            舊版的獨立安裝是 <code>docker-compose</code>(V1,用 Python 寫)。
+            V2 版本(<code>docker compose</code>)效能更好,語法相容,建議優先使用 V2。
+          </p>
+        </div>
+      </div>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">depends_on 不等於等待服務就緒</span>
+          <p>
+            <code>depends_on</code> 預設只保證容器的<em>啟動順序</em>——<code>db</code> 容器啟動後 <code>web</code> 才啟動。
+            但「容器啟動」不等於「PostgreSQL 就緒可以接受連線」。
+            加上 <code>condition: service_healthy</code> 搭配 <code>healthcheck</code>
+            才能確保 <code>web</code> 在 <code>db</code> 真正就緒後才開始。
+            若應用程式沒有此機制保護,應在程式內加入連線失敗重試邏輯。
+          </p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑨ ==================== -->
+      <h2>動手:把 Flask + Redis 應用容器化並用 Compose 一鍵起</h2>
+
+      <p>
+        現在把前面學到的所有工具組合起來,實際容器化一個「有 web 服務和快取」的小型應用。
+        範例包含:Flask web app(Python)+ Redis(計數器)。
+      </p>
+
+      <h3>Step 1:應用程式程式碼</h3>
+
+      <pre><code class="language-python"># app.py — 計次器 API,每次 GET / 把 Redis 的 counter 加 1
+from flask import Flask
+import redis
+import os
+
+app = Flask(__name__)
+
+# 從環境變數取得 Redis 主機名稱(預設 redis,對應 compose service 名稱)
+r = redis.Redis(host=os.getenv("REDIS_HOST", "redis"), port=6379, decode_responses=True)
+
+@app.route("/")
+def index():
+    count = r.incr("counter")   # INCR 是原子操作,執行緒安全
+    return f"你好!這個頁面已被訪問 {count} 次。\n"
+
+if __name__ == "__main__":
+    # app.run() 是 Flask 內建的開發伺服器
+    # 生產環境應改用 gunicorn 或 uvicorn 等 WSGI/ASGI 伺服器
+    app.run(host="0.0.0.0", port=5000)</code></pre>
+
+      <pre><code class="language-text"># requirements.txt
+flask==3.0.3
+redis==5.0.4</code></pre>
+
+      <h3>Step 2:Dockerfile(快取友善 + 非 root)</h3>
+
+      <pre><code class="language-text">FROM python:3.12-slim
+
+# 建立非 root 使用者(安全最佳實踐)
+RUN groupadd -r appgroup &amp;&amp; useradd -r -g appgroup appuser
+
+WORKDIR /app
+
+# 先複製依賴清單,充分利用層快取
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+
+# 複製應用程式碼
+COPY app.py ./
+
+# 切換到非 root 使用者
+USER appuser
+
+EXPOSE 5000
+CMD ["python", "app.py"]</code></pre>
+
+      <h3>Step 3:.dockerignore</h3>
+
+      <pre><code class="language-text"># .dockerignore — 排除不需要進映像的檔案
+__pycache__/
+*.pyc
+.git/
+.env
+*.md
+tests/
+.venv/</code></pre>
+
+      <h3>Step 4:docker-compose.yml</h3>
+
+      <pre><code class="language-text">services:
+  web:
+    build: .
+    ports:
+      - "5000:5000"
+    environment:
+      - REDIS_HOST=redis
+    depends_on:
+      - redis
+    networks:
+      - appnet
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redisdata:/data       # 持久化 Redis 資料
+    command: redis-server --save 60 1
+    networks:
+      - appnet
+
+volumes:
+  redisdata:
+
+networks:
+  appnet:</code></pre>
+
+      <h3>Step 5:一鍵啟動與驗證</h3>
+
+      <pre><code class="language-bash"># 啟動所有服務
+docker compose up -d
+
+# 查看狀態
+docker compose ps
+
+# 測試:訪問計數器 API
+curl http://localhost:5000   # 你好!這個頁面已被訪問 1 次。
+curl http://localhost:5000   # 你好!這個頁面已被訪問 2 次。
+
+# 查看 web 服務日誌
+docker compose logs web
+
+# 進入 Redis 容器驗證資料
+docker compose exec redis redis-cli get counter
+
+# 停止所有服務(保留 volume)
+docker compose down</code></pre>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">開發 vs 生產的 Compose 分層</span>
+          <p>
+            生產與開發環境通常有不同設定(開發時掛 bind mount 熱重載,生產時用建置好的映像)。
+            常見做法:用 <code>docker-compose.yml</code>(基礎設定)+ <code>docker-compose.override.yml</code>(開發覆蓋)。
+            <code>docker compose up</code> 會自動合併兩個檔案。
+            生產環境用 <code>docker compose -f docker-compose.yml -f docker-compose.prod.yml up</code> 明確指定。
+          </p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑩ ==================== -->
+      <h2>最佳實踐與安全:小映像、非 root、.dockerignore、別把祕密寫進映像</h2>
+
+      <p>
+        容器化的生產環境有幾個安全紀律是必須遵守的。
+      </p>
+
+      <h3>1. 用最小基礎映像</h3>
+      <p>
+        映像越小,攻擊面越小、掃描速度越快、部署越快。
+        選擇優先順序:<code>scratch</code>(最小,僅適合靜態 binary)、
+        <code>distroless</code>(無 shell,適合靜態語言)、
+        <code>alpine</code>(~5 MB,適合動態語言)、
+        <code>slim</code> 變體,最後才是完整發行版。
+      </p>
+
+      <h3>2. 非 root 使用者(USER 指令)</h3>
+
+      <div class="callout danger">
+        <div class="ico">⛔</div>
+        <div class="body">
+          <span class="c-title">別讓容器以 root 身份執行應用程式</span>
+          <p>
+            預設情況下,容器內的行程以 <code>root</code>(uid=0)執行。
+            雖然有 namespace 隔離,但容器逃逸漏洞一旦發生(如<a href="93-container-internals.html">第 87 章</a>所說,
+            namespace 不等於 VM 等級安全邊界),容器內的 root 可能等同主機 root。
+            <strong>一定要在 Dockerfile 建立並切換到非 root 使用者。</strong>
+          </p>
+        </div>
+      </div>
+
+      <pre><code class="language-text"># ✓ 正確做法:建立並切換到非 root 使用者
+RUN groupadd -r appgroup &amp;&amp; useradd -r -g appgroup --no-create-home appuser
+USER appuser</code></pre>
+
+      <h3>3. .dockerignore</h3>
+      <p>
+        <code>.dockerignore</code> 的作用類似 <code>.gitignore</code>:告訴 Docker daemon
+        在 build context 傳輸時忽略哪些檔案。常見必排除的項目:
+        <code>.git/</code>、<code>.env</code>、<code>node_modules/</code>、<code>*.log</code>、
+        測試目錄、IDE 設定等。好的 <code>.dockerignore</code> 可以讓 build context 從幾 GB 縮到幾十 MB,
+        大幅加速 <code>docker build</code>。
+      </p>
+
+      <h3>4. 絕對不要把祕密(secret)寫進映像</h3>
+
+      <div class="callout danger">
+        <div class="ico">⛔</div>
+        <div class="body">
+          <span class="c-title">映像層是永久記錄——祕密一旦進入,很難完全清除</span>
+          <p>
+            <code>ENV API_KEY=sk-prod-abc123</code> 會把 API key 永遠固化在映像層裡——
+            即使後面的層用 <code>unset</code> 清掉,也可以用 <code>docker history</code>
+            或直接解開層 tarball 挖出來。<br>
+            正確做法:<strong>祕密在執行時透過環境變數注入</strong>(<code>docker run -e API_KEY=...</code>
+            或 Compose 的 <code>env_file: .env</code>),或使用 Docker secrets / HashiCorp Vault 等祕密管理系統。
+            建置期確實需要祕密(如私有 npm registry token)時,用 <code>docker build --secret</code>(BuildKit)
+            掛載臨時檔案,不進任何層。
+          </p>
+        </div>
+      </div>
+
+      <h3>5. 定期掃描映像漏洞</h3>
+      <pre><code class="language-bash"># Docker Scout(官方,需登入 Docker Hub)
+docker scout cves myapp:latest
+
+# 開源替代:Trivy(Aqua Security)
+trivy image myapp:latest</code></pre>
+
+      <h3>6. 預告:Kubernetes 與更大的編排世界</h3>
+      <p>
+        Compose 適合單機的多容器環境。當你的服務需要跨多台主機、自動水平擴展、
+        滾動更新、自我修復——這就是第 90 章 Kubernetes 登場的時機。
+        Kubernetes 把 Pod(一組容器)作為最小調度單位,
+        用 Deployment、Service、Ingress 等資源描述你的整個雲原生架構。
+        你在這一章學到的 Dockerfile 和映像技能在 Kubernetes 裡完全適用——
+        只是容器的「管理者」從 Compose 換成了 K8s 的 control plane。
+      </p>
+      <p>
+        在後面的章節,容器化技術也會應用到 AI agent 的工具執行隔離——
+        讓大型語言模型呼叫工具時,每次執行都在一個全新的容器沙箱裡安全運行,
+        實現第 106 章容器化 agent 的核心安全機制。
+      </p>
+
+      <!-- ==================== 練習 ==================== -->
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 89.1 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>
+            為以下 Python 程式寫一份 Dockerfile,要求:<br>
+            (a) 使用 <code>python:3.12-slim</code> 作為基礎映像;<br>
+            (b) 指令順序要能充分利用層快取——改 <code>hello.py</code> 不觸發 pip install;<br>
+            (c) 以非 root 使用者執行。<br>
+            完成後,用 <code>docker build</code> 建置,修改 <code>hello.py</code> 後再次建置,
+            觀察哪些層顯示 <code>CACHED</code>。
+          </p>
+          <pre><code class="language-python"># hello.py
+print("Hello from container!")</code></pre>
+          <pre><code class="language-text"># requirements.txt
+requests==2.32.3</code></pre>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-text">FROM python:3.12-slim
+
+# 建立非 root 使用者
+RUN groupadd -r app &amp;&amp; useradd -r -g app appuser
+
+WORKDIR /app
+
+# 先複製依賴清單(快取友善:改 hello.py 不影響這層)
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+
+# 複製程式碼
+COPY hello.py ./
+
+USER appuser
+CMD ["python", "hello.py"]</code></pre>
+              <p>建置與驗證:</p>
+              <pre><code class="language-bash">docker build -t hello:v1 .
+# 修改 hello.py 的輸出文字
+docker build -t hello:v2 .
+# 觀察:RUN pip install 那層仍顯示 CACHED
+# 只有 COPY hello.py ./ 和之後的層重建</code></pre>
+              <p>
+                這驗證了「先 COPY requirements.txt → RUN pip install → COPY 程式碼」
+                的快取友善順序——pip install 只在 requirements.txt 改變時才重跑。
+              </p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 89.2 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>
+            寫一份 <code>docker-compose.yml</code>,跑起以下三個服務:<br>
+            (a) <strong>nginx</strong>(<code>nginx:alpine</code>)作為反向代理,監聽 host 的 8080 埠;<br>
+            (b) <strong>app</strong>(用你自己的 Dockerfile 建置,監聽 5000 埠,只在內網公開,不直接對外);<br>
+            (c) <strong>redis</strong>(<code>redis:7-alpine</code>),資料用命名 volume 持久化;<br>
+            三個服務都在同一個 <code>appnet</code> 網路裡;app 需要在 redis 之後啟動。
+          </p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-text">services:
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "8080:80"
+    depends_on:
+      - app
+    networks:
+      - appnet
+
+  app:
+    build: .
+    expose:
+      - "5000"     # 只在 appnet 內公開,不對外
+    environment:
+      - REDIS_HOST=redis
+    depends_on:
+      - redis
+    networks:
+      - appnet
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redisdata:/data
+    networks:
+      - appnet
+
+volumes:
+  redisdata:
+
+networks:
+  appnet:</code></pre>
+              <p>
+                <code>expose</code> 與 <code>ports</code> 的差異:
+                <code>expose</code> 只在同一個 Compose 網路內公開埠,不對外;
+                <code>ports</code> 才是把 host 埠對應到容器埠對外服務。
+                啟動:<code>docker compose up -d</code>
+              </p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 89.3 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>
+            你的同事把以下 Dockerfile 交給你 review:
+          </p>
+          <pre><code class="language-text">FROM node:20
+
+COPY . .
+RUN npm install
+ENV API_KEY=sk-prod-abc123secretkey
+RUN npm run build
+CMD ["node", "dist/server.js"]</code></pre>
+          <p>
+            列出這份 Dockerfile <strong>至少五個問題</strong>,說明每個問題的原因與修正方式。
+          </p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <ol>
+                <li>
+                  <strong>基礎映像太肥:使用 <code>node:20</code> 而非 <code>node:20-alpine</code>。</strong>
+                  完整 Debian 映像約 1 GB;alpine 版本約 120 MB。修正:改用 <code>FROM node:20-alpine</code>。
+                </li>
+                <li>
+                  <strong>快取順序錯誤:<code>COPY . .</code> 在 <code>RUN npm install</code> 之前。</strong>
+                  每次修改任何程式碼都導致 npm install 重跑。
+                  修正:先 <code>COPY package*.json ./</code> 再 <code>RUN npm install</code>,最後 <code>COPY . .</code>。
+                </li>
+                <li>
+                  <strong>祕密寫進映像:<code>ENV API_KEY=sk-prod-abc123secretkey</code>。</strong>
+                  API key 被固化在映像層裡,<code>docker history</code> 就能看到。
+                  修正:移除這行,改在 <code>docker run -e API_KEY=...</code> 或 Compose 的 <code>env_file</code> 注入。
+                </li>
+                <li>
+                  <strong>沒有切換到非 root 使用者。</strong>
+                  容器以 root 執行應用程式有安全風險。
+                  修正:加入 <code>RUN groupadd -r app &amp;&amp; useradd -r -g app appuser</code>
+                  並在 CMD 前加 <code>USER appuser</code>。
+                </li>
+                <li>
+                  <strong>沒有多階段建置。</strong>
+                  <code>node_modules</code>、npm、build 工具等都進了最終映像,徒增大小與攻擊面。
+                  修正:用多階段建置——build 階段編譯,final 階段只複製 <code>dist/</code>
+                  和 production <code>node_modules</code>。
+                </li>
+                <li>
+                  <strong>沒有 .dockerignore。</strong>
+                  <code>COPY . .</code> 會把 <code>node_modules/</code>、<code>.git/</code>、<code>.env</code>
+                  一起複製進去,既肥又有安全風險。
+                  修正:建立 <code>.dockerignore</code> 排除這些目錄與檔案。
+                </li>
+              </ol>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑪ ==================== -->
+      <h2>把這一章串起來</h2>
+
+      <p>
+        這一章從「你已手寫過 runtime」出發,把工具鏈的每一層都對應到底層機制:
+      </p>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>工具 / 概念</th><th>底層機制(§87/§88)</th><th>本章關鍵重點</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>映像層</td>
+              <td>OverlayFS lowerdir — 唯讀疊層</td>
+              <td>快取友善排序:變動少的放前面</td>
+            </tr>
+            <tr>
+              <td>容器</td>
+              <td>namespace + cgroup + OverlayFS upperdir</td>
+              <td><code>run / exec / logs / stop / rm</code> 完整生命週期</td>
+            </tr>
+            <tr>
+              <td>Volume</td>
+              <td>繞過 upperdir,直接掛載到 Docker 管理路徑</td>
+              <td>命名 volume vs bind mount;不要用匿名 volume</td>
+            </tr>
+            <tr>
+              <td>網路 bridge</td>
+              <td>veth pair + 虛擬 bridge + iptables NAT</td>
+              <td>user-defined network 才支援名稱 DNS 解析</td>
+            </tr>
+            <tr>
+              <td>Compose</td>
+              <td>宣告式描述多容器環境</td>
+              <td><code>depends_on + healthcheck</code>;volumes;networks</td>
+            </tr>
+            <tr>
+              <td>安全</td>
+              <td>capabilities 收縮、namespace 不等於 VM 安全</td>
+              <td>非 root、.dockerignore、祕密不進映像</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>
+        Docker 把<a href="94-mini-docker.html">第 88 章</a>手寫的那兩百行系統呼叫包裝成友善的 CLI——
+        但你現在知道每條指令背後在做什麼:
+        <code>docker run</code> 是 <code>clone() + pivot_root + execvp</code>;
+        <code>docker build</code> 是把每條 Dockerfile 指令固化成 OverlayFS 的一個唯讀層;
+        容器間的 DNS 解析是 Docker 在 user-defined bridge 上植入的 DNS server。
+        有了這層理解,你排查問題、調效能、評估安全的能力都比只會用 CLI 的人強得多。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">📚</div>
+        <div class="body">
+          <span class="c-title">延伸閱讀與資源</span>
+          <p>
+            <strong>docker_practice — Docker 從入門到實踐</strong>:
+            <a href="https://yeasy.gitbook.io/docker_practice/" target="_blank" rel="noopener">yeasy.gitbook.io/docker_practice</a>
+            涵蓋 Dockerfile、Compose、Swarm 的完整實踐指南,中文資源裡最系統的一份。<br><br>
+            <strong>Docker 官方 Getting Started</strong>:
+            <a href="https://docs.docker.com/get-started/" target="_blank" rel="noopener">docs.docker.com/get-started</a>
+            官方互動式教學,從安裝到多容器 Compose 應用有完整的實作引導。<br><br>
+            <strong>Dockerfile 最佳實踐(官方)</strong>:
+            <a href="https://docs.docker.com/build/building/best-practices/" target="_blank" rel="noopener">docs.docker.com/build/building/best-practices</a>
+            層快取、多階段建置、安全建議的權威參考。<br><br>
+            <strong>Trivy — 開源容器漏洞掃描</strong>:
+            <a href="https://aquasecurity.github.io/trivy/" target="_blank" rel="noopener">aquasecurity.github.io/trivy</a>
+            掃描映像中的 OS 套件和應用依賴漏洞,CI/CD 整合友善。
+          </p>
+        </div>
+      </div>
+</article>
+  </main>
+</div>
+<script src="../assets/book.js"></script>
+</body>
+</html>

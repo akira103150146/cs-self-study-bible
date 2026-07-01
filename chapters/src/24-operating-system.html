@@ -1,0 +1,2013 @@
+<!--meta
+title: 作業系統:虛擬化、並行與持久化
+description: 作業系統把有限、難用的硬體變成乾淨好用的抽象。本章沿著 OSTEP 的三大主題——虛擬化(行程與虛擬記憶體)、並行(執行緒、競爭條件與鎖)、持久化(檔案系統與崩潰一致性)——用 C 與系統呼叫帶你看清楚一台電腦如何同時服務上百個程式、又不讓它們互相踩到對方。
+-->
+
+
+      <div class="eyebrow">第五部 · 計算機系統</div>
+      <h1>作業系統:虛擬化、並行與持久化</h1>
+      <p class="subtitle">你按下開機鍵之後,有一個程式比所有程式都先醒來,而且永遠不睡。它管著你電腦裡的每一顆 CPU、每一格記憶體、每一個檔案——卻幾乎從不現身。這一章,我們去認識這個沉默的統治者:作業系統。</p>
+      <div class="byline">
+        <span class="tag">第 24 章</span>
+        <span>閱讀時間 ≈ 70 分鐘</span>
+        <span>難度:★★★★☆</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>作業系統(operating system)到底在做什麼:它既是「資源管理者」也是「魔術師」,把難用的硬體變成乾淨的抽象</li>
+          <li>系統呼叫(system call)與使用者/核心模式(user/kernel mode):應用程式怎麼「拜託」作業系統幫它做事</li>
+          <li><strong>虛擬化 CPU</strong>:行程(process)是什麼、<code>fork()</code> 如何「一變二」、排程器怎麼讓幾顆 CPU 跑上百個程式</li>
+          <li><strong>虛擬化記憶體</strong>:位址空間、虛擬記憶體、分頁與分頁表,以及它如何同時做到隔離、保護與超額使用</li>
+          <li>記憶體與 C 的真相:堆疊 vs 堆積、<code>malloc/free</code>、指標,以及記憶體洩漏與懸空指標這兩個經典惡夢</li>
+          <li><strong>並行</strong>:執行緒(thread)、競爭條件(race condition),以及用鎖、條件變數、號誌來馴服它</li>
+          <li>死結(deadlock)的四個條件,以及生產者-消費者問題</li>
+          <li><strong>持久化</strong>:檔案系統、inode、檔案 API,以及日誌(journaling)如何在斷電後仍保住你的資料</li>
+        </ul>
+      </div>
+
+      <h2>一個忙翻天的管家</h2>
+      <p>
+        想像你住進一棟豪宅,裡面有一位無所不能、但脾氣古怪的管家。你不必知道廚房的瓦斯怎麼接、電從哪裡來、垃圾車幾點到——
+        你只要拉一下鈴,說「我餓了」,飯菜就會上桌;說「我冷了」,暖氣就會打開。管家在背後協調一切:
+        他確保你和其他房客不會同時搶用同一個浴室,確保你睡覺時隔壁的派對不會吵到你,確保你寄放的東西明天還在。
+      </p>
+      <p>
+        你電腦裡就住著這樣一位管家,它叫<strong>作業系統(operating system,OS)</strong>。
+        你打開瀏覽器、播音樂、開編輯器寫程式——這三個程式其實都在搶同一批資源:
+        那幾顆 CPU、那塊記憶體、那個硬碟。是作業系統在中間調度,讓它們<em>以為</em>自己獨佔了整台電腦,
+        而且彼此井水不犯河水。它做得太好,好到你幾乎感覺不到它的存在。
+      </p>
+      <p>
+        上一章(第 21 章)我們看清楚了硬體的真相:CPU 笨得只會「讀一個數字、做一件事、再讀下一個」;
+        記憶體只是一長條格子;螢幕和鍵盤不過是一段被映射的位址。這些硬體<strong>能用,但極難用</strong>——
+        它有限(CPU 只有幾顆)、原始(一個寫錯的位址就能弄花整個畫面)、而且一次只能做一件事。
+        作業系統的工作,就是把這堆難搞的硬體,變成你寫程式時看到的那個乾淨、寬敞、安全的世界。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">作業系統的兩個身分:管理者與魔術師</span>
+          <p>作業系統同時扮演兩個角色。<strong>資源管理者(resource manager)</strong>:像政府一樣,公平且有效率地分配
+          CPU 時間、記憶體空間、硬碟與裝置給每個程式,並且當「警察」維持秩序——不讓一個程式霸佔資源或偷看別人的資料。
+          <strong>魔術師(illusionist)</strong>:把有限、難用的硬體,「變」成一份份乾淨好用的<strong>抽象(abstraction)</strong>——
+          讓每個程式都以為自己獨佔了一顆 CPU、獨佔了整片記憶體、有一個井然有序的檔案世界。
+          這份「美好的假象」,正是你寫程式時習以為常、卻其實得來不易的舒適環境。</p>
+        </div>
+      </div>
+
+      <h2>OSTEP 的三個大哉問</h2>
+      <p>
+        作業系統是個龐大的主題,但有一本經典教材把它漂亮地收斂成三個字。這本書叫
+        <em>Operating Systems: Three Easy Pieces</em>(OSTEP,中文常譯「三隻小豬」),
+        它說:整個作業系統,本質上就在回答三個問題——
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>主題</th><th>英文</th><th>它要解決的問題</th><th>核心假象</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>虛擬化</td><td>Virtualization</td><td>CPU 只有幾顆、記憶體只有一塊,怎麼讓每個程式都以為自己獨佔?</td><td>「這台電腦只有我在用」</td></tr>
+          <tr><td>並行</td><td>Concurrency</td><td>很多事同時在發生,怎麼確保它們不會互相打架、把資料搞爛?</td><td>「同時做很多事,而且不出錯」</td></tr>
+          <tr><td>持久化</td><td>Persistence</td><td>記憶體一斷電就全忘光,怎麼讓資料活過關機、甚至活過當機?</td><td>「我存的東西,明天還在」</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        這三個詞,就是本章的骨架。我們會依序攻克:先讓 OS 把 CPU 和記憶體「變」給每個程式(虛擬化),
+        再處理「很多事同時發生」帶來的混亂(並行),最後讓資料「不因斷電消失」(持久化)。
+        但在出發之前,得先弄清楚一件最基本的事:應用程式到底怎麼「使喚」作業系統?
+      </p>
+
+      <h2>分界線:使用者模式與核心模式</h2>
+      <p>
+        作業系統握有對硬體的最高權限——它能存取任何記憶體、能直接操控磁碟、能決定哪個程式上 CPU。
+        但這帶來一個顯而易見的危險:如果<em>任何</em>程式都有這種權限,那你隨便下載的一個小遊戲,就能讀走你的密碼、
+        或者一個 bug 就能把整台機器弄垮。所以現代 CPU 在硬體層面提供了兩種<strong>執行模式(execution mode)</strong>:
+      </p>
+      <ul>
+        <li><strong>核心模式(kernel mode)</strong>:特權模式。可以執行任何指令、存取任何硬體。只有作業系統的核心(kernel)跑在這個模式。</li>
+        <li><strong>使用者模式(user mode)</strong>:受限模式。不能直接碰硬體、不能存取別人的記憶體。你寫的所有應用程式都跑在這裡。</li>
+      </ul>
+      <p>
+        那問題來了:既然應用程式被關在使用者模式、不能直接碰硬體,它要怎麼讀檔案、怎麼把字印到螢幕?
+        答案是——它必須<strong>拜託作業系統代勞</strong>。這個「拜託」的正式機制,叫做<strong>系統呼叫(system call)</strong>。
+      </p>
+      <p>
+        當你的程式呼叫 <code>printf</code> 或 <code>open</code>,底層其實會執行一條特殊的<strong>陷阱指令(trap)</strong>:
+        CPU 一執行它,就會<strong>切換到核心模式</strong>,並跳進作業系統預先設定好的入口。作業系統接手、檢查你有沒有權限、
+        替你完成這件危險的事,做完再<strong>切回使用者模式</strong>,把結果交還給你。整個過程像隔著一道牆遞紙條:
+        你不能翻牆進去,但可以從牆上的小窗口,把請求遞給裡面那位有權限的管家。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 380" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- user space -->
+  <rect x="30" y="24" width="660" height="92" rx="12" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="50" y="46" font-size="13" font-weight="800" fill="#2f6f6a">使用者模式 User Mode(受限,沒有硬體特權)</text>
+  <rect x="55" y="58" width="150" height="44" rx="8" fill="#fff" stroke="#2f6f6a"/><text x="130" y="85" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">瀏覽器</text>
+  <rect x="225" y="58" width="150" height="44" rx="8" fill="#fff" stroke="#2f6f6a"/><text x="300" y="85" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">文字編輯器</text>
+  <rect x="395" y="58" width="150" height="44" rx="8" fill="#fff" stroke="#2f6f6a"/><text x="470" y="85" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">遊戲</text>
+  <rect x="565" y="58" width="100" height="44" rx="8" fill="#fff" stroke="#2f6f6a"/><text x="615" y="85" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">你的程式</text>
+
+  <!-- syscall boundary -->
+  <rect x="30" y="132" width="660" height="40" rx="8" fill="#fef3c7" stroke="#b4541f" stroke-width="2"/>
+  <text x="360" y="157" text-anchor="middle" font-size="13" font-weight="800" fill="#b4541f">系統呼叫介面 System Call Interface(唯一的合法窗口:open / read / write / fork …)</text>
+
+  <!-- kernel -->
+  <rect x="30" y="188" width="660" height="96" rx="12" fill="#ede9fe" stroke="#8b5cf6" stroke-width="2"/>
+  <text x="50" y="210" font-size="13" font-weight="800" fill="#8b5cf6">核心模式 Kernel Mode(作業系統核心,握有全部特權)</text>
+  <rect x="55" y="222" width="150" height="48" rx="8" fill="#fff" stroke="#8b5cf6"/><text x="130" y="244" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">行程管理</text><text x="130" y="261" text-anchor="middle" font-size="10" fill="#8a929b">排程、fork</text>
+  <rect x="225" y="222" width="150" height="48" rx="8" fill="#fff" stroke="#8b5cf6"/><text x="300" y="244" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">記憶體管理</text><text x="300" y="261" text-anchor="middle" font-size="10" fill="#8a929b">分頁、保護</text>
+  <rect x="395" y="222" width="150" height="48" rx="8" fill="#fff" stroke="#8b5cf6"/><text x="470" y="244" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">檔案系統</text><text x="470" y="261" text-anchor="middle" font-size="10" fill="#8a929b">inode、目錄</text>
+  <rect x="565" y="222" width="100" height="48" rx="8" fill="#fff" stroke="#8b5cf6"/><text x="615" y="244" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">裝置驅動</text><text x="615" y="261" text-anchor="middle" font-size="10" fill="#8a929b">device driver</text>
+
+  <!-- hardware -->
+  <rect x="30" y="300" width="660" height="60" rx="12" fill="#f6e7dd" stroke="#b4541f" stroke-width="2"/>
+  <text x="50" y="322" font-size="13" font-weight="800" fill="#b4541f">硬體 Hardware(第 21 章)</text>
+  <text x="360" y="345" text-anchor="middle" font-size="12" fill="#1f2328">CPU　·　記憶體 RAM　·　磁碟 / SSD　·　鍵盤 / 螢幕 / 網路卡</text>
+
+  <!-- arrows down/up through boundary -->
+  <line x1="300" y1="116" x2="300" y2="132" stroke="#b4541f" stroke-width="2" marker-end="url(#osA)"/>
+  <line x1="420" y1="172" x2="420" y2="188" stroke="#8b5cf6" stroke-width="2" marker-end="url(#osB)"/>
+  <text x="312" y="128" font-size="10" fill="#b4541f">trap 陷入</text>
+  <defs>
+    <marker id="osA" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#b4541f"/></marker>
+    <marker id="osB" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8b5cf6"/></marker>
+  </defs>
+</svg>
+        <figcaption>圖 24-1:作業系統是一座分層架構(呼應第 11 章)。應用程式住在上層的使用者模式,無法直接碰硬體;它們只能透過中間那道「系統呼叫介面」把請求遞進核心。核心握有全部特權,替應用程式完成讀檔、配記憶體、開行程等危險工作,再把結果交還。</figcaption>
+      </div>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">「核心(kernel)」與「作業系統」不完全是同一件事</span>
+          <p>嚴格說,<strong>核心</strong>是作業系統中那塊跑在核心模式、最核心的程式(管行程、記憶體、檔案、裝置)。
+          而我們口語講的「作業系統」(像 Windows、macOS、Linux 發行版)通常還包含一大堆跑在使用者模式的東西:
+          視窗系統、檔案總管、終端機、各種系統工具。本章談的是<strong>核心</strong>負責的那些核心職責——也就是 OSTEP 的三件事。</p>
+        </div>
+      </div>
+
+      <h2>虛擬化 CPU(一):行程是什麼</h2>
+      <p>
+        從「虛擬化 CPU」開始。這裡的主角,是一個你天天聽到、卻未必說得清楚的詞:<strong>行程(process)</strong>。
+        先把一個最常見的混淆釐清:
+      </p>
+      <blockquote>
+        程式(program)是躺在硬碟上的一份檔案;行程(process)是這份程式正在<strong>執行中</strong>的一個實體。
+      </blockquote>
+      <p>
+        打個比方:<strong>程式像一張食譜</strong>(寫在紙上的靜態指令),<strong>行程則是廚師正在照這張食譜煮菜的整個過程</strong>——
+        他手邊有一鍋正在滾的湯(記憶體裡的資料)、看到食譜的第幾行了(程式計數器 PC)、手上拿著哪些食材(暫存器)。
+        同一張食譜,可以同時有<strong>三個廚師</strong>各自照著煮——於是同一個程式,可以同時跑成<strong>三個行程</strong>
+        (你開三個記事本視窗,就是三個行程跑同一個程式)。
+      </p>
+      <p>
+        所以一個行程,是「一個執行中的程式」加上它所有的<strong>狀態</strong>:它的記憶體(程式碼、資料、堆疊、堆積)、
+        它的暫存器(包括 PC)、它開了哪些檔案……作業系統把這些資訊打包成一個叫
+        <strong>行程控制塊(PCB,Process Control Block)</strong>的資料結構,用它來「記住」每個行程長什麼樣。
+        當作業系統要把 CPU 從一個行程切換到另一個,它做的就是「存好這個行程的狀態、載入那個行程的狀態」。
+      </p>
+
+      <h3>行程的三種狀態</h3>
+      <p>
+        一個行程的一生,大部分時間都在三種狀態之間切換:
+      </p>
+      <ul>
+        <li><strong>執行中(running)</strong>:正在某顆 CPU 上跑。一顆 CPU 同一時刻只能有一個行程處於這個狀態。</li>
+        <li><strong>就緒(ready)</strong>:準備好了、隨時能跑,只是還沒輪到它(CPU 正被別人用)。</li>
+        <li><strong>阻塞(blocked)</strong>:在等某件事完成(例如等磁碟讀完、等網路回應、等鍵盤輸入),這段期間它<em>不該</em>佔著 CPU。</li>
+      </ul>
+
+      <div class="diagram">
+<svg viewBox="0 0 700 320" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- states -->
+  <rect x="270" y="40" width="160" height="60" rx="30" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="350" y="68" text-anchor="middle" font-size="14" font-weight="800" fill="#1f2328">就緒 Ready</text>
+  <text x="350" y="86" text-anchor="middle" font-size="10" fill="#8a929b">準備好,等 CPU</text>
+
+  <rect x="60" y="200" width="170" height="60" rx="30" fill="#2f6f6a" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="145" y="228" text-anchor="middle" font-size="14" font-weight="800" fill="#fff">執行中 Running</text>
+  <text x="145" y="246" text-anchor="middle" font-size="10" fill="#cfe6e2">正在 CPU 上跑</text>
+
+  <rect x="470" y="200" width="170" height="60" rx="30" fill="#f6e7dd" stroke="#b4541f" stroke-width="2"/>
+  <text x="555" y="228" text-anchor="middle" font-size="14" font-weight="800" fill="#1f2328">阻塞 Blocked</text>
+  <text x="555" y="246" text-anchor="middle" font-size="10" fill="#8a929b">等 I/O 完成</text>
+
+  <!-- ready -> running (dispatch) -->
+  <path d="M275 88 C 200 120, 150 150, 145 198" fill="none" stroke="#2f6f6a" stroke-width="2" marker-end="url(#stA)"/>
+  <text x="150" y="140" text-anchor="middle" font-size="11" fill="#2f6f6a">排程器選中(dispatch)</text>
+
+  <!-- running -> ready (preempt) -->
+  <path d="M180 200 C 230 150, 290 120, 320 102" fill="none" stroke="#8a929b" stroke-width="2" marker-end="url(#stB)"/>
+  <text x="285" y="170" text-anchor="middle" font-size="11" fill="#8a929b">時間到,被搶占</text>
+
+  <!-- running -> blocked -->
+  <path d="M230 240 L 470 235" fill="none" stroke="#b4541f" stroke-width="2" marker-end="url(#stC)"/>
+  <text x="350" y="228" text-anchor="middle" font-size="11" fill="#b4541f">發出 I/O 請求,去等</text>
+
+  <!-- blocked -> ready -->
+  <path d="M540 200 C 500 140, 460 110, 432 92" fill="none" stroke="#b4541f" stroke-width="2" marker-end="url(#stB)"/>
+  <text x="520" y="150" text-anchor="middle" font-size="11" fill="#b4541f">I/O 完成,重新排隊</text>
+
+  <defs>
+    <marker id="stA" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#2f6f6a"/></marker>
+    <marker id="stB" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/></marker>
+    <marker id="stC" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#b4541f"/></marker>
+  </defs>
+</svg>
+        <figcaption>圖 24-2:行程的三種狀態與轉換。注意「執行中 → 阻塞」這條:當行程要等慢吞吞的 I/O,作業系統會把它擱到一邊、把 CPU 讓給別人——這正是電腦能「一邊下載一邊讓你打字」的關鍵。</figcaption>
+      </div>
+
+      <p>
+        為什麼「阻塞」這個狀態這麼重要?因為 I/O 慢得驚人。CPU 一秒能算數十億次,但去硬碟讀一筆資料可能要等上千萬個 CPU 週期。
+        如果一個行程在等磁碟時還死佔著 CPU,那就是天大的浪費。所以作業系統一看到行程要等 I/O,就把它丟進「阻塞」,
+        立刻把 CPU 換給別的「就緒」行程跑。等 I/O 完成,再把它叫醒、放回「就緒」隊伍。這個切換,我們馬上會細談。
+      </p>
+
+      <h2>虛擬化 CPU(二):fork、exec、wait</h2>
+      <p>
+        行程是怎麼被「生」出來的?在 Unix/Linux 的世界裡(這也是業界與教學的主流),靠的是三個經典的系統呼叫:
+        <code>fork()</code>、<code>exec()</code>、<code>wait()</code>。它們的設計初看怪異,卻優雅得令人拍案。
+      </p>
+
+      <h3>fork():一個行程,裂成兩個</h3>
+      <p>
+        <code>fork()</code> 大概是整個作業系統裡最詭異的一個函式:<strong>你呼叫它一次,它卻回傳兩次</strong>。
+        為什麼?因為呼叫的那一瞬間,作業系統把目前這個行程<strong>完整複製</strong>了一份——
+        記憶體、暫存器、PC、開啟的檔案,全部一模一樣。於是現在有<em>兩個</em>幾乎相同的行程在跑,
+        它們都從 <code>fork()</code> 回傳的那一行「醒來」,繼續往下執行同一份程式碼。
+      </p>
+      <p>
+        那要怎麼分辨誰是誰?靠 <code>fork()</code> 的<strong>回傳值</strong>:在「父行程(parent)」裡,它回傳新生子行程的編號(PID);
+        在「子行程(child)」裡,它回傳 0。看這個範例:
+      </p>
+      <pre><code class="language-c">#include &lt;stdio.h&gt;
+#include &lt;unistd.h&gt;   /* fork() 在這個標頭檔 */
+
+int main(void) {
+    printf("起點:現在只有我一個行程\n");
+
+    int pid = fork();          /* ★ 就是這一行,一個行程裂成兩個 ★ */
+
+    if (pid &lt; 0) {
+        printf("fork 失敗了\n");           /* 系統資源不足時才會發生 */
+    } else if (pid == 0) {
+        printf("我是子行程,fork 回傳給我 0\n");
+    } else {
+        printf("我是父行程,我的子行程 PID = %d\n", pid);
+    }
+    return 0;
+}</code></pre>
+      <p>
+        執行結果,父子兩行的順序<strong>不保證</strong>(誰先被排到 CPU,誰就先印):
+      </p>
+      <pre><code class="language-text">起點:現在只有我一個行程
+我是父行程,我的子行程 PID = 5021
+我是子行程,fork 回傳給我 0</code></pre>
+      <p>
+        關鍵是:<code>"起點"</code> 那行<strong>只印一次</strong>(fork 之前還只有一個行程),
+        而 fork 之後的程式碼,<strong>父子各跑一遍</strong>。下圖把這個「一變二」畫出來:
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 320" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- before -->
+  <rect x="40" y="120" width="180" height="80" rx="10" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="130" y="150" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">行程 P(PID 100)</text>
+  <text x="130" y="172" text-anchor="middle" font-size="11" fill="#4a5159">執行到 fork()…</text>
+  <text x="130" y="190" text-anchor="middle" font-size="10" fill="#8a929b">記憶體、PC、暫存器</text>
+
+  <!-- fork box -->
+  <rect x="300" y="138" width="90" height="44" rx="8" fill="#fef3c7" stroke="#b4541f" stroke-width="2"/>
+  <text x="345" y="165" text-anchor="middle" font-size="13" font-weight="800" fill="#b4541f">fork()</text>
+
+  <line x1="220" y1="160" x2="300" y2="160" stroke="#8a929b" stroke-width="2" marker-end="url(#fkA)"/>
+
+  <!-- after: parent -->
+  <rect x="480" y="50" width="210" height="84" rx="10" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="585" y="78" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">父行程 P(PID 100)</text>
+  <text x="585" y="100" text-anchor="middle" font-size="11" fill="#4a5159">fork() 回傳 = 101</text>
+  <text x="585" y="120" text-anchor="middle" font-size="10" fill="#8a929b">原本的行程,繼續跑</text>
+
+  <!-- after: child -->
+  <rect x="480" y="186" width="210" height="84" rx="10" fill="#ede9fe" stroke="#8b5cf6" stroke-width="2"/>
+  <text x="585" y="214" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">子行程 C(PID 101)</text>
+  <text x="585" y="236" text-anchor="middle" font-size="11" fill="#4a5159">fork() 回傳 = 0</text>
+  <text x="585" y="256" text-anchor="middle" font-size="10" fill="#8a929b">P 的複製品,獨立記憶體</text>
+
+  <path d="M390 150 C 430 110, 450 95, 480 90" fill="none" stroke="#2f6f6a" stroke-width="2" marker-end="url(#fkA)"/>
+  <path d="M390 170 C 430 210, 450 225, 480 228" fill="none" stroke="#8b5cf6" stroke-width="2" marker-end="url(#fkB)"/>
+
+  <defs>
+    <marker id="fkA" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#2f6f6a"/></marker>
+    <marker id="fkB" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8b5cf6"/></marker>
+  </defs>
+</svg>
+        <figcaption>圖 24-3:<code>fork()</code> 的「一變二」。呼叫前是一個行程;呼叫後憑空多出一個幾乎相同的子行程。父行程拿到子行程的 PID,子行程拿到 0——靠這個回傳值的差異,同一段程式碼就能讓父子走上不同的岔路。</figcaption>
+      </div>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">複製整份記憶體不會很慢嗎?</span>
+          <p>會,如果真的逐位元複製的話。所以現代系統用一招叫<strong>寫時複製(copy-on-write,COW)</strong>:
+          fork 的瞬間,父子<em>共用</em>同一份記憶體頁(只是各自標記成唯讀);只有當某一方真的<em>動手寫</em>某一頁時,
+          才在那一刻才幫它複製出私有的一份。大多數 fork 之後馬上 exec(整份記憶體立刻被換掉)的情況,根本不必複製,省下大量功夫。
+          這是「分頁」這個機制(等一下會講)帶來的漂亮副產品。</p>
+        </div>
+      </div>
+
+      <h3>exec():把自己「變身」成另一個程式</h3>
+      <p>
+        光會複製自己有什麼用?威力在於 <code>fork()</code> 跟 <code>exec()</code> 的組合。
+        <code>exec()</code> 做的事是:<strong>把目前行程的記憶體內容,整個換成另一個程式</strong>——
+        程式碼、資料全部換新,從新程式的開頭開始跑,但 PID 不變。它像「換腦不換身分證」。
+      </p>
+      <p>
+        於是「執行一個新程式」的標準套路,就是 <strong>fork 一個自己,然後讓子行程 exec 成想跑的程式</strong>。
+        這正是你每次在終端機打指令、或點開一個 App 時,背後發生的事:
+      </p>
+      <pre><code class="language-c">#include &lt;stdio.h&gt;
+#include &lt;stdlib.h&gt;
+#include &lt;unistd.h&gt;
+#include &lt;sys/wait.h&gt;
+
+int main(void) {
+    int pid = fork();
+
+    if (pid == 0) {
+        /* 子行程:把自己變身成 `ls -l` 這個程式 */
+        char *args[] = { "ls", "-l", NULL };   /* 參數列,結尾要放 NULL */
+        execvp("ls", args);
+        /* 如果 exec 成功,下面這行「永遠不會」被執行——因為這個行程已經不是原本的程式了 */
+        perror("exec 失敗");
+        exit(1);
+    } else {
+        /* 父行程:等子行程做完,再繼續 */
+        wait(NULL);
+        printf("子行程結束了,換我繼續\n");
+    }
+    return 0;
+}</code></pre>
+      <p>
+        注意 exec 那行詭異的特性:<strong>成功的話,它下面的程式碼永遠跑不到</strong>,因為這個行程的「靈魂」已經被
+        <code>ls</code> 取代了。只有 exec <em>失敗</em>(例如找不到那個程式)時,才會落到下面的錯誤處理。
+      </p>
+
+      <h3>wait():父行程等子行程</h3>
+      <p>
+        範例裡的 <code>wait(NULL)</code> 讓父行程<strong>暫停,直到子行程結束</strong>。
+        這保證了輸出順序(子行程先做完,父行程才印那句話),也讓父行程有機會「收屍」——
+        回收子行程結束後殘留的資源。如果父行程不 <code>wait</code> 就先走了,那些結束卻沒被回收的子行程會變成
+        <strong>殭屍行程(zombie)</strong>:已經死了,卻還在行程表裡佔個位子,等著被父行程確認。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">fork + exec + wait:整個系統的繁衍方式</span>
+          <p>這三個系統呼叫,撐起了整個 Unix 的行程世界:<strong>fork</strong> 複製出一個新行程、<strong>exec</strong> 把它變成想跑的程式、
+          <strong>wait</strong> 讓父行程等它做完。你的終端機(shell)就是個無限迴圈:讀你打的指令 → fork → 子行程 exec 成那個指令 → wait 等它跑完 → 再問你下一個指令。
+          你開機後看到的所有行程,追根溯源,全都是從第一個行程(<code>init</code>,PID 1)一路 fork 出來的——這是一棵巨大的行程家族樹。</p>
+        </div>
+      </div>
+
+      <h2>排程:幾顆 CPU,跑上百個行程</h2>
+      <p>
+        現在有了一堆行程,但 CPU 可能只有 8 顆,行程卻有好幾百個。怎麼辦?作業系統的答案是
+        <strong>分時多工(time sharing)</strong>:讓每個行程輪流跑一小段時間(可能只有幾毫秒),
+        切得夠快,你就<em>感覺</em>它們在同時跑——就像電影其實是一張張靜止照片快速播放,你卻看成連續動作。
+      </p>
+      <p>
+        「把 CPU 從行程 A 換給行程 B」這個動作,叫<strong>上下文切換(context switch)</strong>。
+        作業系統得先把 A 的全部狀態(暫存器、PC……)存進 A 的 PCB,再把 B 的狀態從 B 的 PCB 載回 CPU,
+        然後 B 就接著上次中斷的地方繼續跑。這個切換本身要花時間(純屬「行政成本」,沒做任何有用計算),
+        所以切太頻繁也不好——這是個需要拿捏的權衡。
+      </p>
+      <p>
+        負責決定「下一個換誰上」的那段程式,叫<strong>排程器(scheduler)</strong>,它用的規則叫<strong>排程策略(scheduling policy)</strong>。
+        在比較策略好壞前,先定義兩個關鍵指標:
+      </p>
+      <ul>
+        <li><strong>週轉時間(turnaround time)</strong> = 完成時刻 − 抵達時刻。從「來排隊」到「全部做完」總共等了多久。<em>批次運算</em>(例如跑一個科學模擬)在乎這個。</li>
+        <li><strong>回應時間(response time)</strong> = 第一次被排到 CPU 的時刻 − 抵達時刻。從「來排隊」到「終於開始動」等了多久。<em>互動式</em>程式(例如你打字、滑網頁)在乎這個——你要的是「立刻有反應」。</li>
+      </ul>
+
+      <h3>四種經典策略</h3>
+      <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>策略</th><th>規則</th><th>優點</th><th>缺點</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><strong>FIFO</strong>(先到先做)</td><td>誰先來誰先跑,做完才換下一個</td><td>最簡單、最公平直覺</td><td>一個大工作排前面,後面全被卡住(「車隊效應」)</td></tr>
+          <tr><td><strong>SJF</strong>(最短工作優先)</td><td>永遠先做「需時最短」的那個</td><td>讓平均週轉時間<strong>最小</strong>(可證明)</td><td>得先知道每個工作要跑多久(現實做不到);大工作可能餓死</td></tr>
+          <tr><td><strong>RR</strong>(輪轉)</td><td>每個行程跑一個固定<strong>時間片(time slice)</strong>就換下一個,輪流轉圈</td><td>回應時間極佳,人人都很快被輪到</td><td>頻繁切換增加成本;週轉時間通常較差</td></tr>
+          <tr><td><strong>MLFQ</strong>(多層回饋佇列)</td><td>分多層優先級,新工作放高層;用掉太多 CPU 就降級,等待夠久就升級</td><td>不需預知時長,卻能<em>逼近</em> SJF 又兼顧回應</td><td>較複雜,參數要調</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        FIFO 的問題很好懂:想像超市只有一個收銀台,你只買一瓶水,前面卻站著一個推著滿滿三車貨的人——
+        你明明 10 秒能結完,卻得等他 10 分鐘。SJF 就是「只買幾樣的請先」,平均等待瞬間下降。
+        RR 則像「每人限結 5 樣,沒結完請到隊伍尾巴重排」——沒人會被卡死,但你來回奔波(切換)也累。
+        看一張甘特圖最直觀(三個工作 A、B、C 同時抵達,分別需要 20、4、4 個時間單位):
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 300" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- FIFO -->
+  <text x="20" y="48" font-size="13" font-weight="800" fill="#2f6f6a">FIFO(順序 A→B→C)</text>
+  <rect x="120" y="28" width="400" height="34" fill="#e3efed" stroke="#2f6f6a"/><text x="320" y="50" text-anchor="middle" font-size="12" font-weight="700">A(20)</text>
+  <rect x="520" y="28" width="80" height="34" fill="#f6e7dd" stroke="#b4541f"/><text x="560" y="50" text-anchor="middle" font-size="11" font-weight="700">B(4)</text>
+  <rect x="600" y="28" width="80" height="34" fill="#ede9fe" stroke="#8b5cf6"/><text x="640" y="50" text-anchor="middle" font-size="11" font-weight="700">C(4)</text>
+  <text x="120" y="80" font-size="10" fill="#8a929b">完成:A=20  B=24  C=28　→ 平均週轉 =(20+24+28)/3 ≈ 24</text>
+
+  <!-- SJF -->
+  <text x="20" y="138" font-size="13" font-weight="800" fill="#b4541f">SJF(短的先:B→C→A)</text>
+  <rect x="120" y="118" width="80" height="34" fill="#f6e7dd" stroke="#b4541f"/><text x="160" y="140" text-anchor="middle" font-size="11" font-weight="700">B(4)</text>
+  <rect x="200" y="118" width="80" height="34" fill="#ede9fe" stroke="#8b5cf6"/><text x="240" y="140" text-anchor="middle" font-size="11" font-weight="700">C(4)</text>
+  <rect x="280" y="118" width="400" height="34" fill="#e3efed" stroke="#2f6f6a"/><text x="480" y="140" text-anchor="middle" font-size="12" font-weight="700">A(20)</text>
+  <text x="120" y="170" font-size="10" fill="#8a929b">完成:B=4  C=8  A=28　→ 平均週轉 =(4+8+28)/3 ≈ 13.3　(大幅改善!)</text>
+
+  <!-- RR -->
+  <text x="20" y="228" font-size="13" font-weight="800" fill="#8b5cf6">RR(時間片=4,輪流)</text>
+  <g font-size="10" font-weight="700" text-anchor="middle">
+    <rect x="120" y="208" width="48" height="34" fill="#e3efed" stroke="#2f6f6a"/><text x="144" y="230">A</text>
+    <rect x="168" y="208" width="48" height="34" fill="#f6e7dd" stroke="#b4541f"/><text x="192" y="230">B</text>
+    <rect x="216" y="208" width="48" height="34" fill="#ede9fe" stroke="#8b5cf6"/><text x="240" y="230">C</text>
+    <rect x="264" y="208" width="48" height="34" fill="#e3efed" stroke="#2f6f6a"/><text x="288" y="230">A</text>
+    <rect x="312" y="208" width="48" height="34" fill="#e3efed" stroke="#2f6f6a"/><text x="336" y="230">A</text>
+    <rect x="360" y="208" width="48" height="34" fill="#e3efed" stroke="#2f6f6a"/><text x="384" y="230">A</text>
+    <rect x="408" y="208" width="48" height="34" fill="#e3efed" stroke="#2f6f6a"/><text x="432" y="230">A</text>
+  </g>
+  <text x="120" y="262" font-size="10" fill="#8a929b">回應時間:A=0 B=4 C=8(人人很快動起來),但 B、C 的週轉反而被拖長 → 這就是取捨</text>
+</svg>
+        <figcaption>圖 24-4:同樣三個工作,三種排程。SJF 讓<strong>平均週轉時間</strong>最小(短的先做,不讓大工作擋路);RR 讓<strong>回應時間</strong>最小(人人很快被輪到),代價是週轉變差。沒有「最好」的策略,只有「為了什麼而最佳化」的取捨。</figcaption>
+      </div>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">週轉 vs 回應:一個永恆的取捨</span>
+          <p>你沒辦法同時把兩者都做到最好。要「總體最快做完」(週轉短),就該讓短工作先做、少切換;
+          要「人人都覺得很順」(回應快),就得頻繁輪轉、別讓任何人等太久。這正是為什麼你的手機/筆電用的是
+          <strong>MLFQ 這類混合策略</strong>:它偷偷觀察每個行程的行為——常常很快放掉 CPU 去等 I/O 的(像你打字的編輯器),
+          判定它是「互動式」,給它高優先級、讓你感覺超順;一直猛吃 CPU 的(像影片轉檔),降級到背景慢慢跑。
+          你感覺不到它在做這些,但這正是它身為「魔術師」的功力。</p>
+        </div>
+      </div>
+
+      <h2>虛擬化記憶體:每個行程都以為自己獨佔整片記憶體</h2>
+      <p>
+        虛擬化完 CPU,換記憶體。這裡藏著作業系統最精彩的一個魔術。先想一個問題:你電腦同時跑著幾十個程式,
+        它們<strong>都</strong>在用記憶體。如果每個程式都直接讀寫實體記憶體的真實位址,會出大事——
+        程式 A 一個寫錯的位址,就可能覆蓋掉程式 B 的資料,甚至覆蓋掉作業系統自己。一團亂。
+      </p>
+      <p>
+        作業系統的解法美得驚人:它給<strong>每一個行程</strong>都發一份「假的、私有的記憶體」,叫
+        <strong>位址空間(address space)</strong>。在這個行程眼裡,它彷彿從位址 0 開始、獨佔了一整片連續而廣大的記憶體,
+        想用哪格用哪格,完全不知道、也不需要知道別人的存在。這份美好的假象,就叫
+        <strong>虛擬記憶體(virtual memory)</strong>。
+      </p>
+      <p>
+        但實體記憶體只有一塊啊!假象怎麼變出來?關鍵在於:行程用的位址全是<strong>虛擬位址(virtual address)</strong>,
+        是假的;每次它要存取記憶體,中間都有人偷偷把這個虛擬位址<strong>翻譯</strong>成真正的
+        <strong>實體位址(physical address)</strong>。這個翻譯動作叫<strong>位址轉譯(address translation)</strong>,
+        由 CPU 裡一個專門的硬體 <strong>MMU(記憶體管理單元,Memory Management Unit)</strong>飛快完成。
+      </p>
+
+      <h3>分頁:把記憶體切成固定大小的方塊</h3>
+      <p>
+        要怎麼做這個翻譯?最主流的方法叫<strong>分頁(paging)</strong>。它的點子是:把虛擬記憶體切成許多固定大小的小塊,
+        叫<strong>分頁(page)</strong>(常見是 4 KB);把實體記憶體也切成同樣大小的小塊,叫<strong>頁框(page frame)</strong>。
+        然後作業系統替每個行程維護一張對照表,叫<strong>分頁表(page table)</strong>,記著
+        「這個行程的第 N 號虛擬分頁,實際放在實體記憶體的第幾號頁框」。
+      </p>
+      <p>
+        於是翻譯就變成查表:CPU 拿到一個虛擬位址,MMU 把它拆成「分頁號碼 + 頁內位移」,
+        用分頁號碼去分頁表查出對應的頁框號碼,拼上位移,就得到真正的實體位址。妙的地方在於:
+        <strong>連續的虛擬分頁,在實體記憶體裡可以是東一塊、西一塊散落的</strong>——行程完全察覺不到,它眼中永遠是整齊連續的。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 360" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- virtual address space -->
+  <text x="95" y="28" text-anchor="middle" font-size="12" font-weight="800" fill="#2f6f6a">行程的虛擬位址空間</text>
+  <text x="95" y="44" text-anchor="middle" font-size="10" fill="#8a929b">(它以為的:整齊連續)</text>
+  <g font-size="11" text-anchor="middle">
+    <rect x="40" y="56" width="110" height="40" fill="#e3efed" stroke="#2f6f6a"/><text x="95" y="81">虛擬頁 0</text>
+    <rect x="40" y="96" width="110" height="40" fill="#e3efed" stroke="#2f6f6a"/><text x="95" y="121">虛擬頁 1</text>
+    <rect x="40" y="136" width="110" height="40" fill="#e3efed" stroke="#2f6f6a"/><text x="95" y="161">虛擬頁 2</text>
+    <rect x="40" y="176" width="110" height="40" fill="#e3efed" stroke="#2f6f6a"/><text x="95" y="201">虛擬頁 3</text>
+  </g>
+
+  <!-- page table -->
+  <text x="360" y="28" text-anchor="middle" font-size="12" font-weight="800" fill="#b4541f">分頁表 Page Table</text>
+  <text x="360" y="44" text-anchor="middle" font-size="10" fill="#8a929b">(MMU 查這張表來翻譯)</text>
+  <g font-size="11" text-anchor="middle">
+    <rect x="280" y="56" width="160" height="40" fill="#fef3c7" stroke="#b4541f"/><text x="360" y="81">頁 0 → 頁框 6</text>
+    <rect x="280" y="96" width="160" height="40" fill="#fef3c7" stroke="#b4541f"/><text x="360" y="121">頁 1 → 頁框 2</text>
+    <rect x="280" y="136" width="160" height="40" fill="#fef3c7" stroke="#b4541f"/><text x="360" y="161">頁 2 → 頁框 9</text>
+    <rect x="280" y="176" width="160" height="40" fill="#fef3c7" stroke="#b4541f"/><text x="360" y="201">頁 3 → 頁框 4</text>
+  </g>
+
+  <!-- physical memory -->
+  <text x="620" y="28" text-anchor="middle" font-size="12" font-weight="800" fill="#8b5cf6">實體記憶體</text>
+  <text x="620" y="44" text-anchor="middle" font-size="10" fill="#8a929b">(真實的:散落各處)</text>
+  <g font-size="10" text-anchor="middle">
+    <rect x="560" y="56" width="120" height="26" fill="#f3f4f6" stroke="#8a929b"/><text x="620" y="73">頁框 0</text>
+    <rect x="560" y="82" width="120" height="26" fill="#ede9fe" stroke="#8b5cf6"/><text x="620" y="99">頁框 2 ← 虛頁1</text>
+    <rect x="560" y="108" width="120" height="26" fill="#f3f4f6" stroke="#8a929b"/><text x="620" y="125">頁框 3</text>
+    <rect x="560" y="134" width="120" height="26" fill="#ede9fe" stroke="#8b5cf6"/><text x="620" y="151">頁框 4 ← 虛頁3</text>
+    <rect x="560" y="160" width="120" height="26" fill="#f3f4f6" stroke="#8a929b"/><text x="620" y="177">頁框 5</text>
+    <rect x="560" y="186" width="120" height="26" fill="#ede9fe" stroke="#8b5cf6"/><text x="620" y="203">頁框 6 ← 虛頁0</text>
+    <rect x="560" y="212" width="120" height="26" fill="#f3f4f6" stroke="#8a929b"/><text x="620" y="229">頁框 7</text>
+    <rect x="560" y="238" width="120" height="26" fill="#ede9fe" stroke="#8b5cf6"/><text x="620" y="255">頁框 9 ← 虛頁2</text>
+  </g>
+
+  <!-- arrows virtual -> table -->
+  <line x1="150" y1="76" x2="280" y2="76" stroke="#8a929b" stroke-width="1.5" marker-end="url(#pgA)"/>
+  <line x1="150" y1="116" x2="280" y2="116" stroke="#8a929b" stroke-width="1.5" marker-end="url(#pgA)"/>
+  <!-- arrows table -> physical -->
+  <line x1="440" y1="76" x2="558" y2="199" stroke="#8b5cf6" stroke-width="1.5" marker-end="url(#pgB)"/>
+  <line x1="440" y1="116" x2="558" y2="95" stroke="#8b5cf6" stroke-width="1.5" marker-end="url(#pgB)"/>
+
+  <text x="360" y="300" text-anchor="middle" font-size="12" fill="#1f2328">同一條 <tspan font-weight="800">load 位址</tspan> 指令,經 MMU 一查表,虛擬位址就被翻成真正的實體位址</text>
+  <text x="360" y="324" text-anchor="middle" font-size="11" fill="#8a929b">行程永遠看不到右邊那團混亂——這就是「虛擬化記憶體」</text>
+
+  <defs>
+    <marker id="pgA" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#8a929b"/></marker>
+    <marker id="pgB" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#8b5cf6"/></marker>
+  </defs>
+</svg>
+        <figcaption>圖 24-5:虛擬位址 → 實體位址的映射。左邊是行程眼中整齊連續的虛擬分頁;經過中間分頁表的翻譯,它們實際散落在右邊實體記憶體的各個頁框。每個行程都有自己一張分頁表,所以同樣的虛擬位址,在不同行程裡會指向完全不同的實體位置。</figcaption>
+      </div>
+
+      <h3>為什麼要這麼麻煩?三個理由</h3>
+      <p>
+        多繞這麼一層翻譯,值得嗎?太值得了。它一口氣解決了三個大問題:
+      </p>
+      <ul>
+        <li><strong>隔離(isolation)</strong>:每個行程有自己的分頁表,它的虛擬位址只能映射到「分配給它的」頁框。
+        行程 A 根本<em>沒辦法</em>表達出「我要碰行程 B 的記憶體」這件事——它的位址空間裡壓根沒有通往 B 的路。一個行程當掉,不會拖垮別人。</li>
+        <li><strong>保護(protection)</strong>:分頁表的每一筆還能附帶權限位元(可讀/可寫/可執行)。
+        想偷寫唯讀的程式碼區?MMU 當場攔下、丟出例外。這也是擋住許多攻擊的第一道牆。</li>
+        <li><strong>超額使用(overcommitment)</strong>:行程要的記憶體總和,可以<strong>大於</strong>實體記憶體!
+        因為不是每一頁都隨時要用——暫時用不到的頁,可以先「換」到磁碟上,要用時再搬回來。</li>
+      </ul>
+      <p>
+        最後這點就是<strong>換頁(swapping / paging to disk)</strong>:把暫時不用的分頁挪去磁碟,騰出實體記憶體;
+        等行程真的要存取那一頁時,才觸發一次「缺頁(page fault)」,作業系統再把它從磁碟搬回來。
+        這讓你能在 16 GB 的機器上,跑出「彷彿有更多記憶體」的效果——代價是搬進搬出很慢。
+        (換頁與快取的細節,我們留到<strong>第十一部第 48 章「計算機結構」</strong>再深入。)
+      </p>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">TLB:給翻譯加一個快取</span>
+          <p>每次存取記憶體都要先查一次分頁表——但分頁表自己也住在記憶體裡,豈不是每次存取都要<em>多一次</em>存取?太慢了。
+          所以 MMU 裡有一塊極快的小快取,叫 <strong>TLB(Translation Lookaside Buffer)</strong>,專門記住最近用過的「虛擬頁 → 頁框」對照。
+          因為程式存取記憶體有很強的「區域性」(reuse 同一批分頁),TLB 命中率非常高,絕大多數翻譯一查 TLB 就有答案,不必碰分頁表。
+          這是「快取」這個思想無所不在的又一例證。</p>
+        </div>
+      </div>
+
+      <h2>記憶體與 C:堆疊、堆積、與兩個經典惡夢</h2>
+      <p>
+        虛擬記憶體給了每個行程一片乾淨的位址空間。那這片空間<em>裡面</em>是怎麼安排的?用 C 寫程式時你會直接撞上它。
+        一個行程的位址空間,大致分成這幾區:
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 640 360" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="320" y="24" text-anchor="middle" font-size="12" font-weight="800" fill="#1f2328">一個行程的位址空間(由高位址到低位址)</text>
+
+  <!-- stack -->
+  <rect x="180" y="44" width="280" height="60" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="320" y="70" text-anchor="middle" font-size="13" font-weight="800" fill="#2f6f6a">堆疊 Stack</text>
+  <text x="320" y="90" text-anchor="middle" font-size="10" fill="#4a5159">區域變數、函式呼叫框架;自動配置/回收</text>
+  <line x1="320" y1="110" x2="320" y2="150" stroke="#2f6f6a" stroke-width="2" marker-end="url(#mmA)"/>
+  <text x="380" y="135" font-size="10" fill="#2f6f6a">往下長 ↓</text>
+
+  <!-- gap -->
+  <text x="320" y="172" text-anchor="middle" font-size="10" fill="#8a929b">… 中間是空的,留給兩邊生長 …</text>
+
+  <!-- heap -->
+  <line x1="320" y1="184" x2="320" y2="218" stroke="#b4541f" stroke-width="2" marker-end="url(#mmB)"/>
+  <text x="380" y="205" font-size="10" fill="#b4541f">往上長 ↑</text>
+  <rect x="180" y="220" width="280" height="60" fill="#f6e7dd" stroke="#b4541f" stroke-width="2"/>
+  <text x="320" y="246" text-anchor="middle" font-size="13" font-weight="800" fill="#b4541f">堆積 Heap</text>
+  <text x="320" y="266" text-anchor="middle" font-size="10" fill="#4a5159">malloc 動態配置;要你「手動」free</text>
+
+  <!-- data/text -->
+  <rect x="180" y="284" width="280" height="32" fill="#ede9fe" stroke="#8b5cf6" stroke-width="2"/>
+  <text x="320" y="305" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">全域 / 靜態資料(global / static)</text>
+  <rect x="180" y="316" width="280" height="32" fill="#f3f4f6" stroke="#8a929b" stroke-width="2"/>
+  <text x="320" y="337" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">程式碼 Text(你的指令,唯讀)</text>
+
+  <text x="120" y="74" text-anchor="end" font-size="10" fill="#8a929b">高位址</text>
+  <text x="120" y="336" text-anchor="end" font-size="10" fill="#8a929b">低位址</text>
+
+  <defs>
+    <marker id="mmA" markerWidth="10" markerHeight="10" refX="5" refY="8" orient="auto"><path d="M0,0 L6,0 L3,8 Z" fill="#2f6f6a"/></marker>
+    <marker id="mmB" markerWidth="10" markerHeight="10" refX="5" refY="0" orient="auto"><path d="M0,8 L6,8 L3,0 Z" fill="#b4541f"/></marker>
+  </defs>
+</svg>
+        <figcaption>圖 24-6:行程位址空間的經典佈局。堆疊從高位址往下長、堆積從低位址往上長,中間留一大片空地給兩者生長。理解這張圖,你才會懂 C 裡「區域變數」和「malloc 出來的東西」為什麼壽命天差地別。</figcaption>
+      </div>
+
+      <p>
+        我們聚焦兩個你寫 C 時天天在用、卻最容易搞錯的區域:<strong>堆疊(stack)</strong>與<strong>堆積(heap)</strong>。
+      </p>
+      <ul>
+        <li><strong>堆疊</strong>:放區域變數和函式呼叫資訊。它<em>自動</em>管理——你進入一個函式,它的區域變數就被推上堆疊;
+        函式一回傳,這些變數<strong>立刻消失</strong>。快、省事,但壽命被綁死在函式裡。</li>
+        <li><strong>堆積</strong>:放你「想要它活久一點」的資料。你用 <code>malloc()</code> 跟它<em>手動</em>要一塊,
+        用完得<em>手動</em>用 <code>free()</code> 還回去。自由,但責任也全在你身上。</li>
+      </ul>
+      <pre><code class="language-c">#include &lt;stdlib.h&gt;
+
+int *make_array(int n) {
+    int local[100];                    /* 堆疊:函式一回傳就消失 → 回傳它的位址是大忌! */
+    int *arr = malloc(n * sizeof(int)); /* 堆積:跟系統要一塊,函式結束後依然存在 */
+    for (int i = 0; i &lt; n; i++) {
+        arr[i] = i * i;                /* 用指標 arr 像用陣列一樣存取 */
+    }
+    return arr;       /* OK:回傳堆積的指標,呼叫者用完記得 free(arr) */
+}</code></pre>
+      <p>
+        這裡出現了 C 的靈魂——<strong>指標(pointer)</strong>:一個「存放某個記憶體位址的變數」。
+        <code>malloc</code> 回傳的就是一個指標,指向它在堆積上幫你劃出來的那塊空間的開頭。
+        想拿到某個變數的位址,用取址運算子 <code>&amp;</code>;想透過指標去存取它指向的內容,用解參考運算子 <code>*</code>。
+        指標讓 C 強大又危險——而那份危險,正是接下來兩個惡夢的根源。
+      </p>
+
+      <h3>惡夢一:記憶體洩漏(memory leak)</h3>
+      <p>
+        跟堆積要了記憶體,卻忘了還,就叫<strong>記憶體洩漏</strong>。那塊記憶體沒有被釋放、也沒有任何指標還指著它——
+        它就這樣「迷失」了,直到行程結束都拿不回來。一次洩一點看似無害,但若發生在長期運行的迴圈或伺服器裡,
+        記憶體會像漏水的水管一樣越積越多,最後耗盡、程式崩潰。
+      </p>
+      <pre><code class="language-c">void leaky(void) {
+    int *p = malloc(100 * sizeof(int));  /* 跟堆積要了一塊 */
+    p[0] = 42;
+    /* … 用完了,但忘記 free(p) … */
+}   /* ← p 這個「指標」隨函式結束消失了,但它指向的那塊堆積記憶體沒被釋放 → 洩漏 */</code></pre>
+
+      <h3>惡夢二:懸空指標(dangling pointer)</h3>
+      <p>
+        反過來,釋放了一塊記憶體,卻還留著指向它的指標,然後又去用——這個指標就成了<strong>懸空指標</strong>。
+        它指向的那塊空間已經被系統收回、隨時可能配給別人。透過它讀寫,就是踩進別人家——
+        這是「未定義行為(undefined behavior)」,可能當場崩潰、可能默默讀到垃圾、最糟的是看似正常卻悄悄毀損資料。
+      </p>
+      <pre><code class="language-c">int *p = malloc(sizeof(int));
+*p = 10;
+free(p);          /* 把這塊還給系統 */
+*p = 20;          /* ⛔ 危險!p 已是懸空指標,這塊記憶體可能已被別人拿去用了 */
+p = NULL;         /* ✓ 好習慣:free 之後立刻把指標設成 NULL,避免誤用 */</code></pre>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">記憶體錯誤不只是 bug,更是資安漏洞</span>
+          <p>C/C++ 把記憶體管理的全部責任交給你,換來極致的效能與控制,代價是這些錯誤防不勝防:洩漏、懸空指標、
+          重複釋放(double free)、還有最惡名昭彰的<strong>緩衝區溢位(buffer overflow)</strong>——寫入超過配置範圍,
+          覆蓋掉旁邊的資料甚至堆疊上的「返回位址」。攻擊者能精心構造輸入,利用這類漏洞讓程式跳去執行<em>他</em>的程式碼。
+          歷史上無數重大資安事件都源於此。記憶體安全是一條貫穿系統與資安的主線,我們會在
+          <strong>第七部「資訊安全」</strong>(尤其是防禦性程式設計那章)正面拆解緩衝區溢位的攻防。
+          現代語言(Rust、Go、Java、Python)用各種手段——自動垃圾回收、所有權系統——來幫你擋掉大半,
+          但要真正懂它們在防什麼,你得先親眼看過 C 裡的這些坑。</p>
+        </div>
+      </div>
+
+      <h2>並行:當很多事同時發生</h2>
+      <p>
+        到這裡,OSTEP 的第一件事(虛擬化)講完了。接下來是最燒腦、也最迷人的第二件事:<strong>並行(concurrency)</strong>。
+        起點是一個比「行程」更輕巧的概念:<strong>執行緒(thread)</strong>。
+      </p>
+      <p>
+        前面說,行程之間是<strong>隔離</strong>的——各有各的位址空間,互不相見。但有時候,你希望同一個程式裡有「好幾條執行流」
+        <strong>同時</strong>進行,而且它們要<em>共享</em>同一批資料。例如一個瀏覽器:一條執行流負責下載網頁、一條負責渲染畫面、
+        一條負責回應你的捲動——它們得共用同一份頁面資料。每個都開成獨立行程太重(資料還不能共享),這時就用執行緒。
+      </p>
+      <blockquote>
+        執行緒,是「同一個行程的位址空間裡,多條獨立的執行流」。它們共享同一片記憶體(程式碼、堆積、全域變數),但各有各自的堆疊與暫存器(包括 PC)。
+      </blockquote>
+      <p>
+        打個比方:行程是一間<strong>公寓</strong>(有自己的牆、自己的家具,鄰居進不來);執行緒則是<strong>住在同一間公寓裡的室友</strong>——
+        共用客廳、廚房、冰箱(共享記憶體),但各有各的房間(各自的堆疊)。共享帶來效率與便利,
+        也帶來室友之間的經典衝突:兩個人同時要用同一個東西,怎麼辦?
+      </p>
+
+      <h3>並行的惡夢:競爭條件</h3>
+      <p>
+        看一個看似無害的程式:開兩條執行緒,各自把一個共享變數 <code>counter</code> 加 100 萬次。直覺上,最後應該是 200 萬。
+      </p>
+      <pre><code class="language-c">#include &lt;stdio.h&gt;
+#include &lt;pthread.h&gt;
+
+int counter = 0;            /* 兩條執行緒共享的變數 */
+
+void *worker(void *arg) {
+    for (int i = 0; i &lt; 1000000; i++) {
+        counter++;          /* 看似一個動作,其實是三個步驟! */
+    }
+    return NULL;
+}
+
+int main(void) {
+    pthread_t t1, t2;
+    pthread_create(&amp;t1, NULL, worker, NULL);   /* 開第一條執行緒 */
+    pthread_create(&amp;t2, NULL, worker, NULL);   /* 開第二條執行緒 */
+    pthread_join(t1, NULL);                     /* 等它們做完 */
+    pthread_join(t2, NULL);
+    printf("最後 counter = %d(你以為會是 2000000)\n", counter);
+    return 0;
+}</code></pre>
+      <p>
+        實際跑起來,你會得到像 <code>1377492</code> 這種<strong>每次都不一樣、而且小於 200 萬</strong>的怪數字。
+        為什麼?因為那行天真的 <code>counter++</code>,在 CPU 眼裡<strong>不是一個動作,而是三個</strong>:
+      </p>
+      <ol>
+        <li><strong>讀</strong>:把 <code>counter</code> 從記憶體載入暫存器。</li>
+        <li><strong>加</strong>:暫存器裡的值 +1。</li>
+        <li><strong>寫</strong>:把結果寫回記憶體的 <code>counter</code>。</li>
+      </ol>
+      <p>
+        現在想像兩條執行緒「交錯」執行這三步:執行緒 A 讀到 <code>counter = 5</code>,還沒寫回去,
+        時間片到了被切換出去;執行緒 B 也讀到 <code>counter = 5</code>,加成 6 寫回去;然後 A 回來,它手上還握著舊的 5,
+        加成 6 又寫回去。<strong>兩次遞增,結果只加了 1</strong>——有一次更新被悄悄吃掉了。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">競爭條件、臨界區、不可分割性</span>
+          <p><strong>競爭條件(race condition)</strong>:程式的結果取決於多條執行緒「碰巧」誰先誰後的時序——
+          時序不同,結果就不同,而你無法控制時序。這種 bug 時有時無、極難重現,是並行程式最可怕的敵人。<br>
+          <strong>臨界區(critical section)</strong>:那段「存取共享資源、不能被打斷」的程式碼(這裡就是 <code>counter++</code>)。<br>
+          <strong>不可分割性(atomicity)</strong>:我們真正想要的——讓臨界區「要嘛整段做完、要嘛完全沒做」,
+          中間不被別的執行緒插隊。問題的本質,就是 <code>counter++</code> <em>不是</em>不可分割的。</p>
+        </div>
+      </div>
+
+      <h2>馴服並行:鎖、條件變數、號誌</h2>
+      <p>
+        怎麼讓臨界區不被插隊?作業系統與函式庫提供了幾種<strong>同步原語(synchronization primitive)</strong>。
+        最基本的一個叫<strong>鎖(lock,又稱互斥鎖 mutex)</strong>。
+      </p>
+      <p>
+        鎖的概念像廁所門上的「使用中」插銷:進臨界區前先「上鎖(lock)」,出來時「解鎖(unlock)」。
+        同一時間只有一條執行緒能持有鎖;別的執行緒想上鎖時,如果鎖已被佔,就只能<strong>等</strong>,直到持有者解鎖。
+        這就強制讓臨界區一次只有一個人在裡面——把「不可分割性」硬是造了出來。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 280" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- threads -->
+  <rect x="30" y="60" width="140" height="50" rx="8" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="100" y="90" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">執行緒 A</text>
+  <rect x="30" y="170" width="140" height="50" rx="8" fill="#ede9fe" stroke="#8b5cf6" stroke-width="2"/>
+  <text x="100" y="200" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">執行緒 B</text>
+
+  <!-- lock gate -->
+  <rect x="270" y="100" width="80" height="80" rx="10" fill="#fef3c7" stroke="#b4541f" stroke-width="2"/>
+  <text x="310" y="135" text-anchor="middle" font-size="22">🔒</text>
+  <text x="310" y="160" text-anchor="middle" font-size="11" font-weight="700" fill="#b4541f">鎖 lock</text>
+
+  <!-- critical section -->
+  <rect x="430" y="80" width="240" height="120" rx="12" fill="#fff" stroke="#b4541f" stroke-width="2" stroke-dasharray="6 4"/>
+  <text x="550" y="110" text-anchor="middle" font-size="13" font-weight="800" fill="#b4541f">臨界區 Critical Section</text>
+  <text x="550" y="138" text-anchor="middle" font-size="12" fill="#1f2328">counter++;</text>
+  <text x="550" y="162" text-anchor="middle" font-size="10" fill="#8a929b">同一時間只准一條執行緒進來</text>
+  <text x="550" y="182" text-anchor="middle" font-size="10" fill="#8a929b">(目前是 A 在裡面)</text>
+
+  <!-- A holds lock, enters -->
+  <path d="M170 85 C 220 85, 230 130, 270 135" fill="none" stroke="#2f6f6a" stroke-width="2" marker-end="url(#lkA)"/>
+  <path d="M350 130 L 430 130" fill="none" stroke="#2f6f6a" stroke-width="2" marker-end="url(#lkA)"/>
+  <text x="225" y="78" font-size="10" fill="#2f6f6a">A 搶到鎖,進入</text>
+
+  <!-- B waits -->
+  <path d="M170 195 C 220 195, 240 175, 270 165" fill="none" stroke="#8b5cf6" stroke-width="2" stroke-dasharray="4 3" marker-end="url(#lkB)"/>
+  <text x="225" y="220" font-size="10" fill="#8b5cf6">B 想進但鎖被佔 → 等待(阻塞)</text>
+
+  <defs>
+    <marker id="lkA" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#2f6f6a"/></marker>
+    <marker id="lkB" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8b5cf6"/></marker>
+  </defs>
+</svg>
+        <figcaption>圖 24-7:鎖如何保護臨界區。執行緒進臨界區前必須先搶到那把唯一的鎖;A 搶到了就能進去動 <code>counter</code>,B 只能在門外等。等 A 解鎖,B 才輪到。鎖把「同時很多人改」強制變成「一次只有一人改」。</figcaption>
+      </div>
+
+      <p>
+        用鎖修好前面那個程式,只要在臨界區前後加上 lock / unlock:
+      </p>
+      <pre><code class="language-c">#include &lt;stdio.h&gt;
+#include &lt;pthread.h&gt;
+
+int counter = 0;
+pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;   /* 宣告並初始化一把鎖 */
+
+void *worker(void *arg) {
+    for (int i = 0; i &lt; 1000000; i++) {
+        pthread_mutex_lock(&amp;lock);     /* 進臨界區:上鎖(若被佔則在此等待) */
+        counter++;                     /* 這一段現在「不可分割」了 */
+        pthread_mutex_unlock(&amp;lock);   /* 離開臨界區:解鎖,放下一個進來 */
+    }
+    return NULL;
+}
+
+int main(void) {
+    pthread_t t1, t2;
+    pthread_create(&amp;t1, NULL, worker, NULL);
+    pthread_create(&amp;t2, NULL, worker, NULL);
+    pthread_join(t1, NULL);
+    pthread_join(t2, NULL);
+    printf("最後 counter = %d\n", counter);   /* 現在穩穩是 2000000 */
+    return 0;
+}</code></pre>
+
+      <h3>條件變數與號誌</h3>
+      <p>
+        鎖解決「不要同時改」,但並行還有另一類需求:「<strong>等某個條件成立再繼續</strong>」。
+        例如一條執行緒要等另一條把資料準備好。如果用「不斷迴圈檢查」(busy-waiting / 忙碌等待),會白白燒掉 CPU。
+        更好的工具是:
+      </p>
+      <ul>
+        <li><strong>條件變數(condition variable)</strong>:讓執行緒「睡著等待」某個條件,直到別人喊它「醒來(signal)」。
+        典型用法:持有鎖時發現條件還不成立,就 <code>wait</code>(會自動放掉鎖去睡);另一條執行緒改變了狀態後,
+        <code>signal</code> 把它叫醒。它把「等待」做得既正確又不浪費 CPU。</li>
+        <li><strong>號誌(semaphore)</strong>:一個帶計數的同步工具,由 Dijkstra 提出。它有兩個操作:
+        <code>wait</code>(把計數減 1,若變負就阻塞)和 <code>post</code>(把計數加 1,可能喚醒一個等待者)。
+        計數設成 1,它就退化成一把鎖;設成 N,就能用來「最多允許 N 個同時進入」。它能同時表達互斥與排序,非常萬用。</li>
+      </ul>
+
+      <h3>生產者-消費者問題</h3>
+      <p>
+        這些工具最經典的應用,是<strong>生產者-消費者問題(producer-consumer problem)</strong>,也叫有界緩衝區問題。
+        場景是:一群「生產者」執行緒不斷產出資料、放進一個固定大小的緩衝區;一群「消費者」執行緒不斷把資料取走處理。
+        你天天在用它——影片播放器一邊「生產」(解碼下一段)、一邊「消費」(顯示這一段);
+        終端機的管線 <code>a | b</code> 也是(a 生產輸出、b 消費它)。難點在於要同時處理好三件事:
+      </p>
+      <ul>
+        <li><strong>互斥</strong>:生產者和消費者不能同時亂改緩衝區(用<strong>鎖</strong>)。</li>
+        <li><strong>緩衝區滿了</strong>:生產者得停下來等,直到有空位(用<strong>條件變數/號誌</strong>)。</li>
+        <li><strong>緩衝區空了</strong>:消費者得停下來等,直到有東西(用<strong>條件變數/號誌</strong>)。</li>
+      </ul>
+      <p>
+        把這三件事用同步原語正確地組合起來,正是並行程式設計的核心基本功。
+      </p>
+
+      <h3>死結:大家都在等別人</h3>
+      <p>
+        鎖能救你,也能害你。最有名的陷阱叫<strong>死結(deadlock)</strong>:一群執行緒互相卡住,誰也動不了。
+        經典畫面是:執行緒 A 握著鎖 1、想要鎖 2;執行緒 B 握著鎖 2、想要鎖 1。兩個都在等對方先放手,
+        於是<strong>永遠地</strong>等下去。這就像兩台車在窄橋上對向相遇,誰都不肯倒車。
+      </p>
+      <p>
+        Coffman 在 1971 年指出:死結要發生,必須<strong>同時</strong>滿足四個條件,缺一不可——
+        這意味著只要破壞掉<em>任何一個</em>,就能避免死結:
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>條件</th><th>英文</th><th>意思</th><th>怎麼破壞它</th></tr></thead>
+        <tbody>
+          <tr><td>互斥</td><td>mutual exclusion</td><td>資源一次只能一人用</td><td>用無鎖(lock-free)資料結構,讓資源可共享</td></tr>
+          <tr><td>持有並等待</td><td>hold and wait</td><td>握著一個資源時,還去等另一個</td><td>要嘛一次把所有需要的鎖全拿到,要嘛一個都別先拿</td></tr>
+          <tr><td>不可搶奪</td><td>no preemption</td><td>資源不能被強制收回</td><td>拿不到第二個鎖時,主動放掉手上的、稍後重試</td></tr>
+          <tr><td>循環等待</td><td>circular wait</td><td>形成「A 等 B、B 等 A」的環</td><td><strong>給所有鎖編號,規定一律按號碼由小到大取</strong>(最常用、最實用)</td></tr>
+        </tbody>
+      </table></div>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">最實用的一招:固定上鎖順序</span>
+          <p>實務上對付死結,最簡單有效的就是破壞「循環等待」:替所有鎖排個全域順序,規定<strong>每條執行緒都一律按同樣的順序上鎖</strong>。
+          這樣就不可能出現「A 拿了 1 等 2、B 拿了 2 等 1」的環——因為大家都會「先拿 1 再拿 2」。
+          一個簡單的約定,就讓整類 bug 消失。並行的世界裡,紀律往往比聰明更重要。</p>
+        </div>
+      </div>
+
+      <h2>持久化:讓資料活過斷電</h2>
+      <p>
+        最後一件大事:<strong>持久化(persistence)</strong>。前面講的記憶體再怎麼虛擬,有個致命弱點——
+        它是<strong>揮發性(volatile)</strong>的:一斷電,全部歸零。但你的照片、文件、程式碼,必須在關機後依然存在。
+        負責這件事的,是作業系統裡管理<strong>持久性儲存(磁碟、SSD)</strong>的那一塊,它給你的核心抽象,就是
+        <strong>檔案系統(file system)</strong>。
+      </p>
+      <p>
+        檔案系統提供兩個你再熟悉不過的抽象:
+      </p>
+      <ul>
+        <li><strong>檔案(file)</strong>:一串有名字的位元組(bytes)。作業系統不在乎裡面是照片還是文字——對它來說都只是「一串位元組」。</li>
+        <li><strong>目錄(directory)</strong>:一個裝著「名字 → 對應東西」的容器。目錄裡可以放檔案,也可以放別的目錄,於是長出整棵目錄樹。</li>
+      </ul>
+
+      <h3>inode:檔案真正的身分證</h3>
+      <p>
+        這裡有個關鍵洞見,顛覆很多人的直覺:<strong>檔案的「名字」其實不屬於檔案本身</strong>。
+        檔案真正的本體,是一個叫 <strong>inode</strong> 的資料結構,它記著這個檔案的所有<strong>後設資料(metadata)</strong>:
+        大小、權限、擁有者、建立時間,以及最重要的——<strong>它的資料實際存在磁碟的哪些區塊</strong>。
+        每個 inode 有一個編號。
+      </p>
+      <p>
+        那名字呢?名字住在<strong>目錄</strong>裡。一個目錄,本質上就是一張表,記著
+        <strong>「名字 → inode 編號」的對應</strong>。所以當你打開 <code>/home/me/report.txt</code>,作業系統做的是:
+        在 <code>/</code> 目錄查到 <code>home</code> 的 inode、在 <code>home</code> 查到 <code>me</code> 的 inode、
+        在 <code>me</code> 查到 <code>report.txt</code> 對應的 inode 編號,最後讀那個 inode、循著它記的區塊位置,把資料撈出來。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 300" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- directory -->
+  <text x="120" y="32" text-anchor="middle" font-size="12" font-weight="800" fill="#2f6f6a">目錄(名字 → inode 號)</text>
+  <g font-size="11">
+    <rect x="30" y="48" width="180" height="34" fill="#e3efed" stroke="#2f6f6a"/><text x="45" y="70">report.txt → inode 12</text>
+    <rect x="30" y="82" width="180" height="34" fill="#e3efed" stroke="#2f6f6a"/><text x="45" y="104">photo.jpg  → inode 27</text>
+    <rect x="30" y="116" width="180" height="34" fill="#e3efed" stroke="#2f6f6a"/><text x="45" y="138">notes/     → inode 31</text>
+  </g>
+
+  <!-- inode -->
+  <text x="375" y="32" text-anchor="middle" font-size="12" font-weight="800" fill="#b4541f">inode 12(檔案的本體)</text>
+  <rect x="280" y="48" width="190" height="150" rx="8" fill="#fef3c7" stroke="#b4541f" stroke-width="2"/>
+  <text x="295" y="72" font-size="11" fill="#1f2328">大小:4096 bytes</text>
+  <text x="295" y="94" font-size="11" fill="#1f2328">權限:rw-r--r--</text>
+  <text x="295" y="116" font-size="11" fill="#1f2328">擁有者:me</text>
+  <text x="295" y="138" font-size="11" fill="#1f2328">修改時間:…</text>
+  <text x="295" y="166" font-size="11" font-weight="700" fill="#b4541f">資料區塊指標:</text>
+  <text x="295" y="186" font-size="11" fill="#1f2328">→ 區塊 100, 101, 205</text>
+
+  <!-- data blocks -->
+  <text x="620" y="32" text-anchor="middle" font-size="12" font-weight="800" fill="#8b5cf6">磁碟上的資料區塊</text>
+  <g font-size="10" text-anchor="middle">
+    <rect x="540" y="56" width="150" height="32" fill="#ede9fe" stroke="#8b5cf6"/><text x="615" y="76">區塊 100(檔案內容)</text>
+    <rect x="540" y="92" width="150" height="32" fill="#ede9fe" stroke="#8b5cf6"/><text x="615" y="112">區塊 101(檔案內容)</text>
+    <rect x="540" y="128" width="150" height="32" fill="#ede9fe" stroke="#8b5cf6"/><text x="615" y="148">區塊 205(檔案內容)</text>
+  </g>
+
+  <line x1="210" y1="65" x2="280" y2="90" stroke="#8a929b" stroke-width="1.5" marker-end="url(#inA)"/>
+  <line x1="470" y1="180" x2="538" y2="72" stroke="#8b5cf6" stroke-width="1.5" marker-end="url(#inB)"/>
+  <line x1="470" y1="182" x2="538" y2="108" stroke="#8b5cf6" stroke-width="1.5" marker-end="url(#inB)"/>
+  <line x1="470" y1="184" x2="538" y2="144" stroke="#8b5cf6" stroke-width="1.5" marker-end="url(#inB)"/>
+
+  <text x="360" y="240" text-anchor="middle" font-size="11" fill="#8a929b">名字住在目錄裡,本體(inode)記著資料在哪;兩者分離,所以同一個 inode 可以有好幾個名字(hard link)</text>
+
+  <defs>
+    <marker id="inA" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#8a929b"/></marker>
+    <marker id="inB" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#8b5cf6"/></marker>
+  </defs>
+</svg>
+        <figcaption>圖 24-8:目錄、inode 與資料區塊。目錄只存「名字 → inode 編號」;inode 才是檔案的本體,記著後設資料和「資料散在哪些磁碟區塊」。名字與本體分離,正是為什麼一個檔案能有多個名字(hard link),以及「改名」其實只動目錄、完全不碰資料。</figcaption>
+      </div>
+
+      <h3>檔案 API:open / read / write / close</h3>
+      <p>
+        程式怎麼操作檔案?透過一組簡潔的系統呼叫。核心就四個:<code>open</code>(開啟,拿到一個代表它的整數
+        <strong>檔案描述子 file descriptor</strong>)、<code>read</code>(讀)、<code>write</code>(寫)、<code>close</code>(關閉)。
+        看一個完整的「寫一行字,再讀回來」:
+      </p>
+      <pre><code class="language-c">#include &lt;stdio.h&gt;
+#include &lt;fcntl.h&gt;     /* open 與 O_* 旗標 */
+#include &lt;unistd.h&gt;    /* read, write, close */
+#include &lt;string.h&gt;
+
+int main(void) {
+    /* === 寫 === 開檔(沒有就建立、有就清空),取得檔案描述子 fd === */
+    int fd = open("hello.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd &lt; 0) { perror("open"); return 1; }
+
+    char *msg = "Hello, file system!\n";
+    write(fd, msg, strlen(msg));   /* 把這串位元組寫進去 */
+    close(fd);                     /* 關閉,釋放描述子 */
+
+    /* === 讀 === 重新開檔(唯讀),把內容讀回緩衝區 === */
+    fd = open("hello.txt", O_RDONLY);
+    char buf[128];
+    int n = read(fd, buf, sizeof(buf) - 1);   /* 最多讀 127 個位元組 */
+    buf[n] = '\0';                  /* 補上字串結尾,才能當 C 字串印 */
+    close(fd);
+
+    printf("讀到:%s", buf);         /* 讀到:Hello, file system! */
+    return 0;
+}</code></pre>
+      <p>
+        注意那個<strong>檔案描述子(file descriptor)</strong>:它是個小整數,代表「這個行程開啟的某個檔案」。
+        你早就見過三個天生就開好的描述子——<code>0</code> 是標準輸入(stdin)、<code>1</code> 是標準輸出(stdout)、
+        <code>2</code> 是標準錯誤(stderr)。這也是為什麼終端機的「重導向」和「管線」能這麼優雅:
+        它們不過是在偷偷換掉這些描述子背後接的東西而已。
+      </p>
+
+      <h2>儲存與可靠性:當斷電發生在寫到一半</h2>
+      <p>
+        檔案系統最深的挑戰,不是「怎麼存」,而是「<strong>萬一寫到一半斷電怎麼辦</strong>」。
+        底層的硬體先一句話帶過:<strong>磁碟(HDD)</strong>靠機械手臂在旋轉碟片上尋找磁區,所以「隨機讀寫」慢、「循序讀寫」快;
+        <strong>固態硬碟(SSD)</strong>用快閃記憶體、沒有機械零件,快得多,但有寫入次數壽命與「不能原地覆寫、得整塊抹除」的脾氣。
+        無論哪種,它們都比記憶體慢上好幾個數量級——這個落差,主宰了檔案系統的所有設計。
+      </p>
+
+      <h3>緩衝與快取:用記憶體掩護慢吞吞的磁碟</h3>
+      <p>
+        因為磁碟太慢,作業系統會在記憶體裡留一塊<strong>緩衝區/快取(buffer cache / page cache)</strong>:
+        你讀過的資料先留在記憶體,下次再讀就直接命中、不必碰磁碟;你寫的資料也先進記憶體、晚點再「一次寫一批」到磁碟。
+        這讓 I/O 快得多——但也埋下一個隱患:資料「已經寫了」其實只到記憶體,<strong>還沒真的落到磁碟</strong>。
+        這時候斷電,資料就飛了。這正是為什麼資料庫等程式會在關鍵時刻呼叫 <code>fsync()</code>,強迫把快取真正刷到磁碟。
+      </p>
+
+      <h3>崩潰一致性:日誌如何力挽狂瀾</h3>
+      <p>
+        更棘手的是<strong>崩潰一致性(crash consistency)</strong>。想想前面的 inode:新增一個檔案,可能要<em>同時</em>更新好幾個地方——
+        寫資料區塊、更新 inode、更新目錄、更新「哪些區塊還空著」的記錄。如果這幾步只做到一半就斷電,
+        檔案系統會進入<strong>不一致</strong>的鬼狀態:例如 inode 說「我用了區塊 100」,但配置表卻說「區塊 100 是空的」——
+        遲早被覆寫,資料毀損。
+      </p>
+      <p>
+        現代檔案系統的主流解法叫<strong>日誌(journaling)</strong>,點子借自資料庫:在真正動手改之前,
+        先把「我接下來要做哪幾件事」當成一筆完整紀錄,寫進一塊專門的<strong>日誌區</strong>;確認這筆紀錄完整寫好了,
+        才回頭去做真正的更新。這樣一來:
+      </p>
+      <ul>
+        <li>若斷電發生在「日誌都還沒寫完」——那就當什麼都沒發生,原本的資料完好無損。</li>
+        <li>若斷電發生在「日誌寫完了、但真正更新做到一半」——開機後,檔案系統<strong>照著日誌把這批操作重做一遍(replay)</strong>,補完未竟之事。</li>
+      </ul>
+      <p>
+        無論哪種情況,檔案系統都不會卡在「做一半」的不一致狀態。要嘛完全沒做,要嘛完整做完——
+        你會發現,這跟並行那邊追求的「<strong>不可分割性(atomicity)</strong>」是同一個靈魂,只是這次對抗的不是「別的執行緒」,
+        而是「隨時可能發生的斷電」。電腦科學裡,好的想法總是一再回來。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">為什麼「正確地拔隨身碟」很重要</span>
+          <p>現在你懂了:當你拷貝檔案到隨身碟、進度條跑到 100%,資料可能還只在作業系統的<strong>寫入快取</strong>裡,
+          尚未真正落到隨身碟。直接拔掉,就可能寫到一半、毀損檔案甚至整個檔案系統。「安全移除」這個動作,
+          就是叫作業系統<strong>把快取全刷乾淨(flush)</strong>、確認都落地了,才放你拔。
+          這個你嫌麻煩的小步驟,背後是一整套崩潰一致性的考量。</p>
+        </div>
+      </div>
+
+      <h2>動手練習</h2>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 24.1 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>看這段程式,假設 fork 都成功。它總共會印出幾行 <code>"hi"</code>?畫出行程樹來說明。</p>
+          <pre><code class="language-c">#include &lt;stdio.h&gt;
+#include &lt;unistd.h&gt;
+int main(void) {
+    fork();
+    fork();
+    printf("hi\n");
+    return 0;
+}</code></pre>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>4 行。</strong>每個 <code>fork()</code> 會讓當下的行程數量「翻倍」。</p>
+              <ul>
+                <li>一開始:1 個行程。</li>
+                <li>第一個 <code>fork()</code> 之後:1 → 2 個行程。</li>
+                <li>第二個 <code>fork()</code> 之後:每個行程又各自裂成兩個,2 → 4 個行程。</li>
+              </ul>
+              <p>這 4 個行程都會執行到 <code>printf</code>,所以印 4 次。通則:<code>n</code> 個連續的 <code>fork()</code>,
+              會產生 <code>2ⁿ</code> 個行程。行程樹長這樣(P 是原始行程):</p>
+              <pre><code class="language-text">          P
+        /   \         ← 第一個 fork:P 生出 C1
+      P      C1
+     / \    / \       ← 第二個 fork:P 生 C2、C1 生 C3
+    P  C2  C1  C3
+   葉子有 4 個 → 4 行 hi</code></pre>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 24.2 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>下面這段呢?它印幾次 <code>"X"</code>?(小心 <code>&amp;&amp;</code> 的短路特性與 <code>fork()</code> 的回傳值。)</p>
+          <pre><code class="language-c">#include &lt;stdio.h&gt;
+#include &lt;unistd.h&gt;
+int main(void) {
+    if (fork() &amp;&amp; fork()) {     /* 兩個 fork,中間是「邏輯且」 */
+        fork();
+    }
+    printf("X\n");
+    return 0;
+}</code></pre>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>4 次。</strong>兩個關鍵:① <code>fork()</code> 在<strong>父行程</strong>回傳子 PID(非 0,為真)、在<strong>子行程</strong>回傳 0(為假);
+              ② <code>&amp;&amp;</code> 會<strong>短路</strong>——左邊為假時,右邊那個 <code>fork()</code> 根本不執行。我們追蹤每一個被製造出來的行程的命運:</p>
+              <ol>
+                <li><strong>第一個 fork()</strong>(<code>&amp;&amp;</code> 左運算元):原始行程 <strong>P</strong> 執行它,生出子行程 <strong>C1</strong>。行程數 1 → 2。
+                  <ul>
+                    <li>在 <strong>C1</strong> 裡,第一個 fork 回傳 0(假)→ <code>&amp;&amp;</code> 短路,不執行第二個 fork,整個 <code>if</code> 為假 → 直接去 printf。<strong>C1 印 1 次。</strong></li>
+                    <li>在 <strong>P</strong> 裡,第一個 fork 回傳真 → 繼續算右運算元。</li>
+                  </ul>
+                </li>
+                <li><strong>第二個 fork()</strong>(<code>&amp;&amp;</code> 右運算元):<em>只有 P</em> 會跑到這裡,它生出 <strong>C2</strong>。行程數 2 → 3。
+                  <ul>
+                    <li>在 <strong>C2</strong> 裡,第二個 fork 回傳 0 → <code>if</code> 條件(真 &amp;&amp; 假)為假 → 跳過內層 fork,直接去 printf。<strong>C2 印 1 次。</strong></li>
+                    <li>在 <strong>P</strong> 裡,兩個都為真 → 進入 <code>if</code> 內層。</li>
+                  </ul>
+                </li>
+                <li><strong>第三個 fork()</strong>(<code>if</code> 內層):<em>只有 P</em> 會跑到,它生出 <strong>C3</strong>。行程數 3 → 4。P 與 C3 都離開 <code>if</code> 去 printf。<strong>P 與 C3 各印 1 次。</strong></li>
+              </ol>
+              <p>合計四個行程都跑到 printf:<strong>C1 + C2 + P + C3 = 4 次</strong>。</p>
+              <p>本題的教學重點:① <code>&amp;&amp;</code> 短路會讓某些子行程跳過後面的 fork,不能再無腦套用 <code>2ⁿ</code>;
+              ② 最穩的數法是「追蹤每個被製造出來的行程,各自會不會跑到 printf」。別被嚇人的巢狀條件唬住,逐一拆解即可。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 24.3 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>下面這個轉帳程式有競爭條件:兩條執行緒同時對同一個帳戶反覆「存 1 元、再領 1 元」,
+          照理說餘額最後該回到 0,但實際跑出來常是個亂七八糟的非零值。請<strong>指出競爭條件在哪</strong>,
+          並用一把 mutex 修正它。</p>
+          <pre><code class="language-c">#include &lt;stdio.h&gt;
+#include &lt;pthread.h&gt;
+int balance = 0;
+void *txn(void *arg) {
+    for (int i = 0; i &lt; 500000; i++) {
+        balance = balance + 1;   /* 存 1 元 */
+        balance = balance - 1;   /* 領 1 元 */
+    }
+    return NULL;
+}</code></pre>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>競爭條件在哪:</strong><code>balance = balance + 1</code> 和 <code>balance = balance - 1</code> 都不是不可分割的
+              (各自是「讀-改-寫」三步)。兩條執行緒交錯時,某些更新會被覆蓋,導致最終餘額不為 0。
+              <strong>臨界區</strong>是「對 <code>balance</code> 的整段讀寫」。修法:用一把鎖把臨界區框起來。</p>
+              <pre><code class="language-c">#include &lt;stdio.h&gt;
+#include &lt;pthread.h&gt;
+int balance = 0;
+pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+
+void *txn(void *arg) {
+    for (int i = 0; i &lt; 500000; i++) {
+        pthread_mutex_lock(&amp;lock);     /* 進臨界區 */
+        balance = balance + 1;
+        balance = balance - 1;
+        pthread_mutex_unlock(&amp;lock);   /* 離開臨界區 */
+    }
+    return NULL;
+}
+
+int main(void) {
+    pthread_t a, b;
+    pthread_create(&amp;a, NULL, txn, NULL);
+    pthread_create(&amp;b, NULL, txn, NULL);
+    pthread_join(a, NULL);
+    pthread_join(b, NULL);
+    printf("balance = %d\n", balance);   /* 穩穩是 0 */
+    return 0;
+}</code></pre>
+              <p>進階思考:把鎖放在<strong>迴圈外面</strong>(整個迴圈框成一個臨界區)結果也正確,而且因為上鎖/解鎖次數從 100 萬次降到 1 次,
+              通常<em>更快</em>;但缺點是:持鎖期間另一條執行緒完全動不了,失去了並行性。「鎖的粒度(granularity)」要多細,
+              是效能與並行度之間的經典取捨。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 24.4 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>三個工作在時刻 0 同時抵達,需要的 CPU 時間分別是:A = 30、B = 6、C = 6(單位:毫秒)。
+          假設不可搶占。請分別算出 <strong>FIFO(順序 A→B→C)</strong> 與 <strong>SJF</strong> 兩種排程下,
+          每個工作的<strong>週轉時間</strong>,以及<strong>平均週轉時間</strong>。哪個比較好?為什麼?</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>週轉時間 = 完成時刻 − 抵達時刻;這裡都在時刻 0 抵達,所以週轉時間 = 完成時刻。</p>
+              <p><strong>FIFO(A→B→C):</strong></p>
+              <ul>
+                <li>A 在 0 開始,30 完成 → 週轉 30</li>
+                <li>B 在 30 開始,36 完成 → 週轉 36</li>
+                <li>C 在 36 開始,42 完成 → 週轉 42</li>
+                <li>平均 =(30 + 36 + 42)/ 3 = <strong>36</strong></li>
+              </ul>
+              <p><strong>SJF(短的先,順序 B→C→A):</strong></p>
+              <ul>
+                <li>B 在 0 開始,6 完成 → 週轉 6</li>
+                <li>C 在 6 開始,12 完成 → 週轉 12</li>
+                <li>A 在 12 開始,42 完成 → 週轉 42</li>
+                <li>平均 =(6 + 12 + 42)/ 3 = <strong>20</strong></li>
+              </ul>
+              <p><strong>SJF 明顯較好</strong>(平均 20 vs 36)。直覺:把又快又短的 B、C 先做掉,讓它們不必苦等那個 30 毫秒的大塊頭 A;
+              只有 A 一個被延後,但它本來就要花最久。事實上可以證明:對「同時抵達」的一批工作,
+              SJF 能讓平均週轉時間<strong>達到理論最小值</strong>。它的致命缺點是:現實中你通常無法預知每個工作要跑多久——
+              這正是 MLFQ 想用「觀察行為來猜」去逼近 SJF 的原因。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 24.5 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>(a) 用你自己的話解釋:虛擬記憶體(分頁 + 每個行程一張分頁表)是<strong>如何</strong>提供行程之間的「隔離」的?
+          為什麼行程 A「即使想」也碰不到行程 B 的記憶體?<br>
+          (b) 列出死結的四個必要條件,並說明:為什麼「給所有鎖規定一個固定的上鎖順序」就能避免死結?它破壞了哪一個條件?</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>(a) 虛擬記憶體如何提供隔離:</strong>每個行程用的都是<em>虛擬</em>位址,而且每個行程有<strong>自己獨立的一張分頁表</strong>。
+              行程要存取記憶體時,MMU 只會用「該行程自己的分頁表」去翻譯,而這張表裡只登記了「分配給這個行程的頁框」。
+              所以行程 A 能表達的任何虛擬位址,翻譯出來都只會落在 A 自己的頁框上——它的位址空間裡<strong>根本沒有一條路</strong>能通到 B 的頁框。
+              即使 A 寫一個「想越界」的位址,要嘛被翻到 A 自己的另一頁、要嘛該頁根本沒映射而觸發例外被作業系統攔下。
+              關鍵在於:行程<strong>無法繞過 MMU 直接用實體位址</strong>(那是核心模式才有的特權),所以這道牆是硬體強制、無法翻越的。</p>
+              <p><strong>(b) 死結四條件:</strong>① 互斥 ② 持有並等待 ③ 不可搶奪 ④ 循環等待。四者<strong>缺一不可</strong>,
+              所以破壞任何一個即可避免死結。</p>
+              <p>「固定上鎖順序」破壞的是<strong>循環等待(circular wait)</strong>。死結的環長這樣:A 持鎖 1 等鎖 2、B 持鎖 2 等鎖 1。
+              但如果規定「所有人都必須先鎖編號小的、再鎖編號大的」,那麼想同時持有 1 和 2 的人,<em>一律</em>會先拿 1 再拿 2——
+              不可能出現「有人先拿了 2 再回頭等 1」的情況,環就形成不了。沒有環,就沒有死結。
+              這是實務上最常用、最便宜的防死結手段。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 24.6 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>下面這個 C 程式有兩個記憶體 bug。請<strong>各指出是什麼類型</strong>(從「記憶體洩漏 / 懸空指標 / 重複釋放」中選),並改正。</p>
+          <pre><code class="language-c">#include &lt;stdlib.h&gt;
+#include &lt;stdio.h&gt;
+
+int *first_square(int n) {
+    int *arr = malloc(n * sizeof(int));
+    for (int i = 0; i &lt; n; i++) arr[i] = i * i;
+    int *result = malloc(sizeof(int));
+    *result = arr[0];
+    return result;        /* bug A:這裡少做了一件事 */
+}
+
+int main(void) {
+    int *r = first_square(5);
+    printf("%d\n", *r);
+    free(r);
+    free(r);              /* bug B */
+    return 0;
+}</code></pre>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>Bug A 是記憶體洩漏:</strong>函式裡 <code>malloc</code> 了 <code>arr</code>,用完(只取了 <code>arr[0]</code>)卻沒有 <code>free(arr)</code> 就回傳了。
+              函式一結束,<code>arr</code> 這個區域指標就消失,但它指向的那塊堆積記憶體沒被釋放、也再沒人指著它 → 洩漏。</p>
+              <p><strong>Bug B 是重複釋放(double free):</strong><code>r</code> 被 <code>free</code> 了兩次。第二次 free 一塊已經還掉的記憶體是未定義行為,
+              可能直接崩潰、也可能破壞堆積管理結構。(它跟「懸空指標」是近親:第一次 free 後 <code>r</code> 就已成懸空指標,第二次 free 正是誤用它。)</p>
+              <p>改正版:</p>
+              <pre><code class="language-c">int *first_square(int n) {
+    int *arr = malloc(n * sizeof(int));
+    for (int i = 0; i &lt; n; i++) arr[i] = i * i;
+    int *result = malloc(sizeof(int));
+    *result = arr[0];
+    free(arr);            /* ✓ 修正 A:用完就還 */
+    return result;
+}
+
+int main(void) {
+    int *r = first_square(5);
+    printf("%d\n", *r);
+    free(r);
+    r = NULL;             /* ✓ 修正 B:free 後設 NULL,杜絕重複釋放/懸空誤用 */
+    return 0;             /*    (對 NULL 指標再 free 是安全的、什麼都不做) */
+}</code></pre>
+              <p>養成兩個習慣能擋掉大半記憶體 bug:① 每個 <code>malloc</code> 都先想好「誰、在哪裡負責 <code>free</code>」;
+              ② <code>free</code> 之後立刻把指標設成 <code>NULL</code>。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 24.7 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>(任選一題)<br>
+          <strong>(甲)用 pthread + mutex 安全累加:</strong>寫一個完整的 C 程式,開 4 條執行緒,
+          每條把共享變數累加 250000 次,用 mutex 確保最後結果穩穩是 1000000。<br>
+          <strong>(乙)用 fork 建一棵行程樹:</strong>寫一個 C 程式,讓「主行程」依序 fork 出 3 個子行程,
+          每個子行程印出自己的 PID(用 <code>getpid()</code>)與父行程的 PID(用 <code>getppid()</code>),
+          主行程用 <code>wait()</code> 等全部子行程結束後,印一句「all children done」。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>(甲)pthread + mutex 安全累加:</strong></p>
+              <pre><code class="language-c">#include &lt;stdio.h&gt;
+#include &lt;pthread.h&gt;
+
+#define NTHREADS 4
+#define PER      250000
+
+long counter = 0;
+pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+
+void *worker(void *arg) {
+    for (int i = 0; i &lt; PER; i++) {
+        pthread_mutex_lock(&amp;lock);
+        counter++;
+        pthread_mutex_unlock(&amp;lock);
+    }
+    return NULL;
+}
+
+int main(void) {
+    pthread_t th[NTHREADS];
+    for (int i = 0; i &lt; NTHREADS; i++)
+        pthread_create(&amp;th[i], NULL, worker, NULL);
+    for (int i = 0; i &lt; NTHREADS; i++)
+        pthread_join(th[i], NULL);
+    printf("counter = %ld\n", counter);   /* 1000000 */
+    return 0;
+}</code></pre>
+              <p>編譯時記得連結 pthread:<code>gcc prog.c -o prog -lpthread</code>。
+              試試把 lock/unlock 兩行註解掉再跑幾次,你會看到結果每次都不同、且小於一百萬——親眼見證競爭條件。</p>
+              <p><strong>(乙)用 fork 建行程樹:</strong></p>
+              <pre><code class="language-c">#include &lt;stdio.h&gt;
+#include &lt;unistd.h&gt;
+#include &lt;sys/wait.h&gt;
+
+int main(void) {
+    for (int i = 0; i &lt; 3; i++) {
+        int pid = fork();
+        if (pid == 0) {
+            /* 子行程:印自己與父親的 PID,然後結束(別再繼續 fork!) */
+            printf("子行程 #%d:我的 PID=%d,父 PID=%d\n", i, getpid(), getppid());
+            return 0;        /* ★ 關鍵:子行程在這裡離開迴圈,否則會繼續 fork 出孫子 */
+        }
+        /* 父行程:繼續迴圈,fork 下一個 */
+    }
+    for (int i = 0; i &lt; 3; i++)
+        wait(NULL);          /* 等三個子行程都結束 */
+    printf("all children done\n");
+    return 0;
+}</code></pre>
+              <p>最關鍵的一行是子行程裡的 <code>return 0;</code>:如果忘了讓子行程跳出迴圈,
+              每個子行程也會繼續往下 fork,行程數量爆炸(變成 2³ 而不是 1+3)。
+              這是寫 fork 迴圈最常見的坑——務必讓子行程「做完自己的事就離開」。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="callout note"><div class="ico">🧭</div><div class="body"><span class="c-title">延伸:新軌道</span><p>本章的作業系統概念有三條延伸軌道。<a href="90-rust-os-kernel.html">第 84 章「用 Rust 手寫迷你作業系統核心」</a>讓你親手從零建構核心;再往上一層,<a href="91-virt-landscape.html">第 85 章「虛擬化全景:行程隔離到 VM 與容器」</a>展示行程隔離如何演進為 VM 與容器;而<a href="93-container-internals.html">第 87 章「容器的真相:namespaces、cgroups 與 OverlayFS」</a>揭開 Linux namespaces 與 cgroups 如何在核心層面實現容器隔離——正是本章行程與檔案系統隔離的直接延伸。</p></div></div>
+
+      <h2>深掘:虛擬記憶體的完整旅程</h2>
+      <p>
+        前面幾節用直覺建立了虛擬記憶體的基本圖像:虛擬位址、分頁表、MMU。
+        但真實系統的細節更深一層:現代 x86-64 用<strong>四層分頁</strong>走訪才能找到實體位址;
+        TLB 如何把翻譯代價壓到幾乎為零;缺頁時作業系統如何與磁碟協作;
+        記憶體不夠用時該把哪一頁換出去。這一節把這些細節串成一條完整的旅程——
+        深度對齊 OSTEP 的 Paging 章群,讀完你將能徒手計算位址、EMAT 與缺頁次數。
+      </p>
+
+      <h3>一、x86-64 四層分頁走訪</h3>
+      <p>
+        32 位元時代單層分頁就夠用,但 64 位元虛擬空間若仍用單層分頁,光 4 GB 就要 100 萬個條目佔 4 MB——
+        而且大多數行程根本用不到整片空間,絕大部分條目都是空的,卻仍占記憶體。
+        解法:把分頁表本身也「分頁」,用<strong>多層分頁表(multi-level page table)</strong>——
+        只有「真的被使用到」的區段才配置下一層的表,其餘完全不存在。
+      </p>
+      <p>
+        x86-64(Linux 核心採用的版本)用<strong>四層結構</strong>:
+        PML4(Page Map Level 4)→ PDPT(Page Directory Pointer Table)→ PD(Page Directory)→ PT(Page Table)。
+        每層各有 512 個條目(需要 9 個位元索引),最後 12 位元是頁內位移(4 KB 頁)。
+        所以一個有效虛擬位址的 48 位元這樣拆分:
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>欄位</th><th>位元範圍</th><th>寬度</th><th>用途</th></tr></thead>
+        <tbody>
+          <tr><td>PML4 索引</td><td>[47 : 39]</td><td>9 bits</td><td>索引最頂層的 PML4 表(512 條目)</td></tr>
+          <tr><td>PDPT 索引</td><td>[38 : 30]</td><td>9 bits</td><td>索引第二層的 PDPT 表</td></tr>
+          <tr><td>PD 索引</td><td>[29 : 21]</td><td>9 bits</td><td>索引第三層的 PD 表</td></tr>
+          <tr><td>PT 索引</td><td>[20 : 12]</td><td>9 bits</td><td>索引第四層的 PT,取出實體頁框號 PFN</td></tr>
+          <tr><td>頁內位移</td><td>[11 : 0]</td><td>12 bits</td><td>在 4 KB 頁框內的位移</td></tr>
+        </tbody>
+      </table></div>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 340" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="360" y="16" text-anchor="middle" font-size="12" font-weight="800" fill="#1f2328">x86-64 四層分頁走訪(48 位元虛擬位址)</text>
+  <!-- VA register -->
+  <rect x="10" y="24" width="100" height="34" fill="#2f6f6a"/>
+  <text x="60" y="39" text-anchor="middle" font-size="10" font-weight="700" fill="#fff">PML4 idx</text>
+  <text x="60" y="52" text-anchor="middle" font-size="9" fill="#cfe6e2">[47:39] 9 bits</text>
+  <rect x="110" y="24" width="100" height="34" fill="#b4541f"/>
+  <text x="160" y="39" text-anchor="middle" font-size="10" font-weight="700" fill="#fff">PDPT idx</text>
+  <text x="160" y="52" text-anchor="middle" font-size="9" fill="#fde8d8">[38:30] 9 bits</text>
+  <rect x="210" y="24" width="100" height="34" fill="#8b5cf6"/>
+  <text x="260" y="39" text-anchor="middle" font-size="10" font-weight="700" fill="#fff">PD idx</text>
+  <text x="260" y="52" text-anchor="middle" font-size="9" fill="#ede9fe">[29:21] 9 bits</text>
+  <rect x="310" y="24" width="100" height="34" fill="#0d7377"/>
+  <text x="360" y="39" text-anchor="middle" font-size="10" font-weight="700" fill="#fff">PT idx</text>
+  <text x="360" y="52" text-anchor="middle" font-size="9" fill="#cfe6e2">[20:12] 9 bits</text>
+  <rect x="410" y="24" width="300" height="34" fill="#6b7280"/>
+  <text x="560" y="39" text-anchor="middle" font-size="10" font-weight="700" fill="#fff">頁內位移 offset</text>
+  <text x="560" y="52" text-anchor="middle" font-size="9" fill="#e5e7eb">[11:0] 12 bits → 4 KB 頁</text>
+  <!-- Table boxes row -->
+  <!-- CR3 -->
+  <rect x="10" y="112" width="70" height="48" rx="6" fill="#fef3c7" stroke="#b4541f" stroke-width="2"/>
+  <text x="45" y="133" text-anchor="middle" font-size="11" font-weight="800" fill="#b4541f">CR3</text>
+  <text x="45" y="150" text-anchor="middle" font-size="9" fill="#78350f">PML4 基底</text>
+  <!-- PML4 -->
+  <rect x="118" y="104" width="104" height="64" rx="6" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="170" y="128" text-anchor="middle" font-size="12" font-weight="800" fill="#2f6f6a">PML4</text>
+  <text x="170" y="145" text-anchor="middle" font-size="9" fill="#4a5159">512 條目</text>
+  <text x="170" y="160" text-anchor="middle" font-size="9" fill="#4a5159">idx = bits[47:39]</text>
+  <!-- PDPT -->
+  <rect x="258" y="104" width="104" height="64" rx="6" fill="#fef3c7" stroke="#b4541f" stroke-width="2"/>
+  <text x="310" y="128" text-anchor="middle" font-size="12" font-weight="800" fill="#b4541f">PDPT</text>
+  <text x="310" y="145" text-anchor="middle" font-size="9" fill="#4a5159">512 條目</text>
+  <text x="310" y="160" text-anchor="middle" font-size="9" fill="#4a5159">idx = bits[38:30]</text>
+  <!-- PD -->
+  <rect x="398" y="104" width="104" height="64" rx="6" fill="#ede9fe" stroke="#8b5cf6" stroke-width="2"/>
+  <text x="450" y="128" text-anchor="middle" font-size="12" font-weight="800" fill="#8b5cf6">PD</text>
+  <text x="450" y="145" text-anchor="middle" font-size="9" fill="#4a5159">512 條目</text>
+  <text x="450" y="160" text-anchor="middle" font-size="9" fill="#4a5159">idx = bits[29:21]</text>
+  <!-- PT -->
+  <rect x="538" y="104" width="104" height="64" rx="6" fill="#d1fae5" stroke="#0d7377" stroke-width="2"/>
+  <text x="590" y="128" text-anchor="middle" font-size="12" font-weight="800" fill="#0d7377">PT</text>
+  <text x="590" y="145" text-anchor="middle" font-size="9" fill="#4a5159">512 條目</text>
+  <text x="590" y="160" text-anchor="middle" font-size="9" fill="#4a5159">idx = bits[20:12]</text>
+  <!-- Physical Frame box -->
+  <rect x="540" y="212" width="170" height="40" rx="6" fill="#1f2328"/>
+  <text x="625" y="230" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">實體頁框號 PFN</text>
+  <text x="625" y="245" text-anchor="middle" font-size="9" fill="#9ca3af">由 PT 條目取出</text>
+  <!-- Physical address box -->
+  <rect x="310" y="290" width="400" height="38" rx="6" fill="#2f6f6a"/>
+  <text x="510" y="308" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">實體位址 = (PFN &lt;&lt; 12) | offset</text>
+  <text x="510" y="322" text-anchor="middle" font-size="9" fill="#cfe6e2">= 頁框起始位址 + 頁內位移</text>
+  <!-- Horizontal chain arrows -->
+  <line x1="80" y1="136" x2="116" y2="136" stroke="#2f6f6a" stroke-width="2" marker-end="url(#vm9A)"/>
+  <line x1="222" y1="136" x2="256" y2="136" stroke="#b4541f" stroke-width="2" marker-end="url(#vm9B)"/>
+  <line x1="362" y1="136" x2="396" y2="136" stroke="#8b5cf6" stroke-width="2" marker-end="url(#vm9E)"/>
+  <line x1="502" y1="136" x2="536" y2="136" stroke="#0d7377" stroke-width="2" marker-end="url(#vm9F)"/>
+  <!-- PT → PFN -->
+  <line x1="622" y1="170" x2="638" y2="210" stroke="#1f2328" stroke-width="2" marker-end="url(#vm9C)"/>
+  <!-- PFN → physical address -->
+  <line x1="630" y1="252" x2="595" y2="288" stroke="#2f6f6a" stroke-width="2" marker-end="url(#vm9A)"/>
+  <!-- offset → physical address (dashed) -->
+  <line x1="556" y1="60" x2="448" y2="288" stroke="#6b7280" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#vm9D)"/>
+  <!-- VA → table (dashed arrows) -->
+  <line x1="60" y1="58" x2="158" y2="102" stroke="#2f6f6a" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#vm9A)"/>
+  <line x1="160" y1="58" x2="298" y2="102" stroke="#b4541f" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#vm9B)"/>
+  <line x1="260" y1="58" x2="438" y2="102" stroke="#8b5cf6" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#vm9E)"/>
+  <line x1="360" y1="58" x2="578" y2="102" stroke="#0d7377" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#vm9F)"/>
+  <defs>
+    <marker id="vm9A" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#2f6f6a"/></marker>
+    <marker id="vm9B" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#b4541f"/></marker>
+    <marker id="vm9C" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#1f2328"/></marker>
+    <marker id="vm9D" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#6b7280"/></marker>
+    <marker id="vm9E" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#8b5cf6"/></marker>
+    <marker id="vm9F" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#0d7377"/></marker>
+  </defs>
+</svg>
+        <figcaption>圖 24-9:x86-64 四層分頁走訪結構。48 位元虛擬位址被拆成 9/9/9/9/12 五段;CPU 從 CR3 寄存器出發,依序查 PML4→PDPT→PD→PT 四張表(每步各一次記憶體讀取);最後取出實體頁框號 PFN,拼上 12 位元位移得到實體位址。</figcaption>
+      </div>
+
+      <h3>Worked Example:逐步算出實體位址</h3>
+      <p>
+        給定虛擬位址 <strong>VA = 0x0000_0080_4020_1ABC</strong>(48 位元有效)。
+        先把它寫成二進位,按 9/9/9/9/12 拆開:
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>欄位</th><th>位元</th><th>二進位(9 or 12 bits)</th><th>十進位值</th></tr></thead>
+        <tbody>
+          <tr><td>PML4 索引</td><td>[47:39]</td><td>000000001</td><td>1</td></tr>
+          <tr><td>PDPT 索引</td><td>[38:30]</td><td>000000001</td><td>1</td></tr>
+          <tr><td>PD 索引</td><td>[29:21]</td><td>000000001</td><td>1</td></tr>
+          <tr><td>PT 索引</td><td>[20:12]</td><td>000000001</td><td>1</td></tr>
+          <tr><td>頁內位移</td><td>[11:0]</td><td>101010111100</td><td>0xABC</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        驗算:VA = (1 &lt;&lt; 39) | (1 &lt;&lt; 30) | (1 &lt;&lt; 21) | (1 &lt;&lt; 12) | 0xABC
+        = 0x80_0000_0000 | 0x4000_0000 | 0x20_0000 | 0x1000 | 0xABC
+        = 0x0000_0080_4020_1ABC ✓
+      </p>
+      <p>
+        現在跟著 MMU 走一遍四層查表,假設以下實體位址(系統啟動時由 OS 設定):
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>步驟</th><th>操作</th><th>實體位址</th><th>說明</th></tr></thead>
+        <tbody>
+          <tr><td>①</td><td>讀 CR3</td><td>—</td><td>CR3 存著 PML4 表的實體基底:0x0000_1000</td></tr>
+          <tr><td>②</td><td>PML4[1]</td><td>0x0000_1000 + 1×8 = 0x0000_1008</td><td>每條目 8 bytes;查出 PDPT 在 0x0002_0000</td></tr>
+          <tr><td>③</td><td>PDPT[1]</td><td>0x0002_0000 + 1×8 = 0x0002_0008</td><td>查出 PD 在 0x0003_0000</td></tr>
+          <tr><td>④</td><td>PD[1]</td><td>0x0003_0000 + 1×8 = 0x0003_0008</td><td>查出 PT 在 0x0004_0000</td></tr>
+          <tr><td>⑤</td><td>PT[1]</td><td>0x0004_0000 + 1×8 = 0x0004_0008</td><td>PTE 中取出 PFN = 0xABC0(頁框起始 0x0ABC_0000,即 0xABC0 × 0x1000)</td></tr>
+          <tr><td>⑥</td><td>拼位移</td><td>0x0ABC_0000 + 0xABC = <strong>0x0ABC_0ABC</strong></td><td>實體位址!</td></tr>
+        </tbody>
+      </table></div>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">四層 = 四次記憶體讀取 + 一次資料存取 = 共五次</span>
+          <p>沒有 TLB 的情況下,每次使用者程式存取一個記憶體位址,MMU 需要進行 <strong>四次額外的記憶體讀取</strong>(查 PML4、PDPT、PD、PT)才能翻譯出實體位址,再加上最終一次存取資料——合計五次記憶體操作才完成原本「一次讀/寫」。這正是 TLB 存在的理由。</p>
+        </div>
+      </div>
+
+      <h3>二、TLB:快取翻譯結果</h3>
+      <p>
+        <strong>TLB(Translation Lookaside Buffer)</strong>是 MMU 內的一塊極小、極快的<strong>關聯式快取</strong>,
+        專門記住最近用過的「虛擬頁號 → 頁框號」對照。它的工作原理:
+      </p>
+      <ol>
+        <li><strong>TLB 命中(hit)</strong>:MMU 在 TLB 裡找到對應條目 → 直接拿到頁框號,不必碰分頁表。只花 TLB 查找時間 + 一次記憶體讀取。</li>
+        <li><strong>TLB 未命中(miss)</strong>:TLB 沒有 → 走四層分頁表(四次記憶體讀取)→ 把結果填回 TLB → 再做記憶體存取。</li>
+      </ol>
+      <p>
+        由於程式存取記憶體具有強烈的<strong>時間與空間區域性(locality)</strong>——短時間內反覆存取同一批分頁——
+        TLB 命中率(hit rate)在實務上往往可達 <strong>99% 以上</strong>。這讓四層分頁的「五次記憶體操作」代價實際上近乎消失。
+      </p>
+      <p>
+        當然,上下文切換(行程切換)時原行程的 TLB 條目需要全部作廢(flush),或者透過
+        <strong>ASID(Address Space Identifier)</strong>標記讓條目帶上行程身分,避免不必要的 flush。
+      </p>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">EMAT — 有效記憶體存取時間(Effective Memory Access Time)</span>
+          <p>設 TLB 查找時間 $t_{TLB}$、記憶體讀取時間 $t_{mem}$、TLB 命中率 $h$,
+          對 x86-64 四層分頁而言:</p>
+          <p>
+            $$\text{EMAT} = h \cdot (t_{TLB} + t_{mem}) + (1-h) \cdot (t_{TLB} + 4 \cdot t_{mem} + t_{mem})$$
+            $$= t_{TLB} + t_{mem} \cdot (5 - 4h)$$
+          </p>
+          <p><strong>數值範例:</strong>取 $t_{TLB} = 2$ ns、$t_{mem} = 100$ ns、$h = 0.99$:</p>
+          <p>$$\text{EMAT} = 2 + 100 \times (5 - 4 \times 0.99) = 2 + 100 \times 1.04 = \mathbf{106} \text{ ns}$$</p>
+          <p>若沒有 TLB($h=0$):EMAT $= 2 + 500 = 502$ ns。TLB 讓速度提升約 <strong>4.7 倍</strong>——代價只是一塊幾百個條目的小快取。</p>
+        </div>
+      </div>
+
+      <h3>三、需求分頁與缺頁處理(Page Fault)</h3>
+      <p>
+        作業系統允許行程的<strong>虛擬頁面並不全都在實體記憶體中</strong>——暫時不需要的頁可以只存在磁碟的 swap 區。
+        當行程存取一個「目前不在記憶體」的頁面時,PT 條目的 <em>Present</em> 位元為 0,
+        MMU 觸發一個<strong>缺頁例外(page fault)</strong>,CPU 陷入 OS 的缺頁處理常式(page fault handler)。
+        處理步驟如下:
+      </p>
+      <ol>
+        <li><strong>儲存行程狀態</strong>:CPU 把寄存器、PC 存到核心堆疊,切換到核心模式。</li>
+        <li><strong>判斷合法性</strong>:OS 查行程的 VMA(Virtual Memory Area)表,確認這個虛擬位址合法。若不合法 → 發出 SIGSEGV、終止行程。</li>
+        <li><strong>找空閒頁框</strong>:若實體記憶體還有空閒頁框就直接用;否則先用<strong>置換演算法</strong>(見下節)選出犧牲頁(victim page),如果它是 dirty(被修改過)就先把它寫回 swap。</li>
+        <li><strong>磁碟 I/O</strong>:啟動 I/O 把所需頁面從 swap 區讀入剛騰出的頁框。行程在此期間進入「阻塞」狀態,CPU 切換給其他行程。</li>
+        <li><strong>更新 PTE</strong>:I/O 完成後,OS 填上頁框號、設 Present=1,必要時刷新 TLB。</li>
+        <li><strong>重試指令</strong>:OS 恢復行程狀態,CPU 重新執行當初觸發缺頁的那條指令——這次翻譯成功,行程毫無感知地繼續執行。</li>
+      </ol>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">主要缺頁 vs 次要缺頁</span>
+          <p><strong>主要缺頁(major page fault)</strong>:頁面在 swap 上,必須進行一次磁碟讀取——代價高昂(毫秒級)。
+          <strong>次要缺頁(minor page fault)</strong>:頁面其實已在記憶體中(例如被其他行程共享,或已被 OS 預取),
+          只需要更新 PTE、不需要磁碟 I/O——代價低得多(微秒級)。Linux 的 <code>/proc/PID/status</code> 中
+          <code>VmMajFlt</code> 和 <code>VmMinFlt</code> 就是這兩類缺頁的計數。</p>
+        </div>
+      </div>
+
+      <p>
+        這裡要特別提本章前面出現的<strong>寫時複製(Copy-on-Write, COW)</strong>的完整機制:
+        <code>fork()</code> 之後,父子行程的分頁表都指向<strong>同一批實體頁框</strong>,
+        這些頁框全被標記為<em>唯讀</em>。一旦某方試圖<strong>寫入</strong>其中一頁,
+        MMU 因為寫入唯讀頁而觸發缺頁例外(這是「保護型缺頁」,Protection fault)。
+        OS 的缺頁處理常式偵測到這是 COW 標記的頁 → 在實體記憶體中配置一個新頁框、
+        複製原頁內容進去、更新<em>觸發寫入那一方</em>的 PTE 指向新頁框並設回可寫。
+        原頁框繼續被另一方持有。這樣,大多數 fork-then-exec 的情況(exec 會立刻丟棄整個位址空間)
+        完全不需要實際複製任何記憶體頁——COW 把代價推遲到「真的需要時」。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">COW:「先共享、有人改才複製」的惰性最佳化</span>
+          <p>COW 是「<strong>惰性求值(lazy evaluation)</strong>」在記憶體管理的絕妙應用:fork 時不急著複製,等到真的有人要寫才做最小量的工作。這讓 <code>fork()+exec()</code> 幾乎是零複製的。相同模式在 Linux 的頁面快取(mmap 匿名頁)、容器映像的 OverlayFS(§87 章)中都有應用——好想法總是反覆出現。</p>
+        </div>
+      </div>
+
+      <h3>四、分頁置換演算法</h3>
+      <p>
+        當實體記憶體滿了,又需要載入新頁面時,OS 必須<strong>選出一頁驅逐</strong>——這就是<strong>分頁置換演算法(page replacement algorithm)</strong>的職責。
+        選錯了,可能驅逐馬上要用的頁,導致立刻再次缺頁;選對了,能讓缺頁率最小化、系統跑得更順。
+        以下以<strong>參考串(reference string)</strong>
+        <code>1, 2, 3, 1, 2, 4, 1, 2, 3, 4</code>、<strong>3 個頁框</strong>為例,逐步比較。
+      </p>
+
+      <h4>FIFO — 先進先出</h4>
+      <p>
+        最簡單:把最早進入記憶體的頁面驅逐。用一個佇列記錄進入順序,隊首最老、隊尾最新。
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>存取</th><th>頁框狀態(→=最老)</th><th>結果</th><th>缺頁累計</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td>→ 1</td><td>MISS</td><td>1</td></tr>
+          <tr><td>2</td><td>→ 1, 2</td><td>MISS</td><td>2</td></tr>
+          <tr><td>3</td><td>→ 1, 2, 3</td><td>MISS</td><td>3</td></tr>
+          <tr><td>1</td><td>→ 1, 2, 3</td><td>HIT</td><td>3</td></tr>
+          <tr><td>2</td><td>→ 1, 2, 3</td><td>HIT</td><td>3</td></tr>
+          <tr><td>4</td><td>→ 2, 3, 4(驅逐 1)</td><td>MISS</td><td>4</td></tr>
+          <tr><td>1</td><td>→ 3, 4, 1(驅逐 2)</td><td>MISS</td><td>5</td></tr>
+          <tr><td>2</td><td>→ 4, 1, 2(驅逐 3)</td><td>MISS</td><td>6</td></tr>
+          <tr><td>3</td><td>→ 1, 2, 3(驅逐 4)</td><td>MISS</td><td>7</td></tr>
+          <tr><td>4</td><td>→ 2, 3, 4(驅逐 1)</td><td>MISS</td><td><strong>8</strong></td></tr>
+        </tbody>
+      </table></div>
+
+      <h4>Belady 異常(Belady's Anomaly)</h4>
+      <p>
+        直覺上,「頁框越多 → 缺頁越少」——但 FIFO 有個反常:有時<strong>增加頁框數,缺頁反而增加</strong>。
+        這叫 <strong>Belady 異常</strong>。以參考串 <code>1,2,3,4,1,2,5,1,2,3,4,5</code> 為例:
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>參考串</th><th>頁框數</th><th>FIFO 缺頁數</th><th>備注</th></tr></thead>
+        <tbody>
+          <tr><td rowspan="2">1,2,3,4,1,2,5,1,2,3,4,5</td><td>3</td><td><strong>9</strong></td><td>較少頁框,缺頁較少</td></tr>
+          <tr><td>4</td><td><strong>10</strong></td><td>⚠️ 多一頁框,缺頁反而多 1 次!</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        原因:多一個頁框改變了「哪頁最老」,讓 FIFO 在關鍵時刻驅逐了馬上要用的頁。
+        Belady 異常說明 FIFO 並<strong>不是一個「堆疊演算法(stack algorithm)」</strong>——
+        只有堆疊演算法才能保證「頁框越多,命中集合只增不減」。
+        LRU 是堆疊演算法,<em>不會</em>發生 Belady 異常。
+      </p>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">FIFO 不是堆疊演算法,會有 Belady 異常;LRU 不會</span>
+          <p>一個置換演算法若滿足「$n$ 個頁框的命中集合 ⊆ $n+1$ 個頁框的命中集合」這個性質,就稱為<strong>堆疊演算法(stack algorithm)</strong>,它<strong>保證</strong>頁框越多缺頁越少。LRU、OPT 都是堆疊演算法;FIFO 不是。</p>
+        </div>
+      </div>
+
+      <h4>LRU — 最近最少使用</h4>
+      <p>
+        <strong>LRU(Least Recently Used)</strong>:驅逐「最久沒被存取」的頁。直覺上比 FIFO 聰明:
+        長時間沒用到的頁,未來短期內也不太可能用到(時間區域性)。
+        對同樣的參考串 <code>1, 2, 3, 1, 2, 4, 1, 2, 3, 4</code>、3 個頁框:
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>存取</th><th>頁框狀態(LRU→MRU)</th><th>結果</th><th>缺頁累計</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td>1</td><td>MISS</td><td>1</td></tr>
+          <tr><td>2</td><td>1, 2</td><td>MISS</td><td>2</td></tr>
+          <tr><td>3</td><td>1, 2, 3</td><td>MISS</td><td>3</td></tr>
+          <tr><td>1</td><td>2, 3, <strong>1</strong>(提到 MRU)</td><td>HIT</td><td>3</td></tr>
+          <tr><td>2</td><td>3, 1, <strong>2</strong></td><td>HIT</td><td>3</td></tr>
+          <tr><td>4</td><td>1, 2, 4(驅逐 3-LRU)</td><td>MISS</td><td>4</td></tr>
+          <tr><td>1</td><td>2, 4, <strong>1</strong></td><td>HIT</td><td>4</td></tr>
+          <tr><td>2</td><td>4, 1, <strong>2</strong></td><td>HIT</td><td>4</td></tr>
+          <tr><td>3</td><td>1, 2, 3(驅逐 4-LRU)</td><td>MISS</td><td>5</td></tr>
+          <tr><td>4</td><td>2, 3, 4(驅逐 1-LRU)</td><td>MISS</td><td><strong>6</strong></td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        相同參考串:FIFO <strong>8</strong> 次缺頁,LRU <strong>6</strong> 次——LRU 因為知道 1 和 2 最近才被用過而保留它們,
+        代價大幅降低。<strong>純 LRU 的硬體實現成本高</strong>(需要對每個頁框打時間戳並排序),
+        實務上多用以下近似。
+      </p>
+
+      <h4>Clock / Second-Chance 演算法</h4>
+      <p>
+        <strong>Clock 演算法</strong>(又稱 Second-Chance)是 LRU 的低成本近似,Linux 核心廣泛使用。
+        每個頁框有一個<strong>參考位元(reference bit)</strong>,硬體在頁面被存取時自動設為 1。
+        置換時用一個「時鐘指針」掃描:
+      </p>
+      <ul>
+        <li>若指針指向的頁 reference bit = <strong>0</strong> → 驅逐它(它真的長時間沒用)。</li>
+        <li>若 reference bit = <strong>1</strong> → 清為 0、給它「第二次機會」、指針前移再檢查下一頁。</li>
+      </ul>
+      <p>
+        若一輪掃下來所有頁的 reference bit 都是 1,它們全被清成 0,指針回到起點,下一輪就能找到犧牲者——
+        退化成 FIFO 最壞情況。<strong>WSClock</strong>(Working Set Clock)在此基礎上加入工作集時間戳,
+        是 Linux 實際使用的核心換頁演算法的基礎。
+      </p>
+
+      <h3>五、工作集模型與 Thrashing</h3>
+      <p>
+        <strong>工作集(working set)</strong>:在過去 Δ 次存取內曾被使用的頁面集合,記為 $W(t, \Delta)$。
+        它代表「此刻行程真正在用的記憶體」。若分配給行程的頁框數 ≥ 工作集大小,行程能跑得很順;
+        若頁框數 &lt; 工作集大小,行程會不斷缺頁。
+      </p>
+      <p>
+        <strong>Thrashing(顛簸/抖動)</strong>:當系統同時跑太多行程,每個行程分到的頁框都少於工作集大小,
+        所有行程不斷發生缺頁,CPU 時間大半都花在換頁 I/O 上,有用計算量趨近於零。
+        症狀:CPU 使用率突然暴跌、但 I/O 使用率飆高。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">工作集決定行程應得的頁框數</span>
+          <p>作業系統若能即時追蹤每個行程的工作集大小 $|W|$,就能「按需分配」頁框:
+          總頁框夠分給所有行程的工作集 → 系統高效;不夠 → 主動暫停(swap out)一些行程,
+          讓剩下的行程各自都有足夠頁框跑完整工作集。這比「均分頁框」聰明得多,是 Linux 換頁決策的核心哲學。</p>
+        </div>
+      </div>
+
+      <h3>動手實驗室:分頁置換模擬器</h3>
+      <p>
+        下面是一個完整可執行的 Python 分頁置換模擬器,支援 FIFO、LRU 與 Clock 三種策略。
+        複製下去直接 <code>python3 page_sim.py</code> 執行即可;修改 <code>refs</code> 和 <code>nframes</code> 就能跑任意參考串。
+      </p>
+      <pre><code class="language-python">#!/usr/bin/env python3
+"""
+分頁置換模擬器 — 支援 FIFO / LRU / Clock 三種策略
+用法: python3 page_sim.py
+"""
+from collections import deque
+
+def simulate_fifo(refs, nframes):
+    """FIFO:先進先出——最老的頁面先被驅逐"""
+    frames = []
+    queue = deque()   # 記錄進入順序,最左 = 最老
+    faults = 0
+    log = []
+    for page in refs:
+        if page in frames:
+            log.append((page, list(frames), "HIT"))
+        else:
+            faults += 1
+            if len(frames) &lt; nframes:
+                frames.append(page)
+            else:
+                oldest = queue.popleft()   # 取出最老的頁
+                frames.remove(oldest)
+                frames.append(page)
+            queue.append(page)
+            log.append((page, list(frames), "MISS"))
+    return faults, log
+
+def simulate_lru(refs, nframes):
+    """LRU:最近最少使用——最久沒被存取的頁面先被驅逐"""
+    frames = []   # frames[0]=LRU, frames[-1]=MRU
+    faults = 0
+    log = []
+    for page in refs:
+        if page in frames:
+            frames.remove(page)    # 移到 MRU 位置
+            frames.append(page)
+            log.append((page, list(frames), "HIT"))
+        else:
+            faults += 1
+            if len(frames) &lt; nframes:
+                frames.append(page)
+            else:
+                frames.pop(0)      # 移除 LRU(最久未用)
+                frames.append(page)
+            log.append((page, list(frames), "MISS"))
+    return faults, log
+
+def simulate_clock(refs, nframes):
+    """Clock(Second-Chance):給每頁一次第二機會"""
+    frames = [None] * nframes
+    ref_bits = [0] * nframes
+    hand = 0           # 時鐘指針位置
+    faults = 0
+    log = []
+    for page in refs:
+        if page in frames:
+            ref_bits[frames.index(page)] = 1    # 命中:設參考位元
+            log.append((page, [f for f in frames if f is not None], "HIT"))
+        else:
+            faults += 1
+            # 找可置換的槽
+            while True:
+                if frames[hand] is None:
+                    break                        # 空槽直接用
+                if ref_bits[hand] == 0:
+                    break                        # ref=0 → 驅逐
+                ref_bits[hand] = 0              # ref=1 → 清零、給第二次機會
+                hand = (hand + 1) % nframes
+            frames[hand] = page
+            ref_bits[hand] = 1
+            hand = (hand + 1) % nframes
+            log.append((page, [f for f in frames if f is not None], "MISS"))
+    return faults, log
+
+def print_table(name, refs, log):
+    print(f"\n{'='*52}\n  策略: {name}\n{'='*52}")
+    print(f"  {'頁':&lt;5} {'頁框狀態':&lt;28} 結果")
+    print("-" * 52)
+    for page, state, result in log:
+        mark = "✓ HIT " if result == "HIT" else "✗ MISS"
+        print(f"  {page:&lt;5} {str(state):&lt;28} {mark}")
+    faults = sum(1 for _, _, r in log if r == "MISS")
+    print(f"\n  缺頁次數: {faults} / {len(refs)}")
+
+if __name__ == "__main__":
+    refs    = [1, 2, 3, 1, 2, 4, 1, 2, 3, 4]   # 參考串
+    nframes = 3                                    # 頁框數
+
+    print(f"參考串: {refs}  |  頁框數: {nframes}")
+
+    f1, log1 = simulate_fifo(refs, nframes)
+    print_table("FIFO", refs, log1)
+
+    f2, log2 = simulate_lru(refs, nframes)
+    print_table("LRU", refs, log2)
+
+    f3, log3 = simulate_clock(refs, nframes)
+    print_table("Clock", refs, log3)
+
+    print(f"\n{'='*52}")
+    print(f"  FIFO: {f1} 缺頁  |  LRU: {f2} 缺頁  |  Clock: {f3} 缺頁")
+    print(f"{'='*52}")</code></pre>
+
+      <p>預期輸出(節錄):</p>
+      <pre><code class="language-text">參考串: [1, 2, 3, 1, 2, 4, 1, 2, 3, 4]  |  頁框數: 3
+
+====================================================
+  策略: FIFO
+====================================================
+  頁     頁框狀態                     結果
+----------------------------------------------------
+  1     [1]                          ✗ MISS
+  2     [1, 2]                       ✗ MISS
+  3     [1, 2, 3]                    ✗ MISS
+  1     [1, 2, 3]                    ✓ HIT
+  2     [1, 2, 3]                    ✓ HIT
+  4     [2, 3, 4]                    ✗ MISS
+  1     [3, 4, 1]                    ✗ MISS
+  2     [4, 1, 2]                    ✗ MISS
+  3     [1, 2, 3]                    ✗ MISS
+  4     [2, 3, 4]                    ✗ MISS
+
+  缺頁次數: 8 / 10
+...
+====================================================
+  FIFO: 8 缺頁  |  LRU: 6 缺頁  |  Clock: 8 缺頁
+====================================================
+# 此參考串下 Clock 退化到與 FIFO 同(剛載入頁獲得第二次機會)</code></pre>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">實驗:Belady 異常一鍵驗證</span>
+          <p>把 <code>refs</code> 改成 <code>[1,2,3,4,1,2,5,1,2,3,4,5]</code>,先跑 <code>nframes=3</code> 再跑 <code>nframes=4</code>,
+          你會看到 FIFO 從 9 缺頁跳到 10 缺頁——Belady 異常親眼見證。再改用 LRU 同樣的參考串和頁框數,
+          確認 LRU 不會出現異常(3 框 10 次,4 框 8 次,確實單調遞減)。</p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 24.8 <span class="badge">計算</span></div>
+        <div class="ex-body">
+          <p>
+            某系統採用 x86-64 四層分頁,TLB 查找時間 $t_{TLB} = 4$ ns,記憶體讀取時間 $t_{mem} = 80$ ns。
+            (a) 若 TLB 命中率 $h = 0.95$,計算有效記憶體存取時間(EMAT)。<br>
+            (b) 若要讓 EMAT ≤ 100 ns,最低需要多少命中率?<br>
+            (c) 如果升級到五層分頁(Linux 5.x 的 5-level paging,48 → 57 位元虛擬位址),在同樣 $h = 0.95$ 下,EMAT 會變成多少?
+          </p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>(a) 四層分頁,h = 0.95:</strong></p>
+              <p>TLB 命中路徑:$t_{TLB} + t_{mem} = 4 + 80 = 84$ ns(只需 1 次記憶體存取資料)</p>
+              <p>TLB 未命中路徑:$t_{TLB} + 4 \times t_{mem} + t_{mem} = 4 + 5 \times 80 = 404$ ns(走四層 + 讀資料)</p>
+              <p>$$\text{EMAT} = 0.95 \times 84 + 0.05 \times 404 = 79.8 + 20.2 = \mathbf{100} \text{ ns}$$</p>
+              <p><strong>(b) EMAT ≤ 100 ns 的最低命中率:</strong></p>
+              <p>$\text{EMAT} = t_{TLB} + t_{mem}(5 - 4h) \leq 100$</p>
+              <p>$4 + 80(5 - 4h) \leq 100 \Rightarrow 80(5-4h) \leq 96 \Rightarrow 5-4h \leq 1.2 \Rightarrow h \geq \frac{3.8}{4} = 0.95$</p>
+              <p>所以 $h \geq \mathbf{0.95}$,即命中率至少要 95%。</p>
+              <p><strong>(c) 五層分頁($h = 0.95$):</strong></p>
+              <p>五層需要 5 次分頁表查詢,TLB miss 路徑 = $4 + 6 \times 80 = 484$ ns</p>
+              <p>$$\text{EMAT} = 0.95 \times 84 + 0.05 \times 484 = 79.8 + 24.2 = \mathbf{104} \text{ ns}$$</p>
+              <p>多一層分頁,在相同 TLB 命中率下 EMAT 增加 4 ns——正因如此,高命中率的 TLB 讓從 4 層升到 5 層的代價微乎其微(TLB 命中時根本不走分頁表)。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 24.9 <span class="badge">計算</span></div>
+        <div class="ex-body">
+          <p>
+            對參考串 <code>1, 2, 3, 4, 1, 2, 5, 1, 2, 3, 4, 5</code>,用 <strong>FIFO、4 個頁框</strong>
+            逐步追蹤並填表,統計缺頁次數,並與 3 個頁框的結果(9 次)比較——驗證 Belady 異常確實出現。
+          </p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>FIFO,4 個頁框,參考串 = [1,2,3,4,1,2,5,1,2,3,4,5]:</strong></p>
+              <div class="table-wrap">
+              <table>
+                <thead><tr><th>存取</th><th>頁框狀態(→=最老)</th><th>結果</th></tr></thead>
+                <tbody>
+                  <tr><td>1</td><td>→ 1</td><td>MISS</td></tr>
+                  <tr><td>2</td><td>→ 1, 2</td><td>MISS</td></tr>
+                  <tr><td>3</td><td>→ 1, 2, 3</td><td>MISS</td></tr>
+                  <tr><td>4</td><td>→ 1, 2, 3, 4</td><td>MISS</td></tr>
+                  <tr><td>1</td><td>→ 1, 2, 3, 4</td><td><strong>HIT</strong></td></tr>
+                  <tr><td>2</td><td>→ 1, 2, 3, 4</td><td><strong>HIT</strong></td></tr>
+                  <tr><td>5</td><td>→ 2, 3, 4, 5(驅逐 1)</td><td>MISS</td></tr>
+                  <tr><td>1</td><td>→ 3, 4, 5, 1(驅逐 2)</td><td>MISS</td></tr>
+                  <tr><td>2</td><td>→ 4, 5, 1, 2(驅逐 3)</td><td>MISS</td></tr>
+                  <tr><td>3</td><td>→ 5, 1, 2, 3(驅逐 4)</td><td>MISS</td></tr>
+                  <tr><td>4</td><td>→ 1, 2, 3, 4(驅逐 5)</td><td>MISS</td></tr>
+                  <tr><td>5</td><td>→ 2, 3, 4, 5(驅逐 1)</td><td>MISS</td></tr>
+                </tbody>
+              </table></div>
+              <p><strong>缺頁次數 = 10</strong>(HIT 只有步驟 5 和步驟 6)。</p>
+              <p>3 個頁框時:9 次缺頁。4 個頁框時:10 次缺頁。<strong>多一個頁框,缺頁反而多 1 次——Belady 異常確認</strong>。</p>
+              <p>原因分析:4 框讓 1,2,3,4 全都留在記憶體直到 step 6,但接著到 5 時必須驅逐最老的 1(step 7 的 MISS);
+              而 3 框版本在 step 4 就驅逐了 1,step 5 再次裝入 1 但也排隊在前了,時機不同。
+              FIFO 的問題在於「老=最佳驅逐目標」這個假設不成立,記憶體越大有時反而讓「錯誤的老頁」在關鍵位置排隊。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 24.10 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>
+            系統總共有 60 個空閒頁框,同時跑著三個行程,各自的工作集大小為:P1 = 25 頁、P2 = 20 頁、P3 = 18 頁。<br>
+            (a) 系統是否可能發生 thrashing?為什麼?<br>
+            (b) 如果 P3 的工作集增長到 20 頁,系統會怎樣?OS 應該如何應對?<br>
+            (c) 如果用「均分」策略給每個行程 20 個頁框,P1 會發生什麼?
+          </p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>(a) 當前狀況:</strong>三個行程工作集總需求 = 25 + 20 + 18 = 63 頁,
+              但只有 60 個空閒頁框。<strong>需求 (63) &gt; 可用 (60)</strong>,差距 3 頁,系統已面臨
+              <strong>thrashing 邊緣</strong>——至少有一個行程的工作集無法完整放入記憶體,該行程將持續發生缺頁,
+              並阻礙其他行程(I/O 佇列競爭、CPU 時間浪費在換頁)。</p>
+              <p><strong>(b) P3 工作集增長到 20 頁後</strong>:總需求 = 25 + 20 + 20 = 65 頁 &gt; 60,缺口擴大到 5 頁。
+              若 OS 不介入,所有行程都無法在記憶體中保有完整工作集,全部持續缺頁、互相搶頁框——
+              發生<strong>全面 thrashing</strong>,CPU 使用率崩潰。<br>
+              <strong>OS 正確做法</strong>:暫停(swap out)一個行程(例如優先級最低的 P3),
+              釋放出它的全部頁框;讓剩下兩個行程 P1(25) + P2(20) = 45 頁,在 60 個頁框裡跑順暢,
+              等記憶體壓力降低後再換 P3 回來繼續。</p>
+              <p><strong>(c) 均分策略(每人 20 框):</strong>P1 工作集 25 頁,但只分到 20 框——
+              缺 5 頁,P1 將<strong>持續缺頁</strong>,不斷觸發 I/O、搶 P2/P3 的頁框。
+              均分忽略了各行程實際需求的差異;工作集感知分配才是正確做法——
+              給 P1 至少 25 框、P2 至少 20 框、P3 至少 18 框;若總數不夠就暫停一個行程而非讓大家都缺。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>把這一章串起來</h2>
+      <p>
+        我們從一位忙翻天的管家出發,走完了作業系統的全景。如果只能帶走一句話,那就是 OSTEP 的那三個字——
+        作業系統,本質上就在做三件事:
+      </p>
+      <ul>
+        <li><strong>虛擬化(讓你以為獨佔)</strong>:用<strong>行程</strong>把一顆 CPU「變」成人人有份(靠分時與上下文切換、靠排程器在週轉與回應間權衡);
+        用<strong>虛擬記憶體</strong>(分頁、分頁表、MMU、TLB)讓每個行程都以為獨佔整片記憶體,同時換來隔離、保護與超額使用。</li>
+        <li><strong>並行(管好同時發生的事)</strong>:<strong>執行緒</strong>讓一個行程裡多條執行流共享記憶體,
+        卻也召來<strong>競爭條件</strong>這個惡夢;我們用<strong>鎖、條件變數、號誌</strong>守住臨界區、造出不可分割性,
+        並小心<strong>死結</strong>的四個條件(固定上鎖順序是最實用的解藥)。</li>
+        <li><strong>持久化(資料不因斷電消失)</strong>:<strong>檔案系統</strong>用檔案與目錄當抽象、用 <strong>inode</strong> 當檔案的本體、
+        用簡潔的 <strong>open/read/write/close</strong> 當介面;再用<strong>快取</strong>掩護慢吞吞的磁碟、用<strong>日誌</strong>對抗「寫到一半就斷電」,
+        守住崩潰一致性——說穿了,又是在追求那個熟悉的「不可分割性」。</li>
+      </ul>
+      <p>
+        回頭看,這三件事其實是同一個母題的三種變奏:<strong>把醜陋、有限、危險的硬體,變成乾淨、寬裕、安全的抽象</strong>。
+        這正是第 1 章就埋下的那條主線——抽象——在系統層級最壯觀的一次演出。你寫的每一行 Python、每一次
+        <code>open("file")</code>、每一個 <code>x = x + 1</code>,背後都有這位沉默的管家,替你打點好了一切。
+      </p>
+      <p>
+        但有一件事,作業系統一個人辦不到:讓你的電腦跟<strong>世界上其他幾十億台電腦</strong>對話。
+        當資料要離開這台機器、跨越大海去到另一端,我們需要一整套新的抽象與協定。
+        下一章,我們就把視野從「一台電腦」拉到「連起來的所有電腦」——進入<strong>計算機網路</strong>的世界。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">📚</div>
+        <div class="body">
+          <span class="c-title">想更深入?延伸資源</span>
+          <p>本章對應 OSSU 的 <a href="https://pages.cs.wisc.edu/~remzi/OSTEP/">Operating Systems: Three Easy Pieces(OSTEP)</a>——
+          由威斯康辛大學 Remzi 與 Andrea Arpaci-Dusseau 夫婦撰寫,<strong>完全免費</strong>、線上可讀。
+          它正是用「虛擬化、並行、持久化」三大塊來組織整本書的,讀起來像在聊天卻紮實到位,公認是作業系統最好的入門教材之一。
+          書中每一塊都附有可動手的專案(用 C 寫 shell、實作執行緒函式庫、做檔案系統),強烈建議邊讀邊寫——
+          作業系統是那種「親手做過一次,才會真正懂」的主題。讀完後若想看真實核心,可以接著看 Linux 或 xv6(MIT 的教學用 Unix)的原始碼。</p>
+        </div>
+      </div>
+
+    

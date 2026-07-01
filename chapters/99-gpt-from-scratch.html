@@ -1,0 +1,735 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>從零打造 GPT(選修):看懂 agent 在跟誰說話 · CS 自學聖經</title>
+<meta name="description" content="把 LLM 這個黑箱打開:從語言模型「預測下一個 token」的本質,到 tokenization、embedding 與位置編碼、注意力機制(Q/K/V 與 softmax(QKᵀ/√d)V)、Softmax、Transformer block,以及預訓練與微調。最後用 PyTorch 概念性手刻一個教學最小版 mini-GPT,並把它和 CNN 做清楚區隔。本章為選修。">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;700&family=Noto+Sans+TC:wght@400;700&family=Lora:ital,wght@0,400;0,600;0,700;1,400&family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <main class="main">
+    <article class="content">
+
+      <div class="eyebrow">第二二部 · 動手打造 LLM Agent</div>
+      <h1>從零打造 GPT(選修):看懂 agent 在跟誰說話</h1>
+      <p class="subtitle">在你寫的每一個 AI agent 裡,迴圈的正中央都站著一個你不斷呼叫、卻從沒真正看清的角色:那個「LLM」。它到底是什麼?這一章,我們把這個黑箱拆開,看清楚 agent 一直在跟誰說話。</p>
+      <div class="byline">
+        <span class="tag">第 93 章</span>
+        <span>閱讀時間 ≈ 70 分鐘</span>
+        <span>難度:★★★★★</span>
+      </div>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">這是一章「選修」</span>
+          <p>這一章是<strong>選修</strong>:它帶你深入 LLM 的<em>內部</em>,理解「下一個 token 是怎麼被算出來的」。
+          如果你的目標只是<strong>動手做 agent</strong>——呼叫模型、串工具、做 RAG——你完全可以<strong>直接跳到第 94 章</strong>《手刻你的 LLM client》,
+          把模型當成一個「給它文字、它回文字」的黑箱來用,絲毫不影響後面的實作。但如果你像我一樣,
+          受不了自己天天呼叫一個搞不懂的東西,那就留下來——讀完這章,你看 agent 的眼神會完全不一樣。</p>
+        </div>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>語言模型的本質:給定前文,<strong>預測下一個 token 的機率分佈</strong>,再自迴歸地一個接一個生成</li>
+          <li><strong>tokenization</strong>:文字怎麼被切成 token,以及為什麼 token 既不是字、也不是詞</li>
+          <li><strong>embedding</strong>:token 如何變成向量、為何語意相近的 token 向量也相近(連回第 54 章),以及位置編碼(positional encoding)</li>
+          <li><strong>注意力機制(attention)</strong>:Q/K/V 是什麼、$\text{softmax}(QK^\top/\sqrt{d_k})V$ 的直覺與維度、為什麼要除以 $\sqrt{d_k}$、自注意力 vs 因果遮罩</li>
+          <li><strong>Softmax</strong>:怎麼把一排分數變成一個機率分佈(補上第 38 章沒講的那塊拼圖)</li>
+          <li><strong>Transformer block</strong>:多頭注意力 + 前饋網路 + 殘差 + LayerNorm,如何堆疊成 GPT</li>
+          <li><strong>預訓練 vs 微調</strong>:海量文字自監督預訓練 → 指令微調 → RLHF 的概觀(訓練機制連回第 38 章)</li>
+          <li>用 <strong>PyTorch</strong> 概念性手刻一個<strong>教學最小版 mini-GPT</strong>(embedding + 一層注意力 + 輸出頭),並知道完整實作該去哪找</li>
+          <li>Transformer(文本、注意力)與 <strong>CNN(第 67 章,影像卷積)</strong>到底差在哪——以及為什麼 face embedding 不等於 text embedding</li>
+        </ul>
+      </div>
+
+      <h2>把那個你天天呼叫的黑箱打開</h2>
+      <p>
+        想像你正在寫一個 AI 助理 agent。你的程式碼大概長這樣:接收使用者問題 → 呼叫一個 <code>chat()</code> 函式 →
+        拿到一段文字 → 判斷要不要呼叫工具 → 再呼叫 <code>chat()</code> → ……。整個 agent 的迴圈,
+        繞著正中央那個 <code>chat()</code> 打轉。而那個 <code>chat()</code> 背後,是一個叫 <strong>大型語言模型(large language model,LLM)</strong> 的東西。
+      </p>
+      <p>
+        多數教學會叫你把它當魔法:「丟字進去、有字出來,別問為什麼。」當黑箱用,其實也能把 agent 做出來——
+        這也是為什麼這章是選修。但「把它當魔法」會留下一堆解不開的疑惑:為什麼模型有時候會「忘記」前面講過的話?
+        為什麼它會自信滿滿地<strong>胡謅</strong>(幻覺)?為什麼同樣的問題,換個問法答案就天差地別?為什麼它有「上下文長度」的限制?
+        這些問題的答案,全都藏在黑箱<em>裡面</em>。
+      </p>
+      <p>
+        這一章,我們不依賴任何魔法框架,把這個黑箱一層層拆開。你會發現,這個讓全世界為之瘋狂的東西,
+        骨子裡其實做的是一件<strong>樸素到近乎好笑</strong>的事——而它之所以強大,來自一個 2017 年才被提出、
+        卻徹底改變一切的機制:<strong>注意力(attention)</strong>。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">這一章的一條主線</span>
+          <p>如果這章你只記得一件事,請記得:<strong>LLM 是一台「預測下一個 token」的機率機器。</strong>
+          它不「理解」、不「思考」、不查資料庫,它只是反覆地問同一個問題:<em>「給定目前看到的這串 token,下一個最可能是什麼?」</em>
+          ——然後從機率分佈裡挑一個、接上去、再問一次。整個 ChatGPT,就是這個動作快速重複了上千次的結果。
+          後面所有的機制(embedding、注意力、Transformer),都只是為了把這個「預測下一個 token」做得<strong>夠準</strong>。</p>
+        </div>
+      </div>
+
+      <h2>語言模型在做什麼:預測下一個 token</h2>
+      <p>
+        我們先把「語言模型」這個詞拆開。它的工作,可以用一句你早就會的事情來描述:<strong>文字接龍</strong>。
+        給你「今天天氣很」,你大概會接「好」「熱」「冷」,而不會接「香蕉」。你心裡其實對「下一個字」有個<em>機率感</em>:
+        「好」很可能、「香蕉」幾乎不可能。語言模型做的,就是把這個「機率感」變成一個精確的數學物件。
+      </p>
+      <p>
+        正式地說:<strong>語言模型(language model)</strong>是一個函數,給定前面的一串 token $t_1, t_2, \dots, t_{n}$,
+        它輸出「下一個 token」在<strong>整個詞彙表</strong>上的機率分佈:
+      </p>
+      <p>$$P(t_{n+1} \mid t_1, t_2, \dots, t_n)$$</p>
+      <p>
+        注意這不是只猜一個答案,而是給<strong>詞彙表裡每一個可能的 token 各一個機率</strong>。
+        假設詞彙表有 5 萬個 token,模型輸出的就是一個長度 5 萬、加起來等於 1 的機率向量。
+        生成文字時,我們從這個分佈裡<strong>挑一個</strong> token(可以挑機率最大的,也可以帶點隨機性地抽樣),
+        把它接到句子尾巴,然後<strong>把加長後的句子再餵回去</strong>,預測<em>再下一個</em> token——如此反覆。
+        這種「一次生一個、把輸出接回輸入」的方式,叫<strong>自迴歸(autoregressive)</strong>生成。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 200" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="a1" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/></marker>
+  </defs>
+  <text x="20" y="28" font-size="14" font-weight="800" fill="#2f6f6a">自迴歸生成:一次生一個 token,接回去再生</text>
+  <rect x="20" y="48" width="300" height="40" rx="8" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="170" y="73" text-anchor="middle" font-size="14" fill="#1f2328">今天 / 天氣 / 很</text>
+  <rect x="360" y="48" width="150" height="40" rx="8" fill="#2f6f6a"/>
+  <text x="435" y="73" text-anchor="middle" font-size="14" font-weight="800" fill="#fff">語言模型</text>
+  <rect x="550" y="40" width="150" height="56" rx="8" fill="#f6e7dd" stroke="#b4541f"/>
+  <text x="625" y="62" text-anchor="middle" font-size="12" fill="#1f2328">機率分佈:</text>
+  <text x="625" y="80" text-anchor="middle" font-size="11" fill="#4a5159">好0.5 熱0.3 冷0.1 …</text>
+  <line x1="320" y1="68" x2="356" y2="68" stroke="#8a929b" stroke-width="2" marker-end="url(#a1)"/>
+  <line x1="510" y1="68" x2="546" y2="68" stroke="#8a929b" stroke-width="2" marker-end="url(#a1)"/>
+  <text x="360" y="130" font-size="13" fill="#b4541f" font-weight="700">挑出「好」,接到尾巴 →</text>
+  <rect x="20" y="150" width="360" height="40" rx="8" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="200" y="175" text-anchor="middle" font-size="14" fill="#1f2328">今天 / 天氣 / 很 / 好  ← 再餵回模型</text>
+  <path d="M560 120 Q560 170 388 170" fill="none" stroke="#b4541f" stroke-width="2" stroke-dasharray="4 3" marker-end="url(#a1)"/>
+</svg>
+        <figcaption>圖 93-1:自迴歸生成。模型吃進目前的 token 序列,輸出「下一個 token」的機率分佈;我們挑一個接上去,再把整串餵回去。ChatGPT 回你一段話,其實是這個迴圈跑了好幾百次。</figcaption>
+      </div>
+
+      <p>
+        這也立刻解釋了幾個你可能困惑過的現象。模型會<strong>幻覺(hallucination)</strong>,是因為它本來就不是在「查事實」,
+        而是在「接最像樣的下一個 token」——聽起來通順、統計上合理的句子,不保證為真。它有<strong>上下文長度上限</strong>,
+        是因為每次預測能「看」的前文 token 數量有限(這個窗口大小我們等一下會在注意力裡看到)。
+        而它怎麼學會這套「機率感」的?答案是:讀了海量的文字,反覆做這個「遮住下一個字、猜猜看、對答案、調參數」的練習——
+        這正是第 38 章講的<a href="38-machine-learning.html">監督式學習與梯度下降</a>,只是「標籤」就是「下一個真正出現的 token」,
+        資料多到不需要人標(這叫<strong>自監督 self-supervised</strong>)。訓練機制我們複用第 38 章,稍後只補上 LLM 特有的部分。
+      </p>
+
+      <h2>tokenization:文字怎麼被切開</h2>
+      <p>
+        模型只懂數字,不懂文字。所以餵字進模型前的第一步,是把文字切成一個個單位,再把每個單位對應到一個整數編號。
+        這個切法叫 <strong>tokenization(分詞 / 斷詞)</strong>,切出來的單位叫 <strong>token</strong>。
+      </p>
+      <p>
+        你直覺可能會想:那就一個字一個 token、或一個英文單字一個 token 嘛?兩種都不好。<strong>逐字元</strong>切,
+        序列會長到爆炸,而且單一字元「c」幾乎不帶語意;<strong>逐單字</strong>切,詞彙表會大到無法收拾(英文光是各種變形、拼錯、新詞就無窮多),
+        遇到沒見過的詞還會直接卡住。現代 LLM 走的是中間路線:<strong>子詞(subword)</strong>切法,最常見的是
+        <strong>BPE(Byte Pair Encoding,位元組對編碼)</strong>。
+      </p>
+      <p>
+        BPE 的直覺很可愛:先把所有文字拆成最小單位(字元或位元組),然後<strong>反覆把「最常一起出現的相鄰一對」合併成一個新 token</strong>,
+        合併個幾萬次,就長出一套詞彙表。結果是:常見的詞(like、the)會變成單一 token;罕見或複合的詞會被切成幾塊
+        (例如「tokenization」可能被切成 token + ization)。這樣既控制了詞彙表大小,又能用「拼湊」的方式表示<em>任何</em>沒見過的字串。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">token 不是字,也不是詞</span>
+          <p>一個重要的直覺校正:<strong>token 是統計切出來的碎片,不對應任何語言學單位</strong>。
+          英文裡 1 個 token 平均約 0.75 個單字;中文一個常用字常是 1 個 token,但生僻字可能被拆成好幾個位元組 token。
+          這也是為什麼模型「數不清一個單字裡有幾個字母」(它根本沒看到字母,只看到 token),
+          以及為什麼 API 是<strong>按 token 計費</strong>、而不是按字數——你之後在第 94 章串接 API 時,會親自和 token 計數打交道。</p>
+        </div>
+      </div>
+
+      <p>用 Python 看一眼這個「文字 ↔ 整數」的轉換最直接(這裡用最小的字元級示意,真實 LLM 用的是上面說的 BPE):</p>
+      <pre><code class="language-python"># 字元級 tokenizer 示意:真實 LLM 用 BPE(如 tiktoken),原理一樣只是切法更聰明
+text = "hello"
+chars = sorted(set("helo "))            # 這個小語料的「詞彙表」
+stoi = {c: i for i, c in enumerate(chars)}   # token(字元) -&gt; 整數 id
+itos = {i: c for c, i in stoi.items()}       # 整數 id -&gt; token
+
+ids = [stoi[c] for c in text]           # 編碼:文字 -&gt; 一串 token id
+print(ids)                              # 例如 [1, 2, 3, 3, 4]
+print("".join(itos[i] for i in ids))    # 解碼:token id -&gt; 文字 -&gt; "hello"</code></pre>
+      <p>
+        記住這一步的產出:一段文字,進來之後變成了<strong>一串整數 token id</strong>,例如 <code>[1, 2, 3, 3, 4]</code>。
+        模型從頭到尾看到的,就只是這種整數序列。下一個問題是:整數本身沒有意義(id=3 並不比 id=2「大」或「更接近」),
+        那要怎麼讓模型理解「token 之間的關係」?這就輪到 embedding 上場。
+      </p>
+
+      <h2>embedding:把 token 變成有意義的向量</h2>
+      <p>
+        把 token id 直接當數字餵進神經網路是行不通的——id=300 和 id=301 在編號上相鄰,語意上卻可能毫無關係。
+        我們需要的,是讓<strong>語意相近的 token,在某個空間裡也靠得近</strong>。這個空間,就是第 54 章的主角:<strong>向量空間</strong>。
+      </p>
+      <p>
+        <strong>embedding(詞嵌入 / 嵌入向量)</strong>做的事是:給詞彙表裡每個 token 配一個<strong>可學習的向量</strong>(例如 768 維)。
+        這些向量一開始是隨機的,但在訓練過程中會被慢慢調整,最後神奇地排出了結構:意思相近的詞,向量也相近。
+        最經典的例子,是向量之間竟然能做「語意算術」:
+      </p>
+      <p>$$\vec{v}_{\text{國王}} - \vec{v}_{\text{男人}} + \vec{v}_{\text{女人}} \approx \vec{v}_{\text{皇后}}$$</p>
+      <p>
+        這正是第 54 章「向量是空間裡的點、方向有意義」的活生生體現:在這個語意空間裡,「性別」竟然對應到一個固定的<em>方向</em>。
+        embedding 在程式裡就是一張<strong>查表</strong>:輸入 token id,查出對應那一列向量。
+      </p>
+      <pre><code class="language-python">import torch
+import torch.nn as nn
+
+vocab_size, n_embd = 5000, 768          # 詞彙表大小、每個 token 的向量維度
+token_emb = nn.Embedding(vocab_size, n_embd)   # 一張 (5000 x 768) 的可學習查表
+
+ids = torch.tensor([1, 2, 3, 3, 4])     # 上一節得到的 token id 序列(長度 5)
+vecs = token_emb(ids)                   # 查表:每個 id 換成一條 768 維向量
+print(vecs.shape)                       # torch.Size([5, 768]) ← 5 個 token、各 768 維</code></pre>
+
+      <h3>位置編碼:把「順序」也告訴模型</h3>
+      <p>
+        這裡藏著一個微妙又關鍵的問題。我們等一下要用的注意力機制,本身是「<strong>看不出順序</strong>」的——
+        對它來說,「狗咬人」和「人咬狗」裡的 token 集合一模一樣,它分不出誰先誰後。但順序顯然攸關意義!
+        所以我們必須<strong>主動把位置資訊注入向量</strong>。這就是<strong>位置編碼(positional encoding)</strong>。
+      </p>
+      <p>
+        做法直觀:再準備一張「位置」的 embedding 表——第 0 個位置一條向量、第 1 個位置一條向量……
+        然後把「token 向量」和「該位置的向量」<strong>相加</strong>。這樣同一個 token 出現在不同位置,
+        進入模型的向量就不同,模型於是「感覺得到」順序。
+      </p>
+      <pre><code class="language-python">block_size = 128                              # 模型一次能看的最大 token 數(上下文窗口)
+pos_emb = nn.Embedding(block_size, n_embd)    # 位置 0,1,2,... 各配一條向量
+
+T = ids.shape[0]                              # 目前序列長度 = 5
+pos = pos_emb(torch.arange(T))                # (5, 768):第 0~4 個位置的向量
+x = vecs + pos                                # 逐元素相加:token 含義 + 它在哪裡
+print(x.shape)                                # torch.Size([5, 768])</code></pre>
+      <p>
+        現在 <code>x</code> 裡的每一列,都同時編碼了「這是什麼 token」與「它在第幾個位置」。
+        這就是真正送進 Transformer 主體的東西。注意這裡的 <code>block_size</code>——它就是模型的<strong>上下文長度上限</strong>由來:
+        位置表只準備了這麼多列,超過就沒有位置向量可查了。
+      </p>
+
+      <h2>注意力機制:讓每個 token 去「看」其他 token</h2>
+      <p>
+        終於來到整個 Transformer 的心臟。前面我們讓每個 token 變成了一條含位置的向量,但這些向量目前還是<strong>各自獨立</strong>的——
+        「它」這個 token 的向量,還不知道前文的「它」指的是「那隻貓」還是「那台車」。語言充滿這種<strong>脈絡依賴</strong>:
+        一個詞的意思,取決於它周圍的詞。我們需要一個機制,讓每個 token 能去<strong>「看」其他 token、按相關程度蒐集資訊</strong>,
+        來更新自己。這個機制就是<strong>注意力(attention)</strong>。
+      </p>
+
+      <h3>Q、K、V:一個圖書館的比喻</h3>
+      <p>
+        想像每個 token 要去一座圖書館找資料。注意力給每個 token 算出三樣東西,都是用它的向量乘上一個可學習的權重矩陣得到的:
+      </p>
+      <ul>
+        <li><strong>Query(查詢,$Q$)</strong>:我「想找什麼」?——像你心裡的搜尋關鍵字。</li>
+        <li><strong>Key(鍵,$K$)</strong>:我「能提供什麼」?——像每本書背上的標籤。</li>
+        <li><strong>Value(值,$V$)</strong>:我「實際的內容」是什麼?——像書裡真正的資訊。</li>
+      </ul>
+      <p>
+        流程是:某個 token 拿自己的 <strong>Query</strong>,去和<em>所有</em> token 的 <strong>Key</strong> 比對相似度(用點積),
+        相似度高的代表「這本書跟我要找的很相關」;把這些相似度經過 softmax 變成一組加起來為 1 的<strong>權重</strong>;
+        最後用這組權重,去對所有 token 的 <strong>Value</strong> 做<strong>加權平均</strong>。
+        結果就是:每個 token 都「讀」了一遍全場、按相關度把別人的資訊揉進了自己——它的向量,從此帶上了脈絡。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 320" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="q1" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/></marker>
+  </defs>
+  <text x="20" y="26" font-size="14" font-weight="800" fill="#2f6f6a">注意力:token「它」如何向其他 token 蒐集資訊</text>
+  <!-- query token -->
+  <rect x="20" y="120" width="90" height="44" rx="9" fill="#ede4fb" stroke="#8b5cf6"/>
+  <text x="65" y="142" text-anchor="middle" font-size="13" font-weight="700" fill="#1f2328">「它」</text>
+  <text x="65" y="158" text-anchor="middle" font-size="11" fill="#6d28d9">Query</text>
+  <!-- keys/values -->
+  <rect x="300" y="40" width="120" height="40" rx="8" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="360" y="65" text-anchor="middle" font-size="12" fill="#1f2328">那隻 / 貓 (K,V)</text>
+  <rect x="300" y="100" width="120" height="40" rx="8" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="360" y="125" text-anchor="middle" font-size="12" fill="#1f2328">追著 (K,V)</text>
+  <rect x="300" y="160" width="120" height="40" rx="8" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="360" y="185" text-anchor="middle" font-size="12" fill="#1f2328">毛線球 (K,V)</text>
+  <rect x="300" y="220" width="120" height="40" rx="8" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="360" y="245" text-anchor="middle" font-size="12" fill="#1f2328">跑 (K,V)</text>
+  <!-- arrows with weights -->
+  <line x1="110" y1="135" x2="296" y2="60" stroke="#b4541f" stroke-width="3.5" marker-end="url(#q1)"/>
+  <text x="205" y="86" font-size="12" font-weight="800" fill="#b4541f">0.71</text>
+  <line x1="110" y1="140" x2="296" y2="120" stroke="#8a929b" stroke-width="1.3" marker-end="url(#q1)"/>
+  <text x="205" y="118" font-size="11" fill="#8a929b">0.08</text>
+  <line x1="110" y1="146" x2="296" y2="180" stroke="#8a929b" stroke-width="1.3" marker-end="url(#q1)"/>
+  <text x="205" y="170" font-size="11" fill="#8a929b">0.05</text>
+  <line x1="110" y1="152" x2="296" y2="240" stroke="#8a929b" stroke-width="1.8" marker-end="url(#q1)"/>
+  <text x="205" y="220" font-size="11" fill="#8a929b">0.16</text>
+  <!-- output -->
+  <rect x="540" y="120" width="160" height="60" rx="9" fill="#f6e7dd" stroke="#b4541f"/>
+  <text x="620" y="144" text-anchor="middle" font-size="12" fill="#1f2328">「它」的新向量</text>
+  <text x="620" y="162" text-anchor="middle" font-size="11" fill="#b4541f">= Σ 權重 × V(已知指「貓」)</text>
+  <path d="M420 150 Q480 150 536 150" fill="none" stroke="#8a929b" stroke-width="2" marker-end="url(#q1)"/>
+  <text x="430" y="300" font-size="12" fill="#4a5159">粗線 = 高注意力權重(softmax 後):「它」最關注「那隻貓」,於是學到「它=貓」</text>
+</svg>
+        <figcaption>圖 93-2:注意力的核心畫面。token「它」用自己的 Query 去比對每個 token 的 Key,得到一組 softmax 權重(粗線=權重大),再用這組權重對所有 Value 加權平均,更新自己。這就是模型「解出代名詞指誰」的方式。</figcaption>
+      </div>
+
+      <h3>公式與維度:$\text{softmax}(QK^\top/\sqrt{d_k})\,V$</h3>
+      <p>
+        把上面那段話寫成數學,就是 Transformer 原始論文〈Attention Is All You Need〉(2017)裡那條著名的式子:
+      </p>
+      <p>$$\text{Attention}(Q, K, V) = \text{softmax}\!\left(\frac{Q K^\top}{\sqrt{d_k}}\right) V$$</p>
+      <p>
+        這條式子第一次看會發暈,但只要<strong>盯著維度看</strong>,它就會變得清澈。假設我們有 $n$ 個 token,
+        每個 token 的 Query/Key 維度是 $d_k$、Value 維度是 $d_v$(常常 $d_k = d_v$)。把它們疊成矩陣:
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>符號</th><th>形狀</th><th>意思</th></tr></thead>
+        <tbody>
+          <tr><td>$Q$</td><td>$n \times d_k$</td><td>每個 token 各一條 Query(每列一個)</td></tr>
+          <tr><td>$K$</td><td>$n \times d_k$</td><td>每個 token 各一條 Key</td></tr>
+          <tr><td>$V$</td><td>$n \times d_v$</td><td>每個 token 各一條 Value</td></tr>
+          <tr><td>$K^\top$</td><td>$d_k \times n$</td><td>把 $K$ 轉置,好和 $Q$ 相乘</td></tr>
+          <tr><td>$Q K^\top$</td><td>$n \times n$</td><td><strong>注意力分數</strong>:第 $i$ 列第 $j$ 行 = token $i$ 的 Query 和 token $j$ 的 Key 的點積</td></tr>
+          <tr><td>$\text{softmax}(\cdot)$</td><td>$n \times n$</td><td>對每一<strong>列</strong>做 softmax,使每列權重加起來為 1</td></tr>
+          <tr><td>$\text{softmax}(\cdot)\,V$</td><td>$n \times d_v$</td><td><strong>輸出</strong>:每個 token 一條「揉進脈絡後」的新向量</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>
+        關鍵的維度檢查:$Q$ 是 $n \times d_k$、$K^\top$ 是 $d_k \times n$,相乘得到 $n \times n$ 的<strong>分數矩陣</strong>——
+        裡頭裝著「每個 token 對每個 token」的相關度,共 $n^2$ 個數字(這就是為什麼上下文越長、計算量是<strong>平方</strong>成長,長文本特別吃資源)。
+        softmax 不改變形狀,還是 $n \times n$;再乘上 $V$($n \times d_v$),維度上 $(n \times n)(n \times d_v) = n \times d_v$——
+        輸出 token 數不變、每個 token 一條新向量。<strong>進去 $n$ 個 token,出來還是 $n$ 個 token,只是每個都更新過了。</strong>
+      </p>
+
+      <h3>為什麼要除以 $\sqrt{d_k}$?</h3>
+      <p>
+        這個 $\sqrt{d_k}$ 的縮放,常被當成「不知道為什麼但照抄」的細節,其實它的理由很扎實。
+        $Q$ 和 $K$ 的點積,是 $d_k$ 個乘積的<strong>加總</strong>。假設 $Q$、$K$ 的每個分量大致是均值 0、變異數 1 的獨立隨機數,
+        那麼它們點積的<strong>變異數會正比於 $d_k$</strong>(把 $d_k$ 個變異數 1 的東西加起來),標準差就是 $\sqrt{d_k}$。
+      </p>
+      <p>
+        當 $d_k$ 很大(例如 64、128),點積的數值就會被放得很大很大。而 softmax 一旦吃到「某個值遠大於其他值」,
+        會把幾乎全部機率壓到那一個上,輸出趨近一個 one-hot 向量——這時 softmax <strong>進入飽和區、梯度趨近 0</strong>,
+        模型就「學不動」了(這正是第 38 章 sigmoid 飽和、梯度消失的老問題)。
+        除以 $\sqrt{d_k}$,恰好把點積的標準差拉回到 1 附近,讓 softmax 待在「斜率健康、梯度充足」的區間。
+        一句話:<strong>$\sqrt{d_k}$ 是為了穩住 softmax,不讓它因為維度一大就梯度消失。</strong>
+      </p>
+
+      <h3>自注意力 vs 因果遮罩:不准偷看未來</h3>
+      <p>
+        當 $Q$、$K$、$V$ 全都來自<strong>同一串 token 自己</strong>(每個 token 既是查詢者、也是被查的對象),這叫<strong>自注意力(self-attention)</strong>——
+        這也是 GPT 用的。但這裡有個致命問題:GPT 的任務是<strong>預測下一個 token</strong>。如果在預測第 3 個 token 時,
+        注意力允許第 3 個位置去「看」第 4、第 5 個 token,那不就<strong>偷看到答案</strong>了嗎?訓練出來的模型一上線(沒有未來可看)就會廢掉。
+      </p>
+      <p>
+        解法是<strong>因果遮罩(causal mask)</strong>:在做 softmax <em>之前</em>,把分數矩陣裡所有「未來位置」(第 $i$ 列中 $j &gt; i$ 的那些格子)
+        強制設成 $-\infty$。因為 $e^{-\infty} = 0$,softmax 之後這些位置的權重<strong>剛好變成 0</strong>——等於每個 token 只被允許看「自己和前面」、看不到後面。
+        因為遮掉的恰好是分數矩陣的上三角,所以你也會聽到「下三角遮罩」這個說法。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">因果遮罩 = GPT 的「不准偷看未來」</span>
+          <p>GPT 屬於 <strong>decoder-only</strong> 架構,每個位置只能注意到它<strong>左邊(含自己)</strong>的 token。
+          這保證了「預測下一個 token」這個任務在訓練與推論時行為一致。(相對地,BERT 那類<strong>雙向</strong>模型沒有這個遮罩,
+          每個 token 能看左右兩邊,因為它的任務不是生成、而是理解——這是兩種模型的根本分歧。)</p>
+        </div>
+      </div>
+
+      <h2>Softmax:把一排分數變成機率分佈</h2>
+      <p>
+        我們在注意力裡用了兩次 softmax,在語言模型的最後輸出也要用它。它是整個 LLM 反覆出現的關鍵零件,
+        卻是第 38 章(只做到二元的 sigmoid)沒講透的一塊。現在補上。
+      </p>
+      <p>
+        <strong>Softmax</strong> 解決的問題是:我手上有一排<strong>任意實數</strong>分數(可正可負、大小不一),
+        想把它們變成一個<strong>合法的機率分佈</strong>(每個都在 0 到 1 之間、全部加起來等於 1)。公式是:
+      </p>
+      <p>$$\text{softmax}(z)_i = \frac{e^{z_i}}{\sum_{j} e^{z_j}}$$</p>
+      <p>
+        拆開看就三步:(1) 每個分數取 <strong>$e$ 的次方</strong>,把它變成正數,而且「大的變得更突出」(指數放大差距);
+        (2) 把所有指數值<strong>加起來</strong>當分母;(3) 各自除以這個總和來<strong>歸一化</strong>。
+        sigmoid 其實就是只有兩類時的 softmax 特例——所以你早在第 38 章就見過它的弟弟了。
+      </p>
+      <pre><code class="language-python">import torch
+import torch.nn.functional as F
+
+scores = torch.tensor([1.0, 3.0, 2.0])   # 三個任意分數(例如對 3 個 token 的注意力分數)
+probs = F.softmax(scores, dim=-1)         # dim=-1:沿最後一維歸一化
+print(probs)                              # tensor([0.0900, 0.6652, 0.2447])
+print(probs.sum())                        # tensor(1.0000) ← 是合法機率分佈
+
+# 手算驗證:e^1=2.718, e^3=20.086, e^2=7.389,總和 30.193
+# 2.718/30.193=0.090,  20.086/30.193=0.665,  7.389/30.193=0.245 ✓</code></pre>
+      <p>
+        在語言模型的<strong>最後一步</strong>,模型對詞彙表裡每個 token 算出一個分數(叫 <strong>logits</strong>),
+        再用 softmax 把這 5 萬個分數變成 5 萬個機率——這就是本章一開始那個 $P(t_{n+1} \mid \dots)$。
+        順帶一提,你在 API 裡調的 <strong>temperature(溫度)</strong> 參數,做的就是在 softmax 前把 logits 除以一個溫度值:
+        溫度越高、分佈越平、輸出越隨機有創意;溫度越低、分佈越尖、輸出越保守確定。
+      </p>
+
+      <h2>Transformer block:把注意力堆成一座塔</h2>
+      <p>
+        單一個注意力層還不夠強。真正的 GPT,是把注意力和幾個夥伴打包成一個<strong>Transformer block(區塊)</strong>,
+        再把這個 block <strong>疊很多層</strong>(GPT-3 疊了 96 層)。一個標準的 block 裡有四個元件:
+      </p>
+      <ul>
+        <li><strong>多頭注意力(multi-head attention)</strong>:與其做一次注意力,不如<em>並行</em>做好幾次(好幾個「頭」),
+        每個頭用自己的一組 Q/K/V 權重,各自學會關注不同面向(有的頭管文法、有的頭管指代、有的頭管長距離關係),最後把各頭的輸出拼接起來。</li>
+        <li><strong>前饋網路(feed-forward network,FFN)</strong>:注意力之後,每個 token 各自過一個小型的兩層全連接網路(中間夾一個非線性激活,如 ReLU/GELU),
+        負責「消化」剛剛蒐集來的脈絡資訊。這裡用的就是第 38 章的全連接層與激活函數。</li>
+        <li><strong>殘差連接(residual connection)</strong>:把「子層的輸入」直接加到「子層的輸出」上($x + \text{sublayer}(x)$)。
+        這條「捷徑」讓梯度能順暢地流過很深的網路,是能堆到上百層而不會訓練崩掉的關鍵(和第 67 章 ResNet 的殘差是同一招)。</li>
+        <li><strong>層正規化(LayerNorm)</strong>:把每個 token 向量的數值重新縮放到穩定範圍,讓訓練更平順、更快收斂。</li>
+      </ul>
+
+      <div class="diagram">
+<svg viewBox="0 0 700 430" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="b1" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/></marker>
+  </defs>
+  <text x="350" y="26" text-anchor="middle" font-size="14" font-weight="800" fill="#2f6f6a">一個 Transformer block(GPT 把它疊 N 層)</text>
+  <!-- input -->
+  <rect x="270" y="40" width="160" height="34" rx="8" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="350" y="62" text-anchor="middle" font-size="12" fill="#1f2328">輸入:含位置的向量 x</text>
+  <line x1="350" y1="74" x2="350" y2="92" stroke="#8a929b" stroke-width="2" marker-end="url(#b1)"/>
+  <!-- LN1 -->
+  <rect x="280" y="92" width="140" height="30" rx="7" fill="#f3f5f4" stroke="#8a929b"/>
+  <text x="350" y="112" text-anchor="middle" font-size="12" fill="#1f2328">LayerNorm</text>
+  <line x1="350" y1="122" x2="350" y2="138" stroke="#8a929b" stroke-width="2" marker-end="url(#b1)"/>
+  <!-- attention -->
+  <rect x="250" y="138" width="200" height="40" rx="8" fill="#ede4fb" stroke="#8b5cf6"/>
+  <text x="350" y="163" text-anchor="middle" font-size="13" font-weight="700" fill="#6d28d9">多頭因果自注意力</text>
+  <!-- residual 1 -->
+  <circle cx="350" cy="200" r="14" fill="#fff" stroke="#b4541f" stroke-width="2"/>
+  <text x="350" y="205" text-anchor="middle" font-size="15" font-weight="800" fill="#b4541f">+</text>
+  <line x1="350" y1="178" x2="350" y2="186" stroke="#8a929b" stroke-width="2" marker-end="url(#b1)"/>
+  <path d="M270 57 Q150 57 150 200 Q150 200 334 200" fill="none" stroke="#b4541f" stroke-width="2" stroke-dasharray="5 3" marker-end="url(#b1)"/>
+  <text x="120" y="130" font-size="11" fill="#b4541f" font-weight="700">殘差捷徑</text>
+  <line x1="350" y1="214" x2="350" y2="232" stroke="#8a929b" stroke-width="2" marker-end="url(#b1)"/>
+  <!-- LN2 -->
+  <rect x="280" y="232" width="140" height="30" rx="7" fill="#f3f5f4" stroke="#8a929b"/>
+  <text x="350" y="252" text-anchor="middle" font-size="12" fill="#1f2328">LayerNorm</text>
+  <line x1="350" y1="262" x2="350" y2="278" stroke="#8a929b" stroke-width="2" marker-end="url(#b1)"/>
+  <!-- FFN -->
+  <rect x="250" y="278" width="200" height="40" rx="8" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="350" y="303" text-anchor="middle" font-size="13" font-weight="700" fill="#2f6f6a">前饋網路 FFN(+ReLU)</text>
+  <!-- residual 2 -->
+  <circle cx="350" cy="340" r="14" fill="#fff" stroke="#b4541f" stroke-width="2"/>
+  <text x="350" y="345" text-anchor="middle" font-size="15" font-weight="800" fill="#b4541f">+</text>
+  <line x1="350" y1="318" x2="350" y2="326" stroke="#8a929b" stroke-width="2" marker-end="url(#b1)"/>
+  <path d="M450 217 Q560 217 560 340 Q560 340 364 340" fill="none" stroke="#b4541f" stroke-width="2" stroke-dasharray="5 3" marker-end="url(#b1)"/>
+  <line x1="350" y1="354" x2="350" y2="372" stroke="#8a929b" stroke-width="2" marker-end="url(#b1)"/>
+  <!-- output -->
+  <rect x="270" y="372" width="160" height="34" rx="8" fill="#f6e7dd" stroke="#b4541f"/>
+  <text x="350" y="394" text-anchor="middle" font-size="12" fill="#1f2328">輸出:更新後的向量</text>
+</svg>
+        <figcaption>圖 93-3:一個 Transformer block 的結構。輸入向量先過 LayerNorm 與多頭注意力、加回殘差;再過 LayerNorm 與前饋網路、再加回殘差。輸出維度和輸入完全一樣,所以可以一層接一層無限堆疊——這就是 GPT 的主體。</figcaption>
+      </div>
+
+      <p>
+        關鍵在於:<strong>block 的輸入與輸出維度完全相同</strong>($n$ 個 token、各 $d$ 維),所以它能像樂高一樣一層疊一層。
+        token 向量每經過一層,就「揉進」更多脈絡、變得更懂自己在這句話裡的角色。疊得夠深,模型就能捕捉極其細緻的語言結構。
+      </p>
+
+      <h2>預訓練 vs 微調:模型是怎麼「煉」出來的</h2>
+      <p>
+        架構講完了,但一個隨機初始化的 Transformer 什麼都不會。它怎麼變成會聊天的 ChatGPT?經過三個階段——
+        訓練機制全是第 38 章的<a href="38-machine-learning.html">梯度下降 + 反向傳播</a>,差別只在「資料」和「目標」:
+      </p>
+      <ol>
+        <li><strong>預訓練(pre-training)</strong>:餵進<strong>海量文字</strong>(整個網路等級的資料),
+        讓模型反覆做「遮住下一個 token、預測它、和真正的 token 比、用交叉熵當損失、反向傳播調參數」。
+        因為「答案」就是文字裡本來的下一個 token,<strong>不需要人工標註</strong>,所以叫<strong>自監督學習</strong>。
+        這一步最貴(動輒上千萬美元的算力),煉出的是一個「博學但不聽話」的<strong>基礎模型(base model)</strong>——
+        它很會接話,但你問它問題,它可能回你「更多類似的問題」,因為網路上的文字就長那樣。</li>
+        <li><strong>指令微調(instruction fine-tuning / SFT)</strong>:用一批「人寫的(指令 → 理想回答)」高品質範例繼續訓練,
+        教模型「當別人問你問題時,要<em>回答</em>,而不是接話」。這一步讓基礎模型變成一個聽得懂指令的<strong>助理</strong>。</li>
+        <li><strong>RLHF(基於人類回饋的強化學習)</strong>:讓模型對同一問題生成多個回答,由人(或一個學人偏好的「獎勵模型」)排序好壞,
+        再用強化學習(第 38 章的第三類學習)把模型朝「人更喜歡的回答」推。這一步雕琢的是語氣、安全性、有用程度——
+        讓模型不只「會答」,還「答得體貼、不亂來」。</li>
+      </ol>
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">這解釋了你 agent 裡的兩件事</span>
+          <p>第一,為什麼模型「不知道最新消息」——它的知識凍結在預訓練資料的截止日;要補,得靠你在第 96 章學的 <strong>RAG(檢索增強)</strong>把外部資料塞進上下文。
+          第二,為什麼「prompt 寫得好不好」影響這麼大——模型本質是條件機率 $P(\text{下一個 token} \mid \text{上下文})$,
+          你給的 prompt 就是那個「條件」,條件一變、整個分佈就變。<strong>prompt engineering 不是玄學,是在調整機率的條件。</strong></p>
+        </div>
+      </div>
+
+      <h2>概念性手刻 mini-GPT(教學最小版)</h2>
+      <p>
+        現在把所有零件組起來,寫一個<strong>能跑、但刻意極簡</strong>的 mini-GPT。把前面所有概念串成程式碼,
+        你會發現它短得驚人。先看單頭因果自注意力——這是整段最核心的部分,把注意力公式逐行翻成 PyTorch:
+      </p>
+      <pre><code class="language-python">import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class CausalSelfAttention(nn.Module):
+    """單頭因果自注意力(教學最小版;真實 GPT 用多頭)。"""
+    def __init__(self, n_embd, head_size, block_size):
+        super().__init__()
+        self.key   = nn.Linear(n_embd, head_size, bias=False)   # 產生 K
+        self.query = nn.Linear(n_embd, head_size, bias=False)   # 產生 Q
+        self.value = nn.Linear(n_embd, head_size, bias=False)   # 產生 V
+        # 下三角遮罩(buffer,不是可學參數):位置 i 只允許看 j ≤ i
+        self.register_buffer("tril", torch.tril(torch.ones(block_size, block_size)))
+
+    def forward(self, x):
+        B, T, C = x.shape           # batch、序列長度、embedding 維度
+        q = self.query(x)           # (B, T, head_size)
+        k = self.key(x)             # (B, T, head_size)
+        v = self.value(x)           # (B, T, head_size)
+        d_k = k.shape[-1]
+        # 注意力分數 QKᵀ / √d_k → (B, T, T)
+        wei = q @ k.transpose(-2, -1) * d_k ** -0.5
+        # 因果遮罩:把「未來」位置設成 -∞,softmax 後權重恰好變 0
+        wei = wei.masked_fill(self.tril[:T, :T] == 0, float("-inf"))
+        wei = F.softmax(wei, dim=-1)   # 每一列變成機率分佈 (B, T, T)
+        out = wei @ v                  # 加權平均 Value → (B, T, head_size)
+        return out</code></pre>
+      <p>對照前面的公式:<code>q @ k.transpose(-2, -1)</code> 就是 $QK^\top$、<code>* d_k ** -0.5</code> 就是除以 $\sqrt{d_k}$、
+      <code>masked_fill(..., float("-inf"))</code> 就是因果遮罩、<code>F.softmax(..., dim=-1)</code> 就是 softmax、最後 <code>wei @ v</code> 就是乘上 $V$。
+      一行一行,正是那條式子。接著把它包進一個 Transformer block:</p>
+      <pre><code class="language-python">class TransformerBlock(nn.Module):
+    def __init__(self, n_embd, head_size, block_size):
+        super().__init__()
+        self.ln1  = nn.LayerNorm(n_embd)
+        self.attn = CausalSelfAttention(n_embd, head_size, block_size)
+        self.ln2  = nn.LayerNorm(n_embd)
+        self.ff   = nn.Sequential(                  # 前饋網路:放大 4 倍再壓回
+            nn.Linear(n_embd, 4 * n_embd),
+            nn.ReLU(),
+            nn.Linear(4 * n_embd, n_embd),
+        )
+
+    def forward(self, x):
+        x = x + self.attn(self.ln1(x))   # 殘差 + 注意力(先 LayerNorm)
+        x = x + self.ff(self.ln2(x))     # 殘差 + 前饋網路
+        return x</code></pre>
+      <p>最後把 embedding、位置編碼、block、輸出頭組成完整 mini-GPT:</p>
+      <pre><code class="language-python">class MiniGPT(nn.Module):
+    def __init__(self, vocab_size, n_embd, block_size, head_size):
+        super().__init__()
+        self.token_emb = nn.Embedding(vocab_size, n_embd)   # token id → 向量
+        self.pos_emb   = nn.Embedding(block_size, n_embd)   # 位置 → 向量
+        self.block     = TransformerBlock(n_embd, head_size, block_size)
+        self.ln_f      = nn.LayerNorm(n_embd)
+        self.head      = nn.Linear(n_embd, vocab_size)      # 輸出頭:向量 → 每個 token 的分數(logits)
+
+    def forward(self, idx):
+        B, T = idx.shape
+        tok = self.token_emb(idx)              # (B, T, n_embd)
+        pos = self.pos_emb(torch.arange(T))    # (T, n_embd)
+        x = tok + pos                          # 把位置資訊加進去
+        x = self.block(x)                      # 一層 Transformer block(真實 GPT 疊很多層)
+        x = self.ln_f(x)
+        logits = self.head(x)                  # (B, T, vocab_size)
+        return logits
+
+# 推論:取「最後一個位置」的 logits,過 softmax 得下一個 token 的機率分佈
+model = MiniGPT(vocab_size=5000, n_embd=64, block_size=128, head_size=64)
+idx = torch.randint(0, 5000, (1, 10))          # 假裝有一段 10 個 token 的輸入
+logits = model(idx)                            # (1, 10, 5000)
+next_token_logits = logits[:, -1, :]           # 只看最後一格 → (1, 5000)
+probs = F.softmax(next_token_logits, dim=-1)   # → 下一個 token 的機率分佈
+print(probs.shape)                             # torch.Size([1, 5000])</code></pre>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">誠實聲明:這是「教學最小版」,不是真的 GPT</span>
+          <p>上面的程式碼是為了<strong>看懂原理</strong>而刻意極簡的:單頭(真實 GPT 是多頭並行)、只疊一層(GPT-3 疊 96 層)、
+          沒有 dropout、沒有訓練迴圈、沒有真正的 BPE tokenizer、沒有任何效能最佳化。它能讓你<strong>看清資料怎麼流動</strong>,
+          但離一個能用的模型還很遠。想看「麻雀雖小、五臟俱全、真的能訓練出會講話的模型」的完整版,業界公認的兩個最佳起點是:
+          Andrej Karpathy 的 <a href="https://github.com/karpathy/nanoGPT">nanoGPT</a>(約 300 行、能在莎士比亞文本上訓練),
+          以及 Sebastian Raschka 的 <a href="https://github.com/rasbt/LLMs-from-scratch">LLMs-from-scratch</a>(一本書的篇幅,從零帶你寫出並訓練一個 GPT)。
+          強烈建議跟著敲一遍——你會對這章的每個概念有脫胎換骨的理解。</p>
+        </div>
+      </div>
+
+      <h2>Transformer 與 CNN:別把兩種「深度學習」搞混</h2>
+      <p>
+        你在第 67 章看過另一種紅透半邊天的深度網路:<strong>卷積神經網路(CNN)</strong>。它和這章的 Transformer 都叫「深度學習」、
+        都會「學特徵」、都用反向傳播訓練——但它們是為<strong>完全不同的資料</strong>設計的,核心機制南轅北轍。別把它們混為一談。
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th></th><th>CNN(第 67 章)</th><th>Transformer(本章)</th></tr></thead>
+        <tbody>
+          <tr><td><strong>擅長的資料</strong></td><td>影像(有<em>空間</em>結構的網格)</td><td>文本 / 序列(有<em>順序</em>的 token 串)</td></tr>
+          <tr><td><strong>核心機制</strong></td><td>卷積:用小的核掃過鄰近像素,抓<strong>局部</strong>紋理</td><td>注意力:每個 token 直接和<strong>全場</strong>任意 token 互動</td></tr>
+          <tr><td><strong>關係的距離</strong></td><td>靠堆疊層數,才能慢慢看到較大範圍</td><td>一層之內,任意兩個 token 就能直接連上</td></tr>
+          <tr><td><strong>位置觀念</strong></td><td>卷積天生帶有空間位置(像素鄰接)</td><td>注意力看不出順序,要<strong>額外加位置編碼</strong></td></tr>
+          <tr><td><strong>典型輸出</strong></td><td>類別、框、分割遮罩</td><td>下一個 token 的機率分佈</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">face embedding ≠ text embedding</span>
+          <p>兩章都出現了「embedding」這個詞,但別被同名騙了。第 67 章的<strong>人臉 embedding</strong>,
+          是 <strong>CNN</strong> 把一張<em>臉的影像</em>壓成的向量,用來比對「兩張臉像不像」;本章的<strong>文本 embedding</strong>,
+          是把一個<em>文字 token</em> 對應到的向量,捕捉的是<em>語意</em>。兩者都是「把東西變成向量,好比較距離」的同一<strong>思想</strong>
+          (都根植於第 54 章的向量空間),但<strong>產生它的網路、輸入的資料、捕捉的意義完全不同</strong>。
+          看到「embedding」要先問一句:是誰、為什麼東西算的?</p>
+        </div>
+      </div>
+
+      <h2>練習</h2>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 93.1 <span class="badge">計算</span></div>
+        <div class="ex-body">
+          <p>某個 query token 對 3 個 key 算出的<strong>已縮放</strong>注意力分數是 $\mathbf{s} = [1,\ 3,\ 2]$,
+          三個 token 的 Value 向量分別是 $\mathbf{v}_1=[1,0]$、$\mathbf{v}_2=[0,1]$、$\mathbf{v}_3=[1,1]$。
+          (a) 手算 softmax 後的三個注意力權重。(b) 算出注意力輸出向量(權重對 Value 的加權平均)。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>(a)</strong> 套 $\text{softmax}(z)_i = e^{z_i}/\sum_j e^{z_j}$:</p>
+              <p>$e^1 = 2.718$,$e^3 = 20.086$,$e^2 = 7.389$,總和 $= 30.193$。</p>
+              <p>權重 $= [\,2.718/30.193,\ 20.086/30.193,\ 7.389/30.193\,] \approx [0.090,\ 0.665,\ 0.245]$(加起來 = 1 ✓)。</p>
+              <p><strong>(b)</strong> 輸出 $= 0.090\,[1,0] + 0.665\,[0,1] + 0.245\,[1,1]$。</p>
+              <p>第一維:$0.090 + 0 + 0.245 = 0.335$;第二維:$0 + 0.665 + 0.245 = 0.910$。所以輸出 $\approx [0.335,\ 0.910]$。</p>
+              <p>直覺:第二個 token 分數最高($s=3$)、權重最大(0.665),所以輸出最靠近 $\mathbf{v}_2=[0,1]$——
+              注意力「最關注」誰,輸出就最像誰的 Value。用程式驗證:</p>
+              <pre><code class="language-python">import torch, torch.nn.functional as F
+s = torch.tensor([1., 3., 2.])
+w = F.softmax(s, dim=-1)                 # tensor([0.0900, 0.6652, 0.2447])
+V = torch.tensor([[1.,0.], [0.,1.], [1.,1.]])
+print(w @ V)                             # tensor([0.3347, 0.9100])</code></pre>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 93.2 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>注意力公式裡為什麼要除以 $\sqrt{d_k}$?如果<strong>不除</strong>、而且 $d_k$ 很大(例如 256),
+          softmax 的輸出與梯度會發生什麼事?這和第 38 章的哪個老問題是同一回事?</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>$Q$ 與 $K$ 的點積是 $d_k$ 個分量乘積的<strong>加總</strong>。若各分量大致是均值 0、變異數 1 的獨立隨機數,
+              則點積的變異數正比於 $d_k$、標準差約為 $\sqrt{d_k}$。$d_k$ 一大,點積數值就會被放得很大。</p>
+              <p>把很大的數丟進 softmax,會讓某一格的機率<strong>趨近 1、其餘趨近 0</strong>(分佈變得極尖、近乎 one-hot)。
+              這時 softmax 落入<strong>飽和區:對輸入的變化幾乎不反應,梯度趨近 0</strong>,模型學不動。</p>
+              <p>這正是第 38 章 <strong>sigmoid 飽和導致梯度消失</strong>的同一個毛病。除以 $\sqrt{d_k}$ 把點積的標準差拉回 1 附近,
+              讓 softmax 待在斜率健康、梯度充足的區間,訓練才穩。一句話:$\sqrt{d_k}$ 是<strong>穩定 softmax 梯度的縮放</strong>。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 93.3 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>(a) 因果遮罩(causal mask)具體怎麼做、為什麼能「防止 token 偷看未來」?
+          (b) 對一個 4-token 的序列,寫出注意力分數矩陣($4\times4$)裡哪些位置會被遮成 $-\infty$。
+          (c) 如果<strong>拿掉</strong>因果遮罩,拿這種模型去做「預測下一個 token」的訓練,上線後會出什麼問題?</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>(a)</strong> 在 softmax <em>之前</em>,把分數矩陣第 $i$ 列中所有「未來位置」($j &gt; i$)設成 $-\infty$。
+              因為 $e^{-\infty}=0$,softmax 後這些位置的權重<strong>恰好為 0</strong>,等於 token $i$ 對未來 token 的注意力是 0——看不到後面。</p>
+              <p><strong>(b)</strong> 被遮的是<strong>嚴格上三角</strong>(行號 $j$ 大於列號 $i$)。以 ✗ 表示被遮、✓ 表示保留(列 = query 位置 0~3):</p>
+              <pre><code class="language-text">        j=0  j=1  j=2  j=3
+i=0      ✓    ✗    ✗    ✗      (位置 0 只看得到自己)
+i=1      ✓    ✓    ✗    ✗
+i=2      ✓    ✓    ✓    ✗
+i=3      ✓    ✓    ✓    ✓      (位置 3 看得到全部前文)</code></pre>
+              <p>保留的恰好是下三角(含對角線),所以也叫「下三角遮罩」。</p>
+              <p><strong>(c)</strong> 訓練時若不遮,預測第 $i$ 個 token 時模型能看到第 $i{+}1, i{+}2, \dots$ 也就是<strong>答案本身</strong>,
+              損失會低得不真實(模型只是把答案抄過來)。但上線生成時<strong>未來根本還不存在</strong>,模型一旦少了偷看的答案就完全不會預測——
+              訓練與推論行為不一致,模型實際上沒學到東西。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 93.4 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>承本章的 mini-GPT。設 batch 大小 $B=2$、序列長度 $T=10$、embedding 維度 $n\_embd=64$、head_size $=64$、詞彙表 $vocab=5000$。
+          請寫出資料流經以下各點時的<strong>張量形狀</strong>:(a) <code>token_emb(idx)</code> 之後;(b) 注意力分數 <code>wei</code>(softmax 前);
+          (c) 注意力輸出 <code>out</code>;(d) 最終 <code>logits</code>;(e) 取最後一格、過 softmax 後的「下一個 token 機率」。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <ul>
+                <li><strong>(a)</strong> <code>token_emb(idx)</code>:輸入 idx 是 $(B, T) = (2, 10)$,查表後每個 token 變 64 維 → $(2, 10, 64)$。加上位置編碼後形狀不變。</li>
+                <li><strong>(b)</strong> <code>wei = q @ k.transpose(-2,-1)</code>:$q,k$ 各 $(2,10,64)$,$k^\top$ 為 $(2,64,10)$,相乘 → $(2, 10, 10)$。這就是每個 token 對每個 token 的分數($T\times T$)。</li>
+                <li><strong>(c)</strong> <code>out = wei @ v</code>:$(2,10,10)$ 乘 $v\,(2,10,64)$ → $(2, 10, 64)$。注意 token 數 10 不變、每個 token 一條新向量。</li>
+                <li><strong>(d)</strong> <code>logits = head(x)</code>:輸出頭把 64 維映到 vocab → $(2, 10, 5000)$。</li>
+                <li><strong>(e)</strong> <code>logits[:, -1, :]</code> 取最後一格 → $(2, 5000)$;過 softmax 形狀不變,仍是 $(2, 5000)$,且每一列加起來為 1。</li>
+              </ul>
+              <p>核心心得:注意力<strong>不改變 token 數量</strong>($T$ 進、$T$ 出),只更新每個 token 的向量內容;
+              真正把「向量」翻譯成「詞彙表上機率」的,是最後的輸出頭 + softmax。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>把這一章串起來</h2>
+      <p>我們把那個你天天在 agent 裡呼叫、卻看不清的黑箱,從外到內拆了一遍。回顧這趟旅程的路標:</p>
+      <ul>
+        <li><strong>本質</strong>:LLM 是一台「預測下一個 token 機率分佈」的機器,靠<strong>自迴歸</strong>一個接一個生成。幻覺、上下文上限、prompt 敏感,全是這個本質的直接後果。</li>
+        <li><strong>tokenization</strong>:文字被 BPE 切成子詞 token、再變成整數 id;token 不是字也不是詞,API 按它計費。</li>
+        <li><strong>embedding + 位置編碼</strong>:token id 查表成向量,語意近則向量近(第 54 章的向量空間);注意力看不出順序,所以要把位置向量加進去。</li>
+        <li><strong>注意力</strong>:$\text{softmax}(QK^\top/\sqrt{d_k})V$。Q 查、K 比、V 取;$QK^\top$ 是 $n\times n$ 的分數、softmax 成權重、加權平均 V。除以 $\sqrt{d_k}$ 是為了穩住 softmax 梯度;<strong>因果遮罩</strong>讓 GPT 不能偷看未來。</li>
+        <li><strong>Softmax</strong>:把一排任意分數變成合法機率分佈(補上第 38 章的拼圖),temperature 就是在它之前縮放 logits。</li>
+        <li><strong>Transformer block</strong>:多頭注意力 + 前饋網路 + 殘差 + LayerNorm,輸入輸出同維、可無限堆疊,就是 GPT 的主體。</li>
+        <li><strong>訓練三階段</strong>:自監督<strong>預訓練</strong> → 指令<strong>微調</strong> → <strong>RLHF</strong>,機制全是第 38 章的梯度下降 + 反向傳播 + 強化學習。</li>
+        <li><strong>mini-GPT</strong>:我們用幾十行 PyTorch 把這些零件串了起來——但它是<em>教學最小版</em>,真正能訓練的完整版請看 nanoGPT 與 LLMs-from-scratch。</li>
+        <li><strong>CNN vs Transformer</strong>:卷積抓影像局部、注意力連文本全場;face embedding 與 text embedding 同思想、不同網路。別搞混。</li>
+      </ul>
+      <p>
+        現在,當你的 agent 呼叫那個 <code>chat()</code>,你不再面對一團魔法。你知道對面是一台 Transformer,
+        它正把你的 prompt 切成 token、嵌成向量、用注意力反覆揉進脈絡,最後在詞彙表上算出一個機率分佈、抽一個 token 接上去——
+        週而復始。你看得見它為什麼會忘、為什麼會掰、為什麼吃 prompt。<strong>這份「看得見」,就是你做好 agent 工程的底氣。</strong>
+        接下來在<strong>第 94 章《手刻你的 LLM client》</strong>,我們就把這台機器當成一個服務,親手寫程式去呼叫它——
+        從這一章的「裡面怎麼運作」,正式走向「外面怎麼使用」。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">📚</div>
+        <div class="body">
+          <span class="c-title">想更深入?延伸資源</span>
+          <p>動手寫一個能訓練的版本,首選 Andrej Karpathy 的 <a href="https://github.com/karpathy/nanoGPT">nanoGPT</a>
+          與他的 YouTube 影片〈Let's build GPT: from scratch〉,以及 Sebastian Raschka 的書/程式碼
+          <a href="https://github.com/rasbt/LLMs-from-scratch">LLMs-from-scratch</a>。理論源頭請讀 Vaswani 等人 2017 年的論文
+          <a href="https://arxiv.org/abs/1706.03762">Attention Is All You Need</a>。想要絕佳的視覺化直覺,
+          3Blue1Brown 的深度學習系列(尤其談 Transformer 與注意力的幾集)是全網最好的。
+          本章複用的訓練機制(反向傳播、梯度下降、激活函數)在<a href="38-machine-learning.html">第 38 章《機器學習》</a>;
+          向量空間與相似度在<a href="54-linear-algebra.html">第 54 章《線性代數》</a>;
+          而與本章明確區隔的 CNN/影像深度學習在<a href="67-cv-deep-learning.html">第 67 章《深度學習視覺》</a>。</p>
+        </div>
+      </div>
+</article>
+  </main>
+</div>
+<script src="../assets/book.js"></script>
+</body>
+</html>

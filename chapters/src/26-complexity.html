@@ -1,0 +1,1564 @@
+<!--meta
+title: 漸進複雜度與分析
+description: 把第 5 章的 Big-O 直覺正式化:漸進分析的核心思想、大 O / Ω / Θ 的嚴謹定義、複雜度動物園、如何讀出一段程式的複雜度、最壞/平均/最佳情況、時間與空間的取捨、動態陣列的攤銷分析,以及用 Python 計時實驗驗證理論。
+-->
+
+
+      <div class="eyebrow">第六部 · 演算法與資料結構</div>
+      <h1>漸進複雜度與分析</h1>
+      <p class="subtitle">同一台電腦、同一段程式,今天跑得飛快,明天換個輸入卻卡到天荒地老。我們究竟在「測量」演算法的什麼?這一章,我們把第 5 章那個「資料變大,時間變幾倍」的直覺,鍛造成一把精密、可證明的數學量尺。</p>
+      <div class="byline">
+        <span class="tag">第 26 章</span>
+        <span>閱讀時間 ≈ 45 分鐘</span>
+        <span>難度:★★★★☆</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>為什麼「測秒數」沒辦法公平衡量一個演算法,我們真正該測的是什麼</li>
+          <li>漸進分析(asymptotic analysis)的核心思想:只看夠大的 $n$、只看主導項</li>
+          <li>大 O、大 Ω、大 Θ 的<strong>嚴謹定義</strong>,以及「O 是上界不是緊界」這個常見誤解</li>
+          <li>從 $O(1)$ 到 $O(n!)$ 的複雜度動物園,以及指數成長有多恐怖</li>
+          <li>怎麼「讀」一段程式碼,直接看出它的複雜度</li>
+          <li>最壞 / 平均 / 最佳情況,為什麼我們通常盯著最壞情況</li>
+          <li>時間與空間的取捨,以及動態陣列 <code>append</code> 為何「攤銷」起來是 $O(1)$</li>
+          <li>怎麼用 Python 計時實驗,親眼驗證理論預測的成長趨勢</li>
+        </ul>
+      </div>
+
+      <h2>一個無法重現的「實驗」</h2>
+      <p>
+        想像兩位工程師在吵架。小美說她的搜尋程式「只花了 0.3 秒」,小強說他的「只花了 0.1 秒」,
+        於是大家認定小強的演算法比較好。但等一下——小強用的是公司最新的工作站,小美用的是五年前的筆電;
+        小強寫的是 C,小美寫的是 Python;小強測的資料剛好讓答案出現在第一筆,小美那次資料則是最壞情況。
+        這場比較,根本沒有比到「演算法」本身。
+      </p>
+      <p>
+        這正是第 5 章埋下的伏筆。當時我們用「資料變大 10 倍,時間變幾倍」建立了 Big-O 的直覺,
+        並答應你:那些 $\exists\, c, n_0$ 的嚴謹數學,留到第 26 章。現在,我們把帳結清。
+      </p>
+      <p>
+        為什麼「測秒數」這件事這麼不可靠?因為跑出來的秒數,同時被三個跟演算法無關的因素污染:
+      </p>
+      <ul>
+        <li><strong>硬體</strong>:CPU 時脈、快取大小、記憶體速度——換台機器,數字全變。</li>
+        <li><strong>語言與實作</strong>:Python 直譯比 C 編譯慢上幾十倍;同樣的演算法,寫法不同也有常數差。</li>
+        <li><strong>輸入</strong>:同一個演算法,餵不同的資料,快慢可以天差地別(待會的「最壞 / 最佳情況」會細談)。</li>
+      </ul>
+      <p>
+        我們想要的,是一把能<strong>跨越機器、跨越語言、跨越單次運氣</strong>的量尺——一把只衡量
+        「<strong>演算法本身,隨著輸入規模 $n$ 變大,工作量會怎麼成長</strong>」的尺。
+        而要打造這把尺,我們得先學會一種看事情的角度:漸進分析。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">我們衡量的是「成長率」,不是「秒數」</span>
+          <p>複雜度分析從不回答「這要跑幾秒」,它回答的是「<strong>當輸入規模翻倍 / 變十倍,工作量會怎麼跟著漲</strong>」。
+          這個「成長的形狀」是演算法與生俱來的性格,不會因為你換了電腦或換了語言而改變——這正是它珍貴的地方。</p>
+        </div>
+      </div>
+
+      <h2>漸進分析:用望遠鏡看趨勢</h2>
+      <p>
+        假設你細細數過兩個演算法,精確算出它們在輸入規模 $n$ 下的操作次數:
+      </p>
+      <p>
+        $$T_A(n) = 100n + 5000 \qquad\qquad T_B(n) = 2n^2 + 3n + 10$$
+      </p>
+      <p>
+        當 $n$ 很小時,A 反而比較「貴」:$n = 1$ 時 A 要 5100 次、B 只要 15 次。
+        如果你只看小資料,可能會選 B。但這是個陷阱。讓 $n$ 慢慢長大:
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>$n$</th><th>$T_A = 100n + 5000$</th><th>$T_B = 2n^2 + 3n + 10$</th><th>誰比較少?</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>1</td><td>5,100</td><td>15</td><td>B</td></tr>
+          <tr><td>50</td><td>10,000</td><td>5,160</td><td>B</td></tr>
+          <tr><td>100</td><td>15,000</td><td>20,310</td><td>A</td></tr>
+          <tr><td>1,000</td><td>105,000</td><td>2,003,010</td><td>A(大勝)</td></tr>
+          <tr><td>1,000,000</td><td>≈ $10^8$</td><td>≈ $2\times10^{12}$</td><td>A(贏兩萬倍)</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>
+        過了某個門檻(這裡大約是 $n = 100$),B 就再也追不上 A,而且差距越拉越大。
+        這告訴我們一件關鍵的事:<strong>真正決定大規模表現的,是那個成長最快的項</strong>——
+        B 的 $2n^2$、A 的 $100n$。至於 $+5000$、$+3n+10$ 這些低階項,還有 $100$、$2$ 這些常數倍率,
+        在 $n$ 夠大時通通變成雜訊。
+      </p>
+      <p>
+        這就是<strong>漸進分析(asymptotic analysis)</strong>的精神。「Asymptotic(漸進)」這個字,
+        意思是「當 $n$ 趨向無限大時的行為」。我們刻意<em>不看</em>小資料、<em>不看</em>常數、<em>不看</em>低階項,
+        只盯住「當 $n$ 大到不能再大時,誰主宰一切」。
+      </p>
+
+      <div class="callout tip">
+        <div class="ico">🔭</div>
+        <div class="body">
+          <span class="c-title">把它想成一支望遠鏡</span>
+          <p>漸進分析就像拿望遠鏡眺望遠方的地平線。近處的小石子、草叢的紋理(常數與低階項)全都模糊掉了,
+          你只看得見遠方那座山的<strong>輪廓</strong>(主導項)。我們不在乎眼前三公尺,我們在乎「往無限遠的方向,這條路是平的、是斜的、還是直直陡上天」。
+          這個「輪廓」,就是演算法的命運。</p>
+        </div>
+      </div>
+
+      <p>於是,我們要做的「化簡」其實只有兩條規則,接下來整章都會反覆用到:</p>
+      <ul>
+        <li><strong>丟掉常數倍率</strong>:$100n$ 和 $n$ 是同一個成長形狀,都記作 $O(n)$。</li>
+        <li><strong>只留主導項(丟掉低階項)</strong>:$2n^2 + 3n + 10$ 的命運由 $n^2$ 決定,記作 $O(n^2)$。</li>
+      </ul>
+      <p>
+        但「主導」「夠大」「可以忽略」這些詞,聽起來都還很模糊。要讓它們變成能<em>證明</em>的數學,
+        我們需要一個精確的記號——這就是大 O。
+      </p>
+
+      <h2>大 O:成長的上界</h2>
+      <p>
+        我們先用人話說一遍大 O 想表達什麼:「$f(n)$ 的成長,<strong>不會比 $g(n)$ 快</strong>(頂多差一個固定的常數倍)。」
+        換句話說,$g(n)$ 是 $f(n)$ 成長速度的一個<strong>上限</strong>。把這句話翻成數學,就是:
+      </p>
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">大 O 的正式定義</span>
+          <p>我們說 $f(n) = O(g(n))$,若<strong>存在</strong>兩個正常數 $c$ 與 $n_0$,使得:
+          $$\forall\, n \ge n_0:\quad 0 \le f(n) \le c \cdot g(n)$$
+          白話翻譯:「<strong>只要 $n$ 大過某個門檻 $n_0$,我就能找到一個固定的放大倍率 $c$,
+          讓 $c \cdot g(n)$ 從此永遠壓在 $f(n)$ 頭上。</strong>」</p>
+        </div>
+      </div>
+      <p>
+        這個定義裡每個字都在工作,我們逐一拆解:
+      </p>
+      <ul>
+        <li><strong>「存在 $c$」</strong>:這就是「丟掉常數倍率」的來源。你被允許自由挑一個放大倍率,
+        所以 $5n$ 也好、$100n$ 也好,都能被某個 $c \cdot n$ 蓋過,它們都是 $O(n)$。</li>
+        <li><strong>「存在 $n_0$,且只要求 $n \ge n_0$」</strong>:這就是「只看夠大的 $n$」。
+        小資料上誰快誰慢無所謂,我們只在乎門檻之後的長期趨勢。這也是為什麼前面那個「$n$ 小的時候 B 比較快」完全不影響結論。</li>
+        <li><strong>「$f(n) \le c\cdot g(n)$」</strong>:這是<em>上界</em>。它說 $f$ 最多就長這麼快,不會更快。</li>
+      </ul>
+
+      <p>把這個定義畫出來,你會立刻「看見」它在說什麼:</p>
+
+      <div class="diagram">
+<svg viewBox="0 0 640 380" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="ax" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#4a5159"/></marker>
+  </defs>
+  <!-- 門檻後的區域底色 -->
+  <rect x="250" y="40" width="350" height="260" fill="#e3efed" fill-opacity="0.5"/>
+  <!-- 座標軸 -->
+  <line x1="70" y1="300" x2="610" y2="300" stroke="#4a5159" stroke-width="1.5" marker-end="url(#ax)"/>
+  <line x1="70" y1="300" x2="70" y2="40" stroke="#4a5159" stroke-width="1.5" marker-end="url(#ax)"/>
+  <text x="612" y="318" font-size="13" fill="#4a5159">n(輸入規模)</text>
+  <text x="44" y="44" font-size="13" fill="#4a5159">工作量</text>
+  <!-- c·g(n):橘色,最終壓過 -->
+  <path d="M70,290 Q268,145 600,55" fill="none" stroke="#b4541f" stroke-width="3"/>
+  <text x="520" y="48" font-size="14" font-weight="800" fill="#b4541f">c · g(n)</text>
+  <!-- f(n):藍綠,被壓在底下 -->
+  <path d="M70,230 L600,90" fill="none" stroke="#2f6f6a" stroke-width="3"/>
+  <text x="520" y="108" font-size="14" font-weight="800" fill="#2f6f6a">f(n)</text>
+  <!-- n0 虛線 -->
+  <line x1="250" y1="300" x2="250" y2="183" stroke="#8a929b" stroke-width="1.5" stroke-dasharray="5 4"/>
+  <circle cx="250" cy="183" r="4" fill="#8a929b"/>
+  <text x="250" y="320" font-size="14" font-weight="700" fill="#1f2328" text-anchor="middle">n₀</text>
+  <!-- 標註 -->
+  <text x="425" y="345" font-size="13" font-weight="700" fill="#2f6f6a" text-anchor="middle">在 n₀ 右邊(綠底區):c·g(n) 永遠壓在 f(n) 上方 → f(n) = O(g(n))</text>
+  <text x="150" y="100" font-size="12" fill="#8a929b" text-anchor="middle">門檻前可以</text>
+  <text x="150" y="118" font-size="12" fill="#8a929b" text-anchor="middle">隨便誰高誰低</text>
+</svg>
+        <figcaption>圖 26-1:大 O 的幾何意義。在門檻 $n_0$ 之前,$f$ 和 $c\cdot g$ 誰高誰低都無所謂;但只要過了 $n_0$,我們選定的 $c\cdot g(n)$ 就永遠壓在 $f(n)$ 上方。能找到這樣的 $c$ 與 $n_0$,我們就說 $f(n) = O(g(n))$。</figcaption>
+      </div>
+
+      <p>
+        來做一個具體的小證明,把定義用熟。我們宣稱 $3n + 5 = O(n)$。要證明它,我們得<strong>找出一組可行的 $c$ 與 $n_0$</strong>:
+      </p>
+      <blockquote>
+        取 $c = 4$、$n_0 = 5$。當 $n \ge 5$ 時,$5 \le n$,所以 $3n + 5 \le 3n + n = 4n = c\cdot n$。
+        定義被滿足,故 $3n + 5 = O(n)$。$\blacksquare$
+      </blockquote>
+      <p>
+        注意:$c$ 與 $n_0$ 的選擇<strong>不唯一</strong>。取 $c = 8, n_0 = 1$ 也成立(當 $n \ge 1$,$3n + 5 \le 3n + 5n = 8n$)。
+        定義只要求「存在一組」,你不必找最緊的,能找到任何一組就贏了。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">⚖️</div>
+        <div class="body">
+          <span class="c-title">一個惱人但重要的記號習慣:那個「=」其實是「∈」</span>
+          <p>我們寫 $f(n) = O(g(n))$,但這個等號其實是<strong>誤用</strong>。$O(g(n))$ 嚴格說是「所有成長不超過 $g$ 的函數所成的<em>集合</em>」,
+          正確該寫 $f(n) \in O(g(n))$。但歷史上大家寫順了「=」,於是它變成一種<strong>單向</strong>的等號:
+          你可以說「$3n+5$ 是 $O(n)$」,但不能反過來說「$O(n)$ 是 $3n+5$」。
+          看到 $O(\cdot)$ 旁邊的等號,心裡請自動翻譯成「是一種」。</p>
+        </div>
+      </div>
+
+      <h2>Ω 與 Θ:下界,與真正的「緊界」</h2>
+      <p>
+        大 O 給了我們<strong>上界</strong>(成長頂多這麼快)。但只有上界,有時會說謊。
+        舉個極端例子:「線性搜尋是 $O(n^2)$」——這句話<strong>在技術上完全正確</strong>!
+        因為線性搜尋的 $n$ 次操作,確實不超過 $c\cdot n^2$。但這個上界鬆得離譜,
+        就像你說「我身高不超過 100 公尺」——沒說錯,但毫無資訊量。
+      </p>
+      <p>
+        要把話說精準,我們需要另外兩個記號,跟大 O 湊成一套完整的工具。
+      </p>
+
+      <h3>大 Ω(Omega):成長的下界</h3>
+      <p>
+        大 Ω 是大 O 的鏡像。它說「$f(n)$ 的成長<strong>至少</strong>有 $g(n)$ 這麼快」——$g$ 是個<strong>下限</strong>:
+      </p>
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">大 Ω 的正式定義</span>
+          <p>$f(n) = \Omega(g(n))$,若存在正常數 $c, n_0$,使得
+          $$\forall\, n \ge n_0:\quad 0 \le c \cdot g(n) \le f(n)$$
+          把大 O 定義裡的不等號反過來就是它:現在 $c\cdot g(n)$ 是<strong>地板</strong>,$f(n)$ 從此踩在它上面。</p>
+        </div>
+      </div>
+
+      <h3>大 Θ(Theta):上下界合一,真正的緊界</h3>
+      <p>
+        如果一個函數<strong>同時</strong>被 $g$ 從上面壓住、又被 $g$ 從下面頂住,那 $g$ 就<em>剛剛好</em>刻畫了它的成長。
+        這才是我們真正想要的「<strong>緊界(tight bound)</strong>」:
+      </p>
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">大 Θ 的正式定義</span>
+          <p>$f(n) = \Theta(g(n))$,若 $f(n) = O(g(n))$ <strong>且</strong> $f(n) = \Omega(g(n))$。
+          等價地:存在正常數 $c_1, c_2, n_0$,使得
+          $$\forall\, n \ge n_0:\quad c_1\cdot g(n) \le f(n) \le c_2 \cdot g(n)$$
+          也就是 $f$ 被夾在 $g$ 的兩個常數倍之間——成長率<strong>完全相同</strong>。</p>
+        </div>
+      </div>
+
+      <div class="diagram">
+<svg viewBox="0 0 640 320" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="ax2" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#4a5159"/></marker>
+  </defs>
+  <line x1="70" y1="270" x2="610" y2="270" stroke="#4a5159" stroke-width="1.5" marker-end="url(#ax2)"/>
+  <line x1="70" y1="270" x2="70" y2="30" stroke="#4a5159" stroke-width="1.5" marker-end="url(#ax2)"/>
+  <text x="612" y="288" font-size="13" fill="#4a5159">n</text>
+  <!-- c2 g(n) 上界 橘 -->
+  <path d="M70,250 Q300,150 600,40" fill="none" stroke="#b4541f" stroke-width="2.5"/>
+  <text x="540" y="36" font-size="13" font-weight="800" fill="#b4541f">c₂·g(n)</text>
+  <!-- c1 g(n) 下界 紫 -->
+  <path d="M70,265 Q330,235 600,170" fill="none" stroke="#8b5cf6" stroke-width="2.5"/>
+  <text x="540" y="190" font-size="13" font-weight="800" fill="#8b5cf6">c₁·g(n)</text>
+  <!-- f(n) 夾在中間 藍綠 -->
+  <path d="M70,258 Q320,190 600,100" fill="none" stroke="#2f6f6a" stroke-width="3.5"/>
+  <text x="540" y="98" font-size="14" font-weight="800" fill="#2f6f6a">f(n)</text>
+  <text x="335" y="305" font-size="13" font-weight="700" fill="#1f2328" text-anchor="middle">f(n) 被 c₁·g(n) 與 c₂·g(n) 牢牢夾住 → f(n) = Θ(g(n))</text>
+</svg>
+        <figcaption>圖 26-2:大 Θ 是「三明治」。$f(n)$ 被同一個 $g$ 的兩個常數倍上下夾住,代表 $g$ 不多不少正好抓到了 $f$ 的成長率。Θ 才是「緊界」。</figcaption>
+      </div>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">最常見的誤解:把 O 當成「就是」緊界</span>
+          <p>口語上我們常說「合併排序是 $O(n\log n)$」,聽起來像在說它的精確成長。但嚴格講,$O$ 只是上界。
+          說合併排序「是 $O(n^2)$」也<em>沒有錯</em>(只是很鬆),因為 $n\log n \le c\cdot n^2$。
+          真正精準的說法是「合併排序是 $\Theta(n\log n)$」。
+          <strong>實務上,當大家說某演算法「是 $O(f)$」時,心裡通常指的是 $\Theta$(緊界)</strong>——
+          這是一種約定俗成的口語簡化。你自己分析時,要清楚分辨「我證的是上界,還是緊界」。</p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 26.1 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>用大 O 的<strong>定義</strong>證明:$3n^2 + 10n + 7 = O(n^2)$。也就是,請找出一組具體的 $c$ 與 $n_0$,
+          並寫出讓不等式成立的推導。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>策略:把每個低階項都「放大成」$n^2$,再把係數加起來當作 $c$。</p>
+              <p>取 $n_0 = 10$。當 $n \ge 10$ 時:</p>
+              <ul>
+                <li>$10n \le n \cdot n = n^2$(因為 $n \ge 10 \ge 10$,其實只要 $n \ge 10$ 就有 $10n \le n^2$)</li>
+                <li>$7 \le n^2$(因為 $n \ge 10 \Rightarrow n^2 \ge 100 \ge 7$)</li>
+              </ul>
+              <p>所以當 $n \ge 10$:
+              $$3n^2 + 10n + 7 \;\le\; 3n^2 + n^2 + n^2 \;=\; 5n^2.$$
+              取 $c = 5$、$n_0 = 10$,定義被滿足,故 $3n^2 + 10n + 7 = O(n^2)$。$\blacksquare$</p>
+              <p>同樣的手法可以證任何多項式 $a_k n^k + \dots + a_1 n + a_0 = O(n^k)$:把每個低階項都放大成 $n^k$,
+              $c$ 取所有係數絕對值之和即可。<strong>這就是「多項式的 Big-O 只看最高次項」的嚴格根據。</strong></p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>複雜度動物園:從 $O(1)$ 到 $O(n!)$</h2>
+      <p>
+        實務上,絕大多數演算法的複雜度都落在少數幾個「常客」上。我們依成長由慢到快,一隻一隻認識牠們,
+        每隻都配一個你已經見過(或即將見到)的演算法當代表:
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>複雜度</th><th>名稱</th><th>白話</th><th>代表演算法</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>$O(1)$</td><td>常數</td><td>跟資料量無關,永遠一樣快</td><td>陣列依索引取值、雜湊表查詢、堆疊 push/pop</td></tr>
+          <tr><td>$O(\log n)$</td><td>對數</td><td>資料翻倍,只多做一步</td><td>二分搜尋、平衡二元搜尋樹查詢</td></tr>
+          <tr><td>$O(n)$</td><td>線性</td><td>跟資料量成正比</td><td>線性搜尋、求和、找最大值</td></tr>
+          <tr><td>$O(n\log n)$</td><td>線性對數</td><td>「實務上的快」,排序的理論下限</td><td>合併排序、快速排序(平均)、堆積排序</td></tr>
+          <tr><td>$O(n^2)$</td><td>平方</td><td>巢狀掃兩遍,資料一大就吃力</td><td>氣泡 / 插入 / 選擇排序、兩兩比較</td></tr>
+          <tr><td>$O(n^3)$</td><td>立方</td><td>三層巢狀</td><td>樸素矩陣相乘、Floyd–Warshall 最短路徑</td></tr>
+          <tr><td>$O(2^n)$</td><td>指數</td><td>每多一個元素,時間翻倍</td><td>枚舉所有子集、樸素遞迴費氏數</td></tr>
+          <tr><td>$O(n!)$</td><td>階乘</td><td>枚舉所有排列,只能用在極小的 $n$</td><td>暴力解旅行推銷員問題、全排列枚舉</td></tr>
+        </tbody>
+      </table>
+      </div>
+
+      <p>把這些成長曲線畫在同一張圖上,你會看到牠們如何「分道揚鑣」:</p>
+
+      <div class="diagram">
+<svg viewBox="0 0 640 400" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="ax3" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#4a5159"/></marker>
+  </defs>
+  <line x1="60" y1="340" x2="610" y2="340" stroke="#4a5159" stroke-width="1.5" marker-end="url(#ax3)"/>
+  <line x1="60" y1="340" x2="60" y2="30" stroke="#4a5159" stroke-width="1.5" marker-end="url(#ax3)"/>
+  <text x="600" y="362" font-size="13" fill="#4a5159">n(輸入規模)</text>
+  <text x="34" y="34" font-size="13" fill="#4a5159">操作次數</text>
+
+  <!-- O(2^n) 紅:從左邊不久就衝上天花板 -->
+  <path d="M60,338 C120,330 150,120 170,35" fill="none" stroke="#dc2626" stroke-width="2.5"/>
+  <text x="174" y="44" font-size="12" font-weight="800" fill="#dc2626">O(2ⁿ)</text>
+  <!-- O(n^3) 磚紅 -->
+  <path d="M60,338 Q250,300 300,35" fill="none" stroke="#b4541f" stroke-width="2.5"/>
+  <text x="304" y="48" font-size="12" font-weight="800" fill="#b4541f">O(n³)</text>
+  <!-- O(n^2) 紫 -->
+  <path d="M60,338 Q330,290 460,40" fill="none" stroke="#8b5cf6" stroke-width="2.5"/>
+  <text x="462" y="52" font-size="12" font-weight="800" fill="#8b5cf6">O(n²)</text>
+  <!-- O(n log n) 藍 -->
+  <path d="M60,338 Q360,250 600,120" fill="none" stroke="#2563eb" stroke-width="2.5"/>
+  <text x="556" y="112" font-size="12" font-weight="800" fill="#2563eb">O(n log n)</text>
+  <!-- O(n) 藍綠 -->
+  <path d="M60,338 L600,178" fill="none" stroke="#2f6f6a" stroke-width="2.5"/>
+  <text x="566" y="174" font-size="12" font-weight="800" fill="#2f6f6a">O(n)</text>
+  <!-- O(log n) 綠 -->
+  <path d="M60,335 Q250,300 600,278" fill="none" stroke="#16a34a" stroke-width="2.5"/>
+  <text x="566" y="272" font-size="12" font-weight="800" fill="#16a34a">O(log n)</text>
+  <!-- O(1) 灰 -->
+  <line x1="60" y1="325" x2="600" y2="325" stroke="#8a929b" stroke-width="2.5"/>
+  <text x="566" y="318" font-size="12" font-weight="800" fill="#8a929b">O(1)</text>
+</svg>
+        <figcaption>圖 26-3:複雜度成長曲線。越往右上越「貴」。注意 $O(2^n)$ 和 $O(n!)$(未畫,比 $2^n$ 更陡)幾乎是貼著左邊牆壁直接衝破天花板——這就是「指數爆炸」的視覺寫照。$O(\log n)$ 則幾乎是貼著地面的平緩好朋友。</figcaption>
+      </div>
+
+      <p>
+        曲線好看,但還不夠震撼。讓我們把實際的<strong>操作次數</strong>算出來,填進一張表。
+        看著數字一個比一個誇張,你才會真正對「指數」與「階乘」生出敬畏:
+      </p>
+
+      <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>複雜度</th><th>$n = 10$</th><th>$n = 100$</th><th>$n = 10{,}000$(萬)</th><th>$n = 1{,}000{,}000$(百萬)</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>$O(1)$</td><td>1</td><td>1</td><td>1</td><td>1</td></tr>
+          <tr><td>$O(\log n)$</td><td>≈ 3</td><td>≈ 7</td><td>≈ 13</td><td>≈ 20</td></tr>
+          <tr><td>$O(n)$</td><td>10</td><td>100</td><td>$10^4$</td><td>$10^6$</td></tr>
+          <tr><td>$O(n\log n)$</td><td>≈ 33</td><td>≈ 664</td><td>≈ $1.3\times10^5$</td><td>≈ $2.0\times10^7$</td></tr>
+          <tr><td>$O(n^2)$</td><td>100</td><td>$10^4$</td><td>$10^8$</td><td>$10^{12}$</td></tr>
+          <tr><td>$O(n^3)$</td><td>1,000</td><td>$10^6$</td><td>$10^{12}$</td><td>$10^{18}$</td></tr>
+          <tr><td>$O(2^n)$</td><td>1,024</td><td>≈ $1.3\times10^{30}$</td><td colspan="2">天文數字,無法寫完</td></tr>
+          <tr><td>$O(n!)$</td><td>≈ $3.6\times10^6$</td><td>≈ $9.3\times10^{157}$</td><td colspan="2">遠超宇宙中所有原子的數目</td></tr>
+        </tbody>
+      </table>
+      </div>
+
+      <p>
+        把抽象的次數換算成「時間」更有感。假設你有一台每秒能跑 $10^9$(十億)次操作的快電腦:
+      </p>
+
+      <div class="callout danger">
+        <div class="ico">⛔</div>
+        <div class="body">
+          <span class="c-title">指數的恐怖:不是「慢」,是「永遠跑不完」</span>
+          <p>同樣在這台 $10^9$ 次/秒的電腦上,處理 $n = 10^6$ 的資料:</p>
+          <ul>
+            <li>$O(n)$:$10^6$ 次 → <strong>0.001 秒</strong>,眨眼就好。</li>
+            <li>$O(n^2)$:$10^{12}$ 次 → <strong>約 16.7 分鐘</strong>,喝杯咖啡。</li>
+            <li>$O(n^3)$:$10^{18}$ 次 → <strong>約 31.7 年</strong>,你可以結婚生子、孩子上大學了。</li>
+          </ul>
+          <p>而 $O(2^n)$ 根本不用等到百萬。光是 $n = 100$:$2^{100} \approx 1.3\times10^{30}$ 次,
+          需要約 $1.3\times10^{21}$ 秒 ≈ <strong>4 兆年</strong>——比整個宇宙的年齡(約 138 億年)還要長<strong>近三千倍</strong>。
+          這就是為什麼當你聽到「這個問題目前只有指數時間解法」,那幾乎等於宣判「在大輸入上,它無解」。
+          演算法設計的核心使命之一,就是想辦法把指數打下來。</p>
+        </div>
+      </div>
+
+      <h2>怎麼「讀」出一段程式的複雜度</h2>
+      <p>
+        理論講完,該動手了。分析程式碼的複雜度,聽起來玄,其實只要掌握幾條會反覆出現的「文法」,
+        你就能像讀句子一樣讀出複雜度。我們一條一條看。
+      </p>
+
+      <h3>規則一:循序的程式碼用「加法」,然後取主導項</h3>
+      <p>
+        一段接著一段執行的程式碼,複雜度是各段<strong>相加</strong>,加完再丟掉低階項,只留最大的那個:
+      </p>
+      <pre><code class="language-python">def process(arr):
+    total = 0
+    for x in arr:          # 段 A:掃過一遍 → O(n)
+        total += x
+    arr.sort()             # 段 B:Python 內建排序 → O(n log n)
+    return total           # 段 C:回傳 → O(1)
+
+# 總計:O(n) + O(n log n) + O(1) = O(n log n)
+# 因為當 n 夠大,n log n 完全主宰另外兩項</code></pre>
+      <p>
+        $O(n) + O(n\log n) + O(1)$ 不是 $O(n + n\log n + 1)$ 慢慢算,而是直接看「誰最大」:$n\log n$。
+        所以整個函式是 $O(n\log n)$。
+      </p>
+
+      <h3>規則二:巢狀迴圈用「乘法」</h3>
+      <p>
+        一個迴圈套在另一個迴圈裡,複雜度是兩者<strong>相乘</strong>。經典例子是「檢查有沒有重複元素」:
+      </p>
+      <pre><code class="language-python">def has_duplicate(arr):
+    n = len(arr)
+    for i in range(n):              # 外層:跑 n 次
+        for j in range(i + 1, n):  # 內層:跑約 n 次
+            if arr[i] == arr[j]:
+                return True
+    return False
+
+# 外層 n 次 × 內層約 n 次 = O(n²)</code></pre>
+      <p>
+        你可能會抗議:內層其實不是每次都跑 $n$ 次,而是 $n-1, n-2, \dots, 1$ 次,越來越少。沒錯,
+        把它們加總是 $(n-1)+(n-2)+\dots+1 = \frac{n(n-1)}{2}$。但別忘了漸進分析的兩條規則:
+        丟掉常數($\frac{1}{2}$)、丟掉低階項($-\frac{n}{2}$),$\frac{n(n-1)}{2}$ 的命運由 $n^2$ 決定。
+        所以仍是 $\Theta(n^2)$。<strong>「三角形」的迴圈和「正方形」的迴圈,漸進上是一樣的。</strong>
+      </p>
+
+      <h3>規則三:每次「砍半」就生出一個 $\log$</h3>
+      <p>
+        當迴圈每跑一次就把問題規模<strong>除以一個常數</strong>(最常見是除以 2),
+        迴圈的執行次數就是 $\log n$:
+      </p>
+      <pre><code class="language-python">def count_steps(n):
+    steps = 0
+    while n &gt; 1:
+        n = n // 2     # 每一輪,規模砍半
+        steps += 1
+    return steps
+
+# n 要被砍幾次才會降到 1?答案是 log₂(n) 次 → O(log n)
+# count_steps(1024) 回傳 10,因為 2¹⁰ = 1024</code></pre>
+      <p>
+        為什麼是 $\log$?因為「$n$ 連續除以 2,幾次後變成 1」這個問題,等價於問「$2$ 的幾次方等於 $n$」,
+        而那個次方,定義上就是 $\log_2 n$。這也正是第 5 章二分搜尋為什麼是 $O(\log n)$ 的根本原因——
+        它每比一次,搜尋範圍就砍半。
+      </p>
+
+      <h3>把規則組合起來</h3>
+      <p>
+        真實的程式碼,是這些規則的組合。比方說「對每個元素,各做一次二分搜尋」:
+      </p>
+      <pre><code class="language-python">def count_present(queries, sorted_data):
+    found = 0
+    for q in queries:                  # 外層:len(queries) = n 次
+        if binary_search(sorted_data, q) != -1:  # 每次 O(log m)
+            found += 1
+    return found
+
+# n 次外層 × 每次 O(log m) = O(n log m)</code></pre>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">化簡的速查表</span>
+          <p>分析到一半,把式子套這幾條規則收尾:</p>
+          <ul>
+            <li>$O(c \cdot f(n)) = O(f(n))$ —— 丟掉常數倍率。$O(500) = O(1)$,$O(3n) = O(n)$。</li>
+            <li>$O(f(n) + g(n)) = O(\max(f, g))$ —— 相加取主導。$O(n^2 + n) = O(n^2)$。</li>
+            <li>$O(f(n)\cdot g(n))$ 不能再化簡(這是巢狀)。$O(n \cdot \log n) = O(n\log n)$。</li>
+            <li>對數的底數無所謂:$O(\log_2 n) = O(\log_{10} n) = O(\ln n)$(換底只差一個常數倍)。</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 26.2 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>判斷以下三段程式碼各自的時間複雜度(用 $n = $ <code>len(arr)</code>),並說明理由。</p>
+          <pre><code class="language-python"># (a)
+def f(arr):
+    s = 0
+    for x in arr:
+        s += x
+    for x in arr:
+        s += x * x
+    return s
+
+# (b)
+def g(arr):
+    n = len(arr)
+    for i in range(n):
+        for j in range(n):
+            print(arr[i], arr[j])
+
+# (c)
+def h(arr):
+    n = len(arr)
+    i = n
+    while i &gt;= 1:
+        print(arr[0])
+        i = i // 2</code></pre>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>(a) $O(n)$。</strong>兩個迴圈是<em>循序</em>(一個接一個,不是巢狀),
+              各為 $O(n)$,相加 $O(n) + O(n) = O(2n) = O(n)$。<strong>關鍵:兩個並排的迴圈是「加法」,不是「乘法」。</strong>
+              這是最常見的陷阱——看到兩個迴圈別反射性喊 $O(n^2)$,先看它們是「並排」還是「巢狀」。</p>
+              <p><strong>(b) $O(n^2)$。</strong>內層迴圈巢狀在外層裡,兩層各跑 $n$ 次,相乘 $n \times n = O(n^2)$。</p>
+              <p><strong>(c) $O(\log n)$。</strong>每一輪 <code>i</code> 砍半,從 $n$ 降到 1 需要 $\log_2 n$ 輪。
+              迴圈內部只是 $O(1)$ 的 print,所以總共 $O(\log n)$。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 26.3 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>化簡下列複雜度表達式(丟掉常數與低階項,寫成最簡的 $O(\cdot)$):</p>
+          <ol>
+            <li>$5n^3 + 200n^2 + 1000n + 9999$</li>
+            <li>$n + n\log n$</li>
+            <li>$2^n + n^{100}$</li>
+            <li>$\log n + 100$</li>
+            <li>$3n^2 + 2^n$</li>
+          </ol>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <ol>
+                <li>$O(n^3)$。最高次項是 $n^3$,常數 5 與其餘低階項全丟。</li>
+                <li>$O(n\log n)$。$n\log n$ 成長快過 $n$(多了一個 $\log n$ 因子),主導。</li>
+                <li>$O(2^n)$。這題是陷阱:$n^{100}$ 雖然指數高達 100,但它是<strong>多項式</strong>;
+                $2^n$ 是<strong>指數</strong>。任何指數最終都會輾壓任何多項式,所以 $2^n$ 主導。</li>
+                <li>$O(\log n)$。常數 100 丟掉。</li>
+                <li>$O(2^n)$。指數遠快過平方。</li>
+              </ol>
+              <p>記住成長率的排序鏈,化簡就是「挑出最右邊那個」:
+              $$1 \prec \log n \prec n \prec n\log n \prec n^2 \prec n^3 \prec 2^n \prec n!$$</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 26.4 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>分析下面這個巢狀迴圈總共會印出幾次,並給出緊界 $\Theta(\cdot)$。</p>
+          <pre><code class="language-python">def triangle(n):
+    for i in range(n):
+        for j in range(i):    # 注意內層上限是 i,不是 n
+            print(i, j)</code></pre>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>當外層的 <code>i</code> 是 $0, 1, 2, \dots, n-1$ 時,內層 <code>range(i)</code> 分別跑 $0, 1, 2, \dots, n-1$ 次。
+              總次數是:
+              $$0 + 1 + 2 + \dots + (n-1) = \sum_{i=0}^{n-1} i = \frac{n(n-1)}{2}.$$</p>
+              <p>展開是 $\frac{n^2 - n}{2}$。丟掉常數 $\frac{1}{2}$、丟掉低階項 $-\frac{n}{2}$,主導項是 $n^2$。
+              所以是 $\Theta(n^2)$。</p>
+              <p><strong>重點教訓:</strong>即使內層迴圈次數會變動(這裡是個「三角形」而非「正方形」),
+              只要它平均下來與 $n$ 成正比,整體仍是平方級。別被「內層只跑 $i$ 次,比 $n$ 少」騙了——
+              漸進上,$\frac{n^2}{2}$ 和 $n^2$ 是同一回事。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>最壞、平均、最佳:同一個演算法的三張臉</h2>
+      <p>
+        前面我們小心地說「線性搜尋是 $O(n)$」,但其實它有三種命運。回想線性搜尋:從頭找一個目標。
+      </p>
+      <ul>
+        <li><strong>最佳情況(best case)</strong>:目標剛好在第一格。只看一次就找到 → $O(1)$。</li>
+        <li><strong>最壞情況(worst case)</strong>:目標在最後一格,或根本不存在。得看完全部 $n$ 個 → $O(n)$。</li>
+        <li><strong>平均情況(average case)</strong>:假設目標等機率出現在任一格,平均看 $\frac{n}{2}$ 個 → 仍是 $O(n)$。</li>
+      </ul>
+      <p>
+        所以同一個演算法,可以同時是「最佳 $O(1)$」「最壞 $O(n)$」。
+        這也是為什麼前面強調:講複雜度時要說清楚你指的是哪種情況。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 660 220" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="330" y="28" font-size="13" font-weight="700" fill="#1f2328" text-anchor="middle">線性搜尋找目標 23,三種命運</text>
+  <!-- best -->
+  <text x="40" y="62" font-size="12" font-weight="700" fill="#16a34a">最佳:第 1 格就中</text>
+  <g font-size="12" text-anchor="middle">
+    <rect x="200" y="48" width="40" height="26" rx="4" fill="#16a34a"/><text x="220" y="66" fill="#fff" font-weight="700">23</text>
+    <rect x="244" y="48" width="40" height="26" rx="4" fill="#f0f1f3" stroke="#d4d8dd"/><text x="264" y="66" fill="#b5bcc4">5</text>
+    <rect x="288" y="48" width="40" height="26" rx="4" fill="#f0f1f3" stroke="#d4d8dd"/><text x="308" y="66" fill="#b5bcc4">8</text>
+    <rect x="332" y="48" width="40" height="26" rx="4" fill="#f0f1f3" stroke="#d4d8dd"/><text x="352" y="66" fill="#b5bcc4">12</text>
+    <rect x="376" y="48" width="40" height="26" rx="4" fill="#f0f1f3" stroke="#d4d8dd"/><text x="396" y="66" fill="#b5bcc4">16</text>
+    <rect x="420" y="48" width="40" height="26" rx="4" fill="#f0f1f3" stroke="#d4d8dd"/><text x="440" y="66" fill="#b5bcc4">38</text>
+  </g>
+  <text x="500" y="66" font-size="12" font-weight="700" fill="#16a34a">→ O(1)</text>
+  <!-- average -->
+  <text x="40" y="120" font-size="12" font-weight="700" fill="#b4541f">平均:約在中間</text>
+  <g font-size="12" text-anchor="middle">
+    <rect x="200" y="106" width="40" height="26" rx="4" fill="#e3efed" stroke="#2f6f6a"/><text x="220" y="124">5</text>
+    <rect x="244" y="106" width="40" height="26" rx="4" fill="#e3efed" stroke="#2f6f6a"/><text x="264" y="124">8</text>
+    <rect x="288" y="106" width="40" height="26" rx="4" fill="#b4541f"/><text x="308" y="124" fill="#fff" font-weight="700">23</text>
+    <rect x="332" y="106" width="40" height="26" rx="4" fill="#f0f1f3" stroke="#d4d8dd"/><text x="352" y="124" fill="#b5bcc4">12</text>
+    <rect x="376" y="106" width="40" height="26" rx="4" fill="#f0f1f3" stroke="#d4d8dd"/><text x="396" y="124" fill="#b5bcc4">16</text>
+    <rect x="420" y="106" width="40" height="26" rx="4" fill="#f0f1f3" stroke="#d4d8dd"/><text x="440" y="124" fill="#b5bcc4">38</text>
+  </g>
+  <text x="500" y="124" font-size="12" font-weight="700" fill="#b4541f">→ O(n)</text>
+  <!-- worst -->
+  <text x="40" y="178" font-size="12" font-weight="700" fill="#dc2626">最壞:最後一格 / 不存在</text>
+  <g font-size="12" text-anchor="middle">
+    <rect x="200" y="164" width="40" height="26" rx="4" fill="#e3efed" stroke="#2f6f6a"/><text x="220" y="182">5</text>
+    <rect x="244" y="164" width="40" height="26" rx="4" fill="#e3efed" stroke="#2f6f6a"/><text x="264" y="182">8</text>
+    <rect x="288" y="164" width="40" height="26" rx="4" fill="#e3efed" stroke="#2f6f6a"/><text x="308" y="182">12</text>
+    <rect x="332" y="164" width="40" height="26" rx="4" fill="#e3efed" stroke="#2f6f6a"/><text x="352" y="182">16</text>
+    <rect x="376" y="164" width="40" height="26" rx="4" fill="#e3efed" stroke="#2f6f6a"/><text x="396" y="182">38</text>
+    <rect x="420" y="164" width="40" height="26" rx="4" fill="#dc2626"/><text x="440" y="182" fill="#fff" font-weight="700">23</text>
+  </g>
+  <text x="500" y="182" font-size="12" font-weight="700" fill="#dc2626">→ O(n)</text>
+</svg>
+        <figcaption>圖 26-4:同一個線性搜尋,因為目標位置不同,可以是最佳 $O(1)$、平均 $O(n)$、最壞 $O(n)$。複雜度從來不是「一個」數字,而是看你問哪一種情況。</figcaption>
+      </div>
+
+      <p>
+        那為什麼業界<strong>預設都關注最壞情況</strong>?三個現實的理由:
+      </p>
+      <ul>
+        <li><strong>它是保證</strong>:最壞情況給你一個「絕不會更慢」的承諾。對於要排進航班、控制煞車、處理金流的系統,
+        你需要的不是「平均很快」,而是「最糟也撐得住」。</li>
+        <li><strong>它通常容易算</strong>:平均情況需要對「輸入的機率分布」做假設,而現實中的輸入往往不是均勻隨機的;
+        最壞情況不需要任何機率假設,直接看「最慘會怎樣」即可。</li>
+        <li><strong>壞輸入常常真的會出現</strong>:資料未必友善,有時甚至有人<em>故意</em>餵你最壞輸入來癱瘓系統
+        (這是一種真實的資安攻擊,稱為演算法複雜度攻擊)。</li>
+      </ul>
+
+      <div class="callout note">
+        <div class="ico">📚</div>
+        <div class="body">
+          <span class="c-title">快速排序:一個「平均 vs 最壞」差很大的名例</span>
+          <p>快速排序(quicksort)平均是 $\Theta(n\log n)$,跑起來飛快、實務上極受歡迎;
+          但它的<strong>最壞情況是 $\Theta(n^2)$</strong>(例如每次都挑到最差的樞紐 pivot)。
+          這就是「最壞」與「平均」分歧的經典案例——也是為什麼有些場合寧可選最壞也保證 $O(n\log n)$ 的合併排序或堆積排序。
+          這些演算法的細節,是本部後面幾章的主菜。</p>
+        </div>
+      </div>
+
+      <h2>另一個維度:空間複雜度</h2>
+      <p>
+        到目前為止我們只談「時間」(操作次數)。但演算法還會吃掉另一種資源:<strong>記憶體</strong>。
+        <strong>空間複雜度(space complexity)</strong>用同一套 Big-O 語言,衡量「演算法額外需要的記憶體,
+        隨輸入規模 $n$ 怎麼成長」。
+      </p>
+      <p>
+        注意「額外」二字:我們通常算的是<strong>輔助空間(auxiliary space)</strong>——
+        除了輸入本身佔的空間之外,演算法自己又多開了多少。看兩個求和的例子:
+      </p>
+      <pre><code class="language-python"># 版本一:空間 O(1)
+def sum_inplace(arr):
+    total = 0           # 不論 arr 多長,只用了一個變數
+    for x in arr:
+        total += x
+    return total
+
+# 版本二:空間 O(n)
+def running_sums(arr):
+    result = []         # 額外開了一個跟 arr 一樣長的陣列
+    total = 0
+    for x in arr:
+        total += x
+        result.append(total)
+    return result       # 輔助空間隨 n 線性成長 → O(n)</code></pre>
+      <p>
+        遞迴也會悄悄吃空間:每一層遞迴呼叫都會在<strong>呼叫堆疊(call stack)</strong>上佔一格。
+        所以一個遞迴深度為 $n$ 的函式,即使每層只用幾個變數,空間複雜度也是 $O(n)$。
+        (這也是為什麼太深的遞迴會 <code>RecursionError</code> / stack overflow——回憶第 3 章。)
+      </p>
+
+      <h3>時間與空間的取捨</h3>
+      <p>
+        很多時候,你可以<strong>用空間換時間</strong>,或反過來。最乾淨的例子,還是「檢查重複」:
+      </p>
+      <pre><code class="language-python"># 方案 A:省空間,費時間。時間 O(n²),空間 O(1)
+def has_dup_slow(arr):
+    n = len(arr)
+    for i in range(n):
+        for j in range(i + 1, n):
+            if arr[i] == arr[j]:
+                return True
+    return False
+
+# 方案 B:費空間,省時間。時間 O(n),空間 O(n)
+def has_dup_fast(arr):
+    seen = set()              # 用一個雜湊集合記住看過的元素
+    for x in arr:
+        if x in seen:        # 查雜湊集合是平均 O(1)
+            return True
+        seen.add(x)
+    return False</code></pre>
+      <p>
+        方案 B 多花了一個 $O(n)$ 大小的集合,換來把時間從 $O(n^2)$ 砍到 $O(n)$。
+        當資料量大時,這筆交易通常非常划算——記憶體很便宜,時間很貴。
+        這種「拿記憶體換速度」的思想,你會在很多地方再遇到它:
+      </p>
+      <ul>
+        <li><strong>快取(caching)</strong>:把算過的結果存起來,下次直接拿,不重算。</li>
+        <li><strong>動態規劃(dynamic programming)</strong>:用一張表記住子問題的解,把指數時間打成多項式時間
+        (這是本部後面的重頭戲)。</li>
+        <li><strong>雜湊表 / 索引</strong>:多存一份對照結構,把查詢從 $O(n)$ 變 $O(1)$。</li>
+      </ul>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">沒有最好的演算法,只有最適合的權衡</span>
+          <p>時間與空間常常是蹺蹺板:壓低一邊,另一邊就翹起來。哪個重要,取決於你的處境——
+          記憶體吃緊的嵌入式裝置會想省空間;追求極速的伺服器則樂意砸記憶體換時間。
+          工程的藝術,就在於認得出這個取捨,並為當下的限制選對那一端。</p>
+        </div>
+      </div>
+
+      <h2>攤銷分析:動態陣列的 append 為什麼是 $O(1)$?</h2>
+      <p>
+        現在來解開一個你天天在用、卻可能從沒想過的謎。回憶第 4 章:Python 的 <code>list</code> 是一個
+        <strong>動態陣列(dynamic array)</strong>。底層的陣列在記憶體裡其實是<em>固定大小</em>的一塊連續空間。
+        那麼,當這塊空間被填滿了,你又呼叫 <code>append</code>,會發生什麼事?
+      </p>
+      <p>
+        系統得去要一塊<strong>更大</strong>的新空間,把舊資料<strong>整個搬過去</strong>,再放入新元素。
+        這個「搬家」動作要複製所有 $n$ 個既有元素,是 $O(n)$!那……我們怎麼還敢說 <code>append</code> 是 $O(1)$?
+      </p>
+      <p>
+        答案藏在「<strong>多大才擴一次</strong>」這個聰明的設計裡。動態陣列不是「滿了就加一格」,
+        而是「滿了就<strong>容量翻倍</strong>」。我們把這個過程畫出來:
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 680 300" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="ax4" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#4a5159"/></marker>
+  </defs>
+  <text x="340" y="24" font-size="13" font-weight="700" fill="#1f2328" text-anchor="middle">每次 append 的成本:多數很便宜(1),偶爾擴容才昂貴</text>
+  <line x1="50" y1="250" x2="660" y2="250" stroke="#4a5159" stroke-width="1.5" marker-end="url(#ax4)"/>
+  <line x1="50" y1="250" x2="50" y2="40" stroke="#4a5159" stroke-width="1.5" marker-end="url(#ax4)"/>
+  <text x="650" y="270" font-size="12" fill="#4a5159">第幾次 append</text>
+  <text x="30" y="44" font-size="12" fill="#4a5159">成本</text>
+  <!-- 平均線 -->
+  <line x1="50" y1="228" x2="640" y2="228" stroke="#16a34a" stroke-width="2" stroke-dasharray="6 4"/>
+  <text x="560" y="222" font-size="12" font-weight="700" fill="#16a34a">攤銷平均 ≈ 常數</text>
+  <!-- 一般 append:矮 bar(高度約 12)-->
+  <g fill="#2f6f6a">
+    <rect x="60"  y="238" width="20" height="12"/>
+    <rect x="120" y="238" width="20" height="12"/>
+    <rect x="180" y="238" width="20" height="12"/>
+    <rect x="240" y="238" width="20" height="12"/>
+    <rect x="300" y="238" width="20" height="12"/>
+    <rect x="360" y="238" width="20" height="12"/>
+    <rect x="420" y="238" width="20" height="12"/>
+    <rect x="480" y="238" width="20" height="12"/>
+    <rect x="540" y="238" width="20" height="12"/>
+    <rect x="600" y="238" width="20" height="12"/>
+  </g>
+  <!-- 擴容尖峰:高 bar(磚紅),高度隨翻倍越來越高 -->
+  <g fill="#b4541f">
+    <rect x="90"  y="222" width="20" height="28"/>   <!-- copy 1 -->
+    <rect x="150" y="208" width="20" height="42"/>   <!-- copy 2 -->
+    <rect x="270" y="180" width="20" height="70"/>   <!-- copy 4 -->
+    <rect x="510" y="120" width="20" height="130"/>  <!-- copy 8 -->
+  </g>
+  <text x="100" y="216" font-size="10" fill="#b4541f" text-anchor="middle">複製2</text>
+  <text x="160" y="202" font-size="10" fill="#b4541f" text-anchor="middle">複製4</text>
+  <text x="280" y="174" font-size="10" fill="#b4541f" text-anchor="middle">複製8</text>
+  <text x="520" y="114" font-size="10" fill="#b4541f" text-anchor="middle">複製16</text>
+  <text x="340" y="290" font-size="11" fill="#8a929b" text-anchor="middle">尖峰(擴容)雖然越來越高,但出現得越來越「稀疏」(間隔翻倍),平均下來被攤平成常數</text>
+</svg>
+        <figcaption>圖 26-5:動態陣列 append 的成本分布。絕大多數 append 只花 $O(1)$(矮柱);只有在容量用盡、需要翻倍擴容時才付出一次 $O(\text{當前大小})$ 的複製(高柱)。關鍵是:擴容越來越貴,但也越來越罕見。</figcaption>
+      </div>
+
+      <p>
+        來算一筆總帳。假設從容量 1 開始,連續做 $n$ 次 append。容量會在 $1, 2, 4, 8, \dots$ 時各觸發一次擴容,
+        每次擴容要複製當時的所有元素。這些複製的總成本是:
+        $$1 + 2 + 4 + 8 + \dots + \text{(不超過 $n$ 的最大 2 次方)} \;\lt\; 2n.$$
+        這是個<strong>幾何級數</strong>:它的總和不會超過最後一項的兩倍,也就是不到 $2n$。
+        再加上 $n$ 次 append 本身每次的 $O(1)$,做 $n$ 次 append 的<strong>總成本</strong>不到 $3n$,
+        也就是 $O(n)$。把總成本平攤到 $n$ 次操作上:
+        $$\frac{\text{總成本}}{n} \;\lt\; \frac{3n}{n} = 3 = O(1).$$
+      </p>
+      <p>
+        這就是<strong>攤銷分析(amortized analysis)</strong>:當一連串操作裡,昂貴的操作<em>很罕見</em>、
+        足以被大量便宜操作「平攤」掉,我們就用「平均每次操作」的成本來描述它。
+        所以雖然某一次 append 可能是 $O(n)$,但<strong>攤銷後每次 append 是 $O(1)$</strong>——這是個誠實、嚴謹的說法,
+        不是含糊的「大概啦」。
+      </p>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">攤銷 ≠ 平均(別搞混)</span>
+          <p>「攤銷 $O(1)$」和「平均情況 $O(1)$」是兩件不同的事。<strong>平均情況</strong>是對「隨機<em>輸入</em>」取期望,
+          可能某次運氣差就退化。<strong>攤銷</strong>則是對「一連串<em>操作</em>」做<strong>保證</strong>:
+          不管輸入怎樣,任何連續 $n$ 次 append 的<em>總</em>成本鐵定是 $O(n)$,沒有「運氣差」這回事。
+          攤銷是更強的承諾。</p>
+        </div>
+      </div>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">為什麼是「翻倍」,不是「每次加 10」?</span>
+          <p>若改成「滿了就加固定 $k$ 格」,擴容會發生 $\frac{n}{k}$ 次,每次複製越來越多,
+          總複製成本變成 $k + 2k + 3k + \dots \approx \frac{n^2}{2k}$,是 $O(n^2)$——攤銷後每次 append 變 $O(n)$,糟透了!
+          <strong>正是「翻倍」讓擴容間隔呈幾何成長,才把總成本壓在 $O(n)$、攤銷成 $O(1)$。</strong>
+          這個「乘法擴張」的設計哲學,值得記一輩子。</p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 26.5 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>寫一段 Python,實際<strong>數出</strong>「容量翻倍」策略下,連續 append $n$ 個元素總共複製了幾個元素,
+          並驗證它確實小於 $2n$(亦即攤銷成本是常數)。模擬一個「自己管理容量」的動態陣列即可,不要直接用 <code>list.append</code> 的內建行為。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">def count_copies(n):
+    capacity = 1          # 初始容量
+    size = 0              # 目前元素數
+    total_copies = 0      # 累計複製了幾個元素
+    for _ in range(n):
+        if size == capacity:          # 滿了 → 擴容
+            total_copies += size      # 把現有 size 個元素複製到新空間
+            capacity *= 2             # 容量翻倍
+        size += 1                     # 放入新元素
+    return total_copies
+
+for n in [1, 10, 100, 1000, 10000, 100000]:
+    c = count_copies(n)
+    print(f"n={n:&gt;7}  總複製={c:&gt;7}  複製/n={c/n:.3f}  &lt; 2 ? {c &lt; 2*n}")</code></pre>
+              <p>執行結果會像這樣(複製/n 始終穩定在某個小於 2 的常數附近):</p>
+              <pre><code class="language-text">n=      1  總複製=      0  複製/n=0.000  &lt; 2 ? True
+n=     10  總複製=     15  複製/n=1.500  &lt; 2 ? True
+n=    100  總複製=    127  複製/n=1.270  &lt; 2 ? True
+n=   1000  總複製=   1023  複製/n=1.023  &lt; 2 ? True
+n=  10000  總複製=  16383  複製/n=1.638  &lt; 2 ? True
+n= 100000  總複製= 131071  複製/n=1.311  &lt; 2 ? True</code></pre>
+              <p>「複製/n」這個比值會上下跳動,但<strong>永遠不超過 2</strong>(數字總是恰好是 $2^k - 1$ 的形式,即幾何級數和)。
+              這就用程式親手驗證了:總複製成本是 $O(n)$,攤銷到每次 append 是 $O(1)$。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>用實驗檢驗理論:讓數字自己說話</h2>
+      <p>
+        漸進分析是<em>理論</em>。但理論最迷人的地方,是它能<strong>被驗證</strong>。
+        我們前面說「測秒數不可靠」,那是指「拿秒數比較不同演算法」不可靠;
+        但如果是「<strong>對同一個演算法,在同一台機器上,測它隨 $n$ 變大的成長趨勢</strong>」,
+        那秒數反而是檢驗理論的好幫手——因為硬體、語言這些常數因素被固定住了,只剩 $n$ 在變。
+      </p>
+      <p>
+        Python 內建的 <code>time</code> 模組就夠用。注意要用 <code>time.perf_counter()</code>(高解析度計時器),
+        而不是 <code>time.time()</code>(精度較差):
+      </p>
+      <pre><code class="language-python">import time
+
+def linear_work(n):
+    """O(n):掃過一遍。"""
+    total = 0
+    for i in range(n):
+        total += i
+    return total
+
+def quadratic_work(n):
+    """O(n²):巢狀掃兩遍。"""
+    count = 0
+    for i in range(n):
+        for j in range(n):
+            count += 1
+    return count
+
+def measure(func, n):
+    start = time.perf_counter()
+    func(n)
+    return time.perf_counter() - start   # 回傳耗時(秒)
+
+print("=== 線性 O(n):n 翻倍,時間應該約 ×2 ===")
+prev = None
+for n in [1_000_000, 2_000_000, 4_000_000, 8_000_000]:
+    t = measure(linear_work, n)
+    ratio = f"(×{t/prev:.1f})" if prev else ""
+    print(f"n={n:&gt;9}  {t*1000:8.2f} ms  {ratio}")
+    prev = t
+
+print("\n=== 平方 O(n²):n 翻倍,時間應該約 ×4 ===")
+prev = None
+for n in [1000, 2000, 4000, 8000]:
+    t = measure(quadratic_work, n)
+    ratio = f"(×{t/prev:.1f})" if prev else ""
+    print(f"n={n:&gt;9}  {t*1000:8.2f} ms  {ratio}")
+    prev = t</code></pre>
+      <p>在一台普通筆電上,輸出大致會像這樣(<strong>絕對數字因機器而異,但「倍率」才是重點</strong>):</p>
+      <pre><code class="language-text">=== 線性 O(n):n 翻倍,時間應該約 ×2 ===
+n=  1000000     42.13 ms
+n=  2000000     84.06 ms  (×2.0)
+n=  4000000    167.91 ms  (×2.0)
+n=  8000000    335.40 ms  (×2.0)
+
+=== 平方 O(n²):n 翻倍,時間應該約 ×4 ===
+n=     1000      9.88 ms
+n=     2000     39.20 ms  (×4.0)
+n=     4000    158.31 ms  (×4.0)
+n=     8000    631.05 ms  (×4.0)</code></pre>
+      <p>
+        看那兩欄倍率!線性演算法,$n$ 每翻倍,時間就<strong>翻倍</strong>($\times 2$);
+        平方演算法,$n$ 每翻倍,時間就<strong>翻四倍</strong>($\times 4 = 2^2$)。
+        這正是理論的鐵口直斷:$O(n)$ 的 $\frac{T(2n)}{T(n)} = \frac{2n}{n} = 2$;
+        $O(n^2)$ 的 $\frac{T(2n)}{T(n)} = \frac{(2n)^2}{n^2} = 4$。理論與實驗,嚴絲合縫。
+      </p>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">「倍率測試」:你口袋裡最好用的複雜度偵測法</span>
+          <p>想知道一段不熟的程式碼大概是什麼複雜度?別硬讀,直接<strong>量</strong>:把 $n$ 翻倍,看時間變幾倍。
+          時間幾乎不變 → $O(1)$ 或 $O(\log n)$;約 $\times 2$ → $O(n)$;約 $\times 4$ → $O(n^2)$;約 $\times 8$ → $O(n^3)$。
+          這招在面對別人寫的、或自己忘了怎麼分析的程式時,特別好用。</p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 26.6 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>把上面的「倍率測試」套用到第 5 章的<strong>二分搜尋</strong>上。寫一段程式,對越來越大的(已排序)資料,
+          測量二分搜尋的耗時,並觀察「$n$ 翻倍時,時間幾乎沒變」這個 $O(\log n)$ 的招牌特徵。
+          (提示:單次二分搜尋太快,計時器量不準——請對同一個 $n$ 重複搜尋很多次再取平均。)</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">import time
+
+def binary_search(arr, target):
+    low, high = 0, len(arr) - 1
+    while low &lt;= high:
+        mid = (low + high) // 2
+        if arr[mid] == target:
+            return mid
+        elif arr[mid] &lt; target:
+            low = mid + 1
+        else:
+            high = mid - 1
+    return -1
+
+REPEAT = 100_000   # 重複多次,讓總時間長到量得準
+prev = None
+for n in [100_000, 1_000_000, 10_000_000, 100_000_000]:
+    data = list(range(n))            # 已排序
+    target = n - 1                   # 找最後一個(接近最壞情況)
+    start = time.perf_counter()
+    for _ in range(REPEAT):
+        binary_search(data, target)
+    t = (time.perf_counter() - start) / REPEAT   # 單次平均(秒)
+    ratio = f"(×{t/prev:.2f})" if prev else ""
+    print(f"n={n:&gt;11}  每次約 {t*1e6:7.3f} µs  {ratio}")
+    prev = t</code></pre>
+              <p>輸出會類似(每次的時間只<em>緩慢</em>增加,因為 $n$ 翻 10 倍,$\log n$ 只多約 3.3 步):</p>
+              <pre><code class="language-text">n=     100000  每次約   0.620 µs
+n=    1000000  每次約   0.735 µs  (×1.19)
+n=   10000000  每次約   0.870 µs  (×1.18)
+n=  100000000  每次約   1.010 µs  (×1.16)</code></pre>
+              <p>對照之下,如果你把 <code>binary_search</code> 換成線性搜尋,$n$ 每翻 10 倍,時間就會<strong>翻約 10 倍</strong>——
+              這個強烈反差,就是 $O(\log n)$ 與 $O(n)$ 的差別<em>看得見</em>的證明。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 26.7 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>演算法 A 的執行時間是 $T_A(n) = 100n$,演算法 B 的是 $T_B(n) = n^2$。</p>
+          <ol>
+            <li>當 $n$ 很<strong>小</strong>時,哪個比較快?</li>
+            <li>當 $n$ 很<strong>大</strong>時,哪個比較快?用 Big-O 說明。</li>
+            <li>它們的「交叉點」($T_A = T_B$)在哪個 $n$?這個交叉點告訴你什麼實務上的啟示?</li>
+          </ol>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>1. 小 $n$:B 比較快。</strong>例如 $n = 10$,$T_A = 1000$,$T_B = 100$,B 勝。
+              因為 A 有個大常數 100 拖累它。</p>
+              <p><strong>2. 大 $n$:A 比較快(而且差距無限拉大)。</strong>$A$ 是 $O(n)$、$B$ 是 $O(n^2)$,
+              平方終究遠快過線性地成長。無論 A 的常數多大,只要 $n$ 夠大,$100n$ 必定遠小於 $n^2$。</p>
+              <p><strong>3. 交叉點:$100n = n^2 \Rightarrow n = 100$。</strong>當 $n &lt; 100$,B 較快;$n &gt; 100$,A 較快。</p>
+              <p><strong>實務啟示:</strong>漸進複雜度是「夠大的 $n$」才主宰。如果你<em>確定</em>輸入永遠很小($n &lt; 100$),
+              那個「理論上較差」的 B 反而是對的選擇——常數有時很重要。這也是為什麼工業級排序(如 Timsort)
+              會在小區段上改用看似較慢、但常數很小的插入排序。<strong>Big-O 告訴你終局,但別忘了現實中 $n$ 到底多大。</strong></p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>為什麼對數無所不在?</h2>
+      <p>
+        你可能已經注意到,$\log n$ 像個幽靈,在這本書裡一再現身:二分搜尋、平衡樹、堆積、合併排序裡的層數……
+        為什麼?因為它們背後都藏著同一個動作:<strong>反覆砍半</strong>。
+      </p>
+      <p>
+        這是 $\log$ 的本質。問「$n$ 連續除以 2,幾次後降到 1」,答案就是 $\log_2 n$。反過來,
+        問「從 1 開始連續乘以 2,幾次後超過 $n$」,答案也是 $\log_2 n$。任何「每一步把規模乘上或除以一個固定倍數」
+        的過程,步數天生就是對數級:
+      </p>
+      <ul>
+        <li><strong>二分搜尋</strong>(第 5 章):每次比較砍掉一半搜尋範圍 → $O(\log n)$ 次比較。</li>
+        <li><strong>平衡二元搜尋樹 / 堆積</strong>:樹高約 $\log n$,因為每往下一層,節點數翻倍。</li>
+        <li><strong>分治演算法的遞迴深度</strong>:合併排序把陣列一切為二、再切為二……要切 $\log n$ 層才到底。</li>
+        <li><strong>快速冪、輾轉相除法</strong>(第 15 章):每步讓問題規模成倍縮小。</li>
+      </ul>
+      <p>
+        還記得我們說「對數的底數不影響 Big-O」嗎?$\log_2 n$ 和 $\log_{10} n$ 只差一個固定常數
+        ($\log_2 n = \frac{\log_{10} n}{\log_{10} 2}$),而 Big-O 本來就忽略常數,所以一律寫 $O(\log n)$,不標底數。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">🔗</div>
+        <div class="body">
+          <span class="c-title">通往主定理的橋</span>
+          <p>當「砍半」遇上「遞迴」,事情會更精彩。一個把規模 $n$ 切成數個子問題、各自遞迴再合併的演算法,
+          它的執行時間會寫成一條<strong>遞迴關係(recurrence)</strong>,例如合併排序的 $T(n) = 2T(n/2) + O(n)$。
+          解這條關係會解出 $T(n) = O(n\log n)$——那個 $\log$ 正是「切到底要切 $\log n$ 層」來的。
+          第 15 章已經預告過的<strong>主定理(Master Theorem)</strong>,就是一張「查表卡」,
+          讓你一眼解出這類遞迴的複雜度。它的完整威力,留待本部<strong>第 27 章「分治法」</strong>盡情展開。</p>
+        </div>
+      </div>
+
+      <h2>期中期末實戰題庫</h2>
+      <p>
+        以下 14 題依<strong>觀念 → 計算 → 證明 → 實作 → 挑戰</strong>五個維度分層排列,
+        難度從 ★ 遞增至 ★★★★,對齊資工系演算法課期中期末常見題型。每題附<strong>完整解答</strong>
+        (證明題寫出 $c$、$n_0$;遞迴題寫出完整推導)。建議不看解答先獨立作答,再展開比對,效果最好。
+      </p>
+
+      <h3>一、觀念題</h3>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 試題 26-E1 <span class="badge">觀念</span> ★</div>
+        <div class="ex-body">
+          <p>下列四個漸進記號各有嚴謹定義。請 (a) 寫出 $o(g)$ 與 $\omega(g)$ 的正式定義,
+          並 (b) 說明它們分別與 $O(g)$、$\Omega(g)$ 的最關鍵區別。最後 (c) 判斷下列四個命題是非:</p>
+          <ol>
+            <li>$2n = o(n^2)$</li>
+            <li>$n^2 = o(n^2)$</li>
+            <li>$n^2 = \omega(n)$</li>
+            <li>$n\log n = \omega(n)$</li>
+          </ol>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>(a) 正式定義</strong></p>
+              <p>$f(n) = o(g(n))$ 若對<em>任意</em>正常數 $c &gt; 0$,存在 $n_0$,使得
+              $\forall\,n \ge n_0:\; f(n) &lt; c\cdot g(n)$。等價形式:$\displaystyle\lim_{n\to\infty}\frac{f(n)}{g(n)} = 0$。</p>
+              <p>$f(n) = \omega(g(n))$ 若對任意 $c &gt; 0$,存在 $n_0$,使得
+              $\forall\,n \ge n_0:\; f(n) &gt; c\cdot g(n)$。等價:$\displaystyle\lim_{n\to\infty}\frac{f(n)}{g(n)} = \infty$。</p>
+              <p><strong>(b) 與 O/Ω 的關鍵區別</strong></p>
+              <p>大 $O$($f \le c\cdot g$)允許 $c$ 是固定的某個值;小 $o$ 要求對<em>所有</em> $c$ 都成立——比值
+              $f/g$ 最終必須趨向 0,不能只是「有界」。$f = o(g)$ 比 $f = O(g)$ 嚴格得多:$o(g) \subsetneq O(g)$。
+              小 $\omega$ 與大 $\Omega$ 的關係同理:$\omega(g) \subsetneq \Omega(g)$。</p>
+              <p><strong>(c) 判斷</strong></p>
+              <ol>
+                <li><strong>是。</strong>$\lim_{n\to\infty}\dfrac{2n}{n^2} = \lim\dfrac{2}{n} = 0$。</li>
+                <li><strong>否。</strong>$\lim_{n\to\infty}\dfrac{n^2}{n^2} = 1 \ne 0$。$n^2 = \Theta(n^2)$,但不是 $o(n^2)$。</li>
+                <li><strong>是。</strong>$\lim_{n\to\infty}\dfrac{n^2}{n} = n \to \infty$。</li>
+                <li><strong>是。</strong>$\lim_{n\to\infty}\dfrac{n\log n}{n} = \log n \to \infty$。</li>
+              </ol>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 試題 26-E2 <span class="badge">觀念</span> ★★</div>
+        <div class="ex-body">
+          <p>下列三個場景各自最適合哪種分析方式?請選擇「最壞情況分析」「平均情況分析」「攤銷分析」並說明理由。</p>
+          <ol>
+            <li>自動駕駛系統的路徑規劃演算法,必須在固定時間內回應。</li>
+            <li>分析以隨機選樞紐的快速排序對<em>任意固定輸入</em>的期望執行時間。</li>
+            <li>Python <code>list</code> 在連續呼叫 $n$ 次 <code>append</code> 後每次的平均成本。</li>
+          </ol>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <ol>
+                <li><strong>最壞情況分析。</strong>安全攸關系統需要<em>硬性上限</em>保證——「平均表現好」無法接受偶爾超時。
+                最壞情況是唯一能給出「任何輸入下都不超過時間預算」承諾的分析方式。</li>
+                <li><strong>平均情況分析(期望情況分析)。</strong>隨機化演算法對演算法本身的隨機選擇取期望,
+                快速排序用隨機樞紐後任意固定輸入的期望時間均為 $\Theta(n\log n)$——
+                這不依賴輸入分布假設,比一般平均情況更強。</li>
+                <li><strong>攤銷分析。</strong>任意單次 <code>append</code> 可能觸發 $O(n)$ 擴容,
+                但「任意連續 $n$ 次 <code>append</code> 的總成本 $\le 3n$」是<em>確定性保證</em>,不需要任何機率假設。
+                攤銷分析比平均情況分析更強:它保證最壞的 $n$ 次操作序列也只有 $O(n)$ 的總成本。</li>
+              </ol>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 試題 26-E3 <span class="badge">觀念</span> ★★</div>
+        <div class="ex-body">
+          <p>小智宣稱:「演算法 A 在 $n=10^6$ 時跑 $3\times10^{12}$ 次操作,演算法 B 跑 $10^{13}$ 次,
+          所以 A 比 B 快。而且兩者都是 $O(n^2)$,Big-O 相同,所以效能一樣。」
+          請指出這段話中<strong>所有謬誤或過於含糊之處</strong>,並給出正確說法。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>謬誤 1:「Big-O 相同 → 效能一樣」。</strong>
+              Big-O 只捕捉漸進<em>成長率</em>,忽略常數因子。同為 $O(n^2)$ 的兩個演算法在有限 $n$ 下可以有顯著的常數倍差距——
+              例如 $3n^2$ 與 $10n^2$ 同屬 $\Theta(n^2)$,但在 $n=10^6$ 時相差 $3$ 倍以上。
+              「Big-O 相同」只代表<em>長期成長形狀相同</em>,不代表具體運算量相等。</p>
+              <p><strong>謬誤 2(潛在):只看固定的 $n=10^6$ 就斷言優劣。</strong>若其中一個演算法其實是 $O(n\log n)$,
+              在小 $n$ 下可能被常數較小的 $O(n^2)$ 演算法反超(recall 試題 26.7 的交叉點概念)。
+              正確做法:先確定兩者的 $\Theta$,判斷成長率孰低;若成長率相同,再對目標 $n$ 比較常數因子,
+              並說清楚「此結論僅對該規模有效」。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h3>二、計算題</h3>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 試題 26-E4 <span class="badge">計算</span> ★★</div>
+        <div class="ex-body">
+          <p>判斷下列每對函數 $f(n)$ 與 $g(n)$ 的漸進關係。對每小題,從 $O,\Omega,\Theta,o,\omega$ 中選出<em>所有</em>成立的關係(以 $f$ 相對於 $g$ 為準):</p>
+          <ol type="a">
+            <li>$f(n)=3n\log n+5n$，$g(n)=n\log(n^2)$</li>
+            <li>$f(n)=2^{n+1}$，$g(n)=2^n$</li>
+            <li>$f(n)=\log(n!)$，$g(n)=n\log n$</li>
+            <li>$f(n)=n^{1.5}$，$g(n)=n\log n$</li>
+          </ol>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>(a) $f=\Theta(g)$,同時 $f=O(g)$ 且 $f=\Omega(g)$。</strong><br>
+              $g(n)=n\log(n^2)=2n\log n$。
+              $\displaystyle\lim_{n\to\infty}\frac{f}{g}=\lim\frac{3n\log n+5n}{2n\log n}=\lim\!\left(\frac{3}{2}+\frac{5}{2\log n}\right)=\frac{3}{2}$。
+              極限為有限正數,故 $f=\Theta(g)$。</p>
+              <p><strong>(b) $f=\Theta(g)$。</strong><br>
+              $2^{n+1}=2\cdot 2^n$,差常數倍 2,故 $\lim f/g=2$,即 $f=\Theta(g)$。</p>
+              <p><strong>(c) $f=\Theta(g)$。</strong><br>
+              上界:$\log(n!)=\sum_{k=1}^n\log k\le n\log n$,故 $f=O(g)$。<br>
+              下界:$\log(n!)\ge\sum_{k=\lceil n/2\rceil}^n\log k\ge\dfrac{n}{2}\log\dfrac{n}{2}=\dfrac{n}{2}(\log n-1)=\Omega(n\log n)$,故 $f=\Omega(g)$。<br>
+              兩者合併:$f=\Theta(g)$。(詳細推導見試題 26-E9。)</p>
+              <p><strong>(d) $f=\omega(g)$,同時 $f=\Omega(g)$;$f\ne O(g)$。</strong><br>
+              $\displaystyle\lim_{n\to\infty}\frac{n^{1.5}}{n\log n}=\lim\frac{\sqrt{n}}{\log n}=\infty$,
+              因為 $\sqrt{n}$ 成長遠快過 $\log n$。故 $f=\omega(g)$,即 $n^{1.5}$ 成長比 $n\log n$ 快。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 試題 26-E5 <span class="badge">計算</span> ★★★</div>
+        <div class="ex-body">
+          <p>分析下列函式的時間複雜度,給出緊界 $\Theta(\cdot)$。提示:先算外層有幾次迭代,再對每個外層的 $i$ 算內層迭代數,最後求和。</p>
+          <pre><code class="language-python">def mystery(n):
+    i = 1
+    while i &lt;= n:        # 外層:i 從 1 翻倍直到超過 n
+        j = 1
+        while j &lt;= i:    # 內層:j 從 1 翻倍直到超過 i
+            j *= 2
+        i *= 2</code></pre>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>外層:</strong>$i$ 依序取 $1,2,4,\dots,2^m$,共 $L=\lfloor\log_2 n\rfloor+1$ 次迭代。
+              第 $m$ 次外層($m=0,1,\dots,L-1$)時 $i=2^m$。</p>
+              <p><strong>內層(對固定 $i=2^m$):</strong>$j$ 依序取 $1,2,4,\dots,2^m$,共 $m+1$ 次。</p>
+              <p><strong>總次數:</strong>
+              $$\sum_{m=0}^{L-1}(m+1)=1+2+\dots+L=\frac{L(L+1)}{2}.$$
+              其中 $L=\Theta(\log n)$,故總次數 $=\Theta(\log^2 n)$。</p>
+              <p><strong>結論:mystery 的時間複雜度為 $\Theta(\log^2 n)$。</strong>
+              「對數平方」源於外層 $\log n$ 個迭代,每次各做 $\Theta(\log i)$ 次——兩個對數因子相乘的形狀。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 試題 26-E6 <span class="badge">計算</span> ★★★</div>
+        <div class="ex-body">
+          <p>用<strong>主定理(Master Theorem)</strong>解下列遞迴的時間複雜度。主定理($T(n)=aT(n/b)+f(n)$,設 $p=\log_b a$):</p>
+          <ul>
+            <li>情況一:$f(n)=O(n^{p-\varepsilon})$ → $T(n)=\Theta(n^p)$</li>
+            <li>情況二:$f(n)=\Theta(n^p\log^k n)$ → $T(n)=\Theta(n^p\log^{k+1}n)$</li>
+            <li>情況三:$f(n)=\Omega(n^{p+\varepsilon})$ 且正則條件成立 → $T(n)=\Theta(f(n))$</li>
+          </ul>
+          <ol type="a">
+            <li>$T(n)=4T(n/2)+n^2$</li>
+            <li>$T(n)=2T(n/2)+n\log n$</li>
+            <li>$T(n)=9T(n/3)+n^2$</li>
+            <li>$T(n)=3T(n/4)+n\log n$</li>
+          </ol>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>(a)</strong> $a=4,b=2,p=\log_2 4=2$;$f(n)=n^2=\Theta(n^p\log^0 n)$。
+              <strong>情況二</strong>($k=0$):$T(n)=\Theta(n^2\log n)$。</p>
+              <p><strong>(b)</strong> $a=2,b=2,p=\log_2 2=1$;$f(n)=n\log n=\Theta(n^1\cdot\log^1 n)$。
+              <strong>情況二</strong>($k=1$):$T(n)=\Theta(n\log^2 n)$。</p>
+              <p><strong>(c)</strong> $a=9,b=3,p=\log_3 9=2$;$f(n)=n^2=\Theta(n^p\log^0 n)$。
+              <strong>情況二</strong>($k=0$):$T(n)=\Theta(n^2\log n)$。</p>
+              <p><strong>(d)</strong> $a=3,b=4,p=\log_4 3\approx 0.792$;$f(n)=n\log n$。
+              因 $n\log n=\Omega(n)=\Omega(n^{0.792+\varepsilon})$(取 $\varepsilon\approx 0.208$),
+              且正則條件:$3\cdot\tfrac{n}{4}\log\tfrac{n}{4}\le\tfrac{3}{4}n\log n$(取 $c=3/4$)。
+              <strong>情況三</strong>:$T(n)=\Theta(n\log n)$。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 試題 26-E7 <span class="badge">計算</span> ★★★</div>
+        <div class="ex-body">
+          <p>考慮一個 $k$ 位元二進位計數器,從 0 開始執行 $n$ 次 INCREMENT(加 1)操作。
+          每次 INCREMENT 的成本定義為「翻轉的位元數」。用<strong>聚合法(aggregate method)</strong>證明:
+          $n$ 次 INCREMENT 的<em>總</em>成本是 $O(n)$,故每次操作的攤銷成本是 $O(1)$。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>觀察每個位元的翻轉頻率:</strong>
+              位元位置 $i$($i=0$ 為最低位)在每 $2^i$ 次 INCREMENT 中恰好翻轉一次。
+              故在 $n$ 次 INCREMENT 中,位元 $i$ 翻轉至多 $\lfloor n/2^i\rfloor$ 次。</p>
+              <p><strong>總翻轉次數(= 總成本):</strong>
+              $$\sum_{i=0}^{k-1}\!\left\lfloor\frac{n}{2^i}\right\rfloor
+              \;\le\; n\!\sum_{i=0}^{\infty}\frac{1}{2^i} = n\cdot 2 = 2n.$$
+              (幾何級數 $\sum_{i=0}^{\infty}(1/2)^i=2$。)</p>
+              <p><strong>結論:</strong>$n$ 次 INCREMENT 總成本 $\le 2n=O(n)$,故攤銷每次 $O(1)$。$\blacksquare$</p>
+              <p>注意:單次最壞情況成本是 $k=O(\log n)$(例如從 $0\underbrace{11\cdots1}_{k-1}$ 進位到 $1\underbrace{00\cdots0}_{k-1}$,所有位元翻轉),
+              但攤銷後仍是 $O(1)$——「昂貴操作非常罕見」正是攤銷分析的精髓。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h3>三、證明題</h3>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 試題 26-E8 <span class="badge">證明</span> ★★</div>
+        <div class="ex-body">
+          <p>用大 $O$ 的<strong>定義</strong>(給出具體的 $c$ 與 $n_0$)證明 $n\log_2 n = O(n^{1.5})$。
+          要求:寫出完整的不等式推導,不得直接引用極限。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>目標:</strong>找 $c,n_0&gt;0$ 使得 $\forall\,n\ge n_0:\;n\log_2 n\le c\cdot n^{1.5}$,
+              即 $\log_2 n\le c\cdot\sqrt{n}$。</p>
+              <p><strong>取 $c=1,\;n_0=1$。</strong>聲稱:$\forall\,n\ge 1:\;\log_2 n\le\sqrt{n}$。</p>
+              <p>等價命題:$2^{\sqrt{n}}\ge n$。令 $m=\sqrt{n}\ge 1$,即 $2^m\ge m^2$。
+              用歸納法:基底 $m=1$:$2\ge 1$✓;$m=2$:$4\ge 4$✓;
+              歸納步($m\ge 3$):$2^{m+1}=2\cdot 2^m\ge 2m^2$,而 $2m^2\ge(m+1)^2\iff m^2-2m-1\ge 0$,
+              當 $m\ge 3$ 成立。故 $\forall\,m\ge 1:\;2^m\ge m^2$,即 $\log_2 n\le\sqrt{n}$。</p>
+              <p>因此取 $c=1,\;n_0=1$:$\forall\,n\ge 1,\;n\log_2 n\le n\cdot\sqrt{n}=n^{1.5}$,故 $n\log n=O(n^{1.5})$。$\blacksquare$</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 試題 26-E9 <span class="badge">證明</span> ★★★</div>
+        <div class="ex-body">
+          <p>證明 $\log(n!)=\Theta(n\log n)$。須分別完整證明<strong>上界</strong>($O(n\log n)$)與<strong>下界</strong>($\Omega(n\log n)$),並給出明確的 $c_1,c_2,n_0$。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>上界 $O(n\log n)$:</strong>
+              $$\log(n!)=\sum_{k=1}^{n}\log k\;\le\;\sum_{k=1}^{n}\log n=n\log n.$$
+              取 $c_2=1,\;n_0=1$,故 $\log(n!)=O(n\log n)$。$\blacksquare$</p>
+              <p><strong>下界 $\Omega(n\log n)$:</strong>只對後半段 $k=\lceil n/2\rceil$ 到 $n$ 的項估計:
+              $$\log(n!)=\sum_{k=1}^{n}\log k\;\ge\;\sum_{k=\lceil n/2\rceil}^{n}\log k\;\ge\;\frac{n}{2}\cdot\log\frac{n}{2}=\frac{n}{2}(\log n-1).$$
+              當 $n\ge 4$,有 $\log n\ge 2$,故 $1\le\tfrac{\log n}{2}$,即 $\tfrac{n}{2}\le\tfrac{n\log n}{4}$,因此:
+              $$\log(n!)\;\ge\;\frac{n\log n}{2}-\frac{n}{2}\;\ge\;\frac{n\log n}{2}-\frac{n\log n}{4}=\frac{n\log n}{4}.$$
+              取 $c_1=\tfrac{1}{4},\;n_0=4$,故 $\log(n!)=\Omega(n\log n)$。$\blacksquare$</p>
+              <p><strong>合併:</strong>$c_1=\tfrac{1}{4},c_2=1,n_0=4$,對所有 $n\ge 4$:
+              $\tfrac{1}{4}n\log n\le\log(n!)\le n\log n$,故 $\log(n!)=\Theta(n\log n)$。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 試題 26-E10 <span class="badge">證明</span> ★★★★</div>
+        <div class="ex-body">
+          <p>以<strong>遞迴樹法(recursion tree)</strong>求解遞迴式 $T(n)=3T(n/2)+n$($T(1)=1$)的閉式,
+          並給出 $\Theta(\cdot)$ 緊界。請描述遞迴樹結構、計算各層總成本、求葉層數與葉層成本,最後加總。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>樹結構:</strong>根節點代價 $n$,分出 3 個子節點各帶代價 $n/2$;
+              每層節點數乘以 3,子問題規模除以 2。</p>
+              <p><strong>第 $i$ 層($i=0,1,\dots$):</strong>有 $3^i$ 個節點,每個代價 $n/2^i$,
+              該層總成本 $=3^i\cdot n/2^i=n(3/2)^i$。</p>
+              <p><strong>葉層:</strong>子問題規模降到 1 時,$n/2^i=1\Rightarrow i=\log_2 n$,共有 $3^{\log_2 n}=n^{\log_2 3}$ 片葉,
+              葉層總成本 $=n^{\log_2 3}\cdot T(1)=n^{\log_2 3}$。</p>
+              <p><strong>加總(共 $\log_2 n$ 層內節點 + 葉層):</strong>
+              $$T(n)=\sum_{i=0}^{\log_2 n-1}n\!\left(\frac{3}{2}\right)^{\!i}+n^{\log_2 3}.$$
+              幾何級數($r=3/2&gt;1$):
+              $$\sum_{i=0}^{\log_2 n-1}\!\left(\frac{3}{2}\right)^{\!i}=\frac{(3/2)^{\log_2 n}-1}{1/2}=2\!\left(n^{\log_2(3/2)}-1\right)=2\!\left(n^{\log_2 3-1}-1\right).$$
+              故內節點之和 $=2n^{\log_2 3}-2n$。加上葉層:$T(n)=3n^{\log_2 3}-2n=\Theta(n^{\log_2 3})$。</p>
+              <p>$\log_2 3\approx 1.585$,故 $T(n)=\Theta(n^{1.585})$——比 $O(n^2)$ 快,但比 $O(n\log n)$ 慢。
+              此結果亦可由主定理情況一直接得出:$p=\log_2 3,f(n)=n=O(n^{p-\varepsilon})$,故 $T(n)=\Theta(n^{\log_2 3})$。$\blacksquare$</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h3>四、實作題</h3>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 試題 26-E11 <span class="badge">實作</span> ★★</div>
+        <div class="ex-body">
+          <p>實作 Python 函式 <code>timing_survey()</code>,對以下兩種排序各做「倍率測試」($n$ 翻倍,看時間變幾倍),輸出結果表格並說明觀察結論:</p>
+          <ol>
+            <li>$O(n\log n)$:Python 內建 <code>sorted()</code>。</li>
+            <li>$O(n^2)$:自製插入排序。</li>
+          </ol>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">import time, random
+
+def insertion_sort(arr):
+    """自製插入排序:O(n²)"""
+    a = arr[:]
+    for i in range(1, len(a)):
+        key = a[i]
+        j = i - 1
+        while j &gt;= 0 and a[j] &gt; key:
+            a[j + 1] = a[j]
+            j -= 1
+        a[j + 1] = key
+    return a
+
+def measure(func, data):
+    start = time.perf_counter()
+    func(data)
+    return time.perf_counter() - start
+
+def timing_survey():
+    header = f"{'n':&gt;8} | {'sorted ms':&gt;10} | {'插入排序 ms':&gt;12} | {'sorted 倍率':&gt;10} | {'插入倍率':&gt;9}"
+    print(header)
+    print("-" * len(header))
+    prev_b, prev_i = None, None
+    for exp in range(8, 15):          # n = 256 到 16384
+        n = 2 ** exp
+        data = [random.randint(0, n) for _ in range(n)]
+        t_b = measure(lambda d: sorted(d), data)
+        t_i = measure(insertion_sort, data) if n &lt;= 8192 else None
+        rb = f"x{t_b/prev_b:.1f}" if prev_b else "-"
+        ri = (f"x{t_i/prev_i:.1f}" if (prev_i and t_i) else "-")
+        t_i_s = f"{t_i*1000:.1f}" if t_i else "太慢"
+        print(f"{n:&gt;8} | {t_b*1000:&gt;10.2f} | {t_i_s:&gt;12} | {rb:&gt;10} | {ri:&gt;9}")
+        prev_b = t_b
+        if t_i:
+            prev_i = t_i
+
+timing_survey()</code></pre>
+              <p><strong>預期觀察:</strong></p>
+              <ul>
+                <li><code>sorted()</code>(Timsort):$n$ 翻倍,時間約 $\times 2$,符合 $O(n\log n)$。</li>
+                <li>插入排序:$n$ 翻倍,時間約 $\times 4$,符合 $O(n^2)$。</li>
+                <li>在 $n\approx 2000$–$8192$ 區間,插入排序已明顯落後;至 $n=8192$ 時差距通常超過 50 倍。</li>
+              </ul>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 試題 26-E12 <span class="badge">實作</span> ★★★</div>
+        <div class="ex-body">
+          <p>以「計步器」驗證主定理預測。實作兩個遞迴函式,每次做基本操作時讓全域計步器加 1,
+          對 $n=2^1,2^2,\dots,2^{10}$ 各量步數,並印出「實測步數 / 理論預測」的比值,確認比值收斂到常數:</p>
+          <ol>
+            <li><code>dc_nlogn(n)</code>:模擬 $T(n)=2T(n/2)+n$,預測 $\Theta(n\log n)$。</li>
+            <li><code>dc_n2logn(n)</code>:模擬 $T(n)=4T(n/2)+n^2$,預測 $\Theta(n^2\log n)$。</li>
+          </ol>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">import math
+
+steps = 0
+
+def dc_nlogn(n):
+    global steps
+    if n &lt;= 1:
+        steps += 1; return
+    dc_nlogn(n // 2)
+    dc_nlogn(n // 2)
+    for _ in range(n):   # 合併代價 n
+        steps += 1
+
+def dc_n2logn(n):
+    global steps
+    if n &lt;= 1:
+        steps += 1; return
+    for _ in range(4):
+        dc_n2logn(n // 2)
+    for _ in range(n * n):  # 代價 n²
+        steps += 1
+
+print("=== T(n)=2T(n/2)+n  預測 Θ(n log n) ===")
+prev = None
+for k in range(1, 11):
+    n = 2 ** k
+    steps = 0; dc_nlogn(n)
+    theory = n * math.log2(n)
+    ratio = steps / theory
+    print(f"n={n:&gt;5}  步數={steps:&gt;8}  步數/(n·logn)={ratio:.4f}")
+
+print("\n=== T(n)=4T(n/2)+n²  預測 Θ(n² log n) ===")
+for k in range(1, 9):     # n=2..256,n²太大不跑到10
+    n = 2 ** k
+    steps = 0; dc_n2logn(n)
+    theory = n * n * math.log2(n)
+    ratio = steps / theory
+    print(f"n={n:&gt;4}  步數={steps:&gt;9}  步數/(n²·logn)={ratio:.4f}")</code></pre>
+              <p><strong>預期結果:</strong>兩張表右欄的比值應隨 $n$ 增大而趨向某個正常數(通常在 1–4 之間),
+              驗證 $\Theta$ 緊界成立。若比值單調增大代表預測偏低(低估複雜度),單調減小代表偏高。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h3>五、挑戰題</h3>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 試題 26-E13 <span class="badge">挑戰</span> ★★★★</div>
+        <div class="ex-body">
+          <p>用<strong>勢能法(potential method)</strong>分析動態陣列 <code>append</code> 的攤銷成本。
+          定義勢能函數 $\Phi = 2\cdot\text{size} - \text{capacity}$($\text{size}$ 為目前元素數,
+          $\text{capacity}$ 為底層陣列大小)。請依序:</p>
+          <ol>
+            <li>說明 $\Phi$ 在「剛完成一次擴容後」等於 0,且此後始終 $\ge 0$。</li>
+            <li>計算「不觸發擴容的 <code>append</code>」的攤銷代價 $\hat{c}$。</li>
+            <li>計算「觸發擴容(容量翻倍)的 <code>append</code>」的攤銷代價 $\hat{c}$。</li>
+            <li>由 (2)(3) 得出每次 <code>append</code> 攤銷成本 $O(1)$ 的結論。</li>
+          </ol>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>勢能法框架:</strong>攤銷代價 $\hat{c}_i=c_i+\Delta\Phi_i$($c_i$ 為實際代價,$\Delta\Phi_i=\Phi_{\text{after}}-\Phi_{\text{before}}$)。</p>
+              <p><strong>1. 初始條件:</strong>剛擴容完成時 size $=s$,capacity $=2s$,
+              故 $\Phi=2s-2s=0\ge 0$。此後每次 append 使 size 加 1,$\Phi$ 增加 2,始終 $\ge 0$。$\checkmark$</p>
+              <p><strong>2. 不觸發擴容</strong>(size $&lt;$ capacity):<br>
+              $c_i=1$。$\Delta\Phi=(2(\text{size}+1)-\text{cap})-(2\cdot\text{size}-\text{cap})=+2$。
+              $\hat{c}=1+2=\mathbf{3}$。</p>
+              <p><strong>3. 觸發擴容</strong>(size $=$ capacity $=s$ before append):<br>
+              $c_i=s+1$(複製 $s$ 個元素 $+$ 放入新元素)。擴容後:new size $=s+1$,new capacity $=2s$。<br>
+              $\Phi_{\text{after}}=2(s+1)-2s=2$；$\Phi_{\text{before}}=2s-s=s$；$\Delta\Phi=2-s$。<br>
+              $\hat{c}=(s+1)+(2-s)=\mathbf{3}$。</p>
+              <p><strong>4. 結論:</strong>無論是否擴容,每次 append 攤銷代價均為 $3=O(1)$。
+              由勢能法定理:$n$ 次操作總實際代價
+              $\le\sum_{i=1}^n\hat{c}_i+(\Phi_0-\Phi_n)\le 3n+0=O(n)$(因 $\Phi\ge 0$),故每次 append 攤銷 $O(1)$。$\blacksquare$</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 試題 26-E14 <span class="badge">挑戰</span> ★★★★</div>
+        <div class="ex-body">
+          <p>下列四個問題各屬於 P、NP、NP-complete、NP-hard、Undecidable 中的哪些類?請說明理由。(本題假設 $\text{P}\ne\text{NP}$;第 33 章將深入展開。)</p>
+          <ol>
+            <li>排序 $n$ 個整數(Sorting)。</li>
+            <li>3-SAT:給定布林公式(每子句恰好三個文字),問是否可滿足。</li>
+            <li>旅行推銷員問題決策版(TSP-Decision):給定圖 $G$ 與預算 $k$,問是否存在 Hamiltonian cycle 成本 $\le k$。</li>
+            <li>停機問題(Halting Problem):給定程式 $P$ 與輸入 $x$,問 $P(x)$ 是否停機。</li>
+          </ol>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <ol>
+                <li><strong>P</strong>(同時也在 NP 中)。Timsort/合併排序在 $O(n\log n)$ 多項式時間內解決,
+                且 $\Omega(n\log n)$ 是基於比較的排序下界(第 27–28 章會證)。</li>
+                <li><strong>NP-complete</strong>。3-SAT 在 NP 中(給賦值,驗證只需 $O(n)$);
+                由 Cook–Levin 定理(1971),3-SAT 是第一個被證明的 NP-complete 問題——所有 NP 問題皆可多項式歸約到它。</li>
+                <li><strong>NP-complete</strong>。TSP-D 在 NP 中(給一條路線可在多項式時間驗證);
+                且 Hamiltonian Cycle($\le$NP-complete)可多項式歸約到它。
+                注意:TSP 的<em>最佳化版</em>(找最短路線)是 NP-hard(不在 NP 中,因為「這就是最短」的驗證需要指數時間)。</li>
+                <li><strong>Undecidable(不可判定),超出 NP-hard。</strong>Turing(1936)證明停機問題無法被任何圖靈機判定。
+                NP-hard 問題至少在概念上有解(只是可能很慢),而停機問題根本無法用演算法解決——它超越了可計算性的邊界,詳見第 33 章。</li>
+              </ol>
+              <div class="callout note">
+                <div class="ico">🔗</div>
+                <div class="body">
+                  <span class="c-title">複雜度類別的包含關係</span>
+                  <p>$\text{P}\subseteq\text{NP}\subseteq\text{PSPACE}\subseteq\text{EXP}$;
+                  NP-complete 是 NP 中「最難」的問題;NP-hard 包含 NP-complete 但可超出 NP。
+                  Undecidable 問題在所有這些類的外面。「P 是否等於 NP」是千禧年七大問題之一,懸而未決。</p>
+                </div>
+              </div>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>把這一章串起來</h2>
+      <p>
+        我們從「測秒數為什麼不準」出發,打造出一把能跨越機器與語言的量尺;再從直覺一路走到能<em>證明</em>的數學。
+        回顧這趟旅程的路標:
+      </p>
+      <ul>
+        <li>複雜度衡量的是<strong>成長率</strong>,不是秒數。漸進分析只看「夠大的 $n$」,只留<strong>主導項</strong>,丟掉常數與低階項——像拿望遠鏡眺望趨勢。</li>
+        <li><strong>大 O</strong> 是上界($\le c\cdot g$)、<strong>大 Ω</strong> 是下界($\ge c\cdot g$)、<strong>大 Θ</strong> 是上下界合一的<strong>緊界</strong>。
+        記住:「O 是上界,不是緊界」——口語常把 O 當 Θ 用,自己分析時要分清楚。</li>
+        <li>複雜度動物園從 $O(1)$ 排到 $O(n!)$;指數與階乘成長之恐怖,意味著「只有指數解」幾乎等於「大輸入無解」。</li>
+        <li>讀程式三規則:循序<strong>相加</strong>、巢狀<strong>相乘</strong>、砍半生 <strong>$\log$</strong>;讀完再丟常數與低階項。</li>
+        <li>同一演算法有<strong>最佳 / 平均 / 最壞</strong>三張臉;我們通常盯<strong>最壞</strong>,因為它是保證、好算、且壞輸入真的會出現。</li>
+        <li><strong>空間複雜度</strong>是另一個維度;時間與空間常可<strong>互換</strong>(快取、DP、雜湊都是拿空間換時間)。</li>
+        <li><strong>攤銷分析</strong>解釋了動態陣列 append 為何是 $O(1)$:昂貴的擴容很罕見,被大量便宜操作平攤掉。攤銷是「對一連串操作」的保證,比平均情況更強。</li>
+        <li>理論可以用 Python <strong>計時實驗</strong>驗證:$n$ 翻倍看時間變幾倍,就能反推複雜度。</li>
+        <li><strong>對數</strong>源於「反覆砍半」,因此在搜尋、樹、分治裡無所不在;底數不影響 Big-O。</li>
+      </ul>
+      <p>
+        這一章是整個第六部的<strong>數學地基</strong>。從下一章開始,我們會用這把量尺去丈量一個又一個漂亮的演算法與資料結構——
+        分治法、排序、樹、圖、雜湊、動態規劃……每當你問「這個方法到底好不好」,答案都會用你今天學到的語言寫成。
+        歡迎來到演算法的世界。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">📚</div>
+        <div class="body">
+          <span class="c-title">想更深入?延伸資源</span>
+          <p>本章對應 OSSU 的 <strong>Algorithms: Design and Analysis</strong>(Stanford,
+          <a href="https://www.coursera.org/specializations/algorithms">Tim Roughgarden 的演算法專項課程</a>)。
+          Roughgarden 把這門課寫成了一套極為好讀的書
+          <a href="https://www.algorithmsilluminated.org/"><em>Algorithms Illuminated</em></a>,
+          官網 <a href="https://www.algorithmsilluminated.org/">algorithmsilluminated.org</a> 上有配套影片與習題,
+          第一冊正是從漸進分析與大 O 講起,是本章內容最佳的延伸閱讀。
+          想要百科全書式的嚴謹,則可查經典教科書 <em>CLRS</em>(<em>Introduction to Algorithms</em>)的第 3 章「Growth of Functions」。</p>
+        </div>
+      </div>
+
+    

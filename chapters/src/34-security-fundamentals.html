@@ -1,0 +1,807 @@
+<!--meta
+title: 資安基礎與威脅模型
+description: 從第一原理理解資訊安全:CIA 鐵三角、資產/威脅/弱點/風險的核心詞彙、像攻擊者一樣思考的威脅模型(STRIDE 與信任邊界)、Saltzer & Schroeder 八大安全設計原則、認證/授權/可歸責(AAA)與 MFA、常見攻擊概覽,以及縱深防禦的實踐與資安文化。立場為防禦性、授權測試。
+-->
+
+
+      <div class="eyebrow">第七部 · 資訊安全</div>
+      <h1>資安基礎與威脅模型</h1>
+      <p class="subtitle">寫程式的時候,你在想「怎麼讓它跑起來」。攻擊者看著同一段程式,想的卻是「怎麼讓它跑出我要的結果」。學資安,就是學會同時用這兩種眼睛看世界。</p>
+      <div class="byline">
+        <span class="tag">第 34 章</span>
+        <span>閱讀時間 ≈ 42 分鐘</span>
+        <span>難度:★★★☆☆</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>為什麼資安不是「上線前再加的功能」,而是<strong>從設計第一天就要考慮的品質屬性</strong></li>
+          <li>資安鐵三角 <strong>CIA</strong>:機密性、完整性、可用性,各自是什麼、被破壞會怎樣</li>
+          <li>把<strong>資產、威脅、弱點、風險、攻擊面、攻擊向量</strong>這幾個常被混用的詞一次釐清</li>
+          <li>怎麼像攻擊者一樣思考:用 <strong>威脅模型(threat modeling)</strong>與 <strong>STRIDE</strong> 系統化地找漏洞</li>
+          <li>歷久彌新的 <strong>Saltzer &amp; Schroeder 八大安全設計原則</strong></li>
+          <li>認證、授權、可歸責(<strong>AAA</strong>)的差別,以及多因素認證(MFA)為什麼重要</li>
+          <li>惡意軟體、釣魚、中間人、阻斷服務、密碼攻擊……常見威脅的全景圖</li>
+          <li><strong>縱深防禦</strong>怎麼落地,以及為什麼資安是一種<strong>文化與流程</strong>,而不是一次性的任務</li>
+        </ul>
+      </div>
+
+      <h2>一封來自「IT 部門」的信</h2>
+      <p>
+        某個週一早上,公司全體員工收到一封信。寄件人寫著「IT 支援中心」,內容很客氣:
+        「您的信箱容量即將額滿,為避免無法收信,請於今日內點擊下方連結重新驗證您的帳號密碼。」
+        連結看起來也很正常,點進去是一個和公司登入頁<strong>一模一樣</strong>的畫面。
+      </p>
+      <p>
+        那天,公司裡有 37 個人輸入了自己的帳號密碼。沒有任何防火牆被攻破,沒有任何程式漏洞被利用,
+        沒有人寫出一行 0 day exploit。攻擊者只是<strong>寄了一封信</strong>,然後等。
+        三小時後,他們用其中一組憑證登入了公司的內部系統,而那個人,正好是會計。
+      </p>
+      <p>
+        這個故事(它的各種版本每天都在真實上演)告訴我們一件事:資安不是一道你築起來就高枕無憂的牆。
+        它牽涉到程式、系統、網路,但更牽涉到<strong>人、流程與決策</strong>。
+        而最危險的誤解是:以為資安是「工程做完之後,資安團隊再來檢查一下」的事。
+      </p>
+
+      <h2>為什麼資安人人有責</h2>
+      <p>
+        三十年前,「上網」是少數人偶爾做的事。今天,你的手錶、門鎖、汽車、冰箱、醫院的點滴幫浦、
+        城市的紅綠燈,全都連著網路、全都跑著軟體。軟體無所不在,意味著一件可怕的事:
+        <strong>攻擊面(attack surface)也無所不在</strong>。每多一行連網的程式碼、每多一個對外的功能,
+        就多開了一扇門——而攻擊者只需要找到<em>一扇</em>沒鎖好的門,守方卻得把<em>每一扇</em>門都鎖好。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">攻守天生不對稱</span>
+          <p>這是資安最根本、也最殘酷的事實:<strong>防守方要堵住所有漏洞,攻擊者只要找到一個。</strong>
+          這個不對稱性決定了資安的整套思維——你不能只靠「把已知的洞補起來」,
+          而要假設「一定還有沒發現的洞」,並設計成「就算某一層被攻破,還有下一層擋著」。
+          這就是後面會講的<strong>縱深防禦</strong>。</p>
+        </div>
+      </div>
+
+      <h3>安全不是「之後再加」,而是設計的一部分</h3>
+      <p>
+        很多人把安全當成一種「功能」,像登入畫面或匯出 PDF 那樣,可以排到下個版本再做。
+        這是天大的誤會。還記得<strong>第 11 章</strong>講軟體架構時,我們談過<strong>品質屬性
+        (quality attributes)</strong>嗎?效能、可維護性、可擴充性……這些東西的共同特徵是:
+        它們<strong>滲透在整個系統裡,無法事後外掛</strong>。安全(security)正是其中最典型的一個品質屬性。
+      </p>
+      <p>
+        一個沒在設計階段考慮安全的系統,就像一棟蓋好之後才想到「啊我們忘了裝門鎖」的房子——
+        你可以事後補裝,但那些藏在牆裡的水管(資料流)、樓層之間的關係(權限結構)、
+        地基(信任假設)早就定型了,補出來的安全永遠是又貴又脆的補丁。把安全「設計進去」
+        (security by design)而不是「事後黏上去」(security as an afterthought),
+        是這整章想傳達的第一個、也是最重要的態度。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">🔗</div>
+        <div class="body">
+          <span class="c-title">這正是第 11 章的「品質屬性」</span>
+          <p>架構決策是一種<strong>權衡(trade-off)</strong>。安全往往要和便利性、效能、開發速度打架——
+          多一道驗證就多一點摩擦,多一層加密就多一點延遲。資安工程師的工作不是「把安全開到最大」,
+          而是<strong>在理解風險之後,做出有意識的取捨</strong>。要做取捨,你得先有一套衡量風險的語言。
+          那就是接下來幾節要建立的東西。</p>
+        </div>
+      </div>
+
+      <h2>資安鐵三角:CIA 三要素</h2>
+      <p>
+        當我們說一個系統「安全」,到底在說什麼?資安界用一個沿用了數十年的框架來回答這個問題,
+        叫做 <strong>CIA 三要素(CIA triad)</strong>。注意,這個 CIA 跟那個情報局沒關係,
+        它是三個英文字的縮寫——任何資安的目標,幾乎都能歸到這三個之一:
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 440" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- 三角形 -->
+  <polygon points="360,50 110,390 610,390" fill="#e3efed" stroke="#2f6f6a" stroke-width="2.5"/>
+  <!-- 中心 -->
+  <text x="360" y="290" text-anchor="middle" font-size="17" font-weight="800" fill="#2f6f6a">資訊安全</text>
+  <text x="360" y="314" text-anchor="middle" font-size="12" fill="#4a5159">三者缺一不可</text>
+
+  <!-- 頂點:機密性 -->
+  <circle cx="360" cy="50" r="6" fill="#b4541f"/>
+  <text x="360" y="28" text-anchor="middle" font-size="16" font-weight="800" fill="#b4541f">機密性</text>
+  <text x="360" y="86" text-anchor="middle" font-size="12" fill="#4a5159">Confidentiality</text>
+  <text x="360" y="106" text-anchor="middle" font-size="11" fill="#8a929b">只有該看的人看得到</text>
+
+  <!-- 左下:完整性 -->
+  <circle cx="110" cy="390" r="6" fill="#8b5cf6"/>
+  <text x="110" y="416" text-anchor="middle" font-size="16" font-weight="800" fill="#8b5cf6">完整性</text>
+  <text x="110" y="436" text-anchor="middle" font-size="12" fill="#4a5159">Integrity</text>
+  <text x="170" y="360" text-anchor="middle" font-size="11" fill="#8a929b">資料不被竄改</text>
+
+  <!-- 右下:可用性 -->
+  <circle cx="610" cy="390" r="6" fill="#2f6f6a"/>
+  <text x="610" y="416" text-anchor="middle" font-size="16" font-weight="800" fill="#2f6f6a">可用性</text>
+  <text x="610" y="436" text-anchor="middle" font-size="12" fill="#4a5159">Availability</text>
+  <text x="552" y="360" text-anchor="middle" font-size="11" fill="#8a929b">需要時用得到</text>
+</svg>
+        <figcaption>圖 34-1:CIA 鐵三角。機密性、完整性、可用性,是衡量「安全」的三根支柱。任何一根倒下,系統就不安全——而它們之間常常彼此拉扯。</figcaption>
+      </div>
+
+      <h3>機密性(Confidentiality):只有該看的人看得到</h3>
+      <p>
+        <strong>機密性</strong>是指:資訊只被授權的對象存取,不該看的人看不到。你的病歷、銀行密碼、
+        公司的客戶名單、私人訊息——這些都靠機密性保護。實現機密性最主要的兩個工具是
+        <strong>加密(encryption)</strong>(就算被偷走也是一堆亂碼)與<strong>存取控制(access control)</strong>
+        (一開始就不讓沒權限的人碰到)。
+      </p>
+      <p>
+        <strong>違反的後果:</strong>2017 年某大型信用評等機構被入侵,1.4 億多人的姓名、社會安全碼、
+        生日、地址外洩。這些資料一旦流出就<strong>再也收不回來</strong>——你可以改密碼,但改不了你的生日和身分證字號。
+        機密性的破壞,往往是不可逆的傷害。
+      </p>
+
+      <h3>完整性(Integrity):資料沒被偷偷改過</h3>
+      <p>
+        <strong>完整性</strong>是指:資訊是正確、完整、未經未授權竄改的。注意,完整性不只是「不被別人看到」,
+        而是「不被別人<em>偷偷改掉</em>」。想想看:如果攻擊者把你銀行轉帳的「收款人」從你媽改成他自己,
+        他根本不在乎別人看不看得到這筆交易——他在乎的是<em>改掉它</em>。實現完整性的工具有
+        <strong>雜湊(hashing)</strong>、<strong>數位簽章(digital signature)</strong>、
+        <strong>訊息驗證碼(MAC)</strong>——這些我們在<strong>第 35 章密碼學</strong>會深入。
+      </p>
+      <p>
+        <strong>違反的後果:</strong>勒索軟體(ransomware)把你的檔案加密、改得你打不開,是完整性與可用性的雙重破壞;
+        網頁被「置換首頁(defacement)」、軟體更新被植入後門、選票數字被篡改——這些都是完整性災難。
+        當你無法信任手上資料是真的,整個系統就失去了意義。
+      </p>
+
+      <h3>可用性(Availability):需要的時候,它在</h3>
+      <p>
+        <strong>可用性</strong>是指:授權的使用者在需要時,能正常存取資訊與服務。資料再機密、再完整,
+        如果你急著用的時候系統掛了、連不上、慢到爆,那也是一種安全失敗。
+        醫院的系統在急診時當機、銀行在發薪日無法登入、電商在雙十一被打掛——這些都是可用性問題。
+      </p>
+      <p>
+        <strong>違反的後果:</strong>最典型的攻擊就是<strong>阻斷服務(DoS / DDoS)</strong>:
+        攻擊者用海量的垃圾請求把伺服器淹沒,讓真正的使用者擠不進去。可用性也會被天災、
+        硬體故障、設定錯誤破壞——所以備援(redundancy)、備份(backup)、容錯(fault tolerance)
+        也都是資安的一環。
+      </p>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">三者常常互相拉扯</span>
+          <p>把資料鎖在斷網、灌水泥、埋進地底的保險箱裡——機密性、完整性滿分,但可用性掛零(你自己也拿不到)。
+          反過來,把所有東西公開放在無密碼的網站上,可用性滿分,機密性歸零。
+          真實世界的資安,就是在這個三角形裡找<strong>適合你場景的平衡點</strong>:
+          軍事機密偏重 C,金融交易偏重 I,而提供緊急服務的系統可能把 A 擺第一。</p>
+        </div>
+      </div>
+
+      <h3>延伸:不只三個</h3>
+      <p>
+        CIA 是骨架,但現代資安常再加兩個近親:
+      </p>
+      <ul>
+        <li><strong>真實性(Authenticity)</strong>:你正在溝通的對象,真的是他本人/它本尊嗎?
+        而不是冒名頂替的假貨。HTTPS 憑證驗證網站身分,靠的就是真實性。</li>
+        <li><strong>不可否認性(Non-repudiation)</strong>:某人做了某件事之後,<strong>無法事後抵賴</strong>。
+        你用數位簽章簽了一份合約,就不能反咬「那不是我簽的」。它對追責與稽核至關重要。</li>
+      </ul>
+
+      <h2>把詞彙講清楚:資產、威脅、弱點、風險</h2>
+      <p>
+        資安圈有一組詞,新手很容易混著用,但它們的精確區別,正是你建立資安直覺的基礎。
+        我們用一個你家的比喻一次串起來。
+      </p>
+      <ul>
+        <li><strong>資產(asset)</strong>:你想保護的有價值的東西。你家裡的<strong>珠寶與現金</strong>。
+        在系統裡,可能是使用者個資、原始碼、伺服器、商譽。<em>先搞清楚要保護什麼,資安才有意義。</em></li>
+        <li><strong>威脅(threat)</strong>:可能造成傷害的潛在事件或來源。會來<strong>闖空門的小偷</strong>。
+        在系統裡,可能是駭客、惡意內部員工,甚至天災。</li>
+        <li><strong>弱點 / 漏洞(vulnerability)</strong>:系統裡可被利用的缺陷或弱處。你家那扇<strong>沒鎖好、一推就開的後門</strong>。
+        在系統裡,可能是未修補的軟體 bug、太弱的密碼、設定錯誤。</li>
+        <li><strong>攻擊(attack)</strong>:威脅實際利用弱點的行動。小偷<strong>真的從那扇後門溜進來</strong>那一刻。</li>
+        <li><strong>攻擊面(attack surface)</strong>:所有可能被攻擊的入口的總和。你家<strong>所有的門、窗、通風口</strong>。
+        對外開放的每個埠、每個 API、每個輸入欄位,都算進攻擊面。<em>攻擊面越小,要守的地方越少。</em></li>
+        <li><strong>攻擊向量(attack vector)</strong>:攻擊者實際走的那條路徑/手法。小偷<strong>具體是「撬後門鎖」還是「翻窗」</strong>。
+        釣魚信、惡意附件、SQL injection,都是攻擊向量。</li>
+      </ul>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">風險 = 威脅 × 弱點 × 衝擊</span>
+          <p><strong>風險(risk)</strong>不是上面任何單一個詞,而是它們的<em>乘積</em>的直覺:
+          $$\text{風險} \approx \text{威脅發生的可能} \times \text{弱點被利用的容易度} \times \text{一旦得手的衝擊}$$
+          這個公式的精神在於:<strong>只要其中一項趨近於零,風險就低。</strong>
+          沒有威脅(沒人想攻擊)、沒有弱點(無懈可擊)、或衝擊極小(就算被打也無所謂)——任一成立,你就能睡得安穩。
+          資安工作的本質,就是想辦法把這三項裡<em>你能控制的那些</em>壓低。其中你最能掌控的,通常是<strong>弱點</strong>。</p>
+        </div>
+      </div>
+
+      <p>
+        這個乘積的觀點,解釋了很多看似矛盾的決策。為什麼一台<strong>完全不連網、鎖在機房</strong>的舊電腦
+        可以繼續跑沒人敢碰的老軟體?因為「威脅可接觸到它的可能」被壓到極低。
+        為什麼一個<strong>只存公開新聞稿</strong>的網站,就算有漏洞也沒人緊張?因為「衝擊」趨近於零。
+        資安不是追求「零風險」(那不存在),而是<strong>把風險管理到可接受的程度</strong>。
+      </p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 34.1 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>下列每個事件,主要破壞了 CIA 三要素中的<strong>哪一個</strong>(可能不只一個)?簡短說明理由。</p>
+          <ol>
+            <li>攻擊者竊取了資料庫,把幾百萬筆使用者的 email 與密碼公開到網路上。</li>
+            <li>勒索軟體把醫院所有病歷檔案加密,院方付不出贖金,醫師調不出病人的過敏紀錄。</li>
+            <li>某人入侵新聞網站後台,把一則報導的數字從「成長 3%」改成「衰退 30%」。</li>
+            <li>有人對線上售票系統發動大量假請求,讓真正想買票的歌迷全部卡在排隊畫面。</li>
+          </ol>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <ol>
+                <li><strong>機密性(C)</strong>。本該保密的資料被未授權對象看到了。(密碼若是明文存放,還暴露了完整性與設計上的問題。)</li>
+                <li><strong>可用性(A)為主,兼及完整性(I)</strong>。檔案被加密改寫(I),導致醫師需要時拿不到(A)——勒索軟體經典的雙殺。</li>
+                <li><strong>完整性(I)</strong>。資料被未授權竄改,內容不再可信。沒人「看不到」報導,問題在它被「改掉」了。</li>
+                <li><strong>可用性(A)</strong>。這是典型的阻斷服務:系統沒被偷看也沒被改,但合法使用者用不到。</li>
+              </ol>
+              <p>練習把每個資安事件「翻譯」成 CIA,是培養資安直覺最有效的習慣之一。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>像攻擊者一樣思考:威脅模型</h2>
+      <p>
+        工程師的本能是想「正常的人會怎麼用我的系統」。資安要你多長一顆腦袋,問:
+        <strong>「壞人會怎麼<em>濫用</em>我的系統?」</strong>把這個提問系統化、寫下來、逐項檢查的過程,
+        就叫<strong>威脅模型(threat modeling)</strong>。它通常在設計階段就做,因為這時候改設計最便宜。
+      </p>
+      <p>
+        威脅模型不需要很玄,核心就是回答四個問題:
+      </p>
+      <ul>
+        <li><strong>我們在打造什麼?</strong>(畫出系統的資料流)</li>
+        <li><strong>哪裡會出錯?</strong>(找威脅)</li>
+        <li><strong>我們要怎麼辦?</strong>(對策)</li>
+        <li><strong>做得夠好了嗎?</strong>(檢討)</li>
+      </ul>
+
+      <h3>畫出資料流與信任邊界</h3>
+      <p>
+        要找威脅,你得先看清資料怎麼在系統裡流動,以及<strong>哪裡是「信任的分界」</strong>。
+        <strong>信任邊界(trust boundary)</strong>是一條想像的線:線的一邊你能控制、可以信任,
+        另一邊你管不到、不能信任。<strong>資料每跨越一次信任邊界,就是一次危險時刻</strong>——
+        所有的驗證、檢查、過濾,都該發生在這些邊界上。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 380" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="tm-arr" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/></marker>
+  </defs>
+
+  <!-- 信任邊界(虛線) -->
+  <line x1="250" y1="20" x2="250" y2="360" stroke="#b4541f" stroke-width="2" stroke-dasharray="7 5"/>
+  <text x="250" y="375" text-anchor="middle" font-size="11" font-weight="700" fill="#b4541f">信任邊界 Trust Boundary</text>
+  <text x="135" y="40" text-anchor="middle" font-size="11" fill="#b4541f">不可信任(網際網路)</text>
+  <text x="500" y="40" text-anchor="middle" font-size="11" fill="#2f6f6a">你控制的伺服器環境</text>
+
+  <!-- 外部實體:使用者瀏覽器 -->
+  <rect x="40" y="150" width="170" height="70" rx="10" fill="#f6e7dd" stroke="#b4541f"/>
+  <text x="125" y="180" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">使用者瀏覽器</text>
+  <text x="125" y="200" text-anchor="middle" font-size="11" fill="#4a5159">外部實體(陌生人)</text>
+
+  <!-- 處理程序:Web 應用程式 -->
+  <circle cx="400" cy="120" r="58" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="400" y="115" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">Web 應用</text>
+  <text x="400" y="135" text-anchor="middle" font-size="11" fill="#4a5159">處理程序</text>
+
+  <!-- 資料儲存:資料庫 -->
+  <g>
+    <ellipse cx="600" cy="260" rx="62" ry="16" fill="#e0d4f5" stroke="#8b5cf6"/>
+    <path d="M538,260 L538,320 A62,16 0 0 0 662,320 L662,260" fill="#e0d4f5" stroke="#8b5cf6"/>
+    <ellipse cx="600" cy="260" rx="62" ry="16" fill="#e0d4f5" stroke="#8b5cf6"/>
+    <text x="600" y="296" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">資料庫</text>
+    <text x="600" y="314" text-anchor="middle" font-size="11" fill="#4a5159">資料儲存(資產)</text>
+  </g>
+
+  <!-- 資料流箭頭 -->
+  <line x1="210" y1="175" x2="345" y2="135" stroke="#8a929b" stroke-width="2" marker-end="url(#tm-arr)"/>
+  <text x="280" y="150" text-anchor="middle" font-size="11" fill="#4a5159">① 登入請求</text>
+  <line x1="345" y1="155" x2="215" y2="200" stroke="#8a929b" stroke-width="2" marker-end="url(#tm-arr)"/>
+  <text x="280" y="215" text-anchor="middle" font-size="11" fill="#4a5159">④ 回應頁面</text>
+
+  <line x1="445" y1="160" x2="545" y2="250" stroke="#8a929b" stroke-width="2" marker-end="url(#tm-arr)"/>
+  <text x="525" y="200" text-anchor="middle" font-size="11" fill="#4a5159">② 查詢</text>
+  <line x1="552" y1="248" x2="452" y2="158" stroke="#8a929b" stroke-width="2" marker-end="url(#tm-arr)"/>
+  <text x="455" y="235" text-anchor="middle" font-size="11" fill="#4a5159">③ 結果</text>
+</svg>
+        <figcaption>圖 34-2:一個極簡登入系統的資料流圖(DFD)。注意那條紅色虛線——左邊的使用者輸入<strong>完全不可信任</strong>。所有送進①的東西,都必須在跨越信任邊界時被嚴格檢查,絕不能直接拿去拼湊②的資料庫查詢。</figcaption>
+      </div>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">最重要的一條鐵律</span>
+          <p><strong>永遠不要信任來自信任邊界外的輸入。</strong>使用者送來的每一個字元——
+          表單欄位、網址參數、上傳的檔名、HTTP 標頭——都可能是攻擊者精心構造的武器。
+          無數重大漏洞(SQL injection、XSS、命令注入)的根源,都是同一句話:
+          「開發者相信了不該相信的輸入。」第 36 章談 Web 安全時,我們會把這些攻擊一一拆開。</p>
+        </div>
+      </div>
+
+      <h3>STRIDE:給威脅分類的口訣</h3>
+      <p>
+        盯著資料流圖問「哪裡會出錯」時,你需要一張檢查清單,免得漏掉某類威脅。
+        微軟提出的 <strong>STRIDE</strong> 是最常用的一套,它把威脅分成六類,首字母剛好拼成 STRIDE。
+        最妙的是,<strong>每一類正好對應破壞一個資安屬性</strong>:
+      </p>
+
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>STRIDE</th><th>中文</th><th>它在做什麼</th><th>破壞的屬性</th></tr></thead>
+        <tbody>
+          <tr><td><strong>S</strong>poofing</td><td>假冒</td><td>冒充別人的身分(盜用帳號、偽造寄件人)</td><td>真實性</td></tr>
+          <tr><td><strong>T</strong>ampering</td><td>竄改</td><td>偷偷修改資料或程式碼</td><td>完整性</td></tr>
+          <tr><td><strong>R</strong>epudiation</td><td>否認</td><td>做了壞事卻能事後抵賴</td><td>不可否認性</td></tr>
+          <tr><td><strong>I</strong>nformation Disclosure</td><td>資訊洩漏</td><td>讓不該看的人看到資料</td><td>機密性</td></tr>
+          <tr><td><strong>D</strong>enial of Service</td><td>阻斷服務</td><td>讓系統無法正常服務</td><td>可用性</td></tr>
+          <tr><td><strong>E</strong>levation of Privilege</td><td>權限提升</td><td>讓低權限者取得高權限</td><td>授權</td></tr>
+        </tbody>
+      </table>
+      </div>
+
+      <p>
+        有了這張表,你就能對著資料流圖<strong>逐項拷問每個元件</strong>:這個登入功能會不會被「假冒(S)」?
+        這個資料庫的資料會不會被「竄改(T)」?這條傳輸會不會「洩漏(I)」?……
+        把威脅一條條列出來,你就從「憑直覺猜」升級成「系統化地找」。這正是威脅模型的價值。
+      </p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 34.2 <span class="badge">分析</span></div>
+        <div class="ex-body">
+          <p>假設你要替學校做一個<strong>線上選課系統</strong>:學生登入後可以查詢課程、加退選,
+          老師可以看到自己班上的名單。請做一個迷你威脅模型:</p>
+          <ol>
+            <li>列出至少 <strong>3 個資產</strong>(你想保護什麼?)。</li>
+            <li>用 STRIDE 找出至少 <strong>3 個威脅</strong>,並指出各自破壞哪個屬性。</li>
+          </ol>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>(參考答案,你的答案只要合理、能對應就好。)</p>
+              <p><strong>資產:</strong></p>
+              <ul>
+                <li>學生的個資與成績(機密)。</li>
+                <li>選課結果的正確性(誰選上了哪門課)。</li>
+                <li>選課系統本身的可用性(尤其在開放選課的尖峰時段)。</li>
+              </ul>
+              <p><strong>威脅(STRIDE):</strong></p>
+              <ul>
+                <li><strong>S 假冒</strong>:甲同學盜用乙同學的帳號,幫乙退選,或冒充老師查名單。→ 破壞真實性。對策:強認證、MFA。</li>
+                <li><strong>E 權限提升</strong>:學生改動請求參數,讓自己取得「管理員」權限,直接改任何人的課表或成績。→ 破壞授權。對策:伺服器端嚴格檢查每個動作的權限(完全仲裁)。</li>
+                <li><strong>T 竄改</strong>:有人攔截或重放加退選請求,把「加選 A 課」改成「幫別人退選 B 課」。→ 破壞完整性。對策:HTTPS、CSRF 防護、操作需重新確認身分。</li>
+                <li><strong>D 阻斷服務</strong>:開放選課瞬間,有人用機器人狂發請求灌爆系統,真學生擠不進去。→ 破壞可用性。對策:限流、排隊機制、擴容。</li>
+                <li><strong>I 資訊洩漏</strong>:成績或個資因設定錯誤被任意人查到。→ 破壞機密性。對策:存取控制、最小權限。</li>
+              </ul>
+              <p>能列出資產、再用 STRIDE 系統性掃過,就抓住了威脅模型的精髓。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>安全設計原則:站在巨人的肩膀上</h2>
+      <p>
+        早在 1975 年,兩位學者 <strong>Jerome Saltzer</strong> 與 <strong>Michael Schroeder</strong>
+        就寫下了一組安全設計原則。將近半個世紀過去,這些原則<strong>幾乎一字未改地</strong>仍然適用——
+        因為它們講的不是某個技術,而是更底層的智慧。每一條都值得你刻在心裡。
+      </p>
+
+      <h3>最小權限(Least Privilege)</h3>
+      <p>
+        <strong>每個人、每支程式,只該擁有完成工作所需的「最小」權限,多一分都不給。</strong>
+        例子:一個負責「寄送電子報」的程式,只需要讀取訂閱名單的權限,絕對不該有刪除整個資料庫的權限。
+        這樣萬一它被攻破,攻擊者能造成的傷害也被限制在最小範圍。這是整套原則裡,實務上回報最高的一條。
+      </p>
+
+      <h3>失效安全預設(Fail-safe Defaults)</h3>
+      <p>
+        <strong>預設應該是「拒絕」,只有明確被允許的才放行(default deny)。</strong>
+        例子:防火牆的正確設定是「預設擋掉所有連線,只開放你明確需要的那幾個埠」,
+        而不是「預設全開,再一個個去封」。當你忘了設定某樣東西時,系統應該倒向<strong>安全</strong>的那一邊。
+      </p>
+
+      <h3>機制經濟性(Economy of Mechanism)</h3>
+      <p>
+        <strong>讓設計與程式碼盡量簡單、小巧。</strong>例子:一個 50 行、你能完全看懂的驗證邏輯,
+        遠比一個 5000 行、沒人敢碰的「超彈性權限框架」安全。<strong>複雜是安全的天敵</strong>——
+        因為你無法檢查、無法推理、無法信任你看不懂的東西。漏洞最愛躲在複雜裡。
+      </p>
+
+      <h3>完全仲裁(Complete Mediation)</h3>
+      <p>
+        <strong>每一次存取都要檢查權限,不能「檢查過一次就放行到底」。</strong>
+        例子:不要因為使用者「五分鐘前登入過」,就讓他接下來的每個動作都免檢查。
+        每個敏感操作都該重新確認「你現在真的有權做這件事嗎?」。這也是「零信任」思想的雛形。
+      </p>
+
+      <h3>開放設計(Open Design)— Kerckhoffs 原則</h3>
+      <p>
+        <strong>系統的安全,不該建立在「設計保密」上;就算敵人完全知道你的設計,系統依然要安全。</strong>
+        這呼應了密碼學的 <strong>Kerckhoffs 原則</strong>:一套加密系統的安全,應該只取決於<em>金鑰的保密</em>,
+        而不是<em>演算法的保密</em>。把希望寄託在「攻擊者不知道我怎麼做的」(security through obscurity,
+        以隱晦求安全),是最脆弱的賭注——因為祕密總會洩漏。<strong>第 35 章</strong>會再深入這條原則。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">🔓</div>
+        <div class="body">
+          <span class="c-title">為什麼公開的加密反而更安全?</span>
+          <p>聽起來很反直覺:把加密演算法公開,不是讓攻擊者更好破解嗎?恰恰相反。
+          公開的演算法,能被<strong>全世界的密碼學家檢驗</strong>幾十年,撐得住才會被信任(像 AES)。
+          私藏的「自製加密」沒人檢驗過,往往藏著致命缺陷,只是還沒被人發現而已。
+          <strong>「沒人攻破」和「沒人試過攻破」是兩回事。</strong></p>
+        </div>
+      </div>
+
+      <h3>權限分離(Separation of Privilege)</h3>
+      <p>
+        <strong>重要的操作,需要不只一個條件/不只一個人同意。</strong>例子:發射核武需要兩把鑰匙同時轉、
+        銀行大額匯款需要兩位主管簽核。把權力拆開,任何單一一個被攻破都不足以釀成大禍。
+      </p>
+
+      <h3>最小共同機制(Least Common Mechanism)</h3>
+      <p>
+        <strong>盡量減少多個使用者「共用」同一個機制或資源。</strong>例子:每個使用者各自獨立的執行環境、
+        各自的暫存空間,比所有人共用一個全域變數安全——共用的東西一旦被汙染,所有人一起遭殃。
+        (這也是容器化、沙箱隔離背後的精神。)
+      </p>
+
+      <h3>心理可接受性(Psychological Acceptability)</h3>
+      <p>
+        <strong>安全機制必須讓人「用得下去」,否則人們會想辦法繞過它。</strong>
+        例子:如果你規定密碼要 30 個字、每週換一次,大家只會把密碼寫在便利貼上貼在螢幕邊——
+        反而更不安全。好的安全設計,是讓「安全的做法」同時也是「最方便的做法」。
+        <strong>對抗使用者的安全,最後一定輸。</strong>
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">外加一條現代鐵律:縱深防禦(Defense in Depth)</span>
+          <p>它雖不在 Saltzer &amp; Schroeder 原始的八條之列,卻是今天最被強調的原則:
+          <strong>別把所有希望押在單一道防線上,要層層設防。</strong>城堡有護城河、有城牆、有衛兵、有內城——
+          就算外牆被攻破,還有下一道擋著。後面「縱深防禦的實踐」一節會專門講它怎麼落地。</p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 34.3 <span class="badge">分析</span></div>
+        <div class="ex-body">
+          <p>下列每個設計,主要<strong>違反了哪一條</strong>安全設計原則?並說明該怎麼改。</p>
+          <ol>
+            <li>某 App 把資料加密了,但加密用的金鑰直接寫死在 App 程式碼裡,廠商認為「反編譯很麻煩,沒人會去看」。</li>
+            <li>新員工一進公司,IT 就直接給他「系統管理員」帳號,理由是「這樣以後要什麼權限都不用再開」。</li>
+            <li>某內部工具預設「任何登入的員工都能看所有部門的薪資」,要隱藏才需要另外設定。</li>
+          </ol>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <ol>
+                <li><strong>違反開放設計 / Kerckhoffs(以隱晦求安全)</strong>。安全建立在「沒人會去反編譯」這個必然會破的假設上。金鑰一旦被挖出,加密形同虛設。改法:金鑰不該寫死在客戶端,應由伺服器管理或使用安全的金鑰保管機制。</li>
+                <li><strong>違反最小權限</strong>。新員工幾乎一定用不到管理員權限,這只是放大了帳號被盜時的災難。改法:只給目前工作所需的權限,需要時再個別申請、核准、加開。</li>
+                <li><strong>違反失效安全預設(應 default deny)</strong>。預設應該是「看不到」,只有被明確授權的人才看得到敏感資料,而不是反過來。改法:預設拒絕,白名單放行。</li>
+              </ol>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>你是誰、你能做什麼、你做了什麼:AAA</h2>
+      <p>
+        很多人把「登入」當成一件事,但它其實是三件截然不同的事,合稱 <strong>AAA</strong>。
+        分清楚它們,是理解所有存取控制的關鍵。
+      </p>
+      <ul>
+        <li><strong>認證(Authentication):你是誰?</strong>確認你是你所宣稱的那個人。輸入帳密、刷指紋、用手機收驗證碼——都是在回答「證明你是你」。</li>
+        <li><strong>授權(Authorization):你能做什麼?</strong>確認「這個已知身分的人」有沒有權限做某件事。你登入了(認證通過),但你能不能刪除別人的貼文、能不能看財務報表,是授權的事。</li>
+        <li><strong>可歸責(Accountability):你做了什麼?</strong>把每個人的每個動作記錄下來(日誌 / 稽核軌跡),事後能追溯「是誰、在何時、做了什麼」。它撐起前面講的「不可否認性」。</li>
+      </ul>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">認證 ≠ 授權</span>
+          <p>一句話記住差別:<strong>認證是「驗明正身」,授權是「核對權限」。</strong>
+          一個飯店房卡先證明「你是這間飯店的房客」(認證),但它只能開<em>你那一間</em>房門,
+          開不了別人的房、進不了員工辦公室(授權)。
+          無數安全事故,源於系統<em>認證</em>做得很好,卻忘了在每個動作前好好<em>授權</em>——
+          結果登入的使用者改一改網址參數,就看到了別人的資料。這種漏洞叫 IDOR,常見到嚇人。</p>
+        </div>
+      </div>
+
+      <h3>多因素認證(MFA):別把所有蛋放一個籃子</h3>
+      <p>
+        密碼會被猜中、被釣走、被資料外洩。所以現代認證強調<strong>多因素認證(MFA, Multi-Factor Authentication)</strong>:
+        要求你提供<strong>兩種以上不同「種類」</strong>的證明。認證因素傳統上分三類:
+      </p>
+      <ul>
+        <li><strong>你知道的東西(something you know)</strong>:密碼、PIN、安全問題。</li>
+        <li><strong>你擁有的東西(something you have)</strong>:手機、實體安全金鑰、晶片卡。</li>
+        <li><strong>你本身的特徵(something you are)</strong>:指紋、臉、虹膜等生物特徵。</li>
+      </ul>
+      <p>
+        關鍵是「<strong>不同種類</strong>」:密碼 + 安全問題<em>不算</em>真正的 MFA(兩者都是「你知道的」,
+        會被同一次釣魚一起騙走)。但密碼 + 手機簡訊驗證碼就算——攻擊者就算騙到你的密碼,
+        手裡也沒有你的手機。MFA 是今天<strong>性價比最高</strong>的個人資安措施,沒有之一。
+      </p>
+
+      <h3>密碼為什麼絕不能「原樣」存起來</h3>
+      <p>
+        當你在某網站註冊,它<strong>絕對不該</strong>把你的密碼以明文(plaintext)存進資料庫。
+        因為資料庫總有外洩的一天,而那天所有人的密碼就全裸奔了(更慘的是,很多人到處用同一組密碼)。
+        正確做法是只存密碼的<strong>雜湊值(hash)</strong>:一個無法反推回原密碼的「指紋」。
+      </p>
+      <p>
+        但光雜湊還不夠。如果兩個人密碼一樣,雜湊值也會一樣,攻擊者能用預先算好的彩虹表(rainbow table)
+        大批破解。所以還要替每個人的密碼加一段獨一無二的隨機字串,叫<strong>鹽(salt)</strong>,
+        再去雜湊。這樣即使密碼相同,存進去的東西也完全不同。
+      </p>
+
+      <pre><code class="language-text"># 錯誤示範(千萬別這樣)
+users 表:  alice | 密碼: "hunter2"          ← 明文,外洩即災難
+
+# 正確方向(概念示意)
+users 表:  alice | salt: "x9$qZ" | hash: H("hunter2" + "x9$qZ")
+                                          ↑ 只存雜湊,且每人加不同的鹽</code></pre>
+
+      <div class="callout note">
+        <div class="ico">🔗</div>
+        <div class="body">
+          <span class="c-title">預告:第 35 章密碼學</span>
+          <p>「雜湊是什麼?為什麼它不可逆?鹽怎麼運作?為什麼還需要『慢』的雜湊函式(像 bcrypt、Argon2)?」
+          這些問題的精彩答案,留在<strong>第 35 章密碼學</strong>。這裡你只要先牢牢記住一個原則:
+          <strong>系統永遠不該知道你的明文密碼,連存都不該存。</strong></p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 34.4 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>判斷下列每個情境,主要是<strong>認證</strong>的問題還是<strong>授權</strong>的問題?</p>
+          <ol>
+            <li>一般員工登入內部系統後,把網址裡的 <code>user_id=1042</code> 改成 <code>user_id=1</code>,就看到了執行長的薪資。</li>
+            <li>攻擊者用外洩的帳密清單,一組一組去試登入別的網站,試中了你的帳號。</li>
+            <li>系統發現有人連續輸入錯誤密碼 50 次,於是暫時鎖住該帳號。</li>
+            <li>某 API 沒有檢查呼叫者的 token,任何人帶任意參數呼叫都能刪除資料。</li>
+          </ol>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <ol>
+                <li><strong>授權</strong>。身分沒問題(他確實是登入的員工),問題是系統沒檢查「這個身分有沒有權限看 1 號的資料」。這就是經典的 IDOR(Insecure Direct Object Reference)。</li>
+                <li><strong>認證</strong>。這是「憑證填充(credential stuffing)」,攻擊在於冒用他人身分通過認證。對策:MFA、偵測異常登入。</li>
+                <li><strong>認證</strong>(的防護)。鎖定機制是在保護認證環節,抵擋暴力破解。</li>
+                <li><strong>認證 + 授權雙雙缺失</strong>。沒檢查 token 是認證失靈(不知道你是誰);就算有 token 也該檢查能不能刪是授權。兩道關都沒守。</li>
+              </ol>
+              <p>訣竅:先問「系統知道你是誰嗎?」(認證);再問「知道之後,有沒有檢查你能不能做?」(授權)。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>常見威脅與攻擊概覽</h2>
+      <p>
+        理論講完,來認識一下真實世界的「壞東西」。這不是要教你攻擊(本書立場見章末),
+        而是因為<strong>你無法防禦你不認識的東西</strong>。以下是每個資安人都該認得的幾個家族。
+      </p>
+
+      <h3>惡意軟體(Malware)</h3>
+      <p>
+        泛指一切「懷著惡意」的軟體,是個大家族:<strong>病毒(virus)</strong>會把自己附在別的檔案上,
+        靠人去執行才傳播;<strong>蠕蟲(worm)</strong>更可怕,能<em>自己</em>透過網路漏洞主動複製、擴散,不需要人插手;
+        <strong>木馬(Trojan)</strong>偽裝成有用的程式(一個免費的「破解工具」),騙你親手安裝,實則開後門;
+        <strong>勒索軟體(ransomware)</strong>則是近年最猖獗的,它加密你所有的檔案,然後勒索贖金換解密金鑰——
+        正是同時打擊完整性與可用性的典型。
+      </p>
+
+      <h3>社交工程(Social Engineering)與釣魚(Phishing)</h3>
+      <p>
+        這是本章開頭那個故事的主角,也是<strong>最有效、最常成功</strong>的攻擊類別。它不攻擊機器,
+        而是<strong>攻擊人</strong>:利用人的信任、恐懼、好奇、貪婪、急迫感。最常見的形式是<strong>釣魚(phishing)</strong>:
+        偽裝成可信的對象(銀行、IT 部門、老闆)發訊息,誘騙你交出密碼、點開惡意連結、或匯款。
+        針對特定高價值目標(如財務主管)精心客製的,叫<strong>魚叉式釣魚(spear phishing)</strong>。
+        記住:再厚的城牆,也擋不住有人從裡面把門打開。
+      </p>
+
+      <h3>中間人攻擊(MITM)</h3>
+      <p>
+        <strong>中間人(Man-in-the-Middle)</strong>攻擊裡,攻擊者偷偷卡在你和你以為在溝通的對象之間,
+        默默竊聽、甚至竄改來往的訊息,而雙方都渾然不覺。在不加密的公共 Wi-Fi 上,
+        這種攻擊尤其容易。這正是 <strong>HTTPS</strong> 要解決的問題:加密讓中間人看不懂(機密性),
+        憑證讓你確認對方真的是 Google 而非冒牌貨(真實性)。
+      </p>
+
+      <h3>阻斷服務(DoS / DDoS)</h3>
+      <p>
+        <strong>阻斷服務(Denial of Service)</strong>不偷資料、不改資料,它的目標單純就是「讓你的服務掛掉」——
+        破壞可用性。手法通常是用遠超系統負荷的流量把它淹沒。當攻擊來自<em>成千上萬</em>台被控制的機器
+        (殭屍網路 botnet)同時發動,就叫<strong>分散式阻斷服務(DDoS)</strong>,規模可以大到癱瘓整個服務,
+        且難以靠封鎖單一來源解決。
+      </p>
+
+      <h3>密碼攻擊(Password Attacks)</h3>
+      <p>
+        針對密碼的攻擊有好幾種風味:<strong>暴力破解(brute force)</strong>一個個試遍所有可能組合;
+        <strong>字典攻擊(dictionary attack)</strong>聰明一點,先試常見密碼與單字(<code>123456</code>、<code>password</code> 永遠名列前茅);
+        <strong>憑證填充(credential stuffing)</strong>最現實——拿某網站外洩的「帳號+密碼」清單,
+        去別的網站一組組試,賭你到處用同一組密碼(很多人真的是)。這也是為什麼「不要重複用密碼」和「開 MFA」如此重要。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">許多攻擊的根源,是「人」而不是「技術」</span>
+          <p>看完這份清單,你可能以為資安是高來高去的技術對決。但真相是:<strong>絕大多數成功的入侵,
+          起點是一封釣魚信、一個重複使用的弱密碼、一台忘了更新的機器,或一個被社交工程說服的員工。</strong>
+          有句業界名言:「人,是資安最脆弱的一環。」這也是為什麼資安教育、安全意識、良好習慣,
+          往往比再買一套昂貴的防護設備更有效。技術很重要,但別忘了門後面那個會被騙的人。</p>
+        </div>
+      </div>
+
+      <h2>縱深防禦的實踐</h2>
+      <p>
+        回到那條鐵律:攻擊者只要找到一個洞,你卻要守住全部。既然單一防線必然有破綻,
+        答案就是<strong>縱深防禦(defense in depth)</strong>——把防護疊成一層又一層,
+        讓攻擊者就算突破一層,還得面對下一層。我們用一張「洋蔥圖」來看它長什麼樣:
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 640 420" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- 同心圓層 -->
+  <rect x="40"  y="30"  width="560" height="360" rx="16" fill="#f6e7dd" stroke="#b4541f"/>
+  <text x="320" y="52" text-anchor="middle" font-size="13" font-weight="700" fill="#b4541f">周邊 / 網路:防火牆、IDS/IPS</text>
+
+  <rect x="110" y="80"  width="420" height="270" rx="14" fill="#fbeede" stroke="#d98a4f"/>
+  <text x="320" y="100" text-anchor="middle" font-size="13" font-weight="700" fill="#b4541f">主機:修補更新、最小化攻擊面</text>
+
+  <rect x="175" y="125" width="290" height="190" rx="12" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="320" y="145" text-anchor="middle" font-size="13" font-weight="700" fill="#2f6f6a">應用:認證/授權、輸入驗證</text>
+
+  <rect x="235" y="170" width="170" height="110" rx="10" fill="#cfe6e2" stroke="#2f6f6a"/>
+  <text x="320" y="190" text-anchor="middle" font-size="13" font-weight="700" fill="#2f6f6a">資料:加密、最小權限</text>
+
+  <circle cx="320" cy="235" r="34" fill="#8b5cf6"/>
+  <text x="320" y="232" text-anchor="middle" font-size="13" font-weight="800" fill="#fff">資產</text>
+  <text x="320" y="250" text-anchor="middle" font-size="10" fill="#e9def8">你要保護的</text>
+
+  <text x="320" y="408" text-anchor="middle" font-size="11" fill="#8a929b">攻擊者必須一層層突破;任何一層都不該是唯一一道防線</text>
+</svg>
+        <figcaption>圖 34-3:縱深防禦。從最外圈的網路邊界,到主機、應用程式、資料,層層設防。即使外層被攻破,內層仍持續保護核心資產。整套思路貫穿前面講的最小權限、失效安全預設等原則。</figcaption>
+      </div>
+
+      <p>
+        這些層在實務上,對應到一組你會反覆聽到的措施:
+      </p>
+      <ul>
+        <li><strong>防火牆(firewall)</strong>:守在網路邊界,依規則決定哪些連線能進出。配合失效安全預設——預設擋光,只開必要的埠。</li>
+        <li><strong>入侵偵測 / 防禦系統(IDS / IPS)</strong>:IDS 像監視器,發現可疑行為就<em>示警</em>;IPS 更進一步,能<em>主動阻擋</em>。它們補上防火牆看不到的「行為異常」。</li>
+        <li><strong>最小化攻擊面</strong>:關掉用不到的服務、移除沒在用的帳號與套件、不對外開放不必要的埠。<strong>不存在的功能,不會有漏洞。</strong></li>
+        <li><strong>修補(patching)</strong>:及時安裝安全更新。許多重大入侵,利用的都是<em>早就有修補可裝、但沒人去裝</em>的舊漏洞。勤更新,是最樸實也最有效的防禦。</li>
+        <li><strong>最小權限帳號</strong>:日常作業別用管理員權限;每個服務用專屬的、權限受限的帳號跑。把最小權限原則落實到每個帳號。</li>
+        <li><strong>日誌與監控(logging &amp; monitoring)</strong>:記錄誰做了什麼,並持續盯著。這支撐了可歸責,也讓你能<em>及早發現</em>入侵——很多受害者是被攻破好幾個月後才知道,正是因為沒人在看日誌。</li>
+      </ul>
+
+      <h2>安全是一種文化與流程,不是一次性任務</h2>
+      <p>
+        最後,也是最重要的觀念轉變:資安<strong>沒有「完成」的那一天</strong>。
+        你不能在某個星期五下午「把安全做完」然後再也不管。原因很簡單:
+      </p>
+      <ul>
+        <li><strong>CIA 不是一次達標就永久有效。</strong>系統會改、會長大,每一次新功能、新整合,都可能開出新的洞。</li>
+        <li><strong>威脅持續演化。</strong>今天無懈可擊的設計,明天可能因為一個新發現的漏洞、一種新的攻擊手法而失守。攻防是一場沒有終點的軍備競賽。</li>
+        <li><strong>所以安全必須是一種習慣與流程</strong>:在設計時做威脅模型、在開發時做程式碼審查、在上線前做滲透測試、在上線後持續監控與修補、在事故後檢討學習。它必須織進團隊的<em>文化</em>裡。</li>
+      </ul>
+
+      <div class="callout note">
+        <div class="ico">🛡️</div>
+        <div class="body">
+          <span class="c-title">一句話認識「零信任」</span>
+          <p>傳統資安像中世紀城堡:外牆(防火牆)守得很嚴,但<em>進到城內就一律信任</em>。
+          問題是,一旦攻擊者翻牆進來(或本來就是內鬼),就如入無人之境。
+          <strong>零信任(zero trust)</strong>翻轉了這個假設:<em>「永不信任,持續驗證(never trust, always verify)」</em>——
+          不論你在牆內牆外,每一次存取都要重新證明身分與權限。聽出來了嗎?這正是「完全仲裁」原則的大規模實踐。</p>
+        </div>
+      </div>
+
+      <div class="callout danger">
+        <div class="ico">⛔</div>
+        <div class="body">
+          <span class="c-title">倫理與法律的界線:本書教防禦,不教破壞</span>
+          <p>讀到這裡,你已經開始懂得「像攻擊者一樣思考」。這份能力是把雙面刃。
+          請牢牢記住:<strong>本書教的是防禦性資安,以及在「明確獲得授權」下進行的測試</strong>(例如你自己的系統、
+          公司書面授權的滲透測試、合法的漏洞獎勵計畫)。<strong>未經授權去掃描、入侵、破壞他人的系統,
+          在世界各地幾乎都是犯罪</strong>,即使你「只是好奇、沒有惡意」、即使你「沒造成損害」。
+          理解攻擊,是為了更好地防守——這條倫理界線,我們會在<strong>第九部:計算與倫理</strong>裡更完整地討論。
+          技術力越強,越要守住它。</p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 34.5 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>你正在為一個網站設計<strong>登入系統</strong>。請運用本章學到的所有觀念,
+          列出一份<strong>縱深防禦清單</strong>:至少寫出 <strong>6 項</strong>措施,
+          並對每一項說明它<strong>防的是什麼攻擊</strong>、或<strong>體現了哪條原則</strong>。
+          (提示:從註冊、登入過程、密碼儲存、失敗處理、監控,各個環節去想。)</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>(參考清單,你的答案合理即可。一份好的清單會橫跨多個環節、對應多種威脅。)</p>
+              <ol>
+                <li><strong>全程 HTTPS</strong>:加密傳輸,防中間人竊聽密碼(機密性、真實性)。</li>
+                <li><strong>密碼加鹽雜湊儲存(bcrypt/Argon2)</strong>:資料庫即使外洩,密碼也難以還原(機密性;呼應第 35 章)。</li>
+                <li><strong>強制密碼強度 + 比對外洩密碼庫</strong>:擋掉弱密碼與已知外洩密碼,削弱字典攻擊與憑證填充。</li>
+                <li><strong>提供 / 鼓勵多因素認證(MFA)</strong>:即使密碼被竊,攻擊者仍少一個因素,大幅提升認證安全。</li>
+                <li><strong>登入失敗限制(rate limiting / 鎖定 / 漸進延遲 / 圖形驗證)</strong>:擋暴力破解與憑證填充(保護可用性與認證)。</li>
+                <li><strong>失效安全的錯誤訊息</strong>:登入失敗只說「帳號或密碼錯誤」,別洩漏「這個帳號不存在」,避免幫攻擊者枚舉帳號(機密性、失效安全預設)。</li>
+                <li><strong>安全的 session 管理</strong>:登入後發放隨機、會過期的 session token,並加 CSRF 防護(防竄改、防假冒)。</li>
+                <li><strong>每個動作做授權檢查(完全仲裁)</strong>:別只在登入時檢查,之後每個敏感操作都重新確認權限,避免 IDOR。</li>
+                <li><strong>日誌與異常登入監控</strong>:記錄登入事件、對「異地/異常時間/大量失敗」示警(可歸責 + 及早偵測)。</li>
+                <li><strong>密碼重設流程同樣要嚴謹</strong>:重設連結要隨機、會過期、用過即失效——別讓重設變成繞過登入的後門。</li>
+              </ol>
+              <p>注意這份清單怎麼把 CIA、AAA、最小權限、失效安全預設、完全仲裁、縱深防禦全都串了起來——
+              這正是「把安全設計進去」的樣子。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>把這一章串起來</h2>
+      <p>我們從一封釣魚信出發,建立了一整套看待安全的語言與思維。回顧這趟旅程的路標:</p>
+      <ul>
+        <li>軟體無所不在,<strong>攻擊面也無所不在</strong>;攻守天生不對稱,所以安全要<strong>設計進去</strong>,是和效能並列的<strong>品質屬性</strong>,不是事後外掛。</li>
+        <li><strong>CIA 鐵三角</strong>:機密性、完整性、可用性——衡量「安全」的三根支柱,常彼此拉扯,要為場景找平衡。</li>
+        <li><strong>風險 ≈ 威脅 × 弱點 × 衝擊</strong>:資安不是追求零風險,而是把你能控制的那幾項壓低。</li>
+        <li><strong>威脅模型</strong>讓你像攻擊者一樣<em>系統化</em>地找洞:畫資料流、標<strong>信任邊界</strong>、用 <strong>STRIDE</strong> 逐項拷問。</li>
+        <li><strong>Saltzer &amp; Schroeder 八大原則</strong>(最小權限、失效安全預設、開放設計……)歷久彌新,加上現代的<strong>縱深防禦</strong>。</li>
+        <li><strong>AAA</strong>:認證(你是誰)≠ 授權(你能做什麼)≠ 可歸責(你做了什麼);<strong>MFA</strong> 是性價比最高的防護;密碼只存加鹽雜湊。</li>
+        <li>常見攻擊裡,許多的根源<strong>是人不是技術</strong>;縱深防禦把防火牆、修補、最小權限、監控等層層疊起。</li>
+        <li>資安是<strong>沒有終點的文化與流程</strong>;零信任「永不信任,持續驗證」;而我們守的,永遠是<strong>防禦與授權測試</strong>那一側的倫理界線。</li>
+      </ul>
+      <p>
+        你現在擁有了資安的「世界觀」與共同語言。但有一個工具,我們一路上預告了好幾次卻還沒拆開——
+        那個能變出機密性、完整性、真實性的魔法盒子:<strong>密碼學</strong>。雜湊到底怎麼做到不可逆?
+        加密怎麼讓你和素未謀面的伺服器安全通訊?簽章怎麼證明「真的是你簽的」?
+        下一章,我們就來揭開這個現代資安最深、也最迷人的基石。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">📚</div>
+        <div class="body">
+          <span class="c-title">想更深入?延伸資源</span>
+          <p>本章對應 OSSU 的 <a href="https://www.edx.org/learn/cybersecurity/rochester-institute-of-technology-cybersecurity-fundamentals">RITx《Cybersecurity Fundamentals》(Rochester Institute of Technology,edX)</a>,
+          它系統地介紹資安概念、威脅與防禦基礎,是入門資安的好起點。
+          想練習威脅建模,可參考微軟的 <a href="https://learn.microsoft.com/en-us/training/modules/tm-introduction-to-threat-modeling/">Threat Modeling</a> 教材與 STRIDE 方法;
+          想用「動手玩」的方式安全地學攻防觀念(全程在合法、授權的沙箱環境裡),
+          <a href="https://owasp.org/www-project-top-ten/">OWASP Top 10</a> 是認識常見 Web 漏洞的必讀清單,我們會在第 36 章再相見。
+          切記:所有練習都只在你<strong>擁有或獲得明確授權</strong>的系統上進行。</p>
+        </div>
+      </div>
+
+          <div class="callout tip">
+        <div class="ico">🧭</div>
+        <div class="body">
+          <span class="c-title">延伸：專修軌道</span>
+          <p>想把這些觀念變成動手實戰?<a href="69-ctf-foundations.html">第 69 章《駭客工作台、終端機尋寶與編碼》</a>帶你用 CTF 從第一面旗開始(只在授權環境)。</p>
+        </div>
+      </div>
+
+      <div class="callout note">
+        <div class="ico">🧭</div>
+        <div class="body">
+          <span class="c-title">延伸:新軌道</span>
+          <p>想深入了解容器隔離與核心安全?<a href="93-container-internals.html">第 87 章《容器內部》</a>與<a href="94-mini-docker.html">第 88 章《手刻 Docker》</a>帶你看清沙箱的邊界;<a href="97-ebpf.html">第 91 章《eBPF》</a>讓你從核心層監控系統呼叫;而<a href="103-mcp.html">第 97 章《MCP》</a>則揭示 AI 工具鏈的 prompt injection 與 tool poisoning 攻擊面。</p>
+        </div>
+      </div>
+

@@ -1,0 +1,1576 @@
+<!--meta
+title: 計算機網路
+description: 用「由上而下」的方式理解網際網路:從分層模型與封裝,到應用層(HTTP/DNS)、傳輸層(TCP/UDP/三向交握)、網路層(IP/路由/封包交換)、連結層,最後親手用 Python socket 收發位元組,並完整回答「在網址列輸入 google.com 會發生什麼」。
+-->
+
+
+      <div class="eyebrow">第五部 · 計算機系統</div>
+      <h1>計算機網路</h1>
+      <p class="subtitle">你在網址列敲下 <code>google.com</code>、按下 Enter,不到一秒,半個地球外的資料就出現在眼前。這一瞬間,是人類蓋過最大的一台機器在運轉。它到底怎麼辦到的?</p>
+      <div class="byline">
+        <span class="tag">第 25 章</span>
+        <span>閱讀時間 ≈ 55 分鐘</span>
+        <span>難度:★★★★☆</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>網路為什麼要<strong>分層</strong>,以及五層模型與 OSI 七層的對照</li>
+          <li><strong>封裝(encapsulation)</strong>:你的資料如何被一層層包上標頭,送出去再拆開</li>
+          <li>應用層:<strong>HTTP/HTTPS</strong> 的請求-回應、狀態碼與 cookie,還有把網域名翻成 IP 的 <strong>DNS</strong></li>
+          <li>傳輸層:<strong>連接埠</strong>與多工、<strong>UDP</strong> 的簡單快速,以及 <strong>TCP</strong> 如何在不可靠的網路上做到可靠傳輸(三向交握、序號、重傳、壅塞控制)</li>
+          <li>網路層:<strong>IP 位址</strong>與子網路、<strong>路由與封包交換</strong>,封包如何一跳一跳穿越地球</li>
+          <li>連結層:<strong>MAC 位址</strong>、乙太網路與交換器</li>
+          <li>把所有層串起來,完整回答「輸入 <code>google.com</code> 到看到頁面」這道經典面試題</li>
+          <li>親手用 <strong>Python socket</strong> 收發位元組,寫一個 echo 伺服器,並發出一個原始的 HTTP 請求</li>
+        </ul>
+      </div>
+
+      <h2>一道你早就遇過的題目</h2>
+      <p>
+        如果你讀過第 0 章,應該還記得那道暖身題:<em>「當你在瀏覽器網址列輸入 <code>google.com</code> 並按下 Enter,
+        到看到搜尋頁面為止,中間發生了哪些事?」</em>當時我們說,等你讀完整本書,會給出更精確的答案。
+      </p>
+      <p>
+        今天就是還債的日子。這一章,我們要把那短短不到一秒鐘裡發生的事,一層一層拆開來看。
+        你會發現,那不是「一件事」,而是<strong>幾十個協定、跨越好幾層抽象、橫越半個地球</strong>的接力賽。
+        而最神奇的是——它幾乎從不出錯。
+      </p>
+      <p>
+        網際網路(Internet)是人類有史以來造過最龐大、最複雜的工程系統。沒有人能一次理解它的全部。
+        但好消息是:設計它的人也知道這件事,所以他們用了一招你已經很熟的武器來馴服這頭巨獸——
+        正是第 1 章講的<strong>抽象</strong>、第 11 章講的<strong>分層架構</strong>。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">本章的學法:由上而下(top-down)</span>
+          <p>傳統教科書喜歡從電線、電壓講起,一路往上爬到網頁。我們反過來——
+          從你<strong>最熟悉、最有感</strong>的那一層(瀏覽器、網址、HTTP)開始,一路<strong>往下</strong>挖,
+          看每一層為了支撐上一層,默默做了什麼。這叫「由上而下」,是 Kurose &amp; Ross 經典教材的招牌教法,
+          也是讓網路「有感」的最好方式。</p>
+        </div>
+      </div>
+
+      <h2>為什麼要分層?網路的骨架</h2>
+      <p>
+        想像一下,如果叫你「從零設計網際網路」,你得同時操心多少事:電子訊號怎麼在銅線或光纖裡傳?
+        兩台相鄰機器怎麼知道一串 0 和 1 從哪開始、到哪結束?資料怎麼從台北送到美國,中間經過幾十台機器怎麼選路?
+        中途有封包掉了怎麼辦?最後瀏覽器又怎麼知道對方傳來的是一張圖還是一段 HTML?
+      </p>
+      <p>
+        把這些問題全部攪在一起想,任何人都會瘋掉。於是工程師用了那招老把戲:<strong>分而治之</strong>。
+        把整個「讓兩台電腦對話」的大問題,切成幾個堆疊起來的<strong>層(layer)</strong>,
+        每一層只負責一件事,並且<strong>只依賴它下面那一層提供的服務</strong>,完全不管下層是怎麼做到的。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">🔗</div>
+        <div class="body">
+          <span class="c-title">這正是第 11 章的「分層架構」</span>
+          <p>還記得分層架構的鐵律嗎?<strong>每一層只能呼叫正下方那一層,上層依賴下層的服務,下層不知道上層的存在。</strong>
+          網路協定堆疊(protocol stack)就是這個原則最成功、規模最大的一次實踐。
+          當年那張「應用層 / 傳輸層 / 網路層 / 連結層」的圖,現在我們要把每一層裡面真正在跑什麼,一一講清楚。</p>
+        </div>
+      </div>
+
+      <h3>分層帶來的兩個禮物</h3>
+      <p>
+        分層不是為了好看,它解決了兩個真實的痛點:
+      </p>
+      <ul>
+        <li><strong>各司其職,獨立演化</strong>:寫瀏覽器(應用層)的人,完全不用懂光纖怎麼傳光(實體層)。
+        反過來,電信公司把銅線換成光纖、把 4G 升級成 5G,你的 LINE 和 Chrome <strong>一行程式都不用改</strong>。
+        因為它們之間只透過固定的「介面」溝通,內部怎麼變都互不影響。</li>
+        <li><strong>同一套東西重複用</strong>:不管你傳的是網頁、電子郵件還是視訊,在傳輸層以下用的<strong>都是同一套</strong>
+        TCP/IP。網路層只管「把這包資料送到那台機器」,它根本不在乎裡面裝的是情書還是貓影片。</li>
+      </ul>
+
+      <h3>協定:機器之間的共同語言</h3>
+      <p>
+        在繼續往下之前,先講清楚一個貫穿全章的詞:<strong>協定(protocol)</strong>。
+      </p>
+      <p>
+        兩個人講電話,得先有默契:接起來要先說「喂?」,對方回應了才開始講正事,講完說「那就這樣囉,掰掰」再掛斷。
+        這套「誰先講、講什麼格式、收到要怎麼回」的規矩,如果換成兩台機器之間,就叫<strong>協定</strong>。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">什麼是協定</span>
+          <p><strong>協定(protocol)</strong>是一份事先講好的「對話規則」,規定通訊雙方<strong>交換訊息的格式、順序,以及收到訊息後該採取的動作</strong>。
+          HTTP、DNS、TCP、IP……這些名字後面全都是一份協定。只要雙方都遵守同一份協定,
+          一台 Windows 筆電就能和一台從沒見過面、跑著 Linux 的伺服器,順暢地對話。協定,就是網路世界的「共同語言」。</p>
+        </div>
+      </div>
+
+      <h3>五層模型與 OSI 七層</h3>
+      <p>
+        現實中最常用的,是把網路切成<strong>五層</strong>。由上而下分別是:
+      </p>
+      <ul>
+        <li><strong>應用層(application layer)</strong>:你的程式直接打交道的一層。HTTP、DNS、SMTP 都在這。處理「網頁、郵件」這種<em>有意義</em>的資料。</li>
+        <li><strong>傳輸層(transport layer)</strong>:負責把資料<em>可靠地(或快速地)</em>從一支程式送到另一台機器的某支程式。主角是 TCP 與 UDP。</li>
+        <li><strong>網路層(network layer)</strong>:負責把資料<em>從一台主機送到地球另一端的另一台主機</em>,沿途選路。主角是 IP。</li>
+        <li><strong>連結層(link layer)</strong>:負責把資料送到<em>實體上相鄰的下一台機器</em>(例如你的筆電到家裡的路由器)。乙太網路、Wi-Fi 在這。</li>
+        <li><strong>實體層(physical layer)</strong>:真正把 0 和 1 變成電壓、光、無線電波,在線材或空氣中傳出去。</li>
+      </ul>
+      <p>
+        你可能也聽過更老、更學術的 <strong>OSI 七層模型</strong>。它把上面的「應用層」進一步拆成三層(應用、表現、會議),
+        其餘大致對應。OSI 是教科書上的理想參考模型,而真正主宰整個網際網路的,是樸實的 <strong>TCP/IP(五層)</strong>。
+        兩者對照如下:
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 430" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- 左:五層 TCP/IP -->
+  <text x="180" y="26" text-anchor="middle" font-size="14" font-weight="800" fill="#2f6f6a">五層模型(TCP/IP,實務主流)</text>
+  <rect x="40" y="44"  width="280" height="56" rx="8" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="180" y="68"  text-anchor="middle" font-size="13" font-weight="700" fill="#1f2328">5. 應用層 Application</text>
+  <text x="180" y="88"  text-anchor="middle" font-size="11" fill="#4a5159">HTTP · DNS · SMTP</text>
+  <rect x="40" y="108" width="280" height="56" rx="8" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="180" y="132" text-anchor="middle" font-size="13" font-weight="700" fill="#1f2328">4. 傳輸層 Transport</text>
+  <text x="180" y="152" text-anchor="middle" font-size="11" fill="#4a5159">TCP · UDP</text>
+  <rect x="40" y="172" width="280" height="56" rx="8" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="180" y="196" text-anchor="middle" font-size="13" font-weight="700" fill="#1f2328">3. 網路層 Network</text>
+  <text x="180" y="216" text-anchor="middle" font-size="11" fill="#4a5159">IP · ICMP · 路由</text>
+  <rect x="40" y="236" width="280" height="56" rx="8" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="180" y="260" text-anchor="middle" font-size="13" font-weight="700" fill="#1f2328">2. 連結層 Link</text>
+  <text x="180" y="280" text-anchor="middle" font-size="11" fill="#4a5159">乙太網路 · Wi-Fi · ARP</text>
+  <rect x="40" y="300" width="280" height="56" rx="8" fill="#2f6f6a"/>
+  <text x="180" y="324" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">1. 實體層 Physical</text>
+  <text x="180" y="344" text-anchor="middle" font-size="11" fill="#cfe6e2">銅線 · 光纖 · 無線電波</text>
+
+  <!-- 右:OSI 七層 -->
+  <text x="540" y="26" text-anchor="middle" font-size="14" font-weight="800" fill="#b4541f">OSI 七層(學術參考模型)</text>
+  <rect x="420" y="44"  width="240" height="28" rx="6" fill="#f6e7dd" stroke="#b4541f"/><text x="540" y="63"  text-anchor="middle" font-size="12" fill="#1f2328">7. 應用 Application</text>
+  <rect x="420" y="76"  width="240" height="28" rx="6" fill="#f6e7dd" stroke="#b4541f"/><text x="540" y="95"  text-anchor="middle" font-size="12" fill="#1f2328">6. 表現 Presentation</text>
+  <rect x="420" y="108" width="240" height="28" rx="6" fill="#f6e7dd" stroke="#b4541f"/><text x="540" y="127" text-anchor="middle" font-size="12" fill="#1f2328">5. 會議 Session</text>
+  <rect x="420" y="140" width="240" height="56" rx="6" fill="#f6e7dd" stroke="#b4541f"/><text x="540" y="173" text-anchor="middle" font-size="12" fill="#1f2328">4. 傳輸 Transport</text>
+  <rect x="420" y="200" width="240" height="56" rx="6" fill="#f6e7dd" stroke="#b4541f"/><text x="540" y="233" text-anchor="middle" font-size="12" fill="#1f2328">3. 網路 Network</text>
+  <rect x="420" y="260" width="240" height="56" rx="6" fill="#f6e7dd" stroke="#b4541f"/><text x="540" y="293" text-anchor="middle" font-size="12" fill="#1f2328">2. 資料連結 Data Link</text>
+  <rect x="420" y="320" width="240" height="36" rx="6" fill="#b4541f"/><text x="540" y="343" text-anchor="middle" font-size="12" fill="#fff">1. 實體 Physical</text>
+
+  <!-- 對應括號:OSI 上三層 → TCP/IP 應用層 -->
+  <path d="M412,58 C400,58 400,72 388,72 L322,72" fill="none" stroke="#8a929b" stroke-width="1.5" stroke-dasharray="4 3"/>
+  <path d="M412,90 C400,90 400,72 388,72" fill="none" stroke="#8a929b" stroke-width="1.5" stroke-dasharray="4 3"/>
+  <path d="M412,122 C400,122 400,72 388,72" fill="none" stroke="#8a929b" stroke-width="1.5" stroke-dasharray="4 3"/>
+  <text x="365" y="400" text-anchor="middle" font-size="11" fill="#8a929b">OSI 的上三層(應用/表現/會議),在 TCP/IP 裡通通算「應用層」</text>
+</svg>
+        <figcaption>圖 25-1:五層模型 vs OSI 七層。實務上幾乎只用左邊這套五層;OSI 是理解概念的參考。注意層的編號:習慣上實體層是第 1 層、應用層在最上面。</figcaption>
+      </div>
+
+      <h3>封裝:資料如何一層層被包起來</h3>
+      <p>
+        分層最精妙的機制,叫<strong>封裝(encapsulation)</strong>。它的點子簡單到像在寄包裹。
+      </p>
+      <p>
+        想像你要寄一份合約給朋友。合約本身是「資料」。你把它裝進一個信封,信封上寫收件人姓名——這是第一層包裝。
+        郵局收到後,把你的信封丟進一個更大的郵袋,郵袋上貼著「寄往台中分局」的標籤——第二層包裝。
+        貨運再把郵袋裝上一台貼著車牌的卡車——第三層。<strong>每一層都在外面多包一層、貼上自己這一層需要的資訊,卻完全不去動裡面的內容。</strong>
+      </p>
+      <p>
+        網路一模一樣。你的資料從應用層往下走,每經過一層,那一層就在前面加上一段屬於自己的<strong>標頭(header)</strong>:
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 360" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="enc-arr" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/></marker>
+  </defs>
+  <!-- 應用層 -->
+  <text x="40" y="40" font-size="12" font-weight="700" fill="#2f6f6a">應用層</text>
+  <rect x="430" y="24" width="180" height="34" rx="5" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="520" y="46" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">HTTP 訊息</text>
+  <text x="660" y="46" font-size="11" fill="#8a929b">訊息</text>
+
+  <!-- 傳輸層 -->
+  <text x="40" y="100" font-size="12" font-weight="700" fill="#2f6f6a">傳輸層</text>
+  <rect x="360" y="84" width="70" height="34" rx="5" fill="#cfe0f5" stroke="#3a6fb0"/>
+  <text x="395" y="106" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2328">TCP</text>
+  <rect x="430" y="84" width="180" height="34" rx="5" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="520" y="106" text-anchor="middle" font-size="12" fill="#1f2328">HTTP 訊息</text>
+  <text x="640" y="106" font-size="11" fill="#8a929b">區段 segment</text>
+
+  <!-- 網路層 -->
+  <text x="40" y="160" font-size="12" font-weight="700" fill="#2f6f6a">網路層</text>
+  <rect x="290" y="144" width="70" height="34" rx="5" fill="#f3d9c7" stroke="#b4541f"/>
+  <text x="325" y="166" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2328">IP</text>
+  <rect x="360" y="144" width="70" height="34" rx="5" fill="#cfe0f5" stroke="#3a6fb0"/>
+  <text x="395" y="166" text-anchor="middle" font-size="11" fill="#1f2328">TCP</text>
+  <rect x="430" y="144" width="180" height="34" rx="5" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="520" y="166" text-anchor="middle" font-size="12" fill="#1f2328">HTTP 訊息</text>
+  <text x="628" y="166" font-size="11" fill="#8a929b">封包 packet</text>
+
+  <!-- 連結層 -->
+  <text x="40" y="220" font-size="12" font-weight="700" fill="#2f6f6a">連結層</text>
+  <rect x="220" y="204" width="70" height="34" rx="5" fill="#e0d4f5" stroke="#8b5cf6"/>
+  <text x="255" y="226" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2328">訊框頭</text>
+  <rect x="290" y="204" width="70" height="34" rx="5" fill="#f3d9c7" stroke="#b4541f"/>
+  <text x="325" y="226" text-anchor="middle" font-size="11" fill="#1f2328">IP</text>
+  <rect x="360" y="204" width="70" height="34" rx="5" fill="#cfe0f5" stroke="#3a6fb0"/>
+  <text x="395" y="226" text-anchor="middle" font-size="11" fill="#1f2328">TCP</text>
+  <rect x="430" y="204" width="180" height="34" rx="5" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="520" y="226" text-anchor="middle" font-size="12" fill="#1f2328">HTTP 訊息</text>
+  <rect x="610" y="204" width="44" height="34" rx="5" fill="#e0d4f5" stroke="#8b5cf6"/>
+  <text x="632" y="226" text-anchor="middle" font-size="10" fill="#1f2328">尾</text>
+  <text x="360" y="264" text-anchor="middle" font-size="11" fill="#8a929b">訊框 frame</text>
+
+  <!-- 往下箭頭 -->
+  <line x1="160" y1="56" x2="160" y2="206" stroke="#8a929b" stroke-width="2" marker-end="url(#enc-arr)"/>
+  <text x="150" y="135" text-anchor="end" font-size="11" fill="#8a929b" transform="rotate(-90 150 135)">每往下一層,前面多包一個標頭</text>
+
+  <!-- 說明 -->
+  <text x="360" y="306" text-anchor="middle" font-size="12" fill="#4a5159">送出去:由上往下,層層加標頭(封裝)</text>
+  <text x="360" y="328" text-anchor="middle" font-size="12" fill="#4a5159">收進來:由下往上,層層拆標頭(解封裝 decapsulation)</text>
+  <text x="360" y="350" text-anchor="middle" font-size="11" fill="#8a929b">對方每一層只看自己那一段標頭,內容對它來說是「不可拆的黑盒」</text>
+</svg>
+        <figcaption>圖 25-2:封裝。資料下行時每層加上自己的標頭(連結層連尾巴也加);抵達對方後反向一層層拆開。注意各層 PDU 有專屬名稱:傳輸層叫「區段」、網路層叫「封包」、連結層叫「訊框」。</figcaption>
+      </div>
+
+      <p>
+        到了對方那台機器,過程<strong>完全倒過來</strong>:連結層先拆掉自己的訊框標頭,把裡面的東西交給網路層;
+        網路層拆掉 IP 標頭,交給傳輸層;傳輸層拆掉 TCP 標頭,把最裡面那份 HTTP 訊息交給應用層。
+        每一層都只「拆自己貼的那張標籤」,從不去管別層的事。這就是分層的優雅之處。
+      </p>
+
+      <div class="callout history">
+        <div class="ico">📜</div>
+        <div class="body">
+          <span class="c-title">TCP/IP 的誕生</span>
+          <p>1974 年,<strong>Vint Cerf</strong> 與 <strong>Bob Kahn</strong> 發表了一篇論文,描述一套能讓「不同網路彼此互連」的協定——
+          這就是 TCP/IP 的雛形,也是「inter-net(網路之間)」這個詞的由來。1983 年 1 月 1 日,
+          ARPANET 正式全面切換到 TCP/IP,這一天常被視為「現代網際網路的生日」。
+          兩人後來也因此共同獲得了被譽為計算機界諾貝爾獎的圖靈獎。</p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 25.1 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>用你自己的話,描述一份 HTTP 訊息從你的瀏覽器「往下走」到網路卡的過程中,
+          經過哪些層、每層各加上了什麼,最後在線材上跑的是哪一種 PDU(訊息?區段?封包?訊框?)。
+          再說明對方主機收到後,這份資料如何被「解封裝」交回它的瀏覽器。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>下行(封裝)</strong>:</p>
+              <ol>
+                <li>應用層產生一份 <strong>HTTP 訊息</strong>(例如 <code>GET / HTTP/1.1 ...</code>)。</li>
+                <li>傳輸層在前面加上 <strong>TCP 標頭</strong>(含來源埠、目的埠、序號等),變成<strong>區段(segment)</strong>。</li>
+                <li>網路層在前面加上 <strong>IP 標頭</strong>(含來源 IP、目的 IP),變成<strong>封包(packet / datagram)</strong>。</li>
+                <li>連結層在前後加上 <strong>訊框標頭與尾巴</strong>(含來源/目的 MAC、錯誤偵測碼),變成<strong>訊框(frame)</strong>。</li>
+                <li>實體層把這串訊框變成電壓/光/無線電波送出去。</li>
+              </ol>
+              <p><strong>上行(解封裝)</strong>:對方主機反過來,連結層→網路層→傳輸層→應用層,每層拆掉自己那段標頭,
+              最後把純淨的 HTTP 訊息交給對方的網頁伺服器程式。每一層都只看、只拆自己負責的標頭,
+              這正是分層架構「各層獨立、互不干涉」的體現。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>應用層:你看得見的那一層</h2>
+      <p>
+        既然要由上而下,我們就從你最熟的應用層開始。應用層的協定多到數不完,但對自學者來說,
+        有兩個是非懂不可的:讓網頁能跑的 <strong>HTTP</strong>,以及把 <code>google.com</code> 翻成數字位址的 <strong>DNS</strong>。
+      </p>
+
+      <h3>HTTP:網頁世界的請求與回應</h3>
+      <p>
+        <strong>HTTP(HyperText Transfer Protocol,超文字傳輸協定)</strong>是全球資訊網(Web)的核心。
+        它的模型簡單到不可思議:<strong>主從式(client-server)</strong>。瀏覽器是<strong>客戶端(client)</strong>,
+        它<strong>發出請求(request)</strong>;網頁伺服器是<strong>伺服器(server)</strong>,它<strong>回傳回應(response)</strong>。
+        一來一回,故事就結束了。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 700 250" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="http-r" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#b4541f"/></marker>
+    <marker id="http-l" markerWidth="10" markerHeight="10" refX="2" refY="3" orient="auto"><path d="M8,0 L0,3 L8,6 Z" fill="#2f6f6a"/></marker>
+  </defs>
+  <rect x="40" y="90" width="150" height="70" rx="10" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="115" y="120" text-anchor="middle" font-size="14" font-weight="800" fill="#1f2328">瀏覽器</text>
+  <text x="115" y="140" text-anchor="middle" font-size="11" fill="#4a5159">client 客戶端</text>
+
+  <rect x="510" y="90" width="150" height="70" rx="10" fill="#f6e7dd" stroke="#b4541f"/>
+  <text x="585" y="120" text-anchor="middle" font-size="14" font-weight="800" fill="#1f2328">網頁伺服器</text>
+  <text x="585" y="140" text-anchor="middle" font-size="11" fill="#4a5159">server 伺服器</text>
+
+  <line x1="195" y1="108" x2="505" y2="108" stroke="#b4541f" stroke-width="2.5" marker-end="url(#http-r)"/>
+  <text x="350" y="98" text-anchor="middle" font-size="12" font-weight="700" fill="#b4541f">① 請求 Request</text>
+  <text x="350" y="126" text-anchor="middle" font-size="11" fill="#8a929b">GET /search?q=cs HTTP/1.1</text>
+
+  <line x1="505" y1="148" x2="195" y2="148" stroke="#2f6f6a" stroke-width="2.5" marker-end="url(#http-l)"/>
+  <text x="350" y="172" text-anchor="middle" font-size="12" font-weight="700" fill="#2f6f6a">② 回應 Response</text>
+  <text x="350" y="190" text-anchor="middle" font-size="11" fill="#8a929b">200 OK + HTML 內容</text>
+
+  <text x="350" y="226" text-anchor="middle" font-size="11" fill="#8a929b">一個請求換一個回應,如此而已——這就是 HTTP 的全部骨架</text>
+</svg>
+        <figcaption>圖 25-3:HTTP 的請求-回應模型。瀏覽器發問,伺服器回答。一個網頁通常由幾十次這樣的一問一答組成(HTML、CSS、JS、圖片各一輪)。</figcaption>
+      </div>
+
+      <p>一個 HTTP 請求長這樣(它其實就是一段純文字):</p>
+      <pre><code class="language-text">GET /index.html HTTP/1.1
+Host: www.example.com
+User-Agent: Mozilla/5.0
+Accept: text/html
+
+</code></pre>
+      <p>
+        第一行是最關鍵的:<strong>方法(method)</strong>、<strong>路徑</strong>、<strong>版本</strong>。常見的方法有:
+      </p>
+      <ul>
+        <li><strong>GET</strong>:「給我這個資源」。讀取、不改變伺服器狀態。你開網頁、點連結,基本都是 GET。</li>
+        <li><strong>POST</strong>:「這是我要交給你的資料,請處理」。送出表單、上傳留言、登入,通常是 POST。</li>
+        <li>還有 PUT(更新)、DELETE(刪除)等,在設計 API 時很常用,我們在後面的 Web 章節會細談。</li>
+      </ul>
+      <p>伺服器的回應也是純文字,開頭是一行<strong>狀態碼(status code)</strong>:</p>
+      <pre><code class="language-text">HTTP/1.1 200 OK
+Content-Type: text/html; charset=UTF-8
+Content-Length: 1256
+
+&lt;!doctype html&gt;
+&lt;html&gt; ... 網頁內容 ... &lt;/html&gt;</code></pre>
+      <p>狀態碼用一個三位數字,精簡地告訴你「結果如何」。你一定要認得這幾個家族:</p>
+
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>狀態碼</th><th>家族意義</th><th>經典代表</th></tr></thead>
+        <tbody>
+          <tr><td>2xx</td><td>成功</td><td><strong>200 OK</strong>(一切正常)</td></tr>
+          <tr><td>3xx</td><td>重新導向</td><td>301 永久搬家、304 沒變(用快取就好)</td></tr>
+          <tr><td>4xx</td><td>你(客戶端)錯了</td><td><strong>404 Not Found</strong>(找不到)、403 禁止、401 未授權</td></tr>
+          <tr><td>5xx</td><td>伺服器自己出錯</td><td><strong>500 Internal Server Error</strong>、503 暫時無法服務</td></tr>
+        </tbody>
+      </table>
+      </div>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">一秒看懂誰的錯</span>
+          <p>4 開頭=<strong>客戶端</strong>的問題(你打錯網址、沒登入);5 開頭=<strong>伺服器</strong>的問題(它程式爆了)。
+          下次看到 404 別怪伺服器,那通常是網址打錯;看到 500,則是對方工程師要加班了。</p>
+        </div>
+      </div>
+
+      <h4>無狀態,與 cookie 的發明</h4>
+      <p>
+        HTTP 有一個影響深遠的設計:它是<strong>無狀態的(stateless)</strong>。意思是,
+        伺服器處理完一個請求後,<strong>立刻把你忘得一乾二淨</strong>。下一個請求進來,它完全不記得你是誰、剛剛做過什麼。
+        這讓伺服器變得簡單又好擴充(每個請求獨立,可以隨便丟給任何一台伺服器處理),但也帶來一個問題:
+        <em>那「登入狀態」「購物車」這種需要記住你的功能,怎麼辦?</em>
+      </p>
+      <p>
+        答案是 <strong>cookie</strong>。伺服器在回應裡夾一張小紙條(<code>Set-Cookie: session=abc123</code>),
+        瀏覽器把它存起來;之後每次請求,瀏覽器都自動把這張紙條附上去。
+        伺服器一看紙條就「想起你了」。所以 cookie 本質上是<strong>在無狀態協定之上,人工縫補出來的「記憶」</strong>。
+      </p>
+
+      <h4>HTTPS:加上一層鎖</h4>
+      <p>
+        <strong>HTTPS</strong> 就是 HTTP 再套一層加密外殼:<strong>TLS(Transport Layer Security)</strong>。
+        它做兩件事:<strong>加密</strong>(沿途的人偷看,只看到亂碼)與<strong>驗證身分</strong>(確認你連到的真的是 Google,不是冒牌貨)。
+        為什麼非要它不可?這牽涉到網路的根本弱點,我們留到本章最後「網路與安全」一節再揭曉。
+      </p>
+
+      <h3>DNS:把名字翻成號碼的電話簿</h3>
+      <p>
+        現在來解開開頭那道謎題最關鍵的一環。你在網址列打的是 <code>google.com</code>,
+        但網路底層其實<strong>完全不認得名字</strong>,它只認得數字位址,例如 <code>142.250.196.110</code>(這叫 IP 位址)。
+        那麼,從名字到號碼的翻譯,是誰做的?<strong>DNS(Domain Name System,網域名稱系統)</strong>。
+      </p>
+      <p>
+        DNS 就像全世界共用的一本超巨大電話簿:你給它一個名字,它回你一個號碼。但這本電話簿有上億筆資料、
+        每秒被查上兆次,不可能放在單一台機器上。於是它被設計成一個<strong>分散式、階層式</strong>的資料庫——
+        這是整個網路裡最優雅的設計之一。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 340" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="dns-a" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/></marker>
+  </defs>
+  <!-- 你的電腦 -->
+  <rect x="30" y="150" width="120" height="50" rx="8" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="90" y="172" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">你的電腦</text>
+  <text x="90" y="190" text-anchor="middle" font-size="10" fill="#8a929b">google.com=?</text>
+
+  <!-- 本地解析器 -->
+  <rect x="200" y="150" width="130" height="50" rx="8" fill="#fff" stroke="#2f6f6a"/>
+  <text x="265" y="170" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">本地解析器</text>
+  <text x="265" y="188" text-anchor="middle" font-size="10" fill="#8a929b">resolver(含快取)</text>
+
+  <!-- 階層伺服器 -->
+  <rect x="430" y="30" width="250" height="44" rx="8" fill="#f6e7dd" stroke="#b4541f"/>
+  <text x="555" y="49" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">① 根伺服器 Root</text>
+  <text x="555" y="66" text-anchor="middle" font-size="10" fill="#8a929b">「.com 去問 TLD 那台」</text>
+
+  <rect x="430" y="120" width="250" height="44" rx="8" fill="#f6e7dd" stroke="#b4541f"/>
+  <text x="555" y="139" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">② 頂級網域 TLD(.com)</text>
+  <text x="555" y="156" text-anchor="middle" font-size="10" fill="#8a929b">「google.com 去問它的權威伺服器」</text>
+
+  <rect x="430" y="210" width="250" height="44" rx="8" fill="#f6e7dd" stroke="#b4541f"/>
+  <text x="555" y="229" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">③ 權威伺服器 Authoritative</text>
+  <text x="555" y="246" text-anchor="middle" font-size="10" fill="#8a929b">「google.com = 142.250.196.110」</text>
+
+  <!-- 箭頭 -->
+  <line x1="150" y1="175" x2="198" y2="175" stroke="#8a929b" stroke-width="2" marker-end="url(#dns-a)"/>
+  <line x1="332" y1="165" x2="428" y2="58"  stroke="#8a929b" stroke-width="1.6" marker-end="url(#dns-a)"/>
+  <line x1="332" y1="172" x2="428" y2="142" stroke="#8a929b" stroke-width="1.6" marker-end="url(#dns-a)"/>
+  <line x1="332" y1="182" x2="428" y2="232" stroke="#8a929b" stroke-width="1.6" marker-end="url(#dns-a)"/>
+
+  <text x="265" y="300" text-anchor="middle" font-size="11" fill="#4a5159">解析器一路問下去,拿到 IP 後回給你的電腦,並把結果<tspan font-weight="700" fill="#2f6f6a">快取</tspan>起來</text>
+  <text x="265" y="320" text-anchor="middle" font-size="11" fill="#8a929b">下次再查 google.com,直接命中快取,毫秒內回答</text>
+</svg>
+        <figcaption>圖 25-4:DNS 階層解析。從根 → 頂級網域(TLD)→ 權威伺服器,層層問下去,像查字典先看部首再看筆畫。快取讓絕大多數查詢根本不必跑完全程。</figcaption>
+      </div>
+
+      <p>解析 <code>google.com</code> 的步驟,大致是:</p>
+      <ol>
+        <li>你的電腦先問離你最近的 <strong>DNS 解析器(resolver)</strong>(通常是你家路由器或 ISP 提供的)。</li>
+        <li>解析器若<strong>快取(cache)</strong>裡有,直接回答,結束。(這就是為什麼第二次開同個網站特別快。)</li>
+        <li>若沒有,它先問<strong>根伺服器(root)</strong>:「.com 該找誰?」根回:「去問管 .com 的 TLD 伺服器。」</li>
+        <li>再問 <strong>TLD 伺服器</strong>:「google.com 該找誰?」它回:「去問 google.com 的權威伺服器。」</li>
+        <li>最後問 <strong>權威伺服器(authoritative)</strong>,拿到真正的 IP:<code>142.250.196.110</code>。</li>
+        <li>解析器把答案回給你,並<strong>快取</strong>一段時間(由 TTL 決定),下次就不用再跑一遍。</li>
+      </ol>
+
+      <div class="callout history">
+        <div class="ico">📜</div>
+        <div class="body">
+          <span class="c-title">DNS 之前的黑暗時代</span>
+          <p>1983 年 DNS 由 <strong>Paul Mockapetris</strong> 設計之前,名字到 IP 的對照是放在一個叫 <code>HOSTS.TXT</code> 的
+          <strong>單一檔案</strong>裡,由史丹佛研究院統一維護。每台電腦要定期下載這個檔案來更新。
+          隨著網路長大,這招很快撐不住——檔案越來越大、更新越來越慢、衝突越來越多。
+          DNS 的「分散式階層」設計,正是為了解決這個「中央集權撐不住」的難題。(今天你電腦裡那個 <code>hosts</code> 檔,就是它的活化石。)</p>
+        </div>
+      </div>
+
+      <h3>一句話帶過:其他應用層協定</h3>
+      <p>
+        應用層還住著很多鄰居:寄電子郵件用 <strong>SMTP</strong>、收信用 IMAP/POP3;傳檔案有 FTP;
+        遠端登入有 SSH(你在第 16 章用過);看影片的串流、線上遊戲也各有自己的應用層協定。
+        它們的共通點是:<strong>都站在傳輸層的肩膀上</strong>,自己只專心定義「訊息長什麼樣、怎麼一來一往」。
+      </p>
+
+      <h3>主從式 vs P2P</h3>
+      <p>
+        HTTP、DNS、郵件,清一色是<strong>主從式架構</strong>:有明確的「伺服器」提供服務,「客戶端」來索取。
+        但這不是唯一的玩法。還有一種叫 <strong>P2P(peer-to-peer,點對點)</strong>:沒有中央伺服器,
+        每個參與者<strong>既是客戶端、也是伺服器</strong>,大家直接互相分享。BitTorrent 下載、許多區塊鏈網路,都是 P2P。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">🔗</div>
+        <div class="body">
+          <span class="c-title">這正是第 11 章的「主從式架構」</span>
+          <p>還記得第 11 章談過的 client-server 風格嗎?網路是它最大的舞台。
+          主從式的好處是好管理、好控管;缺點是伺服器一掛,全體癱瘓(單點故障)。P2P 反過來:
+          沒有中心、極難整個打掉,但難管理、難保證品質。要選哪種,又回到那句老話——<strong>架構是一種權衡</strong>。</p>
+        </div>
+      </div>
+
+      <h2>傳輸層:把資料交到正確的程式手上</h2>
+      <p>
+        應用層產生了一份要寄出去的訊息。接下來,傳輸層登場。它要解決兩個問題:
+        <strong>(1) 同一台電腦上開了一堆程式,資料來了該交給誰?(2) 我們要「可靠」還是「快」?</strong>
+      </p>
+
+      <h3>連接埠與多工</h3>
+      <p>
+        你的電腦此刻可能同時開著瀏覽器、LINE、收信軟體、線上遊戲。它們的封包全擠在同一條網路線上進進出出。
+        當一個封包抵達,作業系統怎麼知道該把它交給瀏覽器,而不是 LINE?
+      </p>
+      <p>
+        答案是<strong>連接埠(port)</strong>:一個 16 位元的號碼(0 到 65535)。每支正在用網路的程式,
+        都「佔住」一個埠號。IP 位址帶你找到正確的<em>機器</em>(像找到一棟大樓),埠號則帶你找到機器上正確的<em>程式</em>(像找到大樓裡正確的房間)。
+        傳輸層靠「IP + 埠號」這組地址,把資料精準送到目的程式——這個「分流」的動作,就叫<strong>多工(multiplexing)/解多工(demultiplexing)</strong>。
+      </p>
+      <p>有些埠號是全世界講好的慣例,看到就該認得:</p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>埠號</th><th>服務</th><th>協定</th></tr></thead>
+        <tbody>
+          <tr><td>80</td><td>HTTP</td><td>TCP</td></tr>
+          <tr><td>443</td><td>HTTPS</td><td>TCP</td></tr>
+          <tr><td>53</td><td>DNS</td><td>多半 UDP</td></tr>
+          <tr><td>22</td><td>SSH</td><td>TCP</td></tr>
+          <tr><td>25</td><td>SMTP(寄信)</td><td>TCP</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>
+        這就是為什麼你打 <code>http://example.com</code> 不用特別指定埠號——瀏覽器<strong>預設</strong>就連 80 埠(HTTPS 連 443)。
+      </p>
+
+      <h3>UDP:簡單、不可靠、但快</h3>
+      <p>
+        傳輸層有兩位主角,先講比較簡單的這位:<strong>UDP(User Datagram Protocol)</strong>。
+      </p>
+      <p>
+        UDP 幾乎什麼都不做。它接過應用層的資料,加個小小的標頭(來源埠、目的埠、長度、檢查碼),就丟給網路層,
+        然後……就沒有然後了。它<strong>不保證送達、不保證順序、不重傳、不確認</strong>。封包掉了?它不知道,也不管。
+        這聽起來很爛,但它換來了兩個寶貴的東西:<strong>極低的延遲</strong>與<strong>極小的開銷</strong>。
+      </p>
+      <p>什麼時候「快」比「可靠」重要?</p>
+      <ul>
+        <li><strong>即時視訊/語音通話</strong>:掉一兩個畫面格沒關係(頂多花一下),但若為了補那一格而卡住,反而更糟。</li>
+        <li><strong>線上遊戲</strong>:你角色 0.1 秒前的位置,重傳到了也沒意義——遊戲早就往前跑了。新資料才有用。</li>
+        <li><strong>DNS 查詢</strong>:一個小問句、一個小答案,用 UDP 一來一回就好,沒掉就沒掉,掉了重問一次比建立連線還快。</li>
+      </ul>
+
+      <h3>TCP:在不可靠的網路上,變出可靠</h3>
+      <p>
+        現在來到本章的智慧高峰。先認清一個殘酷的事實:<strong>底下的網路層(IP)是「盡力而為」(best-effort)的——
+        它會盡力把封包送到,但<em>從不保證</em></strong>。封包可能在路上塞車被丟掉、可能走不同路徑導致先發後到、可能損毀。
+        IP 對這些一概不負責。
+      </p>
+      <p>
+        然而你下載一個檔案、開一個網頁,它<strong>一個位元組都不能錯、不能漏、不能亂序</strong>。
+        這個「在不可靠的地基上,蓋出可靠的房子」的奇蹟,就是 <strong>TCP(Transmission Control Protocol)</strong> 的工作。
+        它怎麼辦到的?靠三個核心點子。
+      </p>
+
+      <h4>核心點子一:三向交握(建立連線)</h4>
+      <p>
+        和 UDP「丟了就跑」不同,TCP 在傳資料之前,雙方要先「打招呼、確認彼此都準備好了」。
+        這個開場儀式,叫<strong>三向交握(three-way handshake)</strong>,正好三個來回:
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 700 340" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="hs-r" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#b4541f"/></marker>
+    <marker id="hs-l" markerWidth="10" markerHeight="10" refX="2" refY="3" orient="auto"><path d="M8,0 L0,3 L8,6 Z" fill="#2f6f6a"/></marker>
+  </defs>
+  <!-- 兩條時間線 -->
+  <text x="120" y="34" text-anchor="middle" font-size="14" font-weight="800" fill="#2f6f6a">客戶端 Client</text>
+  <text x="580" y="34" text-anchor="middle" font-size="14" font-weight="800" fill="#b4541f">伺服器 Server</text>
+  <line x1="120" y1="48" x2="120" y2="310" stroke="#8a929b" stroke-width="2"/>
+  <line x1="580" y1="48" x2="580" y2="310" stroke="#8a929b" stroke-width="2"/>
+
+  <!-- SYN -->
+  <line x1="120" y1="80" x2="580" y2="120" stroke="#b4541f" stroke-width="2.5" marker-end="url(#hs-r)"/>
+  <text x="350" y="92" text-anchor="middle" font-size="13" font-weight="700" fill="#b4541f">① SYN</text>
+  <text x="350" y="110" text-anchor="middle" font-size="11" fill="#8a929b">「我想連你,我的序號 seq=x」</text>
+
+  <!-- SYN-ACK -->
+  <line x1="580" y1="150" x2="120" y2="190" stroke="#2f6f6a" stroke-width="2.5" marker-end="url(#hs-l)"/>
+  <text x="350" y="162" text-anchor="middle" font-size="13" font-weight="700" fill="#2f6f6a">② SYN-ACK</text>
+  <text x="350" y="180" text-anchor="middle" font-size="11" fill="#8a929b">「好,我收到 x;我的序號 seq=y,ack=x+1」</text>
+
+  <!-- ACK -->
+  <line x1="120" y1="220" x2="580" y2="260" stroke="#b4541f" stroke-width="2.5" marker-end="url(#hs-r)"/>
+  <text x="350" y="232" text-anchor="middle" font-size="13" font-weight="700" fill="#b4541f">③ ACK</text>
+  <text x="350" y="250" text-anchor="middle" font-size="11" fill="#8a929b">「我也收到 y 了,ack=y+1。開始傳吧!」</text>
+
+  <text x="350" y="300" text-anchor="middle" font-size="11" fill="#4a5159">三個訊息走完,雙方都確認「我能送、也能收」——連線正式建立</text>
+</svg>
+        <figcaption>圖 25-5:TCP 三向交握。SYN → SYN-ACK → ACK。為什麼是三次而不是兩次?因為要讓<strong>雙方</strong>都確認「自己的傳送與接收都正常」,兩次只能確認單向。</figcaption>
+      </div>
+
+      <p>
+        交握完成後,連線就「建立」了。注意:這條「連線」其實是<strong>虛擬的</strong>——底下的 IP 根本沒有「連線」的概念,
+        每個封包都是各走各的。TCP 只是用雙方記住的狀態(序號等),在兩端「假裝」有一條穩定的水管。這又是一層漂亮的抽象。
+      </p>
+
+      <h4>核心點子二:序號 + 確認 + 重傳(達成可靠)</h4>
+      <p>
+        資料開始流動後,TCP 怎麼確保不漏、不亂?三招配合:
+      </p>
+      <ul>
+        <li><strong>序號(sequence number)</strong>:每個位元組都有編號。就算封包亂序抵達,接收方也能照編號<strong>重新排好</strong>。</li>
+        <li><strong>確認(ACK)</strong>:接收方每收到資料,就回一個 <strong>ACK</strong>:「我已經收到第 N 號之前的所有東西了。」</li>
+        <li><strong>重傳(retransmission)</strong>:傳送方送出資料後會等 ACK。<strong>等太久沒等到</strong>(逾時),
+        就假設那包掉了,<strong>再傳一次</strong>。</li>
+      </ul>
+      <p>
+        這三招合起來,就是「可靠資料傳輸」的核心思想:<strong>編號讓你能重組與偵測缺漏,確認讓你知道對方收到了沒,
+        重傳讓你能補救遺失。</strong>掉了就補、亂了就排——無論底下的網路多麼不靠譜,上層應用看到的永遠是一條乾淨、有序、完整的資料流。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">可靠傳輸的精髓:一句話</span>
+          <p>TCP 不是靠「一條不會出錯的線」做到可靠,而是靠<strong>「不斷確認 + 缺了就重傳」</strong>這個回饋迴路。
+          這是個深刻的工程哲學:與其追求完美的元件,不如設計一個能<strong>偵測錯誤並自我修復</strong>的系統。
+          你會在分散式系統、甚至 TCP 以外的無數地方,一再遇到這個思想。</p>
+        </div>
+      </div>
+
+      <h4>核心點子三:流量控制與壅塞控制(別把人淹死、也別把路塞爆)</h4>
+      <p>
+        最後,TCP 還很有「公德心」。它管兩種「淹水」:
+      </p>
+      <ul>
+        <li><strong>流量控制(flow control)</strong>:別傳太快,把<strong>接收方</strong>淹死。接收方會在 ACK 裡告訴你
+        「我還剩多少緩衝空間(視窗 window)」,傳送方就照這個量,不會塞爆對方的信箱。</li>
+        <li><strong>壅塞控制(congestion control)</strong>:別傳太快,把<strong>中間的網路</strong>塞爆。
+        這招更聰明:TCP 一開始<strong>小心試探</strong>(慢啟動,從很慢開始,逐步加速),
+        一旦偵測到塞車跡象(封包開始掉),就<strong>立刻大幅降速</strong>,然後再慢慢爬回來。
+        這種「慢慢加、出事就猛踩煞車」的策略,讓全世界幾十億條 TCP 連線能<strong>客氣地共享</strong>有限的網路,而不是一起把它擠垮。</li>
+      </ul>
+
+      <div class="callout history">
+        <div class="ico">📜</div>
+        <div class="body">
+          <span class="c-title">1986 年的網路大塞車</span>
+          <p>1986 年,早期網際網路曾發生「壅塞崩潰(congestion collapse)」:大家拼命重傳塞住的封包,
+          結果越塞越重傳、越重傳越塞,有效傳輸量一度暴跌上千倍。<strong>Van Jacobson</strong> 在 1988 年提出的
+          慢啟動與壅塞避免演算法,救了整個網路,至今仍是 TCP 的基石。這提醒我們:
+          一個看似抽象的「控制策略」,可能就是一個系統能否規模化的生死關鍵。</p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 25.2 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>針對下列四種情境,各自該選 TCP 還是 UDP,並說明理由:
+          (a) 從網站下載一個 50 MB 的 PDF;(b) 兩人線上對戰格鬥遊戲;(c) 即時語音通話;(d) 一次 DNS 查詢。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <ul>
+                <li><strong>(a) 下載 PDF → TCP</strong>。檔案少一個位元組就壞了,絕對不能容錯,可靠性壓倒一切,慢一點無所謂。</li>
+                <li><strong>(b) 格鬥遊戲 → UDP</strong>(配合自訂的補強機制)。即時性最重要,過時的舊狀態重傳到了也沒用,新資料才有價值。</li>
+                <li><strong>(c) 語音通話 → UDP</strong>。掉一小段聲音可以接受,但若為重傳而卡頓,通話體驗反而崩潰。低延遲 &gt; 完整。</li>
+                <li><strong>(d) DNS → UDP</strong>。一問一答都很小,用 UDP 省下建立連線的開銷;萬一沒回應,重問一次即可。(資料過大或特殊情況才改用 TCP。)</li>
+              </ul>
+              <p>判斷準則:<strong>資料完整性 vs 即時性,哪個更不能犧牲?</strong>不能掉資料選 TCP,不能容忍延遲選 UDP。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 25.3 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>用一段不超過 150 字的文字,向一個完全不懂網路的朋友解釋:
+          「為什麼 TCP 能在<strong>會掉封包、會亂序</strong>的網路上,做到一個位元組都不漏、順序也對的可靠傳輸?」
+          請涵蓋序號、確認(ACK)、重傳三個關鍵。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>參考答案:</p>
+              <blockquote>
+                想像你寄一疊有編號的明信片給朋友。每張都<strong>編了號(序號)</strong>,所以就算它們亂序抵達,
+                朋友也能照編號重新排好。朋友每收到,就回你一張「我收到第幾號了」的回條(<strong>ACK</strong>)。
+                你寄出後會盯著回條;<strong>等太久沒收到</strong>,就當那張掉了,<strong>再補寄一張(重傳)</strong>。
+                靠「編號 + 回條 + 補寄」這個迴圈,即使郵差會弄丟、會弄亂,你朋友最後拿到的,
+                一定是完整又按順序的整疊明信片。
+              </blockquote>
+              <p>核心:TCP 不假設網路可靠,而是用「持續確認 + 缺了就補」的回饋機制,主動把不可靠「修」成可靠。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>網路層:讓封包穿越地球</h2>
+      <p>
+        傳輸層把資料切成一段段,交給網路層。網路層只有一個任務,但這任務無比艱鉅:
+        <strong>把這個封包,從你台北家裡的電腦,送到地球另一端某台機器手上</strong>——而它倆中間,隔著幾十台陌生的機器。
+      </p>
+
+      <h3>IP 位址:網路世界的門牌</h3>
+      <p>
+        要把東西送到某處,得先有地址。網路層的地址就是 <strong>IP 位址(IP address)</strong>。
+        目前最普及的 <strong>IPv4</strong> 用 32 個位元,寫成四個 0–255 的數字,用點隔開,例如 <code>140.112.30.26</code>。
+      </p>
+      <p>
+        一個 IP 位址其實分成兩半:<strong>網路部分(network)</strong>說明「你在哪個網路(社區)」,
+        <strong>主機部分(host)</strong>說明「你是那個網路裡的哪一台(門牌號)」。哪裡是分界?由<strong>子網路遮罩</strong>決定,
+        現代寫法用 <strong>CIDR</strong> 表示法,在位址後面加一條斜線和數字:
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 700 230" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="350" y="30" text-anchor="middle" font-size="14" font-weight="800" fill="#1f2328">192.168.1.0 / 24</text>
+  <!-- 四個 octet -->
+  <rect x="60"  y="60" width="140" height="50" rx="6" fill="#e3efed" stroke="#2f6f6a"/>
+  <rect x="200" y="60" width="140" height="50" rx="6" fill="#e3efed" stroke="#2f6f6a"/>
+  <rect x="340" y="60" width="140" height="50" rx="6" fill="#e3efed" stroke="#2f6f6a"/>
+  <rect x="480" y="60" width="140" height="50" rx="6" fill="#f6e7dd" stroke="#b4541f"/>
+  <text x="130" y="92" text-anchor="middle" font-size="16" font-weight="700" fill="#1f2328">192</text>
+  <text x="270" y="92" text-anchor="middle" font-size="16" font-weight="700" fill="#1f2328">168</text>
+  <text x="410" y="92" text-anchor="middle" font-size="16" font-weight="700" fill="#1f2328">1</text>
+  <text x="550" y="92" text-anchor="middle" font-size="16" font-weight="700" fill="#1f2328">0</text>
+  <text x="130" y="128" text-anchor="middle" font-size="11" fill="#8a929b">8 bits</text>
+  <text x="270" y="128" text-anchor="middle" font-size="11" fill="#8a929b">8 bits</text>
+  <text x="410" y="128" text-anchor="middle" font-size="11" fill="#8a929b">8 bits</text>
+  <text x="550" y="128" text-anchor="middle" font-size="11" fill="#8a929b">8 bits</text>
+
+  <!-- 括號:前 24 bits 網路, 後 8 bits 主機 -->
+  <path d="M60,150 L60,162 L480,162 L480,150" fill="none" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="270" y="184" text-anchor="middle" font-size="12" font-weight="700" fill="#2f6f6a">前 24 位元:網路部分(/24)→ 同一個社區</text>
+  <path d="M480,150 L480,162 L620,162 L620,150" fill="none" stroke="#b4541f" stroke-width="2"/>
+  <text x="550" y="184" text-anchor="middle" font-size="12" font-weight="700" fill="#b4541f">後 8 位元:主機</text>
+  <text x="350" y="212" text-anchor="middle" font-size="11" fill="#8a929b">/24 表示「網路部分佔前 24 位元」,剩 8 位元可容納約 254 台主機</text>
+</svg>
+        <figcaption>圖 25-6:IPv4 位址與 CIDR。<code>/24</code> 代表前 24 位元是網路部分。同一子網路(社區)裡的機器,網路部分都相同;路由器靠「網路部分」就能把封包送到正確的社區,再由社區內部派送到正確的門牌。</figcaption>
+      </div>
+
+      <p>
+        為什麼要分這兩半?因為這讓<strong>路由變得可行</strong>。全世界有幾十億台機器,路由器不可能記住每一台的位置;
+        但它可以只記「往某個<em>網路</em>(一整個社區)的封包,該往哪個方向送」。
+        到了那個社區的門口(路由器),再由它負責送到正確的門牌。<strong>用「網路 / 主機」分層,把天文數字般的位址,壓縮成可管理的規模</strong>——
+        這又是分而治之。
+      </p>
+      <p>
+        順帶一提:32 位元的 IPv4 只有約 43 億個位址,早就<strong>不夠用了</strong>。
+        於是有了 <strong>IPv6</strong>,用 128 位元,位址多到幾乎用不完(足以給地球上每一粒沙子都分一個)。
+      </p>
+
+      <h3>路由與轉送:一跳一跳地送</h3>
+      <p>
+        現在最核心的問題來了:封包怎麼從台北「找到路」去美國?關鍵在於——<strong>沒有任何一台機器知道完整的路</strong>。
+        整個過程是<strong>一跳一跳(hop by hop)</strong>接力完成的。
+      </p>
+      <p>
+        負責接力的機器叫<strong>路由器(router)</strong>。每台路由器手上有一張<strong>轉送表(forwarding table)</strong>,
+        記著「要去某某網路方向,就把封包交給<em>我隔壁</em>的哪一台路由器」。封包每抵達一台路由器,它就查表、
+        把封包往「比較接近目的地」的下一台丟過去。如此一台傳一台,像接力賽,直到抵達目的網路。
+      </p>
+      <p>這裡有兩個容易混淆但重要的詞:</p>
+      <ul>
+        <li><strong>轉送(forwarding)</strong>:單一路由器當下的動作——「這個封包進來,我該把它從哪個出口送出去?」查表、轉手,瞬間完成。</li>
+        <li><strong>路由(routing)</strong>:在背後默默進行的大工程——路由器們彼此交換「我能到哪些網路、距離多遠」的情報,
+        合力算出「整張網路的最佳路徑圖」,並填好每個人的轉送表。(這背後正是第 15 章的<strong>圖論最短路徑</strong>演算法!)</li>
+      </ul>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 280" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="rt-a" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#b4541f"/></marker>
+  </defs>
+  <!-- 端點 -->
+  <rect x="20" y="120" width="90" height="46" rx="8" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="65" y="148" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">你的電腦</text>
+  <rect x="610" y="120" width="90" height="46" rx="8" fill="#f6e7dd" stroke="#b4541f"/>
+  <text x="655" y="148" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">伺服器</text>
+
+  <!-- 路由器(節點) -->
+  <circle cx="190" cy="80"  r="26" fill="#fff" stroke="#8a929b" stroke-width="2"/><text x="190" y="85" text-anchor="middle" font-size="11" fill="#4a5159">R1</text>
+  <circle cx="340" cy="180" r="26" fill="#fff" stroke="#8a929b" stroke-width="2"/><text x="340" y="185" text-anchor="middle" font-size="11" fill="#4a5159">R2</text>
+  <circle cx="360" cy="60"  r="26" fill="#fff" stroke="#8a929b" stroke-width="2"/><text x="360" y="65" text-anchor="middle" font-size="11" fill="#4a5159">R3</text>
+  <circle cx="510" cy="120" r="26" fill="#fff" stroke="#8a929b" stroke-width="2"/><text x="510" y="125" text-anchor="middle" font-size="11" fill="#4a5159">R4</text>
+
+  <!-- 所有可能連線(灰) -->
+  <line x1="110" y1="135" x2="170" y2="95" stroke="#d0d4d9" stroke-width="2"/>
+  <line x1="190" y1="106" x2="334" y2="60" stroke="#d0d4d9" stroke-width="2"/>
+  <line x1="206" y1="100" x2="324" y2="160" stroke="#d0d4d9" stroke-width="2"/>
+  <line x1="366" y1="170" x2="486" y2="130" stroke="#d0d4d9" stroke-width="2"/>
+  <line x1="384" y1="72" x2="486" y2="108" stroke="#d0d4d9" stroke-width="2"/>
+  <line x1="536" y1="125" x2="610" y2="138" stroke="#d0d4d9" stroke-width="2"/>
+  <line x1="340" y1="154" x2="360" y2="86" stroke="#d0d4d9" stroke-width="2"/>
+
+  <!-- 實際走的路徑(磚紅,封包) -->
+  <line x1="110" y1="135" x2="168" y2="92" stroke="#b4541f" stroke-width="3" marker-end="url(#rt-a)"/>
+  <line x1="208" y1="98" x2="322" y2="162" stroke="#b4541f" stroke-width="3" marker-end="url(#rt-a)"/>
+  <line x1="364" y1="172" x2="488" y2="132" stroke="#b4541f" stroke-width="3" marker-end="url(#rt-a)"/>
+  <line x1="534" y1="128" x2="608" y2="140" stroke="#b4541f" stroke-width="3" marker-end="url(#rt-a)"/>
+
+  <!-- 封包圖示 -->
+  <rect x="135" y="100" width="22" height="14" rx="3" fill="#b4541f"/><text x="146" y="111" text-anchor="middle" font-size="9" fill="#fff">📦</text>
+
+  <text x="360" y="250" text-anchor="middle" font-size="12" fill="#4a5159">灰線=所有可能的連線;<tspan fill="#b4541f" font-weight="700">磚紅線=這個封包實際走的路徑</tspan>(每台路由器各自決定下一跳)</text>
+  <text x="360" y="270" text-anchor="middle" font-size="11" fill="#8a929b">同一連線的不同封包,甚至可能走不同路徑——這正是「封包交換」的精神</text>
+</svg>
+        <figcaption>圖 25-7:封包穿越網路。沒有人掌握全局,每台路由器只負責「把封包往更接近目的地的下一跳送」。一跳接一跳,封包就這樣橫越了地球。</figcaption>
+      </div>
+
+      <h4>封包交換 vs 電路交換</h4>
+      <p>
+        為什麼網際網路要這樣「一包一包、各走各的」?這牽涉一個歷史性的設計抉擇:<strong>封包交換(packet switching)</strong>
+        對上老式電話網的<strong>電路交換(circuit switching)</strong>。
+      </p>
+      <ul>
+        <li><strong>電路交換</strong>(老電話):通話前,先在你和對方之間<strong>專門「接通」一條實體線路</strong>,
+        整通電話這條線都<strong>只給你用</strong>。優點是品質穩定;缺點是浪費——你講話中間的停頓,那條線就空著也沒人能用。</li>
+        <li><strong>封包交換</strong>(網際網路):資料切成一個個小封包,<strong>每個封包獨立地、見縫插針地</strong>在共享的線路上傳。
+        線路被所有人<strong>動態共享</strong>,使用率極高、極有彈性,某條線斷了封包還能繞道。代價是品質沒保證(這就是為什麼需要 TCP 來補)。</li>
+      </ul>
+      <p>
+        網際網路選了封包交換。這個決定,讓網路變得<strong>極度有韌性</strong>(部分損壞仍能運作)又<strong>極度有效率</strong>——
+        這也是它能長成今天這個規模的根本原因之一。
+      </p>
+
+      <h3>順手認識:NAT、ICMP、ping、traceroute</h3>
+      <p>
+        網路層還有幾個你遲早會遇到的名詞,一句話各記一個:
+      </p>
+      <ul>
+        <li><strong>NAT(網路位址轉換)</strong>:你家裡一堆裝置,對外其實<strong>共用同一個</strong>公開 IP——路由器靠 NAT 在中間做「翻譯」,
+        這也是 IPv4 位址不夠用還能撐這麼久的功臣。</li>
+        <li><strong>ICMP</strong>:網路層的「客服與診斷」協定,專門傳遞錯誤與測試訊息。</li>
+        <li><strong>ping</strong>:用 ICMP 問對方「你還活著嗎?」並量來回時間(延遲)。網路不通時你第一個該下的指令。</li>
+        <li><strong>traceroute</strong>:一個聰明的小把戲,能<strong>把封包經過的每一跳路由器列出來</strong>,讓你親眼看到「一跳一跳」是真的。</li>
+      </ul>
+      <pre><code class="language-bash"># 看封包從你的電腦到 google.com 經過了哪些路由器
+$ traceroute google.com        # Windows 上是 tracert
+
+ 1  192.168.1.1      1.2 ms     # 你家的路由器(第一跳)
+ 2  10.20.0.1        8.5 ms     # ISP 機房
+ 3  ...                         # 一台接一台,越來越接近目的地
+ 9  142.250.196.110  31 ms      # 抵達!</code></pre>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 25.4 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>子網路計算。某公司分到一個網段 <code>192.168.10.0/24</code>。請回答:
+          (a) 這個網段的「網路部分」佔幾位元、「主機部分」佔幾位元?
+          (b) 理論上最多能放幾台主機(扣掉不能用的網路位址與廣播位址)?
+          (c) 若改成 <code>/26</code>,主機數變多還是變少?大約幾台?</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>(a)</strong> <code>/24</code> 表示網路部分佔前 <strong>24 位元</strong>,主機部分佔剩下的 <strong>32 − 24 = 8 位元</strong>。</p>
+              <p><strong>(b)</strong> 8 位元可表示 $2^8 = 256$ 個位址。但每個子網路有兩個位址不能分給主機:
+              全 0 的<strong>網路位址</strong>(<code>.0</code>)與全 1 的<strong>廣播位址</strong>(<code>.255</code>)。
+              所以可用主機數 = $256 - 2 = \mathbf{254}$ 台。</p>
+              <p><strong>(c)</strong> <code>/26</code> 表示網路部分變多(26 位元),主機部分只剩 $32 - 26 = 6$ 位元,
+              所以主機數<strong>變少</strong>:$2^6 - 2 = 64 - 2 = \mathbf{62}$ 台。
+              (斜線後的數字越大,網路部分越長、子網路切得越細、每個子網路能容納的主機越少。)</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>連結層:送到隔壁那一台</h2>
+      <p>
+        最後一層(我們會碰到的)。網路層說「把這封包送到地球另一端」,但它其實沒辦法一步到位——
+        它只能仰賴連結層,把封包送到<strong>實體上直接相連的下一台機器</strong>(下一跳)。
+        連結層管的是「<strong>同一段線路上的鄰居之間</strong>」怎麼傳。
+      </p>
+      <ul>
+        <li><strong>MAC 位址(MAC address)</strong>:每張網路卡出廠時就燒進去的、<strong>全球唯一</strong>的硬體編號
+        (像 <code>3c:22:fb:0a:1b:2c</code>)。IP 位址是「邏輯地址」(可換、可分配),MAC 是「物理身分證」(綁在硬體上)。</li>
+        <li><strong>乙太網路(Ethernet)</strong>:有線區域網路最通行的連結層技術;Wi-Fi 則是它的無線版表親。</li>
+        <li><strong>交換器(switch)</strong>:區域網路裡的「分流員」,看 MAC 位址,把訊框只送給該收的那台機器
+        (不像最原始的集線器會吵到所有人)。</li>
+        <li><strong>ARP</strong>:在同一個區域網路內,把「IP 位址」翻成「MAC 位址」的小幫手——「誰是 192.168.1.5?把你的 MAC 告訴我。」</li>
+      </ul>
+
+      <div class="callout note">
+        <div class="ico">🔍</div>
+        <div class="body">
+          <span class="c-title">兩種「地址」,各司其職</span>
+          <p>一趟旅程同時用到兩種地址:<strong>IP 位址</strong>負責<em>端到端</em>(從台北到美國,全程不變,像「最終收件地址」);
+          <strong>MAC 位址</strong>負責<em>每一跳之間</em>(從這台到隔壁那台,每跳都換,像「下一個中轉站」)。
+          封包每經過一台路由器,IP 不變,但連結層的 MAC 來源/目的會被改寫成「這一跳」的雙方。
+          看懂這點,你就真的懂了分層。</p>
+        </div>
+      </div>
+
+      <h2>把整條路走一遍:輸入 google.com 到看到頁面</h2>
+      <p>
+        準備好了。現在我們把所有層串起來,完整回答那道從第 0 章欠到現在的題目。
+        當你在網址列敲下 <code>google.com</code> 按下 Enter,以下這一切,在大約一秒內發生:
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 470" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="ov-a" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#8a929b"/></marker>
+  </defs>
+  <text x="360" y="26" text-anchor="middle" font-size="14" font-weight="800" fill="#1f2328">一次網頁瀏覽,串起所有層</text>
+
+  <!-- 步驟方塊 -->
+  <rect x="40" y="44" width="300" height="50" rx="8" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="190" y="64" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">① DNS 解析(應用層 / UDP)</text>
+  <text x="190" y="82" text-anchor="middle" font-size="10" fill="#4a5159">google.com → 142.250.196.110</text>
+
+  <rect x="380" y="44" width="300" height="50" rx="8" fill="#f6e7dd" stroke="#b4541f"/>
+  <text x="530" y="64" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">② TCP 三向交握(傳輸層)</text>
+  <text x="530" y="82" text-anchor="middle" font-size="10" fill="#4a5159">SYN → SYN-ACK → ACK,連到 443 埠</text>
+
+  <rect x="380" y="116" width="300" height="50" rx="8" fill="#e0d4f5" stroke="#8b5cf6"/>
+  <text x="530" y="136" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">③ TLS 交握(加密外殼)</text>
+  <text x="530" y="154" text-anchor="middle" font-size="10" fill="#4a5159">交換金鑰、驗證憑證 → 之後全程加密</text>
+
+  <rect x="40" y="116" width="300" height="50" rx="8" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="190" y="136" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">④ HTTP 請求(應用層)</text>
+  <text x="190" y="154" text-anchor="middle" font-size="10" fill="#4a5159">GET / HTTP/1.1  Host: google.com</text>
+
+  <rect x="40" y="188" width="300" height="50" rx="8" fill="#fff" stroke="#8a929b"/>
+  <text x="190" y="208" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">⑤ 封裝下行(傳輸→網路→連結)</text>
+  <text x="190" y="226" text-anchor="middle" font-size="10" fill="#4a5159">加 TCP/IP/訊框標頭,變訊框送出</text>
+
+  <rect x="380" y="188" width="300" height="50" rx="8" fill="#fff" stroke="#8a929b"/>
+  <text x="530" y="208" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">⑥ 路由穿越(網路層)</text>
+  <text x="530" y="226" text-anchor="middle" font-size="10" fill="#4a5159">一跳一跳經過數十台路由器到 Google</text>
+
+  <rect x="380" y="260" width="300" height="50" rx="8" fill="#f6e7dd" stroke="#b4541f"/>
+  <text x="530" y="280" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">⑦ 伺服器處理 + HTTP 回應</text>
+  <text x="530" y="298" text-anchor="middle" font-size="10" fill="#4a5159">200 OK + HTML(沿原路可靠送回)</text>
+
+  <rect x="40" y="260" width="300" height="50" rx="8" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="190" y="280" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">⑧ 瀏覽器渲染</text>
+  <text x="190" y="298" text-anchor="middle" font-size="10" fill="#4a5159">解析 HTML/CSS/JS,再抓圖片等資源</text>
+
+  <!-- 流程箭頭 -->
+  <line x1="340" y1="69"  x2="378" y2="69"  stroke="#8a929b" stroke-width="2" marker-end="url(#ov-a)"/>
+  <line x1="530" y1="94"  x2="530" y2="114" stroke="#8a929b" stroke-width="2" marker-end="url(#ov-a)"/>
+  <line x1="378" y1="141" x2="342" y2="141" stroke="#8a929b" stroke-width="2" marker-end="url(#ov-a)"/>
+  <line x1="190" y1="166" x2="190" y2="186" stroke="#8a929b" stroke-width="2" marker-end="url(#ov-a)"/>
+  <line x1="340" y1="213" x2="378" y2="213" stroke="#8a929b" stroke-width="2" marker-end="url(#ov-a)"/>
+  <line x1="530" y1="238" x2="530" y2="258" stroke="#8a929b" stroke-width="2" marker-end="url(#ov-a)"/>
+  <line x1="378" y1="285" x2="342" y2="285" stroke="#8a929b" stroke-width="2" marker-end="url(#ov-a)"/>
+
+  <text x="360" y="350" text-anchor="middle" font-size="11" fill="#8a929b">每一步都站在前一步的肩膀上——這就是分層的力量:單獨看每層都不難,合起來卻能完成奇蹟</text>
+
+  <!-- 層別圖例 -->
+  <rect x="120" y="380" width="16" height="14" rx="3" fill="#e3efed" stroke="#2f6f6a"/><text x="144" y="392" font-size="11" fill="#4a5159">應用層</text>
+  <rect x="220" y="380" width="16" height="14" rx="3" fill="#f6e7dd" stroke="#b4541f"/><text x="244" y="392" font-size="11" fill="#4a5159">傳輸層</text>
+  <rect x="320" y="380" width="16" height="14" rx="3" fill="#e0d4f5" stroke="#8b5cf6"/><text x="344" y="392" font-size="11" fill="#4a5159">安全(TLS)</text>
+  <rect x="450" y="380" width="16" height="14" rx="3" fill="#fff" stroke="#8a929b"/><text x="474" y="392" font-size="11" fill="#4a5159">網路 / 連結層</text>
+</svg>
+        <figcaption>圖 25-8:總覽。DNS → TCP 交握 → TLS → HTTP 請求 → 封裝下行 → 路由穿越 → 伺服器回應 → 渲染。讀到這裡,你應該能對著這張圖,把每一格背後發生的事講給別人聽。</figcaption>
+      </div>
+
+      <ol>
+        <li><strong>DNS 解析</strong>:瀏覽器先問 DNS:「<code>google.com</code> 的 IP 是?」(若快取有就秒回,沒有就走前面那段根→TLD→權威的階層查詢)。拿到 <code>142.250.196.110</code>。</li>
+        <li><strong>TCP 三向交握</strong>:瀏覽器對著那個 IP 的 443 埠,送出 SYN,完成 SYN-ACK、ACK,建立可靠連線。</li>
+        <li><strong>TLS 交握</strong>:因為是 HTTPS,雙方再協商加密金鑰、驗證伺服器憑證(確認對方真的是 Google)。之後所有資料都加密。</li>
+        <li><strong>HTTP 請求</strong>:瀏覽器送出 <code>GET / HTTP/1.1</code>(帶著 Host、cookie 等標頭)。</li>
+        <li><strong>封裝下行</strong>:這份請求被加上 TCP 標頭(目的埠 443)、IP 標頭(目的 IP)、訊框標頭(下一跳的 MAC),變成位元串送出。</li>
+        <li><strong>路由穿越</strong>:封包一跳一跳,經過你家路由器、ISP、海底電纜、無數台路由器,最終抵達 Google 的資料中心。沿途若有封包遺失,TCP 會重傳。</li>
+        <li><strong>伺服器回應</strong>:Google 的伺服器處理請求(可能查它自己的資料庫、跑排序演算法),回傳 <code>200 OK</code> 加上 HTML,原路可靠送回。</li>
+        <li><strong>瀏覽器渲染</strong>:瀏覽器解析 HTML,發現還需要 CSS、JS、圖片,於是<strong>再發起一輪輪的 HTTP 請求</strong>(每個資源重複上面的流程),最後把畫面畫出來。你看到了 Google 首頁。</li>
+      </ol>
+
+      <p>
+        從第 0 章那句模糊的「大概會查 DNS 吧」,到現在你能清楚說出這八個階段、每一階段在哪一層、用什麼協定——
+        這就是你讀完這趟旅程的證明。
+      </p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 25.5 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>承上,請完整(但精簡)地寫出「在網址列輸入 <code>google.com</code> 到看到頁面」的步驟,
+          並在每一步標註它屬於哪一層、用到什麼協定。這正是經典面試題,請當作真的在白板上回答。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <ol>
+                <li><strong>DNS 解析</strong>(應用層,多半 UDP/53):把 <code>google.com</code> 翻成 IP。先查快取,沒有就走 根 → TLD → 權威 階層。</li>
+                <li><strong>TCP 三向交握</strong>(傳輸層,目的埠 443):SYN / SYN-ACK / ACK,建立可靠連線。</li>
+                <li><strong>TLS 交握</strong>(安全層,因為是 HTTPS):協商金鑰、驗證憑證,之後全程加密。</li>
+                <li><strong>HTTP 請求</strong>(應用層):送出 <code>GET / HTTP/1.1</code> 等。</li>
+                <li><strong>封裝</strong>:依序加上 TCP → IP → 連結層(訊框)標頭。</li>
+                <li><strong>路由轉送</strong>(網路層 IP + 連結層):封包一跳一跳經過路由器穿越網際網路;遺失由 TCP 重傳。</li>
+                <li><strong>伺服器回應</strong>:處理後回傳 <code>200 OK</code> + HTML,可靠送回。</li>
+                <li><strong>渲染</strong>:瀏覽器解析 HTML/CSS/JS,並對其餘資源(圖片等)再發 HTTP 請求,最終畫出頁面。</li>
+              </ol>
+              <p>加分重點:能說出「每層各加了什麼標頭(封裝)」「為什麼用 TCP 而非 UDP(可靠)」「DNS 為何分階層+快取」,
+              就能展現你真的理解,而不只是背步驟。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>用程式碼摸到網路:Python socket</h2>
+      <p>
+        講了這麼多,現在親手碰一下。作業系統提供了一個叫 <strong>socket(插座)</strong>的抽象:
+        它是你的程式通往網路的「插孔」。你把資料塞進 socket,它就順著 TCP/IP 那一整套機制送出去;
+        對方的資料也從 socket 流回來。Python 內建的 <code>socket</code> 模組,讓你能直接玩這個插座。
+      </p>
+
+      <h3>一個極簡的 echo 伺服器</h3>
+      <p>
+        我們來寫一個「回聲(echo)」伺服器:你傳什麼給它,它就原封不動傳回什麼。麻雀雖小,五臟俱全——
+        <code>bind</code>(綁定埠號)、<code>listen</code>(開始聽)、<code>accept</code>(接受連線)、<code>recv</code>/<code>sendall</code>(收發),
+        正是所有網路伺服器的骨架。
+      </p>
+      <pre><code class="language-python"># echo_server.py —— 一個極簡的 TCP 回聲伺服器
+import socket
+
+HOST = "127.0.0.1"   # 本機位址(localhost),只接受自己電腦的連線
+PORT = 65432         # 挑一個沒被佔用的埠號(1024 以上比較安全)
+
+# AF_INET = 用 IPv4;SOCK_STREAM = 用 TCP(可靠串流)
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)  # 方便重複啟動
+    s.bind((HOST, PORT))     # 把 socket 綁到「這台機器的這個埠」
+    s.listen()               # 開始聆聽連線
+    print(f"伺服器在 {HOST}:{PORT} 等待連線…")
+
+    conn, addr = s.accept()  # 阻塞,直到有人連進來;回傳一條專屬連線
+    with conn:
+        print(f"已連線:{addr}")
+        while True:
+            data = conn.recv(1024)   # 一次最多收 1024 個位元組
+            if not data:             # 收到空 bytes,代表對方關閉連線
+                break
+            print("收到:", data.decode())
+            conn.sendall(data)       # 原封不動送回去(這就是 echo)
+    print("連線關閉")</code></pre>
+
+      <h3>對應的客戶端</h3>
+      <pre><code class="language-python"># echo_client.py —— 連上 echo 伺服器,傳一句話,印出回聲
+import socket
+
+HOST = "127.0.0.1"
+PORT = 65432
+
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+    s.connect((HOST, PORT))            # 連到伺服器(背後就是 TCP 三向交握!)
+    s.sendall(b"Hello, network!")      # 注意 b"":網路只認位元組 bytes,不是字串
+    data = s.recv(1024)                # 收回聲
+    print("伺服器回傳:", data.decode())  # bytes 轉回字串顯示</code></pre>
+      <p>
+        開兩個終端機:一個跑 <code>python echo_server.py</code>,另一個跑 <code>python echo_client.py</code>。
+        你會看到伺服器印出「收到: Hello, network!」,客戶端印出「伺服器回傳: Hello, network!」。
+        恭喜——你剛剛<strong>親手在兩支程式之間,用 TCP 收發了真正的位元組</strong>。
+      </p>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">網路傳的是位元組,不是字串</span>
+          <p>注意上面到處是 <code>b"..."</code> 和 <code>.encode()</code> / <code>.decode()</code>。
+          網路底層只搬<strong>位元組(bytes)</strong>,不認得 Python 的字串型別。送出前要 <code>encode()</code>(字串→位元組),
+          收進來要 <code>decode()</code>(位元組→字串)。初學者最常在這裡踩到 <code>TypeError</code>。</p>
+        </div>
+      </div>
+
+      <h3>用 socket 發一個原始的 HTTP 請求</h3>
+      <p>
+        最後這個最有「揭開魔法」的快感:我們<strong>不用任何網頁函式庫</strong>,只用最底層的 socket,
+        手動拼出一個 HTTP 請求字串送出去,然後把伺服器的回應原汁原味印出來。你會親眼看到,
+        本章前面講的「HTTP 其實就是一段純文字」是真的。
+      </p>
+      <pre><code class="language-python"># raw_http.py —— 不靠任何 HTTP 函式庫,手動發一個 GET 請求
+import socket
+
+host = "example.com"
+port = 80   # HTTP 用 80 埠(這裡示範明文 HTTP;HTTPS 還要加 TLS 較複雜)
+
+# 親手拼出 HTTP 請求文字。注意換行必須是 \r\n,結尾要空一行(\r\n\r\n)
+request = (
+    f"GET / HTTP/1.1\r\n"
+    f"Host: {host}\r\n"
+    f"Connection: close\r\n"   # 告訴伺服器:回應完就關連線
+    f"\r\n"                     # 空行 = 標頭結束
+)
+
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+    s.connect((host, port))          # DNS 解析 + TCP 交握都在這一行內完成
+    s.sendall(request.encode())      # 字串編成 bytes 送出
+
+    response = b""
+    while True:                      # 持續收,直到對方關閉連線
+        chunk = s.recv(4096)
+        if not chunk:
+            break
+        response += chunk
+
+print(response.decode("utf-8", errors="replace"))</code></pre>
+      <p>執行後,你會看到伺服器吐回來的東西,開頭正是本章前面講過的狀態行與標頭:</p>
+      <pre><code class="language-text">HTTP/1.1 200 OK
+Content-Type: text/html; charset=UTF-8
+Content-Length: 1256
+...
+
+&lt;!doctype html&gt;
+&lt;html&gt;
+&lt;head&gt;&lt;title&gt;Example Domain&lt;/title&gt;&lt;/head&gt;
+...</code></pre>
+      <p>
+        這短短二十行,把這一整章<strong>串成了一條可以執行的鏈</strong>:<code>connect</code> 觸發 DNS 與 TCP 交握、
+        <code>sendall</code> 送出 HTTP 請求、回應沿著路由可靠地流回來。你平常用的 <code>requests</code> 函式庫、
+        瀏覽器,骨子裡做的也是同一件事,只是幫你把這些細節包成了更舒服的抽象。
+      </p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 25.6 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>把上面的 echo 伺服器改強一點:(a) 讓它能<strong>連續服務多個客戶端</strong>
+          (一個服務完,還能接下一個,不要服務完就結束);(b) 如果客戶端傳來的內容是 <code>"quit"</code>,
+          就回它一句 <code>"bye"</code> 並關閉那條連線。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>關鍵是把 <code>accept()</code> 放進一個外層 <code>while</code> 迴圈,服務完一個再回頭等下一個:</p>
+              <pre><code class="language-python">import socket
+
+HOST, PORT = "127.0.0.1", 65432
+
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.bind((HOST, PORT))
+    s.listen()
+    print(f"在 {HOST}:{PORT} 等待…")
+
+    while True:                       # (a) 外層迴圈:服務完一個還能接下一個
+        conn, addr = s.accept()
+        with conn:
+            print("已連線:", addr)
+            while True:
+                data = conn.recv(1024)
+                if not data:
+                    break
+                msg = data.decode().strip()
+                if msg == "quit":     # (b) 收到 quit 就道別並結束此連線
+                    conn.sendall(b"bye")
+                    break
+                conn.sendall(data)    # 否則照樣回聲
+        print("一位客戶端離開,繼續等待下一位…")</code></pre>
+              <p>進階思考:這個版本一次只能服務「一個」客戶端,後面的人得排隊。
+              要<strong>同時</strong>服務很多人,需要用到多執行緒、多行程,或非同步 I/O(<code>asyncio</code>)——
+              這正是「並行(concurrency)」的議題,留待後面的作業系統與系統設計章節。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 25.7 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>用 socket 寫一個程式,連到 <code>example.com</code>,發出一個原始的 HTTP <code>GET</code> 請求,
+          只把回應的<strong>狀態行(第一行,例如 <code>HTTP/1.1 200 OK</code>)</strong>印出來,其餘丟掉。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>在前面 <code>raw_http.py</code> 的基礎上,把收到的整段回應切出第一行即可:</p>
+              <pre><code class="language-python">import socket
+
+host = "example.com"
+request = (
+    f"GET / HTTP/1.1\r\n"
+    f"Host: {host}\r\n"
+    f"Connection: close\r\n\r\n"
+)
+
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+    s.connect((host, 80))
+    s.sendall(request.encode())
+    # 狀態行就在最前面,通常前幾百個位元組就夠了
+    head = s.recv(1024).decode("utf-8", errors="replace")
+
+status_line = head.split("\r\n", 1)[0]   # 取到第一個換行為止
+print(status_line)                       # 例如:HTTP/1.1 200 OK</code></pre>
+              <p>小觀察:<code>split("\r\n", 1)</code> 的第二個參數 <code>1</code> 表示「最多切一次」,
+              所以 <code>[0]</code> 就是第一行。試著把網址改成一個不存在的路徑(如 <code>GET /nope</code>),
+              看看狀態行是不是變成了 <code>404 Not Found</code>。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>網路與安全的交會點</h2>
+      <p>
+        讀完這一章,你應該對網路如何運作有了清晰的圖像。但這幅圖像藏著一個令人不安的真相,
+        它直接通往第七部「資訊安全」:
+      </p>
+      <p>
+        回想封包穿越網路的過程——它一跳一跳,經過了<strong>幾十台你完全不認識、也無法控制的機器</strong>。
+        而最原始的 HTTP、DNS 等協定,傳的全是<strong>明文</strong>。這意味著,沿途任何一台機器(惡意的路由器、
+        共用同一個 Wi-Fi 的陌生人),理論上都能<strong>偷看</strong>你傳的內容——你的帳號、密碼、訊息。這叫<strong>竊聽(eavesdropping)</strong>。
+      </p>
+
+      <div class="callout danger">
+        <div class="ico">⛔</div>
+        <div class="body">
+          <span class="c-title">這就是為什麼非 HTTPS 不可</span>
+          <p>網路的開放與分享本性,讓它先天就<strong>不安全</strong>。<strong>TLS / 加密</strong>(也就是 HTTP 變成 HTTPS 的那個 S)
+          正是為了補這個洞:就算封包被沿途的人攔下,他看到的也只是一堆無意義的亂碼;同時,憑證機制還能確保
+          「你連到的真的是 Google,而不是有人冒充」。在咖啡廳連公用 Wi-Fi 卻看到網址是 <code>http://</code> 而非 <code>https://</code> 時,請提高警覺。</p>
+        </div>
+      </div>
+
+      <p>除了竊聽,還有幾種你該先聽過名字的攻擊,我們會在第七部細談:</p>
+      <ul>
+        <li><strong>中間人攻擊(Man-in-the-Middle, MITM)</strong>:攻擊者偷偷卡在你和伺服器之間,假扮成對方,
+        把雙方的對話全程攔截、甚至竄改。TLS 的憑證驗證就是專門防它的。</li>
+        <li><strong>DDoS(分散式阻斷服務)</strong>:操縱成千上萬台機器同時對一個目標發出海量請求,
+        把它的頻寬或運算資源<strong>塞爆癱瘓</strong>,讓正常使用者無法存取。</li>
+      </ul>
+      <p>
+        這些都是「網路的特性」與「惡意」交會時迸出的火花。理解了網路怎麼運作,你才看得懂它為什麼會被攻擊、
+        又該怎麼防——這正是第七部要接手的故事。
+      </p>
+
+      <div class="callout note"><div class="ico">🧭</div><div class="body"><span class="c-title">延伸:新軌道</span><p>掌握了網路協定之後,<a href="98-distributed-systems.html">第 92 章「分散式系統與高可用架構」</a>展示多台機器如何在這層網路之上協作——從複製、分片、一致性共識,到故障偵測與自動恢復,是網路知識的自然延伸。</p></div></div>
+
+      <h2>動手實驗室:從零寫一個最小 HTTP/1.1 伺服器</h2>
+      <p>
+        前幾節我們已經拆解了 HTTP 的請求/回應格式(「應用層:你看得見的那一層」)與 TCP 三向交握的原理
+        (「傳輸層:TCP」),練習 25.7 也讓你用 socket 發出了一個原始的 GET 請求。
+        現在來完成<strong>另一半</strong>:從零寫一個能讓<strong>真正的瀏覽器</strong>連上、並看到 HTML 頁面的
+        HTTP/1.1 伺服器。整個實驗只用 Python 標準函式庫,零框架、零依賴。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">這個實驗會讓你親眼看到的三件事</span>
+          <ul>
+            <li><strong>TCP 三向交握何時發生</strong>:每次 <code>s.accept()</code> 回傳,
+            底層的 SYN / SYN-ACK / ACK 就已悄悄完成——你的應用程式碼根本看不到它。</li>
+            <li><strong>HTTP 請求行的真實面貌</strong>:把瀏覽器送來的原始位元組 <code>print</code> 出來,
+            你會看到 <code>GET / HTTP/1.1</code> 開頭,正是本章「HTTP 請求格式」一節的圖。</li>
+            <li><strong><code>Content-Length</code> 為什麼不能少</strong>:缺了它,瀏覽器不知道回應在哪裡結束,
+            會一直阻塞等待,頁面永遠轉圈。</li>
+          </ul>
+        </div>
+      </div>
+
+      <h3>伺服器:綁定 port、解析請求、送出 HTML 頁</h3>
+      <p>
+        下面是一個完整可跑的最小 HTTP/1.1 伺服器。核心流程:
+        <strong>bind → listen → accept → 讀請求 → 解析請求行 → 送回應</strong>。
+        每個步驟都有行內說明;跑起來之後,直接用瀏覽器開 <code>http://localhost:8080/</code> 即可驗收。
+      </p>
+      <pre><code class="language-python"># http_server.py — 最小 HTTP/1.1 伺服器(零依賴)
+import socket
+
+HOST = "127.0.0.1"   # localhost,只接受本機連線
+PORT = 8080          # 用瀏覽器開 http://localhost:8080/
+
+
+def make_response(status: str, body_html: str) -&gt; bytes:
+    """把狀態碼 + HTML 字串組成一個符合 HTTP/1.1 規範的位元組回應。"""
+    body_bytes = body_html.encode("utf-8")
+    # ── Content-Length 必填;否則瀏覽器不知道回應何時結束,頁面會一直轉圈 ──
+    header = (
+        f"HTTP/1.1 {status}\r\n"
+        f"Content-Type: text/html; charset=utf-8\r\n"
+        f"Content-Length: {len(body_bytes)}\r\n"
+        f"Connection: close\r\n"   # 告訴瀏覽器:回應完畢就關這條連線
+        f"\r\n"                    # 空行 = 標頭結束、本體開始
+    )
+    return header.encode("utf-8") + body_bytes
+
+
+def handle_connection(conn: socket.socket) -&gt; None:
+    """從一條已建立的 TCP 連線讀取 HTTP 請求,解析後送出回應。"""
+    raw = b""
+    # HTTP 標頭以「空行 \r\n\r\n」結束,讀到它為止
+    while b"\r\n\r\n" not in raw:
+        chunk = conn.recv(4096)
+        if not chunk:
+            return          # 對方提前斷線
+        raw += chunk
+
+    # ── 解析請求行 ─────────────────────────────────────────────────────────────
+    # 瀏覽器送來的原始文字形如:
+    #   GET /path HTTP/1.1\r\n
+    #   Host: localhost:8080\r\n
+    #   User-Agent: Mozilla/5.0 ...\r\n
+    #   \r\n
+    text         = raw.decode("utf-8", errors="replace")
+    request_line = text.split("\r\n")[0]          # 取第一行
+    parts        = request_line.split()
+    method = parts[0] if len(parts) &gt; 0 else "GET"
+    path   = parts[1] if len(parts) &gt; 1 else "/"
+
+    print(f"← 收到: {request_line}")              # 親眼看 HTTP 請求行長什麼樣
+
+    # ── 組 HTML 本體 ───────────────────────────────────────────────────────────
+    body = f"""&lt;!doctype html&gt;
+&lt;html lang="zh-Hant"&gt;
+&lt;head&gt;
+  &lt;meta charset="utf-8"&gt;
+  &lt;title&gt;我的 HTTP 伺服器&lt;/title&gt;
+&lt;/head&gt;
+&lt;body&gt;
+  &lt;h1&gt;Hello from Python socket!&lt;/h1&gt;
+  &lt;p&gt;路徑: &lt;code&gt;{path}&lt;/code&gt; &amp;nbsp;|&amp;nbsp; 方法: &lt;code&gt;{method}&lt;/code&gt;&lt;/p&gt;
+  &lt;p&gt;這份 HTML 是你親手寫的 Python 伺服器即時產生的,不靠任何框架。&lt;/p&gt;
+&lt;/body&gt;
+&lt;/html&gt;"""
+
+    conn.sendall(make_response("200 OK", body))
+
+
+# ── 主迴圈:持續接受新連線 ─────────────────────────────────────────────────────
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.bind((HOST, PORT))
+    s.listen()
+    print(f"伺服器啟動 → 請用瀏覽器開 http://localhost:{PORT}/")
+    print("按 Ctrl-C 停止\n")
+
+    while True:
+        # s.accept() 阻塞,等待下一個客戶端連進來
+        # ↑ TCP 三向交握(SYN → SYN-ACK → ACK)在這裡的「底層」自動完成
+        conn, addr = s.accept()
+        print(f"[連線建立] 來自 {addr}")
+        with conn:
+            handle_connection(conn)
+        print(f"[連線關閉] {addr}\n")</code></pre>
+
+      <h4>TCP 三向交握在哪一行?</h4>
+      <p>
+        你可能想問:程式碼裡根本看不到 SYN / SYN-ACK / ACK 啊?沒錯——因為作業系統的 TCP/IP 堆疊幫你在底層靜默完成了。
+        完整時序如下:
+      </p>
+      <ol>
+        <li><code>s.listen()</code>:作業系統開始監聽 8080 埠,等待 SYN 到來。你的程式還沒往下跑。</li>
+        <li>瀏覽器(或客戶端)對 <code>127.0.0.1:8080</code> 發出 <strong>SYN</strong>。</li>
+        <li>作業系統(不是你寫的程式)自動回 <strong>SYN-ACK</strong>——此時你的程式仍卡在 <code>accept()</code>。</li>
+        <li>瀏覽器回 <strong>ACK</strong>,三向交握完成;連線進入作業系統的「已就緒佇列」。</li>
+        <li><code>s.accept()</code> 從佇列取出這條就緒的連線並回傳——<strong>你的程式碼才繼續往下跑</strong>。</li>
+      </ol>
+      <p>
+        換句話說,<strong><code>accept()</code> 回傳的那一刻,TCP 可靠連線已經建立好了</strong>。
+        你的 HTTP 伺服器所做的,只是在這條已可靠的 TCP 通道上,
+        收發符合 HTTP 格式的純文字——這正是分層的美:應用層完全不必操心 SYN 旗標怎麼設定。
+      </p>
+
+      <h3>客戶端:用 socket 手動送 GET 請求</h3>
+      <p>
+        除了瀏覽器,也可以用 Python socket 自己扮演客戶端。先讓伺服器在終端機 A 跑著,
+        再在終端機 B 執行下面這段——你會看到完整的回應標頭與 HTML 本體被印出來:
+      </p>
+      <pre><code class="language-python"># http_client.py — 用原始 socket 向自己的 HTTP 伺服器發 GET 請求
+import socket
+
+HOST, PORT = "127.0.0.1", 8080
+
+request = (
+    "GET / HTTP/1.1\r\n"
+    f"Host: {HOST}:{PORT}\r\n"
+    "Connection: close\r\n"
+    "\r\n"           # 空行 = 請求標頭結束
+)
+
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+    s.connect((HOST, PORT))        # TCP 三向交握(背後自動完成)
+    s.sendall(request.encode())    # 送出 HTTP 請求
+
+    response = b""
+    while True:
+        chunk = s.recv(4096)
+        if not chunk:
+            break
+        response += chunk
+
+# 印出完整回應:狀態行 + 標頭 + 空行 + HTML 本體
+print(response.decode("utf-8", errors="replace"))</code></pre>
+
+      <h3>執行步驟與預期輸出</h3>
+
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>步驟</th><th>動作</th><th>預期看到</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>① 啟動伺服器</td>
+            <td>終端機 A:<br><code>python http_server.py</code></td>
+            <td><code>伺服器啟動 → 請用瀏覽器開 http://localhost:8080/</code></td>
+          </tr>
+          <tr>
+            <td>② Python 客戶端</td>
+            <td>終端機 B:<br><code>python http_client.py</code></td>
+            <td>印出 <code>HTTP/1.1 200 OK</code>、<code>Content-Length: ...</code>、及 HTML 本體</td>
+          </tr>
+          <tr>
+            <td>③ curl 驗收</td>
+            <td><code>curl -v http://localhost:8080/</code></td>
+            <td><code>* Connected to 127.0.0.1</code>、<code>&lt; HTTP/1.1 200 OK</code>、HTML 本體</td>
+          </tr>
+          <tr>
+            <td>④ 瀏覽器驗收</td>
+            <td>開瀏覽器,前往<br><code>http://localhost:8080/</code></td>
+            <td>正常顯示「Hello from Python socket!」的 HTML 頁面</td>
+          </tr>
+        </tbody>
+      </table>
+      </div>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">驗收標準:瀏覽器顯示正常 HTML 頁面</span>
+          <p>瀏覽器能正常渲染(而非顯示亂碼、或一直轉圈)代表三個條件同時滿足:
+          <strong>(1)</strong> TCP 三向交握成功——連線建立;<strong>(2)</strong> 伺服器正確解析了 HTTP 請求行;
+          <strong>(3)</strong> 回應含有格式正確的 <code>Content-Length</code>——瀏覽器知道在哪裡停止讀取。
+          三者缺一不可。</p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 25.8 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>替 <code>http_server.py</code> 加上<strong>多路由</strong>:
+          <code>/</code> 回首頁(200);
+          <code>/about</code> 回「關於本伺服器」的頁面(200);
+          其餘任何路徑回 <strong>404 Not Found</strong>(狀態行 <code>404 Not Found</code>,本體是一行簡短 HTML)。
+          用瀏覽器或 curl 各測試三個路徑,確認狀態碼正確。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>把 <code>handle_connection</code> 裡的回應部分換成路由分派即可;
+              <code>make_response</code> 已接受任意 <code>status</code> 字串,無需修改:</p>
+              <pre><code class="language-python">def handle_connection(conn):
+    raw = b""
+    while b"\r\n\r\n" not in raw:
+        chunk = conn.recv(4096)
+        if not chunk:
+            return
+        raw += chunk
+
+    text         = raw.decode("utf-8", errors="replace")
+    request_line = text.split("\r\n")[0]
+    parts        = request_line.split()
+    path         = parts[1] if len(parts) &gt; 1 else "/"
+
+    # ── 路由表 ────────────────────────────────────────────────────
+    if path == "/":
+        body = "&lt;h1&gt;首頁&lt;/h1&gt;&lt;p&gt;&lt;a href='/about'&gt;關於&lt;/a&gt;&lt;/p&gt;"
+        conn.sendall(make_response("200 OK", body))
+    elif path == "/about":
+        body = "&lt;h1&gt;關於&lt;/h1&gt;&lt;p&gt;這是一個最小的 Python HTTP 伺服器。&lt;/p&gt;"
+        conn.sendall(make_response("200 OK", body))
+    else:
+        body = f"&lt;h1&gt;404 Not Found&lt;/h1&gt;&lt;p&gt;找不到路徑 {path}&lt;/p&gt;"
+        conn.sendall(make_response("404 Not Found", body))</code></pre>
+              <p>驗收:<code>curl -v http://localhost:8080/nowhere</code> 的回應第一行應為
+              <code>HTTP/1.1 404 Not Found</code>。多數瀏覽器收到 404 會在 DevTools Network 面板顯示紅色狀態。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 25.9 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>讓伺服器能<strong>解析查詢字串(query string)</strong>:
+          當瀏覽器請求 <code>/greet?name=Alice</code> 時,回傳 <code>&lt;h1&gt;Hello, Alice!&lt;/h1&gt;</code>;
+          若 <code>name</code> 參數不存在,就回傳 <code>Hello, 訪客!</code>。
+          提示:<code>/greet?name=Alice</code> 可先用 <code>path.split("?", 1)</code> 切成純路徑與查詢字串兩段,
+          再對查詢字串做進一步拆解。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">def parse_query(qs: str) -&gt; dict:
+    """把 'key=val&amp;key2=val2' 解析成 {'key': 'val', 'key2': 'val2'}。"""
+    result = {}
+    for pair in qs.split("&amp;"):
+        if "=" in pair:
+            k, v = pair.split("=", 1)
+            result[k] = v
+    return result
+
+
+def handle_connection(conn):
+    raw = b""
+    while b"\r\n\r\n" not in raw:
+        chunk = conn.recv(4096)
+        if not chunk:
+            return
+        raw += chunk
+
+    text         = raw.decode("utf-8", errors="replace")
+    request_line = text.split("\r\n")[0]
+    parts        = request_line.split()
+    full_path    = parts[1] if len(parts) &gt; 1 else "/"
+
+    # 切出路徑與查詢字串
+    if "?" in full_path:
+        path, qs = full_path.split("?", 1)
+    else:
+        path, qs = full_path, ""
+
+    if path == "/greet":
+        params = parse_query(qs)
+        name   = params.get("name", "訪客")
+        body   = f"&lt;h1&gt;Hello, {name}!&lt;/h1&gt;"
+        conn.sendall(make_response("200 OK", body))
+    else:
+        conn.sendall(make_response("200 OK", "&lt;h1&gt;首頁&lt;/h1&gt;"))</code></pre>
+              <p>用瀏覽器或 curl 測試:</p>
+              <pre><code class="language-bash">curl "http://localhost:8080/greet?name=Alice"
+# &lt;h1&gt;Hello, Alice!&lt;/h1&gt;
+
+curl "http://localhost:8080/greet"
+# &lt;h1&gt;Hello, 訪客!&lt;/h1&gt;</code></pre>
+              <p>小觀察:真實世界的查詢字串值可能含 URL 編碼(空格變 <code>%20</code>)。
+              Python 標準函式庫的 <code>urllib.parse.parse_qs</code> 能自動處理,這裡手動拆解只是為了清楚展示原理。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 25.10 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>回顧「TCP 三向交握」一節:三次握手是為了讓雙方都確認「我能送、也能收」。
+          現在用實驗觀察它:<code>python http_server.py</code> 啟動後,
+          在另一個終端機執行 <code>curl -v http://localhost:8080/</code>。
+          請回答:
+          (a) curl 輸出的 <code>* Connected to 127.0.0.1</code> 出現時,三向交握已完成還是尚未完成?
+          (b) 伺服器終端機印出 <code>[連線建立]</code> 的時機,在 <code>Connected</code> 之前還是之後?
+          (c) 為什麼會有這個先後差異?用分層的角度解釋。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>(a)</strong> <code>* Connected to 127.0.0.1</code> 出現時,三向交握<strong>已完成</strong>。
+              curl 的 <code>connect()</code> 在底層發出 SYN,等到 ACK 確認後才回傳——那一刻就是印出 <code>Connected</code> 的時機。</p>
+
+              <p><strong>(b)</strong> 伺服器印出 <code>[連線建立]</code> 在 <code>Connected</code> <strong>之後</strong>。
+              時序如下:
+              </p>
+              <ol>
+                <li>curl 發出 SYN。</li>
+                <li>作業系統(非你的程式)自動回 SYN-ACK。</li>
+                <li>curl 收到 SYN-ACK,回 ACK → 交握完成。curl 印 <code>Connected</code>。</li>
+                <li>你的程式 <code>s.accept()</code> 才從作業系統佇列取出這條就緒連線並回傳,印 <code>[連線建立]</code>。</li>
+              </ol>
+
+              <p><strong>(c)</strong> 分層的原因:TCP 交握是<strong>傳輸層</strong>(作業系統核心)的事,
+              你的伺服器程式屬於<strong>應用層</strong>。傳輸層不需要通知應用層「我正在交握」——
+              它只在連線就緒後,透過 <code>accept()</code> 這個介面,把已建立好的連線「交付」給應用層。
+              這就是「各層只依賴下一層提供的服務、不關心下層的內部細節」的直接體現。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>把這一章串起來</h2>
+      <p>
+        我們用「由上而下」的方式,從你最熟的瀏覽器一路挖到了線材。回顧這趟旅程的路標:
+      </p>
+      <ul>
+        <li><strong>分層</strong>是馴服網路這頭巨獸的關鍵:每層只做一件事、只依賴下一層,讓各層能獨立演化、重複利用。
+        這正是第 11 章「分層架構」的最大舞台。</li>
+        <li><strong>封裝</strong>讓資料下行時層層加標頭(訊息→區段→封包→訊框),上行時層層拆開。<strong>協定</strong>則是各層的共同語言。</li>
+        <li><strong>應用層</strong>:HTTP 的請求-回應與狀態碼、無狀態與 cookie;DNS 用分散式階層 + 快取,把名字翻成 IP。</li>
+        <li><strong>傳輸層</strong>:連接埠做多工;UDP 簡單快但不可靠;TCP 用三向交握、序號、ACK、重傳、壅塞控制,
+        在不可靠的網路上「修」出可靠——這是本章最深刻的工程思想。</li>
+        <li><strong>網路層</strong>:IP 位址(網路/主機兩部分)、封包交換、一跳一跳的路由,讓封包能穿越地球。</li>
+        <li><strong>連結層</strong>:MAC 位址與乙太網路,負責「送到隔壁那一台」。IP 管端到端,MAC 管每一跳。</li>
+        <li>最後,我們用 <strong>Python socket</strong> 親手收發了位元組,並把這一整章串成一條能執行的鏈。</li>
+      </ul>
+      <p>
+        你現在能完整回答那道從第 0 章欠到現在的題目了。更重要的是,你獲得了一種「看穿」的能力:
+        下次網頁開不出來,你不會只會重開機——你會開始想,是 DNS 出問題、TCP 連不上、還是伺服器回了 5xx?
+        這種沿著分層去推理的能力,正是工程師和一般使用者的分水嶺。
+      </p>
+      <p>
+        網路把全世界的電腦連了起來,但「連起來之後要怎麼安全地用」「資料存在哪、怎麼存」「系統怎麼設計才扛得住幾億人」——
+        這些更大的問題,我們會在後面的資安、資料庫與系統設計章節繼續探索。網路,是這一切的地基。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">📚</div>
+        <div class="body">
+          <span class="c-title">想更深入?延伸資源</span>
+          <p>本章對應 OSSU 的 <strong>Computer Networking: a Top-Down Approach</strong>(Kurose &amp; Ross 著)。
+          這本書正是「由上而下」教法的開山之作,從應用層往下講,讀起來特別有感。
+          作者群維護的官方網站 <a href="https://gaia.cs.umass.edu/kurose_ross/">gaia.cs.umass.edu/kurose_ross/</a>
+          上有大量免費資源:互動式動畫(三向交握、封包穿越等都能一步步點著看)、Wireshark 實作教學
+          (親手抓自己電腦的封包來剖析),以及配套投影片。強烈建議搭配 Wireshark 動手抓幾個真實封包——
+          當你親眼看到本章每一個標頭真的躺在那裡,所有抽象瞬間變得具體。</p>
+        </div>
+      </div>
+
+    

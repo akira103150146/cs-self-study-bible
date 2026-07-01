@@ -1,0 +1,1389 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>編譯器原理 · CS 自學聖經</title>
+<meta name="description" content="編譯器是『程式設計師寫給程式設計師的程式』。從編譯器、直譯器、JIT 的差別出發,把編譯管線的每一階段講深:詞法分析(正規表示式與 DFA)、語法分析(上下文無關文法、AST、遞迴下降、LL/LR)、語意分析(符號表與型別檢查)、中間表示與最佳化(常數摺疊、死碼消除、CSE、迴圈最佳化),最後用 Python 親手寫一個會直譯也會編譯的小語言。">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;700&family=Noto+Sans+TC:wght@400;700&family=Lora:ital,wght@0,400;0,600;0,700;1,400&family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <main class="main">
+    <article class="content">
+
+      <div class="eyebrow">第十部 · 進階程式設計</div>
+      <h1>編譯器原理</h1>
+      <p class="subtitle">編譯器,是「程式設計師寫給程式設計師的程式」——它把你寫的人話,翻成機器的母語。第 23 章我們鳥瞰過這條翻譯鏈;這一章,我們要把每一節車廂拆開,看清裡面的每一根齒輪。</p>
+      <div class="byline">
+        <span class="tag">第 42 章</span>
+        <span>閱讀時間 ≈ 80 分鐘</span>
+        <span>難度:★★★★★</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li><strong>編譯器(compiler)、直譯器(interpreter)、JIT</strong> 三者到底差在哪,以及為什麼這個界線其實有點模糊</li>
+          <li>編譯器完整的三段管線:<strong>前端(front end)</strong>(詞法→語法→語意)、<strong>中端(middle end)</strong>(IR 與最佳化)、<strong>後端(back end)</strong>(程式碼產生)</li>
+          <li><strong>詞法分析</strong>如何用<strong>正規表示式(regular expression)</strong>與<strong>有限自動機(DFA)</strong>把字元流切成 token</li>
+          <li><strong>語法分析</strong>:上下文無關文法(CFG)、BNF、剖析樹 vs 抽象語法樹(AST)、<strong>遞迴下降(recursive descent)</strong>如何用文法的分層編碼運算子優先序與結合性,以及 LL 與 LR 的一句話差別</li>
+          <li><strong>語意分析</strong>:符號表(symbol table)、型別檢查(type checking)、作用域(scope)解析</li>
+          <li><strong>最佳化</strong>:為什麼要 IR、什麼是三位址碼、常數摺疊/死碼消除/共同子運算式消除/迴圈最佳化各自在做什麼</li>
+          <li>用 Python <strong>親手寫一個小語言</strong>:tokenizer → 遞迴下降 parser → AST →(直譯求值)或(編譯成第 23 章式的堆疊機碼),而且兩條路真的都能跑</li>
+          <li>為什麼說編譯器是「整個計算機科學的縮影」——形式語言、資料結構、演算法,全在這裡交會</li>
+        </ul>
+      </div>
+
+      <h2>翻譯,是電腦科學的母題</h2>
+      <p>
+        第 23 章結尾,我們站在一座親手蓋起來的高塔前:一行 <code>let sum = sum + i;</code>,
+        像水一樣往下流過編譯器、VM 翻譯器、組譯器,最後變成電子在 CPU 裡奔跑。那一章,我們是<strong>鳥瞰</strong>——
+        三個處理站各給了一個玩具版,夠你看懂全貌。但每一站裡面,其實都藏著數十年的理論與一整個學門。
+        這一章,我們要俯衝下去,把每一站<strong>講深</strong>。
+      </p>
+      <p>
+        先停下來,想一件你可能從沒想過、但其實很奇妙的事:<strong>編譯器,是一個「讀程式、寫程式」的程式。</strong>
+        它的輸入是文字(你的原始碼),輸出也是文字(組合語言、位元組碼、或機器碼)。
+        寫編譯器的人是程式設計師,用它的人也是程式設計師——所以有人說,編譯器是
+        <em>「程式設計師寫給程式設計師的程式」</em>。它站在人類與機器之間,當一個忠實的翻譯官:
+        把我們腦中的意圖(「把分數加總」),翻成 CPU 唯一聽得懂的命令(一串 0 與 1)。
+      </p>
+      <p>
+        而「翻譯」這件事,根本就是電腦科學反覆出現的母題。組譯器把組語翻成機器碼;VM 翻譯器把位元組碼翻成組語;
+        瀏覽器把 HTML 翻成畫面;資料庫把 SQL 翻成查詢計畫……你會發現,只要有「兩種表示法」,
+        中間就站著一個翻譯程式。學會編譯器,你學到的不只是「怎麼做一個編譯器」,而是一套
+        <strong>「如何嚴謹地把一種結構化的語言,轉換成另一種」</strong>的通用功夫。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">編譯器的本質:意義保留的翻譯</span>
+          <p>編譯器要做的,不是逐字硬翻,而是<strong>保住意義(semantics)的翻譯</strong>:
+          翻完之後的程式,跑起來的<em>行為</em>必須跟原本一模一樣,只是換了一種機器聽得懂的形式。
+          這跟人類翻譯一首詩很像——重點不是每個字都對上,而是<strong>意思</strong>要對。
+          只不過編譯器面對的是形式語言,所以它的「信達雅」可以做到數學等級的精確。</p>
+        </div>
+      </div>
+
+      <h2>編譯、直譯、JIT:三種讓程式跑起來的方式</h2>
+      <p>
+        在拆管線之前,先把一個常被混淆的問題講清楚:同樣是「讓高階語言跑起來」,
+        為什麼有人說 C 是「編譯語言」、Python 是「直譯語言」、Java 跑得越久越快?差別到底在哪?
+      </p>
+      <p>
+        關鍵在<strong>「翻譯」與「執行」這兩件事,什麼時候發生、由誰來做</strong>。我們用一個比喻:你拿到一本外文食譜。
+      </p>
+      <ul>
+        <li><strong>編譯器(compiler)</strong>:像請翻譯社<em>事先</em>把整本食譜翻成中文,印成一本新書交給你。
+          翻譯花的時間是一次性的;之後你照中文書下廚,快得很。代價是:翻完才能煮,而且那本中文書只適用於「會中文的廚師」(特定 CPU)。
+          C、C++、Rust、Go 走這條路:<strong>提前(ahead-of-time, AOT)</strong>把整個程式翻成機器碼,產生一個獨立執行檔。</li>
+        <li><strong>直譯器(interpreter)</strong>:像請一位口譯<em>站在你旁邊</em>,你讀一句,他翻一句、你做一步。
+          不用等整本翻完就能開煮,很有彈性;但每做一次都要現場翻一次,慢。而且沒有一本「翻好的書」留下來。
+          Python、Ruby、傳統的 JavaScript 走這條路:程式<strong>邊讀邊執行</strong>,不產生獨立的機器碼檔。</li>
+        <li><strong>JIT(Just-In-Time,即時編譯)</strong>:最聰明的折衷。一開始像口譯一樣邊翻邊做;
+          但口譯發現「這一段你已經做第 100 次了」,就乾脆把這段<em>當場</em>翻成中文寫下來,之後直接用,跳過翻譯。
+          它在<strong>執行期間</strong>把反覆執行的「熱點(hot spot)」即時編譯成原生機器碼。
+          現代的 JVM(HotSpot)、JavaScript 的 V8、.NET、PyPy 都靠 JIT,讓「直譯的彈性」與「編譯的速度」兼得。</li>
+      </ul>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 360" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- Compiler row -->
+  <text x="20" y="42" font-size="13" font-weight="800" fill="#2f6f6a">編譯(AOT)</text>
+  <rect x="20" y="52" width="90" height="38" rx="7" fill="#e3efed" stroke="#2f6f6a"/><text x="65" y="76" text-anchor="middle" font-size="12" fill="#1f2328">原始碼</text>
+  <rect x="150" y="52" width="120" height="38" rx="7" fill="#2f6f6a"/><text x="210" y="71" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">編譯器(翻一次)</text>
+  <rect x="310" y="52" width="110" height="38" rx="7" fill="#f6e7dd" stroke="#b4541f"/><text x="365" y="76" text-anchor="middle" font-size="12" fill="#1f2328">機器碼檔</text>
+  <rect x="460" y="52" width="110" height="38" rx="7" fill="#fff" stroke="#8a929b"/><text x="515" y="76" text-anchor="middle" font-size="12" fill="#1f2328">直接執行(快)</text>
+  <line x1="110" y1="71" x2="148" y2="71" stroke="#8a929b" stroke-width="2" marker-end="url(#ja)"/>
+  <line x1="270" y1="71" x2="308" y2="71" stroke="#8a929b" stroke-width="2" marker-end="url(#ja)"/>
+  <line x1="420" y1="71" x2="458" y2="71" stroke="#8a929b" stroke-width="2" marker-end="url(#ja)"/>
+  <text x="630" y="76" font-size="10" fill="#8a929b">執行前翻好</text>
+
+  <!-- Interpreter row -->
+  <text x="20" y="152" font-size="13" font-weight="800" fill="#8b5cf6">直譯</text>
+  <rect x="20" y="162" width="90" height="38" rx="7" fill="#e3efed" stroke="#2f6f6a"/><text x="65" y="186" text-anchor="middle" font-size="12" fill="#1f2328">原始碼</text>
+  <rect x="150" y="162" width="270" height="38" rx="7" fill="#8b5cf6"/><text x="285" y="181" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">直譯器:讀一句→做一句(邊翻邊跑)</text>
+  <rect x="460" y="162" width="110" height="38" rx="7" fill="#fff" stroke="#8a929b"/><text x="515" y="186" text-anchor="middle" font-size="12" fill="#1f2328">立即看到結果</text>
+  <line x1="110" y1="181" x2="148" y2="181" stroke="#8a929b" stroke-width="2" marker-end="url(#ja)"/>
+  <line x1="420" y1="181" x2="458" y2="181" stroke="#8a929b" stroke-width="2" marker-end="url(#ja)"/>
+  <text x="630" y="186" font-size="10" fill="#8a929b">不留機器碼</text>
+
+  <!-- JIT row -->
+  <text x="20" y="262" font-size="13" font-weight="800" fill="#b4541f">JIT(即時)</text>
+  <rect x="20" y="272" width="90" height="38" rx="7" fill="#e3efed" stroke="#2f6f6a"/><text x="65" y="296" text-anchor="middle" font-size="12" fill="#1f2328">位元組碼</text>
+  <rect x="150" y="272" width="150" height="38" rx="7" fill="#8b5cf6"/><text x="225" y="291" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">直譯執行(暖機)</text>
+  <rect x="330" y="272" width="150" height="38" rx="7" fill="#b4541f"/><text x="405" y="291" text-anchor="middle" font-size="10.5" font-weight="700" fill="#fff">熱點→即時編成原生碼</text>
+  <rect x="500" y="272" width="100" height="38" rx="7" fill="#fff" stroke="#b4541f"/><text x="550" y="296" text-anchor="middle" font-size="11" fill="#1f2328">越跑越快</text>
+  <line x1="110" y1="291" x2="148" y2="291" stroke="#8a929b" stroke-width="2" marker-end="url(#ja)"/>
+  <line x1="300" y1="291" x2="328" y2="291" stroke="#8a929b" stroke-width="2" marker-end="url(#ja)"/>
+  <line x1="480" y1="291" x2="498" y2="291" stroke="#8a929b" stroke-width="2" marker-end="url(#ja)"/>
+
+  <text x="360" y="345" text-anchor="middle" font-size="11" fill="#4a5159">三者的差別,在於「翻譯」發生的<tspan font-weight="800">時機</tspan>:全部事先翻、完全不事先翻、或先跑著再挑熱點翻。</text>
+  <defs><marker id="ja" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/></marker></defs>
+</svg>
+        <figcaption>圖 42-1:編譯、直譯、JIT 的差別,不在「翻不翻」,而在「<strong>何時</strong>翻、翻<strong>多少</strong>」。三者其實是一道光譜:從「全部事先翻」到「完全現場翻」,JIT 落在中間,還會邊跑邊學。</figcaption>
+      </div>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">「編譯語言 vs 直譯語言」其實是個誤稱</span>
+          <p>嚴格說,<strong>語言本身不分編譯或直譯,只有「實作」分</strong>。同一個語言,你可以替它寫編譯器、也可以寫直譯器。
+          C 通常被編譯,但也有 C 直譯器(如 Cling);Python 通常被直譯,但會先被編譯成位元組碼(<code>.pyc</code>),
+          再由 CPython 虛擬機直譯那些位元組碼——它其實是「先編譯、後直譯」的混血。所以更精確的說法是:
+          「CPython 是 Python 的一種直譯式實作」「GCC 是 C 的一種編譯式實作」。
+          這一章講的「編譯器」,指的是<strong>前面那一大段「原始碼 → 某種低階表示」的翻譯流程</strong>——
+          無論最後是被執行檔直接跑、還是被 VM 直譯,這段管線都長得一樣。</p>
+        </div>
+      </div>
+
+      <h2>編譯器的全景:前端、中端、後端</h2>
+      <p>
+        第 23 章把編譯器切成三站:詞法、語法、程式碼產生。那是夠用的簡化。真實的編譯器,習慣用另一種更有用的切法,
+        分成三大塊——而這個切法,本身就是一個關於<strong>抽象與解耦</strong>的漂亮設計:
+      </p>
+      <ul>
+        <li><strong>前端(front end)</strong>:只跟<em>「來源語言」</em>有關。負責「讀懂」原始碼:詞法分析、語法分析、語意分析。
+          它的產物是一棵帶著完整意義資訊的樹(或一份中間表示)。前端不在乎你最後要跑在哪顆 CPU 上。</li>
+        <li><strong>中端(middle end)</strong>:既不管來源語言、也不管目標機器。它在一種中性的
+          <strong>中間表示(intermediate representation, IR)</strong>上做<strong>最佳化</strong>:把程式改寫得更快、更小,但行為不變。</li>
+        <li><strong>後端(back end)</strong>:只跟<em>「目標機器」</em>有關。負責把 IR 翻成特定 CPU 的機器碼:指令選擇、暫存器配置、指令排程。
+          它不在乎這份 IR 原本是 C 還是 Rust 編出來的。</li>
+      </ul>
+      <p>
+        這個「前端管語言、後端管機器、中端居中最佳化」的三分法,就是第 23 章「M×N 降成 M+N」那招的升級版——
+        現在連最佳化都被抽到中間,讓所有語言、所有機器都能共享。<strong>LLVM</strong> 這個現代最有名的編譯器框架,
+        整個設計就建立在這條界線上:Clang(C/C++)、Swift、Rust 全都把程式翻成同一種 <strong>LLVM IR</strong>,
+        共用同一套中端最佳化器與後端;要支援一顆新晶片,只要寫一個後端,上面所有語言立刻受惠。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 430" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- input -->
+  <rect x="300" y="14" width="120" height="40" rx="8" fill="#fff" stroke="#8a929b"/>
+  <text x="360" y="33" text-anchor="middle" font-size="12" font-weight="800" fill="#1f2328">原始碼</text>
+  <text x="360" y="48" text-anchor="middle" font-size="10" fill="#8a929b" font-family="ui-monospace, Consolas, monospace">x = a + b * 2</text>
+
+  <!-- FRONT END group -->
+  <rect x="40" y="74" width="640" height="120" rx="12" fill="#eef6f4" stroke="#2f6f6a" stroke-dasharray="5 4"/>
+  <text x="60" y="96" font-size="13" font-weight="800" fill="#2f6f6a">前端 Front End ── 「讀懂來源語言」</text>
+  <rect x="60" y="110" width="180" height="66" rx="9" fill="#fff" stroke="#2f6f6a"/>
+  <text x="150" y="135" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">① 詞法分析</text>
+  <text x="150" y="153" text-anchor="middle" font-size="10" fill="#4a5159">字元流 → tokens</text>
+  <text x="150" y="168" text-anchor="middle" font-size="9" fill="#8a929b">regex / 自動機</text>
+  <rect x="270" y="110" width="180" height="66" rx="9" fill="#fff" stroke="#2f6f6a"/>
+  <text x="360" y="135" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">② 語法分析</text>
+  <text x="360" y="153" text-anchor="middle" font-size="10" fill="#4a5159">tokens → AST</text>
+  <text x="360" y="168" text-anchor="middle" font-size="9" fill="#8a929b">CFG / 遞迴下降</text>
+  <rect x="480" y="110" width="180" height="66" rx="9" fill="#fff" stroke="#2f6f6a"/>
+  <text x="570" y="135" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">③ 語意分析</text>
+  <text x="570" y="153" text-anchor="middle" font-size="10" fill="#4a5159">查表 / 型別檢查</text>
+  <text x="570" y="168" text-anchor="middle" font-size="9" fill="#8a929b">符號表 / 作用域</text>
+  <line x1="240" y1="143" x2="268" y2="143" stroke="#2f6f6a" stroke-width="2" marker-end="url(#fa)"/>
+  <line x1="450" y1="143" x2="478" y2="143" stroke="#2f6f6a" stroke-width="2" marker-end="url(#fa)"/>
+
+  <!-- MIDDLE END -->
+  <rect x="40" y="214" width="310" height="92" rx="12" fill="#f5f0fe" stroke="#8b5cf6" stroke-dasharray="5 4"/>
+  <text x="60" y="236" font-size="13" font-weight="800" fill="#8b5cf6">中端 Middle End ── 「與語言、機器都無關」</text>
+  <rect x="60" y="250" width="270" height="46" rx="9" fill="#fff" stroke="#8b5cf6"/>
+  <text x="195" y="270" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">IR 上的最佳化</text>
+  <text x="195" y="287" text-anchor="middle" font-size="9.5" fill="#8a929b">常數摺疊 / 死碼消除 / CSE / 迴圈最佳化</text>
+
+  <!-- BACK END -->
+  <rect x="370" y="214" width="310" height="92" rx="12" fill="#fbeee6" stroke="#b4541f" stroke-dasharray="5 4"/>
+  <text x="390" y="236" font-size="13" font-weight="800" fill="#b4541f">後端 Back End ── 「面向目標機器」</text>
+  <rect x="390" y="250" width="270" height="46" rx="9" fill="#fff" stroke="#b4541f"/>
+  <text x="525" y="270" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">程式碼產生</text>
+  <text x="525" y="287" text-anchor="middle" font-size="9.5" fill="#8a929b">指令選擇 / 暫存器配置 / 排程</text>
+
+  <!-- output -->
+  <rect x="300" y="330" width="120" height="40" rx="8" fill="#2f6f6a"/>
+  <text x="360" y="349" text-anchor="middle" font-size="12" font-weight="800" fill="#fff">目標碼</text>
+  <text x="360" y="364" text-anchor="middle" font-size="9" fill="#cfe6e2">VM 命令 / 組語 / 機器碼</text>
+
+  <!-- vertical arrows -->
+  <line x1="360" y1="54" x2="360" y2="72" stroke="#8a929b" stroke-width="2" marker-end="url(#fa)"/>
+  <line x1="360" y1="194" x2="195" y2="212" stroke="#8a929b" stroke-width="2" marker-end="url(#fa)"/>
+  <text x="250" y="208" font-size="9" fill="#8a929b">AST/IR</text>
+  <line x1="350" y1="260" x2="368" y2="260" stroke="#8a929b" stroke-width="2" marker-end="url(#fa)"/>
+  <text x="360" y="252" text-anchor="middle" font-size="9" fill="#8a929b">最佳化後的 IR</text>
+  <line x1="525" y1="306" x2="400" y2="330" stroke="#8a929b" stroke-width="2" marker-end="url(#fa)"/>
+
+  <text x="360" y="398" text-anchor="middle" font-size="11" fill="#4a5159">每換一種語言只改前端;每換一顆 CPU 只改後端;最佳化器(中端)所有人共用。</text>
+  <text x="360" y="417" text-anchor="middle" font-size="10.5" fill="#8b5cf6" font-weight="700">這正是 LLVM 的設計哲學。</text>
+  <defs><marker id="fa" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/></marker></defs>
+</svg>
+        <figcaption>圖 42-2:編譯器的全景。前端讀懂語言、後端面向機器、中端在中性的 IR 上做最佳化。這條界線讓「語言的事」「最佳化的事」「機器的事」徹底解耦——換語言只動前端,換晶片只動後端。本章接下來,就是沿著這張圖一格一格走。</figcaption>
+      </div>
+
+      <h2>前端第一站 — 詞法分析:把字元流切成 token</h2>
+      <p>
+        編譯器最初拿到的,是一堆毫無結構的<strong>字元</strong>:<code>x</code>、<code>=</code>、空格、<code>a</code>、<code>+</code>……
+        在它眼中,連「這是一個單字、那是一個運算子」都還不知道。<strong>詞法分析(lexical analysis,又叫 scanning、tokenizing)</strong>
+        就是第一刀:把字元流切成一個個有意義的最小單位——<strong>token(詞元)</strong>,並貼上類別標籤。
+      </p>
+      <p>第 23 章我們手刻過一個 tokenizer。這次,我們要看清它底下的兩塊理論基石:<strong>正規表示式</strong>與<strong>有限自動機</strong>。</p>
+
+      <h3>token 有哪些種類</h3>
+      <p>對大多數程式語言,token 不外乎這幾類:</p>
+      <ul>
+        <li><strong>關鍵字(keyword)</strong>:語言保留的字,如 <code>if</code>、<code>while</code>、<code>return</code>、<code>let</code>。</li>
+        <li><strong>識別字(identifier)</strong>:程式設計師自取的名字,如變數 <code>score</code>、函式 <code>main</code>。</li>
+        <li><strong>常值(literal)</strong>:寫死在程式裡的值,如數字 <code>42</code>、字串 <code>"hi"</code>。</li>
+        <li><strong>運算子與標點(operator / punctuation)</strong>:<code>+</code>、<code>*</code>、<code>==</code>、<code>(</code>、<code>;</code>、<code>{</code>。</li>
+        <li><strong>空白與註解</strong>:通常被<em>丟掉</em>(但要先正確辨認出來才能丟)。</li>
+      </ul>
+      <p>
+        tokenizer 只負責<strong>斷詞</strong>,不負責<strong>理解</strong>。你餵它 <code>) ) + while</code>,它照樣乖乖切出四個 token——
+        「這串 token 拼起來合不合語法」是下一站的事。詞法分析,就像把一句沒有空格的英文切成一個個單字,但還沒讀懂句子。
+      </p>
+
+      <h3>正規表示式:token 的「規格書」</h3>
+      <p>
+        每一類 token 長什麼樣,要怎麼<em>精確</em>描述?答案是你在第 16 章用 <code>grep</code> 玩過的老朋友——
+        <strong>正規表示式(regular expression)</strong>。它正是描述「一組字串長相」的標準工具:
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>token 類別</th><th>正規表示式</th><th>白話</th></tr></thead>
+        <tbody>
+          <tr><td>整數</td><td><code>[0-9]+</code></td><td>一個以上的數字</td></tr>
+          <tr><td>識別字</td><td><code>[A-Za-z_][A-Za-z0-9_]*</code></td><td>字母或底線開頭,後面接任意多個字母/數字/底線</td></tr>
+          <tr><td>浮點數</td><td><code>[0-9]+\.[0-9]+</code></td><td>數字、一個小數點、再數字</td></tr>
+          <tr><td>運算子</td><td><code>==|!=|&lt;=|&gt;=|[-+*/()]</code></td><td>雙字元運算子,或單一符號</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        這不是巧合。第 16 章的 <code>grep</code> 拿正規表示式來<em>搜尋</em>文字;編譯器拿一模一樣的正規表示式來<em>切分</em>文字。
+        同一套理論,兩種用途。而這引出一個更深的問題:電腦到底是<strong>怎麼</strong>判斷一串字元「符不符合」某個正規表示式的?
+        答案,藏在計算理論裡——一台簡單到不可思議的抽象機器。
+      </p>
+
+      <h3>有限自動機:正規表示式背後的引擎</h3>
+      <p>
+        每一個正規表示式,背後都對應一台<strong>有限自動機(finite automaton)</strong>——更精確地說,一台
+        <strong>決定性有限自動機(DFA,Deterministic Finite Automaton)</strong>。
+        這是第十二部「計算理論」的主角(第 49 章會嚴格展開),這裡先給你直覺。
+      </p>
+      <p>
+        DFA 是一台極度健忘的機器:它只有有限個<strong>狀態(state)</strong>,一次讀一個字元,
+        然後<em>只</em>根據「目前在哪個狀態」與「讀到什麼字元」決定跳到哪個狀態。它沒有記憶體、不會數數,
+        只記得「我現在站在哪」。神奇的是,光憑這點,它就足以辨認任何正規表示式描述的字串。
+        來看一台同時辨認「整數」與「識別字」的 DFA:
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 300" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- start -->
+  <circle cx="100" cy="150" r="30" fill="#fff" stroke="#8a929b" stroke-width="2"/>
+  <text x="100" y="155" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">起始</text>
+  <line x1="40" y1="150" x2="68" y2="150" stroke="#8a929b" stroke-width="2" marker-end="url(#da)"/>
+  <text x="40" y="140" font-size="10" fill="#8a929b">start</text>
+
+  <!-- number state (accepting) -->
+  <circle cx="380" cy="70" r="34" fill="#f6e7dd" stroke="#b4541f" stroke-width="2"/>
+  <circle cx="380" cy="70" r="28" fill="none" stroke="#b4541f" stroke-width="1.5"/>
+  <text x="380" y="68" text-anchor="middle" font-size="12" font-weight="800" fill="#1f2328">NUMBER</text>
+  <text x="380" y="83" text-anchor="middle" font-size="9" fill="#b4541f">(接受)</text>
+
+  <!-- id state (accepting) -->
+  <circle cx="380" cy="230" r="34" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <circle cx="380" cy="230" r="28" fill="none" stroke="#2f6f6a" stroke-width="1.5"/>
+  <text x="380" y="228" text-anchor="middle" font-size="12" font-weight="800" fill="#1f2328">ID</text>
+  <text x="380" y="243" text-anchor="middle" font-size="9" fill="#2f6f6a">(接受)</text>
+
+  <!-- transitions from start -->
+  <line x1="124" y1="135" x2="348" y2="80" stroke="#b4541f" stroke-width="2" marker-end="url(#db)"/>
+  <text x="225" y="98" font-size="11" font-weight="700" fill="#b4541f">讀到數字 0-9</text>
+  <line x1="124" y1="165" x2="348" y2="220" stroke="#2f6f6a" stroke-width="2" marker-end="url(#dc)"/>
+  <text x="222" y="210" font-size="11" font-weight="700" fill="#2f6f6a">讀到字母/底線</text>
+
+  <!-- self loops -->
+  <path d="M 360 40 Q 380 8 400 40" fill="none" stroke="#b4541f" stroke-width="2" marker-end="url(#db)"/>
+  <text x="380" y="14" text-anchor="middle" font-size="10" fill="#b4541f">數字 0-9</text>
+  <path d="M 360 260 Q 380 292 400 260" fill="none" stroke="#2f6f6a" stroke-width="2" marker-end="url(#dc)"/>
+  <text x="380" y="288" text-anchor="middle" font-size="10" fill="#2f6f6a">字母/數字/底線</text>
+
+  <!-- explanation -->
+  <text x="500" y="120" font-size="11" fill="#4a5159">進到「接受狀態」並且</text>
+  <text x="500" y="138" font-size="11" fill="#4a5159">下一個字元無法再延續時,</text>
+  <text x="500" y="156" font-size="11" fill="#4a5159">就切出一個 token。</text>
+  <text x="500" y="182" font-size="11" fill="#8a929b">例:讀 <tspan font-weight="700" fill="#b4541f">3</tspan> <tspan font-weight="700" fill="#b4541f">1</tspan> 後遇到空格</text>
+  <text x="500" y="200" font-size="11" fill="#8a929b">→ 吐出 NUMBER「31」</text>
+
+  <defs>
+    <marker id="da" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/></marker>
+    <marker id="db" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#b4541f"/></marker>
+    <marker id="dc" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#2f6f6a"/></marker>
+  </defs>
+</svg>
+        <figcaption>圖 42-3:一台辨認「整數」與「識別字」的 DFA。從起始狀態出發,讀到數字就走進 NUMBER 狀態(並在那裡靠自迴圈一直吃數字),讀到字母就走進 ID 狀態。雙圈代表「接受狀態」。tokenizer 的本體,就是一群這樣的小自動機在賽跑,看誰能吃最長。</figcaption>
+      </div>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">理論與工具,在這裡握手</span>
+          <p>正規表示式、DFA、tokenizer,其實是同一件事的三張臉:
+          <strong>正規表示式</strong>是「規格」(token 長什麼樣)、<strong>DFA</strong>是「實作」(怎麼一個字元一個字元辨認它)、
+          <strong>tokenizer</strong>是「應用」(用它把原始碼切開)。<code>lex</code>/<code>flex</code> 這類工具的工作,
+          就是讀進你寫的正規表示式,<em>自動</em>幫你生出對應的 DFA 程式碼。第十二部會證明一個漂亮的定理:
+          「正規表示式能描述的語言」<strong>恰好等於</strong>「DFA 能辨認的語言」——理論與工程在此完美閉環。</p>
+        </div>
+      </div>
+
+      <h3>動手寫一個 tokenizer</h3>
+      <p>
+        實務上,我們很少真的手刻 DFA。一個又快又乾淨的技巧,是把每類 token 的正規表示式用<strong>具名群組(named group)</strong>
+        合併成「一條大 regex」,讓 Python 的 <code>re</code> 模組(它內部就是自動機)替我們一次比對。
+        每次比對成功,用 <code>lastgroup</code> 問「是哪一類中的」:
+      </p>
+      <pre><code class="language-python">import re
+
+# 每類 token 配一條正規表示式,順序很重要(先比對到的優先)
+TOKEN_SPEC = [
+    ("NUMBER",   r"\d+"),                 # 整數
+    ("ID",       r"[A-Za-z_]\w*"),        # 識別字
+    ("OP",       r"[+\-*/()=]"),          # 運算子與括號
+    ("NEWLINE",  r"\n"),                  # 換行(用來分隔敘述)
+    ("SKIP",     r"[ \t]+"),              # 空白:辨認出來,但丟掉
+    ("MISMATCH", r"."),                   # 其他任何字元 → 錯誤
+]
+# 合併成一條大 regex:(?P&lt;NUMBER&gt;\d+)|(?P&lt;ID&gt;[A-Za-z_]\w*)|...
+_master = re.compile("|".join(f"(?P&lt;{name}&gt;{pat})" for name, pat in TOKEN_SPEC))
+
+def tokenize(code):
+    tokens = []
+    for m in _master.finditer(code):
+        kind, val = m.lastgroup, m.group()   # 是哪一類?比到什麼字串?
+        if kind == "SKIP":
+            continue                          # 空白直接跳過
+        elif kind == "MISMATCH":
+            raise SyntaxError(f"非法字元 {val!r}")
+        elif kind == "NUMBER":
+            tokens.append(("NUMBER", int(val)))   # 順手轉成 int
+        elif kind == "NEWLINE":
+            tokens.append(("NEWLINE", "\n"))
+        else:
+            tokens.append((kind, val))
+    tokens.append(("EOF", None))              # 結尾哨兵,方便 parser 判斷
+    return tokens
+
+print(tokenize("ans = 12 + x * 3"))
+# [('ID', 'ans'), ('OP', '='), ('NUMBER', 12), ('OP', '+'),
+#  ('ID', 'x'), ('OP', '*'), ('NUMBER', 3), ('EOF', None)]</code></pre>
+      <p>
+        注意 <code>TOKEN_SPEC</code> 的<strong>順序</strong>暗藏玄機:<code>MISMATCH</code>(萬用的 <code>.</code>)放在最後,
+        所以只有當前面都比對失敗時才會輪到它報錯。如果語言有關鍵字,通常的做法是:照樣用 <code>ID</code> 的規則切出來,
+        切完<em>再</em>查一張關鍵字表,把 <code>while</code> 這種「剛好是保留字」的識別字改標成關鍵字——
+        這樣就不必擔心 <code>while</code> 的正規表示式誤吃掉 <code>whileLoop</code> 這種變數名(<strong>最長匹配,maximal munch</strong> 的經典坑)。
+      </p>
+
+      <h2>前端第二站 — 語法分析:從 token 長出一棵樹</h2>
+      <p>
+        有了一排扁平的 token,真正的硬仗才開始。<strong>語法分析(syntactic analysis,俗稱 parsing)</strong>
+        要搞懂這些 token 之間的<strong>結構</strong>:誰修飾誰、誰先算、哪裡是一個完整的敘述。這一節是整章的重頭戲。
+      </p>
+
+      <h3>用文法描述語言:CFG 與 BNF</h3>
+      <p>
+        要讓機器判斷「這串 token 合不合語法」,我們得先把語法<strong>寫成規則</strong>。
+        詞法層用的正規表示式不夠力——它沒有記憶,數不出「左括號跟右括號有沒有配對」這種需要「記住巢狀深度」的結構。
+        我們需要更強的工具:<strong>上下文無關文法(context-free grammar, CFG)</strong>。
+      </p>
+      <p>
+        CFG 由一堆<strong>產生規則(production rule)</strong>組成,每條規則說「某個語法成分,可以由哪些更小的成分組成」。
+        最常見的書寫格式叫 <strong>BNF(Backus–Naur Form)</strong>,1950 年代為了描述 ALGOL 語言而發明。
+        我們用 BNF 寫出「算術運算式」的文法(角括號 <code>&lt; &gt;</code> 框住的是語法成分,<code>::=</code> 讀作「可以是」):
+      </p>
+      <pre><code class="language-text">&lt;expr&gt;   ::= &lt;term&gt; (("+" | "-") &lt;term&gt;)*       // 運算式 = 一串用 +/- 連起來的 term
+&lt;term&gt;   ::= &lt;factor&gt; (("*" | "/") &lt;factor&gt;)*    // term = 一串用 */÷ 連起來的 factor
+&lt;factor&gt; ::= NUMBER | ID | "(" &lt;expr&gt; ")"        // factor = 數字、變數、或括號裡的運算式</code></pre>
+      <p>
+        這三行藏著兩個極深的設計。第一,<strong>它是遞迴的</strong>:<code>&lt;factor&gt;</code> 又繞回去引用 <code>&lt;expr&gt;</code>
+        (括號的情況)。正因如此,括號才能無限巢狀——<code>((1+2))</code> 完全合法。這種「自己引用自己」的能力,
+        正是 CFG 比正規表示式強的地方,也是「context-<em>free</em>」的威力來源。
+      </p>
+      <p>
+        第二,也更巧妙:<strong>運算子優先序被悄悄編碼進了文法的「分層」裡</strong>。把 <code>*</code>、<code>/</code> 放在比
+        <code>+</code>、<code>-</code> 更「裡層」的 <code>&lt;term&gt;</code>,就自動讓乘除「先算」——因為要拆解一個 <code>&lt;expr&gt;</code>,
+        必須先把它的 <code>&lt;term&gt;</code> 拆完。我們等下會看到,這個分層如何讓 parser「不費力氣」就處理對優先序。
+      </p>
+
+      <div class="callout history">
+        <div class="ico">📜</div>
+        <div class="body">
+          <span class="c-title">喬姆斯基階層(Chomsky hierarchy)</span>
+          <p>語言學家 <strong>Noam Chomsky</strong> 在 1956 年把形式語言依「描述它需要多強的文法」分成四層:
+          正規語言(regular)⊂ 上下文無關(context-free)⊂ 上下文相關(context-sensitive)⊂ 遞迴可枚舉(recursively enumerable)。
+          這條階層,恰好對應到辨認它們所需的機器:DFA、下推自動機(堆疊!)、線性有界自動機、圖靈機。
+          編譯器漂亮地用上了前兩層:<strong>詞法</strong>用正規語言(夠切 token),<strong>語法</strong>用上下文無關語言(夠處理巢狀結構)。
+          這是計算理論直接落地到工程的最佳範例,我們留到第十二部細講。</p>
+        </div>
+      </div>
+
+      <h3>剖析樹 vs 抽象語法樹(AST)</h3>
+      <p>
+        parser 的產物是一棵<strong>樹</strong>。為什麼是樹?因為程式天生有<strong>階層</strong>:一個運算式包含子運算式,
+        一個 <code>if</code> 包含條件與主體,主體又包含更多敘述……這種「裡面還有裡面」的結構,用樹表達最自然。但樹有兩種:
+      </p>
+      <ul>
+        <li><strong>剖析樹(parse tree,又叫具體語法樹)</strong>:<em>忠實</em>記錄文法每一步推導,連 <code>&lt;expr&gt;</code>、
+          <code>&lt;term&gt;</code> 這些中間語法成分、連括號標點都留著。它完整,但臃腫。</li>
+        <li><strong>抽象語法樹(AST,Abstract Syntax Tree)</strong>:只留下<em>意義</em>所需的東西——運算子、運算元、結構;
+          丟掉那些只為了「解析」而存在的中間節點與標點。它精煉,是後續每一站真正在用的東西。</li>
+      </ul>
+      <p>同一個小運算式 <code>2 + 3</code>,兩種樹擺在一起,差別一目了然:</p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 330" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- divider -->
+  <line x1="360" y1="20" x2="360" y2="300" stroke="#e3e7ea" stroke-width="1.5" stroke-dasharray="4 4"/>
+  <text x="180" y="34" text-anchor="middle" font-size="13" font-weight="800" fill="#8a929b">剖析樹(具體、臃腫)</text>
+  <text x="540" y="34" text-anchor="middle" font-size="13" font-weight="800" fill="#2f6f6a">抽象語法樹 AST(精煉)</text>
+
+  <!-- PARSE TREE (left) -->
+  <!-- expr -->
+  <rect x="140" y="54" width="80" height="30" rx="6" fill="#f3f4f6" stroke="#8a929b"/><text x="180" y="74" text-anchor="middle" font-size="12" fill="#4a5159">expr</text>
+  <!-- term + term -->
+  <rect x="60" y="120" width="70" height="28" rx="6" fill="#f3f4f6" stroke="#8a929b"/><text x="95" y="139" text-anchor="middle" font-size="11" fill="#4a5159">term</text>
+  <circle cx="180" cy="134" r="15" fill="#fff" stroke="#8a929b"/><text x="180" y="139" text-anchor="middle" font-size="13" font-weight="700" fill="#4a5159">+</text>
+  <rect x="230" y="120" width="70" height="28" rx="6" fill="#f3f4f6" stroke="#8a929b"/><text x="265" y="139" text-anchor="middle" font-size="11" fill="#4a5159">term</text>
+  <!-- factor -->
+  <rect x="60" y="180" width="70" height="28" rx="6" fill="#f3f4f6" stroke="#8a929b"/><text x="95" y="199" text-anchor="middle" font-size="11" fill="#4a5159">factor</text>
+  <rect x="230" y="180" width="70" height="28" rx="6" fill="#f3f4f6" stroke="#8a929b"/><text x="265" y="199" text-anchor="middle" font-size="11" fill="#4a5159">factor</text>
+  <!-- leaves -->
+  <circle cx="95" cy="250" r="18" fill="#f6e7dd" stroke="#b4541f"/><text x="95" y="256" text-anchor="middle" font-size="15" font-weight="700" fill="#1f2328">2</text>
+  <circle cx="265" cy="250" r="18" fill="#f6e7dd" stroke="#b4541f"/><text x="265" y="256" text-anchor="middle" font-size="15" font-weight="700" fill="#1f2328">3</text>
+  <!-- edges -->
+  <line x1="165" y1="84" x2="100" y2="118" stroke="#c4c9ce" stroke-width="1.5"/>
+  <line x1="180" y1="84" x2="180" y2="119" stroke="#c4c9ce" stroke-width="1.5"/>
+  <line x1="195" y1="84" x2="260" y2="118" stroke="#c4c9ce" stroke-width="1.5"/>
+  <line x1="95" y1="148" x2="95" y2="178" stroke="#c4c9ce" stroke-width="1.5"/>
+  <line x1="265" y1="148" x2="265" y2="178" stroke="#c4c9ce" stroke-width="1.5"/>
+  <line x1="95" y1="208" x2="95" y2="231" stroke="#c4c9ce" stroke-width="1.5"/>
+  <line x1="265" y1="208" x2="265" y2="231" stroke="#c4c9ce" stroke-width="1.5"/>
+  <text x="180" y="300" text-anchor="middle" font-size="10" fill="#8a929b">每層推導都留痕跡</text>
+
+  <!-- AST (right) -->
+  <circle cx="540" cy="100" r="26" fill="#2f6f6a"/><text x="540" y="108" text-anchor="middle" font-size="20" font-weight="800" fill="#fff">+</text>
+  <circle cx="470" cy="200" r="22" fill="#f6e7dd" stroke="#b4541f" stroke-width="2"/><text x="470" y="207" text-anchor="middle" font-size="16" font-weight="700" fill="#1f2328">2</text>
+  <circle cx="610" cy="200" r="22" fill="#f6e7dd" stroke="#b4541f" stroke-width="2"/><text x="610" y="207" text-anchor="middle" font-size="16" font-weight="700" fill="#1f2328">3</text>
+  <line x1="524" y1="121" x2="484" y2="182" stroke="#8a929b" stroke-width="2"/>
+  <line x1="556" y1="121" x2="596" y2="182" stroke="#8a929b" stroke-width="2"/>
+  <text x="540" y="262" text-anchor="middle" font-size="11" fill="#4a5159">只剩「運算子 + 兩個運算元」</text>
+  <text x="540" y="282" text-anchor="middle" font-size="10.5" fill="#8a929b" font-family="ui-monospace, Consolas, monospace">BinOp('+', Num(2), Num(3))</text>
+</svg>
+        <figcaption>圖 42-4:同一句 <code>2 + 3</code>,剖析樹(左)忠實保留 expr/term/factor 每一層推導,連標點都在;AST(右)把那些「只為解析而存在」的鷹架全拆掉,只留意義。後續所有階段——語意分析、最佳化、產生碼——用的都是右邊這棵精煉的 AST。</figcaption>
+      </div>
+
+      <h3>歧義:同一句話,兩種解讀</h3>
+      <p>
+        文法最怕一個東西:<strong>歧義(ambiguity)</strong>——同一串 token,能長出<em>不只一棵</em>合法的剖析樹。
+        最惡名昭彰的例子,是程式語言裡的「懸盪 else(dangling else)」:
+      </p>
+      <pre><code class="language-text">if (a) if (b) x = 1; else x = 2;</code></pre>
+      <p>
+        那個 <code>else</code> 到底是配給<em>外層</em>的 <code>if (a)</code>,還是<em>內層</em>的 <code>if (b)</code>?
+        兩種解讀對應兩棵不同的樹,語意天差地遠。一個歧義的文法,等於沒把話講清楚,parser 無所適從。
+        解法有幾種:(1) <strong>改寫文法</strong>消除歧義;(2) 訂一條<strong>消歧規則</strong>(主流語言都規定「else 配最近的 if」);
+        (3) 強迫加大括號。我們前面那個算術文法之所以「漂亮」,正因為它<strong>無歧義</strong>:優先序與結合性都被分層與重複結構釘死了,
+        每個運算式只有唯一一棵樹。
+      </p>
+
+      <h3>遞迴下降:把文法直接變成程式</h3>
+      <p>
+        現在進入最迷人的部分:parser 到底<em>怎麼</em>從一排 token 長出樹?最直覺、也最常被手寫編譯器採用的方法,叫
+        <strong>遞迴下降(recursive descent)</strong>。它的核心點子簡單到像作弊:
+      </p>
+      <blockquote>
+        文法裡的每一條規則,寫成一個函式。規則之間互相引用,函式就互相呼叫(包括遞迴)。
+      </blockquote>
+      <p>
+        對應關係機械到近乎自動:規則的「選項 <code>|</code>」變成 <code>if</code> 分支;「重複 <code>*</code>」變成 <code>while</code> 迴圈;
+        「引用另一條規則」變成函式呼叫;「自我引用」變成遞迴。把前面那個 BNF 文法一條一條翻成 Python:
+      </p>
+      <pre><code class="language-python">class Parser:
+    def __init__(self, tokens):
+        self.toks = tokens
+        self.i = 0
+
+    def peek(self):                          # 看目前 token(不前進)
+        return self.toks[self.i]
+
+    def eat(self, val=None):                 # 吃掉目前 token,前進
+        tok = self.toks[self.i]
+        if val is not None and tok[1] != val:
+            raise SyntaxError(f"預期 {val!r},卻看到 {tok[1]!r}")
+        self.i += 1
+        return tok
+
+    def parse_expr(self):                    # &lt;expr&gt; ::= &lt;term&gt; (("+"|"-") &lt;term&gt;)*
+        node = self.parse_term()
+        while self.peek()[1] in ("+", "-"):  # 「重複」→ while
+            op = self.eat()[1]
+            node = BinOp(op, node, self.parse_term())   # 左結合的關鍵(見下)
+        return node
+
+    def parse_term(self):                    # &lt;term&gt; ::= &lt;factor&gt; (("*"|"/") &lt;factor&gt;)*
+        node = self.parse_factor()
+        while self.peek()[1] in ("*", "/"):
+            op = self.eat()[1]
+            node = BinOp(op, node, self.parse_factor())
+        return node
+
+    def parse_factor(self):                  # &lt;factor&gt; ::= NUMBER | ID | "(" &lt;expr&gt; ")"
+        kind, val = self.peek()
+        if kind == "NUMBER":
+            self.eat();  return Num(val)
+        if kind == "ID":
+            self.eat();  return Var(val)
+        if val == "(":
+            self.eat("(")
+            node = self.parse_expr()         # 遞迴!括號裡又是完整的 expr
+            self.eat(")")
+            return node
+        raise SyntaxError(f"非預期的 token:{(kind, val)}")</code></pre>
+      <p>
+        三個函式,對應三條規則,長得幾乎跟文法一模一樣。<code>parse_factor</code> 在遇到括號時回頭呼叫 <code>parse_expr</code>——
+        這個「下降到底、又繞回頂端」的迴圈,就是「<strong>遞迴</strong>下降」名字的由來。
+      </p>
+
+      <h4>優先序與結合性,是怎麼「自動」對的</h4>
+      <p>
+        這是遞迴下降最美的地方。我們從沒寫過任何一條「乘法優先」的特判,但它就是對了。為什麼?
+      </p>
+      <div class="diagram">
+<svg viewBox="0 0 720 250" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <rect x="60" y="30" width="600" height="190" rx="14" fill="#eef6f4" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="360" y="56" text-anchor="middle" font-size="13" font-weight="800" fill="#2f6f6a">parse_expr ── 處理 + 與 −(優先序最低)</text>
+  <rect x="120" y="70" width="480" height="130" rx="12" fill="#f5f0fe" stroke="#8b5cf6" stroke-width="2"/>
+  <text x="360" y="96" text-anchor="middle" font-size="13" font-weight="800" fill="#8b5cf6">parse_term ── 處理 * 與 /(優先序較高)</text>
+  <rect x="190" y="112" width="340" height="74" rx="10" fill="#fbeee6" stroke="#b4541f" stroke-width="2"/>
+  <text x="360" y="138" text-anchor="middle" font-size="13" font-weight="800" fill="#b4541f">parse_factor ── 數字、變數、( )</text>
+  <text x="360" y="164" text-anchor="middle" font-size="11" fill="#4a5159">最內層 = 最先被解析 = 最先被算</text>
+
+  <text x="690" y="125" font-size="11" fill="#8a929b" transform="rotate(90 690 125)">越裡層,優先序越高</text>
+</svg>
+        <figcaption>圖 42-5:優先序「長」進了函式的呼叫層次裡。<code>parse_expr</code> 想拆出一個運算元,得先呼叫 <code>parse_term</code>;<code>parse_term</code> 又得先呼叫 <code>parse_factor</code>。於是越「裡層」的運算子(乘除)越早被綁成一個完整子樹,自然就「先算」。優先序不是寫死的規則,而是文法分層的副產品。</figcaption>
+      </div>
+      <p>
+        <strong>結合性(associativity)</strong>也藏在程式碼的一個小細節裡。看 <code>parse_expr</code> 的迴圈:
+        每抓到一個新的 <code>+</code>,我們是把「目前已建好的整棵樹」當成<strong>新運算子的左子樹</strong>
+        (<code>node = BinOp(op, node, ...)</code>)。於是 <code>1 - 2 - 3</code> 會長成 <code>(1 - 2) - 3</code> 而非 <code>1 - (2 - 3)</code>——
+        這就是<strong>左結合</strong>,也正是減法該有的行為(答案是 −4,不是 2)。
+        如果你想要<strong>右結合</strong>(像次方 <code>2 ** 3 ** 2</code> 該是 <code>2 ** (3 ** 2)</code>),
+        只要把迴圈改成<em>遞迴</em>呼叫自己即可——這是本章一道練習。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">遞迴下降的精髓</span>
+          <p>把語法的三件難事——<strong>巢狀</strong>(靠遞迴)、<strong>優先序</strong>(靠函式分層)、<strong>結合性</strong>(靠迴圈 vs 遞迴)——
+          全部交給「函式之間的呼叫結構」去自動處理,而不是寫一堆特判。你只要把文法設計對,parser 幾乎是「抄」出來的。
+          這就是為什麼幾乎每一本編譯器教材、每一個真實語言(GCC、Clang、V8、Rust 的 parser)都先教、且大量採用遞迴下降。</p>
+        </div>
+      </div>
+
+      <h3>LL 與 LR:由上而下 vs 由下而上</h3>
+      <p>
+        遞迴下降屬於一個更大的家族,叫 <strong>LL 剖析(由上而下,top-down)</strong>:從文法的「起始符號」出發,
+        一路往下猜「接下來該套哪條規則」,像在填一棵從根長到葉的樹。它直覺、好手寫、錯誤訊息友善,
+        缺點是對付某些文法(尤其「左遞迴」)需要先改寫。
+      </p>
+      <p>
+        另一派是 <strong>LR 剖析(由下而上,bottom-up)</strong>:不先猜,而是把 token 一個個堆到一個堆疊上,
+        一旦堆頂湊出了某條規則的右側,就把它「歸約(reduce)」成左側的語法成分,像從葉子往根組裝。
+        它能處理的文法範圍更廣、更適合機器自動生成,但人類難手寫、出錯時訊息也較難懂。
+        <code>yacc</code>、<code>bison</code> 這類「parser 產生器」走的就是 LR 路線。
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th></th><th>LL(由上而下)</th><th>LR(由下而上)</th></tr></thead>
+        <tbody>
+          <tr><td>方向</td><td>從根往葉(先猜規則)</td><td>從葉往根(先堆再歸約)</td></tr>
+          <tr><td>典型做法</td><td>遞迴下降(常手寫)</td><td>表格驅動(常用工具生成)</td></tr>
+          <tr><td>代表工具</td><td>ANTLR、手刻 parser</td><td>yacc / bison</td></tr>
+          <tr><td>優點</td><td>好懂、好寫、錯誤訊息清楚</td><td>能吃更多文法、效率高</td></tr>
+          <tr><td>痛點</td><td>需處理左遞迴</td><td>難手寫、衝突難除錯</td></tr>
+        </tbody>
+      </table></div>
+      <p>一句話總結:<strong>LL 是「邊讀邊猜這是什麼」,LR 是「先收集材料、湊齊了再說這是什麼」。</strong>本章手寫的,是 LL。</p>
+
+      <h2>前端第三站 — 語意分析:符號表、型別、作用域</h2>
+      <p>
+        語法分析只保證程式<strong>「合文法」</strong>,但合文法不代表<strong>「有意義」</strong>。
+        <code>x = y + 1</code> 在文法上完美無瑕,但如果 <code>y</code> 從沒被宣告、或者 <code>y</code> 是個字串不能加 1,
+        這程式就是錯的。抓出這類「文法對、意義錯」的問題,是<strong>語意分析(semantic analysis)</strong>的工作。
+        它走訪 AST,做三件大事:建符號表、解析作用域、做型別檢查。
+      </p>
+
+      <h3>符號表:程式裡每個名字的戶口名簿</h3>
+      <p>
+        程式裡滿是「名字」:變數名、函式名、型別名。每個名字背後,編譯器都得記住一串資訊——
+        它是什麼型別?是區域變數還是全域?住在記憶體哪一格(或哪個段、哪個暫存器)?
+        這本「名字的戶口名簿」就是<strong>符號表(symbol table)</strong>,本質上是一個從「名字」對應到「屬性」的查找結構
+        (通常就是第 29 章的雜湊表)。
+      </p>
+
+      <h3>作用域:同一個名字,在不同地方指不同東西</h3>
+      <p>
+        麻煩的是,同一個名字 <code>x</code>,在不同的<strong>作用域(scope)</strong>裡可能指完全不同的東西:
+        函式裡的區域 <code>x</code> 會<em>遮蔽(shadow)</em>外層的全域 <code>x</code>。所以符號表通常是<strong>一疊</strong>的:
+        進入一個新作用域(函式、區塊)就疊一張新表,查名字時由內往外一層層找,離開作用域就把那張表丟掉。
+        這個「疊起來、由內往外查」的結構,你應該覺得眼熟——又是堆疊。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 320" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- code on left -->
+  <rect x="20" y="30" width="300" height="260" rx="10" fill="#1f2328"/>
+  <text x="36" y="58" font-size="12.5" fill="#cfe6e2" font-family="ui-monospace, Consolas, monospace">int g = 10;          </text>
+  <text x="36" y="80" font-size="11" fill="#6b7682" font-family="ui-monospace, Consolas, monospace"># 全域作用域</text>
+  <text x="36" y="108" font-size="12.5" fill="#e8c39e" font-family="ui-monospace, Consolas, monospace">void f(int a) {</text>
+  <text x="36" y="130" font-size="12.5" fill="#a7e0d8" font-family="ui-monospace, Consolas, monospace">    int x = a + g; </text>
+  <text x="36" y="152" font-size="11" fill="#6b7682" font-family="ui-monospace, Consolas, monospace">    # f 的作用域</text>
+  <text x="36" y="180" font-size="12.5" fill="#c9b6f5" font-family="ui-monospace, Consolas, monospace">    if (x &gt; 0) {</text>
+  <text x="36" y="202" font-size="12.5" fill="#c9b6f5" font-family="ui-monospace, Consolas, monospace">        int x = 99;</text>
+  <text x="36" y="224" font-size="11" fill="#6b7682" font-family="ui-monospace, Consolas, monospace">        # 區塊作用域(遮蔽外層 x)</text>
+  <text x="36" y="248" font-size="12.5" fill="#c9b6f5" font-family="ui-monospace, Consolas, monospace">    }</text>
+  <text x="36" y="270" font-size="12.5" fill="#e8c39e" font-family="ui-monospace, Consolas, monospace">}</text>
+
+  <!-- scope stack on right -->
+  <text x="520" y="28" text-anchor="middle" font-size="12" font-weight="800" fill="#8a929b">符號表堆疊(查名字時由上往下找)</text>
+  <rect x="380" y="40" width="290" height="58" rx="8" fill="#ede9fe" stroke="#8b5cf6" stroke-width="2"/>
+  <text x="394" y="60" font-size="11" font-weight="800" fill="#8b5cf6">區塊作用域(最內)</text>
+  <text x="394" y="80" font-size="11" fill="#1f2328" font-family="ui-monospace, Consolas, monospace">x → int(=99) ← 遮蔽外層</text>
+  <text x="640" y="68" text-anchor="end" font-size="10" fill="#8b5cf6">↑ 先查這裡</text>
+
+  <rect x="380" y="110" width="290" height="74" rx="8" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="394" y="130" font-size="11" font-weight="800" fill="#2f6f6a">f 的作用域</text>
+  <text x="394" y="150" font-size="11" fill="#1f2328" font-family="ui-monospace, Consolas, monospace">a → int(參數)</text>
+  <text x="394" y="170" font-size="11" fill="#1f2328" font-family="ui-monospace, Consolas, monospace">x → int(區域)</text>
+
+  <rect x="380" y="196" width="290" height="58" rx="8" fill="#f6e7dd" stroke="#b4541f" stroke-width="2"/>
+  <text x="394" y="216" font-size="11" font-weight="800" fill="#b4541f">全域作用域(最外)</text>
+  <text x="394" y="236" font-size="11" fill="#1f2328" font-family="ui-monospace, Consolas, monospace">g → int(=10),f → 函式</text>
+  <text x="640" y="244" text-anchor="end" font-size="10" fill="#b4541f">↓ 最後查這裡</text>
+
+  <text x="520" y="282" text-anchor="middle" font-size="10.5" fill="#4a5159">查 x:先看最內層 → 找到 99,停。查 g:一路找到最外層。</text>
+</svg>
+        <figcaption>圖 42-6:作用域是一疊符號表。進入函式、區塊就疊一張新表;查一個名字時由最內層往外找,找到就停——這自動實現了「內層遮蔽外層」。離開作用域,那張表就被丟掉。又一次,堆疊的後進先出恰好對上「最後進入的作用域最先離開」。</figcaption>
+      </div>
+
+      <h3>型別檢查:把錯誤擋在執行之前</h3>
+      <p>
+        語意分析最重要的一項,是<strong>型別檢查(type checking)</strong>——呼應第 9 章談過的型別系統。
+        編譯器走訪 AST,替每個運算式推導出它的型別,並檢查每個運算「合不合理」:
+        <code>整數 + 整數</code> 沒問題、<code>字串 + 整數</code> 在多數語言是錯誤、把布林值拿去當陣列索引也是錯誤。
+        這正是第 9 章<strong>靜態型別(static typing)</strong>的價值所在:很多 bug 在<em>編譯期</em>就被攔下,
+        根本不必等到程式跑起來才爆炸。型別檢查靠的就是 AST + 符號表:從符號表查出每個變數的型別,
+        由葉往根逐步「算出」整棵樹的型別,一發現矛盾就報錯。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">語法錯誤 vs 語意錯誤</span>
+          <p><strong>語法錯誤(syntax error)</strong>是「話沒講通」:<code>x = + ;</code> 連文法都不合,parser 那一關就過不了。
+          <strong>語意錯誤(semantic error)</strong>是「話講通了但沒道理」:<code>x = y + 1</code> 文法完美,
+          但 <code>y</code> 沒宣告、或型別不對。前者是 parser 的職責,後者是語意分析的職責。
+          你平常看到的「<em>undefined variable</em>」「<em>type mismatch</em>」錯誤訊息,絕大多數都來自這一站。</p>
+        </div>
+      </div>
+
+      <h2>中端 — 中間表示(IR)與最佳化</h2>
+      <p>
+        前端結束,我們手上有一棵帶著完整型別資訊的 AST。理論上可以直接從這裡產生目標碼(第 23 章的玩具就是這麼幹的)。
+        但真實編譯器會先把 AST 降階成一種更「平」、更接近機器、卻又不綁定任何特定 CPU 的形式——
+        <strong>中間表示(intermediate representation, IR)</strong>,然後在 IR 上動最佳化的刀。
+      </p>
+
+      <h3>為什麼要有 IR?</h3>
+      <p>
+        理由跟第 23 章「為什麼要 VM」如出一轍,只是用在編譯器內部:<strong>解耦</strong>。
+        AST 太貼近來源語言(每種語言的 AST 長得都不一樣),機器碼又太貼近目標 CPU。
+        在中間插一層中性的 IR,讓最佳化器寫一次、所有語言與所有機器共用。
+        這就是圖 42-2 裡「中端」存在的理由,也是 LLVM 整個生態的地基——大家都翻成 LLVM IR,共享同一套最佳化。
+      </p>
+
+      <h3>三位址碼:IR 的經典長相</h3>
+      <p>
+        IR 有很多種形式,最經典、最好懂的一種叫<strong>三位址碼(three-address code, TAC)</strong>。
+        規則很簡單:<em>每一條指令最多只有一個運算子、最多三個位址</em>(兩個來源、一個目的),
+        形如 <code>結果 = 運算元1 運算 運算元2</code>。複雜運算式被拆成一串這種小步驟,中間結果存進編譯器自動產生的
+        <strong>臨時變數(temporary)</strong> <code>t1</code>、<code>t2</code>……。看 <code>x = a + b * 2</code> 變成 TAC:
+      </p>
+      <pre><code class="language-text">t1 = b * 2      // 先算乘法,結果放進臨時變數 t1
+t2 = a + t1     // 再算加法
+x  = t2         // 存回 x</code></pre>
+      <p>
+        為什麼要拆這麼碎?因為「攤平、規律、每步只做一件事」的形式,最適合機器分析與改寫。
+        接下來的每一種最佳化,都是在這種規律的指令串(或它的圖形版本)上動手。
+      </p>
+
+      <h3>最佳化巡禮:用更少的力氣,做一樣的事</h3>
+      <p>
+        <strong>最佳化(optimization)</strong>的鐵律只有一條:<strong>可以改快、改小,但行為絕不能變</strong>。
+        它是一門「在保證等價的前提下重寫程式」的藝術。我們看四個最經典、你一定會反覆遇到的招式,每招給你 before / after。
+      </p>
+
+      <h4>① 常數摺疊(constant folding)</h4>
+      <p>編譯期就能算出來的常數運算,何必留到執行期?直接先算好:</p>
+      <pre><code class="language-text">// before                 // after
+int sec = 60 * 60 * 24;    int sec = 86400;   // 編譯時就乘好了</code></pre>
+      <p>它常跟<strong>常數傳播(constant propagation)</strong>聯手:如果 <code>x = 5</code> 之後 <code>x</code> 沒被改過,就把後面用到 <code>x</code> 的地方都換成 <code>5</code>,往往又能再觸發新一輪摺疊。</p>
+
+      <h4>② 死碼消除(dead code elimination)</h4>
+      <p>算了卻沒人用的結果、永遠到不了的程式碼,通通刪掉:</p>
+      <pre><code class="language-text">// before                          // after
+int x = expensive();   // 算了但      return a + b;
+int y = a + b;         // 後面只用 y
+return y;              // x 是死碼 → 整行刪掉,連同 expensive() 的呼叫
+                       // (前提:它沒有副作用)</code></pre>
+      <p>注意那句但書:只有當 <code>expensive()</code> <strong>沒有副作用</strong>(不印東西、不改全域狀態)時才能安全刪除——這正是最佳化最考驗功力的地方:判斷「刪掉它,行為真的不變嗎?」</p>
+
+      <h4>③ 共同子運算式消除(common subexpression elimination, CSE)</h4>
+      <p>同一個運算式算了兩遍?算一次、存起來、重用:</p>
+      <pre><code class="language-text">// before                          // after
+a = (x + y) * 2;                   t = x + y;        // x+y 只算一次
+b = (x + y) * 3;                   a = t * 2;
+                                   b = t * 3;</code></pre>
+
+      <h4>④ 迴圈最佳化:迴圈不變式外提(loop-invariant code motion)</h4>
+      <p>迴圈裡每圈都算、但結果根本不變的東西,搬到迴圈外面只算一次。迴圈跑 <code>n</code> 次,就省下 <code>n−1</code> 次:</p>
+      <pre><code class="language-text">// before                          // after
+for i in range(n):                 t = a * b        # 跟 i 無關 → 提到迴圈外
+    arr[i] = a * b + i             for i in range(n):
+                                       arr[i] = t + i</code></pre>
+      <p>
+        迴圈是程式的熱點,所以迴圈最佳化的回報最大,招式也最多(還有<strong>強度削減</strong>:把昂貴的乘法換成便宜的加法;
+        <strong>迴圈展開</strong>:減少跳躍與判斷的次數)。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">最佳化是「等價變換」的科學</span>
+          <p>每一種最佳化,骨子裡都是同一句話:<strong>找出一個跑得更快、但行為完全等價的寫法,然後替換。</strong>
+          難的從來不是「想到更快的寫法」,而是<strong>嚴格證明「行為真的沒變」</strong>——
+          有沒有副作用?有沒有別名(alias)?有沒有例外路徑?這需要編譯器先做大量<strong>分析(analysis)</strong>
+          (資料流分析、控制流圖、別名分析),才敢動手<strong>變換(transformation)</strong>。
+          分析在前、變換在後,是所有最佳化的鐵律。而這些分析,大量用到第 30 章的圖論與第 32 章的動態規劃。</p>
+        </div>
+      </div>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 250" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="180" y="28" text-anchor="middle" font-size="13" font-weight="800" fill="#8a929b">摺疊前的 AST</text>
+  <text x="540" y="28" text-anchor="middle" font-size="13" font-weight="800" fill="#2f6f6a">摺疊後的 AST</text>
+  <line x1="360" y1="40" x2="360" y2="230" stroke="#e3e7ea" stroke-width="1.5" stroke-dasharray="4 4"/>
+
+  <!-- before: + ( * (60,60), x ) -->
+  <circle cx="180" cy="70" r="22" fill="#2f6f6a"/><text x="180" y="77" text-anchor="middle" font-size="18" font-weight="800" fill="#fff">+</text>
+  <circle cx="110" cy="150" r="22" fill="#8b5cf6"/><text x="110" y="157" text-anchor="middle" font-size="18" font-weight="800" fill="#fff">*</text>
+  <circle cx="250" cy="150" r="20" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/><text x="250" y="156" text-anchor="middle" font-size="14" font-weight="700" fill="#1f2328">x</text>
+  <circle cx="70" cy="220" r="18" fill="#f6e7dd" stroke="#b4541f"/><text x="70" y="226" text-anchor="middle" font-size="13" font-weight="700" fill="#1f2328">60</text>
+  <circle cx="150" cy="220" r="18" fill="#f6e7dd" stroke="#b4541f"/><text x="150" y="226" text-anchor="middle" font-size="13" font-weight="700" fill="#1f2328">60</text>
+  <line x1="165" y1="86" x2="123" y2="134" stroke="#8a929b" stroke-width="2"/>
+  <line x1="195" y1="86" x2="238" y2="135" stroke="#8a929b" stroke-width="2"/>
+  <line x1="98" y1="167" x2="78" y2="204" stroke="#8a929b" stroke-width="2"/>
+  <line x1="122" y1="167" x2="143" y2="204" stroke="#8a929b" stroke-width="2"/>
+
+  <!-- after: + (3600, x) -->
+  <circle cx="540" cy="90" r="22" fill="#2f6f6a"/><text x="540" y="97" text-anchor="middle" font-size="18" font-weight="800" fill="#fff">+</text>
+  <circle cx="470" cy="180" r="22" fill="#fbe9d8" stroke="#b4541f" stroke-width="2"/><text x="470" y="186" text-anchor="middle" font-size="14" font-weight="800" fill="#1f2328">3600</text>
+  <circle cx="610" cy="180" r="20" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/><text x="610" y="186" text-anchor="middle" font-size="14" font-weight="700" fill="#1f2328">x</text>
+  <line x1="525" y1="107" x2="484" y2="162" stroke="#8a929b" stroke-width="2"/>
+  <line x1="555" y1="107" x2="596" y2="163" stroke="#8a929b" stroke-width="2"/>
+  <text x="540" y="225" text-anchor="middle" font-size="11" fill="#4a5159">60 * 60 這棵子樹,被換成單一個 3600</text>
+</svg>
+        <figcaption>圖 42-7:常數摺疊在 AST 上的樣子。最佳化器走訪樹,發現 <code>60 * 60</code> 兩個子節點都是常數,就把整棵子樹替換成它的計算結果 <code>3600</code>。這正是本章一道練習你會親手寫的——一個遞迴走訪、就地化簡的小函式。</figcaption>
+      </div>
+
+      <h2>後端 — 程式碼產生</h2>
+      <p>
+        最後一站:把最佳化過的 IR(或 AST)翻成真正的目標碼——可能是第 23 章的 VM 命令、第 22 章的組合語言,
+        或某顆 CPU 的機器碼。第 23 章已經給過一個美麗的洞見,值得在此重述,因為它是整個程式碼產生的靈魂:
+      </p>
+      <blockquote>
+        把運算式樹用「後序走訪(先左子樹、再右子樹、最後自己)」,產生的命令順序,剛好就是正確的堆疊機程式。
+      </blockquote>
+      <p>
+        為什麼?因為堆疊機要求「運算子動作前,運算元得先在堆疊上」。後序走訪恰恰保證:輪到處理一個運算子時,
+        它的兩個子樹早已被處理、值已 push 上堆疊。優先序與順序,全都「免費」地從樹的形狀掉出來。後端真正的硬骨頭,
+        其實在針對<em>真實 CPU</em> 時才出現:
+      </p>
+      <ul>
+        <li><strong>指令選擇(instruction selection)</strong>:同一個運算,目標 CPU 可能有好幾種指令可達成,挑最划算的。</li>
+        <li><strong>暫存器配置(register allocation)</strong>:CPU 的暫存器只有少少幾個(比記憶體快上百倍),
+          但程式裡的變數成千上百。該讓哪些變數住進寶貴的暫存器、哪些只好放回記憶體?這被巧妙地轉化成第 30 章的
+          <strong>圖著色(graph coloring)</strong>問題——一個 NP-hard 難題,實務上用啟發式快速求近似解。</li>
+        <li><strong>指令排程(instruction scheduling)</strong>:重排指令順序,讓 CPU 的管線(第 21 章)不必空等。</li>
+      </ul>
+      <p>
+        堆疊機(像第 23 章的 VM、像 JVM)之所以「好產生碼」,正是因為它<em>沒有暫存器</em>——運算元位置永遠固定在堆疊頂端,
+        後端省掉了最痛的暫存器配置。這是當年設計 JVM 用堆疊架構的重要考量。代價是:堆疊機跑起來通常比暫存器機慢,
+        所以最後 JVM 還是得靠 JIT 把它再翻成用暫存器的原生碼。一切又繞回了「時機」與「取捨」。
+      </p>
+
+      <h2>大整合 — 用 Python 造一個會直譯也會編譯的小語言</h2>
+      <p>
+        理論講夠了。現在把整條前端管線串起來,做一個真的能跑的東西:一個迷你語言,支援
+        <code>+ - * /</code>、括號、變數與賦值,而且——<strong>同一棵 AST,我們既能直接直譯求值,也能編譯成第 23 章式的堆疊機碼</strong>。
+        這正好親手體現「編譯 vs 直譯,差別只在你拿 AST 來做什麼」。
+      </p>
+      <p>先定義 AST 節點。比起第 23 章用 tuple,我們這次用 <code>dataclass</code> 類別,讓每種節點有清楚的名字與欄位——這也是真實編譯器的做法:</p>
+      <pre><code class="language-python">from dataclasses import dataclass
+
+@dataclass
+class Num:    value: float                 # 數字常值,如 42
+@dataclass
+class Var:    name: str                    # 變數參照,如 x
+@dataclass
+class BinOp:  op: str; left: object; right: object   # 二元運算 a op b
+@dataclass
+class Unary:  op: str; operand: object     # 一元運算,如 -x
+@dataclass
+class Assign: name: str; expr: object      # 賦值 name = expr</code></pre>
+      <p>tokenizer 沿用前面那支 regex 版(此處不再重貼)。parser 在前面遞迴下降的基礎上,多加兩件事:支援<strong>一元負號</strong>,以及把整個程式看成<strong>一串敘述</strong>(每行一句,可以是賦值或裸運算式):</p>
+      <pre><code class="language-python">class Parser:
+    def __init__(self, tokens):
+        self.toks = tokens; self.i = 0
+    def peek(self): return self.toks[self.i]
+    def eat(self, val=None):
+        tok = self.toks[self.i]
+        if val is not None and tok[1] != val:
+            raise SyntaxError(f"預期 {val!r},卻看到 {tok[1]!r}")
+        self.i += 1; return tok
+
+    def parse_program(self):                # 程式 = 一串以換行分隔的敘述
+        stmts = []
+        while self.peek()[0] != "EOF":
+            if self.peek()[0] == "NEWLINE":
+                self.eat(); continue
+            stmts.append(self.parse_statement())
+        return stmts
+
+    def parse_statement(self):              # 敘述 = 賦值 | 裸運算式
+        # 偷看「ID =」開頭 → 賦值;否則當成運算式
+        if self.peek()[0] == "ID" and self.toks[self.i + 1][1] == "=":
+            name = self.eat()[1]; self.eat("=")
+            return Assign(name, self.parse_expr())
+        return self.parse_expr()
+
+    def parse_expr(self):                   # &lt;expr&gt; ::= &lt;term&gt; (("+"|"-") &lt;term&gt;)*
+        node = self.parse_term()
+        while self.peek()[1] in ("+", "-"):
+            op = self.eat()[1]
+            node = BinOp(op, node, self.parse_term())
+        return node
+
+    def parse_term(self):                   # &lt;term&gt; ::= &lt;factor&gt; (("*"|"/") &lt;factor&gt;)*
+        node = self.parse_factor()
+        while self.peek()[1] in ("*", "/"):
+            op = self.eat()[1]
+            node = BinOp(op, node, self.parse_factor())
+        return node
+
+    def parse_factor(self):                 # &lt;factor&gt; ::= "-" &lt;factor&gt; | NUM | ID | "(" &lt;expr&gt; ")"
+        kind, val = self.peek()
+        if val == "-":                      # 一元負號
+            self.eat(); return Unary("-", self.parse_factor())
+        if kind == "NUMBER":
+            self.eat(); return Num(val)
+        if kind == "ID":
+            self.eat(); return Var(val)
+        if val == "(":
+            self.eat("("); node = self.parse_expr(); self.eat(")")
+            return node
+        raise SyntaxError(f"非預期的 token:{(kind, val)}")
+
+def parse(code):
+    return Parser(tokenize(code)).parse_program()</code></pre>
+      <p>
+        現在有了 AST,兵分兩路。<strong>第一條路:直譯。</strong>寫一個遞迴函式走訪 AST,當場算出每個節點的值,
+        變數存在一個字典 <code>env</code> 裡(這個 <code>env</code> 就是最陽春的符號表):
+      </p>
+      <pre><code class="language-python">def interpret(stmts):
+    env = {}; result = None
+    for node in stmts:
+        result = ev(node, env)
+    return result, env
+
+def ev(node, env):
+    if isinstance(node, Num):    return node.value
+    if isinstance(node, Var):
+        if node.name not in env:
+            raise NameError(f"未定義變數 {node.name}")
+        return env[node.name]
+    if isinstance(node, Unary):  return -ev(node.operand, env)
+    if isinstance(node, Assign):
+        env[node.name] = ev(node.expr, env)      # 求值後存進環境
+        return env[node.name]
+    if isinstance(node, BinOp):
+        a, b = ev(node.left, env), ev(node.right, env)   # 後序:先算兩個子樹
+        return {"+": a + b, "-": a - b, "*": a * b, "/": a / b}[node.op]
+    raise TypeError(node)</code></pre>
+      <p>
+        <strong>第二條路:編譯。</strong>走訪同一棵 AST,但這次不求值,而是<strong>吐出第 23 章那種堆疊機 VM 命令</strong>。
+        順便用一張<strong>符號表</strong>把變數名對應到 <code>local</code> 段的索引——正是前面語意分析講的東西,在這裡真的派上用場:
+      </p>
+      <pre><code class="language-python">class Compiler:
+    def __init__(self):
+        self.code = []
+        self.symtab = {}                     # 變數名 → local 索引(符號表!)
+    def slot(self, name):                    # 查/配置變數的 local 槽位
+        if name not in self.symtab:
+            self.symtab[name] = len(self.symtab)
+        return self.symtab[name]
+    def emit(self, line): self.code.append(line)
+
+    def gen(self, node):                      # 後序走訪,產生堆疊機命令
+        if isinstance(node, Num):
+            self.emit(f"push constant {node.value}")
+        elif isinstance(node, Var):
+            self.emit(f"push local {self.slot(node.name)}")
+        elif isinstance(node, Unary):
+            self.gen(node.operand); self.emit("neg")
+        elif isinstance(node, Assign):
+            self.gen(node.expr)               # 先把右邊算到堆疊頂端
+            self.emit(f"pop local {self.slot(node.name)}")   # 再存進變數
+        elif isinstance(node, BinOp):
+            self.gen(node.left)               # 先左子樹
+            self.gen(node.right)              # 再右子樹
+            self.emit({"+":"add","-":"sub","*":"mul","/":"div"}[node.op])
+
+def compile_program(stmts):
+    c = Compiler()
+    for s in stmts:
+        c.gen(s)
+    return c.code, c.symtab</code></pre>
+      <p>為了證明這串命令是真貨,我們再寫一台 30 行的小堆疊機,<em>實際執行</em>它產生的碼——閉環驗證:</p>
+      <pre><code class="language-python">def run_vm(code, nlocals):
+    stack, local = [], [0] * nlocals
+    for line in code:
+        p = line.split(); op = p[0]
+        if op == "push" and p[1] == "constant": stack.append(int(p[2]))
+        elif op == "push" and p[1] == "local":  stack.append(local[int(p[2])])
+        elif op == "pop"  and p[1] == "local":   local[int(p[2])] = stack.pop()
+        elif op == "neg":                        stack.append(-stack.pop())
+        else:
+            y = stack.pop(); x = stack.pop()
+            stack.append({"add":x+y, "sub":x-y, "mul":x*y, "div":x//y}[op])
+    return stack, local</code></pre>
+      <p>把所有東西兜起來跑一段真正的小程式:</p>
+      <pre><code class="language-python">src = """
+x = 2 + 3 * 4
+y = (x - 2) * -5
+x + y
+"""
+
+# 路徑一:直譯
+res, env = interpret(parse(src))
+print("直譯結果:", env, "→", res)
+# 直譯結果: {'x': 14, 'y': -60} → -46
+
+# 路徑二:編譯成 VM 命令,再丟給堆疊機跑
+code, symtab = compile_program(parse(src))
+print("符號表:", symtab)              # {'x': 0, 'y': 1}
+print("\n".join(code))
+stack, local = run_vm(code, len(symtab))
+print("堆疊機結果:", local, "→ 頂端", stack[-1])
+# 堆疊機結果: [14, -60] → 頂端 -46</code></pre>
+      <p>
+        兩條路徑,<strong>同一個答案 −46</strong>。這不是巧合——它們走訪的是同一棵 AST,只是一個「邊走邊算」、
+        一個「邊走邊產生命令、之後再算」。產生的 VM 命令(部分)長這樣,跟第 23 章一脈相承:
+      </p>
+      <pre><code class="language-text">push constant 2      // x = 2 + 3 * 4
+push constant 3
+push constant 4
+mul                  // 3 * 4 先算(乘法在較深層 → 後序先碰到)
+add
+pop local 0          // 存進 x(local 0)
+push local 0         // y = (x - 2) * -5
+push constant 2
+sub
+push constant 5
+neg                  // 一元負號 → neg
+mul
+pop local 1          // 存進 y(local 1)
+push local 0         // x + y
+push local 1
+add</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">編譯與直譯,共用同一個前端</span>
+          <p>看清楚這件漂亮的事:<strong>tokenizer 和 parser,兩條路完全共用</strong>。分岔只發生在拿到 AST <em>之後</em>——
+          你要嘛當場走訪它求值(<strong>直譯器</strong>),要嘛走訪它吐出目標碼(<strong>編譯器</strong>)。
+          這就是為什麼《Crafting Interpreters》一本書能同時教你做直譯器與編譯器:前半條管線根本是同一套。
+          你剛剛用一百行出頭的 Python,把這本書的精華骨架,完整地走了一遍。</p>
+        </div>
+      </div>
+
+      <h2>程式跑起來之後:執行期系統與垃圾回收</h2>
+      <p>
+        編譯器吐出目標碼,故事還沒完——程式<em>跑起來</em>時,背後通常還有一層<strong>執行期系統(runtime system)</strong>在默默撐著:
+        它負責管理呼叫堆疊與堆積(heap)、處理例外、必要時與作業系統打交道(呼應第 24 章的記憶體管理)。
+        其中最有名的一塊,是<strong>垃圾回收(garbage collection, GC)</strong>:在 Java、Python、Go 這類語言裡,
+        你 <code>new</code> 出來的物件用完不必手動釋放,執行期會自動偵測「再也沒人指向」的記憶體並回收它,
+        替你擋掉 C/C++ 那些惡名昭彰的記憶體洩漏與野指標 bug——當然,代價是 GC 自己也要花時間與空間。
+        編譯器(產生程式)與執行期系統(支撐程式),是一體兩面:有些工作編譯器在編譯期就安排好,有些只能留到執行期才知道。
+      </p>
+
+      <h2>編譯器之美:所有 CS 在此交會</h2>
+      <p>
+        走到這裡,值得抬頭看看我們蓋了什麼。編譯器之所以是無數 CS 學生眼中「最有啟發性的一門課」,
+        是因為它像一座橋,把整本書幾乎每一個分支,都實實在在地用上了一次:
+      </p>
+      <div class="diagram">
+<svg viewBox="0 0 720 320" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- center -->
+  <circle cx="360" cy="160" r="62" fill="#2f6f6a"/>
+  <text x="360" y="153" text-anchor="middle" font-size="16" font-weight="800" fill="#fff">編譯器</text>
+  <text x="360" y="174" text-anchor="middle" font-size="10" fill="#cfe6e2">所有理論的交會點</text>
+
+  <!-- contributors -->
+  <rect x="40" y="30" width="210" height="56" rx="10" fill="#f5f0fe" stroke="#8b5cf6" stroke-width="2"/>
+  <text x="145" y="52" text-anchor="middle" font-size="12" font-weight="800" fill="#8b5cf6">形式語言理論(第十二部)</text>
+  <text x="145" y="71" text-anchor="middle" font-size="10" fill="#4a5159">正規表示式・DFA・CFG・自動機</text>
+
+  <rect x="470" y="30" width="210" height="56" rx="10" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="575" y="52" text-anchor="middle" font-size="12" font-weight="800" fill="#2f6f6a">資料結構(第 29–30 章)</text>
+  <text x="575" y="71" text-anchor="middle" font-size="10" fill="#4a5159">樹(AST)・圖(控制流)・雜湊(符號表)</text>
+
+  <rect x="40" y="234" width="210" height="56" rx="10" fill="#fbeee6" stroke="#b4541f" stroke-width="2"/>
+  <text x="145" y="256" text-anchor="middle" font-size="12" font-weight="800" fill="#b4541f">演算法(第 27–32 章)</text>
+  <text x="145" y="275" text-anchor="middle" font-size="10" fill="#4a5159">DP・貪婪・圖著色做最佳化</text>
+
+  <rect x="470" y="234" width="210" height="56" rx="10" fill="#fff" stroke="#8a929b" stroke-width="2"/>
+  <text x="575" y="256" text-anchor="middle" font-size="12" font-weight="800" fill="#4a5159">系統與型別(第 9・23・24 章)</text>
+  <text x="575" y="275" text-anchor="middle" font-size="10" fill="#4a5159">型別系統・VM・記憶體・執行期</text>
+
+  <!-- arrows pointing in -->
+  <line x1="232" y1="80"  x2="312" y2="135" stroke="#8b5cf6" stroke-width="2" marker-end="url(#ba)"/>
+  <line x1="490" y1="80"  x2="408" y2="135" stroke="#2f6f6a" stroke-width="2" marker-end="url(#ba)"/>
+  <line x1="232" y1="244" x2="312" y2="188" stroke="#b4541f" stroke-width="2" marker-end="url(#ba)"/>
+  <line x1="490" y1="244" x2="408" y2="188" stroke="#8a929b" stroke-width="2" marker-end="url(#ba)"/>
+  <defs><marker id="ba" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/></marker></defs>
+</svg>
+        <figcaption>圖 42-8:編譯器是整個 CS 的縮影。詞法/語法借用<strong>形式語言理論</strong>;AST、控制流圖、符號表是<strong>樹、圖、雜湊表</strong>的實戰;最佳化與暫存器配置靠<strong>動態規劃、貪婪、圖著色</strong>;型別檢查與執行期則牽動<strong>型別系統與作業系統</strong>。學編譯器,等於把整本書複習了一遍——而且是用「動手蓋出一個能跑的東西」的方式。</figcaption>
+      </div>
+      <p>
+        這就是為什麼,儘管你這輩子可能不會「從零寫一個 C 編譯器」,這門課依然被公認為計算機科學教育的試金石。
+        它逼你把抽象的理論,變成一行行真的能跑的程式碼;它讓你看見「翻譯」這個母題,如何把整座抽象高塔黏在一起。
+        當你下次按下「執行」,你會知道:從你打的那行字,到 CPU 裡流動的電子,中間每一道工序——切詞、建樹、查表、最佳化、產生碼——
+        都不是魔法,而是一群「規律的笨」程式,接力完成的一場精密翻譯。
+      </p>
+
+      <div class="callout note"><div class="ico">📚</div><div class="body">
+<span class="c-title">想看另一種視角?</span><p>編譯器/直譯器這個題目,SICP 第 4 章從「在 Scheme 裡實作 Scheme」的角度挑戰它:<strong>後設循環直譯器(metacircular evaluator)</strong> 只需幾十行就讓語言自己解釋自己,本章每個前端階段都能在那裡找到直接對應;第 5 章再把它「攤平」成顯式控制求值器,對應到暫存器機器架構。延伸閱讀
+<a href="83-sicp-metacircular.html">第 77 章 · 後設循環直譯器</a>。</p></div></div>
+
+      <h2>動手練習</h2>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 42.1 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>替一個迷你語言寫 tokenizer。這個語言的 token 集是:關鍵字 <code>if</code>/<code>else</code>/<code>while</code>、
+          識別字、整數、以及符號 <code>{ } ( ) ; = &lt; &gt; + -</code>。
+          讓 <code>tokenize("if (x &gt; 0) y = 1;")</code> 切出正確的 token 串(空白要丟掉,關鍵字要跟普通識別字區分開)。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>策略:先用「合併大 regex」切出所有 token,把字母開頭的一律當識別字切出來,<strong>切完再查一張關鍵字表</strong>,
+              把剛好是保留字的改標成關鍵字。這樣 <code>whileLoop</code> 就不會被誤判成關鍵字 <code>while</code> + 識別字 <code>Loop</code>。</p>
+              <pre><code class="language-python">import re
+
+KEYWORDS = {"if", "else", "while"}
+SPEC = [
+    ("ID",       r"[A-Za-z_]\w*"),
+    ("NUMBER",   r"\d+"),
+    ("SYM",      r"[{}();=&lt;&gt;+\-]"),
+    ("SKIP",     r"[ \t]+"),
+    ("MISMATCH", r"."),
+]
+_master = re.compile("|".join(f"(?P&lt;{n}&gt;{p})" for n, p in SPEC))
+
+def tokenize(code):
+    out = []
+    for m in _master.finditer(code):
+        kind, val = m.lastgroup, m.group()
+        if kind == "SKIP":
+            continue
+        if kind == "MISMATCH":
+            raise SyntaxError(f"非法字元 {val!r}")
+        if kind == "ID" and val in KEYWORDS:   # 切完再查關鍵字表
+            kind = "KEYWORD"
+        if kind == "NUMBER":
+            val = int(val)
+        out.append((kind, val))
+    return out
+
+print(tokenize("if (x &gt; 0) y = 1;"))
+# [('KEYWORD','if'), ('SYM','('), ('ID','x'), ('SYM','&gt;'), ('NUMBER',0),
+#  ('SYM',')'), ('ID','y'), ('SYM','='), ('NUMBER',1), ('SYM',';')]
+print(tokenize("whileLoop = 3"))
+# [('ID','whileLoop'), ('SYM','='), ('NUMBER',3)]  ← while 沒被誤切!</code></pre>
+              <p>注意 <code>SPEC</code> 裡 <code>ID</code> 排在 <code>NUMBER</code> 前、<code>MISMATCH</code> 排最後;
+              <code>SYM</code> 字元類別裡的 <code>-</code> 要放結尾(或跳脫)以免被當成範圍。「先當識別字、再查表升級成關鍵字」是真實 lexer 的標準手法。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 42.2 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>用 BNF 寫一個文法,描述「逗號分隔的整數清單,外面包一對中括號」,例如 <code>[]</code>、<code>[1]</code>、<code>[1, 2, 3]</code> 都合法,
+          但 <code>[1,]</code>、<code>[1 2]</code>、<code>[1,,2]</code> 不合法。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>關鍵是把「空清單」與「非空清單」分開處理,並用「第一個元素 + (逗號 + 元素)的重複」來避免結尾多餘的逗號:</p>
+              <pre><code class="language-text">&lt;list&gt;     ::= "[" "]"                       // 空清單
+             | "[" &lt;items&gt; "]"               // 非空清單
+&lt;items&gt;    ::= NUMBER ("," NUMBER)*           // 一個數字,後面跟「,數字」零或多次
+NUMBER     ::= [0-9]+</code></pre>
+              <p>為什麼這樣就排除了 <code>[1,]</code>?因為 <code>("," NUMBER)*</code> 規定逗號後面<strong>一定</strong>得跟一個 NUMBER,
+              不可能出現「逗號後面直接是 <code>]</code>」。<code>[1 2]</code> 也不合法,因為兩個數字之間沒有逗號,
+              <code>&lt;items&gt;</code> 拆完第一個 <code>1</code> 後,下一個不是 <code>,</code> 也不是 <code>]</code>,卡住。
+              這個「頭 + 重複的(分隔符 + 項)」模式,是描述各種「分隔清單」的萬用範本(函式引數、陣列元素都用它)。</p>
+              <p>進階思考:如果改用 <code>&lt;items&gt; ::= NUMBER | NUMBER "," &lt;items&gt;</code>(右遞迴)行不行?也行,而且這版更純粹地展示了 CFG 的遞迴本質。試著畫出 <code>[1, 2, 3]</code> 在兩種寫法下的剖析樹,比較它們的形狀。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 42.3 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>不靠程式,純手動,把運算式 <code>a * (b + c) - d / 2</code> 畫成 AST(抽象語法樹)。
+          標出哪個運算子在樹根(代表最後才算)。再依後序走訪,寫出它對應的堆疊機命令序列。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>先想優先序與結合性:<code>*</code>、<code>/</code> 高於 <code>+</code>、<code>-</code>;括號逼 <code>b + c</code> 先算;
+              最外層是減法,所以 <strong><code>-</code> 在樹根</strong>。樹長這樣(用縮排表示階層):</p>
+              <pre><code class="language-text">          -            ← 樹根(最後算)
+        /   \
+       *     /
+      / \   / \
+     a   +  d  2
+        / \
+       b   c</code></pre>
+              <p>文字版 AST:<code>BinOp('-', BinOp('*', a, BinOp('+', b, c)), BinOp('/', d, 2))</code>。
+              後序走訪(先左、再右、最後自己)產生命令:</p>
+              <pre><code class="language-text">push a          // 左子樹 a * (b + c) 開始
+push b
+push c
+add             // b + c
+mul             // a * (b+c)
+push d          // 右子樹 d / 2 開始
+push constant 2
+div             // d / 2
+sub             // 最後:左 - 右</code></pre>
+              <p>檢查:命令序列裡,每個運算子出現時,它要的兩個運算元都已經 push 在堆疊上了——這就是後序走訪「免費」保證的順序正確性。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 42.4 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>擴充本章的遞迴下降 parser,加入<strong>次方運算子 <code>**</code></strong>。它的優先序<em>高於</em>乘除,而且是
+          <strong>右結合</strong>:<code>2 ** 3 ** 2</code> 要解析成 <code>2 ** (3 ** 2) = 512</code>,而不是 <code>(2 ** 3) ** 2 = 64</code>。
+          (提示:在 <code>term</code> 與 <code>factor</code> 之間插一層新規則 <code>power</code>,並讓它用<em>遞迴</em>而非迴圈來達成右結合。)</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>右結合的祕訣:把「右運算元」交給<strong>遞迴呼叫自己</strong>(而不是像左結合那樣用 while 把樹往左掛)。
+              新文法層:<code>power ::= factor ("**" power)?</code>——注意右側又是 <code>power</code>,這個右遞迴正是右結合的來源。</p>
+              <pre><code class="language-python">    def parse_term(self):                 # term 現在呼叫 power(不再直接呼叫 factor)
+        node = self.parse_power()
+        while self.peek()[1] in ("*", "/"):
+            op = self.eat()[1]
+            node = BinOp(op, node, self.parse_power())
+        return node
+
+    def parse_power(self):                # power ::= factor ("**" power)?  ← 右結合
+        node = self.parse_factor()
+        if self.peek()[1] == "**":
+            self.eat()
+            node = BinOp("**", node, self.parse_power())   # 右遞迴!
+        return node</code></pre>
+              <p>(別忘了 tokenizer 要先能切出 <code>**</code>:在符號規則裡加 <code>\*\*</code>,且放在單一 <code>*</code> 之前,
+              以「最長匹配」原則優先切兩個星號。)驗證:</p>
+              <pre><code class="language-text">2 ** 3 ** 2   →  BinOp('**', 2, BinOp('**', 3, 2))   = 512   ✓ 右結合
+2 ** 3 * 2    →  BinOp('*', BinOp('**', 2, 3), 2)    = 16    ✓ ** 比 * 先</code></pre>
+              <p>對照本章 <code>parse_expr</code> 的<strong>迴圈</strong>(左結合)與這裡的<strong>遞迴</strong>(右結合),
+              你就徹底掌握了「結合性是怎麼用程式碼結構決定的」這件事。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 42.5 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>寫一個<strong>常數摺疊</strong>最佳化函式 <code>fold(node)</code>:它走訪本章的 AST,
+          把「兩個運算元都是常數」的子樹,就地換成計算好的單一 <code>Num</code> 節點。
+          例如 <code>2 + 3 * 4 + x</code> 摺疊後應變成 <code>14 + x</code>(即 <code>BinOp('+', Num(14), Var('x'))</code>)。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>標準做法是<strong>後序遞迴</strong>:先把左右子樹各自摺疊好,<em>再</em>看「摺完之後」兩邊是不是都變成了
+              <code>Num</code>——若是,就當場算出來、回傳一個新的 <code>Num</code>;否則回傳一個子樹已摺疊過的新節點。</p>
+              <pre><code class="language-python">def fold(node):
+    if isinstance(node, BinOp):
+        l, r = fold(node.left), fold(node.right)      # 先遞迴摺疊兩邊
+        if isinstance(l, Num) and isinstance(r, Num): # 兩邊都成了常數 → 直接算
+            v = {"+": l.value + r.value, "-": l.value - r.value,
+                 "*": l.value * r.value, "/": l.value / r.value}[node.op]
+            return Num(v)
+        return BinOp(node.op, l, r)                    # 否則保留結構(但子樹已摺疊)
+    if isinstance(node, Unary):
+        o = fold(node.operand)
+        if isinstance(o, Num):
+            return Num(-o.value)
+        return Unary(node.op, o)
+    return node                                        # Num / Var 葉節點原樣回傳
+
+tree = parse("2 + 3 * 4 + x")[0]
+print(fold(tree))
+# BinOp(op='+', left=Num(value=14), right=Var(name='x'))   ← 14 + x</code></pre>
+              <p>體會「分析在前、變換在後」:我們必須先(遞迴地)把子樹算到底,才能判斷一個節點能不能摺。
+              這個迷你函式,跟真實編譯器裡的常數摺疊,骨架完全相同——差別只在真實版還要小心溢位、浮點誤差與副作用。
+              進階:摺疊後接著做一輪<strong>死碼消除</strong>(例如 <code>x * 0</code> 直接變 <code>0</code>、<code>x + 0</code> 直接變 <code>x</code>),
+              叫做<strong>代數化簡(algebraic simplification)</strong>,試著加進 <code>fold</code> 裡。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 42.6 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>把本章的小語言<strong>完整跑通</strong>:從零組合 tokenizer、parser、直譯器、編譯器與堆疊機,
+          讓它能執行一段含<strong>變數、賦值、括號、一元負號</strong>的多行程式,並驗證「直譯」與「編譯後在堆疊機上執行」
+          兩條路給出<strong>相同答案</strong>。測試輸入:</p>
+          <pre><code class="language-text">a = 6
+b = a * a - 4
+c = (a + b) / -2
+c</code></pre>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>把本章「大整合」一節的五段程式(tokenizer、Parser、interpret/ev、Compiler、run_vm)接在一起即可。
+              手算預期:<code>a=6</code>;<code>b = 36 - 4 = 32</code>;<code>c = (6 + 32) / -2 = 38 / -2 = -19</code>。</p>
+              <pre><code class="language-python">src = """
+a = 6
+b = a * a - 4
+c = (a + b) / -2
+c
+"""
+
+# 路徑一:直譯
+res, env = interpret(parse(src))
+print("直譯:", env, "→", res)
+# 直譯: {'a': 6, 'b': 32, 'c': -19.0} → -19.0
+
+# 路徑二:編譯 → 堆疊機執行
+code, symtab = compile_program(parse(src))
+stack, local = run_vm(code, len(symtab))
+print("編譯:", dict(zip(symtab, local)), "→ 頂端", stack[-1])
+# 編譯: {'a': 6, 'b': 32, 'c': -19} → 頂端 -19</code></pre>
+              <p>(小提醒:直譯用 Python 的 <code>/</code> 得到浮點 <code>-19.0</code>,而我們的玩具堆疊機 <code>run_vm</code> 用整數除法 <code>//</code> 得到 <code>-19</code>,
+              值相等但型別不同。真實編譯器會嚴格定義除法語意並讓兩條路徑一致——這正是「語意必須被精確保留」的活生生例子。)</p>
+              <p><strong>再進一步的挑戰:</strong>替這個語言加上 <code>print expr</code> 敘述、比較運算子 <code>&gt; &lt; ==</code>,
+              以及 <code>if</code> / <code>while</code>(編譯時要產生<strong>標籤與條件跳躍</strong>,正如第 21、23 章所見)。
+              做到這一步,你手上就是一個麻雀雖小、五臟俱全的真編譯器了。想看完整、紮實的進階版,
+              強烈推薦《Crafting Interpreters》——它帶你把這個骨架,長成一個有函式、閉包、類別的完整語言。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 42.7 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>回到「懸盪 else」這個歧義。對於 <code>if (a) if (b) x = 1; else x = 2;</code>,
+          畫出兩種可能的解讀(else 配內層 if、else 配外層 if),說明它們在 <code>a</code> 為真、<code>b</code> 為假時行為有何不同。
+          主流語言選了哪一種?你會怎麼修改文法或加上規則來消除這個歧義?</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>解讀一(else 配最近的內層 if,主流選擇):</strong></p>
+              <pre><code class="language-text">if (a) {
+    if (b) x = 1;
+    else   x = 2;     // else 屬於內層 if(b)
+}</code></pre>
+              <p><strong>解讀二(else 配外層 if):</strong></p>
+              <pre><code class="language-text">if (a) {
+    if (b) x = 1;
+}
+else x = 2;           // else 屬於外層 if(a)</code></pre>
+              <p><strong>當 a 為真、b 為假時:</strong>解讀一會執行 <code>x = 2</code>(進了外層,內層 b 假走 else);
+              解讀二則<strong>什麼都不做</strong>(外層 a 真,不走它的 else;內層 b 假又沒有自己的 else)。
+              同一段碼,兩種命運——這就是歧義的危險。</p>
+              <p><strong>主流語言(C、Java、C# 等)一律規定:<code>else</code> 配對「最近、且尚未配對」的 <code>if</code></strong>,也就是解讀一。
+              消歧的辦法:(1) 訂這條「最近匹配」規則,讓 parser 在遇到 else 時優先綁給最內層 if(遞迴下降天生就會這樣);
+              (2) 改寫文法,區分「有配對 else 的完整 if」與「沒有 else 的開放 if」,從文法層面就只允許一種樹;
+              (3) 最務實的——<strong>強制使用大括號</strong>,讓程式設計師自己講清楚。許多團隊的程式風格規範直接要求「if 一律加 {}」,
+              根源就是為了躲開這個經典陷阱。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="callout note"><div class="ico">🧭</div><div class="body"><span class="c-title">延伸:新軌道</span><p>本章的型別檢查有個現代近親——Rust 的 borrow checker。<a href="86-rust-types-errors.html">第 80 章「型別、trait、列舉與錯誤處理」</a>展示編譯器如何在型別系統之上再疊一層靜態分析,在編譯期同時保證型別正確與記憶體安全,讓借用檢查成為語意分析的一部分。</p></div></div>
+
+      <h2>把這一章串起來</h2>
+      <p>第 23 章我們鳥瞰了翻譯鏈;這一章,我們把編譯器這節車廂徹底拆開,看清了每一根齒輪。回顧路標:</p>
+      <ul>
+        <li><strong>編譯、直譯、JIT</strong> 的差別,在於「翻譯」發生的<strong>時機</strong>:事先全翻、完全現場翻、或先跑再挑熱點翻。語言本身不分編譯或直譯,只有實作分。</li>
+        <li>編譯器的全景分三塊:<strong>前端</strong>(管來源語言)、<strong>中端</strong>(在中性 IR 上最佳化)、<strong>後端</strong>(管目標機器)。這條界線是 LLVM 等現代框架的地基。</li>
+        <li><strong>詞法分析</strong>用<strong>正規表示式</strong>(呼應 grep)描述 token、用<strong>有限自動機(DFA)</strong>辨認它們——理論與工具在此握手。</li>
+        <li><strong>語法分析</strong>用<strong>上下文無關文法(CFG/BNF)</strong>描述結構,產出<strong>AST</strong>。<strong>遞迴下降</strong>把文法直接變成互相呼叫的函式,讓優先序(靠分層)、結合性(靠迴圈 vs 遞迴)、巢狀(靠遞迴)全部自動成立。LL 由上而下、LR 由下而上。</li>
+        <li><strong>語意分析</strong>用<strong>符號表</strong>(疊成作用域)記住每個名字,用<strong>型別檢查</strong>把「文法對、意義錯」的 bug 擋在執行之前。</li>
+        <li><strong>中端</strong>把 AST 降成<strong>三位址碼</strong>等 IR,在上面做<strong>常數摺疊、死碼消除、CSE、迴圈最佳化</strong>——全都是「保證等價」的重寫;分析在前、變換在後。</li>
+        <li><strong>後端</strong>後序走訪樹產生目標碼;面向真實 CPU 時還有指令選擇、<strong>暫存器配置</strong>(化約成圖著色)、指令排程。</li>
+        <li>我們用一百多行 Python,做了一個會<strong>直譯也會編譯</strong>的小語言——兩條路共用 tokenizer 與 parser,只在拿到 AST 後分岔。</li>
+        <li>編譯器是<strong>整個 CS 的縮影</strong>:形式語言、樹/圖/雜湊、DP/貪婪/圖著色、型別系統與執行期,全在這裡交會。</li>
+      </ul>
+      <p>
+        從第 1 章的「演算法 vs 程式」,到第 23 章親手蓋出翻譯鏈,再到這一章把每一階段講透——你對「程式如何變成執行」這件事的理解,
+        已經完整繞了一圈。下一站,我們會把目光投向更廣的進階程式設計領域。但無論你之後寫哪種語言、用哪個框架,
+        你都會記得:在那行 <code>print("Hello")</code> 與螢幕上跳出的字之間,站著一整座你已經看穿的精密機器。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">📚</div>
+        <div class="body">
+          <span class="c-title">想更深入?延伸資源</span>
+          <p>本章對應 OSSU 進階課程中的 <a href="https://www.edx.org/learn/computer-science/stanford-university-compilers">Stanford Compilers(Alex Aiken)</a>——
+          這門經典課把詞法、語法、語意、最佳化、程式碼產生全部講得極為紮實,並帶你實作一個 COOL 語言的完整編譯器。
+          若你比較喜歡「邊讀邊動手做一個能跑的東西」,Bob Nystrom 的 <a href="https://craftinginterpreters.com/"><em>Crafting Interpreters</em></a>
+          是近年公認最好的入門書(全文免費線上閱讀):它帶你先做一個<strong>樹走訪直譯器</strong>、再做一個<strong>位元組碼編譯器 + VM</strong>,
+          正是本章「同一棵 AST、兩條路」的完整放大版。想啃理論聖經,則有那本著名的「龍書」
+          <em>Compilers: Principles, Techniques, and Tools</em>(Aho、Lam、Sethi、Ullman)。
+          最後別忘了:本章是第 23 章的延伸,若對「VM、堆疊機、從 NAND 到能跑程式」的全景還有點模糊,回頭重讀第 23 章會讓這一切更立體。</p>
+        </div>
+      </div>
+
+    </article>
+  </main>
+</div>
+<script src="../assets/book.js"></script>
+</body>
+</html>

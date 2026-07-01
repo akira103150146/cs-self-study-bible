@@ -1,0 +1,1319 @@
+<!--meta
+title: 密碼學
+description: 從凱撒密碼到 TLS:在不安全的通道上達成機密性、完整性與真實性。古典密碼為何失敗、對稱加密與一次性密本、密碼學雜湊與加鹽、RSA 與 Diffie-Hellman 公開金鑰、數位簽章、PKI 憑證,以及把一切串起來的 TLS 握手——並牢記那條鐵律:永遠別自己造密碼系統。
+-->
+
+
+      <div class="eyebrow">第七部 · 資訊安全</div>
+      <h1>密碼學</h1>
+      <p class="subtitle">你刷卡、登入、傳訊息時,資料其實是在一條任何人都能偷看的通道上裸奔。密碼學,就是那層把裸奔變成隱形的數學魔法——它如何只靠幾個古老的數論定理,守住你每天的網路生活?</p>
+      <div class="byline">
+        <span class="tag">第 35 章</span>
+        <span>閱讀時間 ≈ 55 分鐘</span>
+        <span>難度:★★★★☆</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>密碼學到底在解決什麼:在「不安全的通道」上達成機密性、完整性與真實性(呼應第 34 章的 CIA)</li>
+          <li>古典密碼(凱撒、替換)怎麼用頻率分析破解,以及為什麼「靠演算法保密」是死路一條(Kerckhoffs 原則)</li>
+          <li>對稱加密:XOR、一次性密本為何理論完美卻不實用,以及 AES 與加密模式(還有那隻著名的「ECB 企鵝」)</li>
+          <li>密碼學雜湊:單向、抗碰撞、雪崩效應,以及密碼為何一定要加鹽與慢雜湊</li>
+          <li>公開金鑰的魔法:RSA(複習第 15 章)、Diffie-Hellman 金鑰交換,還有怎麼在公開通道上憑空變出一把共同金鑰</li>
+          <li>數位簽章、PKI 憑證與信任鏈——這就是瀏覽器網址列那把鎖頭背後的東西</li>
+          <li>TLS 如何把上面全部串成一條安全連線,以及那條最重要的鐵律:<strong>永遠別自己造密碼系統</strong></li>
+        </ul>
+      </div>
+
+      <h2>一封在大庭廣眾下傳遞的情書</h2>
+      <p>
+        想像 Alice 要寄一張紙條給遠方的 Bob,但這張紙條必須經過一整條街的人手手相傳才會到——每個經手的人,都可能偷看、
+        甚至偷改內容。這聽起來很荒謬,但它正是<strong>網際網路的真實樣貌</strong>。
+      </p>
+      <p>
+        還記得第 25 章嗎?我們親眼看到,你的資料被切成一個個<strong>封包(packet)</strong>,一跳一跳穿越幾十台陌生的路由器才抵達對方。
+        路上的任何一台機器、同一個 Wi-Fi 上的任何一個人,原則上都能把你的封包<strong>攔下來看</strong>。第 25 章我們賣了個關子,
+        說 HTTPS 那把「鎖」留到後面揭曉——這一章,就是揭曉的時刻。
+      </p>
+      <p>
+        在第 34 章,我們認識了資訊安全的三大支柱 <strong>CIA</strong>:機密性(Confidentiality)、完整性(Integrity)、可用性(Availability)。
+        密碼學(cryptography)正是達成前兩者、外加一個「真實性(authenticity)」的核心工具。它要回答一個看似不可能的問題:
+      </p>
+      <blockquote>
+        在一條「每個字都會被陌生人看到、甚至被竄改」的通道上,我和你要怎麼祕密、可靠地溝通?
+      </blockquote>
+
+      <div class="diagram">
+<svg viewBox="0 0 700 250" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs><marker id="ar1" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/></marker></defs>
+  <!-- Alice -->
+  <rect x="20" y="70" width="130" height="60" rx="10" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="85" y="96" text-anchor="middle" font-size="14" font-weight="800" fill="#1f2328">Alice</text>
+  <text x="85" y="116" text-anchor="middle" font-size="11" fill="#4a5159">寄件者</text>
+  <!-- Bob -->
+  <rect x="550" y="70" width="130" height="60" rx="10" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="615" y="96" text-anchor="middle" font-size="14" font-weight="800" fill="#1f2328">Bob</text>
+  <text x="615" y="116" text-anchor="middle" font-size="11" fill="#4a5159">收件者</text>
+  <!-- channel -->
+  <line x1="150" y1="100" x2="550" y2="100" stroke="#8a929b" stroke-width="2" stroke-dasharray="6 5" marker-end="url(#ar1)"/>
+  <text x="350" y="88" text-anchor="middle" font-size="12" fill="#8a929b">不安全的通道(網際網路)</text>
+  <!-- packet -->
+  <rect x="310" y="106" width="80" height="26" rx="5" fill="#fff" stroke="#b4541f"/>
+  <text x="350" y="124" text-anchor="middle" font-size="11" fill="#b4541f">封包 📨</text>
+  <!-- Eve -->
+  <rect x="290" y="185" width="120" height="44" rx="10" fill="#f6e7dd" stroke="#b4541f"/>
+  <text x="350" y="205" text-anchor="middle" font-size="13" font-weight="800" fill="#b4541f">Eve 👁</text>
+  <text x="350" y="221" text-anchor="middle" font-size="10" fill="#8a929b">竊聽者 / 可能竄改</text>
+  <line x1="350" y1="134" x2="350" y2="183" stroke="#b4541f" stroke-width="1.5" stroke-dasharray="4 4"/>
+</svg>
+        <figcaption>圖 35-1:密碼學的基本場景。Alice 想把訊息傳給 Bob,但中間隔著一條任何人(竊聽者 Eve)都能監看、甚至竄改的通道。密碼學的目標,就是讓 Eve 即使拿到每一個位元,也得不到任何有用的東西。</figcaption>
+      </div>
+
+      <p>密碼學要對付的「壞人」,傳統上有兩種,搞清楚它們的差別很重要:</p>
+      <ul>
+        <li><strong>被動攻擊者(Eve,Eavesdropper)</strong>:只偷看,不動手。她想破壞的是<strong>機密性</strong>。</li>
+        <li><strong>主動攻擊者(Mallory,Malicious)</strong>:不只偷看,還會竄改、偽造、重送訊息。她想破壞的是<strong>完整性與真實性</strong>。</li>
+      </ul>
+      <p>
+        一個只防得了 Eve、卻防不了 Mallory 的系統,在真實世界往往不堪一擊。記住這點,我們稍後就會看到:
+        為什麼「光是加密」常常不夠,還需要雜湊、簽章與憑證來補上完整性與真實性。先從密碼學的童年——古典密碼——開始。
+      </p>
+
+      <h2>古典密碼:聰明,但注定失敗</h2>
+
+      <h3>凱撒密碼:把字母往後推幾格</h3>
+      <p>
+        兩千年前,凱撒(Julius Caesar)寫軍事密令時,用了一個簡單的把戲:把每個字母往後推固定的格數。
+        例如往後推 3 格,A 變 D、B 變 E、… X 變 A(繞回來)。「HELLO」就變成「KHOOR」。收信的人只要往前推 3 格,
+        就能還原。這就是<strong>凱撒密碼(Caesar cipher)</strong>,大概是史上最有名的密碼。
+      </p>
+      <p>這裡出現兩個貫穿全章的詞:<strong>明文(plaintext)</strong>是原始訊息,<strong>密文(ciphertext)</strong>是加密後的亂碼;
+      而那個「往後推幾格」的數字,就是這套系統的<strong>金鑰(key)</strong>。我們用 Python 把它寫出來:</p>
+      <pre><code class="language-python">def caesar_encrypt(text, shift):
+    result = ""
+    for ch in text:
+        if ch.isupper():                                  # 大寫字母
+            result += chr((ord(ch) - ord('A') + shift) % 26 + ord('A'))
+        elif ch.islower():                                # 小寫字母
+            result += chr((ord(ch) - ord('a') + shift) % 26 + ord('a'))
+        else:
+            result += ch                                  # 非字母(空白、標點)原樣保留
+    return result
+
+def caesar_decrypt(text, shift):
+    return caesar_encrypt(text, -shift)                   # 解密 = 反方向位移
+
+print(caesar_encrypt("Hello, World!", 3))   # Khoor, Zruog!
+print(caesar_decrypt("Khoor, Zruog!", 3))   # Hello, World!</code></pre>
+      <p>
+        注意那個 <code>% 26</code>——又是<strong>模運算(modular arithmetic)</strong>!還記得第 15 章的「時鐘算術」嗎?
+        字母表就是一個 26 格的時鐘,推過 Z 就繞回 A。密碼學從第一天起,就和模運算綁在一起。
+      </p>
+
+      <h3>它有多脆弱?暴力破解只要試 25 次</h3>
+      <p>
+        凱撒密碼的致命傷顯而易見:金鑰只有 25 種可能(推 1 到 25 格;推 0 格等於沒加密)。攻擊者根本不用聰明,
+        把 25 種全試一遍,哪個結果讀得通就是它。這叫<strong>暴力破解(brute-force attack)</strong>:
+      </p>
+      <pre><code class="language-python">def caesar_bruteforce(cipher):
+    for shift in range(1, 26):
+        print(f"位移 {shift:2}: {caesar_decrypt(cipher, shift)}")
+
+caesar_bruteforce("Khoor, Zruog!")
+# 其中「位移  3」那一行會跳出可讀的 "Hello, World!" —— 破解完成</code></pre>
+      <p>
+        一個密碼系統,如果它的金鑰空間(key space,所有可能金鑰的數量)小到能被電腦在合理時間內全部試完,它就形同虛設。
+        現代密碼的金鑰動輒有 $2^{128}$ 種可能——就算每秒試一兆把,把宇宙年齡乘上一兆倍也試不完。<strong>夠大的金鑰空間,是安全的最低門檻。</strong>
+      </p>
+
+      <h3>替換密碼與頻率分析:聰明也救不了你</h3>
+      <p>
+        「金鑰太少」很容易補救:乾脆讓每個字母「隨機」對應到另一個字母,而不是整齊地推固定格數。這叫
+        <strong>替換密碼(substitution cipher)</strong>。它的金鑰是一張 26 個字母的對照表,可能的排列數高達
+        $26! \approx 4 \times 10^{26}$——暴力破解徹底沒戲。看起來無懈可擊?
+      </p>
+      <p>
+        九世紀的阿拉伯學者<strong>金迪(Al-Kindi)</strong>看穿了它的破綻:<strong>每個字母換了張臉,但它出現的「頻率」沒變。</strong>
+        英文裡 E 最常出現(約 12.7%),其次是 T、A、O……。所以只要密文夠長,數一數哪個符號最常出現,它八成就是 E;
+        次常出現的就是 T……。再配合「字母組合習慣」(例如 TH、單字母字通常是 a 或 I),整張對照表就能一塊塊拼回來。
+        這就是<strong>頻率分析(frequency analysis)</strong>,人類史上第一個系統性的密碼破解術。
+      </p>
+      <pre><code class="language-python">from collections import Counter
+
+cipher = "WKLV LV D VHFUHW PHVVDJH BRX FDQQRW UHDG"   # 一段密文
+freq = Counter(c for c in cipher.lower() if c.isalpha())
+print(freq.most_common(5))
+# 找出最常出現的密文字母,對照英文字母頻率表(E、T、A、O…)去猜對應關係
+# (這段密文其實就是凱撒位移 3;最常出現的 'h' 對到明文 'e')</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">Kerckhoffs 原則:安全只能靠金鑰,不能靠保密演算法</span>
+          <p>古典密碼最深的教訓,被 19 世紀的 Kerckhoffs 寫成了一條鐵律:
+          <strong>一個密碼系統,即使「演算法本身完全公開」,只要金鑰保密,就應該仍然安全。</strong>
+          換句話說,你不能把安全寄望在「沒人知道我怎麼加密的」上面——因為演算法總會外洩(離職員工、逆向工程、論文發表)。
+          這也叫「<em>避免靠隱晦來安全(security through obscurity)</em>」。今天所有正派的密碼演算法(AES、RSA、SHA-256)
+          都是<strong>完全公開、全世界公開檢驗</strong>的;它們的安全,純粹建立在「你不知道那把金鑰」之上。
+          一個不敢公開的密碼演算法,通常是因為它經不起公開。</p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 35.1 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>實作凱撒密碼的 <code>caesar_encrypt(text, shift)</code> 與 <code>caesar_decrypt(text, shift)</code>,
+          要能正確處理大小寫並保留非字母字元。接著寫一個 <code>caesar_bruteforce(cipher)</code>,把 25 種可能解全部印出來,
+          示範金鑰空間太小的後果。最後想一想:如果攻擊者「不想用肉眼」逐行看,有沒有辦法讓程式<strong>自動</strong>挑出最可能的那一行?</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">def caesar_encrypt(text, shift):
+    out = ""
+    for ch in text:
+        if ch.isupper():
+            out += chr((ord(ch) - 65 + shift) % 26 + 65)
+        elif ch.islower():
+            out += chr((ord(ch) - 97 + shift) % 26 + 97)
+        else:
+            out += ch
+    return out
+
+def caesar_decrypt(text, shift):
+    return caesar_encrypt(text, -shift)
+
+def caesar_bruteforce(cipher):
+    for shift in range(1, 26):
+        print(f"位移 {shift:2}: {caesar_decrypt(cipher, shift)}")
+
+# 自動化:用「字母頻率」幫每個候選打分,挑分數最高的
+ENGLISH_FREQ = {  # 各字母在英文中的大約出現比例(%)
+    'e':12.7,'t':9.1,'a':8.2,'o':7.5,'i':7.0,'n':6.7,'s':6.3,'h':6.1,
+    'r':6.0,'d':4.3,'l':4.0,'u':2.8,'c':2.8,'m':2.4,'w':2.4,'f':2.2}
+
+def score(text):
+    return sum(ENGLISH_FREQ.get(c, 0) for c in text.lower())
+
+def best_guess(cipher):
+    candidates = [(score(caesar_decrypt(cipher, s)), s) for s in range(26)]
+    _, shift = max(candidates)            # 分數最高的那個位移最可能正確
+    return shift, caesar_decrypt(cipher, shift)
+
+print(best_guess("Khoor, Zruog!"))   # (3, 'Hello, World!')</code></pre>
+              <p>關鍵洞見:破解不需要「試到對」的運氣,而是把人類的直覺(「哪一行讀起來像英文」)
+              變成一個可計算的<strong>評分函數</strong>。這正是現代密碼分析的精神——把破解變成最佳化問題。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>對稱式加密:同一把鑰匙鎖門開門</h2>
+      <p>
+        古典密碼雖然失敗,但它示範了現代密碼學的第一大分支:<strong>對稱式加密(symmetric encryption)</strong>。
+        「對稱」的意思是——<strong>加密和解密用的是同一把金鑰</strong>。就像家門的鑰匙:同一把,鎖門開門都靠它。
+        凱撒密碼那個「位移量」就是把對稱金鑰,只是它弱得可笑。我們需要更強的。
+      </p>
+
+      <h3>XOR:對稱加密的最小原子</h3>
+      <p>
+        現代對稱加密的最底層,藏著一個你在第 8 章學過的位元運算:<strong>互斥或(XOR,記作 ^)</strong>。
+        XOR 有個美妙的性質:<strong>同一個數連續 XOR 兩次,會變回自己。</strong>用式子說就是 $a \oplus k \oplus k = a$。
+        這簡直是為加密量身打造的:用金鑰 $k$ 把明文 XOR 一次得到密文,收信方再 XOR 同一個 $k$,就還原成明文。
+      </p>
+      <pre><code class="language-python">def xor_bytes(data, key):
+    # 把 data 的每個位元組,與金鑰循環對應的位元組做 XOR
+    return bytes(b ^ key[i % len(key)] for i, b in enumerate(data))
+
+key     = b"SECRET-KEY"
+message = b"attack at dawn"
+
+cipher = xor_bytes(message, key)
+print(cipher.hex())               # 一串看不懂的十六進位亂碼
+
+recovered = xor_bytes(cipher, key)   # 再 XOR 同一把金鑰
+print(recovered)                      # b'attack at dawn' —— 完美還原</code></pre>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">上面這段「XOR 加密」其實很不安全</span>
+          <p>當金鑰比訊息短而被「循環重複」使用時,它就退化成一種多表替換密碼,可以用統計方法破解
+          (這正是攻破二戰恩尼格瑪、以及許多自製「加密」的途徑)。千萬別把這段程式當成真的加密工具——
+          它只是用來理解 XOR 這顆原子。那麼,什麼時候 XOR 加密<em>真的</em>無法被破解?答案很驚人——</p>
+        </div>
+      </div>
+
+      <h3>一次性密本:理論上完美,實務上沒用</h3>
+      <p>
+        如果金鑰滿足三個嚴格條件:<strong>(1) 真正隨機、(2) 和訊息一樣長、(3) 只用一次、用完即丟</strong>,
+        那麼這個 XOR 加密就升級成<strong>一次性密本(One-Time Pad, OTP)</strong>。而 OTP 被數學嚴格證明擁有
+        <strong>完美保密性(perfect secrecy)</strong>:攻擊者就算有無限的算力,看著密文也<em>完全</em>得不到關於明文的任何資訊——
+        因為任何一段明文,都存在一把金鑰能把它加密成這段密文,所以密文等於什麼都沒透露。這是 Claude Shannon 在 1949 年證明的。
+      </p>
+      <p>既然完美,為什麼不全用它?因為那三個條件在現實裡幾乎做不到:</p>
+      <ul>
+        <li><strong>金鑰要和訊息一樣長</strong>:你要傳 1GB 的影片,就得先安全地送一把 1GB 的金鑰過去——可是「安全地送金鑰」正是我們一開始要解決的問題,雞生蛋蛋生雞。</li>
+        <li><strong>金鑰只能用一次</strong>:重複用同一把(「two-time pad」)會立刻洩密,把兩段密文 XOR 起來,金鑰就消掉了,露出明文的關聯。</li>
+        <li><strong>必須真正隨機</strong>:用程式的偽隨機數會留下可預測的規律,完美保密蕩然無存。</li>
+      </ul>
+      <p>OTP 告訴我們:完美保密<em>存在</em>,但代價高到只用在極端場合(如冷戰時期的紅色電話)。實務上,我們要的是「夠安全又夠實用」的折衷——這就是 AES 登場的舞台。</p>
+
+      <h3>AES:現代對稱加密的標準</h3>
+      <p>
+        <strong>AES(Advanced Encryption Standard,進階加密標準)</strong>是今天全世界的對稱加密主力——
+        你的 HTTPS 連線、加密硬碟、WhatsApp 訊息、Wi-Fi(WPA),底層幾乎都靠它。它在 2001 年被美國標準局選定,
+        經過二十多年全世界密碼學家的猛攻,至今沒有實用的破解法。你<strong>不需要懂它的內部細節</strong>(那是一連串精心設計的
+        位元混合與替換),只需要記住幾個關鍵事實:
+      </p>
+      <ul>
+        <li>它是<strong>區塊密碼(block cipher)</strong>:一次處理固定大小的一「塊」資料,AES 的區塊是 <strong>128 位元(16 位元組)</strong>。</li>
+        <li>金鑰長度可選 <strong>128、192 或 256 位元</strong>。AES-256 是目前的高安全標準,連量子電腦在可見的未來也撼動不了它。</li>
+        <li>它是公開的、被全世界檢驗過的——完全符合 Kerckhoffs 原則。</li>
+      </ul>
+      <p>
+        和區塊密碼相對的是<strong>串流密碼(stream cipher)</strong>(如 ChaCha20):它把金鑰展開成一條「金鑰流」,
+        像 OTP 那樣逐位元和明文 XOR,適合長度不定的資料流。兩者各有舞台,但概念上,區塊密碼是現代主流。
+      </p>
+
+      <h3>加密模式:那隻洩密的企鵝</h3>
+      <p>
+        這裡有個關鍵又常被忽略的坑。AES 一次只能加密 16 位元組,但你的檔案有幾百萬位元組。怎麼把一整個檔案餵進去?
+        最天真的做法叫 <strong>ECB(Electronic Codebook)</strong>:把資料切成一塊塊,每塊各自獨立加密。聽起來合理,
+        但它有個致命缺陷——<strong>相同的明文區塊,會產生完全相同的密文區塊</strong>。
+      </p>
+      <p>
+        這意味著什麼?如果原圖有一大片同色的背景(很多相同的區塊),加密後那片區域也會是「同一種亂碼」——
+        <strong>圖案的輪廓被原封不動地保留了下來</strong>。密碼學界有一張著名的示範圖:把 Linux 吉祥物企鵝 Tux
+        用 ECB 模式加密,結果你還是一眼就能認出那是一隻企鵝。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 640 250" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- ===== Panel 1: 原圖 ===== -->
+  <rect x="20" y="40" width="180" height="180" rx="6" fill="#fafbfb" stroke="#d4d8dd"/>
+  <text x="110" y="32" text-anchor="middle" font-size="13" font-weight="700" fill="#1f2328">原圖</text>
+  <!-- penguin (natural colours) -->
+  <ellipse cx="110" cy="150" rx="46" ry="60" fill="#1f2328"/>
+  <circle cx="110" cy="82" r="30" fill="#1f2328"/>
+  <ellipse cx="110" cy="158" rx="27" ry="44" fill="#ffffff"/>
+  <circle cx="100" cy="78" r="4" fill="#fff"/><circle cx="120" cy="78" r="4" fill="#fff"/>
+  <circle cx="100" cy="78" r="2" fill="#1f2328"/><circle cx="120" cy="78" r="2" fill="#1f2328"/>
+  <polygon points="100,88 120,88 110,100" fill="#e8a33d"/>
+  <polygon points="86,202 106,202 94,216" fill="#e8a33d"/>
+  <polygon points="114,202 134,202 126,216" fill="#e8a33d"/>
+
+  <!-- ===== Panel 2: ECB ===== -->
+  <rect x="230" y="40" width="180" height="180" rx="6" fill="#e3efed" stroke="#d4d8dd"/>
+  <text x="320" y="32" text-anchor="middle" font-size="13" font-weight="700" fill="#b4541f">用 ECB 模式加密後 😱</text>
+  <!-- same penguin shape, recoloured into "ciphertext" colours -->
+  <ellipse cx="320" cy="150" rx="46" ry="60" fill="#8b5cf6"/>
+  <circle cx="320" cy="82" r="30" fill="#8b5cf6"/>
+  <ellipse cx="320" cy="158" rx="27" ry="44" fill="#2f6f6a"/>
+  <polygon points="310,88 330,88 320,100" fill="#b4541f"/>
+  <polygon points="296,202 316,202 304,216" fill="#b4541f"/>
+  <polygon points="324,202 344,202 336,216" fill="#b4541f"/>
+  <!-- faint block grid -->
+  <g stroke="#ffffff" stroke-width="1" opacity="0.45">
+    <line x1="260" y1="40" x2="260" y2="220"/><line x1="290" y1="40" x2="290" y2="220"/>
+    <line x1="320" y1="40" x2="320" y2="220"/><line x1="350" y1="40" x2="350" y2="220"/>
+    <line x1="380" y1="40" x2="380" y2="220"/>
+    <line x1="230" y1="70" x2="410" y2="70"/><line x1="230" y1="100" x2="410" y2="100"/>
+    <line x1="230" y1="130" x2="410" y2="130"/><line x1="230" y1="160" x2="410" y2="160"/>
+    <line x1="230" y1="190" x2="410" y2="190"/>
+  </g>
+
+  <!-- ===== Panel 3: secure mode ===== -->
+  <text x="530" y="32" text-anchor="middle" font-size="13" font-weight="700" fill="#2f6f6a">用 CBC/CTR/GCM 加密後 ✅</text>
+  <g>
+    <rect x="440" y="40"  width="36" height="36" fill="#8b5cf6"/><rect x="476" y="40"  width="36" height="36" fill="#2f6f6a"/><rect x="512" y="40"  width="36" height="36" fill="#b4541f"/><rect x="548" y="40"  width="36" height="36" fill="#3a6ea5"/><rect x="584" y="40"  width="36" height="36" fill="#6b8f3a"/>
+    <rect x="440" y="76"  width="36" height="36" fill="#b4541f"/><rect x="476" y="76"  width="36" height="36" fill="#6b8f3a"/><rect x="512" y="76"  width="36" height="36" fill="#8b5cf6"/><rect x="548" y="76"  width="36" height="36" fill="#2f6f6a"/><rect x="584" y="76"  width="36" height="36" fill="#a23b6e"/>
+    <rect x="440" y="112" width="36" height="36" fill="#2f6f6a"/><rect x="476" y="112" width="36" height="36" fill="#a23b6e"/><rect x="512" y="112" width="36" height="36" fill="#6b8f3a"/><rect x="548" y="112" width="36" height="36" fill="#b4541f"/><rect x="584" y="112" width="36" height="36" fill="#3a6ea5"/>
+    <rect x="440" y="148" width="36" height="36" fill="#6b8f3a"/><rect x="476" y="148" width="36" height="36" fill="#8b5cf6"/><rect x="512" y="148" width="36" height="36" fill="#3a6ea5"/><rect x="548" y="148" width="36" height="36" fill="#a23b6e"/><rect x="584" y="148" width="36" height="36" fill="#2f6f6a"/>
+    <rect x="440" y="184" width="36" height="36" fill="#3a6ea5"/><rect x="476" y="184" width="36" height="36" fill="#b4541f"/><rect x="512" y="184" width="36" height="36" fill="#a23b6e"/><rect x="548" y="184" width="36" height="36" fill="#6b8f3a"/><rect x="584" y="184" width="36" height="36" fill="#8b5cf6"/>
+  </g>
+</svg>
+        <figcaption>圖 35-2:著名的「ECB 企鵝」。ECB 模式下,相同的明文區塊永遠對應到相同的密文區塊,於是原圖的輪廓(那些大片同色區域)被完整保留——加密了等於沒加密。安全的模式(CBC/CTR/GCM)會讓每個區塊的加密都受到前文或一個計數器影響,輸出看起來就是一片均勻的雜訊,看不出任何圖案。</figcaption>
+      </div>
+
+      <p>
+        修正之道,是讓每個區塊的加密「彼此牽連」或「混入變化」,常見的安全模式有:
+      </p>
+      <ul>
+        <li><strong>CBC(Cipher Block Chaining)</strong>:每塊明文先和「前一塊的密文」XOR 再加密,於是相同明文也會產生不同密文。</li>
+        <li><strong>CTR(Counter)</strong>:把一個不斷遞增的計數器加密成金鑰流,再和明文 XOR——把區塊密碼變成串流密碼,可平行運算。</li>
+        <li><strong>GCM(Galois/Counter Mode)</strong>:在 CTR 之上再加一個「認證標籤」,同時保證<strong>機密性與完整性</strong>——這是今天 TLS 的首選。</li>
+      </ul>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">加密 ≠ 完整性</span>
+          <p>ECB 企鵝給我們一個更深的教訓:<strong>「有加密」不等於「安全」</strong>。同樣的演算法(AES),
+          用錯模式(ECB)就洩密。而且光加密通常只擋得住 Eve(偷看),擋不住 Mallory(竄改)——攻擊者就算讀不懂密文,
+          也可能盲目地翻轉幾個位元去破壞它。所以現代做法是用 <strong>AEAD</strong>(帶認證的加密,如 AES-GCM):
+          一次同時提供機密性<em>與</em>完整性。這也是為什麼「自己拼裝加密」這麼危險——每個細節都是陷阱。</p>
+        </div>
+      </div>
+
+      <h3>對稱加密的死穴:金鑰怎麼送過去?</h3>
+      <p>
+        現在對稱加密看起來很美:AES 又快又強。但它有一個從凱撒時代就存在、始終繞不開的根本問題——
+        <strong>金鑰分配(key distribution)</strong>。加密和解密用同一把金鑰,所以 Alice 和 Bob 必須<em>事先</em>
+        共享這把金鑰。可是他們之間只有一條不安全的通道(那條 Eve 正在偷聽的線)!
+      </p>
+      <blockquote>
+        你想用加密來保護通道,但你得先安全地把金鑰送過通道——這不就是你一開始要解決的問題嗎?
+      </blockquote>
+      <p>
+        對只有兩個人來說,也許還能「見面時偷偷講好」。但網際網路上,你要和<strong>從沒見過面</strong>的淘寶、銀行、Google
+        建立安全連線,根本沒機會「先見面交換金鑰」。幾千年來,這道牆擋住了所有人。直到 1970 年代,幾位數學家想出一個近乎魔法的點子,
+        徹底繞過了它——這就是密碼學史上最美的突破,也是這一章的重頭戲:公開金鑰。
+      </p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 35.2 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>用 XOR 實作一個對稱加解密函式 <code>xor_cipher(data, key)</code>(加密與解密是同一個函式,為什麼?)。
+          接著請<strong>說明並用程式示範</strong>:當同一把金鑰被用來加密「兩段」訊息時,攻擊者把兩段密文 XOR 起來會發生什麼事?
+          這就是為什麼一次性密本的金鑰「只能用一次」。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">def xor_cipher(data, key):
+    return bytes(b ^ key[i % len(key)] for i, b in enumerate(data))
+# 加解密同一個函式,因為 (a ^ k) ^ k == a:XOR 自己是自己的反運算
+
+key = b"reused-key-reused-key"     # 故意重複使用同一把金鑰(錯誤示範!)
+m1 = b"HELLO ALICE THIS IS BOB"
+m2 = b"HELLO BOB THIS IS ALICE"
+
+c1 = xor_cipher(m1, key)
+c2 = xor_cipher(m2, key)
+
+# 攻擊者就算不知道 key,把兩段密文 XOR 起來,金鑰就「消掉」了:
+#   c1 ^ c2 = (m1 ^ k) ^ (m2 ^ k) = m1 ^ m2
+leak = bytes(a ^ b for a, b in zip(c1, c2))
+print(leak)
+# 結果只和 m1、m2 有關,完全和金鑰無關!
+# 兩段明文相同的位置會 XOR 成 0(b'\x00'),洩漏出明文的結構。
+# 在相同位置:H^H=0, E^E=0, L^L=0, L^L=0, O^O=0, ' '^' '=0 ...
+print([i for i, x in enumerate(leak) if x == 0])  # 找出兩段明文相同的位置</code></pre>
+              <p>這就是「two-time pad」災難:重複使用金鑰,等於把 <code>m1 ^ m2</code> 直接交給攻擊者,
+              再配合語言統計,兩段明文都能被還原。<strong>一次性密本的「一次性」三個字,是用血換來的鐵律。</strong></p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>密碼學雜湊:資料的單向指紋</h2>
+      <p>
+        在跳進公開金鑰之前,我們需要另一塊基石。先問一個問題:你下載一個 5GB 的安裝檔,怎麼確認它在傳輸途中
+        「一個位元都沒被改過」(完整性)?難道要把原檔再下載一次來逐位元比對?有個聰明得多的工具:<strong>密碼學雜湊函數
+        (cryptographic hash function)</strong>。
+      </p>
+      <p>
+        它把<strong>任意長度</strong>的資料,壓縮成一個<strong>固定長度</strong>的「指紋」(例如 SHA-256 永遠輸出 256 位元 / 64 個十六進位字元)。
+        你在第 13 章的雜湊表用過「雜湊」,但密碼學雜湊要求嚴格得多,它必須同時滿足:
+      </p>
+      <ul>
+        <li><strong>單向性(one-way / pre-image resistance)</strong>:從輸入算出指紋很容易,但<strong>從指紋反推回輸入,在計算上不可行</strong>。</li>
+        <li><strong>抗碰撞性(collision resistance)</strong>:極難找到「兩個不同的輸入,卻有相同指紋」的情況。</li>
+        <li><strong>雪崩效應(avalanche effect)</strong>:輸入只改動一個位元,輸出也會<strong>面目全非</strong>(大約一半的位元翻轉)。</li>
+      </ul>
+      <p>用 Python 內建的 <code>hashlib</code> 親眼看看雪崩效應:</p>
+      <pre><code class="language-python">import hashlib
+
+def sha256(text):
+    return hashlib.sha256(text.encode()).hexdigest()
+
+print(sha256("hello"))
+# 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824
+print(sha256("hellp"))   # 只把最後一個字母 o 改成 p
+# 977a8d9d2e1f... 完全不同!輸出看不出任何「只差一個字母」的痕跡
+
+# 應用:驗證檔案完整性(下載網站會公布官方的 SHA-256 指紋)
+def file_sha256(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            h.update(chunk)            # 分塊餵入,不必一次讀進整個大檔
+    return h.hexdigest()</code></pre>
+      <p>
+        雜湊的用途無所不在:<strong>完整性校驗</strong>(下載檔、Git 的每個 commit 其實就是內容的 SHA 指紋)、
+        <strong>數位簽章</strong>(待會就會用到:簽的不是整份文件,而是它的指紋)、
+        以及一個你天天間接用到、卻最常被做錯的場景——<strong>密碼儲存</strong>。
+      </p>
+
+      <h3>密碼儲存:為什麼絕不能存明文,甚至不能只存雜湊</h3>
+      <p>
+        網站該怎麼保存你的密碼?第一條鐵律:<strong>絕對不能存明文</strong>。資料庫一旦外洩,所有人的密碼當場全裸。
+        那存「密碼的雜湊」呢?登入時把你輸入的密碼算一次雜湊,和資料庫裡的比對就好,資料庫永遠不知道原始密碼——聽起來很安全?
+      </p>
+      <p>可惜還不夠。有兩個攻擊在等著:</p>
+      <ul>
+        <li><strong>彩虹表(rainbow table)攻擊</strong>:攻擊者<em>事先</em>把「幾億個常見密碼 → 它們的雜湊」算好存成一張巨表。
+        拿到你外洩的雜湊,他直接查表,瞬間反查出原始密碼。單向性在這裡幫不了你,因為他根本不是「反推」,而是「預先算好正著查」。</li>
+        <li><strong>速度</strong>:SHA-256 設計得<em>很快</em>(每秒幾十億次),這對校驗檔案是優點,對存密碼卻是災難——它讓攻擊者每秒能暴力猜上億個密碼。</li>
+      </ul>
+      <p>正確做法有兩招,缺一不可:</p>
+      <ul>
+        <li><strong>加鹽(salt)</strong>:給每個使用者配一段<strong>隨機</strong>的「鹽」,把它和密碼拼在一起再雜湊,鹽則和雜湊一起存。
+        這樣同樣的密碼,每個人的雜湊都不同,彩虹表整個失效(攻擊者得為每一份鹽重算一張表)。</li>
+        <li><strong>慢雜湊(slow hashing)</strong>:刻意用<em>故意很慢</em>、又吃記憶體的演算法,如 <strong>bcrypt、scrypt、Argon2</strong>
+        (或退而求其次的 PBKDF2)。它們把單次雜湊拖慢到幾十毫秒——你登入時無感,但攻擊者暴力破解的速度被砍掉好幾個數量級。</li>
+      </ul>
+
+      <div class="callout danger">
+        <div class="ico">⛔</div>
+        <div class="body">
+          <span class="c-title">永遠不要用 MD5 或 SHA-1 來存密碼(其實也別拿來做任何安全用途)</span>
+          <p><strong>MD5 與 SHA-1 都已經被攻破</strong>:研究者能實際製造出「碰撞」(兩份不同檔案、相同指紋),
+          Google 在 2017 年就示範了 SHA-1 的碰撞(SHAttered)。更別說它們又快又無鹽,拿來存密碼等於把使用者送給駭客。
+          <strong>請用 bcrypt / scrypt / Argon2 存密碼;需要一般雜湊時用 SHA-256 或 SHA-3。</strong>
+          看到任何系統還在用 MD5「加密」密碼(連用詞都錯了,雜湊不是加密),那是嚴重的紅旗。</p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 35.3 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>用 <code>hashlib</code> 寫一個 <code>sha256(text)</code>,然後設計一個小實驗<strong>量化雪崩效應</strong>:
+          對「hello」和只差一個字母的「hello!」各算 SHA-256,把兩個指紋轉成二進位,數數看總共 256 個位元裡有幾個不一樣。
+          猜猜看會接近多少?(提示:理想的雜湊,改動任何輸入都應讓「大約一半」的輸出位元翻轉。)</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">import hashlib
+
+def sha256_bits(text):
+    digest = hashlib.sha256(text.encode()).digest()      # 32 位元組 = 256 位元
+    return "".join(f"{byte:08b}" for byte in digest)     # 轉成 256 個 '0'/'1'
+
+a = sha256_bits("hello")
+b = sha256_bits("hello!")     # 只多了一個驚嘆號
+
+# 漢明距離:兩個位元字串中不同位元的數量
+diff = sum(x != y for x, y in zip(a, b))
+print(f"256 位元中有 {diff} 個不同 (約 {diff/256:.0%})")
+# 典型結果:約 128 個位元不同,也就是大約一半 —— 這就是雪崩效應</code></pre>
+              <p>結果通常落在 128 上下,接近 50%。這代表輸出和輸入之間「沒有任何可見的關聯」——
+              你無法從「指紋只變了一點點」推測「輸入只變了一點點」,因為事實正好相反。
+              這個性質正是雜湊能當「指紋」的根本原因。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>公開金鑰:密碼學最美的魔法</h2>
+      <p>
+        現在回到那道千年高牆:Alice 和 Bob 素未謀面,只有一條 Eve 正在偷聽的通道,他們要怎麼開始祕密通訊?
+        1976 年,Diffie、Hellman(以及稍後的 RSA 三人組)提出一個顛覆性的想法——<strong>用兩把不同的金鑰</strong>。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">郵筒比喻:公鑰加密、私鑰解密</span>
+          <p>想像一個有投信口的郵筒:<strong>任何人</strong>都能把信投進去(投信口是公開的),但<strong>只有持鑰匙的人</strong>能打開取信。
+          公開金鑰加密就是這樣運作:每個人有一對金鑰——<strong>公鑰(public key)</strong>像投信口,可以印在名片上、貼上網路、廣發給全世界;
+          <strong>私鑰(private key)</strong>像那把開鎖鑰匙,只有你自己保管。<strong>任何人用你的公鑰加密的訊息,只有你的私鑰能解開。</strong>
+          於是 Alice 要寄密信給 Bob,只要去抓 Bob 公開的公鑰來加密就行——金鑰分配問題,迎刃而解!</p>
+        </div>
+      </div>
+
+      <div class="diagram">
+<svg viewBox="0 0 700 210" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs><marker id="ar2" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#2f6f6a"/></marker></defs>
+  <text x="80" y="40" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">Alice</text>
+  <text x="620" y="40" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">Bob</text>
+  <!-- plaintext -->
+  <rect x="20" y="70" width="120" height="44" rx="8" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="80" y="90" text-anchor="middle" font-size="12" fill="#1f2328">明文「我愛你」</text>
+  <text x="80" y="106" text-anchor="middle" font-size="10" fill="#8a929b">用 Bob 的公鑰加密 🔓</text>
+  <!-- ciphertext -->
+  <rect x="290" y="70" width="120" height="44" rx="8" fill="#fff" stroke="#b4541f"/>
+  <text x="350" y="90" text-anchor="middle" font-size="12" fill="#b4541f">密文 8f3a…c1</text>
+  <text x="350" y="106" text-anchor="middle" font-size="10" fill="#8a929b">Eve 只看到亂碼</text>
+  <!-- recovered -->
+  <rect x="560" y="70" width="120" height="44" rx="8" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="620" y="90" text-anchor="middle" font-size="12" fill="#1f2328">明文「我愛你」</text>
+  <text x="620" y="106" text-anchor="middle" font-size="10" fill="#8a929b">用 Bob 的私鑰解密 🔑</text>
+  <line x1="140" y1="92" x2="288" y2="92" stroke="#2f6f6a" stroke-width="2" marker-end="url(#ar2)"/>
+  <line x1="410" y1="92" x2="558" y2="92" stroke="#2f6f6a" stroke-width="2" marker-end="url(#ar2)"/>
+  <text x="350" y="150" text-anchor="middle" font-size="11" fill="#8a929b">公鑰人人可拿(用來加密),私鑰只有 Bob 有(用來解密)</text>
+</svg>
+        <figcaption>圖 35-3:公開金鑰加密。任何人都能用 Bob 公開的公鑰加密訊息,但只有握有對應私鑰的 Bob 解得開。Alice 和 Bob 從來不需要事先共享祕密——金鑰分配的千年難題就此化解。</figcaption>
+      </div>
+
+      <h3>RSA:大數分解難,所以你的密文安全</h3>
+      <p>
+        我們在第 15 章已經親手拼過一個玩具 RSA,這裡快速複習它的靈魂。RSA 的安全性押注在一個「<strong>單向</strong>」的數學事實上:
+        <strong>把兩個大質數相乘很容易,但把乘積分解回那兩個質數,極其困難。</strong> $61 \times 53 = 3233$ 你幾秒算得出來;
+        但給你一個 600 位數,要找出它是哪兩個質數的乘積,目前全世界最強的電腦也得算上比宇宙年齡還久。這個「易於正向、難於反向」的不對稱,
+        就是公開金鑰的命根子。
+      </p>
+      <p>RSA 的步驟,全建立在第 15 章的工具上(模冪 <code>pow(a, b, m)</code>、擴展歐幾里得求模反元素):</p>
+      <pre><code class="language-python">def ext_gcd(a, b):
+    if b == 0:
+        return a, 1, 0
+    g, x1, y1 = ext_gcd(b, a % b)
+    return g, y1, x1 - (a // b) * y1
+
+def mod_inverse(e, phi):
+    g, x, _ = ext_gcd(e, phi)        # 求 d 使得 e·d ≡ 1 (mod phi)
+    return x % phi
+
+# 1. 造鑰匙:挑兩個質數(真實世界用上百位數;這裡沿用第 15 章的小例子)
+p, q = 61, 53
+n   = p * q                  # 3233(公開的模數)
+phi = (p - 1) * (q - 1)      # 3120
+e   = 17                     # 公鑰指數,需與 phi 互質
+d   = mod_inverse(e, phi)    # 2753(私鑰指數)
+
+print("公鑰 (e, n) =", (e, n))    # 人人可拿,用來加密
+print("私鑰 (d, n) =", (d, n))    # 只有你有,用來解密
+
+# 2. 加密 / 解密
+m = 65                       # 明文(必須 &lt; n)
+c = pow(m, e, n)             # 加密:c = m^e mod n
+print("密文:", c)            # 2790
+print("解回:", pow(c, d, n)) # 65 —— 用私鑰解密,完美還原</code></pre>
+      <p>
+        攻擊者就算手握公鑰 $(e, n)$ 和密文 $c$,只要算不出私鑰 $d$ 就一籌莫展;而要算 $d$,他必須先把 $n$ 分解回 $p, q$——
+        這正是那道翻不過的牆。<strong>「分解大數很難」這個信念,撐起了你每天的網路銀行。</strong>
+        (補一句現實:RSA 因金鑰較長、速度較慢,現代正逐漸被下面要講的橢圓曲線取代,但它仍是理解公開金鑰最好的範例。)
+      </p>
+
+      <h3>Diffie-Hellman:在大庭廣眾下調出一杯只有兩人知道的顏色</h3>
+      <p>
+        RSA 解決了「加密」,但還有另一條更優雅的路,專門解決「金鑰交換」——<strong>Diffie-Hellman 金鑰交換(DH)</strong>。
+        它讓 Alice 和 Bob 透過一條<em>完全公開</em>的通道,各自喊出幾個數字,最後憑空算出一把<strong>只有他們兩人知道</strong>的共同金鑰,
+        而旁邊全程偷聽的 Eve 卻算不出來。聽起來像魔術?用調顏料的比喻就懂了。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 700 360" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="dh-a" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/></marker>
+  </defs>
+  <!-- column headers -->
+  <text x="110" y="28" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">Alice</text>
+  <text x="350" y="28" text-anchor="middle" font-size="12" font-weight="700" fill="#8a929b">公開通道(Eve 全看得到)</text>
+  <text x="590" y="28" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">Bob</text>
+  <line x1="230" y1="38" x2="230" y2="340" stroke="#e3e7ea" stroke-width="1"/>
+  <line x1="470" y1="38" x2="470" y2="340" stroke="#e3e7ea" stroke-width="1"/>
+
+  <!-- shared base colour (yellow) -->
+  <circle cx="350" cy="70" r="20" fill="#f4d03f"/>
+  <text x="350" y="105" text-anchor="middle" font-size="11" fill="#8a929b">公開基底顏料(g, p)</text>
+
+  <!-- secrets -->
+  <circle cx="110" cy="70" r="18" fill="#c0392b"/>
+  <text x="110" y="105" text-anchor="middle" font-size="11" fill="#8a929b">私密色 a(紅,不公開)</text>
+  <circle cx="590" cy="70" r="18" fill="#2e86c1"/>
+  <text x="590" y="105" text-anchor="middle" font-size="11" fill="#8a929b">私密色 b(藍,不公開)</text>
+
+  <!-- mixtures publicly sent -->
+  <circle cx="110" cy="160" r="20" fill="#e67e22"/>
+  <text x="110" y="196" text-anchor="middle" font-size="11" fill="#8a929b">混色 = 黃+紅</text>
+  <text x="110" y="210" text-anchor="middle" font-size="10" fill="#8a929b">公開送出 A=g^a</text>
+  <circle cx="590" cy="160" r="20" fill="#27ae60"/>
+  <text x="590" y="196" text-anchor="middle" font-size="11" fill="#8a929b">混色 = 黃+藍</text>
+  <text x="590" y="210" text-anchor="middle" font-size="10" fill="#8a929b">公開送出 B=g^b</text>
+
+  <!-- exchange arrows -->
+  <line x1="135" y1="160" x2="565" y2="160" stroke="#8a929b" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#dh-a)"/>
+  <line x1="565" y1="178" x2="135" y2="178" stroke="#8a929b" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#dh-a)"/>
+
+  <!-- final shared colour (brown) -->
+  <circle cx="110" cy="285" r="22" fill="#6e4b2a"/>
+  <text x="110" y="324" text-anchor="middle" font-size="10" fill="#8a929b">綠(收到)+紅(我的私密)</text>
+  <circle cx="590" cy="285" r="22" fill="#6e4b2a"/>
+  <text x="590" y="324" text-anchor="middle" font-size="10" fill="#8a929b">橙(收到)+藍(我的私密)</text>
+  <rect x="300" y="268" width="100" height="34" rx="8" fill="#efe7df" stroke="#6e4b2a"/>
+  <text x="350" y="289" text-anchor="middle" font-size="12" font-weight="700" fill="#6e4b2a">共同金鑰</text>
+  <text x="350" y="340" text-anchor="middle" font-size="10" fill="#8a929b">雙方調出同一種棕色 = g^(ab);Eve 缺一個私密色,調不出來</text>
+</svg>
+        <figcaption>圖 35-4:Diffie-Hellman 的顏料比喻。雙方從公開的黃色出發,各自混入自己的私密色後,把「混合色」公開交換。最後各自再混入自己的私密色,兩人都會得到同一種棕色——而關鍵在於:<strong>把顏料混合容易,把混合色「分離」回原料卻極難</strong>。Eve 看得到黃、橙、綠三色,卻調不出那個棕色。</figcaption>
+      </div>
+
+      <p>
+        把「混顏料」換成數學,那個「易混難分」的單向操作就是<strong>模冪</strong>:算 $g^a \bmod p$ 很容易,但反過來從結果求出指數 $a$
+        (這叫<strong>離散對數問題</strong>)極其困難。用第 15 章的 <code>pow</code> 就能跑:
+      </p>
+      <pre><code class="language-python"># 公開參數:一個大質數 p 與生成元 g(這裡用小數字示範)
+p, g = 23, 5
+
+a = 6                  # Alice 的私密數(絕不公開)
+A = pow(g, a, p)       # Alice 公開送出 A = g^a mod p  = 8
+
+b = 15                 # Bob 的私密數(絕不公開)
+B = pow(g, b, p)       # Bob 公開送出   B = g^b mod p  = 19
+
+# 各自用「對方的公開值」再做一次自己的私密次方
+alice_key = pow(B, a, p)   # (g^b)^a = g^(ab) mod p
+bob_key   = pow(A, b, p)   # (g^a)^b = g^(ab) mod p
+print(alice_key, bob_key)  # 2 2 —— 兩人算出同一把金鑰!
+
+# Eve 在通道上看得到 p, g, A=8, B=19,卻無法算出 a 或 b,
+# 因此也算不出共同金鑰 g^(ab)。這就是離散對數的「單向牆」。</code></pre>
+      <p>
+        妙就妙在 $g^{ab} = (g^a)^b = (g^b)^a$——指數相乘的順序無所謂,所以兩人殊途同歸。實務上,
+        Alice 和 Bob 用 DH 在公開通道上「無中生有」協商出一把金鑰後,就拿它當<strong>對稱金鑰</strong>(餵給 AES),
+        往後的大量資料就用又快又強的對稱加密來傳。<strong>公開金鑰負責「交換鑰匙」,對稱金鑰負責「實際幹活」</strong>——
+        這個分工,正是 TLS 的核心,馬上就會看到。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">橢圓曲線(ECC):更小的金鑰,一樣的安全</span>
+          <p>今天更主流的做法是把 RSA 與 DH 的數論,搬到<strong>橢圓曲線(Elliptic Curve Cryptography, ECC)</strong>上。
+          它基於「橢圓曲線上的離散對數」這個更難的問題,於是能用<strong>短得多的金鑰</strong>達到同等安全
+          (256 位元的 ECC 約等於 3072 位元的 RSA),速度更快、更省電——所以手機、IoT、現代 TLS 大量採用
+          ECDH(橢圓曲線版的 Diffie-Hellman)。原理一句話帶過:換了個更難的數學舞台,但「易正向、難反向」的精神完全一樣。</p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 35.4 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>沿用第 15 章的工具,完成一個玩具 RSA:用 <code>p, q = 61, 53</code>、<code>e = 17</code> 造出金鑰,
+          對訊息 <code>m = 65</code> 做<strong>加密與解密</strong>,驗證能還原。接著做<strong>數位簽章</strong>:
+          注意簽章的方向<em>和加密相反</em>——用<strong>私鑰</strong>簽、用<strong>公鑰</strong>驗。請示範並解釋為什麼這樣就能證明「這訊息確實是私鑰持有者發的」。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">def ext_gcd(a, b):
+    if b == 0:
+        return a, 1, 0
+    g, x1, y1 = ext_gcd(b, a % b)
+    return g, y1, x1 - (a // b) * y1
+
+def mod_inverse(e, phi):
+    g, x, _ = ext_gcd(e, phi)
+    return x % phi
+
+p, q = 61, 53
+n   = p * q                  # 3233
+phi = (p - 1) * (q - 1)      # 3120
+e   = 17
+d   = mod_inverse(e, phi)    # 2753
+
+m = 65
+
+# --- 加密 / 解密:公鑰加密,私鑰解密 ---
+c = pow(m, e, n)             # 加密
+assert pow(c, d, n) == m     # 解密還原 ✔
+print("加解密 OK,密文 =", c) # 2790
+
+# --- 數位簽章:私鑰簽,公鑰驗(方向相反!) ---
+signature = pow(m, d, n)            # 用「私鑰 d」對訊息簽名
+verified  = pow(signature, e, n)    # 任何人用「公鑰 e」驗證
+print("簽章 =", signature)
+print("驗證得到:", verified, "==原訊息?", verified == m)  # True
+
+# 偽造測試:沒有私鑰 d 的攻擊者,生不出能通過驗證的簽章
+fake = 1234
+print("偽造簽章通過驗證?", pow(fake, e, n) == m)   # False</code></pre>
+              <p>為什麼可行?因為 $e$ 和 $d$ 互為模反元素,<code>pow(pow(m, d, n), e, n) == m</code> 恆成立。
+              只有握有私鑰 $d$ 的人才能產出那個「用公鑰一驗就變回 $m$」的數字。所以驗證通過,就證明了訊息來自私鑰持有者
+              (<strong>真實性</strong>),且訊息沒被改過(<strong>完整性</strong>)。這就是下一節數位簽章的數學核心。
+              (真實系統會先對訊息算雜湊再簽,而不是直接簽原文——這裡為了對應第 15 章而簡化。)</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 35.5 <span class="badge">思考|實作</span></div>
+        <div class="ex-body">
+          <p>實作 Diffie-Hellman 金鑰交換:給定公開的 <code>p, g</code>,讓 Alice 與 Bob 各自選一個私密數,
+          交換公開值後算出共同金鑰,驗證兩邊一致。然後用「自己的話」解釋:Eve 在通道上看到了 <code>p, g, A, B</code> 四個數字,
+          為什麼她仍然算不出共同金鑰?她缺的到底是什麼?</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">def diffie_hellman(p, g, a, b):
+    A = pow(g, a, p)            # Alice 公開值
+    B = pow(g, b, p)            # Bob 公開值
+    alice_key = pow(B, a, p)    # Alice 算:B^a = g^(ab)
+    bob_key   = pow(A, b, p)    # Bob 算:  A^b = g^(ab)
+    return A, B, alice_key, bob_key
+
+p, g = 23, 5
+A, B, k1, k2 = diffie_hellman(p, g, a=6, b=15)
+print("公開傳輸:A =", A, " B =", B)   # A = 8, B = 19
+print("共同金鑰:", k1, k2)            # 2 2
+assert k1 == k2</code></pre>
+              <p><strong>Eve 缺的是「指數」。</strong>她看得到 $A = g^a \bmod p$,但要從 $A$ 反推出 $a$,
+              等於要解<strong>離散對數問題</strong>——在夠大的 $p$ 下,這在計算上不可行。共同金鑰是 $g^{ab}$,
+              而 Eve 手上只有 $g^a$ 和 $g^b$;沒有 $a$ 或 $b$ 任一個,她<em>無法</em>把 $g^a$ 和 $g^b$「組合」成 $g^{ab}$
+              (這叫 Diffie-Hellman 難題)。關鍵不對稱:<strong>正向算模冪是 $O(\log)$ 的瞬間運算,反向求指數卻是天文數字的工作量。</strong></p>
+              <p>但請注意:純 DH 只防得了被動的 Eve,防不了主動的 Mallory——她可以分別冒充雙方,和兩邊各做一次 DH,
+              坐在中間轉譯(<strong>中間人攻擊,man-in-the-middle</strong>)。要堵住它,雙方必須<strong>驗證對方身分</strong>,
+              這就需要數位簽章與憑證——也就是接下來兩節。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>數位簽章:用私鑰蓋一個無法偽造的印章</h2>
+      <p>
+        加密保護的是<strong>機密性</strong>(別人看不到內容)。但很多時候,內容公不公開無所謂,你真正想確認的是:
+        <strong>這真的是「他」發的嗎?有沒有被人在路上改過?</strong> 這是<strong>真實性與完整性</strong>的問題,
+        而解法是公開金鑰的另一個威力——<strong>數位簽章(digital signature)</strong>。
+      </p>
+      <p>
+        它的精妙之處在於:<strong>把公開金鑰反過來用。</strong> 加密是「公鑰鎖、私鑰開」;簽章則是「私鑰簽、公鑰驗」:
+      </p>
+      <ul>
+        <li><strong>簽名</strong>:發訊者先對訊息算一個雜湊(指紋),再用<strong>自己的私鑰</strong>對這個指紋運算,產生一段「簽章」附在訊息後。</li>
+        <li><strong>驗證</strong>:任何人用發訊者<strong>公開的公鑰</strong>檢查簽章,若通過,就同時證明了三件事。</li>
+      </ul>
+
+      <div class="diagram">
+<svg viewBox="0 0 700 210" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs><marker id="ar3" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/></marker></defs>
+  <!-- row 1: encryption -->
+  <text x="40" y="55" font-size="12" font-weight="700" fill="#2f6f6a">加密</text>
+  <rect x="120" y="35" width="130" height="40" rx="8" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="185" y="59" text-anchor="middle" font-size="12" fill="#1f2328">公鑰 🔓 加密</text>
+  <line x1="250" y1="55" x2="430" y2="55" stroke="#8a929b" stroke-width="2" marker-end="url(#ar3)"/>
+  <rect x="430" y="35" width="130" height="40" rx="8" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="495" y="59" text-anchor="middle" font-size="12" fill="#1f2328">私鑰 🔑 解密</text>
+  <text x="600" y="59" font-size="11" fill="#8a929b">求機密性</text>
+  <!-- row 2: signature (reversed) -->
+  <text x="40" y="150" font-size="12" font-weight="700" fill="#b4541f">簽章</text>
+  <rect x="120" y="130" width="130" height="40" rx="8" fill="#f6e7dd" stroke="#b4541f"/>
+  <text x="185" y="154" text-anchor="middle" font-size="12" fill="#1f2328">私鑰 🔑 簽名</text>
+  <line x1="250" y1="150" x2="430" y2="150" stroke="#8a929b" stroke-width="2" marker-end="url(#ar3)"/>
+  <rect x="430" y="130" width="130" height="40" rx="8" fill="#f6e7dd" stroke="#b4541f"/>
+  <text x="495" y="154" text-anchor="middle" font-size="12" fill="#1f2328">公鑰 🔓 驗證</text>
+  <text x="600" y="154" font-size="11" fill="#8a929b">求真實性</text>
+  <text x="350" y="105" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">同一對金鑰,兩種方向相反的用法</text>
+</svg>
+        <figcaption>圖 35-5:加密與簽章互為鏡像。加密為了保密,用公鑰鎖、私鑰開;簽章為了證明身分,用私鑰簽、公鑰驗。因為只有你握有私鑰,能通過你公鑰驗證的簽章,只可能是你做的。</figcaption>
+      </div>
+
+      <p>一個通過驗證的數位簽章,一次提供了三種保證:</p>
+      <ul>
+        <li><strong>完整性(integrity)</strong>:訊息只要被改一個位元,雜湊就變,簽章驗證立刻失敗。</li>
+        <li><strong>真實性(authenticity)</strong>:只有私鑰持有者簽得出能通過驗證的簽章,所以確實是「他」發的。</li>
+        <li><strong>不可否認性(non-repudiation)</strong>:他事後不能抵賴「這不是我簽的」——因為除了他,沒人有那把私鑰。</li>
+      </ul>
+      <p>
+        你在練習 35.4 已經用玩具 RSA 實作過它了。現實中,軟體更新、區塊鏈交易、電子公文、HTTPS 憑證,全靠數位簽章背書。
+        但這裡藏著一個尚未回答的問題:驗證簽章要用「發訊者的公鑰」——可是<strong>你怎麼知道那把公鑰真的屬於他,而不是 Mallory 偷天換日塞給你的假公鑰?</strong>
+        這就把我們帶到最後一塊拼圖。
+      </p>
+
+      <h2>PKI 與憑證:那把鎖頭背後的信任鏈</h2>
+      <p>
+        公開金鑰解決了「加密」與「簽章」,卻冒出一個新問題:<strong>公鑰的真偽</strong>。你連上「銀行網站」,
+        它傳給你一把公鑰說「這是我的」——但你怎麼確定送來的不是冒牌貨的公鑰?如果 Mallory 把她自己的公鑰冒充成銀行的,
+        你就會用她的公鑰加密、和她建立連線,還以為自己很安全。這就是中間人攻擊的核心。
+      </p>
+      <p>
+        解法是引入「<strong>可信任的第三方</strong>」來擔保。整套制度叫<strong>公鑰基礎建設(Public Key Infrastructure, PKI)</strong>,
+        核心角色是<strong>憑證頒發機構(Certificate Authority, CA)</strong>——一些全世界公認可信的機構(如 Let's Encrypt、DigiCert)。
+      </p>
+      <ul>
+        <li>銀行向 CA 證明「我真的擁有 bank.com 這個網域」,CA 查證後,用<strong>CA 自己的私鑰</strong>對「bank.com 的公鑰 + 網域名 + 有效期」打包<strong>簽章</strong>,做成一張<strong>數位憑證(certificate)</strong>。</li>
+        <li>你連上銀行時,它把這張憑證給你。你的瀏覽器/作業系統裡<strong>預先內建</strong>了一份「受信任 CA 的公鑰清單」(信任根, root of trust)。</li>
+        <li>瀏覽器用 CA 的公鑰<strong>驗證憑證上的簽章</strong>:通過,就代表「一個你信任的 CA 擔保:這把公鑰確實屬於 bank.com」。</li>
+      </ul>
+      <p>
+        實務上不是一張憑證,而是一條<strong>信任鏈(chain of trust)</strong>:根 CA 簽中介 CA,中介 CA 再簽網站憑證,
+        像一條擔保的鎖鏈,一路追溯到你天生信任的根。只要鏈上每一環的簽章都驗得過,你就能信任最末端那把公鑰。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 700 240" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs><marker id="ar4" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#2f6f6a"/></marker></defs>
+  <!-- Root CA -->
+  <rect x="40" y="90" width="150" height="60" rx="10" fill="#2f6f6a"/>
+  <text x="115" y="116" text-anchor="middle" font-size="13" font-weight="800" fill="#fff">根 CA</text>
+  <text x="115" y="135" text-anchor="middle" font-size="10" fill="#cfe6e2">瀏覽器內建信任</text>
+  <!-- Intermediate CA -->
+  <rect x="275" y="90" width="150" height="60" rx="10" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="350" y="116" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">中介 CA</text>
+  <text x="350" y="135" text-anchor="middle" font-size="10" fill="#8a929b">被根 CA 簽章</text>
+  <!-- Website cert -->
+  <rect x="510" y="90" width="150" height="60" rx="10" fill="#f6e7dd" stroke="#b4541f"/>
+  <text x="585" y="113" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">bank.com</text>
+  <text x="585" y="132" text-anchor="middle" font-size="10" fill="#8a929b">的憑證(含公鑰)</text>
+  <!-- arrows: signs -->
+  <line x1="190" y1="120" x2="273" y2="120" stroke="#2f6f6a" stroke-width="2" marker-end="url(#ar4)"/>
+  <text x="231" y="110" text-anchor="middle" font-size="10" fill="#2f6f6a">簽</text>
+  <line x1="425" y1="120" x2="508" y2="120" stroke="#2f6f6a" stroke-width="2" marker-end="url(#ar4)"/>
+  <text x="466" y="110" text-anchor="middle" font-size="10" fill="#2f6f6a">簽</text>
+  <text x="350" y="40" text-anchor="middle" font-size="13" font-weight="700" fill="#1f2328">信任鏈:一路追溯到你天生信任的根</text>
+  <text x="350" y="195" text-anchor="middle" font-size="11" fill="#8a929b">瀏覽器逐環驗證簽章;全部通過 → 網址列顯示那把 🔒</text>
+</svg>
+        <figcaption>圖 35-6:憑證的信任鏈。你不需要事先認識 bank.com,只需要信任根 CA;根 CA 擔保中介 CA,中介 CA 擔保網站。這條由數位簽章串成的鏈,就是瀏覽器網址列那把鎖頭背後的全部祕密。</figcaption>
+      </div>
+
+      <div class="callout note">
+        <div class="ico">🔒</div>
+        <div class="body">
+          <span class="c-title">那把鎖頭到底在保證什麼?</span>
+          <p>網址列的 🔒 只保證兩件事:<strong>(1) 連線是加密的</strong>(沿途沒人偷看得到內容),
+          <strong>(2) 你連到的網域,身分經過 CA 擔保</strong>(你確實連到了 <code>bank.com</code>,而不是冒牌站)。
+          它<strong>不</strong>保證這個網站本身是善良的——釣魚網站也能申請到合法憑證、也會顯示鎖頭。
+          所以「有鎖頭」代表「通道安全」,不代表「對方可信」。這個分寸,很多人一輩子搞錯。</p>
+        </div>
+      </div>
+
+      <h2>TLS:把一切串成一條安全連線</h2>
+      <p>
+        我們手上的零件齊了:對稱加密(快)、公開金鑰(解決金鑰交換)、雜湊(完整性)、簽章與憑證(身分)。
+        <strong>TLS(Transport Layer Security)</strong>就是把它們<em>全部</em>編織在一起的協定,也就是 HTTP 變成 HTTPS 時多披的那層外殼
+        (第 25 章我們答應要揭曉的那把鎖,就是它)。它最聰明的設計,是一個分工:
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">TLS 的核心智慧:用慢的(非對稱)去換快的(對稱)</span>
+          <p>非對稱加密安全又能解決金鑰分配,但<strong>慢</strong>;對稱加密<strong>快</strong>,但有金鑰分配難題。
+          TLS 各取所長:<strong>握手階段用「非對稱」安全地協商出一把對稱金鑰,之後的海量資料全用「對稱」加密來傳。</strong>
+          公開金鑰只在開頭辛苦一下下,負責「把鑰匙安全交給對方」;真正的搬運苦力,交給又快又猛的 AES。</p>
+        </div>
+      </div>
+
+      <p>把這場「握手(handshake)」用簡化的流程畫出來:</p>
+
+      <div class="diagram">
+<svg viewBox="0 0 700 380" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs><marker id="tl-a" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#2f6f6a"/></marker></defs>
+  <!-- lifelines -->
+  <rect x="60" y="20" width="150" height="40" rx="8" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="135" y="45" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">你的瀏覽器</text>
+  <rect x="490" y="20" width="150" height="40" rx="8" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="565" y="45" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">伺服器</text>
+  <line x1="135" y1="60" x2="135" y2="360" stroke="#cfd6da" stroke-width="1.5"/>
+  <line x1="565" y1="60" x2="565" y2="360" stroke="#cfd6da" stroke-width="1.5"/>
+
+  <!-- 1 ClientHello -->
+  <line x1="135" y1="95" x2="560" y2="95" stroke="#2f6f6a" stroke-width="2" marker-end="url(#tl-a)"/>
+  <text x="345" y="88" text-anchor="middle" font-size="11" fill="#1f2328">① ClientHello:我支援這些加密套件 + 一個隨機數</text>
+
+  <!-- 2 ServerHello + cert -->
+  <line x1="565" y1="135" x2="140" y2="135" stroke="#2f6f6a" stroke-width="2" marker-end="url(#tl-a)"/>
+  <text x="345" y="128" text-anchor="middle" font-size="11" fill="#1f2328">② ServerHello + 憑證(含公鑰、CA 簽章)+ 隨機數</text>
+
+  <!-- 3 verify cert (client side note) -->
+  <rect x="20" y="155" width="230" height="34" rx="6" fill="#f6e7dd" stroke="#b4541f"/>
+  <text x="135" y="176" text-anchor="middle" font-size="10.5" fill="#b4541f">③ 用 CA 公鑰驗證憑證(信任鏈)</text>
+
+  <!-- 4 key exchange -->
+  <line x1="135" y1="220" x2="560" y2="220" stroke="#2f6f6a" stroke-width="2" marker-end="url(#tl-a)"/>
+  <text x="345" y="213" text-anchor="middle" font-size="11" fill="#1f2328">④ 用非對稱(ECDHE)交換金鑰素材</text>
+
+  <!-- 5 derive symmetric key (both) -->
+  <rect x="20" y="240" width="230" height="34" rx="6" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="135" y="261" text-anchor="middle" font-size="10.5" fill="#2f6f6a">⑤ 各自算出相同的對稱會談金鑰</text>
+  <rect x="450" y="240" width="230" height="34" rx="6" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="565" y="261" text-anchor="middle" font-size="10.5" fill="#2f6f6a">⑤ 各自算出相同的對稱會談金鑰</text>
+
+  <!-- 6 encrypted application data -->
+  <line x1="135" y1="315" x2="560" y2="315" stroke="#b4541f" stroke-width="2.5" marker-end="url(#tl-a)"/>
+  <line x1="565" y1="335" x2="140" y2="335" stroke="#b4541f" stroke-width="2.5" marker-end="url(#tl-a)"/>
+  <text x="345" y="308" text-anchor="middle" font-size="11" font-weight="700" fill="#b4541f">⑥ 之後全用「對稱加密(AES-GCM)」傳資料 —— 快!</text>
+</svg>
+        <figcaption>圖 35-7:簡化的 TLS 握手。前半段(①〜⑤)用憑證驗證身分、用非對稱金鑰交換協商出一把對稱金鑰;一旦握手完成,後半段(⑥)的所有應用資料就改用又快又強的對稱加密。一次性的「貴」操作,換來持續的「便宜」加密。</figcaption>
+      </div>
+
+      <p>
+        握手成功後,你和伺服器之間就有了一條同時具備<strong>機密性</strong>(對稱加密)、<strong>完整性與真實性</strong>
+        (AEAD + 憑證)的隧道。CIA 三本柱裡的 C 和 I,加上真實性,全到位了。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">完美前向保密(Perfect Forward Secrecy)</span>
+          <p>現代 TLS 用 ECDHE(每次連線都產生<strong>臨時的</strong>金鑰交換),帶來一個重要性質:
+          <strong>完美前向保密</strong>——就算伺服器的長期私鑰<em>未來</em>被偷,攻擊者<em>也無法</em>解開他<em>過去</em>側錄下來的舊連線,
+          因為每次連線用的那把臨時金鑰早就用完即丟了。「今天錄起來、等以後破解」的攻擊,被這招擋了下來。</p>
+        </div>
+      </div>
+
+      <h2>鐵律:永遠別自己造密碼系統</h2>
+      <p>
+        讀到這裡,你可能躍躍欲試,想自己寫個加密函式庫。請務必先讀完這一節。整章我們反覆看到一件事:
+        密碼學的演算法本身(AES、RSA)往往不是被攻破的點,<strong>真正出事的幾乎都是「怎麼用」的細節</strong>——
+        用了 ECB 模式、重複用了金鑰、用了可預測的亂數、沒做完整性檢查、比對時洩漏了時間差(<strong>旁路攻擊,side-channel</strong>)……
+        每一個都是深不見底的坑,而且<strong>程式跑得出正確結果,不代表它安全</strong>——這正是密碼學 bug 最可怕的地方:它默默地、無聲地不安全。
+      </p>
+
+      <div class="callout danger">
+        <div class="ico">⛔</div>
+        <div class="body">
+          <span class="c-title">Don't roll your own crypto(別自己造密碼系統)</span>
+          <p>這是整個資安領域最重要的一句忠告。<strong>不要自己設計密碼演算法,也不要自己拼裝密碼協定。</strong>
+          請使用經過全世界專家公開審查、久經實戰的成熟函式庫——例如 Python 的 <code>cryptography</code>、
+          libsodium / PyNaCl,或直接用作業系統/語言內建、設定好的 TLS。它們替你處理了那成千上萬個你想不到的細節。
+          <strong>本章所有玩具程式碼,只為「教學、建立直覺」而存在,絕不可用於任何真實系統。</strong>
+          記住:在密碼學裡,自信地造輪子,通常等於自信地把使用者送進火坑。把聰明用在「正確地使用」成熟工具上,而不是重新發明它們。</p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 35.6 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>(任選一題)<strong>(a)</strong> 用程式具體示範「為什麼 ECB 模式會洩漏圖案」:寫一個玩具區塊加密,
+          把一段「含有重複區塊」的資料用 ECB 方式加密,指出相同明文區塊產生了相同密文區塊。
+          <strong>(b)</strong> 實作一個<strong>加鹽 + 慢雜湊</strong>的密碼儲存與驗證流程,並說明它如何同時擋掉彩虹表與暴力破解。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>(a) ECB 洩漏圖案的最小示範:</strong></p>
+              <pre><code class="language-python"># 玩具「區塊密碼」:每個位元組加上金鑰再取模。極不安全,只為示範 ECB 的結構問題。
+def toy_block_encrypt(block, key):
+    return bytes((b + key) % 256 for b in block)
+
+def ecb_encrypt(data, key, block_size=4):
+    blocks = [data[i:i+block_size] for i in range(0, len(data), block_size)]
+    return [toy_block_encrypt(b, key).hex() for b in blocks]
+
+data = b"SAMESAMESAMEDIFF"   # 前三個 4-byte 區塊都是 b"SAME"
+for ct in ecb_encrypt(data, key=42):
+    print(ct)
+# 你會看到前三行的密文「完全相同」—— 因為明文區塊相同。
+# 圖片裡大片同色背景 = 大量相同區塊 = 大量相同密文 → 輪廓被保留(ECB 企鵝)。
+# 修正:用 CBC/CTR/GCM,讓每塊加密都混入前文或計數器,相同明文也得到不同密文。</code></pre>
+              <p><strong>(b) 加鹽 + 慢雜湊的密碼儲存:</strong></p>
+              <pre><code class="language-python">import hashlib, os, hmac
+
+def hash_password(password, salt=None):
+    if salt is None:
+        salt = os.urandom(16)                 # 每個使用者一份隨機鹽(16 位元組)
+    # PBKDF2:故意迭代很多次,把單次雜湊拖慢
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, 200_000)
+    return salt, digest
+
+def verify(password, salt, expected_digest):
+    _, digest = hash_password(password, salt)
+    # 用 compare_digest 做「定時比較」,避免靠比對時間差的旁路攻擊
+    return hmac.compare_digest(digest, expected_digest)
+
+# 註冊:存下 (salt, digest),絕不存明文密碼
+salt, digest = hash_password("correct horse battery staple")
+# 登入驗證:
+print(verify("correct horse battery staple", salt, digest))  # True
+print(verify("wrong password", salt, digest))                # False</code></pre>
+              <p><strong>為什麼這樣安全?</strong></p>
+              <ul>
+                <li><strong>鹽擋彩虹表</strong>:每個使用者鹽不同,同樣的密碼也算出不同雜湊,攻擊者預算好的彩虹表全部作廢,只能針對「每一份鹽」重新硬算。</li>
+                <li><strong>慢雜湊擋暴力</strong>:PBKDF2 迭代 20 萬次,把每次嘗試拖慢到數十毫秒。你登入時無感,但攻擊者每秒能猜的數量被砍掉好幾個數量級。</li>
+                <li><strong>定時比較擋旁路</strong>:<code>hmac.compare_digest</code> 不會「比到第一個不同的位元組就提早回傳」,避免攻擊者用回應時間反推出正確前綴。</li>
+              </ul>
+              <p>(再次提醒:真實產品請直接用 <code>bcrypt</code> / <code>argon2-cffi</code> 等成熟函式庫,別自己組裝——呼應本章鐵律。)</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>動手實驗室:從零實作 RSA + 破解弱金鑰</h2>
+      <p>
+        前幾節把 RSA 的原理說清楚了；這個實驗室要真正<strong>動手做一遍</strong>——
+        用紙筆可以追得上的小數字，一步步生成金鑰、加解密，接著換成攻擊者 Eve 的視角，
+        用試除法把弱金鑰直接破開。透過這個反差，你會親眼體會大 $n$ 為何讓分解變成天文數字的工作量。
+      </p>
+
+      <h3>金鑰生成:五步手算 + Python</h3>
+      <p>
+        選 $p = 17,\; q = 11$（真實 RSA 用 2048 位元以上的大質數；
+        這裡為了能在紙上完整追蹤而刻意縮小），逐步走完生成流程：
+      </p>
+      <ol>
+        <li>
+          <strong>模數</strong>：$n = p \times q = 17 \times 11 = 187$（<em>公開</em>，放進公鑰）
+        </li>
+        <li>
+          <strong>歐拉函數</strong>：$\varphi(n) = (p-1)(q-1) = 16 \times 10 = 160$
+          （<em>保密</em>——知道它就能算出私鑰）
+        </li>
+        <li>
+          <strong>選加密指數</strong> $e = 7$：需滿足 $1 &lt; e &lt; \varphi(n)$
+          且 $\gcd(e,\,\varphi(n))=1$。7 是質數且不整除 160，互質條件自動成立。
+        </li>
+        <li>
+          <strong>算解密指數</strong> $d = e^{-1} \bmod \varphi(n)$：找整數 $d$
+          使 $7d \equiv 1 \pmod{160}$——用擴展歐幾里得（手算如下）。
+        </li>
+      </ol>
+      <p><strong>手算擴展歐幾里得，求 $d$：</strong></p>
+      <p>
+        目標：解 $7x + 160y = 1$（裴蜀定理保證解存在，因 $\gcd(7, 160)=1$）。<br>
+        前向輾轉相除：<br>
+        $\quad 160 = 22 \times 7 + 6 \;\Rightarrow\; 6 = 160 - 22 \times 7$<br>
+        $\quad 7 = 1 \times 6 + 1 \;\Rightarrow\; 1 = 7 - 1 \times 6$<br>
+        回代消去 $6$：<br>
+        $\quad 1 = 7 - 1 \times (160 - 22 \times 7) = 23 \times 7 - 1 \times 160$<br>
+        故 $d = 23$。驗算：$7 \times 23 = 161 \equiv 1 \pmod{160}$ ✔
+      </p>
+      <p>
+        結論：<strong>公鑰 $(e,\,n)=(7,\,187)$</strong>（人人可知），
+        <strong>私鑰 $(d,\,n)=(23,\,187)$</strong>（只有你保管）。
+      </p>
+      <pre><code class="language-python">def ext_gcd(a, b):
+    """擴展歐幾里得，回傳 (gcd, x, y) 使得 a*x + b*y = gcd"""
+    if b == 0:
+        return a, 1, 0
+    g, x1, y1 = ext_gcd(b, a % b)
+    return g, y1, x1 - (a // b) * y1
+
+def mod_inverse(e, phi):
+    g, x, _ = ext_gcd(e, phi)
+    if g != 1:
+        raise ValueError("e 與 phi 不互質，無模反元素")
+    return x % phi
+
+# ── 金鑰生成 ────────────────────────────────────────────────────────
+p, q = 17, 11
+n    = p * q                      # 187
+phi  = (p - 1) * (q - 1)          # 160
+e    = 7
+d    = mod_inverse(e, phi)         # 23（對應手算結果）
+print(f"公鑰 (e={e}, n={n})   私鑰 (d={d}, n={n})")</code></pre>
+
+      <h3>加密與解密:完整示例</h3>
+      <p>
+        取明文 $m = 88$（需 $0 \le m &lt; n = 187$）：
+      </p>
+      <ul>
+        <li>
+          <strong>加密</strong>（公鑰 $e=7$）：$c = 88^7 \bmod 187$。
+          平方乘法展開，$7=(111)_2$：<br>
+          $88^2 = 7744 \equiv 77 \pmod{187}$，<br>
+          $88^4 = 77^2 = 5929 \equiv 132 \pmod{187}$，<br>
+          $88^7 = 88^4 \cdot 88^2 \cdot 88 \equiv 132 \times 77 \times 88 \equiv 11 \pmod{187}$。密文 $c = 11$。
+        </li>
+        <li>
+          <strong>解密</strong>（私鑰 $d=23$）：$m' = 11^{23} \bmod 187$。
+          $23=(10111)_2$，快速冪：<br>
+          $11^2 \equiv 121,\quad 11^4 \equiv 55,\quad 11^8 \equiv 33,\quad 11^{16} \equiv 154 \pmod{187}$，<br>
+          $11^{23} = 11^{16} \cdot 11^4 \cdot 11^2 \cdot 11 \equiv 154 \times 55 \times 121 \times 11 \equiv 88 \pmod{187}$。完美還原 $m' = 88$ ✔
+        </li>
+      </ul>
+      <pre><code class="language-python"># ── 加密（Python pow 內建快速冪，等同上方手算） ──────────────────────
+m = 88                             # 明文（必須 &lt; n）
+c = pow(m, e, n)                   # c = m^e mod n = 88^7 mod 187
+print(f"明文 {m}  →  密文 {c}")    # 密文 11
+
+# ── 解密 ─────────────────────────────────────────────────────────────
+recovered = pow(c, d, n)           # m' = c^d mod n
+print(f"密文 {c}  →  解密 {recovered}")   # 還原為 88
+assert recovered == m
+print("往返驗證通過 ✔")</code></pre>
+
+      <h3>破解示範:試除法分解弱 n</h3>
+      <p>
+        現在換成 Eve 的視角。她手上只有公鑰 $(e=7,\; n=187)$ 與密文 $c=11$。
+        要解密就得算 $d$；算 $d$ 需要 $\varphi(n)=(p-1)(q-1)$；算 $\varphi(n)$ 需要 $p$ 與 $q$。
+        因此：<strong>破解 RSA 等價於分解 $n = p \times q$。</strong>
+      </p>
+      <p>
+        對小 $n$，<strong>試除法</strong>直接奏效——從 2 到 $\lfloor\sqrt{n}\rfloor$ 逐一試整除，
+        找到第一個因數就拿到了 $p$，$q = n / p$ 馬上跟來：
+      </p>
+      <pre><code class="language-python">import math
+
+def factorize(n):
+    """試除法：O(√n) 次除法找 n 的最小質因數"""
+    for p in range(2, math.isqrt(n) + 1):
+        if n % p == 0:
+            return p, n // p
+    return n, 1    # n 本身是質數
+
+def crack_rsa(e, n):
+    """給定公鑰 (e, n)，用試除法還原私鑰 d"""
+    p, q = factorize(n)
+    if q == 1:
+        return None               # n 是質數，金鑰設定有誤
+    phi = (p - 1) * (q - 1)
+    d   = mod_inverse(e, phi)    # 沿用上方定義的 mod_inverse
+    return p, q, d
+
+# ── 攻擊弱金鑰 ──────────────────────────────────────────────────────
+p_found, q_found, d_cracked = crack_rsa(7, 187)
+print(f"分解成功：187 = {p_found} × {q_found}")   # 187 = 11 × 17
+print(f"還原私鑰：d = {d_cracked}")                # 23
+print(f"解密密文 11：{pow(11, d_cracked, 187)}")   # 88 ✔</code></pre>
+      <p>
+        攻破只花了 $\lfloor\sqrt{187}\rfloor = 13$ 次除法，毫秒內完成。
+        <strong>為什麼真實 RSA（2048 位元）安全？</strong>若 $n$ 有 2048 個位元（$\approx 620$ 位十進位數），
+        最小質因數最差可逼近 $\sqrt{n} \approx 10^{310}$——即使每秒試一兆次（$10^{12}$），
+        也需要約 $10^{298}$ 秒，遠超宇宙年齡（$\approx 4 \times 10^{17}$ 秒）。
+        目前最強的因式分解演算法（一般數域篩法）也只打得到約 800 位元的 $n$；
+        RSA-2048 在現有計算模型下仍不可破——這正是連回本章「易正向、難反向」的那道數論高牆。
+        （附記：量子電腦的 Shor 演算法能高效分解，這也是密碼界積極研究後量子密碼的原因，但那是另一個時代的故事。）
+      </p>
+
+      <h3>（選修）Diffie-Hellman 三行核心</h3>
+      <p>
+        本章稍早的 DH 一節已完整介紹；這裡只把核心壓成五行，
+        讓你在 RSA 實驗脈絡下一眼對照兩者的異同——RSA 靠<strong>大數分解困難</strong>，
+        DH 靠<strong>離散對數困難</strong>，底層單向函數不同，但「易正向、難反向」的精神完全一致：
+      </p>
+      <pre><code class="language-python">p, g = 23, 5              # 公開的質數 p 與生成元 g
+a, b = 6, 15              # Alice、Bob 各自的私密數（絕不公開）
+
+A = pow(g, a, p)          # Alice 公開送出 g^a mod p = 8
+B = pow(g, b, p)          # Bob   公開送出 g^b mod p = 19
+assert pow(B, a, p) == pow(A, b, p)   # 兩端共同金鑰均為 2 ✔
+# Eve 看到 p, g, A=8, B=19；因「離散對數難題」無法從 A 還原 a，
+# 故算不出共同金鑰 g^(ab) mod p。</code></pre>
+
+      <h3>驗收清單</h3>
+      <ul>
+        <li>RSA 加解密往返正確：<code>pow(pow(m, e, n), d, n) == m</code></li>
+        <li>能用試除法分解小 $n$、還原私鑰並解密密文</li>
+        <li>能解釋為何大 $n$ 讓試除法在宇宙壽命內算不完（連回本章「易正向、難反向」）</li>
+        <li>（選修）DH：兩端算出相同共同金鑰，能說出 Eve 卡在「離散對數難題」上</li>
+      </ul>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 實驗室練習 35-L1 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>
+            給定 $p=13,\; q=7,\; e=5$，<strong>不用電腦</strong>，完成：
+            (1) 算 $n$；(2) 算 $\varphi(n)$；(3) 用擴展歐幾里得算 $d$；
+            (4) 加密明文 $m=10$ 得密文 $c$；(5) 解密 $c$ 驗證還原 $m$。
+          </p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>
+                <strong>(1)</strong> $n = 13 \times 7 = 91$。<br>
+                <strong>(2)</strong> $\varphi(91) = 12 \times 6 = 72$。<br>
+                <strong>(3)</strong> 求 $5d \equiv 1 \pmod{72}$，解 $5x + 72y = 1$：<br>
+                $\quad 72 = 14 \times 5 + 2 \;\Rightarrow\; 2 = 72 - 14 \times 5$<br>
+                $\quad 5 = 2 \times 2 + 1 \;\Rightarrow\; 1 = 5 - 2 \times 2$<br>
+                回代：$1 = 5 - 2(72 - 14 \times 5) = 29 \times 5 - 2 \times 72$，故 $d = 29$。<br>
+                驗算：$5 \times 29 = 145 = 2 \times 72 + 1 \equiv 1 \pmod{72}$ ✔<br>
+                <strong>(4)</strong> $c = 10^5 \bmod 91$：$10^2 \equiv 9$，$10^4 \equiv 81$，
+                $10^5 \equiv 81 \times 10 = 810 \equiv 810 - 8 \times 91 = 82 \pmod{91}$。密文 $c = 82$。<br>
+                <strong>(5)</strong> $m' = 82^{29} \bmod 91 = 10$ ✔（步驟繁瑣，建議 Python 驗算）
+              </p>
+              <pre><code class="language-python">p, q, e = 13, 7, 5
+n   = p * q               # 91
+phi = (p-1) * (q-1)       # 72
+d   = pow(e, -1, phi)     # Python 3.8+ 內建模反元素 → 29
+m   = 10
+c   = pow(m, e, n)        # 82
+print(c, pow(c, d, n))    # 82  10 ✔</code></pre>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 實驗室練習 35-L2 <span class="badge">概念</span></div>
+        <div class="ex-body">
+          <p>
+            為什麼 $e$ 必須與 $\varphi(n)$ <strong>互質</strong>？
+            若 $\gcd(e,\;\varphi(n)) &gt; 1$，會發生什麼事？
+            （提示：想想「模反元素存在」的充要條件。）
+          </p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>
+                模反元素 $d = e^{-1} \bmod \varphi(n)$ 存在的<strong>充要條件</strong>是
+                $\gcd(e,\;\varphi(n))=1$（裴蜀定理）。若 $\gcd &gt; 1$，
+                方程式 $ed \equiv 1 \pmod{\varphi(n)}$ 無整數解——私鑰 $d$ 根本算不出來，
+                加密就成了<strong>不可逆的單行道</strong>：密文加得出來，卻永遠解不回明文。
+              </p>
+              <p>
+                工程實踐：現代 RSA 幾乎全用 $e = 65537 = 2^{16}+1$（費馬質數）。
+                它是質數，和絕大多數 $\varphi(n)$ 互質；二進位表示恰好只有兩個 1
+                （<code>1 0000 0000 0000 0001</code>），
+                使快速冪只需 16 次平方 + 1 次額外乘法，加密極快。
+              </p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 實驗室練習 35-L3 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>
+            不借助 Python 的 <code>pow(b, e, n)</code>，自己實作
+            <strong>平方乘法快速冪</strong> <code>fast_pow(base, exp, mod)</code>，
+            並驗算 <code>fast_pow(88, 7, 187) == 11</code>。
+            接著解釋：為什麼「把指數化成二進位、逐位做平方乘法」能把乘法次數從
+            $O(e)$ 壓到 $O(\log_2 e)$？
+          </p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">def fast_pow(base, exp, mod):
+    """平方乘法快速冪：O(log exp) 次模乘法"""
+    result = 1
+    base = base % mod
+    while exp &gt; 0:
+        if exp % 2 == 1:            # 目前最低位元為 1，把 base 乘進結果
+            result = result * base % mod
+        base = base * base % mod    # 平方，處理下一個位元
+        exp //= 2                   # 右移一位（相當於指數除以 2）
+    return result
+
+print(fast_pow(88, 7, 187))    # 11 ✔</code></pre>
+              <p>
+                <strong>為什麼快？</strong>把指數 $e$ 寫成 $k$ 位二進位，例如 $7 = (111)_2$（$k=3$ 位）。
+                演算法每輪只做「一次平方 + 最多一次乘法」，共 $k = \lfloor\log_2 e\rfloor + 1$ 輪，
+                總模乘法次數 $\le 2\log_2 e$，即 $O(\log e)$。
+                若 $e$ 是 2048 位元大數，直接連乘需要 $2^{2048}$ 次，快速冪只需約 $4096$ 次——
+                差距大到任何宇宙都裝不下。正是這個算法讓真實 RSA 在毫秒內完成加解密。
+              </p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>把這一章串起來</h2>
+      <p>我們從一張「在大庭廣眾下傳遞的情書」出發,一路走到了守護全球網路的 TLS。回顧這趟旅程的路標:</p>
+      <ul>
+        <li><strong>密碼學的任務</strong>:在不安全的通道上,達成機密性、完整性與真實性(呼應第 34 章的 CIA、第 25 章的封包可被竊聽)。</li>
+        <li><strong>古典密碼</strong>(凱撒、替換)敗給暴力破解與頻率分析,留下 <strong>Kerckhoffs 原則</strong>:安全只能靠金鑰,不能靠保密演算法。</li>
+        <li><strong>對稱加密</strong>(AES)又快又強,但卡在<strong>金鑰分配</strong>;XOR/一次性密本理論完美卻不實用;模式很重要(ECB 企鵝的教訓)。</li>
+        <li><strong>密碼學雜湊</strong>(SHA-256)是單向指紋,提供完整性;存密碼要<strong>加鹽 + 慢雜湊</strong>,且絕不用 MD5/SHA-1。</li>
+        <li><strong>公開金鑰</strong>(RSA、Diffie-Hellman、ECC)用「易正向、難反向」的數論,繞過金鑰分配難題——這是全章的魔法核心。</li>
+        <li><strong>數位簽章</strong>把公開金鑰反過來用(私鑰簽、公鑰驗),一次給齊完整性、真實性與不可否認性。</li>
+        <li><strong>PKI 與憑證</strong>用信任鏈解決「公鑰真偽」;<strong>TLS</strong> 把全部零件串起來:用非對稱換對稱,再用對稱高速傳輸。</li>
+        <li>最後,那條用血換來的鐵律:<strong>永遠別自己造密碼系統。</strong></li>
+      </ul>
+      <p>
+        密碼學最迷人的地方在於:它把「不可能」變成「可能」——讓素未謀面的兩人在眾目睽睽下交換祕密,讓你能證明身分卻不洩漏密碼,
+        讓一段亂碼承載你最重要的信任。而這一切,竟然只建立在幾個關於質數與餘數的古老定理之上。下一章,我們會把視角從「數學」
+        拉回「人與系統」,看看真實世界的攻擊者如何繞過密碼學、直接攻擊它周圍的軟體與人——畢竟,最堅固的鎖,也擋不住一扇沒關的窗。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">📚</div>
+        <div class="body">
+          <span class="c-title">想更深入?延伸資源</span>
+          <p>本章對應 OSSU 的 <strong>Cybersecurity Fundamentals</strong> 與密碼學基礎。想真正學懂密碼學,最經典的入門是
+          <a href="https://www.coursera.org/learn/crypto">Dan Boneh 的 <em>Cryptography I</em>(Stanford / Coursera)</a>——
+          它把對稱加密、雜湊、公開金鑰的數學與攻擊講得既嚴謹又好懂,是公認的黃金教材。
+          想要一份偏「工程實務、教你怎麼正確使用」的免費讀物,推薦
+          <a href="https://www.crypto101.io/"><em>Crypto 101</em></a>(線上免費)。
+          數論基礎請回看本書第 15 章(模運算、快速冪、RSA);威脅與防禦的全貌則接續第 34 章(CIA)與下一章。
+          但無論讀了多少,請永遠記得最後那條鐵律——<strong>學密碼學是為了「正確地使用」它,而不是自己造一個。</strong></p>
+        </div>
+      </div>
+
+          <div class="callout tip">
+        <div class="ico">🧭</div>
+        <div class="body">
+          <span class="c-title">延伸：專修軌道</span>
+          <p>理解攻擊才能設計安全系統。<a href="70-ctf-crypto.html">第 70 章《古典與現代密碼破譯》</a>用 CTF 視角實作頻率分析、XOR、雜湊與弱 RSA 的破譯。</p>
+        </div>
+      </div>
+

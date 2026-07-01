@@ -1,0 +1,1320 @@
+<!--meta
+title: 實戰:自製關聯式資料庫
+description: 從零打造 SQLite 風格的單檔關聯式資料庫：REPL、SQL 解析、頁格式、持久化 pager、B-tree 索引（含節點分裂）、查詢過濾、WAL 交易，整合資料庫、進階資料結構、排序搜尋與作業系統四大主題。
+-->
+
+      <div class="eyebrow">第二七部 · 動手實戰專案</div>
+      <h1>實戰:自製關聯式資料庫</h1>
+      <p class="subtitle">SQLite 的核心只有 20 萬行 C 程式碼——讀得完,仿得了。這一章帶你用 Python 從 100 行出發,一路走到能讀寫磁碟、用 B-tree 索引、支援 ACID 交易的完整迷你資料庫。</p>
+      <div class="byline">
+        <span class="tag">第 116 章</span>
+        <span>閱讀時間 ≈ 120 分鐘</span>
+        <span>難度:★★★★★</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>一個完整的關聯式資料庫引擎由哪五個層次組成,每層解決什麼問題</li>
+          <li>如何實作一個 REPL(讀取-求值-輸出迴圈,read-eval-print loop)與 meta 指令</li>
+          <li>如何用手寫 tokenizer 與遞迴下降解析器(recursive descent parser)處理 <code>INSERT</code>/<code>SELECT</code></li>
+          <li>如何設計固定大小頁(page)格式、序列化(serialize)與反序列化(deserialize)列(row)結構</li>
+          <li>如何用 pager 把頁持久化(persist)到單一磁碟檔案並在重啟後讀回</li>
+          <li><strong>B-tree 葉節點(leaf node)、內部節點(internal node)的結構,以及插入時節點分裂(node split)的完整步驟</strong></li>
+          <li>如何在 B-tree 上實作 cursor 抽象並支援 <code>WHERE</code> 條件過濾</li>
+          <li>WAL(write-ahead log,預寫日誌)的設計思路,與 ACID 一致性的基本保證</li>
+        </ul>
+      </div>
+
+      <h2>資料庫不是魔法——一個 DB 引擎的五個層次</h2>
+
+      <p>
+        你有沒有想過,<code>SELECT * FROM users WHERE id = 42</code> 這一行字,
+        最終是怎麼變成一筆從磁碟撈出來的資料的?
+        每次看到資料庫「神奇地」在毫秒內搜完百萬筆記錄,你或許以為裡面藏了什麼深奧魔法。
+      </p>
+      <p>
+        其實沒有。SQLite 的整個引擎可以拆成五層——每一層只做一件事,每一層都能在幾百行程式碼內實作:
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 600 420" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif" font-size="13">
+  <defs>
+    <marker id="arr" markerWidth="10" markerHeight="8" refX="8" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 Z" fill="#8a929b"/>
+    </marker>
+  </defs>
+
+  <!-- Layer 1: User / REPL -->
+  <rect x="100" y="20" width="400" height="56" rx="10" fill="#2f6f6a"/>
+  <text x="300" y="44" fill="#fff" font-weight="700" text-anchor="middle">第一層:使用者 / REPL</text>
+  <text x="300" y="62" fill="#cfe6e2" font-size="11" text-anchor="middle">minidb&gt; prompt · .exit / .tables · 錯誤回報</text>
+
+  <line x1="300" y1="76" x2="300" y2="100" stroke="#8a929b" stroke-width="2" marker-end="url(#arr)"/>
+
+  <!-- Layer 2: SQL Frontend -->
+  <rect x="100" y="104" width="400" height="56" rx="10" fill="#b4541f"/>
+  <text x="300" y="128" fill="#fff" font-weight="700" text-anchor="middle">第二層:SQL 前端</text>
+  <text x="300" y="146" fill="#f6e7dd" font-size="11" text-anchor="middle">Tokenizer → Parser → AST(抽象語法樹)</text>
+
+  <line x1="300" y1="160" x2="300" y2="184" stroke="#8a929b" stroke-width="2" marker-end="url(#arr)"/>
+
+  <!-- Layer 3: Query Executor -->
+  <rect x="100" y="188" width="400" height="56" rx="10" fill="#8b5cf6"/>
+  <text x="300" y="212" fill="#fff" font-weight="700" text-anchor="middle">第三層:查詢執行器(Query Executor)</text>
+  <text x="300" y="230" fill="#ece5ff" font-size="11" text-anchor="middle">走訪 B-tree · 套用 WHERE 過濾 · 回傳結果集</text>
+
+  <line x1="300" y1="244" x2="300" y2="268" stroke="#8a929b" stroke-width="2" marker-end="url(#arr)"/>
+
+  <!-- Layer 4: Storage Engine -->
+  <rect x="100" y="272" width="400" height="56" rx="10" fill="#b4541f"/>
+  <text x="300" y="296" fill="#fff" font-weight="700" text-anchor="middle">第四層:儲存引擎(Storage Engine)</text>
+  <text x="300" y="314" fill="#f6e7dd" font-size="11" text-anchor="middle">Pager(頁管理) · B-tree(索引與資料) · Row 序列化</text>
+
+  <line x1="300" y1="328" x2="300" y2="352" stroke="#8a929b" stroke-width="2" marker-end="url(#arr)"/>
+
+  <!-- Layer 5: Disk -->
+  <rect x="100" y="356" width="400" height="48" rx="10" fill="#2f6f6a"/>
+  <text x="300" y="376" fill="#fff" font-weight="700" text-anchor="middle">第五層:磁碟 / 單一資料庫檔案</text>
+  <text x="300" y="394" fill="#cfe6e2" font-size="11" text-anchor="middle">mydb.db — 連續的固定大小頁序列</text>
+</svg>
+        <figcaption>圖 116-1:一個 SQLite 風格資料庫的五層架構。每一層只向下一層請求服務,彼此互不知道對方的實作細節。</figcaption>
+      </div>
+
+      <p>
+        這五層架構與 <a href="37-databases.html">第 37 章「關聯式資料庫」</a>介紹的理論模型一一對應。
+        整本書我們把這些層次「分開講清楚」——第 37 章講了 SQL 語義,<a href="29-data-structures.html">第 29 章</a>講了 B-tree,
+        <a href="24-operating-system.html">第 24 章</a>講了檔案 I/O 與持久化,<a href="28-sorting-searching.html">第 28 章</a>講了搜尋的效能基礎。
+        這一章把它們全部焊在一起。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">核心觀念</span>
+          <p>資料庫引擎是分層系統的典範:每一層的複雜度只有幾百行程式碼,
+          但層層堆疊之後就能處理「隨機磁碟存取」、「崩潰一致性」、「O(log n) 查找」這些工業級問題。</p>
+        </div>
+      </div>
+
+      <h2>語言選擇:C 與 Python 的取捨</h2>
+
+      <p>
+        cstack 的「Let's Build a Simple Database」系列用 C 實作,SQLite 本身也是 C。
+        那我們為什麼選 Python?
+      </p>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">C vs. Python 取捨</span>
+          <table>
+            <thead><tr><th>面向</th><th>C</th><th>Python(本章選用)</th></tr></thead>
+            <tbody>
+              <tr><td>閱讀門檻</td><td>需要指標、malloc、位元運算</td><td>自然英文,直覺易讀</td></tr>
+              <tr><td>位元操控</td><td>完全手動控制</td><td><code>struct</code> 模組做二進制包裝</td></tr>
+              <tr><td>執行效能</td><td>接近機器速度</td><td>慢 10–100 倍,但足夠學習</td></tr>
+              <tr><td>生產可用性</td><td>是(SQLite 就是 C)</td><td>否</td></tr>
+            </tbody>
+          </table>
+          <p>本章的所有概念(頁格式、B-tree 分裂、WAL)與 C 版本完全相同,只是用 Python 說清楚。
+          學完後再讀 <a href="https://cstack.github.io/db_tutorial/" target="_blank">cstack 的 C 實作</a>會輕鬆很多。</p>
+        </div>
+      </div>
+
+      <p>
+        我們會用 Python 的 <code>struct</code> 模組做二進位序列化(binary serialization)——
+        它的 API 和 C 的 <code>memcpy</code> 思路完全一致,
+        讓你同時理解「Python 怎麼表達」和「底層位元組長什麼樣」。
+      </p>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">先備知識</span>
+          <p>需要你熟悉 Python 類別、檔案 I/O,以及對 B-tree 有基本概念
+          (建議先讀 <a href="29-data-structures.html">第 29 章「進階資料結構」</a>的 B-tree 小節)。</p>
+        </div>
+      </div>
+
+      <h2>里程碑 1 — REPL 與 meta 指令</h2>
+
+      <p>
+        所有互動式程式的起點都是 REPL——讀取一行輸入、求值(evaluate)、印出結果、重複(loop)。
+        把 DB 的 REPL 先建好,其他所有功能都插進去這個框架。
+      </p>
+
+      <pre><code class="language-python"># db.py — 里程碑 1：REPL 框架
+import sys
+
+def main():
+    db_file = sys.argv[1] if len(sys.argv) &gt; 1 else ":memory:"
+    print(f"MiniDB v0.1  (file: {db_file})")
+
+    while True:
+        try:
+            line = input("minidb&gt; ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\nBye.")
+            break
+
+        if not line:
+            continue
+
+        if line.startswith("."):
+            result = handle_meta(line)
+            if result == "EXIT":
+                break
+        else:
+            handle_sql(line, db_file)   # 里程碑 2 以後才真正實作
+
+def handle_meta(cmd: str) -&gt; str:
+    """處理 meta 指令 (.exit, .help, .tables ...)"""
+    if cmd == ".exit":
+        print("Bye.")
+        return "EXIT"
+    elif cmd == ".help":
+        print("  .exit    離開 MiniDB")
+        print("  .tables  列出所有資料表")
+        print("  .stats   顯示 pager 統計")
+    elif cmd == ".tables":
+        print("(尚未實作:里程碑 4 之後可列出資料表)")
+    else:
+        print(f"未知 meta 指令: {cmd}")
+    return "OK"
+
+def handle_sql(sql: str, db_file: str):
+    print(f"[TODO] 執行 SQL: {sql}")
+
+if __name__ == "__main__":
+    main()</code></pre>
+
+      <p>
+        執行 <code>python db.py mydb.db</code>,就能看到提示符 <code>minidb&gt;</code>。
+        輸入 <code>.exit</code> 離開,輸入任何 SQL 都印出「TODO」。
+        這個框架是所有後續里程碑的插槽(socket)——每個里程碑只需要替換對應的函式。
+      </p>
+
+      <div class="callout history">
+        <div class="ico">📜</div>
+        <div class="body">
+          <span class="c-title">REPL 的歷史</span>
+          <p>REPL 概念來自 1960 年代 Lisp 機器的互動式求值器。SQLite 的指令列工具 <code>sqlite3</code>
+          本身就是一個 REPL,連 meta 指令以 <code>.</code> 開頭(例如 <code>.schema</code>、<code>.mode column</code>)這個慣例也是 SQLite 引入的。</p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 里程碑 1 檢查點 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>
+            在上方 REPL 程式碼中,加上 <code>.stats</code> meta 指令,讓它印出以下格式:
+          </p>
+          <pre><code class="language-text">minidb&gt; .stats
+[Stats] pages_read=0  pages_written=0  cache_hits=0</code></pre>
+          <p>這些數字現在先固定為 0,等里程碑 4 的 pager 實作後再接上真實值。</p>
+          <details class="solution">
+            <summary>看解答骨架</summary>
+            <div class="sol-body">
+<pre><code class="language-python"># 在 handle_meta 中加入:
+elif cmd == ".stats":
+    # 里程碑 4 之前先印假值
+    print("[Stats] pages_read=0  pages_written=0  cache_hits=0")
+
+# 里程碑 4 之後,把 Pager 實例傳進來:
+def handle_meta(cmd: str, pager=None) -&gt; str:
+    ...
+    elif cmd == ".stats":
+        if pager:
+            print(f"[Stats] pages_read={pager.reads}  "
+                  f"pages_written={pager.writes}  "
+                  f"cache_hits={pager.cache_hits}")
+        else:
+            print("[Stats] pages_read=0  pages_written=0  cache_hits=0")</code></pre>
+              <p><strong>驗收</strong>:在終端機執行 <code>python db.py</code>,輸入 <code>.stats</code> 後應看到一行統計數字而非「未知 meta 指令」。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>里程碑 2 — SQL 前端:Tokenizer 與解析器</h2>
+
+      <p>
+        SQL 是一種領域專用語言(domain-specific language,DSL)。
+        把 <code>INSERT INTO users VALUES (1, 'Alice', 'alice@example.com')</code> 這串字符
+        變成程式能操作的結構,需要兩個步驟:
+        <strong>詞法分析(tokenization)</strong> 把字串切成有意義的最小單元(token),
+        <strong>語法分析(parsing)</strong> 則把 token 串組合成代表「語句意圖」的抽象語法樹(AST,abstract syntax tree)。
+      </p>
+
+      <h3>Tokenizer</h3>
+
+      <pre><code class="language-python"># tokenizer.py — 里程碑 2 前半部
+from dataclasses import dataclass
+from enum import Enum, auto
+from typing import List
+
+class TT(Enum):    # TokenType 縮寫
+    KW   = auto()  # 關鍵字 INSERT / SELECT / FROM / INTO / VALUES / WHERE
+    ID   = auto()  # 識別子(資料表名稱、欄位名稱)
+    INT  = auto()  # 整數字面值
+    STR  = auto()  # 字串字面值 'Alice'
+    COMMA   = auto()
+    LPAREN  = auto()
+    RPAREN  = auto()
+    STAR    = auto()
+    EQ      = auto()
+    EOF     = auto()
+
+KEYWORDS = {"INSERT","INTO","VALUES","SELECT","FROM","WHERE","CREATE","TABLE"}
+
+@dataclass
+class Token:
+    type: TT
+    value: str
+
+def tokenize(sql: str) -&gt; List[Token]:
+    """把 SQL 字串切成 Token 串列。遇到無法識別的字元拋 SyntaxError。"""
+    tokens, i, n = [], 0, len(sql.strip())
+    sql = sql.strip()
+    while i &lt; n:
+        c = sql[i]
+        if c.isspace():
+            i += 1
+        elif c in ",()":
+            t = {",": TT.COMMA, "(": TT.LPAREN, ")": TT.RPAREN}[c]
+            tokens.append(Token(t, c)); i += 1
+        elif c == "*":
+            tokens.append(Token(TT.STAR, "*")); i += 1
+        elif c == "=":
+            tokens.append(Token(TT.EQ, "=")); i += 1
+        elif c == "'":               # 單引號字串
+            j = sql.index("'", i + 1)
+            tokens.append(Token(TT.STR, sql[i+1:j])); i = j + 1
+        elif c.isdigit():
+            j = i
+            while j &lt; n and sql[j].isdigit(): j += 1
+            tokens.append(Token(TT.INT, sql[i:j])); i = j
+        elif c.isalpha() or c == "_":
+            j = i
+            while j &lt; n and (sql[j].isalnum() or sql[j] == "_"): j += 1
+            word = sql[i:j].upper()
+            tokens.append(Token(TT.KW if word in KEYWORDS else TT.ID, word)); i = j
+        else:
+            raise SyntaxError(f"未知字元 '{c}' at pos {i}")
+    tokens.append(Token(TT.EOF, ""))
+    return tokens</code></pre>
+
+      <h3>極簡 Parser</h3>
+
+      <p>
+        我們只支援兩種語句:
+        <code>INSERT INTO &lt;table&gt; VALUES (&lt;id&gt;, &lt;name&gt;, &lt;email&gt;)</code>
+        與 <code>SELECT * FROM &lt;table&gt;</code>(里程碑 6 加 WHERE)。
+        Parser 用遞迴下降(recursive descent)手法——每個語法規則對應一個函式。
+      </p>
+
+      <pre><code class="language-python"># parser.py — 極簡遞迴下降解析器
+from tokenizer import tokenize, TT, Token
+from dataclasses import dataclass
+from typing import Optional, List
+
+@dataclass
+class InsertStmt:
+    table: str
+    row_id: int
+    name: str
+    email: str
+
+@dataclass
+class SelectStmt:
+    table: str
+    where_id: Optional[int] = None   # 里程碑 6 才使用
+
+class Parser:
+    def __init__(self, sql: str):
+        self.tokens = tokenize(sql)
+        self.pos = 0
+
+    def peek(self) -&gt; Token:
+        return self.tokens[self.pos]
+
+    def consume(self, expected_type: TT = None, expected_val: str = None) -&gt; Token:
+        tok = self.tokens[self.pos]
+        if expected_type and tok.type != expected_type:
+            raise SyntaxError(f"期望 {expected_type},得到 {tok}")
+        if expected_val and tok.value != expected_val:
+            raise SyntaxError(f"期望 '{expected_val}',得到 '{tok.value}'")
+        self.pos += 1
+        return tok
+
+    def parse(self):
+        tok = self.peek()
+        if tok.type == TT.KW and tok.value == "INSERT":
+            return self.parse_insert()
+        elif tok.type == TT.KW and tok.value == "SELECT":
+            return self.parse_select()
+        else:
+            raise SyntaxError(f"不支援的語句開頭: {tok.value}")
+
+    def parse_insert(self):
+        self.consume(TT.KW, "INSERT")
+        self.consume(TT.KW, "INTO")
+        table = self.consume(TT.ID).value
+        self.consume(TT.KW, "VALUES")
+        self.consume(TT.LPAREN)
+        row_id = int(self.consume(TT.INT).value)
+        self.consume(TT.COMMA)
+        name  = self.consume(TT.STR).value
+        self.consume(TT.COMMA)
+        email = self.consume(TT.STR).value
+        self.consume(TT.RPAREN)
+        return InsertStmt(table=table, row_id=row_id, name=name, email=email)
+
+    def parse_select(self):
+        self.consume(TT.KW, "SELECT")
+        self.consume(TT.STAR)
+        self.consume(TT.KW, "FROM")
+        table = self.consume(TT.ID).value
+        # 可選的 WHERE id = N
+        if self.peek().type == TT.KW and self.peek().value == "WHERE":
+            self.consume()   # WHERE
+            self.consume(TT.ID)   # 欄位名稱(我們只支援 id)
+            self.consume(TT.EQ)
+            where_id = int(self.consume(TT.INT).value)
+            return SelectStmt(table=table, where_id=where_id)
+        return SelectStmt(table=table)</code></pre>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">固定 schema 的取捨</span>
+          <p>我們暫時把 schema 硬編碼為 <code>(id INTEGER, name TEXT, email TEXT)</code>。
+          真實資料庫需要 DDL 解析(<code>CREATE TABLE</code>)與 schema catalog——這是里程碑完成後的延伸題。</p>
+        </div>
+      </div>
+
+      <h2>里程碑 3 — 記憶體中的資料表:列結構與頁</h2>
+
+      <p>
+        SQL 前端把輸入轉成了 <code>InsertStmt</code> / <code>SelectStmt</code>。
+        現在要真的存放資料。我們先做「純記憶體版本」——像 SQLite 的早期實作一樣,
+        用固定大小的頁(page)在記憶體中管理列(row),為後面的持久化做準備。
+      </p>
+
+      <h3>列的二進位格式</h3>
+
+      <p>
+        每筆列佔固定的位元組數,讓「列 N 在哪裡」能用乘法直接算出來,無需遍歷:
+      </p>
+
+      <pre><code class="language-python"># row.py — 列的序列化
+import struct
+
+# schema: (id: u32, name: 32-byte str, email: 255-byte str) = 291 bytes/row
+ROW_FORMAT = "I 32s 255s"          # struct format string
+ROW_SIZE   = struct.calcsize(ROW_FORMAT)   # 291 bytes
+
+def serialize_row(row_id: int, name: str, email: str) -&gt; bytes:
+    """把一筆列封裝成固定大小的位元組串。"""
+    return struct.pack(
+        ROW_FORMAT,
+        row_id,
+        name.encode("utf-8")[:32],
+        email.encode("utf-8")[:255],
+    )
+
+def deserialize_row(data: bytes) -&gt; dict:
+    """從位元組串還原一筆列。"""
+    row_id, raw_name, raw_email = struct.unpack(ROW_FORMAT, data)
+    return {
+        "id":    row_id,
+        "name":  raw_name.rstrip(b"\x00").decode("utf-8"),
+        "email": raw_email.rstrip(b"\x00").decode("utf-8"),
+    }</code></pre>
+
+      <h3>頁結構</h3>
+
+      <p>
+        頁(page)是儲存引擎最小的 I/O 單位——磁碟讀寫永遠以整頁為單位,
+        即使你只需要一個位元組。這和作業系統的分頁(paging)同一個道理
+        (見 <a href="24-operating-system.html">第 24 章</a>)。
+        我們使用 4 096 位元組(4 KiB)頁,與 SQLite 預設一致:
+      </p>
+
+      <pre><code class="language-python"># page.py — 頁常數
+PAGE_SIZE        = 4096            # 4 KiB
+ROWS_PER_PAGE    = PAGE_SIZE // ROW_SIZE   # ≈ 14 rows/page
+
+class Table:
+    """純記憶體版本:把每一頁存成一個 bytes 物件的陣列。"""
+    def __init__(self):
+        self.pages: list[bytes | None] = [None] * 100   # 最多 100 頁
+        self.num_rows = 0
+
+    def row_slot(self, row_num: int):
+        """計算第 row_num 筆列所在的(page_idx, byte_offset)。"""
+        page_idx = row_num // ROWS_PER_PAGE
+        row_offset = row_num % ROWS_PER_PAGE
+        byte_offset = row_offset * ROW_SIZE
+        return page_idx, byte_offset
+
+    def insert(self, row_id: int, name: str, email: str):
+        page_idx, byte_offset = self.row_slot(self.num_rows)
+        if self.pages[page_idx] is None:
+            self.pages[page_idx] = bytearray(PAGE_SIZE)
+        data = serialize_row(row_id, name, email)
+        self.pages[page_idx][byte_offset:byte_offset + ROW_SIZE] = data
+        self.num_rows += 1
+
+    def select_all(self):
+        for i in range(self.num_rows):
+            page_idx, byte_offset = self.row_slot(i)
+            chunk = self.pages[page_idx][byte_offset:byte_offset + ROW_SIZE]
+            yield deserialize_row(bytes(chunk))</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">核心觀念:固定大小是 O(1) 定址的關鍵</span>
+          <p>因為每筆列大小固定(<code>ROW_SIZE</code> 位元組),第 N 筆的位元組位置 = <code>N × ROW_SIZE</code>,
+          <strong>一個乘法直接算出</strong>,不需要遍歷。這是「固定欄位長度」設計的根本優勢,
+          也是為何傳統 RDBMS 對 VARCHAR 儲存格外謹慎。</p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 里程碑 3 檢查點 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>
+            實作 <strong>往返驗證(round-trip test)</strong>:把一筆列序列化後立刻反序列化,
+            斷言結果與原始資料相同。
+          </p>
+          <pre><code class="language-python"># 測試目標:以下所有斷言必須通過
+row_in = (1, "Alice", "alice@example.com")
+blob   = serialize_row(*row_in)
+row_out = deserialize_row(blob)
+
+assert len(blob) == ROW_SIZE, f"期望 {ROW_SIZE} bytes,實際 {len(blob)}"
+assert row_out["id"]    == 1
+assert row_out["name"]  == "Alice"
+assert row_out["email"] == "alice@example.com"
+print("往返驗證通過 ✓")</code></pre>
+          <details class="solution">
+            <summary>看解答與常見陷阱</summary>
+            <div class="sol-body">
+              <p>直接把上方程式碼加到 <code>row.py</code> 末尾,用 <code>if __name__ == "__main__":</code> 包起來,執行即可。</p>
+              <p><strong>常見陷阱</strong>:把長度超過 32 / 255 位元組的 name / email 塞進去會發生什麼?
+              <code>struct.pack</code> 若傳入超長的 bytes 會拋出 <code>struct.error</code>。解法:在 <code>serialize_row</code> 裡加上長度檢查,或在 Parser 層限制輸入長度。</p>
+              <p><strong>驗收</strong>:<code>python row.py</code> 應印出「往返驗證通過 ✓」且沒有任何 AssertionError。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>里程碑 4 — 持久化與 pager</h2>
+
+      <p>
+        里程碑 3 的 <code>Table</code> 是純記憶體的:程式一結束,資料就消失。
+        這一步要把頁持久化(persist)到磁碟上——程式重啟後資料還在。
+        這正是 <a href="24-operating-system.html">第 24 章</a>檔案 I/O 知識的實戰。
+      </p>
+      <p>
+        <strong>Pager</strong> 是儲存引擎的門衛:它維護一個「頁快取(page cache)」,
+        讓上層的 B-tree 或執行器以<em>頁號(page number)</em>讀寫資料,不需要關心磁碟細節。
+      </p>
+
+      <h3>資料庫檔案格式</h3>
+
+      <p>
+        我們的 <code>.db</code> 檔案結構極簡:
+      </p>
+      <ul>
+        <li><strong>第 0 頁</strong>:根頁(root page)——B-tree 的根節點從這裡開始。</li>
+        <li><strong>第 1、2、3 … 頁</strong>:B-tree 節點依序儲存。</li>
+        <li>所有頁等長(4 096 bytes),「頁 N 的位元組位置 = N × PAGE_SIZE」——O(1) 定址。</li>
+      </ul>
+
+      <pre><code class="language-python"># pager.py — 磁碟頁管理器
+import os
+from page import PAGE_SIZE
+
+class Pager:
+    """Pager:把頁號對應到磁碟位置,並維護記憶體快取。"""
+
+    def __init__(self, filename: str):
+        if filename == ":memory:":
+            self._file = None          # 純記憶體模式
+            self._next_page_num = 0
+        else:
+            # "a+b" 在 Linux O_APPEND 下 seek()+write() 位置不可靠;
+            # 改用 "r+b"(需先建空檔)確保隨機讀寫正確
+            if not os.path.exists(filename):
+                open(filename, "wb").close()
+            self._file = open(filename, "r+b")
+            # _next_page_num 初始化為磁碟現有頁數,避免新頁號與根頁(0)衝突
+            self._next_page_num = os.path.getsize(filename) // PAGE_SIZE
+        self._cache: dict[int, bytearray] = {}
+        self.reads  = 0
+        self.writes = 0
+        self.cache_hits = 0
+
+    def allocate_page(self) -&gt; int:
+        """分配下一個新頁號:取 _next_page_num 與快取現有最大頁號+1 的較大值,
+        確保新頁號不與任何現有頁(磁碟或快取)重疊。首次分裂時 old_page 已在快取,
+        故 max(cache)+1 &gt;= 1,安全地避開根頁(0)。"""
+        num = max(self._next_page_num,
+                  max(self._cache.keys()) + 1 if self._cache else 0)
+        self._next_page_num = num + 1
+        return num
+
+    @property
+    def num_pages(self) -&gt; int:
+        if self._file is None:
+            return 0
+        size = os.path.getsize(self._file.name)
+        return size // PAGE_SIZE
+
+    def get_page(self, page_num: int) -&gt; bytearray:
+        """讀取頁 page_num,優先從快取取,否則從磁碟讀。"""
+        if page_num in self._cache:
+            self.cache_hits += 1
+            return self._cache[page_num]
+
+        # 快取 miss:從磁碟讀取(或新建空頁)
+        self.reads += 1
+        page = bytearray(PAGE_SIZE)
+        if self._file and page_num &lt; self.num_pages:
+            self._file.seek(page_num * PAGE_SIZE)
+            data = self._file.read(PAGE_SIZE)
+            page[:len(data)] = data
+        self._cache[page_num] = page
+        return page
+
+    def flush(self, page_num: int):
+        """把快取中的頁 page_num 寫回磁碟。"""
+        if self._file is None or page_num not in self._cache:
+            return
+        self._file.seek(page_num * PAGE_SIZE)
+        self._file.write(self._cache[page_num])
+        self._file.flush()
+        self.writes += 1
+
+    def flush_all(self):
+        """程式結束前,把所有「髒頁」寫回磁碟。"""
+        for page_num in list(self._cache.keys()):
+            self.flush(page_num)
+
+    def close(self):
+        self.flush_all()
+        if self._file:
+            self._file.close()</code></pre>
+
+      <p>
+        注意 <code>get_page</code> 先查快取(cache lookup),只有 miss 才真正做磁碟 I/O——
+        這就是<strong>緩衝池(buffer pool)</strong>的最基本形式,也是資料庫能在大多數情況下省去磁碟讀寫的關鍵。
+      </p>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">開檔模式:為何改用 "r+b"?</span>
+          <p>Linux 的 <code>O_APPEND</code> flag 讓所有 <code>write()</code> 都強制跳到檔末,
+          無論先前 <code>seek()</code> 到哪裡,因此 <code>"a+b"</code> 模式下
+          <code>seek()+write()</code> 的寫入位置不可靠。
+          正確做法:若檔案不存在先以 <code>"wb"</code> 建立空檔,再以 <code>"r+b"</code> 開啟,
+          才能真正支援隨機讀寫且不截斷——等同於 C 語言的 <code>fopen(path, "r+b")</code>。</p>
+        </div>
+      </div>
+
+      <h2>里程碑 5 — B-tree 索引:從葉節點到分裂</h2>
+
+      <p>
+        有了 pager,我們可以把第 29 章的 B-tree 理論真正實作出來。
+        為什麼 SQLite 用 B-tree 而不是陣列?答案和 <a href="28-sorting-searching.html">第 28 章</a>的搜尋分析完全一致:
+      </p>
+      <ul>
+        <li><strong>陣列</strong>:查找 O(log n)(二分搜),但插入 O(n)(要搬移元素)。</li>
+        <li><strong>B-tree</strong>:查找 <em>和</em> 插入都是 O(log n),且每個節點恰好佔一頁——讀一個節點 = 一次磁碟 I/O。</li>
+      </ul>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">B-tree 是為磁碟而生的資料結構</span>
+          <p>B-tree 的「矮胖」形狀(高分支因子 b、樹高 $O(\log_b n)$)恰好讓每次查找的<strong>磁碟 I/O 次數</strong>最小化。
+          SQLite 預設 b ≈ 481(每個內部節點可放 480 個子指標),一棵高度 3 的 B-tree 能索引超過一億筆記錄!</p>
+        </div>
+      </div>
+
+      <h3>節點格式</h3>
+
+      <p>
+        我們實作 B+ tree(B-plus tree)——所有資料存在<strong>葉節點(leaf node)</strong>,
+        <strong>內部節點(internal node)</strong>只存鍵(key)和子指標。每個節點 = 一個磁碟頁:
+      </p>
+
+      <pre><code class="language-python"># btree.py — 節點格式常數
+import struct
+from pager import Pager
+from page import PAGE_SIZE
+
+# ─── 通用標頭 (header) ─── 每個節點前 6 bytes
+NODE_TYPE_OFFSET   = 0   # 1 byte: 0=leaf, 1=internal
+IS_ROOT_OFFSET     = 1   # 1 byte: 1=root
+PARENT_PTR_OFFSET  = 2   # 4 bytes: 父節點頁號(root 時為 0)
+COMMON_HEADER_SIZE = 6
+
+# ─── 葉節點標頭 ───
+LEAF_NUM_CELLS_OFFSET = COMMON_HEADER_SIZE      # 4 bytes
+LEAF_HEADER_SIZE      = COMMON_HEADER_SIZE + 4  # 10 bytes
+
+# ─── 葉節點 cell 格式 ─── (key u32 + row bytes)
+LEAF_KEY_SIZE    = 4          # u32
+LEAF_VALUE_SIZE  = 291        # ROW_SIZE(與 row.py 一致)
+LEAF_CELL_SIZE   = LEAF_KEY_SIZE + LEAF_VALUE_SIZE  # 295 bytes
+LEAF_SPACE       = PAGE_SIZE - LEAF_HEADER_SIZE     # 4086 bytes
+LEAF_MAX_CELLS   = LEAF_SPACE // LEAF_CELL_SIZE     # 13 cells/page
+
+# ─── 內部節點標頭 ───
+INTERNAL_NUM_KEYS_OFFSET   = COMMON_HEADER_SIZE
+INTERNAL_RIGHT_CHILD_OFFSET= COMMON_HEADER_SIZE + 4
+INTERNAL_HEADER_SIZE       = COMMON_HEADER_SIZE + 8
+
+INTERNAL_KEY_SIZE          = 4
+INTERNAL_CHILD_SIZE        = 4
+INTERNAL_CELL_SIZE         = INTERNAL_KEY_SIZE + INTERNAL_CHILD_SIZE
+INTERNAL_MAX_CELLS         = 3   # 學習用:設小,方便觀察分裂
+
+NODE_LEAF     = 0
+NODE_INTERNAL = 1</code></pre>
+
+      <h3>葉節點的讀寫</h3>
+
+      <pre><code class="language-python">def leaf_num_cells(page: bytearray) -&gt; int:
+    return struct.unpack_from("I", page, LEAF_NUM_CELLS_OFFSET)[0]
+
+def set_leaf_num_cells(page: bytearray, n: int):
+    struct.pack_into("I", page, LEAF_NUM_CELLS_OFFSET, n)
+
+def leaf_cell_offset(cell_num: int) -&gt; int:
+    return LEAF_HEADER_SIZE + cell_num * LEAF_CELL_SIZE
+
+def leaf_key(page: bytearray, cell_num: int) -&gt; int:
+    off = leaf_cell_offset(cell_num)
+    return struct.unpack_from("I", page, off)[0]
+
+def leaf_value(page: bytearray, cell_num: int) -&gt; bytes:
+    off = leaf_cell_offset(cell_num) + LEAF_KEY_SIZE
+    return bytes(page[off: off + LEAF_VALUE_SIZE])
+
+def leaf_insert_cell(page: bytearray, cell_num: int, key: int, value: bytes):
+    """在 cell_num 位置插入 (key, value),並將後面的 cell 往右移一格。"""
+    n = leaf_num_cells(page)
+    if n &gt;= LEAF_MAX_CELLS:
+        raise OverflowError("葉節點已滿,需要分裂")
+    # 把 cell_num 之後的 cells 向右搬移一格
+    for i in range(n, cell_num, -1):
+        src = leaf_cell_offset(i - 1)
+        dst = leaf_cell_offset(i)
+        page[dst: dst + LEAF_CELL_SIZE] = page[src: src + LEAF_CELL_SIZE]
+    # 寫入新 cell
+    off = leaf_cell_offset(cell_num)
+    struct.pack_into("I", page, off, key)
+    page[off + LEAF_KEY_SIZE: off + LEAF_CELL_SIZE] = value
+    set_leaf_num_cells(page, n + 1)</code></pre>
+
+      <h3>Cursor 抽象</h3>
+
+      <p>
+        Cursor(游標)代表「B-tree 中的一個位置」。它讓查詢執行器不需要知道 B-tree 細節,
+        只需要 <code>cursor.advance()</code> 和 <code>cursor.value()</code> 就能遍歷所有列。
+      </p>
+
+      <pre><code class="language-python">class Cursor:
+    """游標:指向 B-tree 中某個葉節點的某個 cell。"""
+    def __init__(self, pager: Pager, page_num: int, cell_num: int):
+        self.pager    = pager
+        self.page_num = page_num
+        self.cell_num = cell_num
+
+    @property
+    def end_of_table(self) -&gt; bool:
+        page = self.pager.get_page(self.page_num)
+        return self.cell_num &gt;= leaf_num_cells(page)
+
+    def value(self) -&gt; bytes:
+        """回傳當前 cell 的 value(序列化後的 row)。"""
+        page = self.pager.get_page(self.page_num)
+        return leaf_value(page, self.cell_num)
+
+    def advance(self):
+        """把游標移到下一個 cell(本章暫不處理跨頁的 next-leaf 指標)。"""
+        self.cell_num += 1</code></pre>
+
+      <h3>節點分裂(Node Split)——最關鍵的步驟</h3>
+
+      <p>
+        當葉節點滿了(<code>leaf_num_cells == LEAF_MAX_CELLS</code>),插入新 cell 前必須先<strong>分裂(split)</strong>。
+        分裂把一個滿的葉節點拆成左、右兩個葉節點,並將「分裂點鍵值」上升到父節點。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 700 320" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif" font-size="13">
+  <defs>
+    <marker id="splarr" markerWidth="10" markerHeight="8" refX="8" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 Z" fill="#2f6f6a"/>
+    </marker>
+  </defs>
+
+  <!-- ─── BEFORE SPLIT ─── -->
+  <text x="130" y="24" fill="#2f6f6a" font-weight="700" font-size="14" text-anchor="middle">分裂前</text>
+
+  <!-- leaf node (full, 4 cells) -->
+  <rect x="30" y="40" width="200" height="44" rx="8" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="130" y="57" fill="#2f6f6a" font-weight="700" text-anchor="middle">葉節點 (滿:4 cells)</text>
+  <text x="130" y="75" fill="#444" text-anchor="middle">key=10 | key=20 | key=30 | key=40</text>
+
+  <!-- insert arrow -->
+  <text x="300" y="52" fill="#b4541f" font-weight="700" text-anchor="middle">INSERT key=25</text>
+  <line x1="240" y1="62" x2="290" y2="62" stroke="#b4541f" stroke-width="2" marker-end="url(#splarr)"/>
+  <text x="260" y="56" fill="#b4541f" font-size="11">→ 溢位!</text>
+
+  <!-- overflow node -->
+  <rect x="310" y="40" width="360" height="44" rx="8" fill="#fde8d8" stroke="#b4541f" stroke-width="2"/>
+  <text x="490" y="57" fill="#b4541f" font-weight="700" text-anchor="middle">臨時溢位節點(5 cells)</text>
+  <text x="490" y="75" fill="#444" text-anchor="middle">key=10 | key=20 | key=25 | key=30 | key=40</text>
+
+  <!-- ─── AFTER SPLIT ─── -->
+  <text x="350" y="130" fill="#2f6f6a" font-weight="700" font-size="14" text-anchor="middle">分裂後</text>
+
+  <!-- parent node -->
+  <rect x="250" y="148" width="200" height="44" rx="8" fill="#2f6f6a" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="350" y="165" fill="#fff" font-weight="700" text-anchor="middle">內部節點 (父)</text>
+  <text x="350" y="183" fill="#cfe6e2" text-anchor="middle">key=30  (上升的分裂鍵)</text>
+
+  <!-- left child -->
+  <rect x="60" y="248" width="200" height="44" rx="8" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="160" y="265" fill="#2f6f6a" font-weight="700" text-anchor="middle">左葉節點</text>
+  <text x="160" y="283" fill="#444" text-anchor="middle">key=10 | key=20 | key=25</text>
+
+  <!-- right child -->
+  <rect x="440" y="248" width="200" height="44" rx="8" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="540" y="265" fill="#2f6f6a" font-weight="700" text-anchor="middle">右葉節點</text>
+  <text x="540" y="283" fill="#444" text-anchor="middle">key=30 | key=40</text>
+
+  <!-- arrows parent → children -->
+  <line x1="300" y1="192" x2="200" y2="248" stroke="#2f6f6a" stroke-width="2" marker-end="url(#splarr)"/>
+  <line x1="400" y1="192" x2="490" y2="248" stroke="#2f6f6a" stroke-width="2" marker-end="url(#splarr)"/>
+
+  <!-- split rule annotation -->
+  <text x="350" y="310" fill="#8a929b" font-size="11" text-anchor="middle">分裂點:⌈(N+1)/2⌉ = ⌈5/2⌉ = 3 → 左含 3 cells,右含 2 cells,分裂鍵 = 右葉第一個 key = 30(B+tree separator)</text>
+</svg>
+        <figcaption>圖 116-2:B+ tree 葉節點分裂示意。插入 key=25 後節點溢位,分裂鍵 = 右葉第一個 key = 30(B+tree separator 指向右子樹的最小鍵)上升到父節點,左葉保留前 3 cells([10,20,25]),右葉保留後 2 cells([30,40])。</figcaption>
+      </div>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">B+ tree 的分裂規則</span>
+          <p>分裂點選在 <code>⌈(N+1)/2⌉</code>(向上取整):若葉節點溢位後有 5 cells,分裂點在索引 3——
+          左葉得到前 3 個 cells(含分裂鍵),右葉得到後 2 個。分裂鍵(分裂點的 key)複製到父節點作為<strong>分隔鍵(separator key)</strong>。
+          注意 B+ tree 的葉節點<em>保留</em>分裂鍵(資料在葉層不丟失),而傳統 B-tree 則是<em>上升</em>後從葉層移走。</p>
+        </div>
+      </div>
+
+      <pre><code class="language-python">def leaf_split_and_insert(pager: Pager, old_page_num: int,
+                          cell_num: int, key: int, value: bytes) -&gt; tuple[int, int]:
+    """
+    葉節點分裂:
+      1. 把 old_page 上的 cells + 新 cell 排序後分成左、右兩半。
+      2. 左半留在 old_page,右半放進 new_page(pager 分配下一個空頁)。
+      3. 回傳 (split_key, new_page_num) tuple(分裂鍵 + 新頁號)。
+    """
+    old_page = pager.get_page(old_page_num)
+    new_page_num = pager.allocate_page()    # 用計數器確保新頁號 ≠ old_page_num
+    new_page = pager.get_page(new_page_num) # 會在 cache 中建立空頁
+
+    # 把 old_page 所有 cells + 新 cell 收集到臨時陣列
+    total = LEAF_MAX_CELLS + 1
+    all_cells = []
+    j = 0
+    for i in range(total):
+        if i == cell_num:
+            all_cells.append((key, value))
+        else:
+            k = leaf_key(old_page, j)
+            v = leaf_value(old_page, j)
+            all_cells.append((k, v))
+            j += 1
+
+    # 計算分裂點
+    left_count  = (total + 1) // 2    # ⌈total/2⌉ 給左葉
+    right_count = total - left_count
+
+    # 清空 old_page 並填入左半
+    set_leaf_num_cells(old_page, 0)
+    for i, (k, v) in enumerate(all_cells[:left_count]):
+        off = leaf_cell_offset(i)
+        struct.pack_into("I", old_page, off, k)
+        old_page[off + LEAF_KEY_SIZE: off + LEAF_CELL_SIZE] = v
+    set_leaf_num_cells(old_page, left_count)
+
+    # 填入右半到 new_page
+    set_leaf_num_cells(new_page, 0)
+    for i, (k, v) in enumerate(all_cells[left_count:]):
+        off = leaf_cell_offset(i)
+        struct.pack_into("I", new_page, off, k)
+        new_page[off + LEAF_KEY_SIZE: off + LEAF_CELL_SIZE] = v
+    set_leaf_num_cells(new_page, right_count)
+
+    # 分裂鍵 = 右葉第一個 key(上升到父節點)
+    split_key = all_cells[left_count][0]
+
+    # 標記節點類型為葉節點
+    old_page[NODE_TYPE_OFFSET] = NODE_LEAF
+    new_page[NODE_TYPE_OFFSET] = NODE_LEAF
+
+    return split_key, new_page_num</code></pre>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 里程碑 5 檢查點 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>
+            實作 <strong>葉節點插入與分裂的完整測試</strong>:
+          </p>
+          <ol>
+            <li>建立一個 Pager(記憶體模式 <code>":memory:"</code>),取得第 0 頁作為葉節點。</li>
+            <li>逐一插入 keys <code>[10, 20, 30, 40]</code>,直到葉節點滿(<code>LEAF_MAX_CELLS = 4</code>)。</li>
+            <li>嘗試插入 key <code>25</code>,此時應觸發 <code>leaf_split_and_insert</code>。</li>
+            <li>驗收:<br>
+              - 第 0 頁(左葉)應有 3 cells,keys 為 <code>[10, 20, 25]</code>。<br>
+              - 第 1 頁(右葉)應有 2 cells,keys 為 <code>[30, 40]</code>。<br>
+              - 回傳的 <code>split_key</code> 應為 <code>30</code>。
+            </li>
+          </ol>
+          <details class="solution">
+            <summary>看解答骨架</summary>
+            <div class="sol-body">
+<pre><code class="language-python">from pager import Pager
+from row import serialize_row, ROW_SIZE
+from btree import (leaf_insert_cell, leaf_split_and_insert,
+                   leaf_num_cells, leaf_key, LEAF_MAX_CELLS,
+                   NODE_TYPE_OFFSET, NODE_LEAF)
+
+def make_dummy_value(key: int) -&gt; bytes:
+    return serialize_row(key, f"user{key}", f"u{key}@test.com")
+
+p = Pager(":memory:")
+root = p.get_page(0)
+root[NODE_TYPE_OFFSET] = NODE_LEAF
+
+for k in [10, 20, 30, 40]:
+    n = leaf_num_cells(root)
+    leaf_insert_cell(root, n, k, make_dummy_value(k))
+
+# 觸發分裂
+new_val = make_dummy_value(25)
+split_key, new_pn = leaf_split_and_insert(p, 0, 2, 25, new_val)
+# cell_num=2 因為 25 的排序位置在 20 之後
+
+left  = p.get_page(0)
+right = p.get_page(1)
+assert leaf_num_cells(left)  == 3
+assert leaf_num_cells(right) == 2
+assert leaf_key(left,  0) == 10
+assert leaf_key(left,  1) == 20
+assert leaf_key(left,  2) == 25
+assert leaf_key(right, 0) == 30
+assert leaf_key(right, 1) == 40
+assert split_key == 30
+print("B-tree 葉節點插入與分裂驗證通過 ✓")</code></pre>
+              <p><strong>常見陷阱</strong>:<code>cell_num</code> 參數是新 key 在所有 cells 中的插入位置(二分搜找出),
+              不是「插入第幾個」的序號。需要先掃描葉節點找到第一個 <code>leaf_key(page, i) &gt;= 25</code> 的位置。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>里程碑 6 — 查詢:SELECT 與 WHERE 過濾</h2>
+
+      <p>
+        有了 B-tree 和 Cursor,執行 <code>SELECT</code> 就是「把 Cursor 從最左葉節點出發,
+        逐 cell 讀取直到 end_of_table」。加上 <code>WHERE id = N</code> 則可以走 B-tree 查找直接定位,
+        不需要掃全表——這就是索引的意義。
+      </p>
+
+      <h3>全表掃描(Table Scan)</h3>
+
+      <pre><code class="language-python"># executor.py — 查詢執行器(局部)
+from row import deserialize_row
+from btree import Cursor, leaf_num_cells, leaf_value, NODE_TYPE_OFFSET, NODE_LEAF
+from pager import Pager
+
+def table_start(pager: Pager) -&gt; Cursor:
+    """回傳指向最左葉節點第一個 cell 的 cursor(目前僅單根葉節點)。"""
+    return Cursor(pager, page_num=0, cell_num=0)
+
+def execute_select(pager: Pager, where_id: int | None = None):
+    """走訪 B-tree 並印出符合條件的列。"""
+    cur = table_start(pager)
+    while not cur.end_of_table:
+        row = deserialize_row(cur.value())
+        if where_id is None or row["id"] == where_id:
+            print(f"  ({row['id']}, {row['name']!r}, {row['email']!r})")
+        cur.advance()</code></pre>
+
+      <h3>B-tree 查找(B-tree Search)</h3>
+
+      <p>
+        對有索引的 <code>WHERE id = N</code>,可以做二分搜直接定位到目標 leaf cell:
+      </p>
+
+      <pre><code class="language-python">def leaf_find(pager: Pager, page_num: int, target_key: int) -&gt; Cursor:
+    """
+    在葉節點中二分搜 target_key,回傳指向對應 cell(或應插入位置)的 Cursor。
+    時間複雜度 O(log M),M = 葉節點 cell 數。
+    """
+    page = pager.get_page(page_num)
+    n = leaf_num_cells(page)
+    lo, hi = 0, n
+    while lo &lt; hi:
+        mid = (lo + hi) // 2
+        k = leaf_key(page, mid)
+        if k == target_key:
+            return Cursor(pager, page_num, mid)
+        elif k &lt; target_key:
+            lo = mid + 1
+        else:
+            hi = mid
+    return Cursor(pager, page_num, lo)   # lo = 應插入的位置</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">全表掃描 vs. 索引查找</span>
+          <p><code>SELECT * FROM users</code>(無 WHERE)= 全表掃描,時間 $O(n)$。
+          <code>SELECT * FROM users WHERE id = 42</code>(主鍵查找)= B-tree 二分搜,時間 $O(\log n)$。
+          這就是加索引能快千倍的原因——從 <a href="28-sorting-searching.html">第 28 章</a>的理論,在這裡真正落地。</p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 里程碑 6 檢查點 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>
+            把 <code>execute_select</code> 接進 REPL 的 <code>handle_sql</code>,讓以下互動成立:
+          </p>
+          <pre><code class="language-text">minidb&gt; INSERT INTO users VALUES (1, 'Alice', 'alice@example.com')
+已插入 1 筆
+minidb&gt; INSERT INTO users VALUES (2, 'Bob', 'bob@example.com')
+已插入 1 筆
+minidb&gt; SELECT * FROM users
+  (1, 'Alice', 'alice@example.com')
+  (2, 'Bob', 'bob@example.com')
+minidb&gt; SELECT * FROM users WHERE id = 2
+  (2, 'Bob', 'bob@example.com')</code></pre>
+          <details class="solution">
+            <summary>看解答骨架</summary>
+            <div class="sol-body">
+              <p>在 <code>handle_sql</code> 中解析出 <code>InsertStmt</code> 或 <code>SelectStmt</code> 後:</p>
+<pre><code class="language-python">from parser import Parser, InsertStmt, SelectStmt
+from executor import execute_select, table_start
+from btree import leaf_find, leaf_insert_cell, leaf_num_cells
+from row import serialize_row
+
+def handle_sql(sql: str, pager: Pager):
+    try:
+        stmt = Parser(sql).parse()
+    except SyntaxError as e:
+        print(f"語法錯誤: {e}"); return
+
+    if isinstance(stmt, InsertStmt):
+        # 找到插入位置(保持 key 排序)
+        cursor = leaf_find(pager, 0, stmt.row_id)
+        value  = serialize_row(stmt.row_id, stmt.name, stmt.email)
+        leaf_insert_cell(pager.get_page(cursor.page_num),
+                         cursor.cell_num, stmt.row_id, value)
+        print("已插入 1 筆")
+    elif isinstance(stmt, SelectStmt):
+        execute_select(pager, where_id=stmt.where_id)</code></pre>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>里程碑 7 — 交易與一致性:WAL 與 ACID 一瞥</h2>
+
+      <p>
+        你的 MiniDB 現在能讀寫磁碟了。但有一個殺手級問題:
+        如果在 <code>pager.flush()</code> 執行到一半時電源突然斷了,怎麼辦?
+        你可能把一個 B-tree 頁寫到一半——磁碟上的資料永遠壞掉了。
+      </p>
+      <p>
+        這就是為什麼所有嚴肅的資料庫系統都需要<strong>交易(transaction)</strong>保證——
+        也就是大名鼎鼎的 <strong>ACID</strong> 四個性質:
+      </p>
+
+      <h3>ACID 四個性質</h3>
+
+      <ul>
+        <li>
+          <strong>原子性(Atomicity)</strong>:一個交易要麼完全成功,要麼完全沒發生。不存在「做了一半」的狀態。
+        </li>
+        <li>
+          <strong>一致性(Consistency)</strong>:交易完成後,資料庫仍滿足所有定義的約束條件(如主鍵唯一性、外鍵參照)。
+        </li>
+        <li>
+          <strong>隔離性(Isolation)</strong>:並行執行的多個交易,彼此互不干擾——好像每個交易都是獨自在執行。
+        </li>
+        <li>
+          <strong>持久性(Durability)</strong>:一旦交易提交成功,即使系統立刻崩潰,資料也不會遺失。
+        </li>
+      </ul>
+
+      <div class="callout history">
+        <div class="ico">📜</div>
+        <div class="body">
+          <span class="c-title">ACID 的起源</span>
+          <p>ACID 由 Jim Gray 在 1970–1980 年代的研究中逐步定義。Gray 後來因資料庫交易研究榮獲 1998 年圖靈獎(Turing Award)。他在 2007 年神秘失蹤——當時他一個人開著帆船出海,至今下落不明。</p>
+        </div>
+      </div>
+
+      <h3>WAL:預寫日誌</h3>
+
+      <p>
+        如何在磁碟上實現原子性?最廣泛使用的技術是
+        <strong>WAL(write-ahead log,預寫日誌)</strong>——SQLite、PostgreSQL 都用它。
+        基本思路:
+      </p>
+      <ol>
+        <li><strong>修改資料之前</strong>,先把「打算做的修改」寫進一個獨立的 WAL 日誌檔。</li>
+        <li>WAL 寫完並 <code>fsync()</code>(確保落磁碟)之後,才把修改套用到正式的資料頁。</li>
+        <li>如果步驟 2 中途崩潰:<br>
+          - WAL 完整 → 重啟時<strong>重播(replay)</strong> WAL 來恢復。<br>
+          - WAL 不完整(步驟 1 中途崩潰)→ 丟掉 WAL,等同於交易未提交,不影響原始資料。
+        </li>
+      </ol>
+
+      <pre><code class="language-python"># wal.py — 極簡 WAL 骨架(僅示意)
+import struct, os
+
+WAL_MAGIC   = b"MWDB"    # 4 bytes: magic number
+WAL_FRAME_HDR = 12       # page_num(4) + page_size(4) + checksum(4)
+
+class WAL:
+    def __init__(self, wal_path: str):
+        self._path = wal_path
+        self._frames: list[tuple[int, bytes]] = []  # (page_num, page_data)
+
+    def append(self, page_num: int, page_data: bytes):
+        """把一個「將要寫入的頁」追加到 WAL 記憶體緩衝區。"""
+        self._frames.append((page_num, bytes(page_data)))
+
+    def commit(self):
+        """
+        提交:把所有 frame 寫進 WAL 檔,最後呼叫 fsync 確保落磁碟。
+        此後才能把修改套用到主資料庫檔案。
+        """
+        with open(self._path, "ab") as f:
+            for page_num, data in self._frames:
+                checksum = sum(data) &amp; 0xFFFFFFFF  # 簡化 checksum
+                f.write(struct.pack("III", page_num, len(data), checksum))
+                f.write(data)
+            f.flush()
+            os.fsync(f.fileno())   # 強制落磁碟
+        self._frames.clear()
+
+    def rollback(self):
+        """回滾:直接丟棄記憶體中的 frames,不寫檔。"""
+        self._frames.clear()
+
+    def replay(self, pager):
+        """重啟時:把 WAL 中所有已提交的 frames 套用到 pager。"""
+        if not os.path.exists(self._path):
+            return
+        with open(self._path, "rb") as f:
+            while True:
+                hdr = f.read(WAL_FRAME_HDR)
+                if len(hdr) &lt; WAL_FRAME_HDR: break
+                page_num, size, _ = struct.unpack("III", hdr)
+                data = f.read(size)
+                if len(data) &lt; size: break   # 不完整的 frame,忽略
+                page = pager.get_page(page_num)
+                page[:] = data
+        os.remove(self._path)   # replay 後刪除 WAL 檔</code></pre>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">fsync 不可省略</span>
+          <p>Python 的 <code>f.flush()</code> 只把資料送進作業系統的頁快取(OS page cache),
+          不保證真正寫到磁碟。<strong>只有 <code>os.fsync(fd)</code> 才能保證持久性。</strong>
+          省略 <code>fsync</code> 的「資料庫」在斷電後可能丟失剛剛「已提交」的交易——
+          這是許多「土炮資料庫」的致命缺陷。</p>
+        </div>
+      </div>
+
+      <h3>並行控制(Concurrency Control)概覽</h3>
+
+      <p>
+        ACID 的<em>隔離性</em>是最複雜的一塊。生產資料庫通常有兩種主流做法:
+      </p>
+      <ul>
+        <li>
+          <strong>鎖(locking)</strong>:讀鎖(shared lock)允許多個讀者並行;
+          寫鎖(exclusive lock)獨佔資源。SQLite 預設使用檔案鎖實現<em>資料庫級別</em>的鎖定——
+          任意時刻只允許一個寫者。
+        </li>
+        <li>
+          <strong>MVCC(multi-version concurrency control,多版本並行控制)</strong>:
+          PostgreSQL 的做法——每次修改不蓋掉原始版本,而是建立新版本,
+          讓讀者「看到修改前的快照」,讀寫不互相阻塞。
+          詳見 <a href="37-databases.html">第 37 章</a>的並行控制小節。
+        </li>
+      </ul>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">SQLite WAL 模式</span>
+          <p>SQLite 3.7.0 起支援 WAL 模式(<code>PRAGMA journal_mode=WAL</code>),
+          讓<em>讀取</em>和<em>一個寫入</em>可以並行發生,大幅提升並發效能。
+          預設的 DELETE 日誌模式則是每次提交前把修改的頁複製到 <code>.db-journal</code> 檔,
+          思路略有不同但目標相同。</p>
+        </div>
+      </div>
+
+      <h2>驗收與延伸:整合七個里程碑</h2>
+
+      <p>
+        完成了七個里程碑之後,你的 MiniDB 應該能做到:
+      </p>
+      <ul>
+        <li>接受 <code>INSERT INTO users VALUES (id, 'name', 'email')</code> 並寫入 B-tree 葉節點。</li>
+        <li>接受 <code>SELECT * FROM users</code> 並全表掃描印出所有列。</li>
+        <li>接受 <code>SELECT * FROM users WHERE id = N</code> 並走 B-tree 二分搜直接定位。</li>
+        <li>程式重啟後,資料仍然存在(pager 的持久化)。</li>
+        <li>葉節點滿時自動分裂,分裂鍵上升至父節點(里程碑 5 的核心)。</li>
+      </ul>
+
+      <h3>整體驗收腳本</h3>
+
+      <pre><code class="language-bash"># 驗收腳本:以下指令序列應全部成功
+python db.py test.db &lt;&lt;'EOF'
+INSERT INTO users VALUES (3, 'Carol', 'carol@example.com')
+INSERT INTO users VALUES (1, 'Alice', 'alice@example.com')
+INSERT INTO users VALUES (2, 'Bob', 'bob@example.com')
+SELECT * FROM users
+SELECT * FROM users WHERE id = 2
+.stats
+.exit
+EOF
+
+# 期望輸出(順序可能因 B-tree 而為排序後):
+# (1, 'Alice', 'alice@example.com')
+# (2, 'Bob', 'bob@example.com')
+# (3, 'Carol', 'carol@example.com')
+# (2, 'Bob', 'bob@example.com')
+# [Stats] pages_read=1  pages_written=1  cache_hits=...</code></pre>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">已知限制(作為延伸題)</span>
+          <ul>
+            <li><strong>固定 schema</strong>:只支援 <code>(id, name, email)</code>。延伸:解析 <code>CREATE TABLE</code> 並把 schema 存入 page 0 的 catalog 區。</li>
+            <li><strong>單表</strong>:只有一個 <code>users</code> 表。延伸:用 catalog 頁記錄多個表的根頁號。</li>
+            <li><strong>內部節點分裂</strong>:當內部節點也滿時需要再次分裂並可能增加樹高,本章略去。延伸:參考 cstack 教學第 10–13 節。</li>
+            <li><strong>JOIN</strong>:多表連結需要巢狀迴圈、雜湊連結(hash join)或排序合併連結(sort-merge join)——留給讀者挑戰。</li>
+            <li><strong>查詢優化器</strong>:選擇索引 vs. 全表掃描的代價模型——詳見 CMU 15-445 的 Query Optimizer 講次。</li>
+          </ul>
+        </div>
+      </div>
+
+      <h3>延伸資源</h3>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">更深入學習</span>
+          <ul>
+            <li><a href="https://cstack.github.io/db_tutorial/" target="_blank">cstack — Let's Build a Simple Database</a>:用 C 一步步實作 SQLite 風格資料庫,共 13 節。本章的 Python 版本是它的高層對應。</li>
+            <li><a href="https://www.sqlite.org/arch.html" target="_blank">SQLite Architecture</a>:SQLite 官方架構文件,包含完整的 Virtual Machine(VDBE)與 B-tree 層說明。</li>
+            <li><a href="https://15445.courses.cs.cmu.edu/" target="_blank">CMU 15-445 Database Systems</a>:Carnegie Mellon 的資料庫系統課程,有 Bustub 實作框架,完整涵蓋 Buffer Pool、B+tree、Query Optimizer、Concurrency。</li>
+            <li><a href="https://dataintensive.net/" target="_blank">Designing Data-Intensive Applications</a>(Martin Kleppmann):深入講解儲存引擎設計、分散式資料庫,是進階必讀。</li>
+          </ul>
+        </div>
+      </div>
+
+      <h2>把這一章串起來</h2>
+
+      <p>
+        你剛剛從零打造了一個能在磁碟上持久化、用 B-tree 索引、
+        支援 SQL 解析的關聯式資料庫。讓我們把七個里程碑的收穫梳理一遍:
+      </p>
+
+      <ul>
+        <li>
+          <strong>里程碑 1(REPL)</strong>:所有互動式程式的骨架——讀取、求值、印出、迴圈。
+          <code>.exit</code> 等 meta 指令和 SQL 走不同路徑。
+        </li>
+        <li>
+          <strong>里程碑 2(SQL 前端)</strong>:Tokenizer 把字串切成 token,
+          遞迴下降 Parser 把 token 組合成 <code>InsertStmt</code>/<code>SelectStmt</code>。
+          固定 schema 讓解析器保持簡單。
+        </li>
+        <li>
+          <strong>里程碑 3(記憶體資料表)</strong>:<code>struct.pack/unpack</code> 做二進位序列化。
+          固定大小的列讓「列 N 的位置 = N × ROW_SIZE」——O(1) 定址。
+        </li>
+        <li>
+          <strong>里程碑 4(Pager)</strong>:頁快取讓 B-tree 以頁號讀寫,實際 I/O 盡量延遲到 <code>flush_all</code>。
+          頁 N 在檔案中的位置 = <code>N × PAGE_SIZE</code>——同樣是 O(1)。
+        </li>
+        <li>
+          <strong>里程碑 5(B-tree)</strong>:葉節點儲存資料,內部節點儲存分隔鍵。
+          節點分裂是最關鍵步驟:把滿的葉節點拆為左右兩半,分裂鍵上升到父節點。
+          整棵樹的高度 $O(\log_b n)$,保證查找和插入都是 $O(\log n)$ 次磁碟 I/O。
+        </li>
+        <li>
+          <strong>里程碑 6(查詢)</strong>:Cursor 抽象隔離了 B-tree 細節。
+          全表掃描 O(n),主鍵查找 O(log n)——索引的威力在這裡真正體現。
+        </li>
+        <li>
+          <strong>里程碑 7(交易)</strong>:WAL 保障原子性——先寫日誌,再改資料頁,
+          崩潰後重播恢復。<code>fsync</code> 是持久性的最後一道防線。
+          MVCC 讓讀寫不互相阻塞。
+        </li>
+      </ul>
+
+      <p>
+        這一章整合了本書四個大方向的知識:
+        <a href="37-databases.html">第 37 章</a>的 SQL 語義與關聯代數、
+        <a href="29-data-structures.html">第 29 章</a>的 B-tree 理論、
+        <a href="28-sorting-searching.html">第 28 章</a>的二分搜與搜尋分析、
+        <a href="24-operating-system.html">第 24 章</a>的檔案 I/O 與持久化。
+        一個從零打造的資料庫,是同時驗證這四塊知識的最佳戰場。
+      </p>
+
+      <blockquote>
+        「如果你不能簡單地解釋它,你就還沒有真正理解它。」——理查・費曼(Richard Feynman)
+      </blockquote>
+      <p>
+        能親手寫出 B-tree 分裂,你就真的理解了 B-tree——不只是「知道它是 O(log n)」,
+        而是「知道每個 case 會怎麼跑、每個 off-by-one 在哪裡」。這就是 capstone 的意義。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">對應原始課程與延伸閱讀</span>
+          <p>本章對應 CMU 15-445 Database Systems 的前半(Storage, Buffer Pool, B+Tree, Index Concurrency)。
+          若想繼續,建議依序挑戰:<strong>CMU 15-445 的 Bustub 作業</strong>(C++ 實作完整 buffer pool + B+tree)→
+          <strong>cstack 教學</strong>的第 8–13 節(C 語言完整內部節點分裂)→
+          <strong>DDIA 第 3 章</strong>(儲存引擎全景:LSM-tree vs. B-tree)。</p>
+        </div>
+      </div>
+
+
+

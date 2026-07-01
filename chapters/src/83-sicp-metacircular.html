@@ -1,0 +1,1198 @@
+<!--meta
+title: 後設循環直譯器:用 Lisp 寫 Lisp
+description: eval 遇見 apply,程式遇見資料——用不到三百行 Scheme,寫出一個能執行 Scheme 的 Scheme 直譯器,揭開語言的最深本質。
+-->
+
+
+      <div class="eyebrow">第十九部 · SICP:抽象的建構</div>
+      <h1>後設循環直譯器:用 Lisp 寫 Lisp</h1>
+      <p class="subtitle">eval 遇見 apply,程式遇見資料——用不到三百行 Scheme,寫出一個能執行 Scheme 的 Scheme 直譯器,揭開語言的最深本質。</p>
+      <div class="byline">
+        <span class="tag">第 77 章</span>
+        <span>閱讀時間 ≈ 90 分鐘</span>
+        <span>難度:★★★★★</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li><strong>後設循環求值器(metacircular evaluator)</strong>:用 Scheme 寫出能執行 Scheme 的直譯器</li>
+          <li><strong>eval/apply 雙人舞</strong>:兩個互遞迴函數如何共同構成整個語言的語意</li>
+          <li><strong>表示運算式</strong>:<code>tagged-list?</code>、<code>self-evaluating?</code>、各 selector 如何讓求值器獨立於語法</li>
+          <li><strong>環境模型實作</strong>:框架(frame)、綁定(binding)、<code>lookup-variable-value</code>、<code>extend-environment</code></li>
+          <li><strong>程式即資料</strong>:eval 是通用機器,求值器消除了「程式」與「資料」的邊界</li>
+          <li><strong>惰性求值變體</strong>:normal-order vs applicative-order、<code>thunk</code>、<code>delay-it</code>/<code>force-it</code></li>
+          <li><strong>非確定計算 amb</strong>:<code>amb</code> 特殊形式、搜尋與回溯、continuation 機制</li>
+          <li>Python 極簡對照:同樣的 eval/apply 結構用 Python 怎麼寫</li>
+        </ul>
+      </div>
+
+      <!-- ==================== h2 ① ==================== -->
+      <h2>直譯器是什麼:eval 與 apply 的雙人舞</h2>
+
+      <blockquote>
+        「它的鑰匙就是寶藏本身！」——John Barth, <em>Chimera</em>(SICP 第四章引言)
+      </blockquote>
+
+      <p>
+        你已經用 Scheme 寫程式好一陣子了。每次你打出 <code>(factorial 5)</code>,某個神秘的機制就把答案 120 吐給你。那個機制——直譯器(interpreter)——到底是什麼？
+      </p>
+      <p>
+        SICP 第四章給出的答案令人頭皮發麻:<strong>直譯器不過是另一個程式</strong>。更精確地說,你可以用 Scheme 寫一個直譯器,而這個直譯器又能執行 Scheme。這種「用自己解釋自己」的直譯器,Abelson 和 Sussman 稱之為<strong>後設循環求值器(metacircular evaluator)</strong>。
+      </p>
+      <p>
+        「後設循環」聽起來像死循環,但它不是。你需要已有一個能跑 Scheme 的環境(底層 Scheme),然後在那個環境裡寫程式,描述「Scheme 應該怎麼運作的規則」。這個描述本身就能執行,形成一個新的 Scheme 層。兩層之間互相依賴——像是在鏡子前拿著另一面鏡子——但不會無限循環,因為總有一個底層可以著地。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">最根本的洞見</span>
+          <p>「決定一個程式語言中運算式意義的求值器,本身只是另一個程式。」——SICP 第四章。讀透這一章,你會從語言的<em>使用者</em>晉升為語言的<em>設計者</em>。</p>
+        </div>
+      </div>
+
+      <p>
+        後設循環求值器的核心是兩個互相呼叫的過程:<code>eval</code> 和 <code>apply</code>。它們形成一支精準的雙人舞,共同把任意 Scheme 運算式化為值。
+      </p>
+
+      <!-- eval/apply SVG 環圖 -->
+      <div class="diagram">
+        <svg viewBox="0 0 700 340" width="700" height="340" font-family="Inter, 'Noto Sans TC', sans-serif">
+          <!-- 背景 -->
+          <rect width="700" height="340" fill="#f8fafb" rx="12"/>
+
+          <!-- eval 圓圈 -->
+          <circle cx="180" cy="170" r="90" fill="#e3efed" stroke="#2f6f6a" stroke-width="2.5"/>
+          <text x="180" y="162" text-anchor="middle" font-size="22" font-weight="bold" fill="#2f6f6a">eval</text>
+          <text x="180" y="184" text-anchor="middle" font-size="12" fill="#2f6f6a">(exp, env)</text>
+
+          <!-- apply 圓圈 -->
+          <circle cx="520" cy="170" r="90" fill="#fef3ec" stroke="#b4541f" stroke-width="2.5"/>
+          <text x="520" y="162" text-anchor="middle" font-size="22" font-weight="bold" fill="#b4541f">apply</text>
+          <text x="520" y="184" text-anchor="middle" font-size="12" fill="#b4541f">(proc, args)</text>
+
+          <!-- eval → apply 上方箭頭 -->
+          <path d="M270 140 Q350 80 430 140" fill="none" stroke="#2f6f6a" stroke-width="2" marker-end="url(#arr-green)"/>
+          <text x="350" y="90" text-anchor="middle" font-size="12" fill="#2f6f6a">遇到 application</text>
+          <text x="350" y="106" text-anchor="middle" font-size="11" fill="#2f6f6a">→ 先 eval 各子式,再呼叫 apply</text>
+
+          <!-- apply → eval 下方箭頭 -->
+          <path d="M430 200 Q350 260 270 200" fill="none" stroke="#b4541f" stroke-width="2" marker-end="url(#arr-orange)"/>
+          <text x="350" y="250" text-anchor="middle" font-size="12" fill="#b4541f">遇到 compound procedure</text>
+          <text x="350" y="266" text-anchor="middle" font-size="11" fill="#b4541f">→ 在新環境對 body 呼叫 eval</text>
+
+          <!-- 輸入 exp/env 左側 -->
+          <text x="50" y="165" text-anchor="middle" font-size="11" fill="#555">Expression</text>
+          <text x="50" y="179" text-anchor="middle" font-size="11" fill="#555">Environment</text>
+          <path d="M80 170 L88 170" fill="none" stroke="#888" stroke-width="1.5" marker-end="url(#arr-gray)"/>
+
+          <!-- 輸出 Value 右側 -->
+          <text x="650" y="165" text-anchor="middle" font-size="11" fill="#555">Value</text>
+          <path d="M610 170 L640 170" fill="none" stroke="#888" stroke-width="1.5" marker-end="url(#arr-gray)"/>
+
+          <!-- 基本情形標注 -->
+          <rect x="60" y="210" width="235" height="52" rx="6" fill="none" stroke="#8a929b" stroke-width="1" stroke-dasharray="4,3"/>
+          <text x="178" y="230" text-anchor="middle" font-size="11" fill="#8a929b">基本情形:數字/字串 → 直接回傳</text>
+          <text x="178" y="246" text-anchor="middle" font-size="11" fill="#8a929b">變數 → 在 env 中查找</text>
+          <text x="178" y="258" text-anchor="middle" font-size="10" fill="#8a929b">primitive proc → apply-primitive-procedure</text>
+
+          <!-- arrow defs -->
+          <defs>
+            <marker id="arr-green" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+              <path d="M0,0 L0,6 L8,3 z" fill="#2f6f6a"/>
+            </marker>
+            <marker id="arr-orange" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+              <path d="M0,0 L0,6 L8,3 z" fill="#b4541f"/>
+            </marker>
+            <marker id="arr-gray" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+              <path d="M0,0 L0,6 L8,3 z" fill="#888"/>
+            </marker>
+          </defs>
+        </svg>
+        <figcaption>圖 77-1:eval/apply 互遞迴雙人舞。運算式在環境中進入 eval；遇到應用(application)就轉交 apply；apply 對複合過程的 body 再呼叫 eval；如此往復,直到觸底——自求值的數字或字串。</figcaption>
+      </div>
+
+      <p>
+        SICP 這樣描述這個循環:「運算式在環境中被求值——化約為過程應用到引數——再化約為新環境中的新運算式——如此不斷,直到碰到符號(去環境裡查值)或基本過程(直接套用)。」這是整個語言的靈魂,濃縮成兩個函數。
+      </p>
+
+      <!-- ==================== h2 ② ==================== -->
+      <h2>求值器核心:eval 與 apply 程式碼全覽</h2>
+
+      <p>
+        讓我們直接看程式碼。SICP 的 <code>eval</code> 是一個大型 <code>cond</code>,根據運算式的語法類型分派:
+      </p>
+
+      <pre><code class="language-scheme">; ── eval:分派求值 ──────────────────────────────────────────
+(define (eval exp env)
+  (cond
+    ((self-evaluating? exp) exp)                         ; 數字、字串
+    ((variable? exp) (lookup-variable-value exp env))    ; 變數 → 查環境
+    ((quoted? exp) (text-of-quotation exp))              ; 'foo → foo
+    ((assignment? exp) (eval-assignment exp env))        ; set!
+    ((definition? exp) (eval-definition exp env))        ; define
+    ((if? exp) (eval-if exp env))                        ; if
+    ((lambda? exp)
+     (make-procedure (lambda-parameters exp)
+                     (lambda-body exp)
+                     env))                               ; lambda → 過程物件
+    ((begin? exp)
+     (eval-sequence (begin-actions exp) env))            ; begin
+    ((cond? exp)
+     (eval (cond-&gt;if exp) env))                         ; cond → if
+    ((application? exp)
+     (apply (eval (operator exp) env)                   ; ← 核心:先 eval 運算子
+            (list-of-values (operands exp) env)))        ;   再 eval 各運算元
+    (else
+     (error "Unknown expression type: EVAL" exp))))</code></pre>
+
+      <p>
+        注意最後一個實質分句:<code>(application? exp)</code>。當 <code>eval</code> 看到的是一個過程呼叫,它先對運算子求值(得到過程物件),再對各個運算元求值(得到引數列表),然後把兩者交給 <code>apply</code>。
+      </p>
+
+      <pre><code class="language-scheme">; ── apply:執行過程 ──────────────────────────────────────────
+(define (apply procedure arguments)
+  (cond
+    ((primitive-procedure? procedure)
+     (apply-primitive-procedure procedure arguments))   ; 基本過程:直接套用
+    ((compound-procedure? procedure)
+     (eval-sequence
+       (procedure-body procedure)
+       (extend-environment                              ; ← 建立新框架
+         (procedure-parameters procedure)
+         arguments
+         (procedure-environment procedure))))
+    (else
+     (error "Unknown procedure type: APPLY" procedure))))</code></pre>
+
+      <p>
+        <code>apply</code> 把過程分成兩類:<strong>基本過程</strong>(<code>car</code>、<code>+</code>、<code>cons</code>⋯⋯,底層 Scheme 直接提供)和<strong>複合過程</strong>(使用者用 <code>lambda</code> 定義的)。對複合過程,<code>apply</code> 先建立一個新的環境框架(把形式參數綁定到引數),再用 <code>eval-sequence</code> 在新環境中逐句執行過程體——這就回到了 <code>eval</code>,完成一圈雙人舞。
+      </p>
+
+      <h3>eval-sequence 與 list-of-values</h3>
+
+      <pre><code class="language-scheme">; 逐句求值一個序列,回傳最後一句的值
+(define (eval-sequence exps env)
+  (cond
+    ((last-exp? exps)
+     (eval (first-exp exps) env))
+    (else
+     (eval (first-exp exps) env)
+     (eval-sequence (rest-exps exps) env))))
+
+; 求值運算元列表,回傳值列表
+(define (list-of-values exps env)
+  (if (no-operands? exps)
+      '()
+      (cons (eval (first-operand exps) env)
+            (list-of-values (rest-operands exps) env))))
+
+; 有條件式的求值:先 eval 謂詞,再選分支
+(define (eval-if exp env)
+  (if (true? (eval (if-predicate exp) env))
+      (eval (if-consequent exp) env)
+      (eval (if-alternative exp) env)))</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">eval/apply 的本質</span>
+          <p><code>eval</code> 把語法化為意義,<code>apply</code> 把意義化為計算。語言的全部語意,就藏在這兩個互遞迴的函數裡。</p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ③ ==================== -->
+      <h2>表示運算式:語法的資料抽象</h2>
+
+      <p>
+        <code>eval</code> 的每個 <code>cond</code> 分句都呼叫一個謂詞(如 <code>assignment?</code>)和若干 selector(如 <code>assignment-variable</code>)。這些都是對「運算式如何表示」的抽象屏障——SICP 稱之為<strong>抽象語法(abstract syntax)</strong>。只要不改 <code>eval</code> 和 <code>apply</code>,你可以換掉全部語法程序,就得到一個使用不同語法的新語言。
+      </p>
+
+      <pre><code class="language-scheme">; ── 基礎謂詞 ──────────────────────────────────────────────
+(define (self-evaluating? exp)
+  (cond ((number? exp) true)
+        ((string? exp) true)
+        (else false)))
+
+(define (variable? exp) (symbol? exp))
+
+; tagged-list? 是辨識特殊形式的通用工具:
+; 判斷 exp 是否是 (tag ...) 形式的列表
+(define (tagged-list? exp tag)
+  (if (pair? exp)
+      (eq? (car exp) tag)
+      false))
+
+; ── 引號運算式 (quote foo) ─────────────────────────────────
+(define (quoted? exp) (tagged-list? exp 'quote))
+(define (text-of-quotation exp) (cadr exp))
+
+; ── 賦值 (set! var val) ────────────────────────────────────
+(define (assignment? exp) (tagged-list? exp 'set!))
+(define (assignment-variable exp) (cadr exp))
+(define (assignment-value exp) (caddr exp))
+
+; ── 定義 (define var val) 或 (define (f params) body) ─────
+(define (definition? exp) (tagged-list? exp 'define))
+(define (definition-variable exp)
+  (if (symbol? (cadr exp))
+      (cadr exp)            ; (define x 5) → x
+      (caadr exp)))         ; (define (f x) ...) → f
+(define (definition-value exp)
+  (if (symbol? (cadr exp))
+      (caddr exp)
+      (make-lambda (cdadr exp)   ; 形式參數
+                   (cddr exp)))) ; 過程體
+
+; ── lambda ─────────────────────────────────────────────────
+(define (lambda? exp) (tagged-list? exp 'lambda))
+(define (lambda-parameters exp) (cadr exp))
+(define (lambda-body exp) (cddr exp))
+(define (make-lambda parameters body)
+  (cons 'lambda (cons parameters body)))
+
+; ── if ─────────────────────────────────────────────────────
+(define (if? exp) (tagged-list? exp 'if))
+(define (if-predicate exp) (cadr exp))
+(define (if-consequent exp) (caddr exp))
+(define (if-alternative exp)
+  (if (not (null? (cdddr exp)))
+      (cadddr exp)
+      'false))              ; 沒有 else 分支時預設 false
+(define (make-if predicate consequent alternative)
+  (list 'if predicate consequent alternative))
+
+; ── begin ──────────────────────────────────────────────────
+(define (begin? exp) (tagged-list? exp 'begin))
+(define (begin-actions exp) (cdr exp))
+(define (last-exp? seq) (null? (cdr seq)))
+(define (first-exp seq) (car seq))
+(define (rest-exps seq) (cdr seq))
+
+; 把序列轉成單一運算式(必要時包成 begin),供 cond-&gt;if 使用
+(define (sequence-&gt;exp seq)
+  (cond ((null? seq) seq)
+        ((last-exp? seq) (first-exp seq))
+        (else (make-begin seq))))
+(define (make-begin seq) (cons 'begin seq))
+
+; ── 應用(過程呼叫)────────────────────────────────────────
+; 任何不是上面類型的 pair 都是應用
+(define (application? exp) (pair? exp))
+(define (operator exp) (car exp))
+(define (operands exp) (cdr exp))
+(define (no-operands? ops) (null? ops))
+(define (first-operand ops) (car ops))
+(define (rest-operands ops) (cdr ops))</code></pre>
+
+      <p>
+        請注意 <code>tagged-list?</code> 的精妙:Scheme 用 s-expression 表示所有資料,<em>也用 s-expression 表示程式</em>。<code>(set! x 5)</code> 本質上就是一個列表 <code>(set! x 5)</code>,所以 <code>(tagged-list? exp 'set!)</code> 就是問「這個列表的第一個元素是不是符號 <code>set!</code>？」這正是「程式即資料」在實作層面的具體體現。
+      </p>
+
+      <h3>賦值與定義的求值</h3>
+
+      <p>
+        <code>eval</code> 的 <code>cond</code> 分派把 <code>set!</code> 和 <code>define</code> 交給 <code>eval-assignment</code> 和 <code>eval-definition</code>。兩者都先遞迴呼叫 <code>eval</code> 算出要綁定的值,再修改環境:
+      </p>
+
+      <pre><code class="language-scheme">; (set! var val):先求值 val,再改環境中的綁定
+(define (eval-assignment exp env)
+  (set-variable-value! (assignment-variable exp)
+                       (eval (assignment-value exp) env)
+                       env)
+  'ok)
+
+; (define var val):先求值 val,再在當前框架建立綁定
+(define (eval-definition exp env)
+  (define-variable! (definition-variable exp)
+                    (eval (definition-value exp) env)
+                    env)
+  'ok)</code></pre>
+
+      <p>
+        兩者都回傳符號 <code>'ok</code>——這正是為什麼在 REPL 打 <code>(define x 5)</code> 會看到 <code>ok</code>。注意 <code>set-variable-value!</code> 與 <code>define-variable!</code> 的差別:前者要求變數已存在(否則報錯),後者則會在當前框架直接建立或覆蓋綁定。
+      </p>
+
+      <h3>cond 作為衍生運算式</h3>
+
+      <p>
+        <code>cond</code> 並不需要 <code>eval</code> 特別處理,只需把它轉換成 <code>if</code> 巢套:
+      </p>
+
+      <pre><code class="language-scheme">(define (cond? exp) (tagged-list? exp 'cond))
+(define (cond-clauses exp) (cdr exp))
+(define (cond-else-clause? clause)
+  (eq? (cond-predicate clause) 'else))
+(define (cond-predicate clause) (car clause))
+(define (cond-actions clause) (cdr clause))
+
+(define (cond-&gt;if exp)
+  (expand-clauses (cond-clauses exp)))
+
+(define (expand-clauses clauses)
+  (if (null? clauses)
+      'false
+      (let ((first (car clauses))
+            (rest (cdr clauses)))
+        (if (cond-else-clause? first)
+            (if (null? rest)
+                (sequence-&gt;exp (cond-actions first))
+                (error "ELSE clause isn't last: COND-&gt;IF" clauses))
+            (make-if (cond-predicate first)
+                     (sequence-&gt;exp (cond-actions first))
+                     (expand-clauses rest))))))</code></pre>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">衍生運算式(derived expressions)</span>
+          <p>像 <code>cond</code>、<code>let</code>、<code>and</code>、<code>or</code> 這些「特殊形式」,其實可以定義為「語法轉換」——把它們轉成更基本的 <code>if</code>/<code>lambda</code>,再讓 <code>eval</code> 求值。這意味著你可以在不改 <code>eval</code> 核心的情況下,不斷地<em>擴展</em>語言。這是宏(macro)系統的原型。</p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ④ ==================== -->
+      <h2>求值器的資料結構:環境</h2>
+
+      <p>
+        過程呼叫的核心是<strong>環境(environment)</strong>的建立與查詢。環境是一個框架(frame)的鏈:每個框架把一組變數名映射到值,並指向外圍框架。
+      </p>
+
+      <h3>表示複合過程</h3>
+
+      <pre><code class="language-scheme">; 複合過程物件 = (procedure 參數列表 過程體 定義時的環境)
+(define (make-procedure parameters body env)
+  (list 'procedure parameters body env))
+
+(define (compound-procedure? p)
+  (tagged-list? p 'procedure))
+
+(define (procedure-parameters p) (cadr p))
+(define (procedure-body p) (caddr p))
+(define (procedure-environment p) (cadddr p))
+
+; 謂詞(真假值)
+(define (true? x) (not (eq? x false)))
+(define (false? x) (eq? x false))</code></pre>
+
+      <h3>環境操作</h3>
+
+      <pre><code class="language-scheme">; 環境是框架的列表；框架是 (變數列表 . 值列表) 的序對
+
+(define (enclosing-environment env) (cdr env))
+(define (first-frame env) (car env))
+(define the-empty-environment '())
+
+(define (make-frame variables values)
+  (cons variables values))
+(define (frame-variables frame) (car frame))
+(define (frame-values frame) (cdr frame))
+(define (add-binding-to-frame! var val frame)
+  (set-car! frame (cons var (car frame)))
+  (set-cdr! frame (cons val (cdr frame))))
+
+; 建立新框架,把參數綁定到引數
+(define (extend-environment vars vals base-env)
+  (if (= (length vars) (length vals))
+      (cons (make-frame vars vals) base-env)
+      (if (&lt; (length vars) (length vals))
+          (error "Too many arguments supplied" vars vals)
+          (error "Too few arguments supplied" vars vals))))
+
+; 查找變數:逐層框架掃描
+(define (lookup-variable-value var env)
+  (define (env-loop env)
+    (define (scan vars vals)
+      (cond ((null? vars)
+             (env-loop (enclosing-environment env)))
+            ((eq? var (car vars))
+             (car vals))
+            (else (scan (cdr vars) (cdr vals)))))
+    (if (eq? env the-empty-environment)
+        (error "Unbound variable" var)
+        (let ((frame (first-frame env)))
+          (scan (frame-variables frame)
+                (frame-values frame)))))
+  (env-loop env))
+
+; 修改既有綁定
+(define (set-variable-value! var val env)
+  (define (env-loop env)
+    (define (scan vars vals)
+      (cond ((null? vars)
+             (env-loop (enclosing-environment env)))
+            ((eq? var (car vars))
+             (set-car! vals val))
+            (else (scan (cdr vars) (cdr vals)))))
+    (if (eq? env the-empty-environment)
+        (error "Unbound variable: SET!" var)
+        (let ((frame (first-frame env)))
+          (scan (frame-variables frame)
+                (frame-values frame)))))
+  (env-loop env))
+
+; 在當前框架定義(或覆蓋)變數
+(define (define-variable! var val env)
+  (let ((frame (first-frame env)))
+    (define (scan vars vals)
+      (cond ((null? vars)
+             (add-binding-to-frame! var val frame))
+            ((eq? var (car vars))
+             (set-car! vals val))
+            (else (scan (cdr vars) (cdr vals)))))
+    (scan (frame-variables frame)
+          (frame-values frame))))</code></pre>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">環境是閉包的「記憶」</span>
+          <p><code>make-procedure</code> 在建立過程物件時,把<em>當時的環境</em>一起封裝進去。之後呼叫這個過程時,<code>apply</code> 用 <code>extend-environment</code> 在那個被封存的環境上建立新框架。這就是第 76 章探討的「閉包為什麼能記住狀態」在實作層面的精確答案。</p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑤ ==================== -->
+      <h2>把直譯器當程式跑:驅動迴圈</h2>
+
+      <p>
+        有了 <code>eval</code> 和 <code>apply</code>,剩下的問題是:怎麼讓它「跑起來」？我們需要一個全域環境和一個驅動迴圈(driver loop)。
+      </p>
+
+      <pre><code class="language-scheme">; ── 基本過程 ──────────────────────────────────────────────
+; 用底層 Scheme 的 apply 實作；我們先把它存起來
+(define apply-in-underlying-scheme apply)
+
+(define primitive-procedures
+  (list (list 'car car)
+        (list 'cdr cdr)
+        (list 'cons cons)
+        (list 'null? null?)
+        (list '+ +)
+        (list '- -)
+        (list '* *)
+        (list '/ /)
+        (list '= =)
+        (list '&lt; &lt;)
+        (list '&gt; &gt;)
+        (list 'not not)
+        (list 'list list)
+        (list 'display display)
+        (list 'newline newline)
+        )) ; 可依需要增加
+
+(define (primitive-procedure? proc)
+  (tagged-list? proc 'primitive))
+(define (primitive-implementation proc) (cadr proc))
+(define (apply-primitive-procedure proc args)
+  (apply-in-underlying-scheme
+   (primitive-implementation proc) args))
+
+(define (primitive-procedure-names)
+  (map car primitive-procedures))
+(define (primitive-procedure-objects)
+  (map (lambda (proc) (list 'primitive (cadr proc)))
+       primitive-procedures))
+
+; ── 建立全域環境 ────────────────────────────────────────────
+(define (setup-environment)
+  (let ((initial-env
+         (extend-environment (primitive-procedure-names)
+                             (primitive-procedure-objects)
+                             the-empty-environment)))
+    (define-variable! 'true true initial-env)
+    (define-variable! 'false false initial-env)
+    initial-env))
+
+(define the-global-environment (setup-environment))
+
+; ── 驅動迴圈 (REPL) ────────────────────────────────────────
+(define input-prompt  ";;; M-Eval input:")
+(define output-prompt ";;; M-Eval value:")
+
+(define (driver-loop)
+  (prompt-for-input input-prompt)
+  (let ((input (read)))
+    (let ((output (eval input the-global-environment)))
+      (announce-output output-prompt)
+      (user-print output)))
+  (driver-loop))
+
+(define (prompt-for-input string)
+  (newline) (newline) (display string) (newline))
+(define (announce-output string)
+  (newline) (display string) (newline))
+
+; user-print 避免把環境(可能很長甚至有循環)列印出來
+(define (user-print object)
+  (if (compound-procedure? object)
+      (display (list 'compound-procedure
+                     (procedure-parameters object)
+                     (procedure-body object)
+                     '&lt;procedure-env&gt;))
+      (display object)))</code></pre>
+
+      <p>
+        現在你可以這樣啟動它:
+      </p>
+
+      <pre><code class="language-scheme">(define the-global-environment (setup-environment))
+(driver-loop)
+
+;;; M-Eval input:
+(define (append x y)
+  (if (null? x) y (cons (car x) (append (cdr x) y))))
+;;; M-Eval value: ok
+
+;;; M-Eval input:
+(append '(a b c) '(d e f))
+;;; M-Eval value: (a b c d e f)</code></pre>
+
+      <p>
+        這個小直譯器可以執行本書前幾章寫過的幾乎所有程式——因為那些程式本身就是 Scheme,而這個直譯器實作了 Scheme。這個「自我指涉」的迴圈讓人讚嘆:直譯器足夠強大,甚至能在自身之上再跑一個直譯器。
+      </p>
+
+      <!-- ==================== h2 ⑥ ==================== -->
+      <h2>程式即資料:eval 是通用機器</h2>
+
+      <p>
+        SICP 指出,這個後設循環求值器是一台<strong>通用機器(universal machine)</strong>。給它任何程式的描述,它就能模擬那個程式。這個洞見有深遠的哲學意涵:
+      </p>
+
+      <ul>
+        <li>對<strong>使用者</strong>來說,<code>(* x x)</code> 是一個「程式」,直譯器應該執行它。</li>
+        <li>對<strong>直譯器</strong>來說,<code>(* x x)</code> 只是一個列表 <code>(* x x)</code>——三個符號組成的資料,按規則處理。</li>
+      </ul>
+
+      <p>
+        這就是 Lisp 設計的根本祕密:<strong>程式和資料使用完全相同的表示形式(s-expression)</strong>,因此「執行一個程式」和「操作一個資料結構」本質上沒有差別。這讓 Lisp 的宏系統、後設程式設計、自我修改程式碼成為可能。
+      </p>
+
+      <pre><code class="language-scheme">; 你可以在執行時建構「程式」並求值
+(eval '(* 5 5) the-global-environment)   ; → 25
+
+; 或者用 cons 動態組裝運算式再送給 eval
+(eval (cons '* (list 5 5)) the-global-environment)  ; → 25
+
+; 更驚人的:你可以「eval 自己」——在 M-Eval 裡再跑一個 M-Eval
+; (只要把 eval/apply 的程式碼輸入到已在跑的那個 M-Eval 就行)</code></pre>
+
+      <div class="callout history">
+        <div class="ico">📜</div>
+        <div class="body">
+          <span class="c-title">停機問題與通用機器</span>
+          <p>「通用機器」這個概念直接連接到 Alan Turing(圖靈)在 1936 年的歷史論文。Turing 證明了「不可能寫出一個通用的 halts? 過程來判斷任意程式是否停機」(停機問題,Halting Problem)。SICP 練習 4.15 讓你用我們剛寫的 M-Eval 來重現這個證明。這是計算理論最深刻的結論之一:有些問題,在原則上就不可計算。</p>
+        </div>
+      </div>
+
+      <h3>Python 對照:一個極簡 eval/apply</h3>
+
+      <p>
+        為了幫助你看清 eval/apply 的結構,這裡給出一個 Python 版的極簡直譯器。它只支援數字、加法和 lambda,但骨架與 SICP 版完全相同:
+      </p>
+
+      <pre><code class="language-python">"""
+極簡 eval/apply——展示雙人舞結構
+支援:數字字面值、變數、加法、lambda、過程呼叫
+"""
+
+def mini_eval(exp, env):
+    """eval:分派求值"""
+    if isinstance(exp, (int, float)):     # 自求值
+        return exp
+    if isinstance(exp, str):              # 變數 → 查環境
+        return env[exp]
+    op = exp[0]
+    if op == 'lambda':                    # lambda → 過程物件
+        _, params, body = exp
+        return ('closure', params, body, env)
+    if op == '+':                         # 加法(示意基本過程)
+        return mini_eval(exp[1], env) + mini_eval(exp[2], env)
+    # 過程呼叫
+    proc = mini_eval(exp[0], env)
+    args = [mini_eval(a, env) for a in exp[1:]]
+    return mini_apply(proc, args)
+
+def mini_apply(proc, args):
+    """apply:執行過程"""
+    if callable(proc):                    # Python 內建 = 基本過程
+        return proc(*args)
+    # 複合過程:建立新環境,對 body 呼叫 eval
+    _, params, body, closure_env = proc
+    new_env = {**closure_env, **dict(zip(params, args))}
+    return mini_eval(body, new_env)
+
+# 測試
+env = {'x': 10, 'y': 3}
+add_two = ['lambda', ['a', 'b'], ['+', 'a', 'b']]
+print(mini_eval([add_two, 'x', 'y'], env))  # → 13</code></pre>
+
+      <p>
+        Python 版的 <code>mini_eval</code> 和 <code>mini_apply</code> 互相呼叫,結構與 Scheme 版如出一轍。差別只在:Scheme 版是同語言的後設循環(Scheme 直譯 Scheme),Python 版是跨語言(Python 直譯極簡 Lisp)。
+      </p>
+
+      <!-- ==================== h2 ⑦ ==================== -->
+      <h2>變體一:惰性求值——讓引數等到需要時才算</h2>
+
+      <p>
+        標準 Scheme 是<strong>應用序(applicative-order)</strong>:呼叫過程前,先把所有引數求值完畢。這個選擇並非唯一,SICP 第 4.2 節介紹了另一種求值策略:<strong>正規序(normal-order)</strong>,又叫<strong>惰性求值(lazy evaluation)</strong>——引數延遲到真正被需要時才求值。
+      </p>
+
+      <pre><code class="language-scheme">; 在應用序下,這會爆炸:
+(define (try a b)
+  (if (= a 0) 1 b))
+(try 0 (/ 1 0))   ; → 錯誤！(/ 1 0) 先被求值
+
+; 在惰性求值下:
+; (/ 1 0) 被包成「thunk」,因為 a=0 時 b 從不被需要
+; → 回傳 1,不出錯</code></pre>
+
+      <h3>Thunk:延遲的承諾</h3>
+
+      <p>
+        惰性求值的實作引入了<strong>thunk</strong>(暫存承諾):把一個未求值的運算式連同它的環境打包起來,等需要時再「強迫(force)」它。
+      </p>
+
+      <pre><code class="language-scheme">; ── thunk 的建立與強迫 ────────────────────────────────────
+; 建立 thunk:把運算式和環境打包
+(define (delay-it exp env)
+  (list 'thunk exp env))
+
+(define (thunk? obj) (tagged-list? obj 'thunk))
+(define (thunk-exp thunk) (cadr thunk))
+(define (thunk-env thunk) (caddr thunk))
+
+; 強迫 thunk(含記憶化:只算一次)
+(define (evaluated-thunk? obj)
+  (tagged-list? obj 'evaluated-thunk))
+(define (thunk-value evaluated-thunk) (cadr evaluated-thunk))
+
+(define (force-it obj)
+  (cond ((thunk? obj)
+         (let ((result (actual-value (thunk-exp obj)
+                                     (thunk-env obj))))
+           (set-car! obj 'evaluated-thunk)   ; 標記為已算
+           (set-car! (cdr obj) result)        ; 存入值
+           (set-cdr! (cdr obj) '())           ; 丟掉環境(節省記憶體)
+           result))
+        ((evaluated-thunk? obj) (thunk-value obj))
+        (else obj)))
+
+; actual-value:eval 後再 force,確保 thunk 被展開
+(define (actual-value exp env)
+  (force-it (eval exp env)))</code></pre>
+
+      <h3>三處協調改動,把 eager 求值器變惰性</h3>
+
+      <p>
+        把第 4.1 節那個正常(eager、應用序)求值器改成惰性求值器,總共只需要協調修改<strong>三處</strong>。第一處在 <code>eval</code>:它的 <code>application?</code> 子句要改成——運算子先用 <code>actual-value</code> 強制求值(因為 <code>apply</code> 需要真正的過程物件來分派),運算元卻<em>不</em>預先求值,而是連同環境一起原封不動地傳給 <code>apply</code>:
+      </p>
+
+      <pre><code class="language-scheme">; eval 的 application? 子句改成:
+; 運算子先 actual-value,運算元「不」預先求值,整批連同 env 傳給 apply
+((application? exp)
+ (apply (actual-value (operator exp) env)
+        (operands exp)
+        env))</code></pre>
+
+      <p>
+        第二處在 <code>eval-if</code>:述詞(predicate)的值是用來決定走哪個分支的,所以必須<em>真的</em>算出來——用 <code>actual-value</code> 強制求值,把可能的 thunk 展開:
+      </p>
+
+      <pre><code class="language-scheme">; eval-if 也要改用 actual-value 強制求值述詞
+(define (eval-if exp env)
+  (if (true? (actual-value (if-predicate exp) env))
+      (eval (if-consequent exp) env)
+      (eval (if-alternative exp) env)))</code></pre>
+
+      <p>
+        第三處在 <code>apply</code>:對複合過程的引數改用 <code>delay-it</code> 包成 thunk,延遲求值。正是這三處改動——<strong>eval 的 application 子句、<code>eval-if</code>、以及 <code>apply</code> 對引數的 delay</strong>——合起來讓整個語言從應用序變成正規序(惰性)。
+      </p>
+
+      <h3>修改 apply:延遲引數</h3>
+
+      <p>
+        在惰性求值器中,<code>apply</code> 對複合過程的引數<em>不</em>求值,而是包成 thunk；只有遞給基本過程時,才強迫求值:
+      </p>
+
+      <pre><code class="language-scheme">; 惰性版 apply
+(define (apply procedure arguments env)
+  (cond
+    ((primitive-procedure? procedure)
+     (apply-primitive-procedure
+       procedure
+       (list-of-arg-values arguments env)))   ; 基本過程:強迫求值
+    ((compound-procedure? procedure)
+     (eval-sequence
+       (procedure-body procedure)
+       (extend-environment
+         (procedure-parameters procedure)
+         (list-of-delayed-args arguments env)  ; 複合過程:延遲引數
+         (procedure-environment procedure))))
+    (else (error "Unknown procedure type: APPLY" procedure))))
+
+(define (list-of-arg-values exps env)
+  (if (no-operands? exps) '()
+      (cons (actual-value (first-operand exps) env)
+            (list-of-arg-values (rest-operands exps) env))))
+
+(define (list-of-delayed-args exps env)
+  (if (no-operands? exps) '()
+      (cons (delay-it (first-operand exps) env)
+            (list-of-delayed-args (rest-operands exps) env))))</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">惰性求值的核心改動</span>
+          <p>應用序 vs 正規序的差別,實作上只需更動 <code>apply</code> 裡對複合過程引數的處理方式:從「先求值」改為「先包 thunk,用到時再 force」。這一改,整個語言的語意就轉變了。</p>
+        </div>
+      </div>
+
+      <p>
+        有趣的副產品:在惰性求值器中,<code>cons</code> 可以被重新定義成非嚴格的(non-strict),讓第 76 章的無限串流變成語言內建的機制,而不再需要 <code>delay</code>/<code>force</code> 語法。
+      </p>
+
+      <!-- ==================== h2 ⑧ ==================== -->
+      <h2>變體二:非確定計算 amb——讓電腦自動搜尋</h2>
+
+      <p>
+        SICP 第 4.3 節的 <code>amb</code> 是這本書最令人驚豔的段落之一。想像你能這樣解題:
+      </p>
+
+      <pre><code class="language-scheme">; 找一對整數 (a, b),使 a² + b² 是完全平方數(畢氏三元組)
+(define (a-pythagorean-triple-between low high)
+  (let ((i (an-integer-between low high)))
+    (let ((j (an-integer-between i high)))
+      (let ((k (an-integer-between j high)))
+        (require (= (+ (* i i) (* j j)) (* k k)))
+        (list i j k)))))</code></pre>
+
+      <p>
+        你沒有寫任何搜尋迴圈,沒有寫回溯邏輯。但這個程式能正確輸出畢氏三元組,因為 <code>amb</code> 求值器在幕後自動幫你試遍所有可能,一遇到 <code>require</code> 失敗就自動回溯。
+      </p>
+
+      <h3>amb 的語意</h3>
+
+      <pre><code class="language-scheme">; (amb e1 e2 ... en) 「模糊地」回傳其中一個值
+; (amb) 沒有選項,表示「此路不通,請回溯」
+
+; require:如果 p 為假,就強制回溯
+(define (require p)
+  (if (not p) (amb)))
+
+; an-element-of:非確定性地從列表選一個元素
+(define (an-element-of items)
+  (require (not (null? items)))
+  (amb (car items)
+       (an-element-of (cdr items))))
+
+; an-integer-between:在區間 [low, high] 中選一個整數
+(define (an-integer-between low high)
+  (require (&lt;= low high))
+  (amb low (an-integer-between (+ low 1) high)))</code></pre>
+
+      <h3>amb 驅動迴圈:try-again</h3>
+
+      <p>
+        <code>amb</code> 求值器的驅動迴圈比普通版多了一個指令:<code>try-again</code>,讓你要求「給我下一個解」:
+      </p>
+
+      <pre><code class="language-scheme">;;; Amb-Eval input:
+(prime-sum-pair '(1 3 5 8) '(20 35 110))
+;;; Starting a new problem
+;;; Amb-Eval value: (3 20)
+
+;;; Amb-Eval input: try-again
+;;; Amb-Eval value: (3 110)
+
+;;; Amb-Eval input: try-again
+;;; Amb-Eval value: (8 35)
+
+;;; Amb-Eval input: try-again
+;;; There are no more values of ...</code></pre>
+
+      <h3>Continuation 機制(深入選讀)</h3>
+
+      <p>
+        <code>amb</code> 的魔法是用<strong>延續(continuation)</strong>實作的。在 <code>amb</code> 求值器裡,每個執行過程接受三個引數:<code>env</code>(環境)、<code>succeed</code>(成功延續)、<code>fail</code>(失敗延續)。
+      </p>
+
+      <pre><code class="language-scheme">; 最核心的 amb 分析過程:
+(define (analyze-amb exp)
+  (let ((cprocs (map analyze (amb-choices exp))))
+    (lambda (env succeed fail)
+      (define (try-next choices)
+        (if (null? choices)
+            (fail)                            ; 所有選項耗盡 → 失敗
+            ((car choices)
+              env
+              succeed
+              (lambda ()                      ; 當前選項失敗時 → 試下一個
+                (try-next (cdr choices))))))
+      (try-next cprocs))))
+
+; 賦值要支援「回溯時撤銷」:
+(define (analyze-assignment exp)
+  (let ((var (assignment-variable exp))
+        (vproc (analyze (assignment-value exp))))
+    (lambda (env succeed fail)
+      (vproc env
+             (lambda (val fail2)              ; *1* 賦值成功
+               (let ((old-value (lookup-variable-value var env)))
+                 (set-variable-value! var val env)
+                 (succeed 'ok
+                          (lambda ()          ; *2* 如果之後失敗,撤銷賦值
+                            (set-variable-value! var old-value env)
+                            (fail2)))))
+             fail))))</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">amb 的本質</span>
+          <p>amb 讓你把問題的約束(constraints)直接寫成程式,搜尋自動發生。<code>succeed</code> 延續代表「如果這條路成功,繼續做什麼」；<code>fail</code> 延續代表「如果這條路失敗,換試另一條」。這與第 45 章 <a href="45-prolog.html">Prolog 的搜尋與回溯</a>如出一轍——兩者都是「描述問題,求解自動發生」的宣告式範式。</p>
+        </div>
+      </div>
+
+      <h3>邏輯謎題示範</h3>
+
+      <pre><code class="language-scheme">; 五層公寓問題:Baker、Cooper、Fletcher、Miller、Smith 住在不同樓層
+(define (multiple-dwelling)
+  (let ((baker    (amb 1 2 3 4 5))
+        (cooper   (amb 1 2 3 4 5))
+        (fletcher (amb 1 2 3 4 5))
+        (miller   (amb 1 2 3 4 5))
+        (smith    (amb 1 2 3 4 5)))
+    (require (distinct? (list baker cooper fletcher miller smith)))
+    (require (not (= baker 5)))          ; Baker 不住頂層
+    (require (not (= cooper 1)))         ; Cooper 不住底層
+    (require (not (= fletcher 5)))       ; Fletcher 不住頂層
+    (require (not (= fletcher 1)))       ; Fletcher 不住底層
+    (require (&gt; miller cooper))          ; Miller 住得比 Cooper 高
+    (require (not (= (abs (- smith fletcher)) 1)))    ; Smith 和 Fletcher 不相鄰
+    (require (not (= (abs (- fletcher cooper)) 1)))   ; Fletcher 和 Cooper 不相鄰
+    (list (list 'baker baker)
+          (list 'cooper cooper)
+          (list 'fletcher fletcher)
+          (list 'miller miller)
+          (list 'smith smith))))
+
+; 結果:((baker 3) (cooper 2) (fletcher 4) (miller 5) (smith 1))</code></pre>
+
+      <!-- ==================== h2 ⑨ ==================== -->
+      <h2>直譯 vs 編譯:這一章在全局的位置</h2>
+
+      <p>
+        現在你手上有了一個直譯器。那麼<strong>編譯器</strong>和直譯器的差別是什麼？
+      </p>
+      <p>
+        第 <a href="42-compilers.html">42 章(編譯器)</a>討論了這個問題。簡單說:
+      </p>
+      <ul>
+        <li><strong>直譯器</strong>:每次執行,都對程式碼做分析(parse、dispatch、lookup)。好處是靈活、互動；代價是每行代碼被執行多少次,就分析多少次。</li>
+        <li><strong>編譯器</strong>:把程式碼事先翻譯成目標代碼(機器碼或位元組碼),執行時不再分析語法。好處是快；代價是預先需要一個額外的翻譯步驟,且靈活性略差。</li>
+      </ul>
+      <p>
+        SICP 第 4.1.7 節還介紹了一個中間方案:<strong>分析後執行(analyzing evaluator)</strong>——把語法分析從執行中分離出來,每個運算式只分析一次,但每次執行仍在直譯器上進行。這正是很多現代語言的 JIT 編譯器的思路。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">amb 與 Prolog 的淵源</span>
+          <p><a href="45-prolog.html">第 45 章 Prolog</a> 的統一(unification)與回溯搜尋,和 <code>amb</code> 的非確定計算是同根的。SICP 第 4.4 節更進一步,在 Scheme 上建造了一個完整的邏輯程式語言(查詢系統),用的是類似的延續機制。「描述知識,查詢自動發生」——這是 Prolog 和 <code>amb</code> 共同的夢想。</p>
+        </div>
+      </div>
+
+      <!-- ==================== exercises ==================== -->
+      <h2>練習題</h2>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 77.1 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>
+            解釋以下 M-Eval 互動的原因(SICP 練習 4.14):Eva 把自己寫的 <code>map</code> 在 M-Eval 裡用,沒問題。Louis 把底層 Scheme 的 <code>map</code> 安裝成基本過程,結果大爆炸。為什麼 Louis 的版本失敗？
+          </p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>
+                底層 Scheme 的 <code>map</code> 期望收到「Scheme 過程物件」,但 M-Eval 中的複合過程是用列表表示的(<code>('procedure params body env)</code> 這樣的資料結構),不是底層 Scheme 能識別的過程。
+              </p>
+              <p>
+                當 Louis 的 <code>map</code>(底層版)試圖把 M-Eval 中的過程物件當函數應用時,底層 Scheme 只看到一個列表,不知道怎麼呼叫它,於是出錯。
+              </p>
+              <p>
+                Eva 自己在 M-Eval 裡寫的 <code>map</code>,是用 M-Eval 的 <code>apply</code> 來呼叫過程物件,所以能正確處理 M-Eval 的複合過程。關鍵:<strong>M-Eval 的過程表示對底層 Scheme 不透明</strong>,只有 M-Eval 自己的 <code>apply</code> 才懂得如何使用它。
+              </p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 77.2 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>
+            為 M-Eval 加入 <code>let</code> 特殊形式。<code>let</code> 是衍生運算式,因為:
+          </p>
+          <pre><code class="language-scheme">(let ((var1 exp1) ... (varn expn)) body)</code></pre>
+          <p>等價於:</p>
+          <pre><code class="language-scheme">((lambda (var1 ... varn) body) exp1 ... expn)</code></pre>
+          <p>
+            請實作 <code>let-&gt;combination</code> 語法轉換,並在 <code>eval</code> 的 <code>cond</code> 裡加上對應分句。
+          </p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-scheme">; 語法謂詞與 selector
+(define (let? exp) (tagged-list? exp 'let))
+(define (let-bindings exp) (cadr exp))
+(define (let-body exp) (cddr exp))
+(define (binding-var b) (car b))
+(define (binding-val b) (cadr b))
+
+; 轉換:(let ((v1 e1) ...) body) → ((lambda (v1 ...) body) e1 ...)
+(define (let-&gt;combination exp)
+  (let ((bindings (let-bindings exp))
+        (body     (let-body exp)))
+    (cons (make-lambda (map binding-var bindings)
+                       body)
+          (map binding-val bindings))))
+
+; 在 eval 的 cond 裡加入:
+; ((let? exp) (eval (let-&gt;combination exp) env))</code></pre>
+              <p>
+                測試:
+              </p>
+              <pre><code class="language-scheme">;;; M-Eval input:
+(let ((x 3) (y 4))
+  (+ x y))
+;;; M-Eval value: 7</code></pre>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 77.3 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>
+            為 M-Eval 加入 <code>and</code> 和 <code>or</code>。它們是短路求值(short-circuit evaluation)的特殊形式:
+          </p>
+          <ul>
+            <li><code>(and e1 e2 ... en)</code>:從左到右求值,遇到假值立即回傳假；全真則回傳最後一個值。</li>
+            <li><code>(or e1 e2 ... en)</code>:從左到右求值,遇到真值立即回傳；全假則回傳 <code>false</code>。</li>
+          </ul>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-scheme">; and
+(define (and? exp) (tagged-list? exp 'and))
+(define (and-exps exp) (cdr exp))
+
+(define (eval-and exps env)
+  (if (null? exps)
+      true                               ; (and) → true
+      (let ((val (eval (car exps) env)))
+        (if (false? val)
+            false
+            (if (null? (cdr exps))
+                val                      ; 最後一個 → 回傳值
+                (eval-and (cdr exps) env))))))
+
+; or
+(define (or? exp) (tagged-list? exp 'or))
+(define (or-exps exp) (cdr exp))
+
+(define (eval-or exps env)
+  (if (null? exps)
+      false                              ; (or) → false
+      (let ((val (eval (car exps) env)))
+        (if (true? val)
+            val                          ; 遇到真值立即回傳
+            (eval-or (cdr exps) env)))))
+
+; 在 eval 的 cond 加入:
+; ((and? exp) (eval-and (and-exps exp) env))
+; ((or? exp)  (eval-or  (or-exps exp)  env))</code></pre>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 77.4 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>
+            把普通的 M-Eval 改成<strong>惰性求值器</strong>。需要:
+          </p>
+          <ol>
+            <li>修改 <code>apply</code> 中對複合過程引數的處理,改為用 <code>delay-it</code> 包成 thunk,而非立即求值。</li>
+            <li>在需要「真實值」的地方(謂詞、過程物件)改用 <code>actual-value</code>。</li>
+            <li>修改驅動迴圈,在輸出前也用 <code>actual-value</code> force 結果。</li>
+          </ol>
+          <p>完成後,在你的惰性求值器裡測試:</p>
+          <pre><code class="language-scheme">(define (try a b) (if (= a 0) 1 b))
+(try 0 (/ 1 0))   ; 應回傳 1,不出錯</code></pre>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>修改 <code>apply</code>(關鍵部分):</p>
+              <pre><code class="language-scheme">; 惰性 apply:基本過程先 force,複合過程延遲
+(define (apply procedure arguments env)
+  (cond
+    ((primitive-procedure? procedure)
+     (apply-primitive-procedure
+       procedure
+       (list-of-arg-values arguments env)))       ; force
+    ((compound-procedure? procedure)
+     (eval-sequence
+       (procedure-body procedure)
+       (extend-environment
+         (procedure-parameters procedure)
+         (list-of-delayed-args arguments env)     ; delay
+         (procedure-environment procedure))))
+    (else (error "Unknown procedure type: APPLY" procedure))))
+
+; eval 中的 application? 分句改為:
+; ((application? exp)
+;  (apply (actual-value (operator exp) env)      ; ← actual-value
+;         (operands exp)
+;         env))
+
+; eval-if 改為:
+(define (eval-if exp env)
+  (if (true? (actual-value (if-predicate exp) env))  ; ← actual-value
+      (eval (if-consequent exp) env)
+      (eval (if-alternative exp) env)))
+
+; 驅動迴圈改用 actual-value:
+(define (driver-loop)
+  (prompt-for-input ";;; L-Eval input:")
+  (let ((input (read)))
+    (let ((output (actual-value input the-global-environment)))
+      (announce-output ";;; L-Eval value:")
+      (user-print output)))
+  (driver-loop))</code></pre>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 77.5 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>
+            用 <code>amb</code> 求值器解以下邏輯謎題(Liars puzzle,SICP 練習 4.42):
+          </p>
+          <p>
+            五個女生各寫了一句真話和一句假話:
+          </p>
+          <ul>
+            <li>Betty:「Kitty 第二,我第三。」</li>
+            <li>Ethel:「我第一,Joan 第二。」</li>
+            <li>Joan:「我第三,Ethel 最後。」</li>
+            <li>Kitty:「我第二,Mary 第四。」</li>
+            <li>Mary:「我第四,第一是 Betty。」</li>
+          </ul>
+          <p>請用 <code>amb</code> 和 <code>require</code> 找出五人的實際名次。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-scheme">(define (liars-puzzle)
+  (let ((betty (amb 1 2 3 4 5))
+        (ethel (amb 1 2 3 4 5))
+        (joan  (amb 1 2 3 4 5))
+        (kitty (amb 1 2 3 4 5))
+        (mary  (amb 1 2 3 4 5)))
+    (require (distinct? (list betty ethel joan kitty mary)))
+    ; Betty:Kitty=2 XOR Betty=3(一真一假)
+    (require (xor (= kitty 2) (= betty 3)))
+    ; Ethel:Ethel=1 XOR Joan=2
+    (require (xor (= ethel 1) (= joan 2)))
+    ; Joan:Joan=3 XOR Ethel=5
+    (require (xor (= joan 3) (= ethel 5)))
+    ; Kitty:Kitty=2 XOR Mary=4
+    (require (xor (= kitty 2) (= mary 4)))
+    ; Mary:Mary=4 XOR Betty=1
+    (require (xor (= mary 4) (= betty 1)))
+    (list (list 'betty betty) (list 'ethel ethel)
+          (list 'joan joan)   (list 'kitty kitty)
+          (list 'mary mary))))
+
+(define (xor a b)
+  (or (and a (not b)) (and (not a) b)))
+
+; 結果:
+; ((betty 3) (ethel 5) (joan 2) (kitty 1) (mary 4))</code></pre>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 77.6 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>
+            停機問題(Halting Problem)証明:假設你有一個過程 <code>(halts? p a)</code>,它能正確判斷「過程 <code>p</code> 在引數 <code>a</code> 上是否停機」,試說明為何這導致矛盾。(SICP 練習 4.15)
+          </p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>假設 <code>halts?</code> 存在,定義以下過程:</p>
+              <pre><code class="language-scheme">(define (run-forever) (run-forever))
+(define (try p)
+  (if (halts? p p)
+      (run-forever)   ; 如果 p 在 p 上停機,就死迴圈
+      'halted))       ; 如果 p 在 p 上不停機,就停止</code></pre>
+              <p>現在考慮 <code>(try try)</code>:</p>
+              <ul>
+                <li>若 <code>(halts? try try)</code> 回傳真(<code>try</code> 在 <code>try</code> 上停機),則執行 <code>(run-forever)</code>——永不停機。矛盾！</li>
+                <li>若 <code>(halts? try try)</code> 回傳假(<code>try</code> 在 <code>try</code> 上不停機),則執行 <code>'halted</code>——停機了。矛盾！</li>
+              </ul>
+              <p>
+                無論 <code>halts?</code> 如何回答,都會產生矛盾。因此,這樣的 <code>halts?</code> 不可能存在。這是 Turing 1936 年論文的核心結論:<strong>停機問題是不可計算的</strong>。
+              </p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑩ ==================== -->
+      <h2>把這一章串起來</h2>
+
+      <p>
+        這一章是 SICP 的皇冠——或者說,是整個計算機科學最美麗的章節之一。讓我們回顧這段旅程:
+      </p>
+
+      <ul>
+        <li><strong>eval/apply 雙人舞</strong>:兩個互遞迴的函數,用不到兩百行 Scheme,就能描述一個完整語言的語意。這是極度的精練。</li>
+        <li><strong>抽象語法</strong>:用 <code>tagged-list?</code> 和各種 selector,把「語法分析」和「求值規則」分離——改語法不需改求值器。</li>
+        <li><strong>環境模型</strong>:框架鏈接實作了詞法作用域(lexical scope)和閉包——第 76 章的環境模型在這裡活了起來。</li>
+        <li><strong>程式即資料</strong>:eval 是通用機器,求值器消除了「程式」與「資料」的邊界,通向宏系統與後設程式設計。</li>
+        <li><strong>惰性求值</strong>:只需改動 <code>apply</code> 的幾行,語言的求值策略就從應用序切換成正規序,infinite stream 變成語言內建。</li>
+        <li><strong>amb 非確定計算</strong>:用延續機制,讓程式員只描述約束,搜尋自動發生——語言作為問題求解的工具。</li>
+      </ul>
+
+      <p>
+        讀完本章,你應該產生這樣的頓悟:<strong>直譯器不是魔法,你自己能寫一個</strong>。更深的頓悟是:「能執行 Lisp 的 Lisp 直譯器」和「能執行任何語言的通用機器」,在原則上只有程式碼長短的差別,沒有本質的不同。這是 Turing 的遺產,也是 SICP 要傳授的最深刻洞見。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">📚</div>
+        <div class="body">
+          <span class="c-title">想更深入？延伸資源</span>
+          <p>
+            本章對應 SICP 第四章(Chapter 4: Metalinguistic Abstraction),涵蓋 4.1–4.3 節。
+            建議直接閱讀原書:Abelson, H., Sussman, G.J., <em>Structure and Interpretation of Computer Programs</em>(第二版),MIT Press,1996。全書可在
+            <a href="https://mitpress.mit.edu/sites/default/files/sicp/full-text/book/book.html" target="_blank" rel="noopener">MIT SICP 官網</a>
+            免費閱讀。
+            此外,MIT 6.001(Structure and Interpretation of Computer Programs)的
+            <a href="https://ocw.mit.edu/courses/6-001-structure-and-interpretation-of-computer-programs-spring-2005/" target="_blank" rel="noopener">OCW 課程</a>
+            有 Abelson 和 Sussman 親授的後設循環直譯器視頻,強烈推薦觀看。
+          </p>
+        </div>
+      </div>
+
+    

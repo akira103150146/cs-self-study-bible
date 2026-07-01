@@ -1,0 +1,1126 @@
+<!--meta
+title: 暫存器機器與顯式控制求值器
+description: 把高階的 eval/apply 降到暫存器機器層——堆疊實作遞迴、stop-and-copy 垃圾回收、顯式控制求值器揭示尾遞迴的底層機制,收束「從 NAND 到直譯器」的全書大圖。
+-->
+
+
+      <div class="eyebrow">第十九部 · SICP:抽象的建構</div>
+      <h1>暫存器機器與顯式控制求值器</h1>
+      <p class="subtitle">堆疊、暫存器、跳指令——把高階的 eval/apply 拆成真實機器能執行的步驟,在這裡你終於看見語言的「最後一哩路」。</p>
+      <div class="byline">
+        <span class="tag">第 78 章</span>
+        <span>閱讀時間 ≈ 90 分鐘</span>
+        <span>難度:★★★★★</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li><strong>暫存器機器模型</strong>:以暫存器、運算、測試、控制器描述任意計算</li>
+          <li><strong>暫存器機器描述語言</strong>:assign/test/branch/goto/save/restore 指令集</li>
+          <li><strong>堆疊實作遞迴</strong>:save/restore 如何讓有限機器模擬無限層遞迴呼叫</li>
+          <li><strong>暫存器機器模擬器</strong>:make-machine、assembler 的設計原理</li>
+          <li><strong>儲存配置與垃圾回收</strong>:記憶體作為向量,stop-and-copy GC 完整機制</li>
+          <li><strong>顯式控制求值器</strong>:eval-dispatch、ev-application、apply-dispatch——metacircular evaluator 的暫存器機器版</li>
+          <li><strong>尾遞迴的底層機制</strong>:ev-sequence-last-exp 為何不在堆疊留痕</li>
+          <li><strong>編譯基礎</strong>:把 Scheme 翻成暫存器機器指令序列的原理</li>
+          <li>「從 NAND 到直譯器」全書大圖的收束</li>
+        </ul>
+      </div>
+
+      <!-- ==================== h2 ① ==================== -->
+      <h2>從高階到機器:暫存器機器模型</h2>
+
+      <blockquote>
+        「我要說明:天上的機器並非什麼神聖的活物,而是一種鐘錶機構——」——Johannes Kepler,1605(SICP 第五章引言)
+      </blockquote>
+
+      <p>
+        第 <a href="83-sicp-metacircular.html">77 章</a>的後設循環求值器是精彩的:用不到三百行 Scheme,就把整個語言的語意表達清楚了。但它有一個關鍵盲點:它繼承了底層 Scheme 的所有控制機制——呼叫棧、返回位址、引數傳遞——卻對此隻字不提。<strong>「為什麼尾遞迴不耗棧？」「過程呼叫時,返回位址存在哪裡？」</strong>這些問題,後設循環求值器一律迴避。
+      </p>
+      <p>
+        SICP 第五章的答案是:我們再往下一層,把求值器<strong>降(lower)</strong>到<strong>暫存器機器(register machine)</strong>層。在暫存器機器中,每一步計算都精確到「把某個暫存器的值放進另一個暫存器」這樣的粒度。那時,尾遞迴、垃圾回收、過程呼叫的每一個機制都無所遁形。
+      </p>
+
+      <p>
+        讓我們從最簡單的例子開始:用暫存器機器計算<strong>最大公因數(GCD, greatest common divisor)</strong>。Euclid 演算法的 Scheme 過程如下:
+      </p>
+
+      <pre><code class="language-scheme">(define (gcd a b)
+  (if (= b 0)
+      a
+      (gcd b (remainder a b))))</code></pre>
+
+      <p>
+        這是一個迭代過程——每次遞迴只需要「新的 a 和 b」,不需要記住舊的計算狀態。一台只有三個暫存器 a、b、t(臨時暫存器)的機器就可以執行它。
+      </p>
+
+      <p>
+        暫存器機器的設計需要兩樣東西:<strong>資料路徑(data paths)</strong>——哪些暫存器、哪些運算、它們如何連接；以及<strong>控制器(controller)</strong>——按什麼順序驅動資料路徑。下圖展示 GCD 機器的完整結構:
+      </p>
+
+      <!-- GCD 暫存器機器 SVG -->
+      <div class="diagram">
+        <svg viewBox="0 0 760 400" width="760" height="400" font-family="Inter, 'Noto Sans TC', sans-serif">
+          <rect width="760" height="400" fill="#f8fafb" rx="12"/>
+
+          <!-- 分隔線 -->
+          <line x1="310" y1="20" x2="310" y2="385" stroke="#ddd" stroke-width="1.5" stroke-dasharray="5,3"/>
+
+          <!-- ===== 資料路徑 區域 ===== -->
+          <text x="20" y="22" font-size="13" font-weight="bold" fill="#2f6f6a">資料路徑 (Data Paths)</text>
+
+          <!-- 暫存器 a -->
+          <rect x="40" y="45" width="80" height="38" rx="6" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+          <text x="80" y="69" text-anchor="middle" font-size="16" font-weight="bold" fill="#2f6f6a">a</text>
+
+          <!-- 暫存器 b -->
+          <rect x="40" y="155" width="80" height="38" rx="6" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+          <text x="80" y="179" text-anchor="middle" font-size="16" font-weight="bold" fill="#2f6f6a">b</text>
+
+          <!-- 暫存器 t -->
+          <rect x="40" y="265" width="80" height="38" rx="6" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+          <text x="80" y="289" text-anchor="middle" font-size="16" font-weight="bold" fill="#2f6f6a">t</text>
+
+          <!-- 運算 rem (梯形) -->
+          <polygon points="165,158 255,158 245,200 175,200" fill="#fef3ec" stroke="#b4541f" stroke-width="2"/>
+          <text x="210" y="184" text-anchor="middle" font-size="13" font-weight="bold" fill="#b4541f">rem</text>
+
+          <!-- 測試 = (圓形) -->
+          <circle cx="210" cy="80" r="30" fill="#f0f0ff" stroke="#8b5cf6" stroke-width="2"/>
+          <text x="210" y="87" text-anchor="middle" font-size="16" fill="#8b5cf6">=</text>
+
+          <!-- const 0 (三角形) -->
+          <polygon points="210,120 225,148 195,148" fill="#fff8" stroke="#8a929b" stroke-width="1.5"/>
+          <text x="210" y="144" text-anchor="middle" font-size="10" fill="#8a929b">0</text>
+
+          <!-- a → rem 箭頭 -->
+          <line x1="120" y1="64" x2="174" y2="162" stroke="#b4541f" stroke-width="1.5" marker-end="url(#arr-red)"/>
+          <text x="134" y="106" font-size="9" fill="#b4541f">a</text>
+
+          <!-- b → rem 箭頭 -->
+          <line x1="120" y1="174" x2="175" y2="176" stroke="#b4541f" stroke-width="1.5" marker-end="url(#arr-red)"/>
+          <text x="130" y="169" font-size="9" fill="#b4541f">b</text>
+
+          <!-- b → = 測試 箭頭 -->
+          <line x1="120" y1="165" x2="180" y2="95" stroke="#8b5cf6" stroke-width="1.5" marker-end="url(#arr-purple)"/>
+
+          <!-- 0 → = 測試 箭頭 -->
+          <line x1="210" y1="148" x2="210" y2="110" stroke="#8b5cf6" stroke-width="1.2"/>
+
+          <!-- rem → t 箭頭 -->
+          <line x1="175" y1="200" x2="120" y2="275" stroke="#b4541f" stroke-width="1.5" marker-end="url(#arr-red)"/>
+          <text x="120" y="243" font-size="10" fill="#b4541f">t←r</text>
+
+          <!-- b → a 箭頭 (左側弧) -->
+          <path d="M40 80 Q5 118 40 165" fill="none" stroke="#2f6f6a" stroke-width="1.5" marker-end="url(#arr-green)"/>
+          <text x="-2" y="124" font-size="10" fill="#2f6f6a">a←b</text>
+
+          <!-- t → b 箭頭 (左側弧) -->
+          <path d="M40 282 Q0 240 40 193" fill="none" stroke="#2f6f6a" stroke-width="1.5" marker-end="url(#arr-green)"/>
+          <text x="-16" y="243" font-size="10" fill="#2f6f6a">b←t</text>
+
+          <!-- ===== 控制器 區域 ===== -->
+          <text x="328" y="22" font-size="13" font-weight="bold" fill="#2f6f6a">控制器 (Controller)</text>
+
+          <!-- start 節點 -->
+          <rect x="330" y="38" width="110" height="30" rx="5" fill="#e3efed" stroke="#2f6f6a" stroke-width="1.5"/>
+          <text x="385" y="58" text-anchor="middle" font-size="12" fill="#2f6f6a">start</text>
+          <line x1="385" y1="68" x2="385" y2="88" stroke="#555" stroke-width="1.5" marker-end="url(#arr-gray)"/>
+
+          <!-- test b=0 菱形 -->
+          <polygon points="385,88 432,124 385,160 338,124" fill="#f0f0ff" stroke="#8b5cf6" stroke-width="1.5"/>
+          <text x="385" y="121" text-anchor="middle" font-size="11" fill="#8b5cf6">test</text>
+          <text x="385" y="136" text-anchor="middle" font-size="10" fill="#8b5cf6">b = 0?</text>
+
+          <!-- branch yes → done -->
+          <line x1="432" y1="124" x2="510" y2="124" stroke="#8b5cf6" stroke-width="1.5" marker-end="url(#arr-purple)"/>
+          <text x="467" y="115" text-anchor="middle" font-size="10" fill="#8b5cf6">yes</text>
+          <rect x="510" y="104" width="70" height="40" rx="6" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+          <text x="545" y="129" text-anchor="middle" font-size="13" font-weight="bold" fill="#2f6f6a">done</text>
+
+          <!-- no 往下 -->
+          <line x1="385" y1="160" x2="385" y2="180" stroke="#555" stroke-width="1.5" marker-end="url(#arr-gray)"/>
+          <text x="398" y="173" font-size="10" fill="#555">no</text>
+
+          <!-- t ← rem(a,b) -->
+          <rect x="330" y="180" width="110" height="32" rx="5" fill="#fef3ec" stroke="#b4541f" stroke-width="1.5"/>
+          <text x="385" y="201" text-anchor="middle" font-size="11" fill="#b4541f">t ← rem(a,b)</text>
+          <line x1="385" y1="212" x2="385" y2="232" stroke="#555" stroke-width="1.5" marker-end="url(#arr-gray)"/>
+
+          <!-- a ← b -->
+          <rect x="330" y="232" width="110" height="32" rx="5" fill="#e3efed" stroke="#2f6f6a" stroke-width="1.5"/>
+          <text x="385" y="253" text-anchor="middle" font-size="11" fill="#2f6f6a">a ← b</text>
+          <line x1="385" y1="264" x2="385" y2="284" stroke="#555" stroke-width="1.5" marker-end="url(#arr-gray)"/>
+
+          <!-- b ← t -->
+          <rect x="330" y="284" width="110" height="32" rx="5" fill="#e3efed" stroke="#2f6f6a" stroke-width="1.5"/>
+          <text x="385" y="305" text-anchor="middle" font-size="11" fill="#2f6f6a">b ← t</text>
+          <line x1="385" y1="316" x2="385" y2="336" stroke="#555" stroke-width="1.5" marker-end="url(#arr-gray)"/>
+
+          <!-- goto test-b 回圈 -->
+          <path d="M385 340 Q295 360 295 124 Q295 90 338 90" fill="none" stroke="#555" stroke-width="1.5" marker-end="url(#arr-gray)"/>
+          <text x="268" y="246" font-size="10" fill="#555">goto</text>
+          <text x="261" y="258" font-size="10" fill="#555">test-b</text>
+
+          <!-- Arrow 定義 -->
+          <defs>
+            <marker id="arr-green" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+              <path d="M0,0 L0,6 L8,3 z" fill="#2f6f6a"/>
+            </marker>
+            <marker id="arr-red" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+              <path d="M0,0 L0,6 L8,3 z" fill="#b4541f"/>
+            </marker>
+            <marker id="arr-purple" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+              <path d="M0,0 L0,6 L8,3 z" fill="#8b5cf6"/>
+            </marker>
+            <marker id="arr-gray" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+              <path d="M0,0 L0,6 L8,3 z" fill="#555"/>
+            </marker>
+          </defs>
+        </svg>
+        <figcaption>圖 78-1:GCD 暫存器機器。左側資料路徑:矩形為暫存器(a、b、t)、梯形為運算(rem 取餘數)、圓形為測試(=)。右側控制器:菱形為判斷、矩形為動作、箭頭為控制流,左側回圈箭頭代表 goto test-b。</figcaption>
+      </div>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">暫存器機器的兩個組件</span>
+          <p><strong>資料路徑</strong>定義「能做什麼」(哪些暫存器、哪些運算),<strong>控制器</strong>定義「按什麼順序做」(指令序列)。兩者合起來完整描述一台計算機器,就像 CPU 的 datapath 與 FSM 控制器。</p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ② ==================== -->
+      <h2>描述暫存器機器的語言；用堆疊實作遞迴</h2>
+
+      <p>
+        用圖表描述複雜機器很不方便。SICP 設計了一種文字語言來描述暫存器機器。GCD 機器用這種語言寫成:
+      </p>
+
+      <pre><code class="language-scheme">; GCD 暫存器機器——文字描述語言
+(controller
+  test-b
+    (test (op =) (reg b) (const 0))       ; 測試 b 是否為 0
+    (branch (label gcd-done))              ; 是 → 跳到 gcd-done
+    (assign t (op rem) (reg a) (reg b))    ; t ← remainder(a, b)
+    (assign a (reg b))                     ; a ← b
+    (assign b (reg t))                     ; b ← t
+    (goto (label test-b))                  ; 回到 test-b 繼續
+  gcd-done)</code></pre>
+
+      <p>
+        這種語言的完整指令集:
+      </p>
+
+      <ul>
+        <li><code>(assign reg (reg src))</code>:把 src 暫存器的值搬到 reg</li>
+        <li><code>(assign reg (const val))</code>:把常數 val 存入 reg</li>
+        <li><code>(assign reg (op name) inputs...)</code>:對輸入做運算,結果存入 reg</li>
+        <li><code>(perform (op name) inputs...)</code>:執行有副作用的動作(如 print)</li>
+        <li><code>(test (op name) inputs...)</code>:執行測試,結果存入內部 flag 暫存器</li>
+        <li><code>(branch (label L))</code>:若 flag 為真,跳到標籤 L</li>
+        <li><code>(goto (label L))</code>:無條件跳到標籤 L</li>
+        <li><code>(goto (reg r))</code>:跳到 r 暫存器所存的位址(用於返回子程式)</li>
+        <li><code>(save reg)</code>:把 reg 的值推入堆疊</li>
+        <li><code>(restore reg)</code>:從堆疊頂端彈出值存入 reg</li>
+      </ul>
+
+      <h3>迭代 vs. 遞迴:堆疊的作用</h3>
+
+      <p>
+        GCD 是迭代過程,一台沒有堆疊的機器就夠用。但<strong>遞迴</strong>呢？考慮遞迴階乘(factorial):
+      </p>
+
+      <pre><code class="language-scheme">(define (factorial n)
+  (if (= n 1)
+      1
+      (* (factorial (- n 1)) n)))</code></pre>
+
+      <p>
+        計算 <code>n!</code> 需要先算 <code>(n-1)!</code>,而計算 <code>(n-1)!</code> 又需要 n 的舊值乘回來。這不像 GCD 可以「原地覆蓋暫存器」——我們需要在遞迴期間保存 n 的舊值。解法:用<strong>堆疊(stack)</strong>。每次進入遞迴之前,把需要保存的暫存器 push 到堆疊；遞迴返回後,restore 回來:
+      </p>
+
+      <pre><code class="language-scheme">; 遞迴階乘暫存器機器
+(controller
+  (assign continue (label fact-done))    ; 設定最終返回地址
+  fact-loop
+    (test (op =) (reg n) (const 1))      ; 測試 n = 1？
+    (branch (label base-case))
+    ; 遞迴呼叫前:保存 n 與 continue
+    (save continue)
+    (save n)
+    (assign n (op -) (reg n) (const 1))  ; n ← n-1
+    (assign continue (label after-fact)) ; 設定遞迴返回地址
+    (goto (label fact-loop))             ; 執行遞迴呼叫
+  after-fact
+    (restore n)                          ; 恢復 n
+    (restore continue)                   ; 恢復返回地址
+    (assign val (op *) (reg n) (reg val)); val ← n * (n-1)!
+    (goto (reg continue))                ; 返回呼叫者
+  base-case
+    (assign val (const 1))               ; 基本情形:1! = 1
+    (goto (reg continue))                ; 返回
+  fact-done)</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">遞迴 = 迭代 + 堆疊</span>
+          <p>任何遞迴過程都可以在一台有限的暫存器機器上執行,只要加上一個堆疊。堆疊的「後進先出」結構正好對應遞迴的「最後呼叫的最先返回」。<code>save</code> 是呼叫前保存現場,<code>restore</code> 是返回後恢復現場。</p>
+        </div>
+      </div>
+
+      <p>
+        計算 <code>(factorial 3)</code> 時,堆疊的動態變化可以清楚追蹤:
+      </p>
+
+      <pre><code class="language-text">進入 fact-loop (n=3):
+  save continue=fact-done → 堆疊: [fact-done]
+  save n=3                → 堆疊: [3, fact-done]
+  n←2, continue←after-fact
+
+進入 fact-loop (n=2):
+  save continue=after-fact → 堆疊: [after-fact, 3, fact-done]
+  save n=2                 → 堆疊: [2, after-fact, 3, fact-done]
+  n←1, continue←after-fact
+
+n=1 → 到 base-case:
+  val ← 1
+  goto (reg continue) → 跳到 after-fact
+
+after-fact(第一層返回):
+  restore n → n=2, 堆疊: [after-fact, 3, fact-done]
+  restore continue → continue=after-fact, 堆疊: [3, fact-done]
+  val ← 2*1 = 2
+  goto after-fact
+
+after-fact(第二層返回):
+  restore n → n=3, 堆疊: [fact-done]
+  restore continue → continue=fact-done, 堆疊: []
+  val ← 3*2 = 6
+  goto fact-done  →  完成！</code></pre>
+
+      <h3>雙重遞迴:費氏數列機器</h3>
+
+      <p>
+        費氏數列(Fibonacci)需要兩次遞迴——先算 fib(n-1),再算 fib(n-2),最後相加。每次遞迴都多一組 save/restore:
+      </p>
+
+      <pre><code class="language-scheme">; 費氏數列暫存器機器(控制器序列)
+(controller
+  (assign continue (label fib-done))
+  fib-loop
+    (test (op &lt;) (reg n) (const 2))      ; n &lt; 2？(基本情形)
+    (branch (label immediate-answer))
+    ; 計算 fib(n-1)
+    (save continue)
+    (assign continue (label afterfib-n-1))
+    (save n)
+    (assign n (op -) (reg n) (const 1))   ; n ← n-1
+    (goto (label fib-loop))
+  afterfib-n-1                            ; val 現在是 fib(n-1)
+    (restore n)
+    (restore continue)
+    ; 計算 fib(n-2)
+    (assign n (op -) (reg n) (const 2))   ; n ← n-2
+    (save continue)
+    (assign continue (label afterfib-n-2))
+    (save val)                            ; 保存 fib(n-1)
+    (goto (label fib-loop))
+  afterfib-n-2                            ; val 現在是 fib(n-2)
+    (assign n (reg val))                  ; n ← fib(n-2)
+    (restore val)                         ; val ← fib(n-1)
+    (restore continue)
+    (assign val (op +) (reg val) (reg n)) ; val ← fib(n-1)+fib(n-2)
+    (goto (reg continue))
+  immediate-answer
+    (assign val (reg n))
+    (goto (reg continue))
+  fib-done)</code></pre>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">continue 暫存器 = CPU 的連結暫存器(link register)</span>
+          <p>在呼叫子程式前,先把返回位址存入 <code>continue</code>(<code>(assign continue (label ...))</code>)；子程式結束時,<code>(goto (reg continue))</code> 跳回。這正是 ARM 架構的 <code>LR</code>(link register)或 x86 的 <code>call</code>/<code>ret</code> 機制的精確類比。</p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ③ ==================== -->
+      <h2>暫存器機器模擬器</h2>
+
+      <p>
+        SICP 第 5.2 節用 Scheme 建了一個完整的暫存器機器模擬器,讓我們能實際執行上面設計的機器。核心介面是 <code>make-machine</code>:
+      </p>
+
+      <pre><code class="language-scheme">; 建立 GCD 機器並執行
+(define gcd-machine
+  (make-machine
+    '(a b t)                                      ; 暫存器列表
+    (list (list 'rem remainder) (list '= =))      ; 運算表
+    '(test-b                                      ; 控制器序列
+        (test (op =) (reg b) (const 0))
+        (branch (label gcd-done))
+        (assign t (op rem) (reg a) (reg b))
+        (assign a (reg b))
+        (assign b (reg t))
+        (goto (label test-b))
+      gcd-done)))
+
+(set-register-contents! gcd-machine 'a 206)      ; 設定輸入
+(set-register-contents! gcd-machine 'b 40)
+(start gcd-machine)                              ; 執行
+(get-register-contents gcd-machine 'a)           ; → 2</code></pre>
+
+      <h3>模擬器的內部結構</h3>
+
+      <p>
+        <code>make-machine</code> 內部建立的「機器物件」包含:
+      </p>
+      <ul>
+        <li><code>make-register</code>:每個暫存器是一個封裝局部狀態的過程物件(message-passing 風格)</li>
+        <li><code>make-stack</code>:堆疊同樣用過程物件封裝(支援 push/pop/initialize)</li>
+        <li>內建暫存器 <code>pc</code>(程式計數器)與 <code>flag</code>:<code>pc</code> 指向下一條要執行的指令,<code>flag</code> 存測試結果</li>
+        <li>組譯器(assembler):把控制器文字轉成可呼叫的「執行過程」列表</li>
+      </ul>
+
+      <pre><code class="language-scheme">; 暫存器的實作
+(define (make-register name)
+  (let ((contents '*unassigned*))
+    (define (dispatch message)
+      (cond ((eq? message 'get) contents)
+            ((eq? message 'set)
+             (lambda (value) (set! contents value)))
+            (else (error "Unknown request: REGISTER" message))))
+    dispatch))
+
+; 堆疊的實作(後進先出)
+(define (make-stack)
+  (let ((s '()))
+    (define (push x) (set! s (cons x s)))
+    (define (pop)
+      (if (null? s)
+          (error "Empty stack: POP")
+          (let ((top (car s)))
+            (set! s (cdr s))
+            top)))
+    (define (initialize) (set! s '()) 'done)
+    (define (dispatch message)
+      (cond ((eq? message 'push) push)
+            ((eq? message 'pop) (pop))
+            ((eq? message 'initialize) (initialize))
+            (else (error "Unknown request: STACK" message))))
+    dispatch))</code></pre>
+
+      <h3>組譯器:把文字化為執行過程</h3>
+
+      <p>
+        組譯器(assembler)的工作分兩步:
+      </p>
+      <ol>
+        <li><strong>掃描標籤</strong>(<code>extract-labels</code>):掃描控制器序列,找出所有標籤(symbol),建立「標籤→指令位置」的對照表。</li>
+        <li><strong>生成執行過程</strong>(<code>update-insts!</code>):對每條指令,用 <code>make-execution-procedure</code> 根據指令類型分派,產生一個「無引數的 Scheme 過程」作為執行過程。</li>
+      </ol>
+
+      <p>
+        「分析一次、執行多次」——這與第 <a href="83-sicp-metacircular.html">77 章</a>後設循環求值器的「分析型求值器」(Section 4.1.7)思路完全相同:把靜態分析(查找標籤位置、解析指令格式)從執行時間中移出,大幅提升效率。
+      </p>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">Python 對照:極簡暫存器機器模擬器</span>
+          <p>下面用 Python 展示「指令就是可呼叫的過程」的核心設計思想(簡化版,只支援基本指令):</p>
+        </div>
+      </div>
+
+      <pre><code class="language-python">"""
+極簡暫存器機器模擬器(Python)
+支援:assign (reg/const/op)、test、branch、goto
+"""
+
+class RegisterMachine:
+    def __init__(self, reg_names, ops, controller):
+        self.regs = {r: None for r in reg_names}
+        self.regs['flag'] = False
+        self.ops = dict(ops)
+        # 第一步:掃描標籤(組譯器 extract-labels)
+        self.labels = {}
+        self.insts = []
+        for item in controller:
+            if isinstance(item, str):         # 標籤 symbol
+                self.labels[item] = len(self.insts)
+            else:
+                self.insts.append(item)
+        self.pc = 0
+
+    def run(self):
+        while 0 &lt;= self.pc &lt; len(self.insts):
+            inst = self.insts[self.pc]
+            self.pc += 1
+            self._exec(inst)
+
+    def _exec(self, inst):
+        op = inst[0]
+        if op == 'assign':
+            _, reg, *src = inst
+            self.regs[reg] = self._val(src)
+        elif op == 'test':
+            self.regs['flag'] = self._val(inst[1:])
+        elif op == 'branch':
+            if self.regs['flag']:
+                self.pc = self.labels[inst[1]]
+        elif op == 'goto':
+            self.pc = self.labels[inst[1]]
+
+    def _val(self, src):
+        if src[0] == 'reg':   return self.regs[src[1]]
+        if src[0] == 'const': return src[1]
+        if src[0] == 'op':
+            fn = self.ops[src[1]]
+            args = [self._val(list(a)) for a in src[2:]]
+            return fn(*args)
+
+# 執行 GCD 機器
+m = RegisterMachine(
+    reg_names=['a', 'b', 't'],
+    ops=[('rem', lambda a, b: a % b), ('=', lambda x, y: x == y)],
+    controller=[
+        'test-b',
+        ('test', 'op', '=', ('reg', 'b'), ('const', 0)),
+        ('branch', 'gcd-done'),
+        ('assign', 't', 'op', 'rem', ('reg', 'a'), ('reg', 'b')),
+        ('assign', 'a', 'reg', 'b'),
+        ('assign', 'b', 'reg', 't'),
+        ('goto', 'test-b'),
+        'gcd-done'
+    ]
+)
+m.regs['a'] = 206
+m.regs['b'] = 40
+m.run()
+print(m.regs['a'])   # → 2</code></pre>
+
+      <!-- ==================== h2 ④ ==================== -->
+      <h2>儲存配置與垃圾回收</h2>
+
+      <p>
+        SICP 第 5.3 節解決了一個現實問題:真實電腦的記憶體有限,但 Lisp 程式不斷用 <code>cons</code> 建立新的序對。當 <code>free</code> 指標超過記憶體邊界,怎麼辦？答案是<strong>垃圾回收(garbage collection, GC)</strong>——自動回收不再需要的記憶體。
+      </p>
+
+      <h3>記憶體作為向量:Lisp 序對的底層表示</h3>
+
+      <p>
+        SICP 把 Lisp 記憶體設計成兩個向量:<code>the-cars</code> 和 <code>the-cdrs</code>。每個序對用一個整數索引表示:<code>the-cars[i]</code> 是第 i 個序對的 car,<code>the-cdrs[i]</code> 是其 cdr。指標(pointer)是一個「型別標籤 + 索引」的組合——例如 <code>p5</code> 表示「pair 指標,索引 5」,<code>n4</code> 表示數字 4,<code>e0</code> 表示空列表。
+      </p>
+
+      <p>
+        <code>cons</code> 的暫存器機器實作——每次 <code>(cons reg2 reg3)</code> 等同於:
+      </p>
+
+      <pre><code class="language-scheme">; (cons reg2 reg3) → 結果存入 reg1
+(perform (op vector-set!) (reg the-cars) (reg free) (reg reg2))
+(perform (op vector-set!) (reg the-cdrs) (reg free) (reg reg3))
+(assign reg1 (reg free))
+(assign free (op +) (reg free) (const 1))   ; free 往前移一格</code></pre>
+
+      <p>
+        <code>free</code> 指標總是指向下一個可用位置。當 <code>free</code> 超過記憶體邊界,就觸發垃圾回收。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">連結:OS 記憶體管理與 GC</span>
+          <p><a href="24-operating-system.html">第 24 章</a>的作業系統介紹了虛擬記憶體(OS 層的記憶體管理)；本節的 GC 是語言層的記憶體管理。第 <a href="42-compilers.html">42 章</a>的編譯器也需要生成與 GC 友好的程式碼(如精確式 GC 需要知道哪些值是指標)。三者共同維持了「程式設計師眼中無限記憶體」的抽象。</p>
+        </div>
+      </div>
+
+      <h3>Stop-and-Copy 垃圾回收</h3>
+
+      <p>
+        SICP 詳細描述了<strong>停止並複製(stop-and-copy)</strong> GC 演算法。基本思路:
+      </p>
+      <ol>
+        <li>記憶體分成「工作記憶體」和「自由記憶體」兩半</li>
+        <li>GC 觸發時,從所有機器暫存器出發,追蹤所有<em>可到達的(reachable)</em>序對</li>
+        <li>把有用的序對連續複製到自由記憶體；複製後的舊位置留下「斷心(broken heart)」標記和轉發地址</li>
+        <li>交換兩半的角色——原「自由記憶體」成為新工作記憶體,原工作記憶體整體作廢</li>
+      </ol>
+
+      <p>
+        這個追蹤過程的核心是一組<strong>雙指標(two-pointer) BFS</strong>:<code>free</code> 與 <code>scan</code>。兩者初始都指向新記憶體的開頭。<code>free</code> 指向「下一個可寫入位置」——每搬移一個序對,<code>free</code> 就往前一格；而 <code>scan</code> 落在 <code>free</code> 後面,負責「逐一檢查已複製到新記憶體、但內部 car/cdr 指標還指向舊記憶體的序對」,把那些內部指標也 relocate 並更新。對每個 scan 到的序對,演算法<strong>先 relocate 它的 car(<code>update-car</code>),再 relocate 它的 cdr(<code>update-cdr</code>)</strong>,然後 <code>scan</code> 才前進一格。新發現的序對被 relocate 時會推進 <code>free</code>,於是 <code>scan</code> 不斷追趕 <code>free</code>；當 <code>scan</code> 終於追上 <code>free</code>(兩者相等),代表所有可到達序對都已複製且內部指標都已更新,GC 結束。這正是用兩個指標在連續記憶體上實現的廣度優先走訪。
+      </p>
+
+      <!-- Stop-and-copy GC 示意 SVG -->
+      <div class="diagram">
+        <svg viewBox="0 0 700 250" width="700" height="250" font-family="Inter, 'Noto Sans TC', sans-serif">
+          <rect width="700" height="250" fill="#f8fafb" rx="10"/>
+
+          <!-- 標題:GC 前 -->
+          <text x="350" y="22" text-anchor="middle" font-size="13" font-weight="bold" fill="#555">GC 前</text>
+
+          <!-- 工作記憶體(GC 前) -->
+          <rect x="20" y="32" width="305" height="60" rx="6" fill="#fef3ec" stroke="#b4541f" stroke-width="1.5"/>
+          <text x="172" y="50" text-anchor="middle" font-size="11" fill="#b4541f">工作記憶體 (Working Memory)</text>
+          <!-- 有用序對(綠色方塊) -->
+          <rect x="32" y="56" width="36" height="24" rx="3" fill="#2f6f6a" opacity="0.85"/>
+          <rect x="74" y="56" width="36" height="24" rx="3" fill="#2f6f6a" opacity="0.85"/>
+          <rect x="178" y="56" width="36" height="24" rx="3" fill="#2f6f6a" opacity="0.85"/>
+          <!-- 垃圾(灰色方塊) -->
+          <rect x="116" y="56" width="30" height="24" rx="3" fill="#ccc"/>
+          <rect x="152" y="56" width="24" height="24" rx="3" fill="#ccc"/>
+          <rect x="220" y="56" width="30" height="24" rx="3" fill="#ccc"/>
+          <rect x="256" y="56" width="36" height="24" rx="3" fill="#ccc"/>
+          <!-- 圖例 -->
+          <rect x="32" y="100" width="12" height="10" fill="#2f6f6a" opacity="0.85"/>
+          <text x="48" y="109" font-size="10" fill="#555">有用資料</text>
+          <rect x="110" y="100" width="12" height="10" fill="#ccc"/>
+          <text x="126" y="109" font-size="10" fill="#555">垃圾(不可到達)</text>
+
+          <!-- 自由記憶體(GC 前,空的) -->
+          <rect x="335" y="32" width="350" height="60" rx="6" fill="#e3efed" stroke="#2f6f6a" stroke-width="1.5" stroke-dasharray="6,3"/>
+          <text x="510" y="67" text-anchor="middle" font-size="11" fill="#2f6f6a">自由記憶體 (Free Memory)(空)</text>
+
+          <!-- GC 執行箭頭說明 -->
+          <text x="350" y="122" text-anchor="middle" font-size="12" fill="#555">⬇  GC 執行:追蹤根指標,只複製可到達序對</text>
+
+          <!-- 標題:GC 後 -->
+          <text x="350" y="148" text-anchor="middle" font-size="13" font-weight="bold" fill="#555">GC 後(角色交換)</text>
+
+          <!-- 新工作記憶體(原自由記憶體) -->
+          <rect x="20" y="156" width="305" height="60" rx="6" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+          <text x="172" y="173" text-anchor="middle" font-size="11" fill="#2f6f6a">新工作記憶體(緊湊排列)</text>
+          <!-- 有用序對,緊湊 -->
+          <rect x="32" y="180" width="36" height="24" rx="3" fill="#2f6f6a" opacity="0.9"/>
+          <rect x="74" y="180" width="36" height="24" rx="3" fill="#2f6f6a" opacity="0.9"/>
+          <rect x="116" y="180" width="36" height="24" rx="3" fill="#2f6f6a" opacity="0.9"/>
+          <!-- free 區域 -->
+          <rect x="158" y="180" width="155" height="24" rx="3" fill="#fff" stroke="#8a929b" stroke-width="1" stroke-dasharray="4,2"/>
+          <text x="236" y="196" text-anchor="middle" font-size="10" fill="#8a929b">← free(下次 cons 從這裡開始)</text>
+
+          <!-- 舊工作記憶體(已作廢) -->
+          <rect x="335" y="156" width="350" height="60" rx="6" fill="#f5f5f5" stroke="#ccc" stroke-width="1.5"/>
+          <text x="510" y="191" text-anchor="middle" font-size="11" fill="#aaa">舊工作記憶體(全部作廢,供下次 GC 使用)</text>
+        </svg>
+        <figcaption>圖 78-2:Stop-and-copy GC 前後示意。GC 前工作記憶體中有用資料(綠色)與垃圾(灰色)混雜；GC 後,有用資料被緊湊地複製到自由記憶體形成新工作記憶體,舊工作記憶體整體作廢。兩半角色交換,<code>free</code> 重置到新工作記憶體的緊湊區末尾。</figcaption>
+      </div>
+
+      <p>
+        Stop-and-copy 的優點:
+      </p>
+      <ul>
+        <li><strong>緊湊化(compaction)</strong>:複製後,有用資料連續存放,消除碎片,對虛擬記憶體友好</li>
+        <li><strong>只掃描有用資料</strong>:不需要線性掃描全部記憶體(mark-sweep 需要)</li>
+        <li><strong>「斷心」機制</strong>:防止同一序對被複製兩次(若 car 位置是 broken-heart 標記,直接讀 cdr 位置的轉發地址)</li>
+      </ul>
+
+      <p>
+        SICP 也提到另一種常見演算法:<strong>標記清除(mark-sweep)</strong>。先從根指標出發標記所有可到達物件,再線性掃描記憶體,把未標記的位置回收。代價是要掃描全部記憶體,且不做緊湊化。兩種演算法各有使用場景,現代 GC(如分代 GC)往往是兩者思想的融合。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">GC 維持「無限記憶體的假象」</span>
+          <p>程式設計師用 <code>cons</code> 毫不在意地建立序對,GC 在幕後默默回收不再使用的記憶體。這是「抽象屏障」的底層設施版本:GC 把「有限實體記憶體」與「語義上無限的 Lisp 記憶體空間」分隔開來。</p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑤ ==================== -->
+      <h2>顯式控制求值器:把 eval/apply 降到暫存器層</h2>
+
+      <p>
+        有了前面幾節的鋪墊,SICP 第 5.4 節做了這本書最震撼的事:把<a href="83-sicp-metacircular.html">第 77 章</a>的<strong>後設循環求值器</strong>翻譯成暫存器機器語言,得到<strong>顯式控制求值器(explicit-control evaluator, EC evaluator)</strong>。它不是另一個求值器——它就是同一個求值器,只是精確到每一條暫存器操作。
+      </p>
+
+      <h3>七個核心暫存器</h3>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>暫存器</th><th>用途</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>exp</code></td><td>當前要求值的運算式</td></tr>
+            <tr><td><code>env</code></td><td>當前求值使用的環境</td></tr>
+            <tr><td><code>val</code></td><td>最近一次求值的結果</td></tr>
+            <tr><td><code>continue</code></td><td>求值完成後的返回地址(遞迴的關鍵)</td></tr>
+            <tr><td><code>proc</code></td><td>被應用的過程物件</td></tr>
+            <tr><td><code>argl</code></td><td>已求值的引數列表(累積中)</td></tr>
+            <tr><td><code>unev</code></td><td>尚未求值的運算元列表</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>eval-dispatch:求值的總入口</h3>
+
+      <p>
+        後設循環求值器的 <code>eval</code> 是一個大型 <code>cond</code>,在 EC 求值器裡變成一串 test-branch 序列,統稱 <code>eval-dispatch</code>:
+      </p>
+
+      <pre><code class="language-scheme">eval-dispatch
+  (test (op self-evaluating?) (reg exp))
+  (branch (label ev-self-eval))
+  (test (op variable?) (reg exp))
+  (branch (label ev-variable))
+  (test (op quoted?) (reg exp))
+  (branch (label ev-quoted))
+  (test (op assignment?) (reg exp))
+  (branch (label ev-assignment))
+  (test (op definition?) (reg exp))
+  (branch (label ev-definition))
+  (test (op if?) (reg exp))
+  (branch (label ev-if))
+  (test (op lambda?) (reg exp))
+  (branch (label ev-lambda))
+  (test (op begin?) (reg exp))
+  (branch (label ev-begin))
+  (test (op application?) (reg exp))
+  (branch (label ev-application))
+  (goto (label unknown-expression-type))</code></pre>
+
+      <p>
+        自求值的運算式(數字、字串)最簡單——直接把 <code>exp</code> 搬到 <code>val</code>,跳到 <code>continue</code>:
+      </p>
+
+      <pre><code class="language-scheme">ev-self-eval
+  (assign val (reg exp))
+  (goto (reg continue))
+
+ev-variable
+  (assign val (op lookup-variable-value) (reg exp) (reg env))
+  (goto (reg continue))
+
+ev-lambda
+  (assign unev (op lambda-parameters) (reg exp))
+  (assign exp  (op lambda-body) (reg exp))
+  (assign val  (op make-procedure) (reg unev) (reg exp) (reg env))
+  (goto (reg continue))</code></pre>
+
+      <h3>ev-application:過程應用的堆疊舞步</h3>
+
+      <p>
+        過程應用是最複雜的部分,對應後設循環 <code>eval</code> 的 <code>(application? exp)</code> 分支。需要先求值運算子,再逐一求值運算元,最後呼叫 <code>apply-dispatch</code>。每次遞迴進入 <code>eval-dispatch</code> 之前,都要 save 必要的暫存器:
+      </p>
+
+      <pre><code class="language-scheme">ev-application
+  (save continue)               ; 保存最終返回地址
+  (save env)                    ; 保存環境(求值運算元時需要)
+  (assign unev (op operands) (reg exp))
+  (save unev)                   ; 保存運算元列表
+  (assign exp (op operator) (reg exp))
+  (assign continue (label ev-appl-did-operator))
+  (goto (label eval-dispatch))  ; 先求值運算子
+
+ev-appl-did-operator
+  (restore unev)                ; 恢復運算元列表
+  (restore env)                 ; 恢復環境
+  (assign argl (op empty-arglist))
+  (assign proc (reg val))       ; proc ← 求值得到的過程物件
+  (test (op no-operands?) (reg unev))
+  (branch (label apply-dispatch))
+  (save proc)
+  ; ... 進入 ev-appl-operand-loop 逐一求值各運算元 ...</code></pre>
+
+      <h3>apply-dispatch:過程應用的執行</h3>
+
+      <pre><code class="language-scheme">apply-dispatch
+  (test (op primitive-procedure?) (reg proc))
+  (branch (label primitive-apply))
+  (test (op compound-procedure?) (reg proc))
+  (branch (label compound-apply))
+  (goto (label unknown-procedure-type))
+
+primitive-apply
+  (assign val (op apply-primitive-procedure) (reg proc) (reg argl))
+  (restore continue)
+  (goto (reg continue))
+
+compound-apply
+  (assign unev (op procedure-parameters) (reg proc))
+  (assign env  (op procedure-environment) (reg proc))
+  (assign env  (op extend-environment) (reg unev) (reg argl) (reg env))
+  (assign unev (op procedure-body) (reg proc))
+  (goto (label ev-sequence))</code></pre>
+
+      <p>
+        對照第 77 章的 Scheme 版 <code>apply</code>:邏輯完全相同——基本過程直接套用,複合過程在新環境中執行過程體。差別只是:現在每一步都精確對應一至幾條暫存器機器指令,save/restore 的位置清晰可見。
+      </p>
+
+      <h3>ev-sequence 與尾遞迴的底層機制</h3>
+
+      <p>
+        <code>ev-sequence</code> 處理運算式序列(過程體或 <code>begin</code>)。關鍵在<em>最後一個</em>運算式的特殊處理:
+      </p>
+
+      <pre><code class="language-scheme">ev-sequence
+  (assign exp (op first-exp) (reg unev))
+  (test (op last-exp?) (reg unev))
+  (branch (label ev-sequence-last-exp))  ; 最後一個 → 特別路徑
+  (save unev)
+  (save env)
+  (assign continue (label ev-sequence-continue))
+  (goto (label eval-dispatch))           ; 求值非最後運算式
+
+ev-sequence-continue
+  (restore env)
+  (restore unev)
+  (assign unev (op rest-exps) (reg unev))
+  (goto (label ev-sequence))
+
+; ★ 尾遞迴消除的核心:最後一個運算式「不 save,直接 restore continue」
+ev-sequence-last-exp
+  (restore continue)           ; 從堆疊恢復外層的返回地址
+  (goto (label eval-dispatch)) ; 直接跳去——不留任何堆疊痕跡</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">尾遞迴的底層真相</span>
+          <p><code>ev-sequence-last-exp</code> 在執行序列最後一個運算式之前,先從堆疊 restore <code>continue</code>(外層的返回地址),再直接跳到 <code>eval-dispatch</code>——<strong>不做任何 save</strong>。這意味著:如果最後一個運算式是過程呼叫(尾呼叫),<code>ev-application</code> 看到的 <code>continue</code> 已是外層的返回地址,整個呼叫不增加堆疊深度。這就是「尾遞迴消除」在暫存器機器層的精確實現。</p>
+        </div>
+      </div>
+
+      <p>
+        以 <code>sqrt-iter</code> 為例:
+      </p>
+      <pre><code class="language-scheme">(define (sqrt-iter guess x)
+  (if (good-enough? guess x)
+      guess
+      (sqrt-iter (improve guess x) x)))  ; 尾呼叫,走 ev-sequence-last-exp 路徑</code></pre>
+      <p>
+        無論迭代多少次,堆疊深度恆為常數。對比:若把 <code>ev-sequence-last-exp</code> 改成和前面一樣也 save,<code>sqrt-iter</code> 就會線性累積堆疊,最終 stack overflow。
+      </p>
+
+      <!-- ==================== h2 ⑥ ==================== -->
+      <h2>編譯:把 Scheme 編成暫存器指令</h2>
+
+      <p>
+        直譯器(不論是後設循環版還是 EC 版)每次執行程式都要重新分析語法、查找標籤、分派指令。<strong>編譯器(compiler)</strong>把這些靜態工作提前做好,直接生成可以「一跑就是結果」的暫存器機器指令序列。
+      </p>
+
+      <p>
+        SICP 第 5.5 節設計了一個 Scheme-to-register-machine 編譯器。基本原理:對每種運算式形式,生成對應的指令模板。例如自求值只需一條指令:
+      </p>
+
+      <pre><code class="language-scheme">; 編譯「自求值」數字 5 → 直接生成
+(assign val (const 5))
+
+; 編譯「變數查找」x → 直接生成
+(assign val (op lookup-variable-value) (const x) (reg env))
+
+; 編譯「lambda」→ 直接生成
+(assign val (op make-compiled-procedure) (label entry) (reg env))</code></pre>
+
+      <p>
+        最關鍵的最佳化:<strong>編譯型尾遞迴(compiled tail recursion)</strong>。在直譯器中,尾遞迴消除靠的是 <code>ev-sequence-last-exp</code> 的特殊邏輯；在編譯器中,編譯器「靜態地知道」某個呼叫是不是尾呼叫,可以直接生成跳轉指令,完全省去 save/restore 的開銷:
+      </p>
+
+      <pre><code class="language-scheme">; 直譯器對尾呼叫的處理(隱式):
+;   ev-sequence-last-exp → restore continue → goto eval-dispatch → ...
+
+; 編譯器對尾呼叫直接生成(顯式):
+;   (求值引數序列後)
+;   (goto (reg proc))   ; 一條跳轉,無 save/restore 開銷</code></pre>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">連結:編譯器原理與機器語言</span>
+          <p>第 <a href="42-compilers.html">42 章(編譯器原理)</a>介紹了從高階語言到機器碼的完整流程(詞法分析、語法分析、語意分析、代碼生成、最佳化)。第 <a href="21-cpu-machine-language.html">21 章(機器語言與 CPU)</a>從 Nand2Tetris 視角描述了真實暫存器機器的指令格式與 CPU 架構。SICP 第 5.5 節的編譯器是兩者的橋樑:它把 Scheme 直接編成暫存器機器指令,揭示「高階語言如何最終落地為機器碼」。</p>
+        </div>
+      </div>
+
+      <h3>直譯 vs 編譯 vs 分析型直譯</h3>
+
+      <p>
+        SICP 在第 5.5.7 節也討論了三種執行方式的對比:
+      </p>
+      <ul>
+        <li><strong>直譯(interpretation)</strong>:靈活、互動快；但每次執行都重複做語法分析</li>
+        <li><strong>編譯(compilation)</strong>:執行快；但需要預先的編譯步驟,部分靈活性損失</li>
+        <li><strong>分析型直譯(analyzing evaluation)</strong>(第 4.1.7 節):把語法分析與執行分離,只分析一次,多次執行,效率介於前兩者之間</li>
+      </ul>
+
+      <p>
+        現代語言往往混用:Python CPython 先編譯成位元組碼再直譯,Java JVM 再加上 JIT 把熱點代碼編成機器碼。這正是 SICP 第 5 章所預示的「漸進精細化」路線。
+      </p>
+
+      <!-- ==================== h2 ⑦ ==================== -->
+      <h2>大圖:從 NAND 到直譯器</h2>
+
+      <p>
+        站在這裡回望,你所看到的是整本書的大圖——一條從最基礎的邏輯閘,到能執行任意程式的直譯器的完整鏈條:
+      </p>
+
+      <ol>
+        <li>
+          <strong><a href="19-boolean-logic.html">第 19 章</a>・布林邏輯</strong>:一切始於 NAND 閘。AND、OR、NOT、XOR 都是 NAND 的組合；半加器、全加器、ALU 都是邏輯閘的組合。這是計算的物理起點。
+        </li>
+        <li>
+          <strong><a href="21-cpu-machine-language.html">第 21 章</a>・機器語言與 CPU</strong>:在邏輯閘上建 ALU、暫存器、程式計數器,得到一台可以執行機器語言的 CPU。機器語言是人類能寫給機器的最低抽象。
+        </li>
+        <li>
+          <strong><a href="23-vm-compiler.html">第 23 章</a>・虛擬機與編譯器</strong>:在 CPU 上建虛擬機(VM)；高階語言編譯成 VM 位元組碼,再由 VM 解釋執行或 JIT 編譯。這一層讓「平台無關」成為可能。
+        </li>
+        <li>
+          <strong>本章・暫存器機器(SICP 第 5.1–5.2 節)</strong>:SICP 的暫存器機器是另一種視角的「CPU」——不關心電路細節,只精確描述「哪個暫存器搬到哪裡、測試什麼、跳到哪裡」。
+        </li>
+        <li>
+          <strong>本章・垃圾回收(SICP 第 5.3 節)</strong>:在有限實體記憶體上,用 stop-and-copy 維持「無限 Lisp 序對空間」的假象。這是語言基礎設施的一部分。
+        </li>
+        <li>
+          <strong>本章・EC 求值器(SICP 第 5.4 節)</strong>:把後設循環求值器的 eval/apply 降到暫存器機器層——現在可以清楚地看見:<em>eval/apply 就是一台在按規則搬暫存器、跳指令的機器</em>。
+        </li>
+        <li>
+          <strong>本章・編譯(SICP 第 5.5 節)</strong>:編譯器把靜態可知的工作預先做好,生成更精煉的指令序列,消除執行時分析的開銷。
+        </li>
+      </ol>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">「高階」與「低階」只是視角的差異</span>
+          <p>第 77 章的後設循環求值器用三百行 Scheme 描述 Scheme 的語意——那個層次的讀者看到的是「eval/apply 的結構」。本章的 EC 求值器用暫存器機器語言描述同樣的計算——那個層次的讀者看到的是「哪個暫存器被 save、哪裡 goto」。兩者描述的是<em>同一件事</em>,只是精確程度不同。「抽象」的本質正是如此:在不同的層次,同一件事有不同的面貌,各自為對應的問題提供最清晰的視角。</p>
+        </div>
+      </div>
+
+      <p>
+        SICP 這本書的弧線:第 1 章「過程即計算的模型」→ 第 2 章「資料抽象」→ 第 3 章「狀態與變異」→ 第 4 章「語言即工具」→ 第 5 章「機器就是語言的真面目」。每一章都不是孤立的技術,而是「計算的本質」這個大問題的一個切面。讀完第 5 章,你手中握著的已不只是一個直譯器,而是一個關於「計算是什麼」的完整視角。
+      </p>
+
+      <!-- ==================== 練習題 ==================== -->
+      <h2>練習題</h2>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 78.1 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>
+            設計一台暫存器機器,用以下迭代演算法計算階乘:
+          </p>
+          <pre><code class="language-scheme">(define (factorial n)
+  (define (iter product counter)
+    (if (&gt; counter n)
+        product
+        (iter (* counter product)
+              (+ counter 1))))
+  (iter 1 1))</code></pre>
+          <p>
+            說明:需要哪些暫存器？哪些運算？並寫出完整的控制器序列。這台機器需要堆疊嗎？
+          </p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>需要的暫存器:<code>n</code>(輸入)、<code>product</code>(累積乘積)、<code>counter</code>(計數器)、<code>val</code>(輸出)。需要的運算:<code>*</code>、<code>+</code>、<code>&gt;</code>(比較)。</p>
+              <pre><code class="language-scheme">; 迭代階乘暫存器機器(不需要堆疊！)
+(controller
+  (assign product (const 1))
+  (assign counter (const 1))
+  test-counter
+    (test (op &gt;) (reg counter) (reg n))    ; counter &gt; n？
+    (branch (label fact-done))
+    (assign product (op *) (reg counter) (reg product))
+    (assign counter (op +) (reg counter) (const 1))
+    (goto (label test-counter))
+  fact-done
+    (assign val (reg product)))</code></pre>
+              <p>這台機器<strong>不需要堆疊</strong>:迭代過程的全部狀態在每一步都完全存在 <code>product</code> 和 <code>counter</code> 這兩個暫存器裡,不需要「記住過去的狀態」再回來使用。這正是迭代過程與遞迴過程在機器層面的根本差別。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 78.2 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>
+            用 EC 求值器觀察遞迴階乘與迭代階乘的堆疊深度差異(SICP 練習 5.26–5.27)。用裝有堆疊計數器的模擬器分別執行:
+          </p>
+          <pre><code class="language-scheme">; 遞迴版
+(define (factorial-rec n)
+  (if (= n 1) 1 (* (factorial-rec (- n 1)) n)))
+
+; 迭代版
+(define (factorial-iter n)
+  (define (iter p c)
+    (if (&gt; c n) p (iter (* c p) (+ c 1))))
+  (iter 1 1))</code></pre>
+          <p>對 n = 1, 2, 3, 4, 5 分別記錄最大堆疊深度,說明兩者的增長規律。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>遞迴版</strong>:每次遞迴呼叫,<code>ev-application</code> 都會 save <code>continue</code>、<code>env</code>、<code>unev</code>,加上乘法的運算元求值也要 save。最大堆疊深度大致與 n 成<em>線性</em>關係(SICP 實測約為 5n+3)。</p>
+              <p><strong>迭代版</strong>:過程體最後一個運算式是尾呼叫 <code>(iter ...)</code>,走 <code>ev-sequence-last-exp</code> 路徑,不做額外 save。每次迭代在<em>常數深度</em>的堆疊上進行,深度與 n 無關(約為固定常數 10)。</p>
+              <p>這是尾遞迴消除的直接量化體現:兩種語義上「等價」的程式,在 EC 求值器下表現出截然不同的堆疊行為。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 78.3 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>
+            Stop-and-copy GC 的手動追蹤。假設記憶體有 6 個位置(索引 0–5),以 -1 代表 nil、<code>nK</code>(如 <code>n1</code>、<code>n2</code>)代表數字 K:
+          </p>
+          <pre><code class="language-text">索引:     0    1    2    3    4    5
+the-cars: [p3, n1, n2, p5, n3, p0]
+the-cdrs: [p1, -1, -1, p4, -1, p2]</code></pre>
+          <p>
+            機器根指標 <code>root = p0</code>(索引 0)。問:哪些序對是可到達的？GC 後,新工作記憶體中各索引存放的是什麼？(按 BFS 追蹤順序複製)
+          </p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>
+                關鍵:SICP 的 <code>gc-loop</code> 在每個 scan 位置<strong>先 relocate car(<code>update-car</code>),再 relocate cdr(<code>update-cdr</code>)</strong>,然後 scan 才前進。複製到新記憶體的順序就是這個「car 先於 cdr」的走訪順序。
+              </p>
+              <p>先 relocate root(p0)放到 free=0,scan 從 0 起與 free 並進,逐格 car 先、cdr 後:</p>
+              <ul>
+                <li><strong>relocate root</strong>:p0 → 新位址 0(free 變 1)</li>
+                <li><strong>scan=0(p0)</strong>:car=p3 → 新位址 1；接著 cdr=p1 → 新位址 2</li>
+                <li><strong>scan=1(p3)</strong>:car=p5 → 新位址 3；接著 cdr=p4 → 新位址 4</li>
+                <li><strong>scan=2(p1)</strong>:car=n1(數字,原樣返回)；cdr=-1(nil,原樣返回)—— 無新增</li>
+                <li><strong>scan=3(p5)</strong>:car=p0(已是斷心,取轉發地址 → 0)；接著 cdr=p2 → 新位址 5</li>
+                <li><strong>scan=4(p4)</strong>:car=n3、cdr=-1 —— 無新增</li>
+                <li><strong>scan=5(p2)</strong>:car=n2、cdr=-1 —— 無新增</li>
+                <li>scan=6 時 scan = free,迴圈結束。</li>
+              </ul>
+              <p>結論:所有 6 個序對(p0–p5)都可到達,沒有垃圾。對應表(舊指標 → 新索引):</p>
+              <pre><code class="language-text">p0 → 0   p3 → 1   p1 → 2   p5 → 3   p4 → 4   p2 → 5</code></pre>
+              <p>GC 後的新工作記憶體(陣列中的 pX 代表「指向 pX 之搬移後版本」的指標):</p>
+              <pre><code class="language-text">新索引:   0    1    2    3    4    5
+new-cars: [p3,  p5,  n1,  p0,  n3,  n2]
+new-cdrs: [p1,  p4,  -1,  p2,  -1,  -1]</code></pre>
+              <p>
+                驗算:新位址 0(原 p0)的 car 是 p3,而 p3 搬到了新位址 1；cdr 是 p1,搬到了新位址 2——與對應表一致。注意 p3 排在 p1 之前(car 先於 cdr),這正是 <code>update-car</code> 先於 <code>update-cdr</code> 的結果。
+              </p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 78.4 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>
+            在 EC 求值器的 <code>ev-sequence</code> 中,如果我們把最後一個運算式也用和前幾個「完全一樣」的方式處理(save unev、save env、設 continue、跳 eval-dispatch),而不走 <code>ev-sequence-last-exp</code> 的特殊路徑——這會造成什麼問題？
+          </p>
+          <p>具體說明:對以下程式,在「壞的 ev-sequence」下,堆疊深度如何隨呼叫次數變化？</p>
+          <pre><code class="language-scheme">(define (count n)
+  (display n)
+  (count (+ n 1)))</code></pre>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>如果最後一個運算式也做 save/restore,那每次呼叫 <code>(count ...)</code> 都會向堆疊推入若干值(continue、env、unev)但永不彈出。堆疊深度線性增長。</p>
+              <p>結果:<code>(count 0)</code> 語意上是「無限迴圈(尾遞迴)」,但在「壞的 ev-sequence」下,它是一個不斷增長的遞迴堆疊——最終耗盡記憶體(stack overflow)。</p>
+              <p>這正是為什麼 Scheme 規格書(R5RS, R7RS)要求直譯器/編譯器必須支援<strong>尾呼叫消除(tail-call elimination)</strong>:它不是「最佳化」,而是語言語意的一部分。沒有 TCE,Scheme 就無法用遞迴表達真正的迭代。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 78.5 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>
+            用 Python 實作一個極簡的 stop-and-copy GC 模擬器。規格如下:
+          </p>
+          <ul>
+            <li>記憶體為兩個列表 <code>cars</code> 和 <code>cdrs</code>,各長 N</li>
+            <li>指標用非負整數表示序對索引；<code>-1</code> = nil；負整數 ≤ -2 表示數字(<code>-2</code> = 0,<code>-3</code> = 1,依此類推)</li>
+            <li>實作 <code>gc(root, cars, cdrs)</code>,回傳 <code>(new_root, new_cars, new_cdrs)</code></li>
+          </ul>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">BROKEN = -999   # 斷心標記(broken heart)
+
+def gc(root, cars, cdrs):
+    N = len(cars)
+    new_cars = [None] * N
+    new_cdrs = [None] * N
+    free_ptr = [0]   # 用列表讓巢狀函數可修改
+
+    def relocate(old):
+        """把 old 指向的序對搬到新記憶體,回傳新指標"""
+        if old &lt; 0:                    # 數字、nil:直接回傳
+            return old
+        if cars[old] == BROKEN:         # 已複製 → 讀轉發地址
+            return cdrs[old]
+        # 複製到新記憶體
+        addr = free_ptr[0]
+        free_ptr[0] += 1
+        new_cars[addr] = cars[old]
+        new_cdrs[addr] = cdrs[old]
+        # 設斷心 + 轉發地址
+        cars[old] = BROKEN
+        cdrs[old] = addr
+        return addr
+
+    new_root = relocate(root)
+    scan = 0
+    while scan &lt; free_ptr[0]:          # 掃描並更新新記憶體內的指標
+        new_cars[scan] = relocate(new_cars[scan])
+        new_cdrs[scan] = relocate(new_cdrs[scan])
+        scan += 1
+
+    return new_root, new_cars[:free_ptr[0]], new_cdrs[:free_ptr[0]]
+
+# 測試:列表 (1 2),即 cons(1, cons(2, nil))
+# 索引0: car=-3(=1), cdr=1   → p0=(1 . p1)
+# 索引1: car=-4(=2), cdr=-1  → p1=(2 . nil)
+# 索引2: 垃圾(不可到達)
+orig_cars = [-3, -4, -3]   # -3=數字1,-4=數字2
+orig_cdrs = [ 1, -1, -1]
+new_root, nc, nd = gc(0, orig_cars, orig_cdrs)
+print(new_root, nc, nd)
+# → 0  [-3, -4]  [1, -1]
+# 索引2的垃圾序對被回收,new_cars/new_cdrs 只有長度2</code></pre>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑧ ==================== -->
+      <h2>把這一章串起來</h2>
+
+      <p>
+        這是 SICP 部的最後一章,也是本書「從 NAND 到直譯器」旅程的終點站。讓我們做最後一次回顧:
+      </p>
+
+      <ul>
+        <li><strong>暫存器機器模型</strong>:任何計算都可以用「暫存器 + 運算 + 測試 + 堆疊 + 控制器」精確描述。GCD 是最簡單的例子；EC 求值器是最複雜的例子。兩者使用完全相同的機制。</li>
+        <li><strong>堆疊與遞迴</strong>:遞迴不是魔法,是「save 舊狀態 → 遞迴 → restore 舊狀態」的精確機制。堆疊讓一台有限機器模擬任意深度的遞迴；迭代過程則根本不需要堆疊。</li>
+        <li><strong>暫存器機器模擬器</strong>:用 Scheme 寫一個能執行暫存器機器語言的模擬器——這本身是後設循環求值器思想的另一次體現:用語言的直譯器去執行另一個語言。組譯器的「分析一次、執行多次」與第 77 章的分析型求值器一脈相承。</li>
+        <li><strong>垃圾回收</strong>:stop-and-copy 通過追蹤可到達物件、緊湊複製,在有限實體記憶體上維持「無限 Lisp 記憶體」的假象。斷心機制防止重複複製；scan/free 兩指標驅動整個 GC 過程。</li>
+        <li><strong>顯式控制求值器</strong>:把後設循環的 eval/apply 降到暫存器層。eval-dispatch 是 eval；apply-dispatch 是 apply；七個暫存器精確對應求值過程的七個關注面向。</li>
+        <li><strong>尾遞迴的底層真相</strong>:<code>ev-sequence-last-exp</code> 的 restore-before-jump 是尾遞迴消除的實現。這不是「最佳化」,而是 Scheme 的語言承諾。</li>
+        <li><strong>編譯</strong>:編譯器把靜態可知的工作預先做好,生成更精煉的指令序列。尾呼叫在編譯器中直接化為跳轉,不留任何 save/restore。</li>
+      </ul>
+
+      <p>
+        SICP 選擇以第 5 章收尾,不是偶然的。整本書的主軸是「計算是什麼、怎麼描述它」。到了第 5 章,答案完整了:計算就是一台暫存器機器在按照規則搬動資料、跳轉控制流——而那台機器可以用任何夠精確的語言描述,包括 Scheme 本身。高階語言是對底層機器的抽象；求值器是把那個抽象「翻譯回」機器的工具；這整個過程可以在機器上跑——無限的層次,相同的本質。Kepler 說:那不是神聖的活物,而是鐘錶機構。SICP 說:那不是魔法,而是暫存器與指令。懂得了這一點,你就真正「進入了機器」。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">📚</div>
+        <div class="body">
+          <span class="c-title">想更深入？延伸資源</span>
+          <p>
+            本章對應 SICP 第五章(Chapter 5: Computing with Register Machines),涵蓋 5.1–5.5 節。
+            建議直接閱讀原書:Abelson, H., Sussman, G.J., <em>Structure and Interpretation of Computer Programs</em>(第二版),MIT Press,1996。全書可在
+            <a href="https://mitpress.mit.edu/sites/default/files/sicp/full-text/book/book.html" target="_blank" rel="noopener">MIT SICP 官網</a>
+            免費閱讀(含習題)。MIT 6.001 的
+            <a href="https://ocw.mit.edu/courses/6-001-structure-and-interpretation-of-computer-programs-spring-2005/" target="_blank" rel="noopener">OCW 課程</a>
+            有 Abelson 和 Sussman 親授的暫存器機器與 EC 求值器視頻講座,強烈推薦觀看。
+          </p>
+          <p>
+            至此,第十九部「SICP:抽象的建構」告一段落。從 Scheme 導引(第 74 章)、資料抽象(第 75 章)、狀態與串流(第 76 章)、後設循環直譯器(第 77 章),到本章的暫存器機器——你已完整走過 SICP 的五個章節,見證了抽象如何一層層搭建,最終在真實機器上落地。這不是終點；這是理解計算機科學最深底層的起點。
+          </p>
+        </div>
+      </div>
+
+    

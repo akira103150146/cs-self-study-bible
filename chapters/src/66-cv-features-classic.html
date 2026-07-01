@@ -1,0 +1,1152 @@
+<!--meta
+title: 特徵與傳統視覺
+description: 深度學習之前,人類如何用手工設計的特徵讓電腦「看懂」影像:從輪廓與形狀分析、角點與特徵點匹配、影像拼接與單應矩陣,到相機標定、多視幾何與光流追蹤——一整套以 Python+OpenCV 實作的經典電腦視覺。
+-->
+
+
+      <div class="eyebrow">第十七部 · 電腦視覺與影像辨識</div>
+      <h1>特徵與傳統視覺</h1>
+      <p class="subtitle">在深度學習席捲一切之前,有整整數十年,人類是靠「親手設計特徵」教電腦看世界的。那些聰明絕頂的點子——把邊緣連成形狀、在影像裡找出獨一無二的角點、用一個 3×3 矩陣把兩張照片縫成全景——至今仍跑在你的手機、你的車、你家的監視器裡。這一章,我們把這套經典功夫一層一層拆給你看。</p>
+      <div class="byline">
+        <span class="tag">第 66 章</span>
+        <span>閱讀時間 ≈ 60 分鐘</span>
+        <span>難度:★★★★☆</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>怎麼把雜亂的邊緣點連成<strong>輪廓</strong>,再用面積、周長、多邊形逼近做形狀辨識與物件計數</li>
+          <li>什麼叫「<strong>好的特徵點</strong>」——為什麼角點比邊緣、平坦區都好認,Harris 角點的直覺從何而來</li>
+          <li><strong>描述子(descriptor)</strong>是特徵點的「指紋」,以及 SIFT / ORB 如何讓辨識對旋轉、縮放、視角都穩健</li>
+          <li>用特徵匹配 +「以圖找物」:Lowe 比值測試濾錯配,<strong>單應矩陣(homography)</strong>把範本投影到場景</li>
+          <li>影像拼接成全景的完整管線,以及 <strong>RANSAC</strong> 為什麼能從一堆錯配裡撈出正確的變換</li>
+          <li>針孔相機模型、內參/外參、鏡頭畸變校正,還有雙眼<strong>視差</strong>怎麼變出深度</li>
+          <li>加入時間維度:<strong>光流(optical flow)</strong>、物件追蹤器、背景相減,以及它們在運動偵測與計數的應用</li>
+          <li>傳統視覺到底好在哪、又卡在哪——以及為什麼複雜場景終究要交給下一章的深度學習</li>
+        </ul>
+      </div>
+
+      <h2>在深度學習之前,人類怎麼教電腦「看」</h2>
+      <p>
+        上一章(第 65 章「影像處理」)我們把影像當成一堆數字來「整理」:調亮度、去雜訊、找邊緣、做形態學。
+        那些操作很有用,但它們有個共同的天花板——<strong>電腦處理完之後,還是不知道畫面裡「有什麼」</strong>。
+        它知道某些像素比較亮、某些地方有一條邊,卻不知道「那是一個杯子」「這兩張照片拍的是同一棟樓」
+        「那台車正從左往右開過去」。
+      </p>
+      <p>
+        從「看到像素」跨到「看懂內容」,是電腦視覺(computer vision)真正的難題。今天我們會直覺地說:
+        「丟給神經網路就好啦。」但深度學習要到 2012 年才真正引爆;在那之前的數十年裡,一代又一代研究者
+        靠的是一個樸實卻威力強大的策略——<strong>手工設計特徵(hand-crafted features)</strong>:
+        人類用幾何、用數學,親手定義「什麼樣的東西值得電腦注意」,再把這些線索組合起來做判斷。
+      </p>
+      <p>
+        這條路線聽起來「土法煉鋼」,但你別小看它。你手機的全景模式、相機的鏡頭校正、監視器的移動偵測、
+        擴增實境(AR)把虛擬物件擺到桌上、SLAM 讓掃地機器人知道自己在哪——這些<strong>至今仍大量倚賴本章的技術</strong>,
+        因為它們<em>快、省電、可解釋、不需要海量標註資料</em>。傳統視覺不是被淘汰的古董,而是深度學習旁邊
+        一套始終在線的可靠工具。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 700 150" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="pf" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/></marker>
+  </defs>
+  <g>
+    <rect x="12" y="50" width="98" height="50" rx="8" fill="#eef2f1" stroke="#8a929b"/>
+    <text x="61" y="73" text-anchor="middle" font-size="13" font-weight="700" fill="#1f2328">原始像素</text>
+    <text x="61" y="90" text-anchor="middle" font-size="10.5" fill="#5b6677">一堆數字</text>
+  </g>
+  <g>
+    <rect x="150" y="50" width="98" height="50" rx="8" fill="#e3efed" stroke="#2f6f6a"/>
+    <text x="199" y="73" text-anchor="middle" font-size="13" font-weight="700" fill="#2f6f6a">邊緣 / 輪廓</text>
+    <text x="199" y="90" text-anchor="middle" font-size="10.5" fill="#5b6677">第 65 章 → 形狀</text>
+  </g>
+  <g>
+    <rect x="288" y="50" width="98" height="50" rx="8" fill="#f1ecfb" stroke="#8b5cf6"/>
+    <text x="337" y="73" text-anchor="middle" font-size="13" font-weight="700" fill="#7c3aed">特徵點</text>
+    <text x="337" y="90" text-anchor="middle" font-size="10.5" fill="#5b6677">角點 + 描述子</text>
+  </g>
+  <g>
+    <rect x="426" y="50" width="98" height="50" rx="8" fill="#f6e7dd" stroke="#b4541f"/>
+    <text x="475" y="73" text-anchor="middle" font-size="13" font-weight="700" fill="#b4541f">匹配 / 幾何</text>
+    <text x="475" y="90" text-anchor="middle" font-size="10.5" fill="#5b6677">H 矩陣・3D</text>
+  </g>
+  <g>
+    <rect x="564" y="50" width="120" height="50" rx="8" fill="#1f2328"/>
+    <text x="624" y="73" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">看懂內容</text>
+    <text x="624" y="90" text-anchor="middle" font-size="10.5" fill="#cbd3da">這是什麼・在哪・往哪動</text>
+  </g>
+  <line x1="111" y1="75" x2="148" y2="75" stroke="#8a929b" stroke-width="1.6" marker-end="url(#pf)"/>
+  <line x1="249" y1="75" x2="286" y2="75" stroke="#8a929b" stroke-width="1.6" marker-end="url(#pf)"/>
+  <line x1="387" y1="75" x2="424" y2="75" stroke="#8a929b" stroke-width="1.6" marker-end="url(#pf)"/>
+  <line x1="525" y1="75" x2="562" y2="75" stroke="#8a929b" stroke-width="1.6" marker-end="url(#pf)"/>
+  <text x="350" y="28" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">傳統電腦視覺的資訊階梯</text>
+  <text x="350" y="130" text-anchor="middle" font-size="11" fill="#5b6677">每一格都把「資訊密度」往上提一層:從像素 → 結構 → 語意</text>
+</svg>
+        <figcaption>圖 66-1:傳統視覺的核心策略,是沿著一座「資訊階梯」一步步往上爬。每一階都把原始像素裡的資訊提煉得更精、更有意義,最終讓電腦能回答「這是什麼、在哪裡、往哪邊動」。本章就是這座階梯的後半段。</figcaption>
+      </div>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">這一章的一條主線</span>
+          <p>傳統電腦視覺,本質上是一場「<strong>用人類的幾何直覺,把像素提煉成可比對、可量測的線索</strong>」的工程。
+          無論是輪廓、角點、描述子、單應矩陣還是光流,背後都是同一個追求:找出對「光線、角度、大小變化」
+          盡量穩健、又足夠獨特的特徵,讓電腦能在不同影像之間認出同一個東西。把這句話放在心裡,後面五個主題就會串成一條線。</p>
+        </div>
+      </div>
+
+      <h2>從邊緣到形狀:輪廓分析</h2>
+      <p>
+        我們從階梯的第一階開始。第 65 章學過邊緣偵測,但邊緣的輸出是「一堆零散的白點」——它告訴你
+        「這裡顏色變化很劇烈」,卻沒把這些點組織成「一個物件」。<strong>輪廓(contour)</strong>就是下一步:
+        把這些邊緣點<strong>連成一條封閉曲線</strong>,代表一個物件完整的外形。一旦有了封閉曲線,
+        我們就能算它的面積、周長、形狀——電腦第一次能用「幾何」來描述一個東西。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 640 230" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="c1" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/></marker>
+  </defs>
+  <text x="120" y="34" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">邊緣:零散的點</text>
+  <!-- scattered dots roughly forming a blob -->
+  <g fill="#8a929b">
+    <circle cx="70" cy="90" r="2.4"/><circle cx="90" cy="78" r="2.4"/><circle cx="112" cy="72" r="2.4"/>
+    <circle cx="138" cy="74" r="2.4"/><circle cx="160" cy="84" r="2.4"/><circle cx="172" cy="104" r="2.4"/>
+    <circle cx="176" cy="128" r="2.4"/><circle cx="164" cy="150" r="2.4"/><circle cx="142" cy="164" r="2.4"/>
+    <circle cx="116" cy="168" r="2.4"/><circle cx="92" cy="160" r="2.4"/><circle cx="74" cy="142" r="2.4"/>
+    <circle cx="64" cy="116" r="2.4"/><circle cx="128" cy="120" r="2.2"/><circle cx="104" cy="108" r="2.2"/>
+  </g>
+  <text x="120" y="206" text-anchor="middle" font-size="11" fill="#5b6677">「這裡有變化」,但不知道是一個東西</text>
+  <line x1="210" y1="120" x2="270" y2="120" stroke="#8a929b" stroke-width="1.8" marker-end="url(#c1)"/>
+  <text x="240" y="110" text-anchor="middle" font-size="11" fill="#5b6677">findContours</text>
+  <text x="450" y="34" text-anchor="middle" font-size="13" font-weight="800" fill="#2f6f6a">輪廓:一條封閉曲線</text>
+  <!-- closed curve through similar points -->
+  <path d="M400,90 Q420,72 446,74 Q480,76 500,98 Q512,124 500,150 Q480,170 446,166 Q412,162 398,138 Q392,112 400,90 Z"
+        fill="#e3efed" stroke="#2f6f6a" stroke-width="2.6"/>
+  <circle cx="450" cy="120" r="3" fill="#b4541f"/>
+  <text x="458" y="124" font-size="11" fill="#b4541f">質心</text>
+  <text x="450" y="200" text-anchor="middle" font-size="11" fill="#5b6677">能算面積、周長、外接框、形狀</text>
+</svg>
+        <figcaption>圖 66-2:邊緣 vs 輪廓。邊緣是一堆「這裡有變化」的零散白點;<code>findContours</code> 把它們連成一條封閉曲線,代表一個完整物件。有了封閉曲線,面積、周長、質心、外接形狀都算得出來——這是幾何辨識的起點。</figcaption>
+      </div>
+
+      <h3>取輪廓:findContours</h3>
+      <p>
+        OpenCV 用 <code>cv2.findContours</code> 從<strong>二值圖</strong>(慣例:白色=前景)抓出所有輪廓。
+        最常用兩個參數:<code>RETR_EXTERNAL</code> 只取最外層輪廓(忽略物件內部的洞),<code>RETR_TREE</code>
+        則取完整層級(連洞都找出來);<code>CHAIN_APPROX_SIMPLE</code> 會壓縮輪廓點(一段直線只存兩端點)省記憶體。
+      </p>
+      <pre><code class="language-python">import cv2
+
+# bw 是二值圖(白=前景)。findContours 回傳「每個物件一條輪廓」的清單
+cnts, hierarchy = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+print(f"找到 {len(cnts)} 條輪廓")          # 每條輪廓 = 一個物件的外形(一串點)
+
+for c in cnts:                            # 一條一條處理
+    print(c.shape)                        # (N, 1, 2):N 個點,每點一組 (x, y)</code></pre>
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">最常見的「版本坑」</span>
+          <p>不同 OpenCV 版本,<code>findContours</code> 回傳 <strong>2 個或 3 個值</strong>(早期版本多回一個影像)。
+          要跨版本不出錯,慣用寫法是取最後兩個:<code>cnts, hier = cv2.findContours(...)[-2:]</code>。
+          這個小技巧能省下你大量「為什麼別人能跑我不行」的除錯時間。</p>
+        </div>
+      </div>
+
+      <h3>輪廓的「尺規」:面積、周長、外接形狀</h3>
+      <p>
+        有了一條輪廓,我們就能拿出各種「尺規」去量它。這些量測值,正是下一步判斷「它是什麼形狀」的依據:
+      </p>
+      <pre><code class="language-python">import cv2
+
+# 假設 cnts 是 findContours 的輸出
+c = max(cnts, key=cv2.contourArea)        # 挑面積最大的輪廓(常用來鎖定主物件)
+
+area = cv2.contourArea(c)                 # 面積(輪廓圍住的像素數)
+peri = cv2.arcLength(c, True)             # 周長;True = 封閉曲線
+
+x, y, w, h = cv2.boundingRect(c)          # 正立外接矩形(畫框 / 裁切常用)
+(cx, cy), r = cv2.minEnclosingCircle(c)   # 最小外接圓:圓心 (cx,cy)、半徑 r
+hull = cv2.convexHull(c)                  # 凸包:像用橡皮筋套住物件的外框</code></pre>
+      <p>
+        <code>max(cnts, key=cv2.contourArea)</code> 是個很 Python 的寫法:<code>key=函式</code> 表示
+        「不是比清單元素本身,而是比每個元素丟進這個函式後的結果」——這裡就是「比面積、回傳面積最大的那條輪廓」。
+        <strong>凸包(convex hull)</strong>則可以想成:用一條橡皮筋從外面套住整個物件,凹進去的地方會被拉直,
+        得到的外框就是凸包。它在等一下「數手指」時會派上大用場。
+      </p>
+
+      <h3>形狀分類:用頂點數就能認出三角形、矩形、圓</h3>
+      <p>
+        這是輪廓分析裡最漂亮的小魔術。核心點子很簡單:<strong>把彎彎曲曲的輪廓,簡化成幾條直線,
+        再數剩下幾個頂點</strong>。三角形會剩 3 個、矩形 4 個、五邊形 5 個,而圓會逼近出一大堆頂點——
+        靠頂點數,電腦就能分辨形狀。負責「簡化」的函式是 <code>cv2.approxPolyDP</code>:
+      </p>
+      <pre><code class="language-python">import cv2
+
+def classify(c):
+    """用多邊形逼近的頂點數,判斷形狀名稱。"""
+    peri = cv2.arcLength(c, True)
+    # 0.04*peri 是容許誤差:越大越粗略(頂點越少)、越小越貼合(頂點越多)
+    approx = cv2.approxPolyDP(c, 0.04 * peri, True)
+    v = len(approx)                        # 數頂點個數
+    return {3: "三角形", 4: "矩形", 5: "五邊形"}.get(v, "圓形")  # 找不到就當圓</code></pre>
+
+      <div class="diagram">
+<svg viewBox="0 0 660 200" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- triangle -->
+  <polygon points="70,140 30,60 110,60" fill="#e3efed" stroke="#2f6f6a" stroke-width="2.4"/>
+  <circle cx="30" cy="60" r="4" fill="#b4541f"/><circle cx="110" cy="60" r="4" fill="#b4541f"/><circle cx="70" cy="140" r="4" fill="#b4541f"/>
+  <text x="70" y="170" text-anchor="middle" font-size="12.5" font-weight="700" fill="#1f2328">3 頂點 → 三角形</text>
+  <!-- rectangle -->
+  <polygon points="195,65 285,65 285,135 195,135" fill="#e3efed" stroke="#2f6f6a" stroke-width="2.4"/>
+  <circle cx="195" cy="65" r="4" fill="#b4541f"/><circle cx="285" cy="65" r="4" fill="#b4541f"/><circle cx="285" cy="135" r="4" fill="#b4541f"/><circle cx="195" cy="135" r="4" fill="#b4541f"/>
+  <text x="240" y="170" text-anchor="middle" font-size="12.5" font-weight="700" fill="#1f2328">4 頂點 → 矩形</text>
+  <!-- pentagon -->
+  <polygon points="400,55 440,86 425,132 375,132 360,86" fill="#e3efed" stroke="#2f6f6a" stroke-width="2.4"/>
+  <circle cx="400" cy="55" r="4" fill="#b4541f"/><circle cx="440" cy="86" r="4" fill="#b4541f"/><circle cx="425" cy="132" r="4" fill="#b4541f"/><circle cx="375" cy="132" r="4" fill="#b4541f"/><circle cx="360" cy="86" r="4" fill="#b4541f"/>
+  <text x="400" y="170" text-anchor="middle" font-size="12.5" font-weight="700" fill="#1f2328">5 頂點 → 五邊形</text>
+  <!-- circle -->
+  <circle cx="585" cy="98" r="42" fill="#e3efed" stroke="#2f6f6a" stroke-width="2.4"/>
+  <g fill="#b4541f">
+    <circle cx="585" cy="56" r="3"/><circle cx="615" cy="68" r="3"/><circle cx="627" cy="98" r="3"/><circle cx="615" cy="128" r="3"/>
+    <circle cx="585" cy="140" r="3"/><circle cx="555" cy="128" r="3"/><circle cx="543" cy="98" r="3"/><circle cx="555" cy="68" r="3"/>
+  </g>
+  <text x="585" y="170" text-anchor="middle" font-size="12.5" font-weight="700" fill="#1f2328">很多頂點 → 圓形</text>
+</svg>
+        <figcaption>圖 66-3:多邊形逼近做形狀分類。把輪廓化簡成最少的直線段後,數剩下幾個頂點(紅點)就能分辨形狀。關鍵旋鈕是容許誤差 <code>0.04*周長</code>:設太大會把矩形誤判成三角形,設太小會把三角形拆出多餘頂點——這是最值得你動手調的參數。</figcaption>
+      </div>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">想要「旋轉、縮放都不變」的形狀指紋?</span>
+          <p>頂點數會受雜訊影響。若要更穩健地比對形狀,OpenCV 提供 <code>cv2.moments</code> 算質心、
+          <code>cv2.HuMoments</code> 算出 <strong>7 個對旋轉與縮放不變的形狀描述子(Hu 矩)</strong>,
+          再用 <code>cv2.matchShapes</code> 比兩個形狀有多像。這就像給每個形狀一張不受擺放角度影響的「身分證」。</p>
+        </div>
+      </div>
+
+      <h3>應用一瞥:物件計數與凸缺陷數手指</h3>
+      <p>
+        輪廓分析最直接的應用就是<strong>物件計數</strong>:二值化 → 找輪廓 → 過濾掉太小的雜訊輪廓 → 數剩幾條。
+        工廠數零件、生物實驗數細胞、農業數果實,都是這個套路。再進一步,凸包還能玩出「數手指」這種手勢辨識:
+        把手用凸包(橡皮筋)套住,<strong>手指之間的凹谷</strong>就是凸包與真實輪廓的落差,叫做
+        <strong>凸缺陷(convexity defect)</strong>。數出夠深的凹谷個數,就能推算張開幾根手指——剪刀石頭布就靠這招。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 460 240" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- hand silhouette (rough) -->
+  <path d="M120,220 L120,150
+           L108,150 L108,70 L122,70 L122,140
+           L136,140 L136,55 L150,55 L150,138
+           L164,138 L164,60 L178,60 L178,140
+           L192,140 L192,90 L206,90 L206,150
+           L214,165 L214,220 Z"
+        fill="#f6e7dd" stroke="#b4541f" stroke-width="2"/>
+  <!-- convex hull (rubber band over fingertips) -->
+  <polyline points="120,150 108,70 136,55 164,60 192,90 214,165"
+            fill="none" stroke="#2f6f6a" stroke-width="2" stroke-dasharray="6 4"/>
+  <!-- defect markers between fingers -->
+  <circle cx="122" cy="135" r="4" fill="#8b5cf6"/>
+  <circle cx="143" cy="130" r="4" fill="#8b5cf6"/>
+  <circle cx="171" cy="132" r="4" fill="#8b5cf6"/>
+  <circle cx="199" cy="135" r="4" fill="#8b5cf6"/>
+  <text x="300" y="70" font-size="12.5" fill="#2f6f6a" font-weight="700">─ ─ 凸包(橡皮筋)</text>
+  <text x="300" y="100" font-size="12.5" fill="#8b5cf6" font-weight="700">● 凸缺陷(指間凹谷)</text>
+  <text x="300" y="135" font-size="12.5" fill="#1f2328">4 個深凹谷</text>
+  <text x="300" y="156" font-size="12.5" fill="#1f2328">→ 推算張開 <tspan font-weight="800">5</tspan> 指</text>
+  <text x="300" y="190" font-size="11.5" fill="#5b6677">凹谷數 + 1 ≈ 手指數</text>
+</svg>
+        <figcaption>圖 66-4:用凸缺陷數手指。凸包(綠虛線)把手「繃」成最外框,真實輪廓(紅)在指縫處凹進去,落差就是凸缺陷(紫點)。只計算夠深的凹谷(過濾雜訊),凹谷數 +1 就約等於張開的手指數——剪刀(2)、石頭(0)、布(5)就這樣判出來。</figcaption>
+      </div>
+
+      <h2>什麼是「好的特徵點」?角點的故事</h2>
+      <p>
+        輪廓分析很強,但它有個罩門:<strong>它要求你先把物件乾淨地切出來(二值化、去背)</strong>。
+        一旦背景雜亂、物件互相重疊、光線飄忽,輪廓就崩了。更要命的是,如果同一個東西換個角度、換個距離拍,
+        輪廓的形狀就完全變樣——你沒辦法靠輪廓在兩張不同照片裡認出「這是同一個杯子」。
+      </p>
+      <p>
+        我們需要一種更局部、更穩健的線索:不依賴整個物件被切乾淨,而是在影像裡找出一些
+        <strong>獨特、好認、而且換個角度還認得出來</strong>的小地方。這就是<strong>特徵點(feature point /
+        keypoint)</strong>的核心思想,也是本章的重頭戲。問題只剩一個:什麼樣的點才「好認」?
+      </p>
+
+      <h3>平坦、邊緣、角點:誰最好定位?</h3>
+      <p>
+        想像你拿一個小視窗在影像上滑動,看看視窗內的內容會不會變。分三種情況:
+      </p>
+      <ul>
+        <li><strong>平坦區(flat)</strong>:視窗往任何方向移動,看到的都一樣(一片白牆)。完全無法定位——你根本不知道自己移動了沒。</li>
+        <li><strong>邊緣(edge)</strong>:沿著邊的方向移動,看起來一樣;只有垂直跨過邊時才會變。能定位<em>一個</em>方向,另一個方向仍模稜兩可。</li>
+        <li><strong>角點(corner)</strong>:<em>往任何方向</em>移動,視窗內容都會明顯改變。這是唯一能被「釘死」在精確位置的點——所以角點是最好的特徵。</li>
+      </ul>
+
+      <div class="diagram">
+<svg viewBox="0 0 660 220" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="a1" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#8a929b"/></marker>
+  </defs>
+  <!-- flat -->
+  <rect x="30" y="40" width="150" height="110" fill="#e3efed"/>
+  <rect x="80" y="70" width="50" height="50" fill="none" stroke="#b4541f" stroke-width="2" stroke-dasharray="4 3"/>
+  <line x1="105" y1="95" x2="150" y2="95" stroke="#8a929b" stroke-width="1.4" marker-end="url(#a1)"/>
+  <line x1="105" y1="95" x2="60" y2="95" stroke="#8a929b" stroke-width="1.4" marker-end="url(#a1)"/>
+  <line x1="105" y1="95" x2="105" y2="50" stroke="#8a929b" stroke-width="1.4" marker-end="url(#a1)"/>
+  <line x1="105" y1="95" x2="105" y2="140" stroke="#8a929b" stroke-width="1.4" marker-end="url(#a1)"/>
+  <text x="105" y="175" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">平坦區</text>
+  <text x="105" y="195" text-anchor="middle" font-size="11" fill="#b03a3a">怎麼移都一樣 ✗</text>
+  <!-- edge -->
+  <rect x="255" y="40" width="150" height="110" fill="#e3efed"/>
+  <rect x="255" y="40" width="75" height="110" fill="#9fb0c3"/>
+  <rect x="305" y="70" width="50" height="50" fill="none" stroke="#b4541f" stroke-width="2" stroke-dasharray="4 3"/>
+  <line x1="330" y1="95" x2="375" y2="95" stroke="#2f6f6a" stroke-width="2" marker-end="url(#a1)"/>
+  <line x1="330" y1="95" x2="285" y2="95" stroke="#2f6f6a" stroke-width="2" marker-end="url(#a1)"/>
+  <line x1="330" y1="95" x2="330" y2="50" stroke="#8a929b" stroke-width="1.4" stroke-dasharray="3 2" marker-end="url(#a1)"/>
+  <line x1="330" y1="95" x2="330" y2="140" stroke="#8a929b" stroke-width="1.4" stroke-dasharray="3 2" marker-end="url(#a1)"/>
+  <text x="330" y="175" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">邊緣</text>
+  <text x="330" y="195" text-anchor="middle" font-size="11" fill="#b4541f">只定得住一個方向 △</text>
+  <!-- corner -->
+  <rect x="480" y="40" width="150" height="110" fill="#e3efed"/>
+  <path d="M480,40 L555,40 L555,95 L630,95 L630,150 L480,150 Z" fill="#9fb0c3"/>
+  <rect x="530" y="70" width="50" height="50" fill="none" stroke="#b4541f" stroke-width="2" stroke-dasharray="4 3"/>
+  <line x1="555" y1="95" x2="600" y2="95" stroke="#2f6f6a" stroke-width="2" marker-end="url(#a1)"/>
+  <line x1="555" y1="95" x2="510" y2="95" stroke="#2f6f6a" stroke-width="2" marker-end="url(#a1)"/>
+  <line x1="555" y1="95" x2="555" y2="50" stroke="#2f6f6a" stroke-width="2" marker-end="url(#a1)"/>
+  <line x1="555" y1="95" x2="555" y2="140" stroke="#2f6f6a" stroke-width="2" marker-end="url(#a1)"/>
+  <text x="555" y="175" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">角點</text>
+  <text x="555" y="195" text-anchor="middle" font-size="11" fill="#0b8a6b">任何方向都會變 ✓</text>
+</svg>
+        <figcaption>圖 66-5:為什麼角點是好特徵。拿一個小視窗(紅虛線框)四處滑動:平坦區怎麼移都看不出變化(無法定位);邊緣只在跨過它時才變(只定得住一個方向);角點往任何方向移動內容都改變,因此能被精確釘在原位——這正是「好特徵點」的定義。</figcaption>
+      </div>
+
+      <h3>Harris 角點:把直覺寫成公式</h3>
+      <p>
+        Harris 角點偵測(1988)把上面的直覺數學化。它衡量「視窗移動 $(u,v)$ 後,內容變化有多大」:
+      </p>
+      <p>$$E(u,v)=\sum_{x,y} w(x,y)\,\big[\,I(x+u,\,y+v)-I(x,y)\,\big]^2$$</p>
+      <p>
+        把這個變化量做泰勒近似後,核心會濃縮成一個 $2\times2$ 的<strong>結構矩陣(structure tensor)</strong> $M$,
+        它由影像在 $x$、$y$ 方向的梯度組成。$M$ 的兩個特徵值 $\lambda_1,\lambda_2$ 告訴我們這一點的「方向性」:
+        兩個都小 → 平坦;一大一小 → 邊緣;<strong>兩個都大 → 角點</strong>(呼應第 54 章:特徵值描述一個線性映射在各方向的「伸縮強度」)。
+        Harris 用一個不必真的解特徵值的便宜公式來判斷:
+      </p>
+      <p>$$R=\det(M)-k\,\big(\operatorname{trace}(M)\big)^2,\qquad k\approx 0.04\text{–}0.06$$</p>
+      <p>
+        $R$ 很大代表角點、$R$ 為負代表邊緣、$|R|$ 很小代表平坦。在 OpenCV 裡,你甚至不必碰這些公式,
+        一行就能拿到「最好的 N 個角點」(Shi-Tomasi 版,Harris 的改良):
+      </p>
+      <pre><code class="language-python">import cv2
+import numpy as np
+
+gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+# 找最多 100 個品質夠好、彼此至少隔 10 像素的角點
+corners = cv2.goodFeaturesToTrack(gray, maxCorners=100,
+                                  qualityLevel=0.01, minDistance=10)
+for x, y in corners.reshape(-1, 2):
+    cv2.circle(img, (int(x), int(y)), 4, (0, 255, 0), -1)   # 標出每個角點</code></pre>
+
+      <h3>從「點」到「指紋」:特徵描述子</h3>
+      <p>
+        光知道角點在哪還不夠。要在<em>另一張</em>照片裡認出「同一個角點」,我們需要描述這個點
+        <strong>周圍長什麼樣子</strong>——這就是<strong>描述子(descriptor)</strong>:一串數字,像是這個點的「指紋」。
+        兩張照片裡的兩個點,只要指紋夠像,就判定它們是同一個東西。
+      </p>
+      <p>
+        好的描述子要對「干擾」免疫:換個角度、拉遠拉近、轉個方向、光線變一點,指紋都要盡量不變。
+        兩個經典名字你一定會遇到:
+      </p>
+      <ul>
+        <li><strong>SIFT(Scale-Invariant Feature Transform,1999)</strong>:電腦視覺史上影響最深遠的演算法之一。
+        它對縮放、旋轉、光照都極穩健,代價是計算較慢。(因專利曾被收費,如今已開放免費使用。)</li>
+        <li><strong>ORB(Oriented FAST and Rotated BRIEF,2011)</strong>:免費、極快、實務首選。
+        它產生的是<strong>二進位描述子</strong>(一串 0/1),比對時用「位元差幾個」的 Hamming 距離,
+        在手機等資源有限的裝置上特別划算。</li>
+      </ul>
+      <pre><code class="language-python">import cv2
+
+orb = cv2.ORB_create(nfeatures=1000)          # 最多找 1000 個關鍵點
+# detectAndCompute 一次做完「找關鍵點」+「算描述子」;None 是遮罩(不限範圍)
+kp, des = orb.detectAndCompute(gray, None)
+print(f"找到 {len(kp)} 個關鍵點;描述子矩陣 {des.shape}")  # 每列一個 32 位元組指紋
+
+vis = cv2.drawKeypoints(img, kp, None, color=(0, 255, 0),
+                        flags=cv2.DrawMatchesFlags_DRAW_RICH_KEYPOINTS)  # 圓圈含方向</code></pre>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">關鍵點 vs 描述子,別搞混</span>
+          <p><strong>關鍵點(keypoint)</strong>是「在哪裡」——影像中一個獨特的位置(通常是角點),
+          還帶有尺度與方向資訊。<strong>描述子(descriptor)</strong>是「長什麼樣」——把那個點周圍的樣貌
+          編碼成一串數字。匹配時比對的是<em>描述子</em>,而關鍵點告訴你比中的東西<em>座落在哪</em>。</p>
+        </div>
+      </div>
+
+      <h3>特徵匹配:在兩張圖裡認出同一個東西</h3>
+      <p>
+        有了兩張圖各自的描述子,匹配就是「<strong>幫每個描述子,在對面找最像的那個</strong>」。
+        最直接的是暴力匹配器(<code>BFMatcher</code>):把一邊的每個描述子,跟另一邊全部比一輪。
+        這裡有個一定要記住的細節——<strong>ORB 的二進位描述子要用 Hamming 距離,SIFT 的浮點描述子要用 L2 距離</strong>,
+        用錯距離匹配會爛掉。
+      </p>
+      <p>
+        但暴力匹配會產生大量錯配。救星是 David Lowe 提出的<strong>比值測試(ratio test)</strong>:
+        對每個點找<em>最近</em>與<em>次近</em>兩個對象,只有當「最近」明顯比「次近」更近(小於 0.75 倍)才採信。
+        直覺是:<strong>如果最近和次近差不多近,代表這個點不夠獨特、容易認錯,乾脆別要它。</strong>
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 620 210" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="150" y="28" text-anchor="middle" font-size="13" font-weight="800" fill="#0b8a6b">獨特 → 保留 ✓</text>
+  <circle cx="50" cy="100" r="7" fill="#1f2328"/><text x="50" y="128" text-anchor="middle" font-size="11" fill="#5b6677">查詢點</text>
+  <line x1="58" y1="98" x2="118" y2="76" stroke="#0b8a6b" stroke-width="3.5"/>
+  <circle cx="124" cy="74" r="7" fill="#0b8a6b"/><text x="138" y="66" font-size="11" fill="#0b8a6b" font-weight="700">最近 d1(很近)</text>
+  <line x1="58" y1="104" x2="208" y2="158" stroke="#9fb0c3" stroke-width="1.8" stroke-dasharray="5 3"/>
+  <circle cx="214" cy="160" r="7" fill="#9fb0c3"/><text x="150" y="180" font-size="11" fill="#9fb0c3">次近 d2(明顯遠)</text>
+  <text x="150" y="200" text-anchor="middle" font-size="11" fill="#1f2328">d1 &lt; 0.75·d2 → 採信</text>
+  <line x1="310" y1="20" x2="310" y2="200" stroke="#d7dee8" stroke-width="1.2"/>
+  <text x="465" y="28" text-anchor="middle" font-size="13" font-weight="800" fill="#b03a3a">模稜兩可 → 丟棄 ✗</text>
+  <circle cx="365" cy="100" r="7" fill="#1f2328"/><text x="365" y="128" text-anchor="middle" font-size="11" fill="#5b6677">查詢點</text>
+  <line x1="373" y1="96" x2="470" y2="70" stroke="#d98a1f" stroke-width="3"/>
+  <circle cx="476" cy="68" r="7" fill="#d98a1f"/><text x="490" y="62" font-size="11" fill="#d98a1f">d1</text>
+  <line x1="373" y1="104" x2="478" y2="120" stroke="#d98a1f" stroke-width="3"/>
+  <circle cx="484" cy="122" r="7" fill="#d98a1f"/><text x="498" y="128" font-size="11" fill="#d98a1f">d2</text>
+  <text x="465" y="180" text-anchor="middle" font-size="11" fill="#1f2328">d1 ≈ d2(差不多近)</text>
+  <text x="465" y="200" text-anchor="middle" font-size="11" fill="#b03a3a">不夠獨特 → 不採信</text>
+</svg>
+        <figcaption>圖 66-6:Lowe 比值測試。對每個查詢點看「最近 (d1)」與「次近 (d2)」:左邊 d1 明顯比 d2 近,代表這個對應很有把握,保留;右邊 d1 和 d2 差不多近,代表這個點容易認錯,丟掉。一個簡單的比值,就濾掉了絕大多數錯配。</figcaption>
+      </div>
+
+      <pre><code class="language-python">import cv2
+
+orb = cv2.ORB_create(1000)
+kp1, des1 = orb.detectAndCompute(img1, None)
+kp2, des2 = orb.detectAndCompute(img2, None)
+
+bf = cv2.BFMatcher(cv2.NORM_HAMMING)          # ORB 用 Hamming;SIFT 改 NORM_L2
+matches = bf.knnMatch(des1, des2, k=2)        # 每個點找「最近 2 個」對象
+
+# Lowe 比值測試:最近(m)要明顯比次近(n)更近,才算可信
+good = [m for m, n in matches if m.distance &lt; 0.75 * n.distance]
+print(f"原始配對 {len(matches)} → 過濾後好匹配 {len(good)}")
+
+vis = cv2.drawMatches(img1, kp1, img2, kp2, good[:30], None,
+                      flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)</code></pre>
+      <p>
+        <code>[m for m, n in matches if ...]</code> 是串列生成式;<code>for m, n in</code> 一次把每組
+        (最近, 次近) 拆成兩個變數,<code>if</code> 只留通過測試的最近匹配 <code>m</code>。
+        實務上,務必把「不過濾」與「過濾後」的連線圖並排看一次——前者亂連如毛線球,後者乾淨筆直,對比強烈到你會立刻記住比值測試的價值。
+      </p>
+
+      <h2>影像拼接:把特徵匹配變成全景</h2>
+      <p>
+        現在來看特徵匹配最迷人的一個應用——<strong>全景拼接(panorama stitching)</strong>。
+        你手機的「全景模式」、Google 街景、空拍地圖,本質上都在做同一件事:把多張有重疊的照片,
+        對齊後縫成一張大圖。而它用到的積木,你<em>已經全部學過了</em>。
+      </p>
+
+      <h3>單應矩陣:把一個平面映到另一個平面</h3>
+      <p>
+        關鍵的數學工具叫<strong>單應矩陣(homography)</strong>,記作 $H$,是一個 $3\times3$ 矩陣。
+        它描述「同一個平面,從一個視角看 vs 從另一個視角看」之間的對應關係。用<strong>齊次座標</strong>表示
+        (把 2D 點 $(x,y)$ 補成 $(x,y,1)$,呼應第 54 章的座標技巧),映射就是一次矩陣乘法:
+      </p>
+      <p>$$\begin{bmatrix}x'\\y'\\w'\end{bmatrix}\;\sim\;H\begin{bmatrix}x\\y\\1\end{bmatrix},
+        \qquad H=\begin{bmatrix}h_{11}&h_{12}&h_{13}\\h_{21}&h_{22}&h_{23}\\h_{31}&h_{32}&1\end{bmatrix}$$</p>
+      <p>
+        算出 $(x',y',w')$ 後,再除以 $w'$ 得到真正的影像座標 $(x'/w',\,y'/w')$——這個「除以最後一維」就是
+        <strong>透視(perspective)</strong>的來源,它讓 $H$ 能表達「近大遠小」的傾斜效果,比第 54 章的純線性變換更廣。
+        $H$ 有 8 個自由度,而每組對應點提供 2 條方程式,所以<strong>至少要 4 組對應點</strong>才解得出 $H$。
+        這些對應點,正是上一節的特徵匹配幫我們找到的!
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 620 250" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="hf" markerWidth="11" markerHeight="11" refX="8" refY="3" orient="auto"><path d="M0,0 L9,3 L0,6 Z" fill="#8b5cf6"/></marker>
+  </defs>
+  <!-- source plane (frontal square) -->
+  <rect x="40" y="70" width="120" height="120" fill="#e3efed" stroke="#2f6f6a" stroke-width="2.4"/>
+  <line x1="40" y1="110" x2="160" y2="110" stroke="#9fb6b3" stroke-width="1"/>
+  <line x1="40" y1="150" x2="160" y2="150" stroke="#9fb6b3" stroke-width="1"/>
+  <line x1="80" y1="70" x2="80" y2="190" stroke="#9fb6b3" stroke-width="1"/>
+  <line x1="120" y1="70" x2="120" y2="190" stroke="#9fb6b3" stroke-width="1"/>
+  <circle cx="40" cy="70" r="4" fill="#b4541f"/><circle cx="160" cy="70" r="4" fill="#b4541f"/>
+  <circle cx="160" cy="190" r="4" fill="#b4541f"/><circle cx="40" cy="190" r="4" fill="#b4541f"/>
+  <text x="100" y="215" text-anchor="middle" font-size="12.5" font-weight="700" fill="#2f6f6a">範本平面(正視)</text>
+  <!-- arrow with H -->
+  <line x1="200" y1="130" x2="300" y2="130" stroke="#8b5cf6" stroke-width="2.4" marker-end="url(#hf)"/>
+  <text x="250" y="118" text-anchor="middle" font-size="15" font-weight="800" fill="#7c3aed">H</text>
+  <text x="250" y="150" text-anchor="middle" font-size="10.5" fill="#5b6677">3×3 矩陣</text>
+  <!-- destination plane (perspective quad) -->
+  <polygon points="360,90 560,70 580,200 380,210" fill="#f6e7dd" stroke="#b4541f" stroke-width="2.4"/>
+  <line x1="367" y1="130" x2="573" y2="116" stroke="#d8b9a6" stroke-width="1"/>
+  <line x1="373" y1="170" x2="577" y2="158" stroke="#d8b9a6" stroke-width="1"/>
+  <line x1="427" y1="84" x2="433" y2="207" stroke="#d8b9a6" stroke-width="1"/>
+  <line x1="487" y1="79" x2="491" y2="204" stroke="#d8b9a6" stroke-width="1"/>
+  <circle cx="360" cy="90" r="4" fill="#b4541f"/><circle cx="560" cy="70" r="4" fill="#b4541f"/>
+  <circle cx="580" cy="200" r="4" fill="#b4541f"/><circle cx="380" cy="210" r="4" fill="#b4541f"/>
+  <text x="470" y="235" text-anchor="middle" font-size="12.5" font-weight="700" fill="#b4541f">場景中的同一平面(傾斜)</text>
+</svg>
+        <figcaption>圖 66-7:單應矩陣 $H$ 把一個平面映射到另一個視角下的同一平面。注意正視的方格被映成「近大遠小」的梯形——這就是透視。只要有 4 組對應點(紅點),就能解出 $H$;有了 $H$,範本上任一點都能投影到場景的正確位置。</figcaption>
+      </div>
+
+      <h3>RANSAC:在一堆錯配裡,撈出正確的變換</h3>
+      <p>
+        理論上 4 組點就能求 $H$,但實務上特徵匹配總會混進一些錯配(離群點 outlier)。如果用全部的點去硬解,
+        幾個錯配就能把結果帶歪。解法是 <strong>RANSAC(隨機抽樣一致性)</strong>,它的點子簡單到不可思議:
+      </p>
+      <ol>
+        <li><strong>隨機</strong>抽最少數量的點(求 $H$ 需 4 組),算出一個候選 $H$。</li>
+        <li>看看<strong>其餘所有點裡,有多少「同意」這個 $H$</strong>(投影後落在誤差範圍內,稱為內群 inlier)。</li>
+        <li>重複很多次,最後採用「贊成票最多」的那個 $H$,再用所有內群點精算一次。</li>
+      </ol>
+      <p>
+        因為正確的對應彼此一致、錯配各走各的,所以<strong>少數錯配永遠湊不出多數同意</strong>——
+        RANSAC 自然就把它們排除了。這是電腦視覺裡最重要的「抗離群」工具之一。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 620 220" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="155" y="26" text-anchor="middle" font-size="13" font-weight="800" fill="#b03a3a">用全部點硬擬合</text>
+  <!-- inliers on a line + a few outliers -->
+  <g fill="#2f6f6a">
+    <circle cx="40" cy="170" r="4"/><circle cx="70" cy="158" r="4"/><circle cx="100" cy="150" r="4"/>
+    <circle cx="135" cy="138" r="4"/><circle cx="170" cy="128" r="4"/><circle cx="205" cy="118" r="4"/>
+    <circle cx="240" cy="106" r="4"/>
+  </g>
+  <circle cx="120" cy="60" r="5" fill="#b4541f"/><circle cx="220" cy="180" r="5" fill="#b4541f"/>
+  <!-- skewed line pulled by outliers -->
+  <line x1="35" y1="150" x2="255" y2="95" stroke="#b03a3a" stroke-width="2.4" stroke-dasharray="6 4"/>
+  <text x="155" y="208" text-anchor="middle" font-size="11" fill="#5b6677">兩個離群點(紅)把線拉歪</text>
+  <line x1="305" y1="20" x2="305" y2="210" stroke="#d7dee8" stroke-width="1.2"/>
+  <text x="460" y="26" text-anchor="middle" font-size="13" font-weight="800" fill="#0b8a6b">RANSAC:取贊成最多的</text>
+  <g fill="#2f6f6a">
+    <circle cx="345" cy="170" r="4"/><circle cx="375" cy="158" r="4"/><circle cx="405" cy="150" r="4"/>
+    <circle cx="440" cy="138" r="4"/><circle cx="475" cy="128" r="4"/><circle cx="510" cy="118" r="4"/>
+    <circle cx="545" cy="106" r="4"/>
+  </g>
+  <circle cx="425" cy="60" r="5" fill="none" stroke="#b4541f" stroke-width="2"/>
+  <circle cx="525" cy="180" r="5" fill="none" stroke="#b4541f" stroke-width="2"/>
+  <line x1="340" y1="172" x2="560" y2="100" stroke="#0b8a6b" stroke-width="2.8"/>
+  <text x="460" y="208" text-anchor="middle" font-size="11" fill="#5b6677">內群(綠)說了算,離群點被忽略</text>
+</svg>
+        <figcaption>圖 66-8:RANSAC 的威力(以擬合一條線示意)。左邊把所有點一視同仁,兩個離群點(紅實心)就把擬合結果拉歪;右邊 RANSAC 反覆隨機取樣,找出「最多點同意」的模型,離群點(紅空心)自動被排除。求單應矩陣 $H$ 時用的就是這套邏輯。</figcaption>
+      </div>
+
+      <h3>手刻拼接:其實是 M9 + 第 54 章的組合</h3>
+      <p>
+        把上面全部串起來,兩張圖拼接的程式短得驚人——而且你會發現,「新東西其實是舊積木拼的」:
+      </p>
+      <pre><code class="language-python">import cv2
+import numpy as np
+
+# 1) 兩張圖各偵測 ORB 特徵,匹配 + 比值測試,得到 good(見前一節)
+orb = cv2.ORB_create(2000)
+k1, d1 = orb.detectAndCompute(left, None)
+k2, d2 = orb.detectAndCompute(right, None)
+bf = cv2.BFMatcher(cv2.NORM_HAMMING)
+# 求「右圖 → 左圖」的變換,所以 query 用右圖、train 用左圖
+good = [m for m, n in bf.knnMatch(d2, d1, k=2) if m.distance &lt; 0.75 * n.distance]
+
+if len(good) &gt;= 4:                         # 至少 4 組對應才求得出 H
+    src = np.float32([k2[m.queryIdx].pt for m in good]).reshape(-1, 1, 2)  # 右圖點
+    dst = np.float32([k1[m.trainIdx].pt for m in good]).reshape(-1, 1, 2)  # 左圖點
+    # 2) RANSAC 求單應矩陣(自動剔除錯配);5.0 是容許誤差(像素)
+    H, mask = cv2.findHomography(src, dst, cv2.RANSAC, 5.0)
+    # 3) 把右圖 warp 到左圖座標系,畫布加寬才放得下
+    h1, w1 = left.shape[:2]
+    pano = cv2.warpPerspective(right, H, (w1 + right.shape[1], h1))
+    pano[0:h1, 0:w1] = left                # 左圖原封不動貼到左邊 → 兩張接起來
+    cv2.imwrite("pano.jpg", pano)</code></pre>
+      <p>
+        這就是 M9 的「特徵匹配 + 求 $H$」加上第 54 章的「透視變換把座標搬家」。直接覆蓋會在重疊處留下明顯接縫與曝光差,
+        實務上會再做<strong>融合(blending)</strong>把接縫抹平。如果你只想要結果,OpenCV 還有一鍵全景的高階介面:
+      </p>
+      <pre><code class="language-python">import cv2
+
+stitcher = cv2.Stitcher_create(cv2.Stitcher_PANORAMA)
+status, pano = stitcher.stitch([img1, img2, img3])   # 一串圖,順序不限
+if status == cv2.Stitcher_OK:                        # 一定要檢查 status!
+    cv2.imwrite("panorama.jpg", pano)
+else:
+    print("拼接失敗,常因重疊不足(需 ≥30%)或畫面無紋理")</code></pre>
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">拼接拼不起來?八成是這兩件事</span>
+          <p>第一,<strong>重疊不足或畫面太空</strong>(白牆、藍天無紋理)→ 找不到足夠的對應點。
+          相鄰兩張至少要重疊 30%。第二,<strong>沒檢查 <code>status</code></strong>——高階 <code>Stitcher</code>
+          失敗時回傳非 0,你卻拿了個空的結果去用。記得永遠先確認 <code>status == cv2.Stitcher_OK</code>。</p>
+        </div>
+      </div>
+
+      <h2>相機標定與多視幾何:把 2D 連回 3D</h2>
+      <p>
+        到目前為止我們都在 2D 像素的世界裡打轉。但很多應用需要回答 3D 問題:這個零件實際多大?那台車離我多遠?
+        要把 AR 的虛擬茶杯穩穩擺在真實桌面上,得先知道相機是怎麼把 3D 世界「拍扁」成 2D 影像的——這就是
+        <strong>多視幾何(multi-view geometry)</strong>的領域,而一切的起點是搞懂相機本身。
+      </p>
+
+      <h3>針孔相機模型</h3>
+      <p>
+        最簡單也最核心的相機模型是<strong>針孔相機(pinhole camera)</strong>:想像一個密閉盒子,
+        正面戳一個小孔,3D 世界的光線穿過小孔,在後方的成像平面上投出一個上下顛倒的像。
+        這個「3D 點 → 2D 像素」的投影,可以用一條優雅的矩陣式表達:
+      </p>
+      <p>$$s\begin{bmatrix}u\\v\\1\end{bmatrix}
+        =\underbrace{\begin{bmatrix}f_x&0&c_x\\0&f_y&c_y\\0&0&1\end{bmatrix}}_{K\ (\text{內參})}
+        \;\underbrace{\big[\,R\,\mid\,t\,\big]}_{\text{外參}}
+        \begin{bmatrix}X\\Y\\Z\\1\end{bmatrix}$$</p>
+      <ul>
+        <li><strong>內參矩陣 $K$(intrinsics)</strong>:相機自身的性質——焦距 $f_x,f_y$(畫面被「放大」多少)、
+        主點 $c_x,c_y$(光軸打在感光元件上的位置,通常接近影像中心)。同一台相機這組值固定不變。</li>
+        <li><strong>外參 $[R\mid t]$(extrinsics)</strong>:相機<em>擺在哪</em>——它在世界座標中的旋轉 $R$ 與平移 $t$。
+        相機每動一下,外參就變。</li>
+      </ul>
+
+      <div class="diagram">
+<svg viewBox="0 0 620 260" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="pa" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#8a929b"/></marker>
+  </defs>
+  <!-- 3D object (a tree-like arrow) on the left -->
+  <line x1="60" y1="40" x2="60" y2="120" stroke="#2f6f6a" stroke-width="4"/>
+  <polygon points="50,52 70,52 60,30" fill="#2f6f6a"/>
+  <text x="60" y="140" text-anchor="middle" font-size="11.5" fill="#2f6f6a" font-weight="700">3D 物件(X,Y,Z)</text>
+  <!-- pinhole -->
+  <line x1="300" y1="20" x2="300" y2="240" stroke="#cbd3da" stroke-width="2"/>
+  <circle cx="300" cy="130" r="6" fill="#1f2328"/>
+  <text x="300" y="258" text-anchor="middle" font-size="11.5" fill="#1f2328" font-weight="700">針孔(光心)</text>
+  <!-- rays through pinhole to image plane -->
+  <line x1="60" y1="30" x2="520" y2="210" stroke="#b4541f" stroke-width="1.4" marker-end="url(#pa)"/>
+  <line x1="60" y1="120" x2="520" y2="155" stroke="#b4541f" stroke-width="1.4" marker-end="url(#pa)"/>
+  <!-- image plane on the right -->
+  <line x1="500" y1="120" x2="500" y2="230" stroke="#8b5cf6" stroke-width="2.4"/>
+  <!-- inverted image (small arrow upside down) -->
+  <line x1="513" y1="155" x2="513" y2="210" stroke="#7c3aed" stroke-width="4"/>
+  <polygon points="503,198 523,198 513,220 " fill="#7c3aed"/>
+  <text x="513" y="245" text-anchor="middle" font-size="11.5" fill="#7c3aed" font-weight="700">2D 成像(u,v)</text>
+  <text x="513" y="138" text-anchor="middle" font-size="10.5" fill="#5b6677">上下顛倒</text>
+  <text x="300" y="100" text-anchor="middle" font-size="10.5" fill="#5b6677">焦距 f</text>
+  <line x1="300" y1="118" x2="500" y2="118" stroke="#8a929b" stroke-width="1" stroke-dasharray="3 2"/>
+</svg>
+        <figcaption>圖 66-9:針孔相機模型。3D 世界的光線穿過一個針孔(光心),在後方成像平面上投出上下顛倒的像。焦距 $f$ 決定放大率,主點是光軸與成像平面的交點。把這個幾何寫成矩陣,就是內參 $K$ 與外參 $[R\mid t]$ 的投影式。</figcaption>
+      </div>
+
+      <h3>為什麼要標定?——找出 K 與畸變係數</h3>
+      <p>
+        每一台相機、每一顆鏡頭,內參 $K$ 都不一樣,而且真實鏡頭還會帶來<strong>畸變(distortion)</strong>:
+        廣角鏡頭讓直線往外凸(桶狀畸變)、某些鏡頭讓直線往內凹(枕狀畸變)。
+        只要你想用畫面來<em>量測</em>或做 3D/AR,就必須先把這些參數量出來——這個過程叫
+        <strong>相機標定(camera calibration)</strong>。
+      </p>
+      <p>
+        最經典的做法是拍<strong>棋盤格</strong>:它的格點間距已知、又好偵測。拍 15~20 張不同角度的棋盤,
+        收集每張的「角點 3D 座標 ↔ 角點 2D 影像座標」對應,丟給 <code>calibrateCamera</code> 一次解出 $K$ 與畸變係數:
+      </p>
+      <pre><code class="language-python">import cv2
+import numpy as np
+
+# 對每張棋盤照片:找內角點(9×6 = 每邊格數 − 1)
+found, corners = cv2.findChessboardCorners(gray, (9, 6))
+# ... 收集多張的 objpoints(角點 3D 座標)與 imgpoints(角點 2D 座標) ...
+
+# 用所有對應解出內參與畸變;gray.shape[::-1] 把 (高,寬) 反成 (寬,高)
+ret, K, dist, rvecs, tvecs = cv2.calibrateCamera(
+    objpoints, imgpoints, gray.shape[::-1], None, None)
+
+undist = cv2.undistort(img, K, dist)      # 用標定結果把彎掉的直線拉回直的</code></pre>
+
+      <div class="diagram">
+<svg viewBox="0 0 600 210" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="df" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/></marker>
+  </defs>
+  <text x="120" y="28" text-anchor="middle" font-size="13" font-weight="800" fill="#b4541f">校正前(桶狀畸變)</text>
+  <rect x="40" y="45" width="160" height="120" fill="#f6e7dd" stroke="#b4541f" stroke-width="1.5"/>
+  <!-- bulging lines -->
+  <path d="M55,55 Q120,40 185,55" fill="none" stroke="#b4541f" stroke-width="1.8"/>
+  <path d="M48,90 Q120,75 192,90" fill="none" stroke="#b4541f" stroke-width="1.8"/>
+  <path d="M48,120 Q120,135 192,120" fill="none" stroke="#b4541f" stroke-width="1.8"/>
+  <path d="M55,155 Q120,170 185,155" fill="none" stroke="#b4541f" stroke-width="1.8"/>
+  <text x="120" y="190" text-anchor="middle" font-size="11" fill="#5b6677">直線往外凸</text>
+  <line x1="225" y1="105" x2="305" y2="105" stroke="#8a929b" stroke-width="1.8" marker-end="url(#df)"/>
+  <text x="265" y="95" text-anchor="middle" font-size="11" fill="#5b6677">undistort</text>
+  <text x="470" y="28" text-anchor="middle" font-size="13" font-weight="800" fill="#2f6f6a">校正後(拉直)</text>
+  <rect x="390" y="45" width="160" height="120" fill="#e3efed" stroke="#2f6f6a" stroke-width="1.5"/>
+  <line x1="398" y1="58" x2="542" y2="58" stroke="#2f6f6a" stroke-width="1.8"/>
+  <line x1="398" y1="90" x2="542" y2="90" stroke="#2f6f6a" stroke-width="1.8"/>
+  <line x1="398" y1="120" x2="542" y2="120" stroke="#2f6f6a" stroke-width="1.8"/>
+  <line x1="398" y1="152" x2="542" y2="152" stroke="#2f6f6a" stroke-width="1.8"/>
+  <text x="470" y="190" text-anchor="middle" font-size="11" fill="#5b6677">直線變回直的</text>
+</svg>
+        <figcaption>圖 66-10:鏡頭畸變校正。廣角鏡頭常讓原本筆直的線條往外膨脹(桶狀畸變);用標定得到的 $K$ 與畸變係數 <code>undistort</code> 後,直線回復筆直。這是任何「拿畫面量測」之前的必備前處理——沒校正過的座標,量出來都會偏。</figcaption>
+      </div>
+
+      <h3>立體視覺:用兩隻眼睛量出深度</h3>
+      <p>
+        單一張照片丟失了深度資訊(你沒辦法只看一張平面照就確定遠近)。但兩台略為分開的相機——
+        就像你的兩隻眼睛——能把深度<em>算</em>回來。做個小實驗:伸出手指放在面前,左右眼交替閉,
+        你會看到手指相對背景「跳」得很厲害;再看遠處的牆,幾乎不跳。這個左右影像之間的位移,
+        就叫<strong>視差(disparity)</strong>,而且——<strong>越近的東西,視差越大</strong>。
+      </p>
+      <p>深度與視差成反比,公式漂亮得很:</p>
+      <p>$$Z=\frac{f\cdot B}{d}$$</p>
+      <p>
+        其中 $Z$ 是深度、$f$ 是焦距、$B$ 是兩相機間距(基線 baseline)、$d$ 是視差。
+        把畫面每個像素的視差都算出來、再上色,就得到一張<strong>深度圖(depth map)</strong>——
+        自駕車、3D 掃描、體感遊戲(早期的 Kinect 概念)都建立在這之上。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 600 240" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- two cameras -->
+  <rect x="60" y="180" width="40" height="26" rx="3" fill="#1f2328"/><text x="80" y="222" text-anchor="middle" font-size="11" fill="#5b6677">左相機</text>
+  <rect x="180" y="180" width="40" height="26" rx="3" fill="#1f2328"/><text x="200" y="222" text-anchor="middle" font-size="11" fill="#5b6677">右相機</text>
+  <line x1="100" y1="193" x2="180" y2="193" stroke="#8a929b" stroke-width="1.2" stroke-dasharray="4 3"/>
+  <text x="140" y="186" text-anchor="middle" font-size="10.5" fill="#5b6677">基線 B</text>
+  <!-- near object -->
+  <circle cx="150" cy="80" r="14" fill="#b4541f"/><text x="150" y="55" text-anchor="middle" font-size="11.5" fill="#b4541f" font-weight="700">近物</text>
+  <line x1="80" y1="180" x2="150" y2="90" stroke="#b4541f" stroke-width="1.4"/>
+  <line x1="200" y1="180" x2="150" y2="90" stroke="#b4541f" stroke-width="1.4"/>
+  <text x="118" y="135" font-size="10.5" fill="#b4541f">視差大</text>
+  <!-- far object -->
+  <circle cx="430" cy="60" r="12" fill="#2f6f6a"/><text x="430" y="40" text-anchor="middle" font-size="11.5" fill="#2f6f6a" font-weight="700">遠物</text>
+  <line x1="80" y1="180" x2="430" y2="70" stroke="#2f6f6a" stroke-width="1.2"/>
+  <line x1="200" y1="180" x2="430" y2="70" stroke="#2f6f6a" stroke-width="1.2"/>
+  <text x="330" y="120" font-size="10.5" fill="#2f6f6a">視差小</text>
+  <text x="490" y="150" font-size="12.5" fill="#1f2328" font-weight="700">Z = f·B / d</text>
+  <text x="490" y="172" font-size="10.5" fill="#5b6677">視差 d 越大</text>
+  <text x="490" y="188" font-size="10.5" fill="#5b6677">→ 深度 Z 越小(越近)</text>
+</svg>
+        <figcaption>圖 66-11:雙眼立體視覺。同一個物件在左右相機中的位置差就是視差 $d$。近物的兩條視線夾角大、視差大;遠物視差小。由 $Z=fB/d$ 即可從視差反推深度——這正是你的大腦每分每秒在做的事。</figcaption>
+      </div>
+
+      <pre><code class="language-python">import cv2
+
+# 立體匹配:numDisparities 須為 16 倍數;blockSize 是比對區塊(奇數)
+stereo = cv2.StereoSGBM_create(numDisparities=64, blockSize=9)
+disparity = stereo.compute(grayL, grayR)      # 吃左右兩張灰階圖,算每像素視差
+# 視差越大 = 越近;把 disparity 正規化上色,就是一張深度圖</code></pre>
+
+      <h2>加入時間:物件追蹤與光流</h2>
+      <p>
+        前面都在處理靜態影像。但真實世界會動,而<strong>影片就是一連串隨時間排列的影像(影格 frame)</strong>。
+        一旦加入時間維度,就能問新問題:畫面裡<em>什麼東西在動</em>?它<em>往哪邊移動</em>?
+        這就是物件追蹤(tracking)與光流(optical flow)的主場——交通計數、賣場動線分析、運動科技、保全偵測,全靠它。
+      </p>
+
+      <h3>背景相減:抓出「會動的東西」</h3>
+      <p>
+        最樸素也最常用的運動偵測,是<strong>背景相減(background subtraction)</strong>。直覺很簡單:
+        固定鏡頭拍一條馬路,「不動的」是背景(馬路),「在動的」就是前景(車)。OpenCV 的背景相減器會
+        <em>持續學習</em>背景模型,你每餵一幀,它就回傳一張前景遮罩——移動的東西標白、背景標黑。
+      </p>
+      <pre><code class="language-python">import cv2
+
+bs = cv2.createBackgroundSubtractorMOG2()     # 會持續學習背景的物件
+kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+
+while True:
+    ok, frame = cap.read()
+    if not ok:
+        break
+    fg = bs.apply(frame)                       # 前景遮罩:移動物體=白
+    fg = cv2.morphologyEx(fg, cv2.MORPH_OPEN, kernel)   # 開運算去雜點(第 65 章)
+    cnts, _ = cv2.findContours(fg, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[-2:]
+    for c in cnts:
+        if cv2.contourArea(c) &gt; 500:           # 過濾太小的雜訊
+            x, y, w, h = cv2.boundingRect(c)
+            cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)</code></pre>
+
+      <div class="diagram">
+<svg viewBox="0 0 600 180" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="bf2" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/></marker>
+  </defs>
+  <!-- current frame -->
+  <rect x="30" y="35" width="140" height="100" fill="#e3efed" stroke="#8a929b"/>
+  <rect x="30" y="105" width="140" height="30" fill="#cbd3da"/>
+  <circle cx="95" cy="80" r="16" fill="#b4541f"/>
+  <text x="100" y="155" text-anchor="middle" font-size="11.5" font-weight="700" fill="#1f2328">這一幀(背景+車)</text>
+  <text x="200" y="78" text-anchor="middle" font-size="20" fill="#8a929b">−</text>
+  <!-- learned background -->
+  <rect x="230" y="35" width="140" height="100" fill="#e3efed" stroke="#8a929b"/>
+  <rect x="230" y="105" width="140" height="30" fill="#cbd3da"/>
+  <text x="300" y="155" text-anchor="middle" font-size="11.5" font-weight="700" fill="#1f2328">學到的背景</text>
+  <line x1="385" y1="85" x2="425" y2="85" stroke="#8a929b" stroke-width="1.8" marker-end="url(#bf2)"/>
+  <!-- foreground mask -->
+  <rect x="440" y="35" width="140" height="100" fill="#1f2328"/>
+  <circle cx="505" cy="80" r="16" fill="#fff"/>
+  <text x="510" y="155" text-anchor="middle" font-size="11.5" font-weight="700" fill="#1f2328">前景遮罩(只剩車)</text>
+</svg>
+        <figcaption>圖 66-12:背景相減。把「這一幀」減去「持續學到的背景」,只剩下會動的東西(前景遮罩,白色)。再用形態學去雜點、用輪廓框出每個移動物體,就能做運動偵測與計數。缺點:對光照突變(雲遮太陽、開關燈)很敏感,會整片變白。</figcaption>
+      </div>
+
+      <h3>光流:像素如何在影格之間移動</h3>
+      <p>
+        <strong>光流(optical flow)</strong>回答更細的問題:同一個東西,從前一幀到這一幀,
+        <em>移動了多少、往哪移</em>?它有兩種風味:
+      </p>
+      <ul>
+        <li><strong>稀疏光流(sparse)</strong>:只追你指定的少數幾個點(通常是角點)。經典演算法是
+        <strong>Lucas-Kanade</strong>。它假設一個小鄰域內的像素一起移動,從而解出每個點的位移。
+        把「前一幀位置 → 這一幀位置」連起來,就是運動軌跡。</li>
+        <li><strong>稠密光流(dense)</strong>:算<em>每一個像素</em>的位移向量,得到整張「運動場」。
+        常用 Farnebäck 演算法,把方向轉成色相、大小轉成亮度,畫成一張彩色運動圖,哪裡在動、往哪動一目了然。</li>
+      </ul>
+      <pre><code class="language-python">import cv2
+import numpy as np
+
+# 稀疏光流(Lucas-Kanade):追蹤上一幀的角點 p0 在這一幀的新位置
+p0 = cv2.goodFeaturesToTrack(prev_gray, 100, 0.01, 10)   # 先找一批角點來追
+p1, st, err = cv2.calcOpticalFlowPyrLK(prev_gray, gray, p0, None)
+good_new = p1[st == 1]                          # st=1 表示成功追到的點
+good_old = p0[st == 1]
+for (a, b), (c, d) in zip(good_new, good_old):
+    cv2.line(frame, (int(a), int(b)), (int(c), int(d)), (0, 255, 0), 2)  # 畫軌跡
+# 下一輪:把 p1 當成新的 p0 繼續追</code></pre>
+
+      <div class="diagram">
+<svg viewBox="0 0 600 200" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="of" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#b4541f"/></marker>
+  </defs>
+  <text x="300" y="26" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">前一幀(空心)→ 這一幀(實心),箭頭 = 位移</text>
+  <!-- object moving right -->
+  <g>
+    <circle cx="120" cy="80" r="9" fill="none" stroke="#8a929b" stroke-width="2"/>
+    <circle cx="200" cy="85" r="9" fill="#2f6f6a"/>
+    <line x1="129" y1="81" x2="190" y2="84" stroke="#b4541f" stroke-width="2.2" marker-end="url(#of)"/>
+  </g>
+  <g>
+    <circle cx="150" cy="140" r="9" fill="none" stroke="#8a929b" stroke-width="2"/>
+    <circle cx="235" cy="148" r="9" fill="#2f6f6a"/>
+    <line x1="159" y1="141" x2="225" y2="147" stroke="#b4541f" stroke-width="2.2" marker-end="url(#of)"/>
+  </g>
+  <g>
+    <circle cx="110" cy="120" r="9" fill="none" stroke="#8a929b" stroke-width="2"/>
+    <circle cx="188" cy="124" r="9" fill="#2f6f6a"/>
+    <line x1="119" y1="121" x2="178" y2="123" stroke="#b4541f" stroke-width="2.2" marker-end="url(#of)"/>
+  </g>
+  <text x="170" y="185" text-anchor="middle" font-size="11" fill="#5b6677">物件整體往右移 → 一束向右的光流向量</text>
+  <!-- legend right -->
+  <text x="430" y="80" font-size="12" fill="#8a929b">○ 前一幀位置 p0</text>
+  <text x="430" y="108" font-size="12" fill="#2f6f6a">● 這一幀位置 p1</text>
+  <text x="430" y="136" font-size="12" fill="#b4541f">→ 位移(光流)</text>
+</svg>
+        <figcaption>圖 66-13:光流就是「同一個點在相鄰影格之間的位移」。追蹤前一幀的角點(空心)在這一幀跑到哪(實心),箭頭就是它的運動向量。一整束朝同一方向的向量,代表物件整體在朝那個方向移動——這是運動分析最基本的線索。</figcaption>
+      </div>
+
+      <h3>物件追蹤器:給一框,之後它自己跟</h3>
+      <p>
+        如果你只想鎖定<em>一個</em>目標(一台車、一張臉、一顆球),OpenCV 內建的追蹤器最方便:
+        <strong>第一幀你框一個目標,之後它每一幀自動回報新位置</strong>。
+      </p>
+      <pre><code class="language-python">import cv2
+
+tracker = cv2.TrackerCSRT_create()             # CSRT 較準;KCF 較快
+tracker.init(frame, bbox)                       # bbox = (x, y, w, h),告訴它要跟誰
+
+while True:
+    ok, frame = cap.read()
+    if not ok:
+        break
+    success, bbox = tracker.update(frame)       # 每幀回報:還跟得到嗎、新位置在哪
+    if success:
+        x, y, w, h = map(int, bbox)
+        cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+    else:
+        cv2.putText(frame, "Lost!", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)</code></pre>
+      <p>
+        目標被長時間遮住、或外觀變化太大時會跟丟(<code>success=False</code>)。實務上常配
+        <strong>卡爾曼濾波(Kalman filter)</strong>:用運動模型預測目標下一刻的位置,抗短暫遮擋與抖動,
+        並在多目標時維持穩定的 ID。把「偵測 + 追蹤」結合起來,就是現代<strong>多目標追蹤(MOT)</strong>的雛形——
+        而「偵測」這一塊,正是下一章深度學習要登場的地方。
+      </p>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">一個經典應用:跨線計數</span>
+          <p>車流/人流計數的核心技巧很巧妙:畫一條虛擬計數線,記錄每個目標<strong>上一幀</strong>與
+          <strong>這一幀</strong>的質心在線的哪一側。當它從一側跨到另一側時 +1。判斷「跨線」只要看
+          <code>(上一幀質心 − 線) × (這一幀質心 − 線) &lt; 0</code>——兩者異號就代表跨過去了。
+          記得要存上一幀的位置,否則會重複計數。</p>
+        </div>
+      </div>
+
+      <h2>傳統視覺的價值與限制</h2>
+      <p>
+        我們爬完了整座階梯:輪廓 → 特徵點 → 匹配與幾何 → 時間。現在退一步問:這套「手工特徵」的功夫,
+        到底好在哪、又卡在哪?
+      </p>
+      <p>
+        <strong>它的價值,在受控場景裡至今無可取代。</strong>當光線穩定、背景單純、物件外觀變化有限——
+        產線檢測、棋盤標定、文件掃描、固定鏡頭的監視器——傳統視覺<em>又快、又省電、又精準,而且完全可解釋</em>。
+        你能清楚說出「它是因為數到 4 個頂點才判斷成矩形」「它是靠這 50 組對應點求出 H」。
+        它<strong>不需要海量標註資料</strong>,一兩張範本就能上工;它能在沒有 GPU 的微控制器上即時運行。
+        當問題定義清楚,殺雞何必用牛刀?
+      </p>
+      <p>
+        <strong>它的限制,在複雜、開放的場景裡會原形畢露。</strong>手工特徵是人類「猜」出來的規則——
+        角點、邊緣、Hu 矩——它們對<em>幾何</em>變化穩健,卻擋不住真實世界的混亂:嚴重遮擋、劇烈光影、
+        形變的物體(一隻擺各種姿勢的貓)、抽象的語意(「這是不是一張快樂的臉?」)。
+        你沒辦法手寫一條規則去定義「貓的特徵」,因為貓有千萬種樣子。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 620 200" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="160" y="28" text-anchor="middle" font-size="13" font-weight="800" fill="#2f6f6a">傳統視覺擅長</text>
+  <rect x="30" y="42" width="260" height="135" rx="8" fill="#e3efed"/>
+  <text x="50" y="70" font-size="12" fill="#1f2328">• 受控光線、固定鏡頭</text>
+  <text x="50" y="95" font-size="12" fill="#1f2328">• 幾何明確的物件(形狀/標記)</text>
+  <text x="50" y="120" font-size="12" fill="#1f2328">• 量測、標定、拼接、追蹤</text>
+  <text x="50" y="145" font-size="12" fill="#1f2328">• 要快、省電、可解釋、少資料</text>
+  <text x="50" y="168" font-size="11" fill="#0b8a6b" font-weight="700">→ 規則清楚,殺雞不用牛刀</text>
+  <text x="460" y="28" text-anchor="middle" font-size="13" font-weight="800" fill="#b4541f">需要深度學習</text>
+  <rect x="330" y="42" width="260" height="135" rx="8" fill="#f6e7dd"/>
+  <text x="350" y="70" font-size="12" fill="#1f2328">• 雜亂背景、劇烈光影變化</text>
+  <text x="350" y="95" font-size="12" fill="#1f2328">• 嚴重遮擋、形變的物體</text>
+  <text x="350" y="120" font-size="12" fill="#1f2328">• 高層語意(這是貓?是誰?)</text>
+  <text x="350" y="145" font-size="12" fill="#1f2328">• 千萬種樣貌,寫不出規則</text>
+  <text x="350" y="168" font-size="11" fill="#b03a3a" font-weight="700">→ 讓模型自己「學」特徵(第 67 章)</text>
+</svg>
+        <figcaption>圖 66-14:兩條路線的分工。傳統手工特徵在「受控、幾何明確」的場景又快又可靠;一旦進入「雜亂、開放、要高層語意」的場景,人寫的規則就力不從心,該換成讓模型自己從資料中學出特徵的深度學習。它們不是取代關係,而是互補。</figcaption>
+      </div>
+
+      <p>
+        這正是深度學習帶來的典範轉移:與其讓人類絞盡腦汁<em>設計</em>特徵,不如餵給神經網路海量資料,
+        讓它<strong>自己學出</strong>該注意什麼特徵。下一章(第 67 章),我們就會看到卷積神經網路(CNN)
+        如何把本章「人工設計濾波器/特徵」的工作,變成「從資料中自動學習」——但你會發現,
+        CNN 學到的低層濾波器,長得竟然很像本章的邊緣與角點偵測器。<strong>傳統視覺不是被丟掉的舊知識,
+        而是理解深度學習為何有效的最佳起點。</strong>
+      </p>
+
+      <h2>動手練習</h2>
+      <p>以下練習由淺入深,涵蓋本章五個主題。強烈建議先自己寫,再展開解答對照。所有程式都用 Python + OpenCV。</p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 66.1 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>給一張有多個白色物件(深色背景)的影像,用輪廓<strong>數出有幾個物件</strong>,
+          並在每個物件上畫出外接矩形與編號。記得過濾掉太小的雜訊輪廓。</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p>標準套路:灰階 → 二值化 → <code>findContours</code> → 過濾小面積 → 數數量並標號。</p>
+              <pre><code class="language-python">import cv2
+
+img = cv2.imread("objects.jpg")
+gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+_, bw = cv2.threshold(gray, 60, 255, cv2.THRESH_BINARY)   # 白物件、深背景
+
+cnts, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[-2:]
+
+count = 0
+for c in cnts:
+    if cv2.contourArea(c) &lt; 200:          # 過濾雜訊輪廓
+        continue
+    count += 1
+    x, y, w, h = cv2.boundingRect(c)
+    cv2.rectangle(img, (x, y), (x + w, y + h), (0, 255, 0), 2)
+    cv2.putText(img, str(count), (x, y - 6),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+
+print(f"共偵測到 {count} 個物件")
+cv2.imwrite("counted.jpg", img)</code></pre>
+              <p>若物件彼此相黏導致少算,可在二值化後加一次形態學開運算,或改用 <code>cv2.RETR_TREE</code>
+              搭配層級分析;若想更穩,可加 distance transform + watershed 把黏住的物件切開。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 66.2 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>在一張影像上找出特徵點:(a) 用 <code>goodFeaturesToTrack</code> 找出最好的 50 個角點並畫綠點;
+          (b) 改用 ORB 偵測關鍵點並用 <code>drawKeypoints</code> 畫出(含方向)。比較兩者抓到的點有何不同。</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">import cv2
+
+img = cv2.imread("scene.jpg")
+gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+# (a) Shi-Tomasi 角點(Harris 的改良)
+corners = cv2.goodFeaturesToTrack(gray, maxCorners=50,
+                                  qualityLevel=0.01, minDistance=10)
+a = img.copy()
+for x, y in corners.reshape(-1, 2):
+    cv2.circle(a, (int(x), int(y)), 4, (0, 255, 0), -1)
+cv2.imwrite("corners.jpg", a)
+
+# (b) ORB:關鍵點 + 描述子
+orb = cv2.ORB_create(nfeatures=500)
+kp, des = orb.detectAndCompute(gray, None)
+b = cv2.drawKeypoints(img, kp, None, color=(0, 255, 0),
+                      flags=cv2.DrawMatchesFlags_DRAW_RICH_KEYPOINTS)
+cv2.imwrite("orb.jpg", b)
+print(f"角點 {len(corners)} 個;ORB 關鍵點 {len(kp)} 個,描述子 {des.shape}")</code></pre>
+              <p>觀察重點:<code>goodFeaturesToTrack</code> 只給「位置」,適合拿去餵光流追蹤;
+              ORB 的關鍵點還帶<strong>尺度與方向</strong>(畫出來的圓圈大小與線段),並附帶描述子,
+              才能做跨圖匹配。兩者都集中在紋理豐富、角點多的地方,平坦區幾乎沒有點。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 66.3 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>「以圖找物」:給一張範本(例如某本書的封面)與一張場景照片(書放在桌上的一角),
+          用 ORB 特徵匹配 + 比值測試 + RANSAC 求單應矩陣,把範本的四個角投影到場景上,<strong>畫框標出物件位置</strong>。</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p>這是 M9 旗艦專題的完整流程:偵測 → 匹配 → 濾錯配 → 求 H → 投影四角。</p>
+              <pre><code class="language-python">import cv2
+import numpy as np
+
+tmpl = cv2.imread("book_cover.jpg")    # 範本
+scene = cv2.imread("desk.jpg")         # 場景
+
+orb = cv2.ORB_create(1000)
+k1, d1 = orb.detectAndCompute(tmpl, None)
+k2, d2 = orb.detectAndCompute(scene, None)
+
+bf = cv2.BFMatcher(cv2.NORM_HAMMING)
+good = [m for m, n in bf.knnMatch(d1, d2, k=2) if m.distance &lt; 0.75 * n.distance]
+print(f"好匹配 {len(good)} 組")
+
+if len(good) &gt;= 4:
+    # queryIdx=範本端、trainIdx=場景端
+    src = np.float32([k1[m.queryIdx].pt for m in good]).reshape(-1, 1, 2)
+    dst = np.float32([k2[m.trainIdx].pt for m in good]).reshape(-1, 1, 2)
+    H, mask = cv2.findHomography(src, dst, cv2.RANSAC, 5.0)
+
+    h, w = tmpl.shape[:2]
+    corners = np.float32([[0, 0], [w, 0], [w, h], [0, h]]).reshape(-1, 1, 2)
+    proj = cv2.perspectiveTransform(corners, H)         # 範本四角投影到場景
+    cv2.polylines(scene, [np.int32(proj)], True, (0, 255, 0), 3)
+    cv2.imwrite("located.jpg", scene)
+else:
+    print("好匹配不足 4 組,無法定位(換紋理更豐富的範本或更清晰的場景)")</code></pre>
+              <p>常見坑:範本太平、無紋理(找不到特徵);距離度量用錯(ORB 必須 <code>NORM_HAMMING</code>);
+              忘了比值測試導致錯配淹沒正確匹配。把 <code>drawMatches</code> 畫出來檢查連線,是最快的除錯方式。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 66.4 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>用你自己的話解釋:<strong>單應矩陣(homography)如何把一個平面映射到另一個平面</strong>?
+          為什麼至少需要 4 組對應點?為什麼它能表達「近大遠小」的透視效果,而第 54 章的一般 $2\times2$ 線性變換不行?</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>怎麼映射:</strong>把 2D 點寫成齊次座標 $(x, y, 1)$,單應矩陣 $H$(3×3)做一次矩陣乘法
+              得到 $(x', y', w')$,再<strong>除以 $w'$</strong> 還原成真正的影像座標 $(x'/w',\, y'/w')$。
+              這個「先矩陣乘、再除以最後一維」就是它的全部。</p>
+              <p><strong>為什麼要 4 組點:</strong>$H$ 有 9 個元素,但整體可以乘上任意非零常數而不改變映射(因為最後會除以 $w'$),
+              所以實際只有 <strong>8 個自由度</strong>。每組對應點 $(x,y)\to(x',y')$ 提供 2 條方程式($x'$ 一條、$y'$ 一條),
+              因此 $8\div2 = 4$ 組點剛好把 $H$ 釘死。(點愈多愈好,可配 RANSAC 抗錯配。)</p>
+              <p><strong>為什麼能表達透視:</strong>關鍵在「除以 $w'$」這一步。$H$ 的最後一列
+              $(h_{31}, h_{32}, 1)$ 讓 $w'$ 隨著 $(x, y)$ 改變,於是同樣的位移在不同位置被「除以不同的數」——
+              這就製造出近大遠小。第 54 章的 $2\times2$ 線性變換沒有這個除法(它把平行線永遠保持平行),
+              所以只能做旋轉、縮放、剪切,變不出梯形般的透視。單應矩陣正是線性變換往「投影幾何」的自然延伸。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 66.5 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>用<strong>幀差法(frame differencing)</strong>偵測影片中的運動:比較連續兩幀的差異,
+          把變動夠大的區域框出來。(進階:改用稀疏光流追蹤角點並畫出運動軌跡。)</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p>幀差法是最輕量的運動偵測:相鄰兩幀相減 → 二值化 → 形態學清理 → 找輪廓框出。</p>
+              <pre><code class="language-python">import cv2
+
+cap = cv2.VideoCapture("traffic.mp4")
+ok, prev = cap.read()
+prev_gray = cv2.cvtColor(prev, cv2.COLOR_BGR2GRAY)
+kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+
+while True:
+    ok, frame = cap.read()
+    if not ok:
+        break
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    diff = cv2.absdiff(prev_gray, gray)              # 兩幀相減(絕對值)
+    _, motion = cv2.threshold(diff, 25, 255, cv2.THRESH_BINARY)
+    motion = cv2.morphologyEx(motion, cv2.MORPH_OPEN, kernel)   # 去雜點
+
+    cnts, _ = cv2.findContours(motion, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[-2:]
+    for c in cnts:
+        if cv2.contourArea(c) &gt; 500:                 # 過濾太小的變動
+            x, y, w, h = cv2.boundingRect(c)
+            cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+
+    cv2.imshow("motion", frame)
+    if cv2.waitKey(30) &amp; 0xFF == ord('q'):
+        break
+    prev_gray = gray                                  # 這一幀成為下一輪的「上一幀」
+
+cap.release()
+cv2.destroyAllWindows()</code></pre>
+              <p>幀差法很省、但只看得到「正在動」的邊緣(物件中央若顏色均勻會被當成沒動)。
+              想要完整的前景遮罩,改用本章的背景相減 <code>createBackgroundSubtractorMOG2</code>;
+              想知道「往哪動」,則用稀疏光流 <code>calcOpticalFlowPyrLK</code> 追角點、把 p0→p1 連線即得軌跡。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>把這一章串起來</h2>
+      <p>
+        我們沿著一座「資訊階梯」,看完了深度學習之前人類教電腦看世界的整套功夫。回顧路標:
+      </p>
+      <ul>
+        <li><strong>輪廓與形狀</strong>:把零散邊緣連成封閉曲線,用面積、周長、多邊形逼近頂點數做形狀分類與物件計數;凸缺陷還能數手指。</li>
+        <li><strong>特徵點</strong>:角點是最好的特徵,因為它在任何方向移動都會變;Harris 用結構矩陣的特徵值量化這件事。</li>
+        <li><strong>描述子與匹配</strong>:SIFT/ORB 把特徵點周圍編成「指紋」,Lowe 比值測試濾掉模稜兩可的錯配。</li>
+        <li><strong>單應矩陣與 RANSAC</strong>:用 4 組以上對應點把一個平面映到另一個平面(透視來自「除以 $w'$」),RANSAC 從錯配中撈出正確的 $H$——影像拼接就是這些積木的組合。</li>
+        <li><strong>相機標定與多視幾何</strong>:針孔模型用內參 $K$ + 外參 $[R\mid t]$ 描述投影;標定量出 $K$ 與畸變並校正;雙眼視差由 $Z=fB/d$ 還原深度。</li>
+        <li><strong>追蹤與光流</strong>:背景相減抓會動的東西,光流量出像素位移,追蹤器鎖定單一目標——加上時間維度就能做運動偵測與計數。</li>
+      </ul>
+      <p>
+        最重要的體悟也許是:這些技術沒有一個是魔法,全是<strong>樸實的幾何與線性代數疊出來的</strong>——
+        把邊緣連成形狀、用特徵值判斷角點、用矩陣乘法搬動平面、用相似三角形換算深度。
+        它們在受控場景至今好用得很;而當場景變得雜亂、開放、需要高層語意時,我們就需要一種能
+        「自己學出特徵」的方法。下一章(第 67 章),我們走進<strong>深度學習的電腦視覺</strong>,
+        看卷積神經網路如何接手這份工作——並驚訝地發現,它在底層學到的東西,竟和本章的邊緣與角點如此相似。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">📚</div>
+        <div class="body">
+          <span class="c-title">想更深入?延伸資源</span>
+          <p>本章所有 API 都來自 <a href="https://opencv.org/">OpenCV</a>,官方的
+          <a href="https://docs.opencv.org/4.x/d6/d00/tutorial_py_root.html">OpenCV-Python Tutorials</a>
+          有每個主題(輪廓、特徵、標定、光流)可直接執行的範例,是最好的動手起點。
+          想把背後幾何補紮實,Richard Szeliski 的免費鉅著
+          <a href="https://szeliski.org/Book/">《Computer Vision: Algorithms and Applications》</a>
+          是公認的經典教科書;偏好課程的話,可參考多所大學公開的電腦視覺課(如 First Principles of Computer Vision、
+          Stanford CS231A 多視幾何)。本章用到的向量、矩陣、特徵值、齊次座標,在
+          <strong>第 54 章「線性代數」</strong>有完整建立;若想看「相機如何把 3D 變成 2D」的另一面,
+          <strong>第 39 章「計算機圖學」</strong>正是反方向的同一套數學。下一站,<strong>第 67 章</strong>
+          會用深度學習重新詮釋「特徵」這個概念。</p>
+        </div>
+      </div>
+
+    

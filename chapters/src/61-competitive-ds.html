@@ -1,0 +1,1534 @@
+<!--meta
+title: 競賽資料結構:單調隊列、BIT、線段樹
+description: 從第 29 章的通用資料結構,延伸到競賽戰場上真正吃飯的工具:單調棧、單調隊列、稀疏表、樹狀數組(BIT)、線段樹與懶惰標記,以及競賽風格的並查集。每個結構都照「解決什麼問題→原理→C++ 實作→複雜度→應用」走一遍,配大量 SVG。
+-->
+
+
+      <div class="eyebrow">第十六部 · 競賽程式設計與 APCS</div>
+      <h1>競賽資料結構:單調隊列、BIT、線段樹</h1>
+      <p class="subtitle">第 29 章你打開了資料結構的引擎蓋。這一章,我們要把這些零件改裝成競賽用的高效能引擎——學會用一條單調序列把 $O(n^2)$ 壓成 $O(n)$,用一個位元小技巧維護前綴和,再用一棵樹同時駕馭整段區間的查詢與修改。</p>
+      <div class="byline">
+        <span class="tag">第 61 章</span>
+        <span>閱讀時間 ≈ 70 分鐘</span>
+        <span>難度:★★★★☆</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>堆疊、佇列、雙端佇列在競賽裡扮演的角色,以及怎麼用 C++ 的 <code>stack</code> / <code>queue</code> / <code>deque</code></li>
+          <li>單調棧(monotonic stack)如何用「丟掉沒用的資料」把「下一個更大元素」「柱狀圖最大矩形」做到 $O(n)$</li>
+          <li>單調隊列(monotonic queue)如何 $O(n)$ 解滑動視窗最大值,以及它和單調棧的對稱關係</li>
+          <li>稀疏表(sparse table)用倍增思想 $O(n\log n)$ 預處理、$O(1)$ 回答區間最值(RMQ)</li>
+          <li>樹狀數組 / BIT 的 lowbit 魔法:為什麼它能用 $O(\log n)$ 維護前綴和,並配合離散化求逆序對</li>
+          <li>線段樹的遞迴建樹 / 查詢 / 修改,以及懶惰標記(lazy propagation)如何讓「區間加值」也變 $O(\log n)$</li>
+          <li>競賽風格、又短又快的並查集(路徑壓縮 + 按大小合併)</li>
+          <li>面對一道題,怎麼用一張總表挑出對的結構</li>
+        </ul>
+      </div>
+
+      <h2>從「通用資料結構」到「競賽資料結構」</h2>
+      <p>
+        在<a href="29-data-structures.html">第 29 章</a>,我們親手打造了陣列、鏈結串列、堆疊、佇列、雜湊表、樹、堆積、並查集,
+        並學會「面對問題挑對結構」。那一章的精神是<strong>通用</strong>:這些結構在任何程式裡都用得上。
+        這一章,我們把場景縮到一個特別的戰場——<strong>程式競賽與 APCS 實作題</strong>。
+      </p>
+      <p>
+        競賽的世界有它獨特的壓力:題目給你一個 $n$ 可能高達 $2\times10^5$ 甚至 $10^6$ 的序列,
+        然後丟給你成千上萬筆「查詢」與「修改」,並要求你在<strong>一秒內</strong>全部答完。
+        這時候,一個 $O(n^2)$ 的暴力解——哪怕邏輯完全正確——也會無情地 <strong>TLE(超時)</strong>。
+        於是競賽選手發展出一套專門的兵器:它們不見得能解決所有問題,但只要對上特定的「區間查詢」「滑動視窗」「動態前綴和」題型,
+        就能把複雜度從平方壓到對數,甚至線性。
+      </p>
+      <p>
+        這一章介紹六件這樣的兵器:<strong>單調棧、單調隊列、稀疏表、樹狀數組(BIT)、線段樹、競賽版並查集</strong>。
+        我們對每一個都走同一條路線,和第 29 章一致:
+        <strong>它解決什麼問題 → 背後的原理(畫給你看)→ 完整 C++ 實作 → 複雜度 → 用在哪</strong>。
+        程式以 <strong>C++</strong> 為主,因為它是競賽的通用語言——快、且有現成好用的 STL。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">這一章的兩條主線</span>
+          <p>① <strong>單調性(monotonicity)</strong>:很多時候,資料裡有一大堆「永遠不會是答案」的元素。
+          只要果斷把它們丟掉、只留下一條<strong>單調</strong>的序列,複雜度就會崩塌。單調棧、單調隊列都是這個思想。<br>
+          ② <strong>分塊與倍增(blocking &amp; doubling)</strong>:與其每次查詢都從頭掃,不如預先把資料切成
+          一塊塊「整理好的小結論」,查詢時把幾塊拼起來就好。稀疏表、BIT、線段樹都是這個思想的不同化身。</p>
+        </div>
+      </div>
+
+      <h2>暖身:競賽裡的堆疊、佇列與雙端佇列</h2>
+      <p>
+        在動用重兵器之前,先快速複習三個第 29 章的老朋友,並把它們翻譯成 C++ 的講法。
+        競賽中我們<strong>幾乎不會自己手刻</strong>這些結構(除非是 APCS 觀念題),而是直接用 STL,省時又不易出錯。
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>結構</th><th>規矩</th><th>STL</th><th>核心操作</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><strong>堆疊 stack</strong></td><td>後進先出 LIFO</td><td><code>std::stack</code></td><td><code>push</code> / <code>pop</code> / <code>top</code> / <code>empty</code></td></tr>
+          <tr><td><strong>佇列 queue</strong></td><td>先進先出 FIFO</td><td><code>std::queue</code></td><td><code>push</code> / <code>pop</code> / <code>front</code> / <code>empty</code></td></tr>
+          <tr><td><strong>雙端佇列 deque</strong></td><td>兩端都能進出</td><td><code>std::deque</code></td><td><code>push_back/front</code> / <code>pop_back/front</code> / <code>front</code> / <code>back</code></td></tr>
+        </tbody>
+      </table>
+      </div>
+      <pre><code class="language-cpp">#include &lt;bits/stdc++.h&gt;   // 競賽常用的萬用標頭(把幾乎所有標準庫都引入)
+using namespace std;
+
+int main() {
+    ios::sync_with_stdio(false); cin.tie(nullptr);  // 關閉同步,加速 cin/cout
+
+    stack&lt;int&gt; stk;          // 堆疊
+    stk.push(1); stk.push(2);
+    cout &lt;&lt; stk.top() &lt;&lt; "\n";   // 2(最後進的在最上面)
+    stk.pop();
+
+    queue&lt;int&gt; q;            // 佇列
+    q.push(1); q.push(2);
+    cout &lt;&lt; q.front() &lt;&lt; "\n";    // 1(最先進的在最前面)
+    q.pop();
+
+    deque&lt;int&gt; dq;           // 雙端佇列,兩端都能動
+    dq.push_back(1); dq.push_front(0);
+    cout &lt;&lt; dq.front() &lt;&lt; " " &lt;&lt; dq.back() &lt;&lt; "\n";   // 0 1
+    return 0;
+}</code></pre>
+      <p>
+        這三個容器各對應一類經典應用(第 29 章詳述過):堆疊用於括號配對、後序運算式求值、模擬遞迴;
+        佇列用於 BFS、流程模擬;deque 則因為兩端都能 $O(1)$ 進出,成了本章<strong>單調隊列</strong>的硬體基礎。
+        記住一句話:<strong>當你需要「在序列上維護一條會動態增刪的單調序列」,deque 幾乎一定是答案。</strong>
+      </p>
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">為什麼競賽愛用 C++?</span>
+          <p>三個理由:① <strong>快</strong>——編譯式語言,常數小,$10^8$ 級運算一秒內輕鬆完成,Python 往往做不到;
+          ② <strong>STL 齊全</strong>——<code>sort</code>、<code>set</code>、<code>map</code>、<code>priority_queue</code>、
+          <code>lower_bound</code> 都是現成的;③ <strong>整數位元運算直接</strong>——本章 BIT 的 lowbit、狀態壓縮 DP 都靠它。
+          這一部的第 <a href="59-cpp-stl.html">59 章</a>專門講 C++ 與 STL,第 <a href="60-competitive-techniques.html">60 章</a>講前綴和與差分,
+          建議搭配閱讀。</p>
+        </div>
+      </div>
+
+      <h2>單調棧:果斷丟掉「永遠輪不到」的資料</h2>
+
+      <h3>它解決什麼問題</h3>
+      <p>
+        先看一道在 APCS 出現過的題目(改寫自「最接近的高人」):給你 $n$ 個人的身高排成一列,
+        對每個人,求他<strong>右邊第一個比他高的人</strong>是誰。這類問題有個響亮的名字:
+        <strong>下一個更大元素(Next Greater Element, NGE)</strong>。
+      </p>
+      <p>
+        最直覺的做法:對每個 $i$,往右一個一個找,直到找到更大的。最壞情況(身高遞減)每個都要掃到底,
+        總共 $O(n^2)$。當 $n=2\times10^5$,這是 $4\times10^{10}$ 次運算——穩穩超時。我們需要 $O(n)$。
+      </p>
+
+      <h3>原理:維護一條單調遞減的「待解決」堆疊</h3>
+      <p>
+        關鍵觀察(這也是所有單調結構的靈魂):<strong>如果 $a[j] \le a[i]$ 而且 $j &lt; i$,那麼 $a[j]$ 永遠不可能是
+        「$i$ 之後某人」的下一個更大元素</strong>——因為更靠右、又更高(或一樣高)的 $a[i]$ 會先擋住它。
+        既然 $a[j]$ 已經沒有利用價值,我們就把它<strong>丟掉</strong>。
+      </p>
+      <p>
+        於是我們用一個堆疊,只存「還沒找到更大元素」的索引。每讀進一個新元素 $a[i]$,
+        就把堆疊頂端所有「比 $a[i]$ 小」的元素彈出——對它們而言,$a[i]$ 正是它們等待已久的「下一個更大元素」。
+        彈完之後,堆疊裡剩下的恰好是一條<strong>由底到頂單調遞減</strong>的序列,再把 $i$ 推進去。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 680 300" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs><marker id="ms-a" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#b4541f"/></marker></defs>
+  <text x="30" y="28" font-size="14" font-weight="800" fill="#2f6f6a">陣列 a = [2, 1, 2, 4, 3] ,處理到 a[3]=4 的瞬間</text>
+  <!-- array -->
+  <g>
+    <rect x="40"  y="45" width="60" height="46" rx="4" fill="#e3efed" stroke="#2f6f6a"/>
+    <rect x="100" y="45" width="60" height="46" rx="4" fill="#e3efed" stroke="#2f6f6a"/>
+    <rect x="160" y="45" width="60" height="46" rx="4" fill="#e3efed" stroke="#2f6f6a"/>
+    <rect x="220" y="45" width="60" height="46" rx="4" fill="#cfe6e2" stroke="#2f6f6a" stroke-width="2.5"/>
+    <rect x="280" y="45" width="60" height="46" rx="4" fill="#fff" stroke="#8a929b" stroke-dasharray="4 3"/>
+  </g>
+  <text x="70"  y="74" text-anchor="middle" font-size="17" fill="#1f2328">2</text>
+  <text x="130" y="74" text-anchor="middle" font-size="17" fill="#1f2328">1</text>
+  <text x="190" y="74" text-anchor="middle" font-size="17" fill="#1f2328">2</text>
+  <text x="250" y="74" text-anchor="middle" font-size="17" font-weight="800" fill="#1f6b64">4</text>
+  <text x="310" y="74" text-anchor="middle" font-size="17" fill="#8a929b">3</text>
+  <text x="70"  y="108" text-anchor="middle" font-size="11" fill="#8a929b">0</text>
+  <text x="130" y="108" text-anchor="middle" font-size="11" fill="#8a929b">1</text>
+  <text x="190" y="108" text-anchor="middle" font-size="11" fill="#8a929b">2</text>
+  <text x="250" y="108" text-anchor="middle" font-size="11" fill="#8a929b">3 ← 現在</text>
+  <text x="310" y="108" text-anchor="middle" font-size="11" fill="#8a929b">4</text>
+
+  <!-- stack before -->
+  <text x="120" y="150" text-anchor="middle" font-size="13" font-weight="800" fill="#b4541f">堆疊(存索引)處理前</text>
+  <g>
+    <rect x="80" y="165" width="80" height="32" rx="4" fill="#f6e7dd" stroke="#b4541f"/>
+    <rect x="80" y="197" width="80" height="32" rx="4" fill="#f6e7dd" stroke="#b4541f"/>
+  </g>
+  <text x="120" y="186" text-anchor="middle" font-size="13" fill="#1f2328">2 (值 2) ← 頂</text>
+  <text x="120" y="218" text-anchor="middle" font-size="13" fill="#1f2328">0 (值 2)</text>
+
+  <!-- arrow -->
+  <line x1="300" y1="200" x2="380" y2="200" stroke="#b4541f" stroke-width="2.5" marker-end="url(#ms-a)"/>
+  <text x="340" y="190" text-anchor="middle" font-size="11" fill="#b4541f">a[3]=4 來了</text>
+  <text x="340" y="226" text-anchor="middle" font-size="10" fill="#8a929b">4 &gt; 2,兩個都彈出</text>
+
+  <!-- stack after -->
+  <text x="540" y="150" text-anchor="middle" font-size="13" font-weight="800" fill="#2f6f6a">處理後</text>
+  <g>
+    <rect x="500" y="165" width="80" height="32" rx="4" fill="#cfe6e2" stroke="#2f6f6a" stroke-width="2"/>
+  </g>
+  <text x="540" y="186" text-anchor="middle" font-size="13" fill="#1f2328">3 (值 4) ← 頂</text>
+  <text x="540" y="250" text-anchor="middle" font-size="11" fill="#2f6f6a">ans[0]=4, ans[2]=4</text>
+  <text x="540" y="268" text-anchor="middle" font-size="11" fill="#8a929b">(被彈出者的答案就是 4)</text>
+</svg>
+        <figcaption>圖 61-1:單調棧處理 NGE。堆疊裡只留「還在等更大元素」的索引,對應值由底到頂遞減。當 4 進來,把比它小的 2、2(索引 0、2)彈出——它們的「下一個更大元素」就是 4。每個元素一生只進堆疊一次、出一次,所以總共 $O(n)$。</figcaption>
+      </div>
+
+      <h3>完整 C++ 實作</h3>
+      <pre><code class="language-cpp">#include &lt;bits/stdc++.h&gt;
+using namespace std;
+
+int main() {
+    ios::sync_with_stdio(false); cin.tie(nullptr);
+    int n; cin &gt;&gt; n;
+    vector&lt;int&gt; a(n), ans(n, -1);   // ans[i]:右邊第一個更大的值,沒有就 -1
+    for (int i = 0; i &lt; n; i++) cin &gt;&gt; a[i];
+
+    stack&lt;int&gt; stk;                 // 存「還沒找到更大元素」的索引,值單調遞減
+    for (int i = 0; i &lt; n; i++) {
+        // 當前 a[i] 比堆疊頂端的值大 → 它就是頂端那些元素的「下一個更大元素」
+        while (!stk.empty() &amp;&amp; a[i] &gt; a[stk.top()]) {
+            ans[stk.top()] = a[i];
+            stk.pop();
+        }
+        stk.push(i);               // a[i] 自己也加入「等待隊伍」
+    }
+    for (int i = 0; i &lt; n; i++)
+        cout &lt;&lt; ans[i] &lt;&lt; " \n"[i == n - 1];   // 最後一個換行,其餘空格
+    return 0;
+}</code></pre>
+      <p>
+        那個 <code>" \n"[i == n - 1]</code> 是競賽愛用的小技巧:它是一個長度 2 的字串,
+        當 <code>i == n-1</code> 為真(值 1)時取到 <code>'\n'</code>,否則取到 <code>' '</code>。
+        效果就是「元素間印空格、最後印換行」。
+      </p>
+
+      <h3>複雜度:均攤分析的經典範例</h3>
+      <p>
+        乍看那個 <code>while</code> 迴圈藏在 <code>for</code> 裡,像是 $O(n^2)$?其實不是。
+        關鍵在於:<strong>每個索引最多被 push 一次、pop 一次</strong>。整個過程中 pop 的總次數,
+        絕不可能超過 push 的總次數 $n$。所以兩個迴圈合起來,總操作數是 $O(n)$——
+        這正是<a href="26-complexity.html">第 26 章</a>講的<strong>均攤分析(amortized analysis)</strong>的招牌例子。
+      </p>
+
+      <h3>應用:柱狀圖中的最大矩形</h3>
+      <p>
+        單調棧最漂亮的應用之一:給一排寬度都是 1、高度為 <code>h[i]</code> 的柱子,
+        求能在裡面框出的<strong>最大矩形面積</strong>(矩形底邊必須貼齊地面)。
+        這題在第 27 章「分治」也出現過,但單調棧能直接 $O(n)$ 解決。
+      </p>
+      <p>
+        核心想法:對每根柱子 $i$,我們想知道「以它的高度 <code>h[i]</code> 當矩形的高,最多能往左右延伸多寬」。
+        能延伸的範圍,就是左右兩側<strong>第一根比它矮的柱子</strong>之間。這又是「找下一個(上一個)更小元素」——
+        單調棧的拿手好戲。實作上,我們維護一個<strong>高度單調遞增</strong>的索引堆疊;當一根更矮的柱子到來,
+        就把比它高的柱子一一彈出,彈出的瞬間正好能算出「那根柱子當高」的最大矩形。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 680 280" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="30" y="26" font-size="14" font-weight="800" fill="#2f6f6a">h = [2, 1, 5, 6, 2, 3] ,最大矩形面積 = 10</text>
+  <!-- baseline -->
+  <line x1="60" y1="220" x2="620" y2="220" stroke="#8a929b" stroke-width="1.5"/>
+  <!-- bars: width 80 each, scale height x24 -->
+  <!-- h=2 -->
+  <rect x="70"  y="172" width="78" height="48"  fill="#e3efed" stroke="#2f6f6a"/>
+  <!-- h=1 -->
+  <rect x="150" y="196" width="78" height="24"  fill="#e3efed" stroke="#2f6f6a"/>
+  <!-- h=5 -->
+  <rect x="230" y="100" width="78" height="120" fill="#f6e7dd" stroke="#b4541f"/>
+  <!-- h=6 -->
+  <rect x="310" y="76"  width="78" height="144" fill="#f6e7dd" stroke="#b4541f"/>
+  <!-- h=2 -->
+  <rect x="390" y="172" width="78" height="48"  fill="#e3efed" stroke="#2f6f6a"/>
+  <!-- h=3 -->
+  <rect x="470" y="148" width="78" height="72"  fill="#e3efed" stroke="#2f6f6a"/>
+  <!-- highlighted max rectangle: bars index 2,3 height 5, width 2 (5*2=10) -->
+  <rect x="230" y="100" width="158" height="120" fill="#b4541f" fill-opacity="0.28" stroke="#b4541f" stroke-width="2.5" stroke-dasharray="6 3"/>
+  <text x="309" y="92" text-anchor="middle" font-size="13" font-weight="800" fill="#b4541f">高 5 × 寬 2 = 10</text>
+  <!-- labels -->
+  <text x="109" y="244" text-anchor="middle" font-size="12" fill="#4a5159">2</text>
+  <text x="189" y="244" text-anchor="middle" font-size="12" fill="#4a5159">1</text>
+  <text x="269" y="244" text-anchor="middle" font-size="12" fill="#4a5159">5</text>
+  <text x="349" y="244" text-anchor="middle" font-size="12" fill="#4a5159">6</text>
+  <text x="429" y="244" text-anchor="middle" font-size="12" fill="#4a5159">2</text>
+  <text x="509" y="244" text-anchor="middle" font-size="12" fill="#4a5159">3</text>
+  <text x="109" y="262" text-anchor="middle" font-size="11" fill="#8a929b">0</text>
+  <text x="189" y="262" text-anchor="middle" font-size="11" fill="#8a929b">1</text>
+  <text x="269" y="262" text-anchor="middle" font-size="11" fill="#8a929b">2</text>
+  <text x="349" y="262" text-anchor="middle" font-size="11" fill="#8a929b">3</text>
+  <text x="429" y="262" text-anchor="middle" font-size="11" fill="#8a929b">4</text>
+  <text x="509" y="262" text-anchor="middle" font-size="11" fill="#8a929b">5</text>
+</svg>
+        <figcaption>圖 61-2:柱狀圖最大矩形。以高度 5 的柱子(索引 2)當高,它能往右延伸到索引 3(高 6 ≥ 5),但左邊索引 1(高 1)擋住、右邊索引 4(高 2)擋住,寬度為 2,面積 $5\times2=10$,是全圖最大。</figcaption>
+      </div>
+
+      <pre><code class="language-cpp">#include &lt;bits/stdc++.h&gt;
+using namespace std;
+typedef long long LL;
+
+int main() {
+    ios::sync_with_stdio(false); cin.tie(nullptr);
+    int n; cin &gt;&gt; n;
+    vector&lt;int&gt; h(n);
+    for (int i = 0; i &lt; n; i++) cin &gt;&gt; h[i];
+
+    stack&lt;int&gt; stk;       // 存索引,對應高度單調遞增
+    LL best = 0;
+    for (int i = 0; i &lt;= n; i++) {
+        int cur = (i == n) ? 0 : h[i];   // 末端放一根高 0 的哨兵,逼出剩下所有矩形
+        // 來了一根更矮(或一樣)的柱子 → 把比它高的彈出並結算
+        while (!stk.empty() &amp;&amp; h[stk.top()] &gt;= cur) {
+            int height = h[stk.top()];
+            stk.pop();
+            int left = stk.empty() ? -1 : stk.top();  // 左邊第一根更矮的位置
+            LL width = i - left - 1;                   // 這根柱子能延伸的寬度
+            best = max(best, (LL)height * width);
+        }
+        stk.push(i);
+    }
+    cout &lt;&lt; best &lt;&lt; "\n";
+    return 0;
+}</code></pre>
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">辨識「該用單調棧」的訊號</span>
+          <p>看到「對每個元素,找它<strong>左/右</strong>第一個<strong>更大/更小</strong>的元素」,
+          或「以每個元素為某種極值,能延伸多遠」,八九不離十就是單調棧。
+          口訣:找「更大」用<strong>遞減</strong>棧、找「更小」用<strong>遞增</strong>棧。</p>
+        </div>
+      </div>
+
+      <h2>單調隊列:滑動視窗最大值的 $O(n)$ 神技</h2>
+
+      <h3>它解決什麼問題</h3>
+      <p>
+        經典題:給一個長度 $n$ 的陣列,和一個固定寬度 $k$ 的「視窗」。視窗從最左滑到最右,每滑一步,
+        請回報<strong>視窗內的最大值</strong>。這就是 <strong>滑動視窗最大值(Sliding Window Maximum)</strong>。
+      </p>
+      <p>
+        暴力解:每個視窗位置都重新掃 $k$ 個元素找最大,共 $O(nk)$,當 $n,k$ 都是 $2\times10^5$ 時直接爆炸。
+        我們要 $O(n)$。
+      </p>
+
+      <h3>原理:單調棧的「會過期」版本</h3>
+      <p>
+        和單調棧一樣的觀察:<strong>如果 $a[j] \le a[i]$ 而且 $j &lt; i$,那 $a[j]$ 一旦和 $a[i]$ 同時在視窗裡,
+        就永遠輪不到它當最大值</strong>——因為 $a[i]$ 更大、又更晚離開視窗。所以可以丟掉。
+      </p>
+      <p>
+        但這裡比單調棧多了一個麻煩:視窗會<strong>從左邊離開</strong>元素。最大值可能正好是即將離開視窗的那個,
+        我們得能從<strong>頭部</strong>移除過期元素。一個只能單端進出的堆疊辦不到——所以改用
+        <strong>雙端佇列(deque)</strong>:尾部負責「丟掉比新元素小的」(維持單調),頭部負責「丟掉過期的」。
+        維護完後,deque 的<strong>頭部</strong>永遠是當前視窗的最大值。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 680 290" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="mq-f" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8b5cf6"/></marker>
+    <marker id="mq-b" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#b4541f"/></marker>
+  </defs>
+  <text x="30" y="26" font-size="14" font-weight="800" fill="#2f6f6a">a = [1, 3, -1, -3, 5, 3] ,k = 3</text>
+  <!-- array -->
+  <g font-size="15">
+    <rect x="40"  y="42" width="56" height="42" rx="4" fill="#e3efed" stroke="#2f6f6a"/>
+    <rect x="96"  y="42" width="56" height="42" rx="4" fill="#cfe6e2" stroke="#2f6f6a" stroke-width="2"/>
+    <rect x="152" y="42" width="56" height="42" rx="4" fill="#cfe6e2" stroke="#2f6f6a" stroke-width="2"/>
+    <rect x="208" y="42" width="56" height="42" rx="4" fill="#cfe6e2" stroke="#2f6f6a" stroke-width="2"/>
+    <rect x="264" y="42" width="56" height="42" rx="4" fill="#e3efed" stroke="#2f6f6a"/>
+    <rect x="320" y="42" width="56" height="42" rx="4" fill="#e3efed" stroke="#2f6f6a"/>
+  </g>
+  <text x="68"  y="69" text-anchor="middle" fill="#1f2328">1</text>
+  <text x="124" y="69" text-anchor="middle" fill="#1f2328">3</text>
+  <text x="180" y="69" text-anchor="middle" fill="#1f2328">-1</text>
+  <text x="236" y="69" text-anchor="middle" fill="#1f2328">-3</text>
+  <text x="292" y="69" text-anchor="middle" fill="#1f2328">5</text>
+  <text x="348" y="69" text-anchor="middle" fill="#1f2328">3</text>
+  <text x="180" y="104" text-anchor="middle" font-size="11" fill="#2f6f6a">↑ 視窗 [1,3] 涵蓋索引 1~3,最大值 = 3</text>
+
+  <!-- deque -->
+  <text x="120" y="150" text-anchor="middle" font-size="13" font-weight="800" fill="#b4541f">deque(存索引,值由前到後遞減)</text>
+  <g font-size="13">
+    <rect x="120" y="165" width="96" height="34" rx="4" fill="#ece5ff" stroke="#8b5cf6" stroke-width="2"/>
+    <rect x="216" y="165" width="96" height="34" rx="4" fill="#f6e7dd" stroke="#b4541f"/>
+    <rect x="312" y="165" width="96" height="34" rx="4" fill="#f6e7dd" stroke="#b4541f"/>
+  </g>
+  <text x="168" y="187" text-anchor="middle" fill="#1f2328">idx 1 (3)</text>
+  <text x="264" y="187" text-anchor="middle" fill="#1f2328">idx 2 (-1)</text>
+  <text x="360" y="187" text-anchor="middle" fill="#1f2328">idx 3 (-3)</text>
+  <!-- front / back arrows -->
+  <line x1="168" y1="225" x2="168" y2="203" stroke="#8b5cf6" stroke-width="2" marker-end="url(#mq-f)"/>
+  <text x="168" y="242" text-anchor="middle" font-size="11" fill="#8b5cf6">front = 最大值</text>
+  <line x1="360" y1="225" x2="360" y2="203" stroke="#b4541f" stroke-width="2" marker-end="url(#mq-b)"/>
+  <text x="360" y="242" text-anchor="middle" font-size="11" fill="#b4541f">back = 新元素進出口</text>
+  <text x="120" y="272" font-size="11" fill="#8a929b">下一步 5 進來 → 從 back 把 -3、-1、3 全彈掉(都比 5 小),deque 只剩 idx 4(值 5)</text>
+</svg>
+        <figcaption>圖 61-3:單調隊列維護滑動視窗最大值。deque 存索引,對應值由前到後嚴格遞減。頭部(front)永遠是當前視窗最大值;新元素從尾部(back)進來時,把所有比它小的彈掉;頭部若超出視窗左界就移除。</figcaption>
+      </div>
+
+      <h3>完整 C++ 實作</h3>
+      <pre><code class="language-cpp">#include &lt;bits/stdc++.h&gt;
+using namespace std;
+
+int main() {
+    ios::sync_with_stdio(false); cin.tie(nullptr);
+    int n, k; cin &gt;&gt; n &gt;&gt; k;
+    vector&lt;int&gt; a(n);
+    for (int i = 0; i &lt; n; i++) cin &gt;&gt; a[i];
+
+    deque&lt;int&gt; dq;          // 存索引,對應值由前到後單調遞減
+    for (int i = 0; i &lt; n; i++) {
+        // 1. 頭部過期:索引 ≤ i-k 表示已滑出視窗左界
+        if (!dq.empty() &amp;&amp; dq.front() &lt;= i - k) dq.pop_front();
+        // 2. 尾部清理:比新元素 a[i] 小的都沒用了,從尾部彈掉
+        while (!dq.empty() &amp;&amp; a[dq.back()] &lt;= a[i]) dq.pop_back();
+        // 3. 新元素入隊(從尾部)
+        dq.push_back(i);
+        // 4. 視窗成形後(i ≥ k-1),頭部就是這個視窗的最大值
+        if (i &gt;= k - 1) cout &lt;&lt; a[dq.front()] &lt;&lt; " ";
+    }
+    cout &lt;&lt; "\n";
+    return 0;
+}</code></pre>
+
+      <h3>複雜度與「單調棧 vs 單調隊列」</h3>
+      <p>
+        和單調棧一樣,每個索引最多進 deque 一次、出一次,總共 $O(n)$。
+        兩者是一對孿生兄弟,差別只在「資料怎麼離場」:
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th></th><th>單調棧 (monotonic stack)</th><th>單調隊列 (monotonic queue)</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>底層容器</td><td><code>stack</code>(只動一端)</td><td><code>deque</code>(兩端都動)</td></tr>
+          <tr><td>誰會被移除</td><td>只有尾端(被新元素「打敗」者)</td><td>尾端(被打敗)+ 頭端(過期)</td></tr>
+          <tr><td>典型問題</td><td>下一個更大/更小元素、最大矩形</td><td>固定/滑動視窗的最值、優化 DP 轉移</td></tr>
+          <tr><td>複雜度</td><td>$O(n)$</td><td>$O(n)$</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">單調隊列也能優化 DP</span>
+          <p>在<a href="62-competitive-paradigms.html">第 62 章</a>會看到,許多形如
+          $dp[i] = \min\{dp[j] : i-k \le j &lt; i\} + c[i]$ 的轉移式,本質就是「在一個滑動視窗裡求最小值」,
+          可以用單調隊列把 $O(nk)$ 的 DP 壓到 $O(n)$。這是單調隊列在競賽中最值錢的延伸用途。
+          若不想自己維護單調性,用 <code>multiset</code> 也能做到 $O(n\log n)$,程式更短但較慢。</p>
+        </div>
+      </div>
+
+      <h2>稀疏表:$O(1)$ 回答「這段區間的最小值是多少」</h2>
+
+      <h3>它解決什麼問題</h3>
+      <p>
+        <strong>區間最值查詢(Range Minimum/Maximum Query, RMQ)</strong>:給定一個<strong>不會改變</strong>的陣列,
+        要回答大量「區間 $[l, r]$ 裡的最小值是多少?」。如果每次查詢都掃一遍,單次 $O(n)$,$q$ 筆就是 $O(nq)$,太慢。
+      </p>
+      <p>
+        當資料<strong>靜態(不修改)</strong>、查詢的是<strong>可重疊運算</strong>(最大、最小、gcd、按位 AND/OR 這種「算兩次也沒差」的運算)時,
+        有一個極漂亮的工具:<strong>稀疏表(sparse table)</strong>。它 $O(n\log n)$ 預處理後,每筆查詢只要 $O(1)$。
+      </p>
+
+      <h3>原理:倍增 + 兩塊重疊覆蓋</h3>
+      <p>
+        核心是<strong>倍增(binary lifting / doubling)</strong>思想。我們預先算好所有「長度是 2 的次方」的區間答案:
+        令 <code>st[j][i]</code> = 從 $i$ 開始、長度 $2^j$ 的區間(即 $[i,\, i+2^j-1]$)的最小值。
+        這張表能遞推地建出來,因為一個長度 $2^j$ 的區間,恰好等於<strong>兩個長度 $2^{j-1}$ 的區間拼起來</strong>:
+      </p>
+      <p style="text-align:center">
+        $$\text{st}[j][i] = \min\Big(\text{st}[j-1][i],\ \ \text{st}[j-1][\,i + 2^{\,j-1}\,]\Big)$$
+      </p>
+      <p>
+        查詢 $[l, r]$ 時,設區間長度為 $\text{len} = r-l+1$,取 $k = \lfloor \log_2 \text{len} \rfloor$。
+        一個長度 $2^k$ 的區間可能蓋不滿 $[l,r]$,但<strong>兩個</strong>長度 $2^k$ 的區間——一個從 $l$ 往右、一個從 $r$ 往左——
+        一定能<strong>完全覆蓋</strong> $[l,r]$(中間重疊沒關係,因為求 min 重複算不影響答案):
+      </p>
+      <p style="text-align:center">
+        $$\min\Big(\text{st}[k][l],\ \ \text{st}[k][\,r - 2^k + 1\,]\Big)$$
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 680 300" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="30" y="24" font-size="14" font-weight="800" fill="#2f6f6a">a = [5, 2, 7, 4, 8, 1, 6, 3] ,查詢 min(a[1..6])</text>
+  <!-- array index row -->
+  <g font-size="14">
+    <rect x="60"  y="40" width="64" height="40" rx="4" fill="#e3efed" stroke="#2f6f6a"/>
+    <rect x="124" y="40" width="64" height="40" rx="4" fill="#e3efed" stroke="#2f6f6a"/>
+    <rect x="188" y="40" width="64" height="40" rx="4" fill="#e3efed" stroke="#2f6f6a"/>
+    <rect x="252" y="40" width="64" height="40" rx="4" fill="#e3efed" stroke="#2f6f6a"/>
+    <rect x="316" y="40" width="64" height="40" rx="4" fill="#e3efed" stroke="#2f6f6a"/>
+    <rect x="380" y="40" width="64" height="40" rx="4" fill="#e3efed" stroke="#2f6f6a"/>
+    <rect x="444" y="40" width="64" height="40" rx="4" fill="#e3efed" stroke="#2f6f6a"/>
+    <rect x="508" y="40" width="64" height="40" rx="4" fill="#e3efed" stroke="#2f6f6a"/>
+  </g>
+  <text x="92"  y="65" text-anchor="middle" fill="#1f2328">5</text>
+  <text x="156" y="65" text-anchor="middle" fill="#1f2328">2</text>
+  <text x="220" y="65" text-anchor="middle" fill="#1f2328">7</text>
+  <text x="284" y="65" text-anchor="middle" fill="#1f2328">4</text>
+  <text x="348" y="65" text-anchor="middle" fill="#1f2328">8</text>
+  <text x="412" y="65" text-anchor="middle" fill="#1f2328">1</text>
+  <text x="476" y="65" text-anchor="middle" fill="#1f2328">6</text>
+  <text x="540" y="65" text-anchor="middle" fill="#1f2328">3</text>
+  <g font-size="11" fill="#8a929b">
+    <text x="92"  y="96" text-anchor="middle">0</text>
+    <text x="156" y="96" text-anchor="middle">1</text>
+    <text x="220" y="96" text-anchor="middle">2</text>
+    <text x="284" y="96" text-anchor="middle">3</text>
+    <text x="348" y="96" text-anchor="middle">4</text>
+    <text x="412" y="96" text-anchor="middle">5</text>
+    <text x="476" y="96" text-anchor="middle">6</text>
+    <text x="540" y="96" text-anchor="middle">7</text>
+  </g>
+  <!-- query range [1,6] len=6, k=2 (length 4) -->
+  <text x="30" y="140" font-size="13" fill="#4a5159">len = 6,k = ⌊log₂6⌋ = 2,所以用兩塊長度 2² = 4 的區間:</text>
+  <!-- block 1: st[2][1] covers [1,4] -->
+  <rect x="124" y="155" width="256" height="34" rx="6" fill="#b4541f" fill-opacity="0.18" stroke="#b4541f" stroke-width="2"/>
+  <text x="252" y="177" text-anchor="middle" font-size="12" fill="#b4541f">st[2][1] = min(a[1..4]) = 2</text>
+  <!-- block 2: st[2][3] covers [3,6] -->
+  <rect x="252" y="200" width="256" height="34" rx="6" fill="#8b5cf6" fill-opacity="0.18" stroke="#8b5cf6" stroke-width="2"/>
+  <text x="380" y="222" text-anchor="middle" font-size="12" fill="#8b5cf6">st[2][3] = min(a[3..6]) = 1</text>
+  <!-- overlap note -->
+  <text x="316" y="256" text-anchor="middle" font-size="11" fill="#8a929b">兩塊在 [3,4] 重疊 → 沒關係,min 重複算不影響</text>
+  <text x="30" y="284" font-size="13" font-weight="800" fill="#2f6f6a">答案 = min(2, 1) = 1 ,只算了一次 min,O(1)</text>
+</svg>
+        <figcaption>圖 61-4:稀疏表查詢 $[1,6]$。長度 6 不是 2 的次方,但用兩塊長度 4 的預存區間(一塊靠左、一塊靠右)就能完全覆蓋,中間重疊不影響 min 的結果。答案一步算出。</figcaption>
+      </div>
+
+      <h3>完整 C++ 實作</h3>
+      <pre><code class="language-cpp">#include &lt;bits/stdc++.h&gt;
+using namespace std;
+const int MAXN = 100005, LOG = 17;   // 2^17 &gt; 1e5
+
+int st[LOG][MAXN];   // st[j][i] = a[i .. i+2^j-1] 的最小值
+int lg[MAXN];        // 預先算好的 floor(log2)
+
+int main() {
+    ios::sync_with_stdio(false); cin.tie(nullptr);
+    int n, q; cin &gt;&gt; n &gt;&gt; q;
+    for (int i = 0; i &lt; n; i++) cin &gt;&gt; st[0][i];   // 長度 2^0=1 的區間就是自己
+
+    // 預處理 log:lg[x] = floor(log2(x))
+    lg[1] = 0;
+    for (int i = 2; i &lt;= n; i++) lg[i] = lg[i / 2] + 1;
+
+    // 倍增建表:長度 2^j = 兩個長度 2^(j-1) 拼起來
+    for (int j = 1; (1 &lt;&lt; j) &lt;= n; j++)
+        for (int i = 0; i + (1 &lt;&lt; j) &lt;= n; i++)
+            st[j][i] = min(st[j-1][i], st[j-1][i + (1 &lt;&lt; (j-1))]);
+
+    while (q--) {
+        int l, r; cin &gt;&gt; l &gt;&gt; r;        // 查詢 [l, r] 最小值(0-indexed)
+        int k = lg[r - l + 1];
+        cout &lt;&lt; min(st[k][l], st[k][r - (1 &lt;&lt; k) + 1]) &lt;&lt; "\n";
+    }
+    return 0;
+}</code></pre>
+
+      <h3>複雜度與限制</h3>
+      <ul>
+        <li><strong>預處理</strong>:表有 $\log n$ 列、每列 $n$ 格,$O(n\log n)$ 時間與空間。</li>
+        <li><strong>查詢</strong>:$O(1)$——只取兩格、算一次 min。這是稀疏表無人能敵的賣點。</li>
+        <li><strong>致命限制</strong>:<strong>不支援修改</strong>!一旦陣列有任何一格變動,整張表都可能要重建。
+        而且只適用於「<strong>可重疊</strong>」的運算(min、max、gcd、AND、OR)。
+        像「區間和」這種重複算會出錯的運算,稀疏表就不行——那是下面 BIT 與線段樹的舞台。</li>
+      </ul>
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">稀疏表只給「靜態」資料用</span>
+          <p>判準很清楚:資料<strong>建好後不再改</strong>、查詢的是<strong>區間最值(或 gcd)</strong>——選稀疏表,$O(1)$ 查到爽。
+          只要題目出現「修改某個元素」,就必須改用 BIT 或線段樹。別在會修改的題目上硬用稀疏表。</p>
+        </div>
+      </div>
+
+      <h2>樹狀數組 / BIT:用一個位元技巧維護前綴和</h2>
+
+      <h3>它解決什麼問題</h3>
+      <p>
+        回想<a href="60-competitive-techniques.html">第 60 章</a>的<strong>前綴和</strong>:它能 $O(1)$ 回答區間和,
+        但有個大弱點——<strong>一旦修改某個元素,後面所有前綴和都要重算,$O(n)$</strong>。
+        如果題目同時要「單點修改」和「區間求和」,而且兩者都很多,前綴和就跪了。
+      </p>
+      <p>
+        <strong>樹狀數組(Binary Indexed Tree, BIT;又稱 Fenwick tree、芬威克樹)</strong>正是為此而生:
+        它讓<strong>單點修改</strong>與<strong>前綴和查詢</strong>都變成 $O(\log n)$。程式短到只有幾行,
+        是競賽中 C/P 值最高的資料結構,沒有之一。
+      </p>
+
+      <h3>原理:lowbit 與「每格管轄一段」</h3>
+      <p>
+        BIT 用一個和原陣列一樣大的陣列 <code>bit[]</code>(<strong>1-indexed</strong>,從 1 開始)。
+        魔法全在一個運算:<strong>lowbit</strong>。
+      </p>
+      <p style="text-align:center">$$\text{lowbit}(x) = x \mathbin{\&amp;} (-x)$$</p>
+      <p>
+        它取出 $x$ 在二進位下<strong>最低位的那個 1 所代表的值</strong>。例如 $6 = (110)_2$,最低位的 1 在第 1 位,
+        所以 $\text{lowbit}(6) = 2$;$12 = (1100)_2$,$\text{lowbit}(12) = 4$。
+        為什麼 <code>x &amp; (-x)</code> 行得通?因為電腦用<strong>二補數(two's complement)</strong>表示負數,
+        $-x$ 等於「把 $x$ 每個位元反轉再加 1」,結果恰好讓「最低位的 1」對齊、其餘位元歸零(這呼應<a href="20-combinational-sequential.html">第 20 章</a>的二補數表示)。
+      </p>
+      <p>
+        BIT 的精髓:<strong><code>bit[i]</code> 負責管轄 $a[\,i-\text{lowbit}(i)+1\,]$ 到 $a[i]$ 這一段的和</strong>,
+        長度恰好是 $\text{lowbit}(i)$。畫出來就懂了:
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 680 320" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="30" y="24" font-size="14" font-weight="800" fill="#2f6f6a">BIT 的管轄範圍(n = 8):每格 bit[i] 蓋住長度 lowbit(i) 的一段</text>
+  <!-- index labels at top -->
+  <g font-size="13" fill="#1f2328">
+    <text x="100" y="58" text-anchor="middle">1</text>
+    <text x="168" y="58" text-anchor="middle">2</text>
+    <text x="236" y="58" text-anchor="middle">3</text>
+    <text x="304" y="58" text-anchor="middle">4</text>
+    <text x="372" y="58" text-anchor="middle">5</text>
+    <text x="440" y="58" text-anchor="middle">6</text>
+    <text x="508" y="58" text-anchor="middle">7</text>
+    <text x="576" y="58" text-anchor="middle">8</text>
+  </g>
+  <text x="40" y="58" font-size="11" fill="#8a929b">索引</text>
+  <!-- a cells -->
+  <g>
+    <rect x="74"  y="66" width="52" height="30" rx="3" fill="#e3efed" stroke="#2f6f6a"/>
+    <rect x="142" y="66" width="52" height="30" rx="3" fill="#e3efed" stroke="#2f6f6a"/>
+    <rect x="210" y="66" width="52" height="30" rx="3" fill="#e3efed" stroke="#2f6f6a"/>
+    <rect x="278" y="66" width="52" height="30" rx="3" fill="#e3efed" stroke="#2f6f6a"/>
+    <rect x="346" y="66" width="52" height="30" rx="3" fill="#e3efed" stroke="#2f6f6a"/>
+    <rect x="414" y="66" width="52" height="30" rx="3" fill="#e3efed" stroke="#2f6f6a"/>
+    <rect x="482" y="66" width="52" height="30" rx="3" fill="#e3efed" stroke="#2f6f6a"/>
+    <rect x="550" y="66" width="52" height="30" rx="3" fill="#e3efed" stroke="#2f6f6a"/>
+  </g>
+  <!-- coverage bars: bit[i] covers (i-lowbit(i), i] -->
+  <!-- bit[1]: [1,1] -->
+  <rect x="74"  y="106" width="52"  height="22" rx="4" fill="#f6e7dd" stroke="#b4541f"/>
+  <text x="100" y="122" text-anchor="middle" font-size="11" fill="#b4541f">bit[1]</text>
+  <!-- bit[2]: [1,2] -->
+  <rect x="74"  y="132" width="120" height="22" rx="4" fill="#f6e7dd" stroke="#b4541f"/>
+  <text x="134" y="148" text-anchor="middle" font-size="11" fill="#b4541f">bit[2] (lowbit=2)</text>
+  <!-- bit[3]: [3,3] -->
+  <rect x="210" y="106" width="52"  height="22" rx="4" fill="#f6e7dd" stroke="#b4541f"/>
+  <text x="236" y="122" text-anchor="middle" font-size="11" fill="#b4541f">bit[3]</text>
+  <!-- bit[4]: [1,4] -->
+  <rect x="74"  y="158" width="256" height="22" rx="4" fill="#ece5ff" stroke="#8b5cf6"/>
+  <text x="202" y="174" text-anchor="middle" font-size="11" fill="#8b5cf6">bit[4] (lowbit=4)</text>
+  <!-- bit[5]: [5,5] -->
+  <rect x="346" y="106" width="52"  height="22" rx="4" fill="#f6e7dd" stroke="#b4541f"/>
+  <text x="372" y="122" text-anchor="middle" font-size="11" fill="#b4541f">bit[5]</text>
+  <!-- bit[6]: [5,6] -->
+  <rect x="346" y="132" width="120" height="22" rx="4" fill="#f6e7dd" stroke="#b4541f"/>
+  <text x="406" y="148" text-anchor="middle" font-size="11" fill="#b4541f">bit[6] (lowbit=2)</text>
+  <!-- bit[7]: [7,7] -->
+  <rect x="482" y="106" width="52"  height="22" rx="4" fill="#f6e7dd" stroke="#b4541f"/>
+  <text x="508" y="122" text-anchor="middle" font-size="11" fill="#b4541f">bit[7]</text>
+  <!-- bit[8]: [1,8] -->
+  <rect x="74"  y="184" width="528" height="22" rx="4" fill="#cfe6e2" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="338" y="200" text-anchor="middle" font-size="11" fill="#1f6b64">bit[8] (lowbit=8,管整段)</text>
+
+  <!-- query example -->
+  <text x="30" y="240" font-size="13" font-weight="800" fill="#2f6f6a">查詢前綴和 query(7) = a[1..7]:從 7 一路減 lowbit</text>
+  <text x="40" y="262" font-size="12" fill="#4a5159">7 → bit[7] (蓋 [7,7]) ,7 - lowbit(7)=7-1 = 6</text>
+  <text x="40" y="282" font-size="12" fill="#4a5159">6 → bit[6] (蓋 [5,6]) ,6 - lowbit(6)=6-2 = 4</text>
+  <text x="40" y="302" font-size="12" fill="#4a5159">4 → bit[4] (蓋 [1,4]) ,4 - lowbit(4)=4-4 = 0 → 停。三格相加 = a[1..7] ✓</text>
+</svg>
+        <figcaption>圖 61-5:BIT 的管轄結構。每個 <code>bit[i]</code> 管轄結尾在 $i$、長度為 $\text{lowbit}(i)$ 的一段。查詢前綴和 $a[1..7]$ 時,從 7 不斷減去 lowbit(7→6→4→0),把 bit[7]+bit[6]+bit[4] 三段(剛好不重不漏地拼出 $[1,7]$)相加。減 lowbit 的次數 = 二進位中 1 的個數 ≤ $\log n$。</figcaption>
+      </div>
+
+      <h3>兩個核心操作:沿著 lowbit 跳</h3>
+      <ul>
+        <li><strong>查詢前綴和 <code>query(i)</code></strong>:要算 $a[1..i]$,從 $i$ 出發,
+        每次加上 <code>bit[i]</code>,再令 <code>i -= lowbit(i)</code>,直到 $i=0$。
+        這條路徑把 $[1,i]$ 切成 $O(\log n)$ 段不重疊的 BIT 區間。</li>
+        <li><strong>單點修改 <code>update(i, delta)</code></strong>:把 $a[i]$ 加上 <code>delta</code>,
+        則所有「管轄範圍涵蓋 $i$」的格子都要跟著加。做法相反:從 $i$ 出發,每次 <code>bit[i] += delta</code>,
+        再令 <code>i += lowbit(i)</code>,直到超出 $n$。</li>
+      </ul>
+
+      <h3>完整 C++ 實作</h3>
+      <pre><code class="language-cpp">#include &lt;bits/stdc++.h&gt;
+using namespace std;
+typedef long long LL;
+const int MAXN = 100005;
+
+LL bit[MAXN];   // 1-indexed!
+int n;
+
+int lowbit(int x) { return x &amp; (-x); }   // 取最低位的 1
+
+void update(int i, LL delta) {           // a[i] += delta
+    for (; i &lt;= n; i += lowbit(i))
+        bit[i] += delta;
+}
+
+LL query(int i) {                        // 回傳 a[1..i] 的前綴和
+    LL sum = 0;
+    for (; i &gt; 0; i -= lowbit(i))
+        sum += bit[i];
+    return sum;
+}
+
+LL rangeSum(int l, int r) {              // a[l..r] = 前綴(r) - 前綴(l-1)
+    return query(r) - query(l - 1);
+}
+
+int main() {
+    ios::sync_with_stdio(false); cin.tie(nullptr);
+    n = 8;
+    int a[9] = {0, 3, 2, 7, 5, 1, 4, 6, 8};   // a[1..8],a[0] 不用
+    for (int i = 1; i &lt;= n; i++) update(i, a[i]);   // 逐一建表 O(n log n)
+
+    cout &lt;&lt; rangeSum(2, 5) &lt;&lt; "\n";   // a[2..5] = 2+7+5+1 = 15
+    update(4, 10);                    // a[4] 從 5 變 15(+10)
+    cout &lt;&lt; rangeSum(2, 5) &lt;&lt; "\n";   // 15 + 10 = 25
+    return 0;
+}</code></pre>
+      <p>
+        短短十幾行,你就有了一個能在 $O(\log n)$ 內同時「改」和「查」的前綴和。
+        體會 <code>update</code> 和 <code>query</code> 走的方向<strong>恰好相反</strong>(一個 <code>+=</code>、一個 <code>-=</code>),
+        這對稱性正是 lowbit 結構的優雅之處。
+      </p>
+
+      <h3>應用:配合離散化求逆序對</h3>
+      <p>
+        <a href="27-divide-and-conquer.html">第 27 章</a>用「魔改合併排序」$O(n\log n)$ 數過<strong>逆序對(inversion)</strong>
+        ——位置在前、值卻更大的數對 $(i,j)$,$i&lt;j$ 且 $a[i]&gt;a[j]$。BIT 提供了另一條同樣 $O(n\log n)$、且更容易推廣的路:
+      </p>
+      <p>
+        想法:從左到右掃陣列,用 BIT 把「<strong>每個值出現了沒</strong>」記在對應位置上。
+        處理到 $a[i]$ 時,「前面已出現、且比 $a[i]$ 大的數的個數」就是以 $i$ 為右端點新增的逆序對數。
+        這個數 = (已插入總數 $i$) − (已插入且 ≤ $a[i]$ 的個數) = <code>i - query(rank(a[i]))</code>。
+      </p>
+      <p>
+        但 $a[i]$ 的值域可能很大(例如到 $10^9$),BIT 開不了那麼大的陣列。解法是
+        <strong>離散化(discretization)</strong>:把所有出現過的值<strong>排序去重</strong>,
+        用它們的<strong>排名</strong>(第幾小)取代原值。這樣值域就壓縮到 $1 \sim n$,BIT 就裝得下了。
+        (離散化是第 60 章的基本功,這裡正好派上用場。)
+      </p>
+      <pre><code class="language-cpp">#include &lt;bits/stdc++.h&gt;
+using namespace std;
+typedef long long LL;
+
+int n;
+LL bit[200005];
+int lowbit(int x) { return x &amp; (-x); }
+void update(int i, LL v) { for (; i &lt;= n; i += lowbit(i)) bit[i] += v; }
+LL query(int i) { LL s = 0; for (; i &gt; 0; i -= lowbit(i)) s += bit[i]; return s; }
+
+int main() {
+    ios::sync_with_stdio(false); cin.tie(nullptr);
+    cin &gt;&gt; n;
+    vector&lt;int&gt; a(n);
+    for (int i = 0; i &lt; n; i++) cin &gt;&gt; a[i];
+
+    // 離散化:排序去重,再用 lower_bound 查每個值的排名(1-indexed)
+    vector&lt;int&gt; srt(a);
+    sort(srt.begin(), srt.end());
+    srt.erase(unique(srt.begin(), srt.end()), srt.end());
+    auto rankOf = [&amp;](int x) {
+        return int(lower_bound(srt.begin(), srt.end(), x) - srt.begin()) + 1;
+    };
+
+    LL inv = 0;
+    for (int i = 0; i &lt; n; i++) {
+        int r = rankOf(a[i]);
+        inv += i - query(r);   // 前面已插入、且比 a[i] 大的個數
+        update(r, 1);          // 把 a[i] 記進 BIT
+    }
+    cout &lt;&lt; inv &lt;&lt; "\n";
+    return 0;
+}</code></pre>
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">BIT 的變奏</span>
+          <p>BIT 不只能做「單點改 + 前綴和」。配合<strong>差分</strong>(第 60 章),它還能做「區間加值 + 單點查詢」;
+          用兩個 BIT 甚至能做「區間加值 + 區間求和」。它也能維護前綴最大值(但不能改小)。
+          總之,只要操作能拆成「沿 lowbit 跳」,BIT 通常都是最短最快的選擇。</p>
+        </div>
+      </div>
+
+      <h2>線段樹:區間查詢與區間修改的萬用瑞士刀(重頭戲)</h2>
+
+      <h3>它解決什麼問題</h3>
+      <p>
+        BIT 很香,但它擅長的是「前綴和」這類問題。當題目要的是更刁鑽的組合——
+        <strong>區間求和 + 區間最大值 + 區間修改</strong>,甚至「把一整段區間都加上某個值」「把一整段都改成某個值」——
+        BIT 就力不從心了。這時候登場的是競賽資料結構的王者:<strong>線段樹(segment tree)</strong>。
+      </p>
+      <p>
+        線段樹幾乎能維護任何「<strong>可以由左右兩半合併而來</strong>」的區間資訊(和、最大、最小、gcd、最大子段和……),
+        並支援單點修改與(配合懶惰標記的)區間修改,全部 $O(\log n)$。它比 BIT 長、比 BIT 慢一點,但<strong>萬用</strong>。
+      </p>
+
+      <h3>原理:把區間遞迴對半切成一棵樹</h3>
+      <p>
+        線段樹是一棵二元樹。<strong>根</strong>代表整個區間 $[0, n-1]$;每個節點代表一段區間 $[lo, hi]$,
+        它的兩個小孩各代表<strong>左半 $[lo, mid]$ 與右半 $[mid+1, hi]$</strong>;一路切到<strong>葉節點</strong>,
+        每片葉子代表單一個元素。每個節點存的,是「它所代表那段區間的答案」(這裡以區間和為例)。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 680 330" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="30" y="22" font-size="14" font-weight="800" fill="#2f6f6a">區間和線段樹:a = [2, 1, 4, 3](每個節點存「該段的和」)</text>
+  <!-- edges -->
+  <g stroke="#8a929b" stroke-width="1.8">
+    <line x1="340" y1="58" x2="190" y2="118"/>
+    <line x1="340" y1="58" x2="490" y2="118"/>
+    <line x1="190" y1="140" x2="110" y2="200"/>
+    <line x1="190" y1="140" x2="270" y2="200"/>
+    <line x1="490" y1="140" x2="410" y2="200"/>
+    <line x1="490" y1="140" x2="570" y2="200"/>
+  </g>
+  <!-- root [0,3] sum=10 -->
+  <rect x="280" y="36" width="120" height="44" rx="8" fill="#cfe6e2" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="340" y="55" text-anchor="middle" font-size="12" fill="#1f6b64">[0,3]</text>
+  <text x="340" y="72" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">和 = 10</text>
+  <!-- [0,1] sum=3 -->
+  <rect x="132" y="118" width="116" height="44" rx="8" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="190" y="137" text-anchor="middle" font-size="12" fill="#2f6f6a">[0,1]</text>
+  <text x="190" y="154" text-anchor="middle" font-size="13" fill="#1f2328">和 = 3</text>
+  <!-- [2,3] sum=7 -->
+  <rect x="432" y="118" width="116" height="44" rx="8" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="490" y="137" text-anchor="middle" font-size="12" fill="#2f6f6a">[2,3]</text>
+  <text x="490" y="154" text-anchor="middle" font-size="13" fill="#1f2328">和 = 7</text>
+  <!-- leaves -->
+  <rect x="62"  y="200" width="96" height="44" rx="8" fill="#f6e7dd" stroke="#b4541f"/>
+  <text x="110" y="219" text-anchor="middle" font-size="12" fill="#b4541f">[0,0]</text>
+  <text x="110" y="236" text-anchor="middle" font-size="13" fill="#1f2328">2</text>
+  <rect x="222" y="200" width="96" height="44" rx="8" fill="#f6e7dd" stroke="#b4541f"/>
+  <text x="270" y="219" text-anchor="middle" font-size="12" fill="#b4541f">[1,1]</text>
+  <text x="270" y="236" text-anchor="middle" font-size="13" fill="#1f2328">1</text>
+  <rect x="362" y="200" width="96" height="44" rx="8" fill="#f6e7dd" stroke="#b4541f"/>
+  <text x="410" y="219" text-anchor="middle" font-size="12" fill="#b4541f">[2,2]</text>
+  <text x="410" y="236" text-anchor="middle" font-size="13" fill="#1f2328">4</text>
+  <rect x="522" y="200" width="96" height="44" rx="8" fill="#f6e7dd" stroke="#b4541f"/>
+  <text x="570" y="219" text-anchor="middle" font-size="12" fill="#b4541f">[3,3]</text>
+  <text x="570" y="236" text-anchor="middle" font-size="13" fill="#1f2328">3</text>
+  <!-- note -->
+  <text x="340" y="280" text-anchor="middle" font-size="12" fill="#8a929b">父節點的和 = 左小孩的和 + 右小孩的和(由下往上合併)</text>
+  <text x="340" y="304" text-anchor="middle" font-size="12" fill="#4a5159">查詢 [1,2]:拆成 [1,1]+[2,2] = 1 + 4 = 5,只走 O(log n) 個節點</text>
+</svg>
+        <figcaption>圖 61-6:區間和線段樹。每個節點存它那段區間的和,父 = 左 + 右。樹高約 $\log n$,所以建樹 $O(n)$、查詢與修改 $O(\log n)$。查詢 $[1,2]$ 時,演算法會把它拆成樹上幾個「完全落在 $[1,2]$ 內」的節點(這裡是 $[1,1]$ 與 $[2,2]$)再合併。</figcaption>
+      </div>
+
+      <h3>三個遞迴:建樹、查詢、單點修改</h3>
+      <p>
+        實作上,我們用一個陣列 <code>seg[]</code> 存整棵樹(開 <strong>4 倍</strong>空間最保險),
+        節點編號 1 是根,節點 <code>node</code> 的左小孩是 <code>node*2</code>、右小孩是 <code>node*2+1</code>。
+        三個操作都是漂亮的遞迴:
+      </p>
+      <ul>
+        <li><strong>建樹 build</strong>:葉節點直接放元素值;內部節點遞迴建好左右子樹後,合併兩半。</li>
+        <li><strong>查詢 query([ql,qr])</strong>:對每個節點分三種情況——
+        <em>完全不相交</em>(回傳 0)、<em>完全被包含</em>(直接回傳這個節點的答案,不再下探)、
+        <em>部分重疊</em>(往左右兩個小孩遞迴再合併)。</li>
+        <li><strong>單點修改 update</strong>:往下找到那片葉子改值,回程時順手更新沿路每個祖先的和。</li>
+      </ul>
+
+      <pre><code class="language-cpp">#include &lt;bits/stdc++.h&gt;
+using namespace std;
+typedef long long LL;
+const int MAXN = 100005;
+
+LL seg[4 * MAXN];   // 線段樹陣列,開 4 倍空間
+int a[MAXN];
+
+// 在 node(代表區間 [lo,hi])上建樹
+void build(int node, int lo, int hi) {
+    if (lo == hi) { seg[node] = a[lo]; return; }   // 葉節點
+    int mid = (lo + hi) / 2;
+    build(node * 2,     lo,      mid);
+    build(node * 2 + 1, mid + 1, hi);
+    seg[node] = seg[node * 2] + seg[node * 2 + 1]; // 合併:父 = 左 + 右
+}
+
+// 把 a[pos] 改成 val
+void update(int node, int lo, int hi, int pos, LL val) {
+    if (lo == hi) { seg[node] = val; return; }
+    int mid = (lo + hi) / 2;
+    if (pos &lt;= mid) update(node * 2,     lo,      mid, pos, val);
+    else            update(node * 2 + 1, mid + 1, hi,  pos, val);
+    seg[node] = seg[node * 2] + seg[node * 2 + 1]; // 回程更新祖先
+}
+
+// 查詢 [ql, qr] 的區間和
+LL query(int node, int lo, int hi, int ql, int qr) {
+    if (qr &lt; lo || hi &lt; ql) return 0;              // 完全不相交
+    if (ql &lt;= lo &amp;&amp; hi &lt;= qr) return seg[node];     // 完全被包含
+    int mid = (lo + hi) / 2;                       // 部分重疊 → 拆兩半
+    return query(node * 2,     lo,      mid, ql, qr)
+         + query(node * 2 + 1, mid + 1, hi,  ql, qr);
+}
+
+int main() {
+    ios::sync_with_stdio(false); cin.tie(nullptr);
+    int n = 4;
+    int init[4] = {2, 1, 4, 3};
+    for (int i = 0; i &lt; n; i++) a[i] = init[i];
+
+    build(1, 0, n - 1);
+    cout &lt;&lt; query(1, 0, n - 1, 1, 2) &lt;&lt; "\n";   // a[1..2] = 1+4 = 5
+    update(1, 0, n - 1, 2, 10);                 // a[2] 從 4 改成 10
+    cout &lt;&lt; query(1, 0, n - 1, 1, 2) &lt;&lt; "\n";   // 1+10 = 11
+    return 0;
+}</code></pre>
+
+      <h3>懶惰標記:讓「區間加值」也快起來</h3>
+      <p>
+        如果題目要「把 $[l,r]$ 這一整段每個元素都加上 $v$」,逐一單點修改是 $O(n\log n)$,太慢。
+        線段樹的殺手鐧是<strong>懶惰標記(lazy propagation)</strong>:當一段區間<strong>完全落在</strong>修改範圍內時,
+        我們<strong>不</strong>真的下去改每個葉子,而是在這個節點上<strong>記一張欠條</strong>(lazy 標記),
+        說「我和我底下所有元素,都欠加 $v$」,並立刻更新這個節點的總和。
+        只有當之後某次查詢或修改<strong>需要往下走</strong>時,才把欠條<strong>下推(push down)</strong>給兩個小孩。
+        這樣「能偷懶就偷懶」,把區間修改也壓到 $O(\log n)$。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 680 270" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs><marker id="lz-a" markerWidth="11" markerHeight="11" refX="8" refY="3.5" orient="auto"><path d="M0,0 L9,3.5 L0,7 Z" fill="#8b5cf6"/></marker></defs>
+  <text x="30" y="22" font-size="14" font-weight="800" fill="#2f6f6a">懶惰標記:對 [0,3] 整段 +5,先掛欠條,不立刻下推</text>
+  <!-- before: node [0,3] gets lazy -->
+  <text x="150" y="56" text-anchor="middle" font-size="12" font-weight="700" fill="#b4541f">修改當下</text>
+  <rect x="92" y="66" width="116" height="48" rx="8" fill="#ece5ff" stroke="#8b5cf6" stroke-width="2"/>
+  <text x="150" y="85" text-anchor="middle" font-size="11" fill="#8b5cf6">[0,3] 和 +=5×4</text>
+  <text x="150" y="103" text-anchor="middle" font-size="11" font-weight="800" fill="#b4541f">lazy = 5(欠條)</text>
+  <g stroke="#cbd2d8" stroke-width="1.6" stroke-dasharray="4 3">
+    <line x1="120" y1="114" x2="90" y2="150"/>
+    <line x1="180" y1="114" x2="210" y2="150"/>
+  </g>
+  <rect x="44"  y="150" width="92" height="40" rx="6" fill="#eef1f3" stroke="#8a929b"/>
+  <text x="90" y="174" text-anchor="middle" font-size="11" fill="#8a929b">[0,1] 還沒更新</text>
+  <rect x="164" y="150" width="92" height="40" rx="6" fill="#eef1f3" stroke="#8a929b"/>
+  <text x="210" y="174" text-anchor="middle" font-size="11" fill="#8a929b">[2,3] 還沒更新</text>
+  <text x="150" y="214" text-anchor="middle" font-size="11" fill="#8a929b">小孩暫時是「舊的」,但因為上面節點已記欠條,答案不會錯</text>
+
+  <!-- arrow -->
+  <line x1="300" y1="130" x2="370" y2="130" stroke="#8b5cf6" stroke-width="2.5" marker-end="url(#lz-a)"/>
+  <text x="335" y="120" text-anchor="middle" font-size="11" fill="#8b5cf6">之後要往下</text>
+  <text x="335" y="148" text-anchor="middle" font-size="10" fill="#8a929b">push down</text>
+
+  <!-- after push down -->
+  <text x="520" y="56" text-anchor="middle" font-size="12" font-weight="700" fill="#2f6f6a">下推之後</text>
+  <rect x="462" y="66" width="116" height="48" rx="8" fill="#cfe6e2" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="520" y="85" text-anchor="middle" font-size="11" fill="#1f6b64">[0,3] 和已正確</text>
+  <text x="520" y="103" text-anchor="middle" font-size="11" fill="#2f6f6a">lazy = 0(欠條清掉)</text>
+  <g stroke="#8a929b" stroke-width="1.6">
+    <line x1="490" y1="114" x2="460" y2="150"/>
+    <line x1="550" y1="114" x2="580" y2="150"/>
+  </g>
+  <rect x="414" y="150" width="92" height="40" rx="6" fill="#ece5ff" stroke="#8b5cf6"/>
+  <text x="460" y="170" text-anchor="middle" font-size="10" fill="#8b5cf6">[0,1] +=5×2</text>
+  <text x="460" y="184" text-anchor="middle" font-size="10" fill="#b4541f">lazy = 5</text>
+  <rect x="534" y="150" width="92" height="40" rx="6" fill="#ece5ff" stroke="#8b5cf6"/>
+  <text x="580" y="170" text-anchor="middle" font-size="10" fill="#8b5cf6">[2,3] +=5×2</text>
+  <text x="580" y="184" text-anchor="middle" font-size="10" fill="#b4541f">lazy = 5</text>
+  <text x="520" y="214" text-anchor="middle" font-size="11" fill="#8a929b">欠條往下傳一層,小孩各自再記欠條,如此遞延</text>
+</svg>
+        <figcaption>圖 61-7:懶惰標記。對 $[0,3]$ 整段加 5 時,只更新該節點的總和(加 $5\times4$)並掛上 lazy=5,<strong>不</strong>碰小孩。等到後續操作真的需要進到小孩,才把欠條下推一層。每段區間最多被「拆解」成 $O(\log n)$ 個節點,所以區間修改也是 $O(\log n)$。</figcaption>
+      </div>
+
+      <pre><code class="language-cpp">#include &lt;bits/stdc++.h&gt;
+using namespace std;
+typedef long long LL;
+const int MAXN = 100005;
+
+LL seg[4 * MAXN], lazy[4 * MAXN];   // lazy[node]:這段區間「每個元素還欠加多少」
+int a[MAXN];
+
+void build(int node, int lo, int hi) {
+    lazy[node] = 0;
+    if (lo == hi) { seg[node] = a[lo]; return; }
+    int mid = (lo + hi) / 2;
+    build(node * 2, lo, mid);
+    build(node * 2 + 1, mid + 1, hi);
+    seg[node] = seg[node * 2] + seg[node * 2 + 1];
+}
+
+// 把 node 的欠條下推給兩個小孩
+void pushDown(int node, int lo, int hi) {
+    if (lazy[node] == 0) return;
+    int mid = (lo + hi) / 2;
+    LL add = lazy[node];
+    // 左孩子 [lo, mid]
+    seg[node * 2]  += add * (mid - lo + 1);
+    lazy[node * 2] += add;
+    // 右孩子 [mid+1, hi]
+    seg[node * 2 + 1]  += add * (hi - mid);
+    lazy[node * 2 + 1] += add;
+    lazy[node] = 0;          // 自己的欠條已交付,清掉
+}
+
+// 區間 [ql, qr] 每個元素加上 val
+void update(int node, int lo, int hi, int ql, int qr, LL val) {
+    if (qr &lt; lo || hi &lt; ql) return;             // 不相交
+    if (ql &lt;= lo &amp;&amp; hi &lt;= qr) {                   // 完全包含 → 掛欠條,不下探
+        seg[node]  += val * (hi - lo + 1);
+        lazy[node] += val;
+        return;
+    }
+    pushDown(node, lo, hi);                     // 要往下,先還清欠條
+    int mid = (lo + hi) / 2;
+    update(node * 2,     lo,      mid, ql, qr, val);
+    update(node * 2 + 1, mid + 1, hi,  ql, qr, val);
+    seg[node] = seg[node * 2] + seg[node * 2 + 1];
+}
+
+LL query(int node, int lo, int hi, int ql, int qr) {
+    if (qr &lt; lo || hi &lt; ql) return 0;
+    if (ql &lt;= lo &amp;&amp; hi &lt;= qr) return seg[node];
+    pushDown(node, lo, hi);                     // 查詢往下前也要先下推
+    int mid = (lo + hi) / 2;
+    return query(node * 2,     lo,      mid, ql, qr)
+         + query(node * 2 + 1, mid + 1, hi,  ql, qr);
+}
+
+int main() {
+    ios::sync_with_stdio(false); cin.tie(nullptr);
+    int n = 6;
+    int init[6] = {1, 2, 3, 4, 5, 6};
+    for (int i = 0; i &lt; n; i++) a[i] = init[i];
+    build(1, 0, n - 1);
+
+    cout &lt;&lt; query(1, 0, n - 1, 1, 4) &lt;&lt; "\n";   // a[1..4] = 2+3+4+5 = 14
+    update(1, 0, n - 1, 1, 4, 10);              // a[1..4] 各 +10
+    cout &lt;&lt; query(1, 0, n - 1, 1, 4) &lt;&lt; "\n";   // 14 + 10×4 = 54
+    cout &lt;&lt; query(1, 0, n - 1, 0, 2) &lt;&lt; "\n";   // a[0..2] = 1 + 12 + 13 = 26
+    return 0;
+}</code></pre>
+
+      <h3>線段樹 vs BIT:該選哪一個?</h3>
+      <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th></th><th>樹狀數組 BIT</th><th>線段樹 Segment Tree</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>程式長度</td><td><strong>極短</strong>(約 6 行)</td><td>較長(建/查/改三個遞迴)</td></tr>
+          <tr><td>常數 / 速度</td><td><strong>快、省記憶體</strong>($n$ 格)</td><td>慢一點($4n$ 格)</td></tr>
+          <tr><td>單點改 + 前綴/區間和</td><td>✅ 拿手</td><td>✅ 可以</td></tr>
+          <tr><td>區間最大/最小值</td><td>❌(只能勉強做前綴極值)</td><td>✅ 拿手</td></tr>
+          <tr><td>區間修改(加值/賦值)</td><td>△(需差分技巧、較受限)</td><td>✅ 懶惰標記,通吃</td></tr>
+          <tr><td>各種奇怪的區間資訊</td><td>❌</td><td>✅ 只要能「左右合併」就行</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">一句話的選擇法則</span>
+          <p>只要 <strong>BIT 能做的,就用 BIT</strong>——短、快、不易錯(尤其「單點改 + 區間和」)。
+          一旦遇到<strong>區間最值、區間修改、或其他需要自訂合併方式</strong>的需求,
+          就果斷上<strong>線段樹</strong>。線段樹是「能力上界」,BIT 是「特定情況下更省事的特化版」。</p>
+        </div>
+      </div>
+
+      <h2>競賽風格的並查集</h2>
+      <p>
+        <a href="29-data-structures.html">第 29 章</a>已經講透了<strong>並查集(union-find / disjoint set)</strong>的原理:
+        每個集合是一棵樹、根當代表,靠<strong>路徑壓縮</strong>與<strong>按秩(或按大小)合併</strong>把每次操作壓到近乎常數
+        $O(\alpha(n))$($\alpha$ 是增長極慢的反阿克曼函數,實務上 ≤ 4)。這裡只補上競賽中最常見的「短打」寫法。
+      </p>
+      <p>
+        競賽選手追求又短又快。<code>find</code> 用一行遞迴加路徑壓縮;合併用「按大小」並順手維護每個集合的人數
+        (很多題目會問「這群有幾個人」)。注意這裡用 <strong>0-indexed</strong>,且通常用全域陣列省事:
+      </p>
+      <pre><code class="language-cpp">#include &lt;bits/stdc++.h&gt;
+using namespace std;
+const int MAXN = 100005;
+
+int par[MAXN], sz[MAXN];   // par[x]:父節點;sz[x]:以 x 為根的集合大小
+
+void init(int n) {
+    for (int i = 0; i &lt; n; i++) { par[i] = i; sz[i] = 1; }
+}
+
+int find(int x) {          // 路徑壓縮:回傳根,並把沿路節點直接接到根
+    return par[x] == x ? x : par[x] = find(par[x]);
+}
+
+bool unite(int x, int y) {       // 合併;回傳 false 表示本來就同一群
+    x = find(x); y = find(y);
+    if (x == y) return false;
+    if (sz[x] &lt; sz[y]) swap(x, y);   // 按大小:把小的掛到大的下面
+    par[y] = x;
+    sz[x] += sz[y];
+    return true;
+}
+
+int main() {
+    ios::sync_with_stdio(false); cin.tie(nullptr);
+    int n, m; cin &gt;&gt; n &gt;&gt; m;          // n 個點、m 條「朋友關係」
+    init(n);
+    int components = n;              // 一開始每人自成一群
+    for (int i = 0; i &lt; m; i++) {
+        int a, b; cin &gt;&gt; a &gt;&gt; b;
+        if (unite(a, b)) components--;   // 每成功合併一次,群數 -1
+    }
+    cout &lt;&lt; components &lt;&lt; "\n";       // 連通分量(朋友圈)的數目
+    return 0;
+}</code></pre>
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">並查集在競賽的主戰場</span>
+          <p>① <strong>動態連通性</strong>:不斷加邊,隨時問「兩點連通了嗎」。② <strong>Kruskal 最小生成樹</strong>:
+          邊由小到大加,用並查集判斷「會不會成環」(第 63 章會用到)。③ <strong>連通分量計數</strong>(上面這題)。
+          ④ 進階技巧如<strong>虛擬根 / 帶權並查集</strong>(處理「敵人的敵人是朋友」這類關係)。
+          它的程式短、效率高,是競賽必背的基本功。</p>
+        </div>
+      </div>
+
+      <h2>一張總表:操作、複雜度,何時選哪個</h2>
+      <p>
+        把這一章(加上第 60 章的前綴和)的兵器全列出來。挑工具時先問三件事:
+        <strong>「資料會不會修改?」「我要查的是和、還是最值、還是別的?」「修改是單點還是整段?」</strong>
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>結構</th><th>預處理</th><th>查詢</th><th>修改</th><th>最適合的場景</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>前綴和</strong><br>(第 60 章)</td>
+            <td>$O(n)$</td>
+            <td>區間和 $O(1)$</td>
+            <td>不支援(改一格 $O(n)$)</td>
+            <td><strong>靜態</strong>資料的區間和</td>
+          </tr>
+          <tr>
+            <td><strong>稀疏表</strong></td>
+            <td>$O(n\log n)$</td>
+            <td>區間最值 $O(1)$</td>
+            <td>不支援</td>
+            <td><strong>靜態</strong>資料的 RMQ / gcd</td>
+          </tr>
+          <tr>
+            <td><strong>樹狀數組 BIT</strong></td>
+            <td>$O(n\log n)$</td>
+            <td>前綴 / 區間和 $O(\log n)$</td>
+            <td>單點 $O(\log n)$</td>
+            <td>單點改 + 區間和(短、快首選)</td>
+          </tr>
+          <tr>
+            <td><strong>線段樹</strong></td>
+            <td>$O(n)$</td>
+            <td>任意可合併資訊 $O(\log n)$</td>
+            <td>單點 / 區間 $O(\log n)$</td>
+            <td>區間最值、區間修改、複雜區間資訊</td>
+          </tr>
+          <tr>
+            <td><strong>單調棧</strong></td>
+            <td>—</td>
+            <td colspan="2">整趟掃描 $O(n)$</td>
+            <td>下一個更大/更小、最大矩形</td>
+          </tr>
+          <tr>
+            <td><strong>單調隊列</strong></td>
+            <td>—</td>
+            <td colspan="2">整趟掃描 $O(n)$</td>
+            <td>滑動視窗最值、優化 DP 轉移</td>
+          </tr>
+          <tr>
+            <td><strong>並查集</strong></td>
+            <td>$O(n)$</td>
+            <td>連通性 $O(\alpha(n))$</td>
+            <td>合併 $O(\alpha(n))$</td>
+            <td>動態連通性、Kruskal MST</td>
+          </tr>
+        </tbody>
+      </table>
+      </div>
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">三步驟選擇法</span>
+          <p>① <strong>不修改</strong> → 區間和用<strong>前綴和</strong>、區間最值用<strong>稀疏表</strong>(都 $O(1)$)。<br>
+          ② <strong>會修改</strong> → 單點改+區間和用 <strong>BIT</strong>;要區間改、區間最值、或奇怪的合併用<strong>線段樹</strong>。<br>
+          ③ <strong>單向掃描求極值</strong>(下一個更大、滑動視窗)→ <strong>單調棧 / 單調隊列</strong>,$O(n)$;
+          <strong>動態分組 / 連通</strong> → <strong>並查集</strong>。</p>
+        </div>
+      </div>
+
+      <h2>動手練習</h2>
+      <p>
+        這些結構,看懂程式碼只是第一步;真正內化,要靠親手打。下面七題覆蓋本章每個主角,
+        建議到 ZeroJudge、AP325 judge 或 OJ 上找對應題目實際提交(AC 才是真懂)。請先自己寫,卡住再看解答。
+      </p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 61.1 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>給一個長度 $n$ 的陣列,對每個元素輸出它<strong>右邊第一個比它大</strong>的元素(沒有則輸出 <code>-1</code>)。
+          要求 $O(n)$。例如 <code>[2, 1, 2, 4, 3]</code> → <code>[4, 2, 4, -1, -1]</code>。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>標準單調棧:維護一個「值單調遞減」的索引堆疊;新元素比堆疊頂端大時,
+              就是頂端那些元素的答案,彈出並填答案。</p>
+              <pre><code class="language-cpp">#include &lt;bits/stdc++.h&gt;
+using namespace std;
+
+int main() {
+    ios::sync_with_stdio(false); cin.tie(nullptr);
+    int n; cin &gt;&gt; n;
+    vector&lt;int&gt; a(n), ans(n, -1);
+    for (int i = 0; i &lt; n; i++) cin &gt;&gt; a[i];
+
+    stack&lt;int&gt; stk;                 // 存索引,值單調遞減
+    for (int i = 0; i &lt; n; i++) {
+        while (!stk.empty() &amp;&amp; a[i] &gt; a[stk.top()]) {
+            ans[stk.top()] = a[i];   // a[i] 是它的「下一個更大元素」
+            stk.pop();
+        }
+        stk.push(i);
+    }
+    for (int i = 0; i &lt; n; i++)
+        cout &lt;&lt; ans[i] &lt;&lt; " \n"[i == n - 1];
+    return 0;
+}</code></pre>
+              <p>每個索引進出堆疊各一次,均攤 $O(n)$。把不等號反向、或改成「找右邊第一個更小」,
+              就能解一大票變形(例如「每日溫度」「接雨水」)。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 61.2 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>給陣列 <code>a</code> 與視窗寬度 $k$,輸出每個長度 $k$ 的滑動視窗內的<strong>最大值</strong>,$O(n)$。
+          例如 <code>a=[1,3,-1,-3,5,3]</code>、<code>k=3</code> → <code>[3, 3, 5, 5]</code>。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>單調隊列:deque 存索引、對應值由前到後遞減。每步先丟過期的頭、再從尾部丟掉比新元素小的,
+              然後新元素入隊;視窗成形後頭部即最大值。</p>
+              <pre><code class="language-cpp">#include &lt;bits/stdc++.h&gt;
+using namespace std;
+
+int main() {
+    ios::sync_with_stdio(false); cin.tie(nullptr);
+    int n, k; cin &gt;&gt; n &gt;&gt; k;
+    vector&lt;int&gt; a(n);
+    for (int i = 0; i &lt; n; i++) cin &gt;&gt; a[i];
+
+    deque&lt;int&gt; dq;                       // 索引,值單調遞減
+    for (int i = 0; i &lt; n; i++) {
+        if (!dq.empty() &amp;&amp; dq.front() &lt;= i - k) dq.pop_front(); // 過期
+        while (!dq.empty() &amp;&amp; a[dq.back()] &lt;= a[i]) dq.pop_back(); // 沒用的
+        dq.push_back(i);
+        if (i &gt;= k - 1) cout &lt;&lt; a[dq.front()] &lt;&lt; " ";
+    }
+    cout &lt;&lt; "\n";
+    return 0;
+}</code></pre>
+              <p>把 <code>&lt;=</code> 改成 <code>&gt;=</code>、deque 維持遞增,就是滑動視窗<strong>最小值</strong>。
+              要同時求最大與最小(例如「固定長度區間的最大區段差」),就開兩個 deque。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 61.3 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>給一個長度 $n$、值域可能很大的整數陣列,求<strong>逆序對</strong>的數目
+          (位置 $i&lt;j$ 但 $a[i]&gt;a[j]$ 的對數)。用 <strong>BIT + 離散化</strong>,$O(n\log n)$。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>先把值離散化成排名(壓進 $1\sim n$),再從左到右掃:處理 <code>a[i]</code> 時,
+              「前面已插入、且比它大的個數」= <code>i - query(rank)</code>,累加後把它記入 BIT。</p>
+              <pre><code class="language-cpp">#include &lt;bits/stdc++.h&gt;
+using namespace std;
+typedef long long LL;
+
+int n;
+LL bit[200005];
+int lowbit(int x) { return x &amp; (-x); }
+void update(int i, LL v) { for (; i &lt;= n; i += lowbit(i)) bit[i] += v; }
+LL query(int i) { LL s = 0; for (; i &gt; 0; i -= lowbit(i)) s += bit[i]; return s; }
+
+int main() {
+    ios::sync_with_stdio(false); cin.tie(nullptr);
+    cin &gt;&gt; n;
+    vector&lt;int&gt; a(n), srt;
+    for (int i = 0; i &lt; n; i++) { cin &gt;&gt; a[i]; srt.push_back(a[i]); }
+    sort(srt.begin(), srt.end());
+    srt.erase(unique(srt.begin(), srt.end()), srt.end());
+
+    LL inv = 0;
+    for (int i = 0; i &lt; n; i++) {
+        int r = int(lower_bound(srt.begin(), srt.end(), a[i]) - srt.begin()) + 1;
+        inv += i - query(r);   // 已插入、且比 a[i] 大的個數
+        update(r, 1);
+    }
+    cout &lt;&lt; inv &lt;&lt; "\n";
+    return 0;
+}</code></pre>
+              <p>這和第 27 章「合併排序數逆序對」殊途同歸,但 BIT 法更容易推廣到「二維偏序」「動態加入」等變形。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 61.4 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>實作一棵<strong>區間和線段樹</strong>,支援兩種操作:<code>U p v</code>(把 $a[p]$ 改成 $v$)、
+          <code>Q l r</code>(輸出 $a[l..r]$ 的和),各 $O(\log n)$。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>三個遞迴:build、單點 update、區間 query。query 的三分支(不相交 / 完全包含 / 部分重疊)是關鍵。</p>
+              <pre><code class="language-cpp">#include &lt;bits/stdc++.h&gt;
+using namespace std;
+typedef long long LL;
+const int MAXN = 100005;
+LL seg[4 * MAXN];
+int a[MAXN], n;
+
+void build(int nd, int lo, int hi) {
+    if (lo == hi) { seg[nd] = a[lo]; return; }
+    int mid = (lo + hi) / 2;
+    build(nd * 2, lo, mid); build(nd * 2 + 1, mid + 1, hi);
+    seg[nd] = seg[nd * 2] + seg[nd * 2 + 1];
+}
+void update(int nd, int lo, int hi, int pos, LL val) {
+    if (lo == hi) { seg[nd] = val; return; }
+    int mid = (lo + hi) / 2;
+    if (pos &lt;= mid) update(nd * 2, lo, mid, pos, val);
+    else            update(nd * 2 + 1, mid + 1, hi, pos, val);
+    seg[nd] = seg[nd * 2] + seg[nd * 2 + 1];
+}
+LL query(int nd, int lo, int hi, int ql, int qr) {
+    if (qr &lt; lo || hi &lt; ql) return 0;
+    if (ql &lt;= lo &amp;&amp; hi &lt;= qr) return seg[nd];
+    int mid = (lo + hi) / 2;
+    return query(nd * 2, lo, mid, ql, qr) + query(nd * 2 + 1, mid + 1, hi, ql, qr);
+}
+
+int main() {
+    ios::sync_with_stdio(false); cin.tie(nullptr);
+    int q; cin &gt;&gt; n &gt;&gt; q;
+    for (int i = 0; i &lt; n; i++) cin &gt;&gt; a[i];
+    build(1, 0, n - 1);
+    while (q--) {
+        char op; int x, y; cin &gt;&gt; op &gt;&gt; x &gt;&gt; y;
+        if (op == 'U') update(1, 0, n - 1, x, y);
+        else cout &lt;&lt; query(1, 0, n - 1, x, y) &lt;&lt; "\n";
+    }
+    return 0;
+}</code></pre>
+              <p>把合併方式 <code>seg[nd*2] + seg[nd*2+1]</code> 改成 <code>max(...)</code> 或 <code>min(...)</code>
+              (查詢初值與「不相交」回傳值也要跟著改成 $\pm\infty$),立刻變成區間最值線段樹。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 61.5 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>給一個<strong>不會修改</strong>的陣列與 $q$ 筆查詢,每筆問 $[l,r]$ 的<strong>最小值</strong>。
+          用<strong>稀疏表</strong>,預處理 $O(n\log n)$、單筆查詢 $O(1)$。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>建表用倍增遞推;查詢用兩塊長度 $2^k$ 的區間覆蓋 $[l,r]$,取 min。</p>
+              <pre><code class="language-cpp">#include &lt;bits/stdc++.h&gt;
+using namespace std;
+const int MAXN = 100005, LOG = 17;
+int st[LOG][MAXN], lg[MAXN];
+
+int main() {
+    ios::sync_with_stdio(false); cin.tie(nullptr);
+    int n, q; cin &gt;&gt; n &gt;&gt; q;
+    for (int i = 0; i &lt; n; i++) cin &gt;&gt; st[0][i];
+    lg[1] = 0;
+    for (int i = 2; i &lt;= n; i++) lg[i] = lg[i / 2] + 1;
+    for (int j = 1; (1 &lt;&lt; j) &lt;= n; j++)
+        for (int i = 0; i + (1 &lt;&lt; j) &lt;= n; i++)
+            st[j][i] = min(st[j-1][i], st[j-1][i + (1 &lt;&lt; (j-1))]);
+    while (q--) {
+        int l, r; cin &gt;&gt; l &gt;&gt; r;
+        int k = lg[r - l + 1];
+        cout &lt;&lt; min(st[k][l], st[k][r - (1 &lt;&lt; k) + 1]) &lt;&lt; "\n";
+    }
+    return 0;
+}</code></pre>
+              <p>注意:稀疏表只對「可重疊」運算(min/max/gcd)有效。若改成區間和,因為重疊會重複計入而出錯——
+              那種情況請改用 BIT 或線段樹。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 61.6 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>實作一棵<strong>帶懶惰標記的線段樹</strong>,支援:<code>A l r v</code>(把 $a[l..r]$ 每個元素加上 $v$)、
+          <code>Q l r</code>(輸出 $a[l..r]$ 的和),兩者皆 $O(\log n)$。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>關鍵在 <code>pushDown</code>:每次要往下走(無論查詢或修改)之前,先把欠條傳給小孩。
+              區間加值時,若節點完全被包含,就只更新自己的和並累加 lazy,不再下探。</p>
+              <pre><code class="language-cpp">#include &lt;bits/stdc++.h&gt;
+using namespace std;
+typedef long long LL;
+const int MAXN = 100005;
+LL seg[4 * MAXN], lazy[4 * MAXN];
+int a[MAXN], n;
+
+void build(int nd, int lo, int hi) {
+    lazy[nd] = 0;
+    if (lo == hi) { seg[nd] = a[lo]; return; }
+    int mid = (lo + hi) / 2;
+    build(nd * 2, lo, mid); build(nd * 2 + 1, mid + 1, hi);
+    seg[nd] = seg[nd * 2] + seg[nd * 2 + 1];
+}
+void pushDown(int nd, int lo, int hi) {
+    if (!lazy[nd]) return;
+    int mid = (lo + hi) / 2; LL add = lazy[nd];
+    seg[nd*2]   += add * (mid - lo + 1);  lazy[nd*2]   += add;
+    seg[nd*2+1] += add * (hi - mid);      lazy[nd*2+1] += add;
+    lazy[nd] = 0;
+}
+void update(int nd, int lo, int hi, int ql, int qr, LL v) {
+    if (qr &lt; lo || hi &lt; ql) return;
+    if (ql &lt;= lo &amp;&amp; hi &lt;= qr) { seg[nd] += v * (hi - lo + 1); lazy[nd] += v; return; }
+    pushDown(nd, lo, hi);
+    int mid = (lo + hi) / 2;
+    update(nd*2, lo, mid, ql, qr, v); update(nd*2+1, mid+1, hi, ql, qr, v);
+    seg[nd] = seg[nd*2] + seg[nd*2+1];
+}
+LL query(int nd, int lo, int hi, int ql, int qr) {
+    if (qr &lt; lo || hi &lt; ql) return 0;
+    if (ql &lt;= lo &amp;&amp; hi &lt;= qr) return seg[nd];
+    pushDown(nd, lo, hi);
+    int mid = (lo + hi) / 2;
+    return query(nd*2, lo, mid, ql, qr) + query(nd*2+1, mid+1, hi, ql, qr);
+}
+int main() {
+    ios::sync_with_stdio(false); cin.tie(nullptr);
+    int q; cin &gt;&gt; n &gt;&gt; q;
+    for (int i = 0; i &lt; n; i++) cin &gt;&gt; a[i];
+    build(1, 0, n - 1);
+    while (q--) {
+        char op; cin &gt;&gt; op;
+        if (op == 'A') { int l, r; LL v; cin &gt;&gt; l &gt;&gt; r &gt;&gt; v; update(1, 0, n-1, l, r, v); }
+        else { int l, r; cin &gt;&gt; l &gt;&gt; r; cout &lt;&lt; query(1, 0, n-1, l, r) &lt;&lt; "\n"; }
+    }
+    return 0;
+}</code></pre>
+              <p>最容易錯的兩個地方:① 忘了在 query 裡也 <code>pushDown</code>;② lazy 累加要用 <code>+=</code> 而非 <code>=</code>
+              (因為一個節點可能累積多次未下推的加值)。把這兩點顧好,懶惰標記就穩了。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 61.7 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>有 $n$ 個人(編號 $0 \sim n-1$)與 $m$ 條「朋友關係」。朋友的朋友也是朋友。
+          用<strong>並查集</strong>求最後總共有幾個<strong>朋友圈(連通分量)</strong>,並回答若干筆「$x$ 和 $y$ 是不是同一圈」。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>路徑壓縮 + 按大小合併。每成功合併一次,連通分量數就 −1;同圈判斷就是比較兩者的根。</p>
+              <pre><code class="language-cpp">#include &lt;bits/stdc++.h&gt;
+using namespace std;
+const int MAXN = 100005;
+int par[MAXN], sz[MAXN];
+
+int find(int x) { return par[x] == x ? x : par[x] = find(par[x]); }
+bool unite(int x, int y) {
+    x = find(x); y = find(y);
+    if (x == y) return false;
+    if (sz[x] &lt; sz[y]) swap(x, y);
+    par[y] = x; sz[x] += sz[y];
+    return true;
+}
+int main() {
+    ios::sync_with_stdio(false); cin.tie(nullptr);
+    int n, m, q; cin &gt;&gt; n &gt;&gt; m &gt;&gt; q;
+    for (int i = 0; i &lt; n; i++) { par[i] = i; sz[i] = 1; }
+    int comp = n;
+    for (int i = 0; i &lt; m; i++) {
+        int a, b; cin &gt;&gt; a &gt;&gt; b;
+        if (unite(a, b)) comp--;
+    }
+    cout &lt;&lt; comp &lt;&lt; "\n";                 // 朋友圈數目
+    while (q--) {
+        int x, y; cin &gt;&gt; x &gt;&gt; y;
+        cout &lt;&lt; (find(x) == find(y) ? "YES" : "NO") &lt;&lt; "\n";
+    }
+    return 0;
+}</code></pre>
+              <p>進階變形:用「<strong>虛擬根</strong>」(把編號 $i$ 的敵人記在 $i+n$)可以處理「敵人的敵人是朋友」這類題;
+              要支援刪點時,常用<strong>離線反向</strong>(把刪除倒過來看成加入)。這些都是並查集的常見競賽套路。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>把這一章串起來</h2>
+      <p>
+        這一章把第 29 章的通用資料結構,升級成競賽戰場上能扛住 $2\times10^5$ 級資料、一秒內答完的高效兵器。
+        回顧整趟旅程,你會發現它們全圍繞著兩個核心思想打轉:
+      </p>
+      <ul>
+        <li><strong>單調棧</strong>:果斷丟掉「永遠輪不到」的元素,只留單調序列。$O(n)$ 解「下一個更大元素」「柱狀圖最大矩形」。</li>
+        <li><strong>單調隊列</strong>:單調棧的「會過期」版本,用 deque 兩端維護。$O(n)$ 解滑動視窗最值,也能優化 DP。</li>
+        <li><strong>稀疏表</strong>:倍增預處理、兩塊重疊覆蓋,$O(1)$ 回答靜態 RMQ——代價是不能修改。</li>
+        <li><strong>樹狀數組 BIT</strong>:lowbit 讓每格管轄一段,$O(\log n)$ 同時支援單點改與前綴和;配離散化求逆序對。又短又快。</li>
+        <li><strong>線段樹</strong>:把區間遞迴對半切成樹,$O(\log n)$ 駕馭任何「能左右合併」的區間資訊;懶惰標記讓區間修改也變 $O(\log n)$。萬用王者。</li>
+        <li><strong>並查集</strong>:路徑壓縮 + 按大小合併,近乎常數時間處理動態連通性。Kruskal 與連通分量的好搭檔。</li>
+      </ul>
+      <p>
+        選擇的心法不變:<strong>不修改就用前綴和 / 稀疏表($O(1)$);要修改,單點改+區間和用 BIT、其餘用線段樹;
+        單向掃描求極值用單調棧 / 隊列;動態分組用並查集。</strong>沒有最強的結構,只有最貼合手邊那道題的結構。
+      </p>
+      <p>
+        有了這些兵器,你已經能拆解一大票 APCS 實作題第 3、4 題與 OJ 中等難度題。
+        接下來的<a href="62-competitive-paradigms.html">第 62 章</a>,我們要把焦點從「資料結構」轉向「演算法範式」——
+        暴搜、分治、貪心、DP——並看到單調隊列、線段樹如何反過來成為這些範式的加速引擎。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">📚</div>
+        <div class="body">
+          <span class="c-title">想更深入?延伸資源</span>
+          <p>本章整合自吳邦一教授的 <strong>AP325</strong> 教材(第 0 章 0.4 進階資料結構、第 3 章佇列與堆疊),
+          是練習這些主題最對味的中文題單,搭配
+          <a href="https://judge.tcirc.tw/">中一中 Judge</a>、<a href="https://zerojudge.tw/">ZeroJudge</a> 實作最佳。
+          想看更嚴謹的推導與更多變形,
+          <a href="https://oi-wiki.org/ds/fenwick/">OI-Wiki 的樹狀數組</a>、
+          <a href="https://oi-wiki.org/ds/seg/">線段樹</a>、
+          <a href="https://oi-wiki.org/ds/sparse-table/">ST 表</a>章節是最完整的中文百科;
+          英文則首推 <a href="https://cp-algorithms.com/data_structures/fenwick.html">cp-algorithms</a>
+          的 Fenwick Tree、Segment Tree、Sparse Table 條目,證明與進階技巧(如線段樹上二分、可持久化)都很到位。
+          複雜度的回顧見<a href="26-complexity.html">第 26 章</a>,結構的基礎見<a href="29-data-structures.html">第 29 章</a>。</p>
+        </div>
+      </div>
+
+    

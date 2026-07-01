@@ -1,0 +1,1541 @@
+<!--meta
+title: 實戰:寫一個編譯器
+description: 從零打造一個完整的程式語言:詞法分析、Pratt 解析器、AST、樹走訪直譯器、語意分析、位元碼與堆疊式虛擬機。整合正規語言、編譯原理與 VM 的里程碑式 Capstone 專案。
+-->
+
+      <div class="eyebrow">第二七部 · 動手實戰專案</div>
+      <h1>實戰:寫一個編譯器</h1>
+      <p class="subtitle">一段 <code>print(1 + 2 * 3)</code> 的文字,是如何變成執行中的計算結果的?今天你要親手打造那條橋——從字元到 token、從 token 到語法樹、從語法樹到位元碼、從位元碼到輸出。</p>
+      <div class="byline">
+        <span class="tag">第 117 章</span>
+        <span>閱讀時間 ≈ 90 分鐘</span>
+        <span>難度:★★★★★</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會能做到</div>
+        <ul>
+          <li>用 Python 從零實作一個完整的小語言「Mini」:詞法 → 語法 → 語意 → 執行</li>
+          <li>理解並實作 <strong>Pratt 解析器(Pratt parser)</strong>,正確處理運算子優先級與結合方向</li>
+          <li>設計並走訪<strong>抽象語法樹(AST, Abstract Syntax Tree)</strong>,建立樹走訪直譯器</li>
+          <li>設計一組<strong>位元碼(bytecode)</strong>指令集,把 AST 編譯成指令並在<strong>堆疊虛擬機(stack VM)</strong>上執行</li>
+          <li>整合正規語言、上下文無關文法(CFG)、編譯器理論、堆疊式 VM 三大主題,看見它們如何拼成一個完整的語言執行環境</li>
+        </ul>
+      </div>
+
+      <!-- ═══════════════════════════════════════════════════════ -->
+      <h2>一、原始碼到執行:那條看不見的橋</h2>
+      <!-- ═══════════════════════════════════════════════════════ -->
+
+      <p>
+        你打開 VS Code,敲了一段 Python:
+      </p>
+      <pre><code class="language-python">x = 10
+print(x * 2 + 3)</code></pre>
+      <p>
+        你按下執行,螢幕印出 <code>23</code>。
+        這中間到底發生了什麼?
+      </p>
+      <p>
+        對大多數程式設計師來說,這個過程是一個黑盒子。
+        今天我們要把黑盒子打開——而且不只是讀懂它,而是<strong>自己造一個</strong>。
+        我們會設計一個叫做 <strong>Mini</strong> 的小語言,然後從零寫出它完整的執行引擎。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">編譯器的核心任務</span>
+          <p>把人類可讀的<strong>原始碼(source code)</strong>翻譯成電腦可執行的<strong>目標碼(target code)</strong>。
+          「翻譯」可以一次完成(靜態編譯),也可以邊讀邊跑(直譯器),或者先編成中間碼再執行(Python、JVM、CLR 都走這條路)。</p>
+        </div>
+      </div>
+
+      <p>整個翻譯過程分成幾個階段,每個階段的輸入是上一個階段的輸出:</p>
+
+      <div class="diagram">
+<svg viewBox="0 0 820 200" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif" font-size="12">
+  <defs>
+    <marker id="ah" markerWidth="8" markerHeight="7" refX="7" refY="3.5" orient="auto">
+      <path d="M0,0 L8,3.5 L0,7 Z" fill="#8a929b"/>
+    </marker>
+  </defs>
+
+  <!-- ── 第一列:前端 ── -->
+  <text x="10" y="14" font-size="10" fill="#8a929b" font-weight="600">前端 (Frontend)</text>
+
+  <!-- Source -->
+  <rect x="10"  y="22" width="80" height="44" rx="8" fill="#e3efed"/>
+  <text x="50"  y="41" text-anchor="middle" fill="#2f6f6a" font-weight="700">原始碼</text>
+  <text x="50"  y="57" text-anchor="middle" fill="#8a929b">Source</text>
+
+  <line x1="90"  y1="44" x2="108" y2="44" stroke="#8a929b" stroke-width="1.5" marker-end="url(#ah)"/>
+
+  <!-- Lexer -->
+  <rect x="110" y="18" width="90" height="52" rx="8" fill="#2f6f6a"/>
+  <text x="155" y="40" text-anchor="middle" fill="#fff" font-weight="700">詞法分析</text>
+  <text x="155" y="56" text-anchor="middle" fill="#cfe6e2">Lexer</text>
+  <text x="155" y="66" text-anchor="middle" fill="#a3c8c4" font-size="10">§49 正規語言</text>
+
+  <line x1="200" y1="44" x2="218" y2="44" stroke="#8a929b" stroke-width="1.5" marker-end="url(#ah)"/>
+
+  <!-- Tokens -->
+  <rect x="220" y="22" width="80" height="44" rx="8" fill="#e3efed"/>
+  <text x="260" y="41" text-anchor="middle" fill="#2f6f6a" font-weight="700">Tokens</text>
+  <text x="260" y="57" text-anchor="middle" fill="#8a929b">記號串流</text>
+
+  <line x1="300" y1="44" x2="318" y2="44" stroke="#8a929b" stroke-width="1.5" marker-end="url(#ah)"/>
+
+  <!-- Parser -->
+  <rect x="320" y="18" width="90" height="52" rx="8" fill="#2f6f6a"/>
+  <text x="365" y="40" text-anchor="middle" fill="#fff" font-weight="700">語法分析</text>
+  <text x="365" y="56" text-anchor="middle" fill="#cfe6e2">Parser</text>
+  <text x="365" y="66" text-anchor="middle" fill="#a3c8c4" font-size="10">§49 CFG</text>
+
+  <line x1="410" y1="44" x2="428" y2="44" stroke="#8a929b" stroke-width="1.5" marker-end="url(#ah)"/>
+
+  <!-- AST -->
+  <rect x="430" y="22" width="80" height="44" rx="8" fill="#e3efed"/>
+  <text x="470" y="41" text-anchor="middle" fill="#2f6f6a" font-weight="700">AST</text>
+  <text x="470" y="57" text-anchor="middle" fill="#8a929b">語法樹</text>
+
+  <!-- 從 AST 向下 -->
+  <line x1="470" y1="66" x2="470" y2="100" stroke="#8a929b" stroke-width="1.5" marker-end="url(#ah)"/>
+
+  <!-- ── 第二列:後端 ── -->
+  <text x="10" y="118" font-size="10" fill="#8a929b" font-weight="600">後端 (Backend)</text>
+
+  <!-- Semantic -->
+  <rect x="420" y="104" width="100" height="52" rx="8" fill="#b4541f"/>
+  <text x="470" y="126" text-anchor="middle" fill="#fff" font-weight="700">語意分析</text>
+  <text x="470" y="142" text-anchor="middle" fill="#f6e7dd">Semantic</text>
+  <text x="470" y="152" text-anchor="middle" fill="#f0c8b0" font-size="10">§9 型別</text>
+
+  <line x1="420" y1="130" x2="392" y2="130" stroke="#8a929b" stroke-width="1.5" marker-end="url(#ah)"/>
+
+  <!-- Compiler -->
+  <rect x="292" y="104" width="100" height="52" rx="8" fill="#b4541f"/>
+  <text x="342" y="126" text-anchor="middle" fill="#fff" font-weight="700">程式碼生成</text>
+  <text x="342" y="142" text-anchor="middle" fill="#f6e7dd">Compiler</text>
+  <text x="342" y="152" text-anchor="middle" fill="#f0c8b0" font-size="10">§42 編譯原理</text>
+
+  <line x1="292" y1="130" x2="268" y2="130" stroke="#8a929b" stroke-width="1.5" marker-end="url(#ah)"/>
+
+  <!-- Bytecode -->
+  <rect x="180" y="108" width="88" height="44" rx="8" fill="#e3efed"/>
+  <text x="224" y="127" text-anchor="middle" fill="#2f6f6a" font-weight="700">位元碼</text>
+  <text x="224" y="143" text-anchor="middle" fill="#8a929b">Bytecode</text>
+
+  <line x1="180" y1="130" x2="158" y2="130" stroke="#8a929b" stroke-width="1.5" marker-end="url(#ah)"/>
+
+  <!-- VM -->
+  <rect x="60" y="104" width="98" height="52" rx="8" fill="#8b5cf6"/>
+  <text x="109" y="126" text-anchor="middle" fill="#fff" font-weight="700">虛擬機</text>
+  <text x="109" y="142" text-anchor="middle" fill="#ece5ff">Stack VM</text>
+  <text x="109" y="152" text-anchor="middle" fill="#d4c4fd" font-size="10">§23 VM</text>
+
+  <line x1="60"  y1="130" x2="38"  y2="130" stroke="#8a929b" stroke-width="1.5" marker-end="url(#ah)"/>
+
+  <!-- Output -->
+  <rect x="10"  y="108" width="50" height="44" rx="8" fill="#16a34a"/>
+  <text x="35"  y="127" text-anchor="middle" fill="#fff" font-weight="700">輸出</text>
+  <text x="35"  y="143" text-anchor="middle" fill="#bbf7d0" font-size="11">Output</text>
+
+  <!-- 「本章路徑」標籤 -->
+  <rect x="530" y="104" width="280" height="62" rx="8" fill="#f8f9fa" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="540" y="122" fill="#374151" font-weight="600" font-size="11">本章路徑</text>
+  <text x="540" y="138" fill="#6b7280" font-size="10">里程碑 1:Lexer</text>
+  <text x="540" y="150" fill="#6b7280" font-size="10">里程碑 2:Parser (Pratt)</text>
+  <text x="540" y="162" fill="#6b7280" font-size="10">里程碑 3–6:AST → 語意 → 位元碼 → VM</text>
+</svg>
+        <figcaption>圖 117-1:編譯管線全景。前端把原始碼轉為 AST;後端把 AST 轉為位元碼並在 VM 上執行。本章每一個里程碑對應管線的一個方塊。</figcaption>
+      </div>
+
+      <div class="callout history">
+        <div class="ico">📜</div>
+        <div class="body">
+          <span class="c-title">兩本必讀經典</span>
+          <p><a href="https://craftinginterpreters.com/" target="_blank" rel="noopener"><em>Crafting Interpreters</em></a>(Robert Nystrom,免費線上閱讀)是目前最好的編譯器入門書,實作兩版 Lox 語言:先做樹走訪直譯器,再做位元碼 VM。
+          <a href="https://interpreterbook.com/" target="_blank" rel="noopener"><em>Writing An Interpreter In Go</em></a>(Thorsten Ball)則以 Go 語言帶你實作 Monkey 語言,風格清晰。本章的設計深受這兩本啟發。</p>
+        </div>
+      </div>
+
+      <!-- ═══════════════════════════════════════════════════════ -->
+      <h2>二、設計我們的語言:Mini</h2>
+      <!-- ═══════════════════════════════════════════════════════ -->
+
+      <p>
+        在動手寫程式碼之前,先把目標語言的語法釘清楚。
+        我們的語言叫 <strong>Mini</strong>,支援:變數指派、算術與比較運算、<code>if/else</code>、<code>while</code> 迴圈、函式定義與呼叫、以及一個內建的 <code>print</code>。
+      </p>
+      <p>一段 Mini 程式看起來像這樣:</p>
+      <pre><code class="language-text">// 計算費波那契數列
+func fib(n) {
+    if n &lt;= 1 {
+        return n;
+    }
+    return fib(n - 1) + fib(n - 2);
+}
+
+x = 10;
+print(fib(x));   // 輸出 55</code></pre>
+
+      <p>用<strong>擴充巴科斯-諾爾範式(EBNF, Extended Backus-Naur Form)</strong>描述 Mini 的完整文法:</p>
+      <pre><code class="language-text">program    = statement* EOF
+statement  = assign | if_stmt | while_stmt | func_def
+           | return_stmt | print_stmt | expr_stmt
+assign     = IDENT '=' expr ';'
+if_stmt    = 'if' expr block ('else' block)?
+while_stmt = 'while' expr block
+func_def   = 'func' IDENT '(' params? ')' block
+return_stmt= 'return' expr ';'
+print_stmt = 'print' '(' expr ')' ';'
+expr_stmt  = expr ';'
+block      = '{' statement* '}'
+params     = IDENT (',' IDENT)*
+
+// 運算式(由低到高優先級)
+expr       = equality
+equality   = comparison (('==' | '!=') comparison)*
+comparison = addition   (('&lt;' | '&gt;' | '&lt;=' | '&gt;=') addition)*
+addition   = multiply   (('+' | '-') multiply)*
+multiply   = unary      (('*' | '/') unary)*
+unary      = ('-' | '!') unary | primary
+primary    = NUMBER | STRING | IDENT ('(' args? ')')? | '(' expr ')'
+args       = expr (',' expr)*</code></pre>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">CFG 與可解析性</span>
+          <p>這份文法是一個<strong>上下文無關文法(CFG, Context-Free Grammar)</strong>。
+          計算理論(本書第 §49 章)告訴我們:CFG 生成的語言可以被<strong>下推自動機(PDA)</strong>辨識。
+          我們的遞迴下降解析器,本質上就是一個手寫的 PDA——呼叫堆疊扮演「下推儲存」的角色。</p>
+        </div>
+      </div>
+
+      <!-- ═══════════════════════════════════════════════════════ -->
+      <h2>里程碑 1 — 詞法分析器(Lexer / Tokenizer)</h2>
+      <!-- ═══════════════════════════════════════════════════════ -->
+
+      <p>
+        詞法分析(lexical analysis)把原始碼的<strong>字元流(character stream)</strong>切成
+        一個個有意義的<strong>記號(token)</strong>。
+        例如 <code>x = 10 + 3;</code> 被切成:
+        <code>IDENT("x")</code> <code>ASSIGN</code> <code>NUM(10)</code> <code>PLUS</code> <code>NUM(3)</code> <code>SEMI</code>。
+      </p>
+      <p>
+        從計算理論的角度看(本書 §49 章),每種 token 對應一種<strong>正規語言(regular language)</strong>,
+        可以用<strong>有限自動機(FA, Finite Automaton)</strong>辨識。
+        Lexer 就是把這些 FA 組合起來,貪婪地吃字元、吐 token。
+      </p>
+
+      <h3>1.1 Token 類型</h3>
+      <pre><code class="language-python">from enum import Enum, auto
+
+class TT(Enum):
+    # 字面量
+    NUM    = auto()      # 數字  e.g. 3.14
+    STR    = auto()      # 字串  e.g. "hello"
+    IDENT  = auto()      # 識別子 e.g. foo_bar
+    # 算術運算子
+    PLUS   = auto()      # +
+    MINUS  = auto()      # -
+    STAR   = auto()      # *
+    SLASH  = auto()      # /
+    # 比較運算子
+    EQ     = auto()      # ==
+    NEQ    = auto()      # !=
+    LT     = auto()      # &lt;
+    GT     = auto()      # &gt;
+    LEQ    = auto()      # &lt;=
+    GEQ    = auto()      # &gt;=
+    # 其他符號
+    ASSIGN = auto()      # =
+    BANG   = auto()      # !
+    LPAREN = auto(); RPAREN = auto()   # ( )
+    LBRACE = auto(); RBRACE = auto()   # { }
+    SEMI   = auto(); COMMA  = auto()   # ; ,
+    # 關鍵字
+    IF = auto(); ELSE   = auto(); WHILE  = auto()
+    FUNC = auto(); RETURN = auto(); PRINT = auto()
+    EOF    = auto()
+
+# 關鍵字對映表
+KEYWORDS = {
+    'if': TT.IF, 'else': TT.ELSE, 'while': TT.WHILE,
+    'func': TT.FUNC, 'return': TT.RETURN, 'print': TT.PRINT,
+}
+
+class Token:
+    __slots__ = ('type', 'val', 'line')
+    def __init__(self, type, val, line):
+        self.type, self.val, self.line = type, val, line
+    def __repr__(self):
+        return f"Token({self.type.name}, {self.val!r}, ln={self.line})"</code></pre>
+
+      <h3>1.2 Lexer 實作</h3>
+      <pre><code class="language-python">class Lexer:
+    def __init__(self, src: str):
+        self.src  = src
+        self.pos  = 0
+        self.line = 1
+
+    # ── 輔助方法 ──────────────────────────────────
+    def peek(self):
+        """看目前字元但不移動"""
+        return self.src[self.pos] if self.pos &lt; len(self.src) else '\0'
+
+    def advance(self):
+        """讀取並移動一格"""
+        ch = self.src[self.pos]; self.pos += 1
+        if ch == '\n': self.line += 1
+        return ch
+
+    def match(self, expected):
+        """若下一個字元是 expected 則吃掉,回傳 True"""
+        if self.peek() == expected:
+            self.advance(); return True
+        return False
+
+    def skip_ws(self):
+        """跳過空白與 // 單行注釋"""
+        while self.pos &lt; len(self.src):
+            c = self.peek()
+            if c in ' \t\r\n':
+                self.advance()
+            elif c == '/' and self.src[self.pos:self.pos+2] == '//':
+                while self.peek() not in ('\n', '\0'):
+                    self.advance()
+            else:
+                break
+
+    # ── 字元群讀取 ────────────────────────────────
+    def read_num(self):
+        """讀取整數或浮點數,回傳 float"""
+        s = self.pos
+        while self.peek().isdigit(): self.advance()
+        if self.peek() == '.':
+            self.advance()
+            while self.peek().isdigit(): self.advance()
+        return float(self.src[s:self.pos])
+
+    def read_str(self):
+        """讀取 "..." 字串字面量(支援 \n \t \\ \")"""
+        buf = []
+        while self.peek() not in ('"', '\0'):
+            ch = self.advance()
+            if ch == '\\':
+                esc = self.advance()
+                buf.append({'n':'\n','t':'\t','\\':'\\','"':'"'}.get(esc, esc))
+            else:
+                buf.append(ch)
+        if self.peek() == '\0':
+            raise SyntaxError(f"ln{self.line}: 字串字面量未終止")
+        self.advance()           # 吃掉結尾的 "
+        return ''.join(buf)
+
+    def read_ident(self):
+        """讀取識別子或關鍵字"""
+        s = self.pos
+        while self.peek().isalnum() or self.peek() == '_':
+            self.advance()
+        return self.src[s:self.pos]
+
+    # ── 主掃描迴圈 ────────────────────────────────
+    def next_token(self) -&gt; Token:
+        self.skip_ws()
+        if self.pos &gt;= len(self.src):
+            return Token(TT.EOF, None, self.line)
+        ln, ch = self.line, self.advance()
+
+        # 數字
+        if ch.isdigit():
+            self.pos -= 1
+            return Token(TT.NUM, self.read_num(), ln)
+        # 字串
+        if ch == '"':
+            return Token(TT.STR, self.read_str(), ln)
+        # 識別子 / 關鍵字
+        if ch.isalpha() or ch == '_':
+            self.pos -= 1
+            name = self.read_ident()
+            return Token(KEYWORDS.get(name, TT.IDENT), name, ln)
+
+        # 單字元運算子
+        simple = {
+            '+': TT.PLUS,  '-': TT.MINUS, '*': TT.STAR,  '/': TT.SLASH,
+            '(': TT.LPAREN,')': TT.RPAREN,'{': TT.LBRACE,'}': TT.RBRACE,
+            ';': TT.SEMI,  ',': TT.COMMA,
+        }
+        if ch in simple:
+            return Token(simple[ch], ch, ln)
+
+        # 雙字元運算子
+        if ch == '=':
+            if self.match('='): return Token(TT.EQ,  '==', ln)
+            return Token(TT.ASSIGN, '=', ln)
+        if ch == '!':
+            if self.match('='): return Token(TT.NEQ, '!=', ln)
+            return Token(TT.BANG, '!', ln)
+        if ch == '&lt;':
+            if self.match('='): return Token(TT.LEQ, '&lt;=', ln)
+            return Token(TT.LT, '&lt;', ln)
+        if ch == '&gt;':
+            if self.match('='): return Token(TT.GEQ, '&gt;=', ln)
+            return Token(TT.GT, '&gt;', ln)
+
+        raise SyntaxError(f"ln{self.line}: 未知字元 {ch!r}")
+
+    def tokenize(self):
+        """掃描全部原始碼,回傳 token 列表"""
+        toks = []
+        while True:
+            t = self.next_token()
+            toks.append(t)
+            if t.type == TT.EOF: break
+        return toks</code></pre>
+
+      <p>快速驗證:</p>
+      <pre><code class="language-python">tokens = Lexer('x = 10 + 3;').tokenize()
+for t in tokens:
+    print(t)
+# Token(IDENT, 'x', ln=1)
+# Token(ASSIGN, '=', ln=1)
+# Token(NUM, 10.0, ln=1)
+# Token(PLUS, '+', ln=1)
+# Token(NUM, 3.0, ln=1)
+# Token(SEMI, ';', ln=1)
+# Token(EOF, None, ln=1)</code></pre>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">關鍵字 vs 識別子</span>
+          <p>Lexer 必須先讀完整個識別子再查 <code>KEYWORDS</code>。
+          若提前比較字元,<code>ifx</code> 會被誤認為 <code>if</code> 加上 <code>x</code>——這叫「最長匹配(maximal munch)」原則。</p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 里程碑 1 驗收 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>為 Mini 加入<strong>取餘運算子 <code>%</code></strong>。你需要:(1) 在 <code>TT</code> 加入 <code>PERCENT = auto()</code>;(2) 在 Lexer 的 <code>simple</code> 字典加入 <code>'%': TT.PERCENT</code>;(3) 在後面的 Parser 中為 <code>TT.PERCENT</code> 設定與 <code>*</code>、<code>/</code> 相同的結合力;(4) 在直譯器的 <code>eval_expr</code> 加入 <code>if op == '%': return lv % rv</code>。完成後驗收:<code>Lexer('10 % 3;').tokenize()</code> 應看到 <code>PERCENT</code> token,且 Mini 能正確計算 <code>print(10 % 3);</code> 輸出 <code>1.0</code>。</p>
+          <details class="solution"><summary>看解答骨架</summary>
+            <div class="sol-body">
+              <pre><code class="language-python"># (1) TT enum 加入
+PERCENT = auto()   # %
+
+# (2) Lexer.next_token 的 simple 字典
+'%': TT.PERCENT,
+
+# (3) Parser 的 LBP 加入(與 * / 同級 = 40)
+TT.PERCENT: 40,
+
+# (4) Interpreter.eval_expr 的 BinOp 分支
+if op == '%': return lv % rv
+
+# 驗收
+toks = Lexer('print(10 % 3);').tokenize()
+# 確認中間有 Token(PERCENT, '%', ln=1)
+
+interp = Interpreter()
+interp.run('print(10 % 3);')
+# 輸出:1.0</code></pre>
+              <p>注意:在 <code>led</code> 中使用 <code>self.expr(LBP[t.type])</code> 時,<code>TT.PERCENT</code> 的 LBP=40 確保 <code>10 % 3 + 1</code> 被解析為 <code>(10 % 3) + 1 = 2</code>,而非 <code>10 % (3 + 1) = 2</code>——雖然結果碰巧相同,但結構正確。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ═══════════════════════════════════════════════════════ -->
+      <h2>里程碑 2 — 語法分析器:遞迴下降 + Pratt Parsing</h2>
+      <!-- ═══════════════════════════════════════════════════════ -->
+
+      <p>
+        Parser 的任務是把平坦的 token 串流轉換成一棵反映<strong>語法結構</strong>的樹。
+        最困難的部分在於<strong>運算子優先級</strong>:
+        <code>1 + 2 * 3</code> 應該解析為 <code>1 + (2 * 3)</code> 而非 <code>(1 + 2) * 3</code>。
+      </p>
+      <p>
+        傳統做法是為每個優先級寫一層函式(equality → comparison → addition → multiply → unary → primary)。
+        這完全可行,但有個更優雅的方案:
+        <strong>Pratt 解析(Pratt parsing / Top-Down Operator Precedence)</strong>,
+        由 Vaughan Pratt 於 1973 年提出。
+      </p>
+
+      <h3>2.1 Pratt 的核心直覺:結合力</h3>
+      <p>
+        給每個<strong>二元運算子</strong>一個數字——<strong>左結合力(Left-Binding Power, LBP)</strong>。
+        數字越大,「吸引」兩側運算元的力量越強。
+        解析時,只要下一個運算子的 LBP <strong>大於</strong>目前的臨界值,就繼續往右吃。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 640 240" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- 背景框 -->
+  <rect x="10" y="10" width="620" height="220" rx="12" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1.5"/>
+
+  <!-- 標題行 -->
+  <rect x="10" y="10" width="620" height="36" rx="12" fill="#2f6f6a"/>
+  <text x="80"  y="33" fill="#fff" font-size="13" font-weight="700">運算子</text>
+  <text x="240" y="33" fill="#fff" font-size="13" font-weight="700">LBP(左結合力)</text>
+  <text x="400" y="33" fill="#fff" font-size="13" font-weight="700">結合方向</text>
+  <text x="530" y="33" fill="#fff" font-size="13" font-weight="700">範例</text>
+
+  <!-- 行 1 -->
+  <rect x="10" y="46" width="620" height="34" fill="#fff"/>
+  <text x="80"  y="68" fill="#374151" font-size="13">( )  括號</text>
+  <text x="240" y="68" fill="#8b5cf6" font-size="13" font-weight="700">— (最高)</text>
+  <text x="400" y="68" fill="#6b7280" font-size="12">n/a</text>
+  <text x="530" y="68" fill="#374151" font-size="12">(2+3)*4</text>
+
+  <!-- 行 2 -->
+  <rect x="10" y="80" width="620" height="34" fill="#f1f5f9"/>
+  <text x="80"  y="102" fill="#374151" font-size="13">-  !  一元</text>
+  <text x="240" y="102" fill="#8b5cf6" font-size="13" font-weight="700">50</text>
+  <text x="400" y="102" fill="#6b7280" font-size="12">右結合</text>
+  <text x="530" y="102" fill="#374151" font-size="12">-(-x) → x</text>
+
+  <!-- 行 3 -->
+  <rect x="10" y="114" width="620" height="34" fill="#fff"/>
+  <text x="80"  y="136" fill="#374151" font-size="13">*  /  乘除</text>
+  <text x="240" y="136" fill="#b4541f" font-size="13" font-weight="700">40</text>
+  <text x="400" y="136" fill="#6b7280" font-size="12">左結合</text>
+  <text x="530" y="136" fill="#374151" font-size="12">6/2*3 → 9</text>
+
+  <!-- 行 4 -->
+  <rect x="10" y="148" width="620" height="34" fill="#f1f5f9"/>
+  <text x="80"  y="170" fill="#374151" font-size="13">+  -  加減</text>
+  <text x="240" y="170" fill="#b4541f" font-size="13" font-weight="700">30</text>
+  <text x="400" y="170" fill="#6b7280" font-size="12">左結合</text>
+  <text x="530" y="170" fill="#374151" font-size="12">1+2-3 → 0</text>
+
+  <!-- 行 5 -->
+  <rect x="10" y="182" width="620" height="34" fill="#fff"/>
+  <text x="80"  y="204" fill="#374151" font-size="13">&lt;  &gt;  &lt;=  &gt;=</text>
+  <text x="240" y="204" fill="#2f6f6a" font-size="13" font-weight="700">20</text>
+  <text x="400" y="204" fill="#6b7280" font-size="12">左結合</text>
+  <text x="530" y="204" fill="#374151" font-size="12">a&lt;b+1</text>
+
+  <!-- 行 6 -->
+  <rect x="10" y="216" width="620" height="14" rx="12" fill="#f1f5f9"/>
+  <text x="80"  y="226" fill="#374151" font-size="13">==  !=  相等</text>
+  <text x="240" y="226" fill="#2f6f6a" font-size="13" font-weight="700">10  (最低)</text>
+
+  <!-- 左側「高↑低↓」標尺 -->
+  <line x1="25" y1="46" x2="25" y2="220" stroke="#8a929b" stroke-width="1.5"/>
+  <text x="18" y="60"  fill="#8b5cf6" font-size="11" text-anchor="middle">高</text>
+  <text x="18" y="75"  fill="#8b5cf6" font-size="11" text-anchor="middle">↑</text>
+  <text x="18" y="195" fill="#2f6f6a" font-size="11" text-anchor="middle">↓</text>
+  <text x="18" y="210" fill="#2f6f6a" font-size="11" text-anchor="middle">低</text>
+</svg>
+        <figcaption>圖 117-2:Mini 語言的運算子優先級表。LBP 越高,優先級越高;相同 LBP 的運算子左結合(先算左邊)。</figcaption>
+      </div>
+
+      <h3>2.2 AST 節點定義</h3>
+      <pre><code class="language-python"># ── AST 節點 ─────────────────────────────────────────────
+
+class Num:       # 數字字面量
+    def __init__(self, value): self.value = value
+
+class Str:       # 字串字面量
+    def __init__(self, value): self.value = value
+
+class Var:       # 變數參考
+    def __init__(self, name): self.name = name
+
+class BinOp:     # 二元運算  op ∈ {'+','-','*','/','&lt;','&gt;','&lt;=','&gt;=','==','!='}
+    def __init__(self, op, left, right):
+        self.op, self.left, self.right = op, left, right
+
+class Unary:     # 一元運算  op ∈ {'-','!'}
+    def __init__(self, op, operand):
+        self.op, self.operand = op, operand
+
+class Assign:    # 指派語句  name = value
+    def __init__(self, name, value): self.name, self.value = name, value
+
+class Block:     # 語句序列  { stmt* }
+    def __init__(self, stmts): self.stmts = stmts
+
+class IfStmt:    # if cond then [else else_blk]
+    def __init__(self, cond, then_blk, else_blk=None):
+        self.cond = cond; self.then_blk = then_blk; self.else_blk = else_blk
+
+class WhileStmt: # while cond body
+    def __init__(self, cond, body): self.cond, self.body = cond, body
+
+class FuncDef:   # func name(params) body
+    def __init__(self, name, params, body):
+        self.name, self.params, self.body = name, params, body
+
+class Call:      # name(args)
+    def __init__(self, name, args): self.name, self.args = name, args
+
+class ReturnStmt:
+    def __init__(self, value): self.value = value
+
+class PrintStmt:
+    def __init__(self, value): self.value = value</code></pre>
+
+      <h3>2.3 Pratt Parser 實作</h3>
+      <pre><code class="language-python"># 各二元運算子的左結合力 (Left-Binding Power)
+LBP = {
+    TT.EQ:    10, TT.NEQ:   10,   # ==  !=
+    TT.LT:    20, TT.GT:    20,   # &lt;   &gt;
+    TT.LEQ:   20, TT.GEQ:   20,   # &lt;=  &gt;=
+    TT.PLUS:  30, TT.MINUS: 30,   # +   -
+    TT.STAR:  40, TT.SLASH: 40,   # *   /
+}
+
+class Parser:
+    def __init__(self, tokens):
+        self.tokens = tokens
+        self.pos    = 0
+
+    def cur(self): return self.tokens[self.pos]
+    def eat(self):
+        t = self.tokens[self.pos]
+        if t.type != TT.EOF: self.pos += 1
+        return t
+    def expect(self, tt):
+        t = self.eat()
+        if t.type != tt:
+            raise SyntaxError(f"ln{t.line}: 預期 {tt.name},得到 {t.type.name} ({t.val!r})")
+        return t
+    def check(self, tt): return self.cur().type == tt
+    def match(self, tt):
+        if self.check(tt): self.eat(); return True
+        return False
+
+    # ════════════════════════════════════════════════════
+    # Pratt 核心
+    # ════════════════════════════════════════════════════
+    def expr(self, rbp=0):
+        """
+        解析一個運算式,rbp = 呼叫者的右結合力(right-binding power)。
+        只要下一個 token 的 LBP &gt; rbp,就繼續把它吃進來。
+        """
+        t    = self.eat()
+        left = self.nud(t)                              # 前置語意(prefix)
+        while LBP.get(self.cur().type, 0) &gt; rbp:      # 繼續吃 LBP 更強的運算子
+            t    = self.eat()
+            left = self.led(left, t)                    # 中置語意(infix)
+        return left
+
+    def nud(self, t):
+        """null denotation:token 出現在前置(prefix)位置時的語意"""
+        if t.type == TT.NUM:   return Num(t.val)
+        if t.type == TT.STR:   return Str(t.val)
+        if t.type == TT.IDENT:
+            if self.check(TT.LPAREN):           # 函式呼叫 f(...)
+                self.eat()                      # 吃掉 '('
+                args = []
+                if not self.check(TT.RPAREN):
+                    args.append(self.expr(0))
+                    while self.match(TT.COMMA):
+                        args.append(self.expr(0))
+                self.expect(TT.RPAREN)
+                return Call(t.val, args)
+            return Var(t.val)                   # 普通變數參考
+        if t.type == TT.MINUS: return Unary('-', self.expr(50))  # 前置 -
+        if t.type == TT.BANG:  return Unary('!', self.expr(50))  # 前置 !
+        if t.type == TT.LPAREN:                 # 括號分組 (...)
+            e = self.expr(0)
+            self.expect(TT.RPAREN)
+            return e
+        raise SyntaxError(f"ln{t.line}: 未預期的 token {t.type.name}")
+
+    def led(self, left, t):
+        """
+        left denotation:token 出現在中置(infix)位置時的語意。
+        傳入 LBP[t.type] 作為 rbp,確保左結合性:
+        '1 - 2 - 3' → (1-2)-3,而非 1-(2-3)。
+        """
+        return BinOp(t.val, left, self.expr(LBP[t.type]))
+
+    # ════════════════════════════════════════════════════
+    # 語句解析
+    # ════════════════════════════════════════════════════
+    def statement(self):
+        t = self.cur()
+        if t.type == TT.IF:     return self._if()
+        if t.type == TT.WHILE:  return self._while()
+        if t.type == TT.FUNC:   return self._func()
+        if t.type == TT.RETURN:
+            self.eat()
+            v = self.expr(0); self.expect(TT.SEMI)
+            return ReturnStmt(v)
+        if t.type == TT.PRINT:
+            self.eat()
+            self.expect(TT.LPAREN)
+            v = self.expr(0)
+            self.expect(TT.RPAREN); self.expect(TT.SEMI)
+            return PrintStmt(v)
+        # 運算式語句 或 指派語句
+        e = self.expr(0)
+        if self.match(TT.ASSIGN):        # name = value;
+            if not isinstance(e, Var):
+                raise SyntaxError("指派目標必須是識別子")
+            val = self.expr(0); self.expect(TT.SEMI)
+            return Assign(e.name, val)
+        self.expect(TT.SEMI)
+        return e                         # 純運算式語句
+
+    def block(self):
+        self.expect(TT.LBRACE)
+        stmts = []
+        while not self.check(TT.RBRACE) and not self.check(TT.EOF):
+            stmts.append(self.statement())
+        self.expect(TT.RBRACE)
+        return Block(stmts)
+
+    def _if(self):
+        self.expect(TT.IF)
+        cond = self.expr(0)
+        then = self.block()
+        else_ = self.block() if self.match(TT.ELSE) else None
+        return IfStmt(cond, then, else_)
+
+    def _while(self):
+        self.expect(TT.WHILE)
+        cond = self.expr(0); body = self.block()
+        return WhileStmt(cond, body)
+
+    def _func(self):
+        self.expect(TT.FUNC)
+        name = self.expect(TT.IDENT).val
+        self.expect(TT.LPAREN)
+        params = []
+        if not self.check(TT.RPAREN):
+            params.append(self.expect(TT.IDENT).val)
+            while self.match(TT.COMMA):
+                params.append(self.expect(TT.IDENT).val)
+        self.expect(TT.RPAREN)
+        return FuncDef(name, params, self.block())
+
+    def parse(self):
+        stmts = []
+        while not self.check(TT.EOF):
+            stmts.append(self.statement())
+        return Block(stmts)</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">Pratt 解析的魔法</span>
+          <p><code>expr(rbp)</code> 的迴圈條件 <code>LBP[cur] &gt; rbp</code> 只有一行,卻同時處理了優先級與左結合性:
+          <br>• 優先級:LBP(*)=40 &gt; LBP(+)=30,所以 <code>1+2*3</code> 的 <code>*</code> 會被 right-side 的 <code>expr(30)</code> 吸進去,變成 <code>1+(2*3)</code>。
+          <br>• 左結合:<code>led</code> 傳入 <code>LBP[t]</code>(不是 -1),所以相同優先級的運算子不再被右吸,<code>1-2-3</code> 解析為 <code>(1-2)-3</code>。</p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 里程碑 2 驗收 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>手動追蹤 Pratt Parser 解析 <code>(2 + 3) * 4</code> 的過程。寫出每一步 <code>expr(rbp)</code>/<code>nud</code>/<code>led</code> 的呼叫順序與返回值。最終的 AST 應該是什麼形狀?</p>
+          <details class="solution"><summary>看解析過程</summary>
+            <div class="sol-body">
+              <pre><code class="language-text">expr(0)
+  eat → Token(LPAREN, '(')
+  nud(LPAREN):
+    expr(0)            ← 解析括號內
+      eat → Token(NUM, 2)
+      nud(NUM) → Num(2)
+      cur=PLUS, LBP=30 &gt; 0? YES → eat PLUS
+      led(Num(2), PLUS):
+        expr(30)       ← 右側,rbp=30
+          eat → Token(NUM, 3)
+          nud(NUM) → Num(3)
+          cur=RPAREN, LBP=0 &gt; 30? NO
+          return Num(3)
+        return BinOp('+', Num(2), Num(3))
+      left = BinOp('+', Num(2), Num(3))
+      cur=RPAREN, LBP=0 &gt; 0? NO
+      return BinOp('+', Num(2), Num(3))
+    expect(RPAREN) → 吃掉 ')'
+    return BinOp('+', Num(2), Num(3))   ← nud 的返回值
+  left = BinOp('+', Num(2), Num(3))
+  cur=STAR, LBP=40 &gt; 0? YES → eat STAR
+  led(left, STAR):
+    expr(40)
+      eat → Token(NUM, 4)
+      nud(NUM) → Num(4)
+      cur=SEMI/EOF, LBP=0 &gt; 40? NO
+      return Num(4)
+    return BinOp('*', BinOp('+',Num(2),Num(3)), Num(4))
+  left = BinOp('*', BinOp('+',Num(2),Num(3)), Num(4))
+  cur=EOF, LBP=0 &gt; 0? NO
+  return BinOp('*', BinOp('+',Num(2),Num(3)), Num(4))</code></pre>
+              <p>最終 AST:</p>
+              <pre><code class="language-text">BinOp('*')
+├── BinOp('+')
+│   ├── Num(2)
+│   └── Num(3)
+└── Num(4)</code></pre>
+              <p>求值:先算 <code>2+3=5</code>,再算 <code>5*4=20</code>。括號確保 <code>+</code> 被 <code>nud</code>(括號的語意)整個包起來再返回,使 <code>*</code> 的左子節點是整個 <code>BinOp('+',...)</code>。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ═══════════════════════════════════════════════════════ -->
+      <h2>里程碑 3 — AST 與樹走訪直譯器</h2>
+      <!-- ═══════════════════════════════════════════════════════ -->
+
+      <p>
+        有了 AST,最快讓語言「跑起來」的方式是<strong>樹走訪直譯器(tree-walking interpreter)</strong>:
+        直接遞迴走訪每個 AST 節點、求值、執行——不需要任何中間表示。
+        CPython 早期版本就是這樣做的(後來改成位元碼)。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 460 290" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="ah2" markerWidth="8" markerHeight="7" refX="7" refY="3.5" orient="auto">
+      <path d="M0,0 L8,3.5 L0,7 Z" fill="#8a929b"/>
+    </marker>
+  </defs>
+
+  <!-- 標題 -->
+  <text x="230" y="18" text-anchor="middle" fill="#374151" font-size="13" font-weight="700">AST for  (2 + 3) * 4</text>
+
+  <!-- Root: BinOp * -->
+  <rect x="165" y="28" width="130" height="50" rx="10" fill="#2f6f6a"/>
+  <text x="230" y="50" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">BinOp</text>
+  <text x="230" y="68" text-anchor="middle" fill="#cfe6e2" font-size="12">op = '*'</text>
+
+  <!-- 邊:root → left, root → right -->
+  <line x1="195" y1="78" x2="130" y2="138" stroke="#8a929b" stroke-width="1.8" marker-end="url(#ah2)"/>
+  <line x1="265" y1="78" x2="330" y2="138" stroke="#8a929b" stroke-width="1.8" marker-end="url(#ah2)"/>
+  <text x="152" y="120" fill="#8a929b" font-size="10">left</text>
+  <text x="302" y="120" fill="#8a929b" font-size="10">right</text>
+
+  <!-- Left child: BinOp + -->
+  <rect x="55"  y="140" width="150" height="50" rx="10" fill="#2f6f6a"/>
+  <text x="130" y="162" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">BinOp</text>
+  <text x="130" y="180" text-anchor="middle" fill="#cfe6e2" font-size="12">op = '+'</text>
+
+  <!-- Right child: Num(4) -->
+  <rect x="275" y="140" width="130" height="50" rx="10" fill="#b4541f"/>
+  <text x="340" y="162" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">Num</text>
+  <text x="340" y="180" text-anchor="middle" fill="#f6e7dd" font-size="12">value = 4.0</text>
+
+  <!-- 邊:left → Num(2), left → Num(3) -->
+  <line x1="100" y1="190" x2="75"  y2="245" stroke="#8a929b" stroke-width="1.8" marker-end="url(#ah2)"/>
+  <line x1="160" y1="190" x2="195" y2="245" stroke="#8a929b" stroke-width="1.8" marker-end="url(#ah2)"/>
+  <text x="74"  y="230" fill="#8a929b" font-size="10">left</text>
+  <text x="170" y="230" fill="#8a929b" font-size="10">right</text>
+
+  <!-- Num(2) -->
+  <rect x="20"  y="248" width="120" height="40" rx="8" fill="#8b5cf6"/>
+  <text x="80"  y="265" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">Num</text>
+  <text x="80"  y="281" text-anchor="middle" fill="#ece5ff" font-size="12">value = 2.0</text>
+
+  <!-- Num(3) -->
+  <rect x="155" y="248" width="120" height="40" rx="8" fill="#8b5cf6"/>
+  <text x="215" y="265" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">Num</text>
+  <text x="215" y="281" text-anchor="middle" fill="#ece5ff" font-size="12">value = 3.0</text>
+
+  <!-- 求值注解 -->
+  <text x="370" y="275" fill="#16a34a" font-size="11" font-weight="600">eval:</text>
+  <text x="370" y="289" fill="#16a34a" font-size="11">(2+3)*4=20</text>
+</svg>
+        <figcaption>圖 117-3:<code>(2 + 3) * 4</code> 的 AST。直譯器後序走訪(先算葉節點,再算根):先得 2、3,加得 5,再乘 4 得 20。</figcaption>
+      </div>
+
+      <h3>3.1 作用域環境</h3>
+      <pre><code class="language-python">class ReturnValue(Exception):
+    """用 Exception 傳遞 return 值——這是實作 early return 的標準技巧"""
+    def __init__(self, value): self.value = value
+
+class Env:
+    """
+    作用域鏈(scope chain):每個 Env 是一層作用域,parent 指向外層。
+    查變數時從內層一層一層往外找。
+    """
+    def __init__(self, parent=None):
+        self.vars   = {}
+        self.parent = parent
+
+    def get(self, name):
+        if name in self.vars:    return self.vars[name]
+        if self.parent:          return self.parent.get(name)
+        raise NameError(f"未定義變數:{name}")
+
+    def set(self, name, val):
+        """
+        指派:在最近的已定義層修改;若無則在當前層定義。
+        簡化版:Mini 採「定義即指派」語意。
+        """
+        if name in self.vars or self.parent is None:
+            self.vars[name] = val
+        elif self.parent:
+            self.parent.set(name, val)
+
+    def define(self, name, val):
+        """強制在當前層建立新綁定(用於函式參數)"""
+        self.vars[name] = val</code></pre>
+
+      <h3>3.2 樹走訪直譯器</h3>
+      <pre><code class="language-python">class Interpreter:
+    def __init__(self):
+        self.globals = Env()
+        self.funcs   = {}          # 函式定義表
+
+    # ── 運算式求值 ────────────────────────────────
+    def eval_expr(self, node, env):
+        if isinstance(node, Num):    return node.value
+        if isinstance(node, Str):    return node.value
+        if isinstance(node, Var):    return env.get(node.name)
+
+        if isinstance(node, Unary):
+            v = self.eval_expr(node.operand, env)
+            return -v if node.op == '-' else not v
+
+        if isinstance(node, BinOp):
+            lv = self.eval_expr(node.left,  env)
+            rv = self.eval_expr(node.right, env)
+            op = node.op
+            if op == '+':   return lv + rv
+            if op == '-':   return lv - rv
+            if op == '*':   return lv * rv
+            if op == '/':
+                if rv == 0: raise ZeroDivisionError("Mini: 除以零")
+                return lv / rv
+            if op == '&lt;':   return lv &lt; rv
+            if op == '&gt;':   return lv &gt; rv
+            if op == '&lt;=':  return lv &lt;= rv
+            if op == '&gt;=':  return lv &gt;= rv
+            if op == '==':  return lv == rv
+            if op == '!=':  return lv != rv
+
+        if isinstance(node, Call):
+            fn = self.funcs.get(node.name)
+            if fn is None:
+                raise NameError(f"未定義函式:{node.name}")
+            args = [self.eval_expr(a, env) for a in node.args]
+            local = Env(self.globals)              # 函式在全域作用域下執行
+            for p, a in zip(fn.params, args):
+                local.define(p, a)
+            try:
+                self.exec_block(fn.body, local)
+            except ReturnValue as rv:
+                return rv.value
+            return None
+
+        raise TypeError(f"未知 AST 節點:{type(node).__name__}")
+
+    # ── 語句執行 ──────────────────────────────────
+    def exec_stmt(self, stmt, env):
+        if isinstance(stmt, Assign):
+            env.set(stmt.name, self.eval_expr(stmt.value, env))
+        elif isinstance(stmt, PrintStmt):
+            print(self.eval_expr(stmt.value, env))
+        elif isinstance(stmt, IfStmt):
+            if self.eval_expr(stmt.cond, env):
+                self.exec_block(stmt.then_blk, Env(env))
+            elif stmt.else_blk:
+                self.exec_block(stmt.else_blk, Env(env))
+        elif isinstance(stmt, WhileStmt):
+            while self.eval_expr(stmt.cond, env):
+                self.exec_block(stmt.body, Env(env))
+        elif isinstance(stmt, FuncDef):
+            self.funcs[stmt.name] = stmt     # 把函式存入全域函式表
+        elif isinstance(stmt, ReturnStmt):
+            raise ReturnValue(self.eval_expr(stmt.value, env))
+        else:
+            self.eval_expr(stmt, env)        # 運算式語句:求值後丟棄
+
+    def exec_block(self, block, env):
+        for s in block.stmts:
+            self.exec_stmt(s, env)
+
+    def run(self, source: str):
+        """一站式:原始碼 → 詞法 → 語法 → 執行"""
+        tokens = Lexer(source).tokenize()
+        ast    = Parser(tokens).parse()
+        self.exec_block(ast, self.globals)</code></pre>
+
+      <p>完整執行一段 Mini 程式:</p>
+      <pre><code class="language-python">src = """
+func fib(n) {
+    if n &lt;= 1 { return n; }
+    return fib(n - 1) + fib(n - 2);
+}
+print(fib(10));
+"""
+Interpreter().run(src)   # 輸出:55.0</code></pre>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 里程碑 3 驗收 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>在直譯器中為 Mini 加入邏輯運算子 <code>and</code> 與 <code>or</code>(短路求值)。步驟:(1) 在 <code>TT</code> 加入 <code>AND = auto()</code>、<code>OR = auto()</code>;(2) 在 <code>KEYWORDS</code> 加入 <code>'and': TT.AND, 'or': TT.OR</code>;(3) 在 <code>LBP</code> 設定 <code>TT.OR: 5, TT.AND: 8</code>(優先級低於比較);(4) 在 <code>led</code> 函式加入短路邏輯:不能直接用 Python 的 <code>+</code> 之類;需要在 <code>eval_expr</code> 的 <code>BinOp</code> 分支加入特判。驗收:<code>Interpreter().run('print(0 or 5);')</code> 輸出 <code>5</code>;<code>print(1 and 0);</code> 輸出 <code>0</code>。</p>
+          <details class="solution"><summary>看解答骨架</summary>
+            <div class="sol-body">
+              <pre><code class="language-python"># TT enum
+AND = auto(); OR = auto()
+
+# KEYWORDS
+'and': TT.AND, 'or': TT.OR,
+
+# LBP(低於比較運算子 20)
+TT.OR:  5,
+TT.AND: 8,
+
+# eval_expr:在處理 BinOp 其餘運算子前,先特判 and/or 實現短路求值
+if isinstance(node, BinOp) and node.op in ('and', 'or'):
+    lv = self.eval_expr(node.left, env)
+    if node.op == 'and':
+        return lv if not lv else self.eval_expr(node.right, env)
+    else:  # or
+        return lv if lv else self.eval_expr(node.right, env)
+# 其餘二元運算子才照原本 lv/rv 都求值的路徑
+
+# 驗收
+Interpreter().run('print(0 or 5);')    # 5
+Interpreter().run('print(1 and 0);')   # 0
+Interpreter().run('print(1 and 2);')   # 2</code></pre>
+              <p>注意 <code>led</code> 函式不需要改:它只存 <code>BinOp(t.val, left, self.expr(LBP[t.type]))</code>,t.val 是 <code>'and'</code> 或 <code>'or'</code>。短路求值的關鍵是在 <code>eval_expr</code> 裡提前特判——<strong>右運算元只在左側無法決定結果時才求值</strong>,不可先把左右都 eval 完再判斷。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ═══════════════════════════════════════════════════════ -->
+      <h2>里程碑 4 — 語意分析</h2>
+      <!-- ═══════════════════════════════════════════════════════ -->
+
+      <p>
+        語法分析確認程式「形狀合法」,但不保證語意正確。例如使用未宣告的變數、
+        在函式外用 <code>return</code>——這些錯誤語法上合法,語意上不行。
+        <strong>語意分析(semantic analysis)</strong>在執行前靜態偵測這類問題。
+      </p>
+      <p>
+        Mini 的語意分析器做兩件事:(1) <strong>作用域解析(scope resolution)</strong>:確認每個 <code>Var</code> 都有對應的定義;
+        (2) <strong>return 合法性檢查</strong>:確認 <code>return</code> 只出現在函式內。
+      </p>
+
+      <pre><code class="language-python">class SemanticError(Exception): pass
+
+class Checker:
+    """
+    靜態語意檢查器:走訪 AST,回報語意錯誤。
+    採「定義-使用」分析(Def-Use Analysis)。
+    """
+    def __init__(self):
+        self.scope_stack = [set()]   # 作用域鏈(集合的堆疊)
+        self.in_func     = 0         # 目前是否在函式內(計數,支援巢狀函式)
+
+    def define(self, name): self.scope_stack[-1].add(name)
+    def lookup(self, name):
+        return any(name in sc for sc in self.scope_stack)
+
+    def push_scope(self): self.scope_stack.append(set())
+    def pop_scope(self):  self.scope_stack.pop()
+
+    # ── 走訪 ──────────────────────────────────────
+    def check_expr(self, node):
+        if isinstance(node, (Num, Str)): return
+        if isinstance(node, Var):
+            if not self.lookup(node.name):
+                raise SemanticError(f"未定義變數:{node.name}")
+        elif isinstance(node, (BinOp, Call)):
+            if isinstance(node, BinOp):
+                self.check_expr(node.left); self.check_expr(node.right)
+            else:   # Call
+                for a in node.args: self.check_expr(a)
+        elif isinstance(node, Unary):
+            self.check_expr(node.operand)
+
+    def check_stmt(self, stmt):
+        if isinstance(stmt, Assign):
+            self.check_expr(stmt.value)
+            self.define(stmt.name)            # 指派後才算「已定義」
+        elif isinstance(stmt, PrintStmt):
+            self.check_expr(stmt.value)
+        elif isinstance(stmt, ReturnStmt):
+            if self.in_func == 0:
+                raise SemanticError("return 只能在函式內使用")
+            self.check_expr(stmt.value)
+        elif isinstance(stmt, IfStmt):
+            self.check_expr(stmt.cond)
+            self.check_block(stmt.then_blk)
+            if stmt.else_blk: self.check_block(stmt.else_blk)
+        elif isinstance(stmt, WhileStmt):
+            self.check_expr(stmt.cond)
+            self.check_block(stmt.body)
+        elif isinstance(stmt, FuncDef):
+            self.define(stmt.name)
+            self.push_scope()
+            self.in_func += 1
+            for p in stmt.params: self.define(p)
+            self.check_block(stmt.body)
+            self.in_func -= 1
+            self.pop_scope()
+        else:
+            self.check_expr(stmt)
+
+    def check_block(self, block):
+        self.push_scope()
+        for s in block.stmts: self.check_stmt(s)
+        self.pop_scope()
+
+    def check(self, ast: Block):
+        for s in ast.stmts: self.check_stmt(s)</code></pre>
+
+      <p>實際使用:</p>
+      <pre><code class="language-python">src_bad = "print(z);"   # z 從未定義
+try:
+    ast = Parser(Lexer(src_bad).tokenize()).parse()
+    Checker().check(ast)
+except SemanticError as e:
+    print(f"語意錯誤:{e}")   # 語意錯誤:未定義變數:z</code></pre>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">型別檢查是下一步</span>
+          <p>本書 §9 章討論的<strong>型別系統(type system)</strong>可以整合在語意分析階段:
+          在走訪時為每個運算式推導型別,若 <code>+</code> 的兩側型別不相容則報錯。
+          Mini 目前只有動態型別,型別錯誤在執行時才爆出——靜態型別語言(如 TypeScript、Rust)在編譯時就攔截這些錯誤。</p>
+        </div>
+      </div>
+
+      <!-- ═══════════════════════════════════════════════════════ -->
+      <h2>里程碑 5 — 中間表示與位元碼</h2>
+      <!-- ═══════════════════════════════════════════════════════ -->
+
+      <p>
+        樹走訪直譯器簡單,但每次執行都要重新走訪 AST——效率較低。
+        真實的語言(CPython、JVM、Lua、LuaJIT)會先把 AST 編譯成一種
+        <strong>中間表示(IR, Intermediate Representation)</strong>,
+        再由<strong>虛擬機(VM)</strong>執行。
+        最常見的 IR 形式是<strong>位元碼(bytecode)</strong>:
+        一序列緊湊的數值指令,可以快速被 VM 迴圈執行。
+      </p>
+
+      <h3>5.1 Mini 指令集</h3>
+      <pre><code class="language-python">from enum import IntEnum
+
+class Op(IntEnum):
+    # 堆疊操作
+    PUSH_CONST    = 0    # arg: constant_idx  → 把常數推入堆疊
+    LOAD_VAR      = 1    # arg: name_idx      → 把變數值推入堆疊
+    STORE_VAR     = 2    # arg: name_idx      → pop 並存入變數
+    POP           = 3    #                    → 丟棄堆疊頂端
+
+    # 算術
+    ADD = 4; SUB = 5; MUL = 6; DIV = 7
+
+    # 比較(結果為 True/False 推入堆疊)
+    LT = 8; GT = 9; LEQ = 10; GEQ = 11; EEQ = 12; NEQ = 13
+
+    # 一元
+    NEG = 14   # 取負
+    NOT = 15   # 邏輯反
+
+    # 控制流
+    JUMP          = 16   # arg: addr   → 無條件跳到 addr
+    JUMP_IF_FALSE = 17   # arg: addr   → pop; 若 falsy 則跳
+    CALL          = 18   # arg: name_idx, argc → 呼叫函式
+    RETURN        = 19   # pop 值後返回
+    PRINT         = 20   # pop 值後印出
+    HALT          = 21   # 停止執行</code></pre>
+
+      <p>
+        Mini VM 是一台<strong>堆疊式虛擬機(stack-based VM)</strong>——與 JVM、WASM、CPython 的設計相同。
+        本書 §23 章詳細介紹了 nand2tetris Jack 編譯器如何把 Jack 語言編成相似的堆疊指令集;
+        這裡我們的設計來自同一個家族。
+      </p>
+
+      <h3>5.2 Bytecode 編譯器</h3>
+      <pre><code class="language-python">OP_MAP = {
+    '+': Op.ADD, '-': Op.SUB, '*': Op.MUL, '/': Op.DIV,
+    '&lt;': Op.LT,  '&gt;': Op.GT,  '&lt;=': Op.LEQ, '&gt;=': Op.GEQ,
+    '==': Op.EEQ, '!=': Op.NEQ,
+}
+
+class Code:
+    """單一函式(或主程式)的位元碼區段"""
+    def __init__(self):
+        self.bytecode = []      # [(Op, *args), ...]
+        self.consts   = []      # 常數池
+        self.names    = []      # 名稱池(變數/函式名)
+        self.params   = []      # 函式參數名(主程式為空)
+
+    def const_idx(self, v):
+        if v not in self.consts: self.consts.append(v)
+        return self.consts.index(v)
+
+    def name_idx(self, n):
+        if n not in self.names: self.names.append(n)
+        return self.names.index(n)
+
+    def emit(self, *instr):
+        self.bytecode.append(instr)
+        return len(self.bytecode) - 1   # 回傳指令位址(用於 patch)
+
+    def patch(self, addr, *instr):
+        self.bytecode[addr] = instr
+
+class Compiler:
+    def __init__(self):
+        self.funcs = {}         # 函式名 → Code
+
+    def compile(self, ast: Block) -&gt; Code:
+        code = Code()
+        for s in ast.stmts:
+            self._stmt(s, code)
+        code.emit(Op.HALT)
+        return code
+
+    # ── 運算式編譯 ────────────────────────────────
+    def _expr(self, node, code: Code):
+        if isinstance(node, Num):
+            code.emit(Op.PUSH_CONST, code.const_idx(node.value))
+        elif isinstance(node, Str):
+            code.emit(Op.PUSH_CONST, code.const_idx(node.value))
+        elif isinstance(node, Var):
+            code.emit(Op.LOAD_VAR, code.name_idx(node.name))
+        elif isinstance(node, Unary):
+            self._expr(node.operand, code)
+            code.emit(Op.NEG if node.op == '-' else Op.NOT)
+        elif isinstance(node, BinOp):
+            self._expr(node.left,  code)
+            self._expr(node.right, code)
+            code.emit(OP_MAP[node.op])
+        elif isinstance(node, Call):
+            for a in node.args:
+                self._expr(a, code)
+            code.emit(Op.CALL, code.name_idx(node.name), len(node.args))
+
+    # ── 語句編譯 ──────────────────────────────────
+    def _stmt(self, stmt, code: Code):
+        if isinstance(stmt, Assign):
+            self._expr(stmt.value, code)
+            code.emit(Op.STORE_VAR, code.name_idx(stmt.name))
+        elif isinstance(stmt, PrintStmt):
+            self._expr(stmt.value, code)
+            code.emit(Op.PRINT)
+        elif isinstance(stmt, IfStmt):
+            self._expr(stmt.cond, code)
+            jif = code.emit(Op.JUMP_IF_FALSE, 0)   # 先填 0,之後 patch
+            for s in stmt.then_blk.stmts: self._stmt(s, code)
+            if stmt.else_blk:
+                j   = code.emit(Op.JUMP, 0)
+                code.patch(jif, Op.JUMP_IF_FALSE, len(code.bytecode))
+                for s in stmt.else_blk.stmts: self._stmt(s, code)
+                code.patch(j, Op.JUMP, len(code.bytecode))
+            else:
+                code.patch(jif, Op.JUMP_IF_FALSE, len(code.bytecode))
+        elif isinstance(stmt, WhileStmt):
+            loop = len(code.bytecode)               # 迴圈頂端位址
+            self._expr(stmt.cond, code)
+            jout = code.emit(Op.JUMP_IF_FALSE, 0)
+            for s in stmt.body.stmts: self._stmt(s, code)
+            code.emit(Op.JUMP, loop)                # 跳回頂端
+            code.patch(jout, Op.JUMP_IF_FALSE, len(code.bytecode))
+        elif isinstance(stmt, FuncDef):
+            fc = Code(); fc.params = stmt.params
+            for s in stmt.body.stmts: self._stmt(s, fc)
+            fc.emit(Op.RETURN)                      # 確保一定 return
+            self.funcs[stmt.name] = fc
+        elif isinstance(stmt, ReturnStmt):
+            self._expr(stmt.value, code)
+            code.emit(Op.RETURN)
+        else:
+            self._expr(stmt, code)
+            code.emit(Op.POP)                       # 運算式語句:結果丟棄</code></pre>
+
+      <p>來看看 <code>print(3 + 4 * 2);</code> 被編成什麼位元碼:</p>
+      <pre><code class="language-python">src = 'print(3 + 4 * 2);'
+tokens = Lexer(src).tokenize()
+ast    = Parser(tokens).parse()
+c      = Compiler()
+code   = c.compile(ast)
+
+for i, instr in enumerate(code.bytecode):
+    print(f"{i:3d}: {instr}")
+
+# 0: (Op.PUSH_CONST, 0)    ← consts[0] = 3.0
+# 1: (Op.PUSH_CONST, 1)    ← consts[1] = 4.0
+# 2: (Op.PUSH_CONST, 2)    ← consts[2] = 2.0
+# 3: (Op.MUL,)             ← 4*2 = 8(先乘,因為 Parser 已正確處理優先級)
+# 4: (Op.ADD,)             ← 3+8 = 11
+# 5: (Op.PRINT,)
+# 6: (Op.HALT,)</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">優先級已被 Parser 解決</span>
+          <p>位元碼裡不需要括號或優先級資訊——因為 Pratt Parser 已經把正確的結構編碼進 AST,
+          編譯器按後序走訪 AST 就能自然產生正確的指令序列。
+          <code>4 * 2</code> 的位元碼出現在 <code>+ 3</code> 之前,這讓 VM 先算乘法再算加法。</p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 里程碑 5 驗收 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>手動追蹤以下 Mini 程式的位元碼執行,在每條指令後寫出堆疊狀態:</p>
+          <pre><code class="language-text">x = 5;
+print(x * 2 + 3);</code></pre>
+          <p>預期位元碼序列(部分):</p>
+          <pre><code class="language-text">0: PUSH_CONST 0   (5.0)    ← consts[0] = 5.0
+1: STORE_VAR  0   (x)
+2: LOAD_VAR   0   (x)
+3: PUSH_CONST 1   (2.0)    ← consts[1] = 2.0
+4: MUL
+5: PUSH_CONST 2   (3.0)    ← consts[2] = 3.0
+6: ADD
+7: PRINT
+8: HALT</code></pre>
+          <p>常數池依 <code>const_idx</code> 加入順序:5.0 → 索引 0、2.0 → 索引 1、3.0 → 索引 2。寫出 ip=2 到 ip=8 每步的堆疊快照(用 <code>[底部, ..., 頂部]</code> 表示)。</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-text">前置:PUSH 5.0 → [5.0]
+      STORE x   → []   (x = 5.0)
+
+ip=2: LOAD_VAR x      → [5.0]
+ip=3: PUSH_CONST 2.0  → [5.0, 2.0]
+ip=4: MUL             → [10.0]       ← pop 5.0、2.0;push 10.0
+ip=5: PUSH_CONST 3.0  → [10.0, 3.0]
+ip=6: ADD             → [13.0]       ← pop 10.0、3.0;push 13.0
+ip=7: PRINT           → []           ← pop 13.0;輸出 13.0
+ip=8: HALT            → 程式結束</code></pre>
+              <p>這個過程清楚說明了堆疊式 VM 的工作原理:每個操作數先被推入堆疊,運算子從堆疊取走操作數、把結果推回去。不需要暫存器。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ═══════════════════════════════════════════════════════ -->
+      <h2>里程碑 6 — 位元碼虛擬機與優化一瞥</h2>
+      <!-- ═══════════════════════════════════════════════════════ -->
+
+      <p>
+        VM 是一個大迴圈:讀取指令、依 <code>Op</code> 分派、操作堆疊,一直到 <code>HALT</code>。
+        這種設計叫做<strong>取指-解碼-執行迴圈(fetch-decode-execute loop)</strong>,
+        與真實 CPU 的工作方式結構上完全相同(本書 §23 章)。
+      </p>
+
+      <pre><code class="language-python">class VM:
+    def __init__(self, compiler: Compiler):
+        self.compiler = compiler
+        self.globals  = {}          # 全域變數
+
+    def run_code(self, code: Code, local_vars: dict = None) -&gt; object:
+        """執行一個 Code 物件,回傳最後的 return 值(若有)"""
+        stack  = []
+        vars_  = dict(local_vars or {})
+        ip     = 0
+        bc     = code.bytecode
+
+        def push(v): stack.append(v)
+        def pop():   return stack.pop()
+
+        while ip &lt; len(bc):
+            instr = bc[ip]; ip += 1
+            op = instr[0]
+
+            if op == Op.PUSH_CONST:
+                push(code.consts[instr[1]])
+
+            elif op == Op.LOAD_VAR:
+                name = code.names[instr[1]]
+                push(vars_.get(name, self.globals.get(name)))
+
+            elif op == Op.STORE_VAR:
+                name = code.names[instr[1]]
+                val  = pop()
+                vars_[name] = val
+                if code.params == []:          # 主程式:寫回全域
+                    self.globals[name] = val
+
+            elif op == Op.POP:
+                pop()
+
+            elif op in (Op.ADD, Op.SUB, Op.MUL, Op.DIV,
+                        Op.LT,  Op.GT,  Op.LEQ, Op.GEQ,
+                        Op.EEQ, Op.NEQ):
+                b, a = pop(), pop()
+                result = {
+                    Op.ADD: a+b, Op.SUB: a-b, Op.MUL: a*b, Op.DIV: a/b,
+                    Op.LT:  a&lt;b, Op.GT:  a&gt;b, Op.LEQ: a&lt;=b, Op.GEQ: a&gt;=b,
+                    Op.EEQ: a==b, Op.NEQ: a!=b,
+                }[op]
+                push(result)
+
+            elif op == Op.NEG: push(-pop())
+            elif op == Op.NOT: push(not pop())
+            elif op == Op.PRINT: print(pop())
+
+            elif op == Op.JUMP:
+                ip = instr[1]
+
+            elif op == Op.JUMP_IF_FALSE:
+                if not pop(): ip = instr[1]
+
+            elif op == Op.CALL:
+                fname = code.names[instr[1]]
+                argc  = instr[2]
+                args  = [stack.pop() for _ in range(argc)][::-1]  # 還原順序
+                fn_code = self.compiler.funcs.get(fname)
+                if fn_code is None:
+                    raise NameError(f"未定義函式:{fname}")
+                local = dict(zip(fn_code.params, args))
+                ret = self.run_code(fn_code, local)   # 遞迴執行
+                push(ret if ret is not None else 0.0)
+
+            elif op == Op.RETURN:
+                return pop()
+
+            elif op == Op.HALT:
+                break
+
+        return None
+
+    def run(self, source: str):
+        tokens = Lexer(source).tokenize()
+        ast    = Parser(tokens).parse()
+        code   = self.compiler.compile(ast)
+        self.run_code(code)</code></pre>
+
+      <h3>6.1 優化一瞥:常數摺疊</h3>
+      <p>
+        <strong>常數摺疊(constant folding)</strong>是編譯器最基本的優化:
+        若一個 <code>BinOp</code> 的兩個子節點都是常數,直接在編譯期計算結果、替換成單一 <code>Num</code> 節點。
+      </p>
+      <pre><code class="language-python">def fold_constants(node):
+    """在 AST 上做常數摺疊優化(遞迴後序走訪)"""
+    if isinstance(node, BinOp):
+        node.left  = fold_constants(node.left)
+        node.right = fold_constants(node.right)
+        if isinstance(node.left, Num) and isinstance(node.right, Num):
+            lv, rv = node.left.value, node.right.value
+            op = node.op
+            if op == '+':  return Num(lv + rv)
+            if op == '-':  return Num(lv - rv)
+            if op == '*':  return Num(lv * rv)
+            if op == '/' and rv != 0: return Num(lv / rv)
+    return node</code></pre>
+      <p>
+        插入語意分析之後、程式碼生成之前:<code>ast = fold_constants(ast)</code>。
+        原本 <code>2 + 3</code> 需要 PUSH、PUSH、ADD 三條指令,優化後只需 PUSH 5——少兩條。
+        大型程式裡這種改善會在迴圈和函式中反覆出現。
+      </p>
+      <p>
+        <strong>窺孔優化(peephole optimization)</strong>則在位元碼層面做類似的事:
+        掃描相鄰指令序列,用更短或更快的指令替換。
+        例如 <code>PUSH 1; ADD</code> 可以被替換成單一的 <code>INC</code>(若 VM 支援的話)。
+        本書 §42 章的編譯器原理部分有更詳細的討論。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">JVM、WASM、CPython 都走同一條路</span>
+          <p>Java 原始碼 → <code>.class</code> 位元碼 → JVM 執行;
+          Python 原始碼 → <code>.pyc</code> 位元碼 → CPython VM 執行;
+          C/Rust → <code>.wasm</code> 位元碼 → WASM VM 執行。
+          你今天親手造的 Mini VM 與這些生產級 VM 在結構上是同一個家族。</p>
+        </div>
+      </div>
+
+      <!-- ═══════════════════════════════════════════════════════ -->
+      <h2>驗收:讓 Mini 跑起來</h2>
+      <!-- ═══════════════════════════════════════════════════════ -->
+
+      <p>把所有元件組合起來,驗收每個里程碑:</p>
+      <pre><code class="language-python">def run_mini(source: str, use_vm=False):
+    """
+    Mini 語言執行入口。
+    use_vm=False → 樹走訪直譯器
+    use_vm=True  → 位元碼 VM
+    """
+    tokens = Lexer(source).tokenize()
+    ast    = Parser(tokens).parse()
+    Checker().check(ast)                # 里程碑 4:語意檢查
+    if use_vm:
+        c = Compiler()
+        code = c.compile(ast)
+        VM(c).run_code(code)
+    else:
+        Interpreter().run(source)</code></pre>
+
+      <h3>驗收程式一:階乘</h3>
+      <pre><code class="language-text">func fact(n) {
+    if n &lt;= 1 { return 1; }
+    return n * fact(n - 1);
+}
+print(fact(10));   // 預期:3628800.0</code></pre>
+
+      <h3>驗收程式二:迴圈計數</h3>
+      <pre><code class="language-text">i = 0;
+sum = 0;
+while i &lt; 100 {
+    i = i + 1;
+    sum = sum + i;
+}
+print(sum);   // 預期:5050.0</code></pre>
+
+      <h3>驗收程式三:費波那契(位元碼 VM)</h3>
+      <pre><code class="language-text">func fib(n) {
+    if n &lt;= 1 { return n; }
+    return fib(n - 1) + fib(n - 2);
+}
+print(fib(15));   // 預期:610.0</code></pre>
+
+      <h3>延伸方向</h3>
+      <ul>
+        <li><strong>閉包(closure)</strong>:讓函式捕獲定義時的作用域,而非呼叫時的作用域。需要在函式物件上儲存 <code>captured_env</code>。</li>
+        <li><strong>垃圾回收(GC)</strong>:加入標記-清除(mark-and-sweep)或參考計數(reference counting)管理動態配置的物件。</li>
+        <li><strong>原生程式碼生成</strong>:把位元碼進一步編譯成 x86/ARM 機器碼,或透過 LLVM 後端生成高效原生程式碼。</li>
+        <li><strong>JIT 編譯(Just-In-Time compilation)</strong>:在執行時動態把熱路徑的位元碼編譯成機器碼——這是 PyPy、V8、LuaJIT 的核心技術。</li>
+        <li><strong>字串插值與更豐富的型別</strong>:加入陣列、字典、布林字面量,讓 Mini 更接近真實使用。</li>
+      </ul>
+
+      <!-- ═══════════════════════════════════════════════════════ -->
+      <h2>把這一章串起來</h2>
+      <!-- ═══════════════════════════════════════════════════════ -->
+
+      <p>
+        你剛剛做到了一件相當厲害的事:從零開始,用不到 600 行 Python,造出了一個完整的程式語言執行環境。
+        讓我們點名每一個被你打通的知識結節:
+      </p>
+      <ul>
+        <li><strong>正規語言 / FA(§49 章)</strong>:Lexer 的字元掃描邏輯本質上是一個有限自動機,每種 token 對應一個正規模式。</li>
+        <li><strong>上下文無關文法(§49 章)</strong>:Mini 的 EBNF 文法是一個 CFG;Parser 實作了對應的下推自動機,呼叫堆疊就是「下推儲存」。</li>
+        <li><strong>Pratt Parsing(§42 章)</strong>:一個優雅的運算子優先級解析演算法,用「左結合力」這個單一數字取代了傳統的多層函式鏈。</li>
+        <li><strong>AST 與樹走訪</strong>:抽象語法樹是程式的純結構表示;遞迴走訪是最直接的執行方式。</li>
+        <li><strong>語意分析</strong>:作用域鏈、Def-Use 分析、return 合法性——在執行前靜態捕捉邏輯錯誤。</li>
+        <li><strong>堆疊式 VM 位元碼(§23 章)</strong>:一組緊湊的指令讓程式可以「離線編譯、稍後執行」,而且天然適合詮譯和優化。</li>
+        <li><strong>常數摺疊</strong>:最基礎的編譯期優化,把編譯器理論(§42 章)的知識轉化為實際效能提升。</li>
+      </ul>
+
+      <blockquote>
+        任何足夠複雜的程式,最終都在某個層面上是一個詮譯器。
+        <br>— Alan Perlis,SICP 序言
+      </blockquote>
+
+      <p>
+        這句話現在對你應該有了新的份量。你不只「知道」有編譯器這回事——
+        你親手造過一個,你知道那條管線的每一個接縫在哪裡、為什麼那樣設計。
+        這才是真正的理解。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">繼續深入的資源</span>
+          <ul>
+            <li><a href="https://craftinginterpreters.com/" target="_blank" rel="noopener"><em>Crafting Interpreters</em></a>(Robert Nystrom,免費線上):最完整的編譯器入門書,從樹走訪 Lox 一路做到 C 語言的位元碼 clox。</li>
+            <li><a href="https://interpreterbook.com/" target="_blank" rel="noopener"><em>Writing An Interpreter In Go</em></a>(Thorsten Ball):以 Go 語言實作 Monkey 語言,風格清晰,附完整測試。</li>
+            <li><a href="https://llvm.org/docs/tutorial/" target="_blank" rel="noopener">LLVM Tutorial (Kaleidoscope)</a>:用 C++ 從零建語言並接入 LLVM 後端,看見真實工業等級的優化是如何運作的。</li>
+            <li>Vaughan Pratt, <em>Top Down Operator Precedence</em>(1973):Pratt Parsing 的原始論文,比許多教科書讀起來更清晰。</li>
+          </ul>
+        </div>
+      </div>

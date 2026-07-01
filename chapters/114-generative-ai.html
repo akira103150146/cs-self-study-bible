@@ -1,0 +1,836 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>生成式 AI:擴散模型與多模態 · CS 自學聖經</title>
+<meta name="description" content="從 GAN、VAE 到 DDPM 擴散模型、Latent Diffusion、CLIP 文字-影像對齊與視覺語言模型:補齊生成式 AI 的另一半,從資料分佈直覺到 PyTorch 玩具擴散的完整旅程。">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;700&family=Noto+Sans+TC:wght@400;700&family=Lora:ital,wght@0,400;0,600;0,700;1,400&family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <main class="main">
+    <article class="content">
+      <div class="eyebrow">第二四部 · 進階人工智慧</div>
+      <h1>生成式 AI:擴散模型與多模態</h1>
+      <p class="subtitle">你已經讀過 CNN 辨認貓狗、GPT 接龍文字——但誰負責<em>生成</em>那張不存在的人臉、那幅從未有人畫過的油畫?這一章把生成式 AI 的另一半補齊:從 GAN 的對抗博弈,到讓 Stable Diffusion 成真的擴散數學,再到讓文字和影像說同一種語言的 CLIP。</p>
+      <div class="byline">
+        <span class="tag">第 108 章</span>
+        <span>閱讀時間 ≈ 90 分鐘</span>
+        <span>難度:★★★★★</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li><strong>判別式 vs 生成式</strong>:兩種模型在學的是完全不同的機率物件</li>
+          <li><strong>VAE</strong>(變分自動編碼器):潛在空間直覺、重參數化技巧、ELBO 損失</li>
+          <li><strong>GAN</strong>(生成對抗網路):生成器 vs 判別器的博弈本質,以及訓練為何如此脆弱</li>
+          <li><strong>擴散模型(diffusion model)</strong>:前向加噪鏈 + 反向去噪鏈的設計哲學,以及它為何比 GAN 穩定</li>
+          <li><strong>DDPM 數學直覺</strong>:噪聲排程 $\beta_t$、閉合式前向公式、訓練目標「預測噪聲 $\boldsymbol{\epsilon}$」與 DDPM 取樣步驟</li>
+          <li><strong>Latent Diffusion / Stable Diffusion</strong>:為何在 VAE 潛在空間做擴散可以省下 64× 算力;U-Net + 時間嵌入;CFG</li>
+          <li><strong>CLIP</strong>:對比學習如何把影像和文字對齊進同一個嵌入空間,以及零樣本分類</li>
+          <li><strong>VLM</strong>(視覺語言模型):如何把影像「接進」LLM 的 token 流</li>
+          <li>用 <strong>PyTorch 手刻 1D 玩具擴散模型</strong>(教學最小版),以及完整實作的推薦去處</li>
+          <li>深偽(deepfake)、訓練資料版權與生成 AI 的倫理責任</li>
+        </ul>
+      </div>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">這章讀什麼、不讀什麼</span>
+          <p>
+            本書有兩章已涵蓋「生成式」的一角:
+            <a href="99-gpt-from-scratch.html">第 93 章〈從零打造 GPT〉</a>講自迴歸<strong>文字</strong>生成;
+            <a href="67-cv-deep-learning.html">第 67 章〈深度學習視覺〉</a>講 CNN 影像<strong>分類</strong>(判別式)。
+            本章補的是這兩章都沒覆蓋的空白:<strong>影像/音訊/多模態的生成</strong>。三章的界線很清楚:
+            GPT = 自迴歸文字;CNN = 判別影像;本章 = <strong>生成影像</strong>。
+          </p>
+        </div>
+      </div>
+
+      <!-- ══════════════════════════════════════════════════════
+           h2 ① 判別式 vs 生成式
+           ══════════════════════════════════════════════════════ -->
+      <h2>判別式 vs 生成式:學不同的機率物件</h2>
+      <p>
+        想像你手上有一萬張貓的照片和一萬張狗的照片。你想要一個會分辨貓狗的系統——
+        這個任務,<strong>判別式模型(discriminative model)</strong>只需要學:
+        「給我一張圖 $\mathbf{x}$,它是貓的機率 $p(y=\text{貓}|\mathbf{x})$ 是多少?」
+        它不在乎「一張貓的圖到底長什麼樣」,只在乎邊界:把空間切割成「貓這邊」和「狗那邊」。
+      </p>
+      <p>
+        現在換個任務:你想生成一張<strong>從未存在過的貓的照片</strong>。這時判別式模型就沒用了——
+        它只會回答「是/否」,不會無中生有。你需要的是<strong>生成式模型(generative model)</strong>,
+        它學的是整個資料的分佈:$p(\mathbf{x})$。有了 $p(\mathbf{x})$,你就能從中<strong>取樣(sample)</strong>,
+        每次取樣就是生成一張新圖。
+      </p>
+      <p>
+        用更直覺的比喻:判別式模型學的是「哪條線把貓和狗分開」;
+        生成式模型學的是「貓的圖長什麼樣子的全部可能性」——整個貓的概率密度函數。
+        前者只需要找邊界,後者要把整個分佈建模出來,難度差了一個量級。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">核心觀念:生成模型在學 $p(\mathbf{x})$</span>
+          <p>生成模型的目標是學習資料的真實分佈 $p_{\text{data}}(\mathbf{x})$,
+          然後能從這個分佈中取樣。不同的生成模型族,本質上是在用不同的策略去近似這個 $p(\mathbf{x})$。</p>
+        </div>
+      </div>
+
+      <!-- ══════════════════════════════════════════════════════
+           h2 ② 生成模型族譜
+           ══════════════════════════════════════════════════════ -->
+      <h2>生成模型族譜:自迴歸、VAE、GAN</h2>
+
+      <h3>自迴歸模型(連回第 93 章)</h3>
+      <p>
+        最直接的想法:把聯合機率用連鎖律展開:
+        $p(\mathbf{x}) = p(x_1)\,p(x_2|x_1)\,p(x_3|x_1,x_2)\cdots$
+        然後一個一個位置、一個一個 pixel 地預測。
+        <a href="99-gpt-from-scratch.html">第 93 章的 GPT</a>正是文字版的自迴歸——每次預測下一個 token。
+        影像版的 PixelCNN 也用同樣思路:從左上到右下,一個 pixel 一個 pixel 生成。
+        優點:目標函數清晰(最大概似);缺點:生成速度<strong>極慢</strong>(1024×1024 的圖要做 100 萬步)。
+      </p>
+
+      <h3>變分自動編碼器(VAE)</h3>
+      <p>
+        VAE(Variational Autoencoder,變分自動編碼器)的核心思想是:
+        把每張圖「壓縮」到一個低維的<strong>潛在向量(latent vector)</strong> $\mathbf{z}$,再從 $\mathbf{z}$ 還原回圖。
+        這聽起來和普通自動編碼器一樣——差別在於 VAE 要求潛在空間<strong>平滑且連續</strong>:
+        相鄰的 $\mathbf{z}$ 應該解碼出相似的圖,而且任意取樣一個 $\mathbf{z} \sim \mathcal{N}(0, \mathbf{I})$ 都能解碼出一張合理的圖。
+      </p>
+      <p>
+        為此,VAE 的編碼器不輸出一個點,而是輸出一個高斯分佈的<strong>均值 $\boldsymbol{\mu}$ 和標準差 $\boldsymbol{\sigma}$</strong>,
+        然後透過<strong>重參數化技巧(reparameterization trick)</strong>取樣:
+        $\mathbf{z} = \boldsymbol{\mu} + \boldsymbol{\sigma} \odot \boldsymbol{\epsilon},\quad \boldsymbol{\epsilon} \sim \mathcal{N}(0, \mathbf{I})$。
+        這讓梯度可以「穿過」取樣操作,整個模型端到端可微分(詳見
+        <a href="111-deep-learning-math.html">第 105 章〈深度學習的數學〉</a>的重參數化推導)。
+      </p>
+      <p>
+        訓練目標是最大化<strong>ELBO(Evidence Lower BOund,證據下界)</strong>:
+        $$\mathcal{L}_{\text{VAE}} = \underbrace{\mathbb{E}_{q}\!\left[\log p_\theta(\mathbf{x}|\mathbf{z})\right]}_{\text{重建損失}} - \underbrace{D_{\text{KL}}\!\left(q_\phi(\mathbf{z}|\mathbf{x}) \,\|\, p(\mathbf{z})\right)}_{\text{正則項(讓 }z\text{ 接近標準高斯)}}$$
+        第一項要求解碼器能把 $\mathbf{z}$ 還原成原圖;第二項要求潛在分佈貼近標準高斯,保證取樣時不會落在「空洞」裡。
+      </p>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">KL 散度的直覺</span>
+          <p>$D_{\text{KL}}(q \| p)$ 衡量「用 $p$ 去近似 $q$ 時浪費了多少資訊」。
+          這裡用 KL 散度把潛在分佈往標準高斯靠——讓整個潛在空間有密度,
+          任意取樣都有意義。KL 散度與交叉熵的深層關係在
+          <a href="111-deep-learning-math.html">第 105 章</a>有嚴格推導。</p>
+        </div>
+      </div>
+
+      <h3>生成對抗網路(GAN)</h3>
+      <p>
+        2014 年,Goodfellow 等人提出了一個極具創意的想法:
+        與其直接建模 $p(\mathbf{x})$,不如讓兩個網路互相「博弈」。
+      </p>
+      <ul>
+        <li><strong>生成器(Generator,G)</strong>:從隨機雜訊 $\mathbf{z}$ 生成假圖,目標是生成得「夠真實」。</li>
+        <li><strong>判別器(Discriminator,D)</strong>:判斷一張圖是「真實資料」還是「G 生成的假圖」,目標是判斷得「夠準確」。</li>
+      </ul>
+      <p>
+        訓練目標是一個 minimax 博弈:
+        $$\min_G \max_D \; \mathbb{E}_{\mathbf{x} \sim p_{\text{data}}}[\log D(\mathbf{x})] + \mathbb{E}_{\mathbf{z} \sim p(\mathbf{z})}[\log(1 - D(G(\mathbf{z})))]$$
+        理論上,當博弈收斂到納許均衡(Nash equilibrium),$G$ 會學到真實資料分佈。
+      </p>
+      <p>
+        GAN 的問題在於「理論上」和「實際上」差很遠。訓練極不穩定:
+        如果 $D$ 太強,$G$ 的梯度消失;如果 $G$ 太強,$D$ 沒有學習訊號。
+        最嚴重的是<strong>模式崩潰(mode collapse)</strong>:$G$ 發現只要生成某幾種「萬用假圖」就能騙過 $D$,
+        於是放棄了整個資料分佈的多樣性,天天生成同一種臉。
+      </p>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">GAN 的訓練陷阱</span>
+          <p>GAN 訓練時 Generator 和 Discriminator 的學習率、架構、訓練步數比例必須精心調整。
+          業界在 DCGAN、Wasserstein GAN(WGAN)、StyleGAN 等後繼工作中投入大量心力才把訓練穩定下來。
+          即使如此,模式崩潰仍是已知問題。擴散模型之所以後來居上,很大程度源自此。</p>
+        </div>
+      </div>
+
+      <!-- ══════════════════════════════════════════════════════
+           h2 ③ 擴散模型:穩定的那條路
+           ══════════════════════════════════════════════════════ -->
+      <h2>擴散模型:為什麼比 GAN 穩定</h2>
+      <p>
+        2020 年,Ho 等人發表 DDPM(Denoising Diffusion Probabilistic Models),用一個極其優雅的思路繞開了 GAN 的所有陷阱。
+        核心想法只有一句話:<strong>「把生成的難題,拆成一千個去噪的小題。」</strong>
+      </p>
+      <p>
+        擴散模型的訓練分兩個過程:
+      </p>
+      <ul>
+        <li><strong>前向過程(forward process)</strong>:這是一條<em>固定的</em>馬可夫鏈,在 $T$ 個時步內漸進地往圖上加高斯噪聲,
+            直到 $\mathbf{x}_T \approx \mathcal{N}(0, \mathbf{I})$——一張純雜訊。這個過程不需要訓練,是設計好的。</li>
+        <li><strong>反向過程(reverse process)</strong>:這是<em>學習的</em>部分,訓練一個神經網路 $\boldsymbol{\epsilon}_\theta$,
+            在每個時步 $t$ 給它一張帶噪圖 $\mathbf{x}_t$ 和時步 $t$,讓它預測「這張圖上加的是什麼噪聲」——
+            然後把噪聲減掉,還原出 $\mathbf{x}_{t-1}$。</li>
+      </ul>
+      <p>
+        為什麼這比 GAN 穩定?因為每個反向步驟都是一個<strong>監督迴歸問題</strong>:
+        輸入已知($\mathbf{x}_t$)、標籤已知(前向時加的真實噪聲 $\boldsymbol{\epsilon}$)、
+        損失函數就是普通的均方誤差。沒有對抗博弈、沒有模式崩潰、沒有梯度消失——
+        只是在一千個獨立的去噪任務上做監督學習。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 760 220" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="arr-fwd" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#b4541f"/>
+    </marker>
+    <marker id="arr-rev" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#2f6f6a"/>
+    </marker>
+  </defs>
+
+  <!-- ── 前向過程(上排)──────────────────────────────── -->
+  <text x="10" y="22" font-size="12" font-weight="700" fill="#b4541f">前向過程(加噪,固定)</text>
+  <!-- 圓圈:x_0 … x_T,填色從乾淨到雜訊 -->
+  <circle cx="55"  cy="68" r="32" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <circle cx="170" cy="68" r="32" fill="#d0dbd8" stroke="#8a929b" stroke-width="1.5"/>
+  <circle cx="285" cy="68" r="32" fill="#bccaca" stroke="#8a929b" stroke-width="1.5"/>
+  <circle cx="400" cy="68" r="32" fill="#a8b8b6" stroke="#8a929b" stroke-width="1.5"/>
+  <circle cx="515" cy="68" r="32" fill="#94a5a3" stroke="#8a929b" stroke-width="1.5"/>
+  <circle cx="630" cy="68" r="32" fill="#7a8f8d" stroke="#8a929b" stroke-width="1.5"/>
+  <circle cx="720" cy="68" r="28" fill="#607b79" stroke="#8a929b" stroke-width="1.5"/>
+
+  <text x="55"  y="73" text-anchor="middle" font-size="13" fill="#1f2328" font-weight="700">x₀</text>
+  <text x="170" y="73" text-anchor="middle" font-size="13" fill="#1f2328">x₁</text>
+  <text x="285" y="73" text-anchor="middle" font-size="13" fill="#1f2328">x₂</text>
+  <text x="400" y="73" text-anchor="middle" font-size="11" fill="#1f2328">···</text>
+  <text x="515" y="73" text-anchor="middle" font-size="11" fill="#fff">···</text>
+  <text x="630" y="73" text-anchor="middle" font-size="12" fill="#fff">x<tspan font-size="9" dy="4">T-1</tspan></text>
+  <text x="720" y="73" text-anchor="middle" font-size="13" fill="#fff" font-weight="700">x<tspan font-size="9" dy="4">T</tspan></text>
+
+  <!-- 前向箭頭 -->
+  <line x1="89"  y1="68" x2="136" y2="68" stroke="#b4541f" stroke-width="2" marker-end="url(#arr-fwd)"/>
+  <line x1="204" y1="68" x2="251" y2="68" stroke="#b4541f" stroke-width="2" marker-end="url(#arr-fwd)"/>
+  <line x1="319" y1="68" x2="366" y2="68" stroke="#b4541f" stroke-width="2" marker-end="url(#arr-fwd)"/>
+  <line x1="434" y1="68" x2="481" y2="68" stroke="#b4541f" stroke-width="2" marker-end="url(#arr-fwd)"/>
+  <line x1="549" y1="68" x2="596" y2="68" stroke="#b4541f" stroke-width="2" marker-end="url(#arr-fwd)"/>
+  <line x1="664" y1="68" x2="690" y2="68" stroke="#b4541f" stroke-width="2" marker-end="url(#arr-fwd)"/>
+
+  <text x="112" y="58" text-anchor="middle" font-size="10" fill="#b4541f">+β₁ε</text>
+  <text x="227" y="58" text-anchor="middle" font-size="10" fill="#b4541f">+β₂ε</text>
+  <text x="676" y="58" text-anchor="middle" font-size="10" fill="#b4541f">+βᵀε</text>
+
+  <!-- ── 反向過程(下排)──────────────────────────────── -->
+  <text x="10" y="138" font-size="12" font-weight="700" fill="#2f6f6a">反向過程(去噪,學習 ε_θ)</text>
+
+  <!-- 圓圈複製(下排,從右往左走) -->
+  <circle cx="55"  cy="185" r="32" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <circle cx="170" cy="185" r="32" fill="#d0dbd8" stroke="#8a929b" stroke-width="1.5"/>
+  <circle cx="285" cy="185" r="32" fill="#bccaca" stroke="#8a929b" stroke-width="1.5"/>
+  <circle cx="400" cy="185" r="32" fill="#a8b8b6" stroke="#8a929b" stroke-width="1.5"/>
+  <circle cx="515" cy="185" r="32" fill="#94a5a3" stroke="#8a929b" stroke-width="1.5"/>
+  <circle cx="630" cy="185" r="32" fill="#7a8f8d" stroke="#8a929b" stroke-width="1.5"/>
+  <circle cx="720" cy="185" r="28" fill="#607b79" stroke="#8a929b" stroke-width="1.5"/>
+
+  <text x="55"  y="190" text-anchor="middle" font-size="13" fill="#1f2328" font-weight="700">x₀</text>
+  <text x="170" y="190" text-anchor="middle" font-size="13" fill="#1f2328">x₁</text>
+  <text x="285" y="190" text-anchor="middle" font-size="13" fill="#1f2328">x₂</text>
+  <text x="400" y="190" text-anchor="middle" font-size="11" fill="#1f2328">···</text>
+  <text x="515" y="190" text-anchor="middle" font-size="11" fill="#fff">···</text>
+  <text x="630" y="190" text-anchor="middle" font-size="12" fill="#fff">x<tspan font-size="9" dy="4">T-1</tspan></text>
+  <text x="720" y="190" text-anchor="middle" font-size="13" fill="#fff" font-weight="700">x<tspan font-size="9" dy="4">T</tspan></text>
+
+  <!-- 反向箭頭(從右往左) -->
+  <line x1="690" y1="185" x2="664" y2="185" stroke="#2f6f6a" stroke-width="2" marker-end="url(#arr-rev)"/>
+  <line x1="597" y1="185" x2="549" y2="185" stroke="#2f6f6a" stroke-width="2" marker-end="url(#arr-rev)"/>
+  <line x1="482" y1="185" x2="434" y2="185" stroke="#2f6f6a" stroke-width="2" marker-end="url(#arr-rev)"/>
+  <line x1="367" y1="185" x2="319" y2="185" stroke="#2f6f6a" stroke-width="2" marker-end="url(#arr-rev)"/>
+  <line x1="252" y1="185" x2="204" y2="185" stroke="#2f6f6a" stroke-width="2" marker-end="url(#arr-rev)"/>
+  <line x1="137" y1="185" x2="89"  y2="185" stroke="#2f6f6a" stroke-width="2" marker-end="url(#arr-rev)"/>
+
+  <text x="677" y="175" text-anchor="middle" font-size="10" fill="#2f6f6a">−ε_θ</text>
+  <text x="112" y="175" text-anchor="middle" font-size="10" fill="#2f6f6a">−ε_θ</text>
+
+  <text x="380" y="215" text-anchor="middle" font-size="11" fill="#8a929b">ε_θ(x_t, t):學習預測每步加的噪聲</text>
+</svg>
+        <figcaption>圖 108-1:擴散模型的前向(加噪)與反向(去噪)鏈。前向鏈是固定的;反向鏈由神經網路 $\boldsymbol{\epsilon}_\theta$ 學習。(箭頭標籤示意;完整步驟為 $\sqrt{1-\beta_t}\,x_{t-1}+\sqrt{\beta_t}\,\epsilon$,見下方公式。)</figcaption>
+      </div>
+
+      <!-- ══════════════════════════════════════════════════════
+           h2 ④ DDPM 數學直覺
+           ══════════════════════════════════════════════════════ -->
+      <h2>DDPM 數學直覺:預測噪聲</h2>
+
+      <h3>噪聲排程</h3>
+      <p>
+        前向過程定義一個固定的噪聲排程 $\{\beta_t\}_{t=1}^{T}$($\beta_t \in (0,1)$,通常很小),
+        每步往圖上混入一點高斯噪聲:
+        $$q(\mathbf{x}_t \mid \mathbf{x}_{t-1}) = \mathcal{N}\!\left(\mathbf{x}_t;\; \sqrt{1-\beta_t}\,\mathbf{x}_{t-1},\; \beta_t\mathbf{I}\right)$$
+        令 $\alpha_t = 1 - \beta_t$,再令 $\bar{\alpha}_t = \prod_{s=1}^{t} \alpha_s$,
+        則 DDPM 最強大的性質是「<strong>任意時步的閉合式</strong>」——不需要從 $\mathbf{x}_0$ 一步一步跑到 $t$,可以直接算:
+        $$\mathbf{x}_t = \sqrt{\bar{\alpha}_t}\,\mathbf{x}_0 + \sqrt{1 - \bar{\alpha}_t}\,\boldsymbol{\epsilon}, \qquad \boldsymbol{\epsilon} \sim \mathcal{N}(0, \mathbf{I})$$
+        當 $t$ 大,$\bar{\alpha}_t \to 0$,式子右邊第一項消失,剩下純噪聲。當 $t=0$,$\bar{\alpha}_0=1$,就是原圖。
+      </p>
+
+      <h3>訓練目標:預測噪聲</h3>
+      <p>
+        利用閉合式,訓練資料集無限豐富:任意取一張真實圖 $\mathbf{x}_0$、
+        任意取一個時步 $t \in \{1,\ldots,T\}$、任意取一個噪聲 $\boldsymbol{\epsilon} \sim \mathcal{N}(0, \mathbf{I})$,
+        就能算出 $\mathbf{x}_t$。然後把 $(\mathbf{x}_t, t)$ 餵給去噪網路 $\boldsymbol{\epsilon}_\theta$,
+        要它預測 $\boldsymbol{\epsilon}$。損失函數就是均方誤差:
+        $$\mathcal{L} = \mathbb{E}_{t,\,\mathbf{x}_0,\,\boldsymbol{\epsilon}}\left[\,\bigl\|\boldsymbol{\epsilon} - \boldsymbol{\epsilon}_\theta(\mathbf{x}_t, t)\bigr\|^2\,\right]$$
+        這個目標看起來出奇地簡單——Ho 等人的論文的成就之一,正是說明這個簡化後的目標在實踐上表現極佳。
+      </p>
+
+      <h3>取樣(DDPM Reverse)</h3>
+      <p>
+        訓練完後,要生成一張圖,從 $\mathbf{x}_T \sim \mathcal{N}(0, \mathbf{I})$ 出發,
+        反覆執行 $T$ 步去噪:
+        $$\mathbf{x}_{t-1} = \frac{1}{\sqrt{\alpha_t}}\left(\mathbf{x}_t - \frac{1-\alpha_t}{\sqrt{1-\bar{\alpha}_t}}\,\boldsymbol{\epsilon}_\theta(\mathbf{x}_t, t)\right) + \sqrt{\beta_t}\,\mathbf{z}, \quad \mathbf{z} \sim \mathcal{N}(0,\mathbf{I})$$
+        最後一步($t=1$)通常省略加噪項 $\sqrt{\beta_t}\mathbf{z}$。每步都需要呼叫一次網路——這是擴散模型的主要缺點:
+        生成速度慢(原版 DDPM 要 1000 步)。後續的 DDIM、DPM-Solver 等把步數壓到 20–50 步。
+      </p>
+
+      <h3>與分數匹配的關係</h3>
+      <p>
+        這裡補一個讓很多論文提到、但初學者常困惑的概念。
+        <strong>分數函數(score function)</strong>定義為 $\nabla_{\mathbf{x}} \log p_t(\mathbf{x})$,
+        它指向「$\mathbf{x}$ 附近資料密度增加最快的方向」。
+        可以證明,預測噪聲和估計分數函數是等價的:
+        $$\boldsymbol{\epsilon}_\theta(\mathbf{x}_t, t) \approx -\sqrt{1 - \bar{\alpha}_t}\;\nabla_{\mathbf{x}_t} \log p_t(\mathbf{x}_t)$$
+        這意味著去噪網路其實在近似帶噪分佈的梯度場——這是 Song et al. 的分數匹配(score matching)視角,
+        和 DDPM 的預測噪聲視角本質等價。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">DDPM 的關鍵公式</span>
+          <p>
+            前向閉合式:$\mathbf{x}_t = \sqrt{\bar{\alpha}_t}\mathbf{x}_0 + \sqrt{1-\bar{\alpha}_t}\boldsymbol{\epsilon}$<br>
+            訓練目標:$\mathcal{L} = \mathbb{E}\|\boldsymbol{\epsilon} - \boldsymbol{\epsilon}_\theta(\mathbf{x}_t, t)\|^2$<br>
+            取樣:反覆執行 $\mathbf{x}_{t-1} \leftarrow f(\mathbf{x}_t, \boldsymbol{\epsilon}_\theta(\mathbf{x}_t,t))$
+          </p>
+        </div>
+      </div>
+
+      <!-- ══════════════════════════════════════════════════════
+           h2 ⑤ Latent Diffusion / Stable Diffusion
+           ══════════════════════════════════════════════════════ -->
+      <h2>Latent Diffusion 與 Stable Diffusion</h2>
+
+      <h3>問題:在像素空間做擴散太貴了</h3>
+      <p>
+        原版 DDPM 直接在像素空間做擴散。一張 512×512 的 RGB 圖有 786,432 個數值,
+        每步去噪就是對這麼大的向量做一次 U-Net 前向傳播,再重複 1000 次。
+        訓練一個 ImageNet 級別的 DDPM 需要大量 GPU 算力。
+      </p>
+
+      <h3>解法:先壓縮、再擴散</h3>
+      <p>
+        2022 年,Rombach 等人提出<strong>Latent Diffusion Model(LDM)</strong>,
+        也就是 Stable Diffusion 的底層架構。核心想法:
+        先訓練一個 <strong>VAE</strong>,把 512×512 的圖壓縮到 64×64 的潛在向量(壓縮比 8×,算力省 64×);
+        然後在<strong>潛在空間</strong>做擴散。生成完後,再用 VAE 解碼器還原到像素。
+      </p>
+      <p>
+        潛在空間的擴散模型使用 <strong>U-Net</strong> 作為去噪骨幹:
+        有下採樣(encoder)路徑和上採樣(decoder)路徑,並有跳接(skip connection)保留細節——
+        這個 U-Net 和第 67 章〈影像分割〉提到的 U-Net 是同一個架構。
+      </p>
+
+      <h3>時間嵌入</h3>
+      <p>
+        去噪網路需要知道目前在哪個時步 $t$。做法和 Transformer 的位置編碼(見第 93 章)類似:
+        把整數 $t$ 用<strong>正弦/餘弦函數</strong>編碼成一個向量 $\mathbf{e}(t)$,
+        再把這個向量加到 U-Net 每個層的啟動值上。這讓網路在不同時步表現出不同的去噪行為——
+        早期步驟負責「大局構圖」,晚期步驟負責「細節紋理」。
+      </p>
+
+      <h3>條件生成與 CFG</h3>
+      <p>
+        要做文字→影像,需要把文字提示 $c$(例如「一隻在雪地裡跑的柴犬」)接入去噪網路。
+        做法是:用 CLIP 文字編碼器把提示編碼成向量,然後透過 U-Net 裡的<strong>交叉注意力(cross-attention)</strong>
+        讓每個空間位置都能「看到」提示的語意。
+      </p>
+      <p>
+        <strong>Classifier-Free Guidance(CFG,無分類器引導)</strong>是讓文字→影像效果飆升的關鍵技巧。
+        訓練時,以某個比例隨機丟棄條件(改成空提示 $\emptyset$),讓網路同時學習有條件和無條件去噪。
+        生成時,把兩個預測做線性外插:
+        $$\tilde{\boldsymbol{\epsilon}}_\theta(\mathbf{x}_t, c) = \boldsymbol{\epsilon}_\theta(\mathbf{x}_t, \emptyset) + w \cdot \bigl[\boldsymbol{\epsilon}_\theta(\mathbf{x}_t, c) - \boldsymbol{\epsilon}_\theta(\mathbf{x}_t, \emptyset)\bigr]$$
+        $w > 1$ 稱為<strong>引導強度(guidance scale)</strong>:$w$ 越大,結果越貼近文字提示,但多樣性降低;
+        $w$ 太小,生成的圖缺乏主題。實際使用中 $w \in [3, 10]$ 是常見範圍。
+      </p>
+
+      <!-- ══════════════════════════════════════════════════════
+           h2 ⑥ CLIP
+           ══════════════════════════════════════════════════════ -->
+      <h2>CLIP:把文字和影像拉進同一個空間</h2>
+      <p>
+        Stable Diffusion 的文字理解能力,來自一個 2021 年 OpenAI 提出的模型:
+        <strong>CLIP(Contrastive Language-Image Pre-training)</strong>。
+        它解決了一個很基礎的問題:影像和文字是兩種完全不同的資料格式,要怎麼讓它們「說同一種語言」?
+      </p>
+
+      <h3>對比學習的思路</h3>
+      <p>
+        CLIP 的訓練資料是 4 億對(圖片, 說明文字)。訓練目標簡單到令人驚訝:
+        讓「匹配的一對」的嵌入向量<strong>接近</strong>,讓「不匹配的對」的嵌入向量<strong>遠離</strong>。
+      </p>
+      <p>
+        具體做法:一個批次裡有 $N$ 張圖和 $N$ 段文字(互相匹配)。
+        影像編碼器把圖編成向量 $\mathbf{v}_i$,文字編碼器把文字編成向量 $\mathbf{u}_j$。
+        計算所有 $N^2$ 對的<strong>餘弦相似度(cosine similarity)</strong>
+        (與<a href="54-linear-algebra.html">第 54 章〈線性代數〉</a>的向量夾角直接對應;嵌入與餘弦相似度的應用另見<a href="102-rag-from-scratch.html">第 96 章</a>)。
+        目標是讓 $N$ 對對角線相似度最大,其餘 $N^2-N$ 對相似度最小——這就是 InfoNCE 損失:
+        $$\mathcal{L}_{\text{CLIP}} = -\frac{1}{N}\sum_{i=1}^{N} \log \frac{\exp(\mathbf{v}_i \cdot \mathbf{u}_i / \tau)}{\sum_{j=1}^{N} \exp(\mathbf{v}_i \cdot \mathbf{u}_j / \tau)}$$
+        $\tau$ 是溫度超參數。這和對比學習、資訊最大化的思路一脈相承。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 700 280" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="arr2" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L6,3 L0,6 Z" fill="#8a929b"/>
+    </marker>
+  </defs>
+
+  <!-- ── 左側:影像 ───────────────────── -->
+  <text x="70" y="22" text-anchor="middle" font-size="13" font-weight="700" fill="#1f2328">影像</text>
+  <rect x="20" y="35" width="100" height="36" rx="6" fill="#e3efed" stroke="#2f6f6a"/>
+  <rect x="20" y="85" width="100" height="36" rx="6" fill="#e3efed" stroke="#2f6f6a"/>
+  <rect x="20" y="135" width="100" height="36" rx="6" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="70" y="58"  text-anchor="middle" font-size="12" fill="#1f2328">🐕 dog.jpg</text>
+  <text x="70" y="108" text-anchor="middle" font-size="12" fill="#1f2328">🌅 sunset.jpg</text>
+  <text x="70" y="158" text-anchor="middle" font-size="12" fill="#1f2328">🚗 car.jpg</text>
+
+  <!-- 影像編碼器 -->
+  <rect x="145" y="68" width="90" height="50" rx="8" fill="#2f6f6a" stroke="none"/>
+  <text x="190" y="88"  text-anchor="middle" font-size="11" fill="#fff" font-weight="700">影像</text>
+  <text x="190" y="104" text-anchor="middle" font-size="11" fill="#fff" font-weight="700">編碼器</text>
+  <!-- 箭頭進入影像編碼器 -->
+  <line x1="120" y1="53" x2="143" y2="82" stroke="#8a929b" stroke-width="1.5" marker-end="url(#arr2)"/>
+  <line x1="120" y1="103" x2="143" y2="93" stroke="#8a929b" stroke-width="1.5" marker-end="url(#arr2)"/>
+  <line x1="120" y1="153" x2="143" y2="108" stroke="#8a929b" stroke-width="1.5" marker-end="url(#arr2)"/>
+
+  <!-- 影像 embeddings -->
+  <circle cx="278" cy="60"  r="14" fill="#2f6f6a" stroke="none"/>
+  <circle cx="278" cy="93"  r="14" fill="#2f6f6a" stroke="none"/>
+  <circle cx="278" cy="126" r="14" fill="#2f6f6a" stroke="none"/>
+  <text x="278" y="65"  text-anchor="middle" font-size="10" fill="#fff">v₁</text>
+  <text x="278" y="98"  text-anchor="middle" font-size="10" fill="#fff">v₂</text>
+  <text x="278" y="131" text-anchor="middle" font-size="10" fill="#fff">v₃</text>
+  <line x1="237" y1="82" x2="262" y2="65" stroke="#8a929b" stroke-width="1.5" marker-end="url(#arr2)"/>
+  <line x1="237" y1="93" x2="262" y2="93" stroke="#8a929b" stroke-width="1.5" marker-end="url(#arr2)"/>
+  <line x1="237" y1="104" x2="262" y2="121" stroke="#8a929b" stroke-width="1.5" marker-end="url(#arr2)"/>
+
+  <!-- ── 中間:相似度矩陣 ─────────────── -->
+  <text x="380" y="22" text-anchor="middle" font-size="12" fill="#8a929b">餘弦相似度矩陣</text>
+  <!-- 3×3 格子 -->
+  <rect x="326" y="32" width="44" height="36" rx="3" fill="#c8e6c9" stroke="#2f6f6a"/>
+  <rect x="372" y="32" width="44" height="36" rx="3" fill="#f5f5f5" stroke="#e0e0e0"/>
+  <rect x="418" y="32" width="44" height="36" rx="3" fill="#f5f5f5" stroke="#e0e0e0"/>
+  <rect x="326" y="70" width="44" height="36" rx="3" fill="#f5f5f5" stroke="#e0e0e0"/>
+  <rect x="372" y="70" width="44" height="36" rx="3" fill="#c8e6c9" stroke="#2f6f6a"/>
+  <rect x="418" y="70" width="44" height="36" rx="3" fill="#f5f5f5" stroke="#e0e0e0"/>
+  <rect x="326" y="108" width="44" height="36" rx="3" fill="#f5f5f5" stroke="#e0e0e0"/>
+  <rect x="372" y="108" width="44" height="36" rx="3" fill="#f5f5f5" stroke="#e0e0e0"/>
+  <rect x="418" y="108" width="44" height="36" rx="3" fill="#c8e6c9" stroke="#2f6f6a"/>
+  <!-- 值 -->
+  <text x="348" y="54"  text-anchor="middle" font-size="12" fill="#2f6f6a" font-weight="700">0.92</text>
+  <text x="394" y="54"  text-anchor="middle" font-size="11" fill="#999">0.08</text>
+  <text x="440" y="54"  text-anchor="middle" font-size="11" fill="#999">0.03</text>
+  <text x="348" y="92"  text-anchor="middle" font-size="11" fill="#999">0.05</text>
+  <text x="394" y="92"  text-anchor="middle" font-size="12" fill="#2f6f6a" font-weight="700">0.89</text>
+  <text x="440" y="92"  text-anchor="middle" font-size="11" fill="#999">0.11</text>
+  <text x="348" y="130" text-anchor="middle" font-size="11" fill="#999">0.02</text>
+  <text x="394" y="130" text-anchor="middle" font-size="11" fill="#999">0.09</text>
+  <text x="440" y="130" text-anchor="middle" font-size="12" fill="#2f6f6a" font-weight="700">0.94</text>
+  <!-- 標記對角線 -->
+  <text x="380" y="162" text-anchor="middle" font-size="11" fill="#2f6f6a">↑ 對角線(匹配對)最大化</text>
+
+  <!-- ── 右側:文字 ───────────────────── -->
+  <text x="616" y="22" text-anchor="middle" font-size="13" font-weight="700" fill="#1f2328">文字</text>
+  <!-- 文字編碼器 -->
+  <rect x="476" y="68" width="90" height="50" rx="8" fill="#8b5cf6" stroke="none"/>
+  <text x="521" y="88"  text-anchor="middle" font-size="11" fill="#fff" font-weight="700">文字</text>
+  <text x="521" y="104" text-anchor="middle" font-size="11" fill="#fff" font-weight="700">編碼器</text>
+
+  <rect x="570" y="35" width="110" height="36" rx="6" fill="#f0ecff" stroke="#8b5cf6"/>
+  <rect x="570" y="85" width="110" height="36" rx="6" fill="#f0ecff" stroke="#8b5cf6"/>
+  <rect x="570" y="135" width="110" height="36" rx="6" fill="#f0ecff" stroke="#8b5cf6"/>
+  <text x="625" y="57"  text-anchor="middle" font-size="11" fill="#1f2328">a dog</text>
+  <text x="625" y="107" text-anchor="middle" font-size="11" fill="#1f2328">a sunset</text>
+  <text x="625" y="157" text-anchor="middle" font-size="11" fill="#1f2328">a red car</text>
+
+  <!-- 箭頭出文字編碼器 -->
+  <line x1="567" y1="82" x2="571" y2="59" stroke="#8a929b" stroke-width="1.5" marker-end="url(#arr2)"/>
+  <line x1="567" y1="93" x2="569" y2="103" stroke="#8a929b" stroke-width="1.5" marker-end="url(#arr2)"/>
+  <line x1="567" y1="107" x2="571" y2="143" stroke="#8a929b" stroke-width="1.5" marker-end="url(#arr2)"/>
+
+  <!-- 文字 embeddings(左邊接矩陣) -->
+  <circle cx="464" cy="60"  r="14" fill="#8b5cf6" stroke="none"/>
+  <circle cx="464" cy="93"  r="14" fill="#8b5cf6" stroke="none"/>
+  <circle cx="464" cy="126" r="14" fill="#8b5cf6" stroke="none"/>
+  <text x="464" y="65"  text-anchor="middle" font-size="10" fill="#fff">u₁</text>
+  <text x="464" y="98"  text-anchor="middle" font-size="10" fill="#fff">u₂</text>
+  <text x="464" y="131" text-anchor="middle" font-size="10" fill="#fff">u₃</text>
+  <line x1="476" y1="82"  x2="480" y2="65"  stroke="#8a929b" stroke-width="1.5"/>
+  <line x1="476" y1="93"  x2="480" y2="93"  stroke="#8a929b" stroke-width="1.5"/>
+  <line x1="476" y1="107" x2="480" y2="121" stroke="#8a929b" stroke-width="1.5"/>
+
+  <!-- 連接到矩陣 -->
+  <line x1="294" y1="60" x2="324" y2="50" stroke="#8a929b" stroke-width="1" stroke-dasharray="4,3"/>
+  <line x1="294" y1="93" x2="324" y2="88" stroke="#8a929b" stroke-width="1" stroke-dasharray="4,3"/>
+  <line x1="294" y1="126" x2="324" y2="126" stroke="#8a929b" stroke-width="1" stroke-dasharray="4,3"/>
+  <line x1="462" y1="60"  x2="464" y2="50" stroke="#8a929b" stroke-width="1" stroke-dasharray="4,3"/>
+  <line x1="462" y1="93"  x2="464" y2="88" stroke="#8a929b" stroke-width="1" stroke-dasharray="4,3"/>
+  <line x1="462" y1="126" x2="464" y2="126" stroke="#8a929b" stroke-width="1" stroke-dasharray="4,3"/>
+
+  <!-- 說明 -->
+  <text x="350" y="200" font-size="11" fill="#8a929b">訓練目標:最大化對角線(匹配對)相似度,最小化非對角線(不匹配對)相似度</text>
+  <text x="350" y="220" font-size="11" fill="#8a929b">結果:影像嵌入與文字嵌入落在同一個共享空間,可以跨模態做相似度比較</text>
+</svg>
+        <figcaption>圖 108-2:CLIP 對比訓練示意。影像編碼器與文字編碼器各自輸出嵌入向量;訓練讓對角線(匹配對)的餘弦相似度最大,非對角線(不匹配)最小。</figcaption>
+      </div>
+
+      <h3>零樣本分類:CLIP 的神奇應用</h3>
+      <p>
+        訓練完成後,CLIP 可以做<strong>零樣本分類(zero-shot classification)</strong>:
+        不需要任何分類頭(softmax 層),只需要把每個類別名稱轉成文字提示,例如:
+        「a photo of a <em>cat</em>」、「a photo of a <em>dog</em>」。
+        把這些提示用文字編碼器編成向量,再計算測試圖片的影像向量與每個類別向量的餘弦相似度——
+        相似度最高的類別就是預測結果。
+        CLIP 用這種方式在 ImageNet 上達到接近監督學習的準確率,而且可以直接推廣到任何「從沒見過的類別」。
+      </p>
+
+      <!-- ══════════════════════════════════════════════════════
+           h2 ⑦ 多模態語言模型 VLM
+           ══════════════════════════════════════════════════════ -->
+      <h2>多模態語言模型(VLM):影像如何接進 LLM</h2>
+      <p>
+        <strong>視覺語言模型(Vision-Language Model,VLM)</strong>把「看圖」和「對話」合在一起。
+        GPT-4V、Gemini、LLaVA 都屬於這一類:你丟給它一張圖加一句問題,它回答。
+      </p>
+      <p>
+        問題是:<a href="99-gpt-from-scratch.html">第 93 章的 LLM</a>吃的是 token 序列——
+        文字先被切成 token,再嵌入成向量。但影像不是 token。怎麼辦?
+      </p>
+
+      <h3>影像→視覺 token 的橋</h3>
+      <p>
+        最常見的做法是「<strong>視覺投影器(visual projector)</strong>」模式:
+      </p>
+      <ol>
+        <li>用一個<strong>視覺編碼器</strong>(如 CLIP 的影像端,或 ViT)把影像切成小塊(patch)並編碼成向量序列。</li>
+        <li>用一個<strong>投影層</strong>(一個線性層或 MLP)把視覺向量的維度映射到 LLM 的 embedding 維度。</li>
+        <li>把這些「視覺 token」直接<strong>插入</strong>文字 token 序列前面(前綴),形成:
+            <code>[圖片視覺 token₁ … token₂₅₆] [使用者: 這張圖在哪裡拍的?]</code></li>
+        <li>整個序列送進 LLM,讓 LLM 的注意力機制自動把視覺資訊和文字問題關聯起來。</li>
+      </ol>
+      <p>
+        LLaVA(Large Language and Vision Assistant)是此架構的代表性開源實作:
+        CLIP ViT-L/14 作為視覺編碼器 + 一個線性投影層 + Vicuna/LLaMA 作為語言模型。
+        投影層用(圖片, 詳細描述)對話資料微調,讓模型「學會描述圖片」。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">VLM 不「看圖」:它接 token</span>
+          <p>VLM 的視覺編碼器不是人眼——它把圖像切成 patch(通常 14×14 pixel 一塊),
+          每塊 patch 編碼成一個向量。一張 224×224 的圖切成 256 個 patch,
+          模型就多了 256 個視覺 token。LLM 的注意力機制在文字 token 和視覺 token 之間
+          自由流動,「看圖」本質上是讓文字 token 對視覺 token 做 cross-attention。</p>
+        </div>
+      </div>
+
+      <!-- ══════════════════════════════════════════════════════
+           h2 ⑧ 手刻玩具擴散模型
+           ══════════════════════════════════════════════════════ -->
+      <h2>手刻玩具擴散:1D 雙峰分佈的 forward/reverse</h2>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">這是教學最小版,不代表真實系統</span>
+          <p>以下程式碼把所有複雜度砍到最低:1D 資料(不是影像)、
+          T=200 步(不是 1000)、MLP 去噪器(不是 U-Net)、無條件生成。
+          目標是讓你能在筆電 CPU 上五分鐘內跑完,直觀感受 forward/reverse 迴圈。
+          真實的 Stable Diffusion 實作請見
+          <a href="https://github.com/huggingface/diffusers" target="_blank" rel="noopener">HuggingFace diffusers</a>
+          或 Karpathy 的 <a href="https://github.com/karpathy/minGPT" target="_blank" rel="noopener">minGPT</a> 同系列教學。</p>
+        </div>
+      </div>
+
+<pre><code class="language-python">import torch
+import torch.nn as nn
+import numpy as np
+
+# ── 超參數(教學最小版,T=200 步) ────────────────────────────
+T        = 200
+betas    = torch.linspace(1e-4, 0.02, T)           # 線性噪聲排程
+alphas   = 1.0 - betas
+alpha_bars = torch.cumprod(alphas, dim=0)           # ᾱ_t = ∏_{s≤t} α_s
+
+# ── 玩具資料:兩個高斯的混合(雙峰) ─────────────────────────
+def make_data(n=4000):
+    c = torch.randint(0, 2, (n,))                  # 0 或 1
+    x = torch.randn(n) * 0.3 + torch.where(c == 0, -2.0, 2.0)
+    return x.unsqueeze(1)                           # 形狀 (n, 1)
+
+# ── 前向加噪:閉合式一步到位 ─────────────────────────────────
+def forward_diffuse(x0, t):
+    """x_t = sqrt(ᾱ_t) * x0 + sqrt(1 - ᾱ_t) * ε"""
+    eps  = torch.randn_like(x0)
+    ab   = alpha_bars[t].view(-1, 1)               # (B, 1)
+    x_t  = ab.sqrt() * x0 + (1 - ab).sqrt() * eps
+    return x_t, eps                                 # 返回 x_t 和真實 ε
+
+# ── 去噪網路:簡單 MLP ──────────────────────────────────────
+#    輸入:x_t(1維) + 時步嵌入(1維) → 輸出:預測噪聲 ε(1維)
+class DenoiseMLP(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(2, 64), nn.SiLU(),
+            nn.Linear(64, 64), nn.SiLU(),
+            nn.Linear(64, 1)
+        )
+    def forward(self, x_t, t):
+        t_emb = (t.float() / T).unsqueeze(1)       # 正規化時步
+        return self.net(torch.cat([x_t, t_emb], dim=1))
+
+# ── 訓練 ────────────────────────────────────────────────────
+model     = DenoiseMLP()
+optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+data      = make_data()
+
+for step in range(5000):
+    idx  = torch.randint(0, len(data), (256,))
+    x0   = data[idx]
+    t    = torch.randint(0, T, (256,))
+    x_t, eps = forward_diffuse(x0, t)
+
+    pred_eps = model(x_t, t)
+    loss     = ((pred_eps - eps) ** 2).mean()      # ℒ = E‖ε - ε_θ‖²
+
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()
+    if step % 1000 == 0:
+        print(f"step {step:5d}  loss={loss.item():.4f}")
+
+# ── 取樣(DDPM reverse) ──────────────────────────────────────
+@torch.no_grad()
+def sample(n=500):
+    x = torch.randn(n, 1)                          # 從純雜訊出發
+    for t in range(T - 1, -1, -1):
+        t_batch  = torch.full((n,), t, dtype=torch.long)
+        eps_hat  = model(x, t_batch)               # 預測噪聲
+        alpha_t  = alphas[t]
+        ab_t     = alpha_bars[t]
+        # DDPM 反向步:去掉預測的噪聲份量
+        x = (x - (1 - alpha_t) / (1 - ab_t).sqrt() * eps_hat) / alpha_t.sqrt()
+        if t &gt; 0:                                   # 最後一步不加噪聲
+            x += betas[t].sqrt() * torch.randn_like(x)
+    return x.squeeze(1).numpy()
+
+samples = sample()
+# 理想情況:samples 近似原始雙峰分佈,大約一半落在 -2 附近、一半落在 +2 附近
+print(f"均值={samples.mean():.2f}  標準差={samples.std():.2f}")
+</code></pre>
+
+      <p>
+        這個玩具模型讓你親眼看見:從純雜訊 $\mathcal{N}(0,1)$ 出發,
+        反向走 200 步後能重新出現雙峰結構——這就是擴散模型的魔法,只是縮小到了 1D。
+        真實的影像生成模型把這個邏輯擴展到 VAE 潛在空間 + U-Net + 交叉注意力 + 文字條件,
+        其核心 forward/reverse 迴圈和這裡一模一樣。
+      </p>
+
+      <!-- ══════════════════════════════════════════════════════
+           h2 ⑨ 倫理
+           ══════════════════════════════════════════════════════ -->
+      <h2>深偽、版權與生成 AI 的倫理</h2>
+      <p>
+        生成式 AI 帶來的能力,和它帶來的風險同等驚人。這裡梳理幾個當前最迫切的問題,
+        更完整的倫理框架請見<a href="41-ethics.html">第 41 章〈電腦倫理〉</a>。
+      </p>
+
+      <h3>深偽(Deepfake)與虛假資訊</h3>
+      <p>
+        擴散模型可以生成「從未存在過的人臉」,以及讓任意人說任意話的視訊。
+        這在<strong>選舉干預</strong>、<strong>詐騙</strong>和<strong>非自願色情</strong>場景中已造成真實傷害。
+        偵測深偽的技術(頻域分析、眨眼異常、臉部邊緣偽影)目前與生成端打拉鋸戰,
+        沒有單一可靠方案——因為每當新的偵測方法出現,生成器很快就能規避。
+        相關攻防見<a href="113-ai-security.html">第 107 章 AI/LLM 安全與紅隊</a>。
+      </p>
+
+      <h3>訓練資料版權</h3>
+      <p>
+        Stable Diffusion 等模型使用從網路爬取的數十億張圖片訓練,其中大量是有著作權的藝術家作品。
+        目前多個國家/地區的法院正在審理此類訴訟,結果未定。
+        部分訓練集(如 LAION-5B)的授權爭議持續中。
+        <strong>「風格模仿」</strong>——讓模型生成「模仿某位藝術家風格」的作品——更是引發了強烈的創作倫理爭議。
+      </p>
+
+      <h3>AI 生成內容的標記與溯源</h3>
+      <p>
+        C2PA(Coalition for Content Provenance and Authenticity)等組織正在推動圖片的
+        <strong>數位水印(digital watermarking)</strong>和元資料標準,讓 AI 生成內容可被自動識別。
+        部分主流平台已要求在發佈 AI 生成內容時標記。
+        技術上,水印可以在像素空間(細微改動不可見)或潛在空間嵌入,但繞過方法同樣存在。
+      </p>
+
+      <div class="callout danger">
+        <div class="ico">⛔</div>
+        <div class="body">
+          <span class="c-title">生成式 AI 的能力不等於授權</span>
+          <p>技術上<strong>能做到</strong>不代表<strong>應該做</strong>或<strong>合法可做</strong>。
+          使用生成式工具時,需注意:訓練資料的授權狀態、生成內容的版權歸屬(各地法規不同)、
+          被仿真人物的同意與肖像權、以及平台的服務條款。</p>
+        </div>
+      </div>
+
+      <!-- ══════════════════════════════════════════════════════
+           練習
+           ══════════════════════════════════════════════════════ -->
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 108.1 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>解釋為什麼擴散模型比 GAN 在訓練上更穩定。你的答案應涵蓋:訓練信號的來源、博弈論 vs 監督學習的區別,以及模式崩潰在擴散模型中為何較不易發生。</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>訓練信號</strong>:GAN 的生成器梯度來自判別器——判別器越強,梯度越稀疏甚至消失(梯度消失問題);判別器越弱,生成器方向錯誤。擴散模型每個去噪步驟都有明確的監督標籤(真實噪聲 $\boldsymbol{\epsilon}$),損失函數就是 MSE,梯度始終存在且語意明確。</p>
+              <p><strong>博弈 vs 監督</strong>:GAN 是一個 minimax 博弈,需要兩個網路同步達到納許均衡——這個平衡極難達成,超參數調整空間狹窄。擴散模型只訓練一個去噪網路,目標固定(最小化 MSE),是標準監督學習。</p>
+              <p><strong>模式崩潰</strong>:GAN 的生成器只要「騙過」判別器即可,發現只用少數幾種圖就能高效騙過後就不再探索多樣性。擴散模型的目標是還原所有訓練樣本的噪聲分佈,無從「捷徑」——如果固定只生成某種圖,面對不同時步和不同噪聲的 $\mathbf{x}_t$,MSE 損失就會居高不下。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 108.2 <span class="badge">計算</span></div>
+        <div class="ex-body">
+          <p>假設你有一個原始資料點 $x_0 = 2.0$,噪聲排程給出 $\bar{\alpha}_{50} = 0.64$(即 $t=50$ 時)。
+          用 DDPM 閉合式公式計算 $\mathbf{x}_{50}$,假設這次抽到的噪聲 $\epsilon = -0.5$。
+          然後說明:當 $\bar{\alpha}_t$ 趨近於 0 時,$x_t$ 會變成什麼形式?</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p>DDPM 閉合式:$x_t = \sqrt{\bar{\alpha}_t}\,x_0 + \sqrt{1-\bar{\alpha}_t}\,\epsilon$</p>
+              <p>代入數值:
+              $$x_{50} = \sqrt{0.64} \times 2.0 + \sqrt{1 - 0.64} \times (-0.5)$$
+              $$= 0.8 \times 2.0 + \sqrt{0.36} \times (-0.5) = 1.6 + 0.6 \times (-0.5) = 1.6 - 0.3 = 1.3$$
+              </p>
+              <p>當 $\bar{\alpha}_t \to 0$:$\sqrt{\bar{\alpha}_t} \to 0$,$\sqrt{1-\bar{\alpha}_t} \to 1$,
+              所以 $x_t \to \epsilon$——即純粹的標準高斯噪聲。這正是前向過程的目的:把任意資料點逐漸轉化為高斯噪聲。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 108.3 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>解釋 CLIP 如何做零樣本分類(zero-shot classification)。具體說明:對一張未見過類別的圖片,從文字提示到最終分類結果,完整描述一遍 CLIP 的推論流程。這和傳統的 ImageNet 分類(如 ResNet + softmax)有什麼根本差異?</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>CLIP 零樣本分類流程:</strong></p>
+              <ol>
+                <li>為每個候選類別構造文字模板:「a photo of a <em>[類別名]</em>」。</li>
+                <li>用 CLIP 文字編碼器把 $K$ 個類別文字各自編碼成向量 $\{\mathbf{u}_k\}_{k=1}^{K}$。</li>
+                <li>用 CLIP 影像編碼器把測試圖片編碼成向量 $\mathbf{v}$。</li>
+                <li>計算 $\mathbf{v}$ 與每個 $\mathbf{u}_k$ 的餘弦相似度:$s_k = \mathbf{v} \cdot \mathbf{u}_k / (\|\mathbf{v}\|\|\mathbf{u}_k\|)$。</li>
+                <li>取相似度最高的類別為預測:$\hat{k} = \arg\max_k s_k$。</li>
+              </ol>
+              <p><strong>與傳統分類的根本差異:</strong>傳統 ResNet + softmax 分類頭是「封閉集合」——分類頭有多少個輸出神經元,就只能預測多少個類別;要加新類別必須重新微調。CLIP 是「開放詞彙」——只要你能描述這個類別(寫成文字),就能即刻分類,不需要任何針對新類別的訓練樣本。這是遷移能力的本質差異。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 108.4 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>在本章的玩具擴散程式碼基礎上,嘗試把噪聲排程改為「餘弦排程(cosine schedule)」:
+          $\bar{\alpha}_t = \cos^2\!\left(\frac{t/T + s}{1+s} \cdot \frac{\pi}{2}\right)$,其中 $s=0.008$。
+          比較線性排程和餘弦排程下,$\bar{\alpha}_t$ 隨 $t$ 的曲線形狀差異,並說明為何餘弦排程在影像生成中通常效果更好。</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+<pre><code class="language-python">import torch, math
+
+T = 200
+s = 0.008
+
+# 餘弦排程
+def cosine_alpha_bar(t_arr, T, s=0.008):
+    return torch.cos(((t_arr / T + s) / (1 + s)) * (math.pi / 2)) ** 2
+
+t_vals   = torch.arange(T)
+ab_cos   = cosine_alpha_bar(t_vals, T)
+ab_lin   = torch.cumprod(1 - torch.linspace(1e-4, 0.02, T), dim=0)
+</code></pre>
+              <p><strong>曲線差異</strong>:線性排程在前期加噪速度快,導致資料信號很早就被淹沒;餘弦排程在中段加噪速度更平均,在接近 $t=T$ 才完全轉為噪聲。</p>
+              <p><strong>影像效果</strong>:線性排程對小細節(高頻)的破壞過早,導致去噪網路在早期步驟「無事可做」,訓練效率低。餘弦排程讓各時步都有意義的信號可學習,訓練更均勻,最終生成品質通常更高。這是 Improved DDPM(Ho et al., 2021)的主要改進之一。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ══════════════════════════════════════════════════════
+           h2 ⑩ 把這一章串起來
+           ══════════════════════════════════════════════════════ -->
+      <h2>把這一章串起來</h2>
+      <p>
+        這一章補齊了書中生成式 AI 的另一半。讓我們把整個旅程快速回顧:
+      </p>
+      <ul>
+        <li><strong>生成模型的根本目標</strong>是學習資料分佈 $p(\mathbf{x})$ 並從中取樣——這和判別式模型的 $p(y|\mathbf{x})$ 本質不同。</li>
+        <li><strong>VAE</strong> 用變分推論和潛在空間讓取樣可控;ELBO = 重建損失 − KL 散度。</li>
+        <li><strong>GAN</strong> 用對抗博弈繞開了明確的 $p(\mathbf{x})$,代價是訓練不穩定與模式崩潰。</li>
+        <li><strong>擴散模型</strong>把「一步生成」拆成「T 步去噪」,把困難的生成問題轉化成 T 個容易的監督迴歸。DDPM 的訓練目標:$\mathcal{L} = \mathbb{E}\|\boldsymbol{\epsilon} - \boldsymbol{\epsilon}_\theta(\mathbf{x}_t, t)\|^2$。</li>
+        <li><strong>Latent Diffusion / Stable Diffusion</strong>:在 VAE 潛在空間做擴散省算力;U-Net + 時間嵌入 + CLIP 文字條件 + CFG 構成完整管線。</li>
+        <li><strong>CLIP</strong> 透過對比學習把影像和文字拉進同一個嵌入空間,讓文字→影像和零樣本分類成為可能。</li>
+        <li><strong>VLM</strong> 把影像切成 patch token、投影到 LLM embedding 空間,與文字 token 一起做注意力——讓語言模型「看圖說話」。</li>
+      </ul>
+      <p>
+        和其他章的連結:
+        <a href="38-machine-learning.html">第 38 章〈機器學習〉</a>的梯度下降與損失函數是一切訓練的基礎;
+        <a href="67-cv-deep-learning.html">第 67 章〈深度學習視覺〉</a>的 U-Net 架構直接用在 Latent Diffusion 裡;
+        <a href="99-gpt-from-scratch.html">第 93 章〈從零打造 GPT〉</a>的 Transformer 和嵌入概念是 CLIP 和 VLM 的共同語言;
+        <a href="111-deep-learning-math.html">第 105 章〈深度學習的數學〉</a>提供了 KL 散度、ELBO 和重參數化的嚴格推導;
+        <a href="54-linear-algebra.html">第 54 章〈線性代數〉</a>的餘弦相似度是 CLIP 對齊的數學基礎;
+        <a href="41-ethics.html">第 41 章〈電腦倫理〉</a>為深偽和資料版權問題提供更廣的倫理框架。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">延伸學習</span>
+          <ul>
+            <li><strong>DDPM 原論文</strong>:Ho et al., "Denoising Diffusion Probabilistic Models" (NeurIPS 2020) — 擴散模型的奠基之作。</li>
+            <li><strong>Stable Diffusion 原論文</strong>:Rombach et al., "High-Resolution Image Synthesis with Latent Diffusion Models" (CVPR 2022)。</li>
+            <li><strong>CLIP 原論文</strong>:Radford et al., "Learning Transferable Visual Models From Natural Language Supervision" (ICML 2021)。</li>
+            <li><strong>HuggingFace diffusers</strong>:<a href="https://github.com/huggingface/diffusers" target="_blank" rel="noopener">github.com/huggingface/diffusers</a> — 可直接使用的 Stable Diffusion/DDPM/SDXL 實作與教學。</li>
+            <li><strong>Lilian Weng's blog</strong>:<a href="https://lilianweng.github.io/posts/2021-07-11-diffusion-models/" target="_blank" rel="noopener">What are Diffusion Models?</a> — 最清晰的擴散模型數學推導之一。</li>
+            <li><strong>Andrej Karpathy 的影片</strong>:YouTube "Let's build the GPT Tokenizer" 同系列有 diffusion 相關解說。</li>
+            <li><strong>MIT IAP Diffusion Lab</strong>:<a href="https://mit-6s978.github.io/" target="_blank" rel="noopener">6.S978</a> — MIT 開設的擴散模型實作課。</li>
+          </ul>
+        </div>
+      </div>
+</article>
+  </main>
+</div>
+<script src="../assets/mathjax"></script>
+<script src="../assets/book.js"></script>
+</body>
+</html>

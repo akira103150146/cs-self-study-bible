@@ -1,0 +1,1094 @@
+<!--meta
+title: 防禦性程式設計與漏洞辨識
+description: 大多數資安事件,源自程式碼裡的一個小疏忽。本章用 C 與 Python 的真實漏洞與修正,帶你建立「永遠假設輸入是惡意的」防禦心態:輸入驗證、緩衝區溢位、整數溢位、SQL 與命令注入、認證錯誤、敏感資訊外洩、TOCTOU,以及 OWASP Top 10、SAST/DAST/模糊測試與縱深防禦等安全心法。
+-->
+
+
+      <div class="eyebrow">第七部 · 資訊安全</div>
+      <h1>防禦性程式設計與漏洞辨識</h1>
+      <p class="subtitle">幾乎每一則資安頭條的背後,都藏著一行不起眼的程式碼。一個沒檢查的長度、一段被拼進 SQL 的字串、一個忘了還的指標——攻擊者要的,從來不是什麼魔法,而是你的一時疏忽。這一章,我們學著像攻擊者一樣思考,然後像工程師一樣防守。</p>
+      <div class="byline">
+        <span class="tag">第 36 章</span>
+        <span>閱讀時間 ≈ 65 分鐘</span>
+        <span>難度:★★★★☆</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>防禦性程式設計(defensive programming)的心態:為什麼要<strong>永遠假設輸入是惡意的</strong></li>
+          <li>第一誡:輸入驗證與輸出編碼——白名單為什麼勝過黑名單,該在哪裡檢查</li>
+          <li>C/C++ 的經典記憶體漏洞:緩衝區溢位、整數溢位、off-by-one、格式化字串、use-after-free,以及它們為何能導致<strong>任意程式碼執行</strong></li>
+          <li>注入攻擊(injection):SQL 注入、命令注入、XSS——以及參數化查詢如何一勞永逸地擋掉它們</li>
+          <li>認證、密碼與工作階段的常見錯誤:明文密碼、弱雜湊、session 固定、不安全的隨機數</li>
+          <li>其他你該認得的弱點:不安全的反序列化、把密鑰寫進程式碼、錯誤訊息洩漏、TOCTOU 競爭條件</li>
+          <li>OWASP Top 10 當成你的隨身檢查清單</li>
+          <li>把安全變成<strong>流程</strong>:靜態/動態分析、模糊測試、相依套件掃描、code review、最小權限與 CI</li>
+        </ul>
+      </div>
+
+      <h2>一個小疏忽,如何變成頭條</h2>
+      <p>
+        2014 年春天,全世界三分之二的網站,都在連夜更換它們的安全憑證。罪魁禍首叫
+        <strong>Heartbleed</strong>——一個藏在 OpenSSL 裡的漏洞,讓攻擊者可以隔著網路,
+        一次次「多要一點」記憶體,把伺服器裡的密碼、私鑰、別人的對話通通撈出來。
+        而它的根源,說穿了令人心碎:<strong>程式相信了使用者宣稱的長度,卻沒去核對真正收到多少資料</strong>。
+        一個少寫的長度檢查,撼動了整個網際網路。
+      </p>
+      <p>
+        這不是特例,而是常態。絕大多數的資安事件,不是因為攻擊者破解了什麼高深的密碼學
+        (那其實非常難,我們在<strong>第 35 章</strong>談過);而是因為程式碼裡有<strong>一個小疏忽</strong>:
+        一個沒檢查的輸入、一段被誤當成指令執行的資料、一塊用完沒清乾淨的記憶體。
+        資安的戰場,九成在你寫的每一行 code 裡。
+      </p>
+      <p>
+        前面幾章我們學的是「攻防的全景」:<strong>第 34 章</strong>建立了威脅模型與 CIA 三要素的思考框架,
+        <strong>第 35 章</strong>讓你看清密碼學能做什麼、不能做什麼。這一章把鏡頭拉到最近——
+        拉到你的鍵盤前。我們要談的是<strong>防禦性程式設計</strong>:一種寫程式時隨身攜帶的偏執心態。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">防禦性程式設計的第一性原理</span>
+          <p><strong>永遠假設你的程式會被惡意使用。</strong>不要假設輸入是善意的、格式是正確的、長度是合理的、
+          呼叫順序是你預期的。你寫的每一個函式,都可能在某天被一個存心搞破壞的人、用你做夢也想不到的方式餵進資料。
+          防禦性程式設計,就是把「萬一呢?」這三個字,寫進每一道邊界。這正是<strong>第 5 章</strong>那句忠告
+          「<strong>別相信使用者輸入</strong>」的升級版——當時它是為了避免 bug,現在它是為了擋住攻擊。</p>
+        </div>
+      </div>
+
+      <div class="callout note">
+        <div class="ico">⚖️</div>
+        <div class="body">
+          <span class="c-title">先講清楚:這些知識的用途與界線</span>
+          <p>這一章會教你「漏洞長什麼樣、攻擊如何發生」。這些知識的<strong>唯一正當用途</strong>,是讓你寫出更安全的程式、
+          以及在<strong>獲得授權</strong>的前提下進行安全測試。我們刻意只講到「概念與成因」,不會提供可以直接複製去攻擊別人系統的完整
+          exploit。未經授權去攻擊任何系統,在絕大多數國家都是犯罪——這條倫理與法律的界線,我們在
+          <strong>第九部「倫理」</strong>會正式深入。請記住:理解攻擊,是為了更好地防守。</p>
+        </div>
+      </div>
+
+      <h2>第一誡:永遠不要相信輸入</h2>
+      <p>
+        如果這一章只能記住一件事,就是這件:<strong>所有來自你程式之外的資料,在被驗證之前,都是不可信的。</strong>
+        這裡的「之外」範圍比你想的大得多——不只是表單欄位,還包括:網址參數、HTTP 標頭、Cookie、
+        上傳的檔名、上游 API 的回應、環境變數、設定檔、甚至資料庫裡別人之前存進去的資料。
+        只要它不是你這段程式自己產生的常數,它就有嫌疑。
+      </p>
+
+      <h3>信任邊界:在哪裡檢查,比怎麼檢查更重要</h3>
+      <p>
+        想像你的系統像一座城堡。<strong>信任邊界(trust boundary)</strong>就是城牆——牆外是危險的世界,
+        牆內是你已經驗證過、可以放心使用的資料。防禦性程式設計的核心動作,就是<strong>在資料跨越城牆的那一刻,
+        把它攔下來檢查</strong>。一旦放進城裡才想到要查,往往已經太遲:它可能早就被拼進了一句 SQL、
+        印進了一個網頁、寫進了一塊緩衝區。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 320" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- outside world -->
+  <rect x="20" y="30" width="200" height="260" rx="12" fill="#f6e7dd" stroke="#b4541f" stroke-width="2"/>
+  <text x="120" y="56" text-anchor="middle" font-size="13" font-weight="800" fill="#b4541f">牆外:不可信的世界</text>
+  <g font-size="11" text-anchor="middle" fill="#4a5159">
+    <rect x="40" y="74" width="160" height="30" rx="6" fill="#fff" stroke="#b4541f"/><text x="120" y="94">表單 / 網址參數</text>
+    <rect x="40" y="112" width="160" height="30" rx="6" fill="#fff" stroke="#b4541f"/><text x="120" y="132">HTTP 標頭 / Cookie</text>
+    <rect x="40" y="150" width="160" height="30" rx="6" fill="#fff" stroke="#b4541f"/><text x="120" y="170">上傳檔名 / 內容</text>
+    <rect x="40" y="188" width="160" height="30" rx="6" fill="#fff" stroke="#b4541f"/><text x="120" y="208">上游 API 回應</text>
+    <rect x="40" y="226" width="160" height="30" rx="6" fill="#fff" stroke="#b4541f"/><text x="120" y="246">環境變數 / 設定</text>
+  </g>
+
+  <!-- the wall / validation gate -->
+  <rect x="300" y="30" width="120" height="260" rx="10" fill="#fef3c7" stroke="#b4541f" stroke-width="3"/>
+  <text x="360" y="150" text-anchor="middle" font-size="14" font-weight="800" fill="#b4541f">驗證關卡</text>
+  <text x="360" y="172" text-anchor="middle" font-size="11" fill="#b4541f">(信任邊界)</text>
+  <text x="360" y="200" text-anchor="middle" font-size="10" fill="#8a929b">白名單</text>
+  <text x="360" y="216" text-anchor="middle" font-size="10" fill="#8a929b">長度 / 型別 / 範圍</text>
+  <text x="360" y="232" text-anchor="middle" font-size="10" fill="#8a929b">不合格 → 直接拒絕</text>
+
+  <!-- inside -->
+  <rect x="500" y="30" width="200" height="260" rx="12" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="600" y="56" text-anchor="middle" font-size="13" font-weight="800" fill="#2f6f6a">牆內:已驗證,可信</text>
+  <text x="600" y="150" text-anchor="middle" font-size="11" fill="#4a5159">商業邏輯</text>
+  <text x="600" y="172" text-anchor="middle" font-size="11" fill="#4a5159">資料庫查詢</text>
+  <text x="600" y="194" text-anchor="middle" font-size="11" fill="#4a5159">渲染畫面</text>
+
+  <line x1="220" y1="160" x2="298" y2="160" stroke="#8a929b" stroke-width="2" marker-end="url(#tbA)"/>
+  <line x1="422" y1="160" x2="498" y2="160" stroke="#2f6f6a" stroke-width="2" marker-end="url(#tbB)"/>
+  <defs>
+    <marker id="tbA" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/></marker>
+    <marker id="tbB" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#2f6f6a"/></marker>
+  </defs>
+</svg>
+        <figcaption>圖 36-1:信任邊界。所有外來資料都要在跨越城牆(信任邊界)的那一刻被攔下、驗證;通過的才進入牆內被信任地使用。把驗證集中在邊界,而不是散落在程式各處事後補救。</figcaption>
+      </div>
+
+      <h3>白名單,而不是黑名單</h3>
+      <p>
+        檢查輸入有兩種思路。<strong>黑名單(blacklist)</strong>:列出「壞東西」,看到就擋——
+        例如「過濾掉 <code>&lt;script&gt;</code>」「不准出現分號」。<strong>白名單(whitelist / allowlist)</strong>:
+        反過來,列出「好東西」,只放行明確合法的,其餘一律拒絕——例如「使用者名稱只允許英數字與底線,長度 3 到 16」。
+      </p>
+      <p>
+        黑名單幾乎總是輸,原因很簡單:<strong>你永遠列不完所有壞東西</strong>。攻擊者只要找到一個你沒想到的變形就贏了——
+        大小寫繞過、編碼繞過、Unicode 同形字、巢狀標籤……防守方要堵住所有洞,攻擊方只要找到一個洞。
+        白名單則把這個不對稱反轉過來:你只要定義清楚「什麼是合法的」,任何沒見過的東西都自動被擋在外面。
+      </p>
+      <pre><code class="language-python">import re
+
+# ❌ 黑名單:試圖列舉壞字元,永遠有漏網之魚
+def bad_check(username):
+    for ch in ["'", ";", "&lt;", "&gt;", "--"]:   # 真的列得完嗎?
+        if ch in username:
+            return False
+    return True
+
+# ✅ 白名單:只定義「合法長什麼樣」,其餘一律拒絕
+USERNAME_RE = re.compile(r"^[a-zA-Z0-9_]{3,16}$")   # 只准英數字與底線,長度 3–16
+
+def good_check(username):
+    return USERNAME_RE.fullmatch(username) is not None</code></pre>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">驗證(validation)≠ 編碼(encoding):兩件事都要做</span>
+          <p><strong>輸入驗證</strong>是在入口問「這筆資料合不合法?」(對的留、錯的拒)。
+          <strong>輸出編碼(output encoding)</strong>則是在資料要離開系統、進入另一個「直譯器」之前,
+          把它轉成那個直譯器眼中「純資料、不是指令」的安全形式。例如把字串塞進 HTML 前,
+          要把 <code>&lt;</code> 轉成 <code>&amp;lt;</code>(這樣瀏覽器就不會把它當標籤);塞進 SQL 前,用參數化查詢
+          (等一下會講)。<strong>驗證擋掉壞輸入,編碼防止好資料在錯的地方被誤讀成指令。</strong>同一筆資料,
+          在送進 HTML、SQL、Shell、JSON 時,需要的是不同的編碼——所以「該怎麼編碼」取決於「要送去哪裡」。</p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 36.1 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>下面這個函式接收一筆「轉帳金額」的字串輸入,直接就拿去用了。請為它加上嚴謹的輸入驗證
+          (用白名單思路),要求:必須是正整數、不得為空、不得有正負號或小數點、金額上限 1,000,000。
+          不合法時拋出例外。</p>
+          <pre><code class="language-python">def transfer(amount_str):
+    amount = int(amount_str)        # 直接轉換,毫無防備
+    do_transfer(amount)</code></pre>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>關鍵思考:<code>int("...")</code> 看似無害,但 <code>int(" -5 ")</code>、<code>int("0x10", 0)</code>
+              這類輸入可能不是你要的;而且就算轉得出數字,業務上也有範圍限制。先用白名單格式檢查(只允許數字字元),
+              再檢查範圍。把驗證寫成「不通過就早早拒絕(fail fast)」:</p>
+              <pre><code class="language-python">import re
+
+AMOUNT_RE = re.compile(r"^[0-9]{1,7}$")   # 只允許 1~7 位純數字
+MAX_AMOUNT = 1_000_000
+
+def transfer(amount_str):
+    # 1) 型別與格式:必須是字串、且只由數字組成
+    if not isinstance(amount_str, str) or not AMOUNT_RE.fullmatch(amount_str):
+        raise ValueError("金額格式不合法:只允許正整數")
+    # 2) 範圍:轉成數字後檢查上下限
+    amount = int(amount_str)
+    if amount &lt;= 0 or amount &gt; MAX_AMOUNT:
+        raise ValueError("金額超出允許範圍")
+    do_transfer(amount)</code></pre>
+              <p>注意我們<strong>先用正規表達式擋掉所有非數字</strong>(這會順手擋掉空字串、空白、正負號、小數點、
+              科學記號、十六進位前綴),通過後才轉成整數做範圍檢查。這就是「在信任邊界用白名單」的具體樣貌。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>記憶體安全:C 的力量,也是它的詛咒</h2>
+      <p>
+        我們在<strong>第 24 章</strong>看過 C 的記憶體真相:堆疊、堆積、指標,以及記憶體洩漏與懸空指標兩個惡夢。
+        那一章結尾就預告過:這些「記憶體錯誤」不只是 bug,更是<strong>資安漏洞</strong>。現在,我們正面拆解它們。
+      </p>
+      <p>
+        為什麼偏偏是 C/C++?因為它們把記憶體管理的<strong>全部責任交給程式設計師</strong>,
+        以換取極致的效能與控制力。語言本身<em>不會</em>幫你檢查「你寫的位置有沒有超出配置的範圍」。
+        於是當你算錯一個長度、少加一個邊界檢查,程式不會當場報錯——它會默默地寫到「不該寫的地方」,
+        而那個地方,可能正好是攻擊者垂涎的目標。
+      </p>
+
+      <h3>緩衝區溢位:覆寫鄰居,甚至綁架程式</h3>
+      <p>
+        <strong>緩衝區溢位(buffer overflow)</strong>是資安史上最古老、也最致命的漏洞,沒有之一。
+        它的成因一句話就能說完:<strong>往一塊固定大小的緩衝區裡,寫入超過它容量的資料</strong>。
+        多出來的位元組不會憑空消失,它們會繼續往後寫,<strong>覆蓋掉記憶體裡緊鄰的東西</strong>。
+        來看一段教科書級的災難:
+      </p>
+      <pre><code class="language-c">#include &lt;stdio.h&gt;
+
+void greet(void) {
+    char name[16];              /* 只配置 16 bytes 的堆疊緩衝區 */
+    printf("請輸入你的名字:");
+    gets(name);                 /* ⛔ 災難:gets() 完全不檢查長度,你給多長它讀多長 */
+    printf("你好,%s!\n", name);
+}</code></pre>
+      <p>
+        <code>gets()</code> 是 C 標準庫裡惡名昭彰到<strong>已被正式從語言移除</strong>的函式:它從輸入讀一整行,
+        完全不管你的緩衝區有多大。使用者乖乖輸入 <code>Akira</code>,沒事;但只要輸入超過 15 個字元
+        (留一格給字串結尾的 <code>\0</code>),多出來的位元組就會溢出 <code>name</code> 的範圍,
+        繼續往堆疊的更高位址寫去。而堆疊上緊鄰著它的,是兩樣攻擊者夢寐以求的東西。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 380" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="360" y="24" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">greet() 的堆疊框架(stack frame)</text>
+
+  <!-- normal column -->
+  <text x="180" y="52" text-anchor="middle" font-size="12" font-weight="800" fill="#2f6f6a">正常輸入 "Akira"</text>
+  <rect x="80" y="64" width="200" height="46" fill="#f6e7dd" stroke="#b4541f" stroke-width="2"/>
+  <text x="180" y="84" text-anchor="middle" font-size="11" font-weight="700" fill="#b4541f">返回位址 return address</text>
+  <text x="180" y="100" text-anchor="middle" font-size="10" fill="#4a5159">→ 指回呼叫者(完好)</text>
+  <rect x="80" y="110" width="200" height="40" fill="#ede9fe" stroke="#8b5cf6" stroke-width="2"/>
+  <text x="180" y="135" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2328">舊的框架指標</text>
+  <rect x="80" y="150" width="200" height="80" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="180" y="180" text-anchor="middle" font-size="11" font-weight="700" fill="#2f6f6a">name[16]</text>
+  <text x="180" y="200" text-anchor="middle" font-size="11" fill="#4a5159">A k i r a \0 . . .</text>
+  <text x="180" y="218" text-anchor="middle" font-size="10" fill="#8a929b">沒寫滿,沒事</text>
+
+  <!-- overflow column -->
+  <text x="540" y="52" text-anchor="middle" font-size="12" font-weight="800" fill="#b4541f">惡意輸入(超長)</text>
+  <rect x="440" y="64" width="200" height="46" fill="#b4541f" stroke="#7a2f10" stroke-width="2"/>
+  <text x="540" y="84" text-anchor="middle" font-size="11" font-weight="800" fill="#fff">返回位址 被覆寫!</text>
+  <text x="540" y="100" text-anchor="middle" font-size="10" fill="#ffe3d3">→ 指向攻擊者選定的位址</text>
+  <rect x="440" y="110" width="200" height="40" fill="#d98a5a" stroke="#7a2f10" stroke-width="2"/>
+  <text x="540" y="135" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">框架指標 被覆寫</text>
+  <rect x="440" y="150" width="200" height="80" fill="#d98a5a" stroke="#7a2f10" stroke-width="2"/>
+  <text x="540" y="180" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">name[16] 被塞爆</text>
+  <text x="540" y="200" text-anchor="middle" font-size="11" fill="#fff">A A A A A A A A A A …</text>
+  <text x="540" y="218" text-anchor="middle" font-size="10" fill="#ffe3d3">資料滿出來,繼續往上寫</text>
+
+  <!-- write direction arrow -->
+  <line x1="360" y1="210" x2="360" y2="90" stroke="#b4541f" stroke-width="2.5" marker-end="url(#bofA)"/>
+  <text x="372" y="155" font-size="11" fill="#b4541f">寫入方向</text>
+  <text x="372" y="170" font-size="10" fill="#8a929b">(往高位址,</text>
+  <text x="372" y="184" font-size="10" fill="#8a929b">朝返回位址爬)</text>
+
+  <text x="60" y="270" font-size="10" fill="#8a929b">低位址 ↓</text>
+  <text x="60" y="84" font-size="10" fill="#8a929b">高位址 ↑</text>
+
+  <text x="360" y="300" text-anchor="middle" font-size="11" fill="#1f2328">函式 <tspan font-weight="800">return</tspan> 時,CPU 會跳到「返回位址」——若它已被改寫,程式就跳去執行攻擊者指定的地方</text>
+  <text x="360" y="322" text-anchor="middle" font-size="10" fill="#8a929b">這就是緩衝區溢位通往「任意程式碼執行」的橋樑(本圖為概念示意,非可用 exploit)</text>
+
+  <defs>
+    <marker id="bofA" markerWidth="10" markerHeight="10" refX="5" refY="2" orient="auto"><path d="M0,8 L5,0 L10,8 Z" fill="#b4541f"/></marker>
+  </defs>
+</svg>
+        <figcaption>圖 36-2:堆疊上的緩衝區溢位(概念圖)。<code>name</code> 緩衝區之上緊鄰著「舊框架指標」與「返回位址」。寫超出 <code>name</code> 的資料會往高位址爬,覆蓋掉返回位址。當函式 <code>return</code> 時,CPU 會跳到那個(已被竄改的)位址——控制權就此易手。</figcaption>
+      </div>
+
+      <p>
+        <strong>後果有多嚴重?</strong>輕則覆蓋掉旁邊的變數、讓程式行為錯亂或崩潰(這已經是
+        <strong>第 34 章</strong>說的「可用性」被破壞);重則,攻擊者精心計算溢位的長度,
+        把「返回位址」改寫成他想要的值,讓程式 <code>return</code> 時跳去執行<strong>他事先放進記憶體的指令</strong>。
+        這就是傳說中的<strong>任意程式碼執行(arbitrary code execution)</strong>——
+        對方等於拿到了在你機器上下指令的權力。Heartbleed、Morris 蠕蟲、無數作業系統與瀏覽器漏洞,
+        骨子裡都是這一類記憶體越界。
+      </p>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">為什麼「能寫進記憶體」就等於「能執行程式碼」?(概念)</span>
+          <p>因為在 C 的記憶體模型裡,<strong>資料與「控制流程」住在同一塊記憶體</strong>。返回位址只是堆疊上的一個數字,
+          它決定函式結束後 CPU「下一步跳去哪」。緩衝區溢位讓攻擊者能<em>寫</em>到那個數字——而能控制「下一步跳去哪」,
+          就等於能控制程式的行為。經典手法是把返回位址導向一段攻擊者注入的指令(早年叫 shellcode),
+          或導向程式裡既有的、可被串接利用的程式碼片段。我們<strong>刻意只講到這個層次</strong>:
+          理解「資料越界 → 改寫控制流程 → 劫持執行」這條因果鏈,已經足夠讓你明白為什麼一定要防;
+          至於可實際運作的攻擊細節,屬於授權滲透測試的專業領域,不在本書範圍。</p>
+        </div>
+      </div>
+
+      <p>
+        <strong>怎麼修?</strong>核心就一句:<strong>永遠不要寫超過緩衝區的容量,也永遠不要相信輸入的長度</strong>。
+        具體做法是改用「會帶上長度上限」的函式:
+      </p>
+      <pre><code class="language-c">#include &lt;stdio.h&gt;
+#include &lt;string.h&gt;
+
+void greet(void) {
+    char name[16];
+    printf("請輸入你的名字:");
+
+    /* ✅ fgets 第二個參數限定「最多讀幾個位元組」,絕不會超過緩衝區 */
+    if (fgets(name, sizeof(name), stdin) != NULL) {
+        name[strcspn(name, "\n")] = '\0';   /* 去掉 fgets 可能留下的換行 */
+        printf("你好,%s!\n", name);
+    }
+}</code></pre>
+      <p>
+        同樣的道理,複製字串時不要用不檢查長度的 <code>strcpy</code>、串接時不要用 <code>strcat</code>;
+        改用會吃上限的版本。其中最不容易出錯的是 <code>snprintf</code>,它一定會把結果截斷在你給的大小內、
+        並保證結尾有 <code>\0</code>:
+      </p>
+      <pre><code class="language-c">char dst[16];
+
+/* ❌ strcpy 不檢查長度:src 一長,dst 就爆 */
+strcpy(dst, src);
+
+/* ⚠️ strncpy 有上限,但「來源過長時不會幫你補 \0」——容易留下沒結尾的字串 */
+strncpy(dst, src, sizeof(dst) - 1);
+dst[sizeof(dst) - 1] = '\0';     /* 必須自己手動補上結尾 */
+
+/* ✅ snprintf 最安全:一定截斷在大小內、且保證 \0 結尾 */
+snprintf(dst, sizeof(dst), "%s", src);</code></pre>
+
+      <div class="callout note">
+        <div class="ico">🛡️</div>
+        <div class="body">
+          <span class="c-title">現代防護:三層安全網(但別把它們當免死金牌)</span>
+          <p>就算寫出了溢位 bug,現代系統還疊了三道硬體/編譯器防線,大幅提高攻擊難度:
+          <strong>堆疊金絲雀(stack canary)</strong>——在返回位址前放一個隨機哨兵值,函式返回前檢查它有沒有被改動,被改就立刻終止;
+          <strong>DEP / NX(資料不可執行)</strong>——把堆疊、堆積標記成「不可執行」,讓注入的資料無法直接當指令跑;
+          <strong>ASLR(位址空間隨機化)</strong>——每次執行都隨機擺放記憶體佈局,讓攻擊者猜不到該跳去哪個位址。
+          但請記住:這些是<strong>減災</strong>,不是<strong>根治</strong>。真正的修法,永遠是「一開始就別寫出越界」。
+          所以業界也越來越多改用<strong>記憶體安全的語言</strong>(Rust、Go)從源頭消滅這類漏洞。</p>
+        </div>
+      </div>
+
+      <h3>整數溢位:當數字偷偷繞回去</h3>
+      <p>
+        我們在<strong>第 2 章</strong>與<strong>第 20 章</strong>看過:電腦裡的整數是<strong>固定位元</strong>的,
+        有上限。當運算結果超過上限,它不會報錯,而是<strong>無聲地繞回去(wrap around)</strong>——
+        就像里程表跑滿了會歸零。這在資安上極度危險,因為它常常發生在「算記憶體要配多大」的時候:
+      </p>
+      <pre><code class="language-c">#include &lt;stdlib.h&gt;
+#include &lt;string.h&gt;
+
+/* 配置一個能裝 count 個元素、每個 size 大小的緩衝區 */
+void *make_buffer(size_t count, size_t size, const void *data) {
+    void *buf = malloc(count * size);   /* ⛔ count * size 可能整數溢位! */
+    /* 若 count 與 size 都很大,乘積超過 size_t 上限會繞回成一個「很小」的數,
+       於是 malloc 配了一塊「比你以為的小很多」的記憶體 */
+    memcpy(buf, data, count * size);    /* 然後這裡照「真正的大小」拷貝 → 緩衝區溢位 */
+    return buf;
+}</code></pre>
+      <p>
+        攻擊者只要讓 <code>count * size</code> 剛好溢位,就能誘使程式配出一塊過小的緩衝區,
+        接著的 <code>memcpy</code> 就寫爆了它——整數溢位於是<strong>變成</strong>緩衝區溢位。
+        修正方式是在相乘<em>之前</em>先檢查會不會溢位,或直接用專為此設計的 <code>calloc</code>
+        (它內部會幫你檢查 <code>count * size</code> 的溢位):
+      </p>
+      <pre><code class="language-c">/* ✅ 方法一:相乘前先檢查 */
+if (size != 0 &amp;&amp; count &gt; SIZE_MAX / size) {
+    return NULL;                 /* 會溢位,拒絕 */
+}
+void *buf = malloc(count * size);
+
+/* ✅ 方法二:用 calloc,它會替你做溢位檢查,並把記憶體清零 */
+void *buf = calloc(count, size);</code></pre>
+
+      <h3>Off-by-one:那個多跑一格的迴圈</h3>
+      <p>
+        <strong>差一錯誤(off-by-one)</strong>是邊界上最常見的失手:迴圈多跑一次、索引多算一格。
+        在多數語言裡它只是個 bug,但在 C 裡,多寫一格就是越界寫入:
+      </p>
+      <pre><code class="language-c">char buf[16];
+/* ❌ 用 &lt;= 會讓 i 跑到 16,而合法索引只到 15 → buf[16] 越界寫 */
+for (int i = 0; i &lt;= 16; i++) {
+    buf[i] = 'A';
+}
+
+/* ✅ 正確:嚴格小於陣列大小 */
+for (int i = 0; i &lt; 16; i++) {
+    buf[i] = 'A';
+}</code></pre>
+      <p>
+        看似只多寫一個位元組,但那個位元組可能正好踩在某個關鍵變數或返回位址的最低位——
+        歷史上不乏「單位元組溢位(off-by-one byte)」被串成完整攻擊的案例。
+        養成習慣:寫迴圈邊界時,停下來問自己「最後一次 <code>i</code> 是多少?它還在範圍內嗎?」
+      </p>
+
+      <h3>格式化字串漏洞:別把使用者輸入當格式字串</h3>
+      <p>
+        <code>printf</code> 家族的第一個參數是<strong>格式字串</strong>,裡面的 <code>%s</code>、<code>%x</code>、<code>%n</code>
+        會指揮它去讀(甚至寫)記憶體。如果你把<strong>使用者控制的字串</strong>直接當成格式字串,就闖大禍了:
+      </p>
+      <pre><code class="language-c">char *user = get_user_input();
+
+printf(user);          /* ⛔ 若 user 含 "%x%x%x" 可讀出堆疊內容;含 "%n" 甚至能寫記憶體 */
+
+printf("%s", user);    /* ✅ 把 user 當成「純資料」,而不是「格式指令」 */</code></pre>
+      <p>
+        關鍵體悟和注入攻擊一模一樣:<strong>資料被誤當成了指令</strong>。<code>%n</code> 這個格式指定符會把
+        「目前已輸出的字元數」<em>寫進</em>一個指標指向的位址——攻擊者可藉此進行任意記憶體寫入。
+        修法永遠是:格式字串要寫成程式裡的常數,使用者資料只能透過 <code>%s</code> 之類的<em>參數</em>傳入。
+      </p>
+
+      <h3>Use-after-free 與 double free:幽靈指標再現</h3>
+      <p>
+        <strong>第 24 章</strong>講過懸空指標(dangling pointer):記憶體被 <code>free</code> 之後,
+        指向它的指標還在,繼續使用就是<strong>釋放後使用(use-after-free)</strong>。在資安上,這是僅次於緩衝區溢位的重災區。
+        為什麼危險?因為那塊記憶體被釋放後,可能很快被配給<em>別的</em>用途(甚至是攻擊者可控的資料)。
+        此時透過舊指標讀寫,就等於讓攻擊者間接操控了「本該是別人的」記憶體——常被串成程式碼執行。
+      </p>
+      <pre><code class="language-c">char *p = malloc(64);
+/* ... 使用 p ... */
+free(p);
+
+/* ⛔ use-after-free:p 指向的記憶體已歸還,可能已被別人拿去用 */
+strcpy(p, "late write");
+
+/* ⛔ double free:重複釋放同一塊,會破壞堆積管理結構,可被利用 */
+free(p);
+
+/* ✅ 解法:free 之後立刻把指標設為 NULL。
+   之後若誤用,會變成對 NULL 解參考(當場崩潰),而不是悄悄踩進別人的記憶體;
+   而且對 NULL 再做一次 free() 是安全的、什麼也不會發生 */
+free(p);
+p = NULL;</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">記憶體漏洞的共同根源:沒有人替你檢查邊界</span>
+          <p>緩衝區溢位、整數溢位、off-by-one、格式化字串、use-after-free——它們表面各異,
+          但都來自同一件事:<strong>C/C++ 不會在執行時幫你檢查「你存取的位置合不合法、那塊記憶體還活著嗎」</strong>。
+          所以防禦的根本對策有兩條:在 C 裡,養成「永遠帶長度、永遠檢查邊界、free 後立刻 NULL」的肌肉記憶,
+          並善用工具(<code>-fsanitize=address</code>、Valgrind、靜態分析)在上線前抓出它們;
+          在新專案裡,認真考慮用<strong>記憶體安全的語言</strong>,從語言層級根除這整類問題。</p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 36.2 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>下面這段 C 程式想把使用者輸入的密碼複製到一個固定緩衝區再做比對。請指出它的緩衝區溢位漏洞,
+          說明攻擊者能造成什麼後果,並寫出修正版。</p>
+          <pre><code class="language-c">#include &lt;stdio.h&gt;
+#include &lt;string.h&gt;
+
+int check_password(void) {
+    char input[12];
+    char correct[] = "s3cr3t";
+    printf("Password: ");
+    gets(input);                    /* (1) */
+    strcpy(input, input);           /* 無意義,忽略 */
+    return strcmp(input, correct) == 0;
+}</code></pre>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>漏洞:</strong>第 (1) 行的 <code>gets(input)</code> 不檢查長度,而 <code>input</code> 只有 12 bytes。
+              使用者輸入超過 11 個字元就會溢出,覆蓋掉堆疊上緊鄰的資料——可能是 <code>correct</code> 變數、
+              舊框架指標、甚至返回位址。<strong>後果:</strong>(a) 攻擊者可把溢位資料蓋過 <code>correct</code>,
+              讓比對「假性通過」;(b) 更嚴重的,蓋過返回位址以劫持執行流程,導致任意程式碼執行。</p>
+              <p><strong>修正:</strong>用 <code>fgets</code> 限定讀取長度。比對密碼還應該用「常數時間比較」避免時間側通道
+              (這屬於<strong>第 35 章</strong>的主題,這裡先用標準比較示意):</p>
+              <pre><code class="language-c">#include &lt;stdio.h&gt;
+#include &lt;string.h&gt;
+
+int check_password(void) {
+    char input[12];
+    const char *correct = "s3cr3t";
+    printf("Password: ");
+    if (fgets(input, sizeof(input), stdin) == NULL) return 0;
+    input[strcspn(input, "\n")] = '\0';      /* 去掉換行 */
+    return strcmp(input, correct) == 0;
+}</code></pre>
+              <p>進一步的防禦:密碼不應該以明文寫死在程式裡(這是「敏感資訊外洩」,後面會談),
+              而且比對的應該是<strong>雜湊</strong>而非明文(呼應第 35 章)。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 36.3 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>用你自己的話,向一個只懂基礎 C 的同學解釋:為什麼一個「只是把資料寫超出陣列」的緩衝區溢位 bug,
+          有可能演變成「攻擊者在你機器上執行任意指令」?過程的關鍵環節是什麼?(只需講概念,不要寫攻擊程式碼。)</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>關鍵在於三個環節串成一條因果鏈:</p>
+              <ol>
+                <li><strong>資料與控制資訊混居:</strong>在 C 的堆疊上,你的區域陣列(資料)和函式的「返回位址」
+                (決定函式結束後 CPU 跳去哪——也就是控制流程)挨得很近。</li>
+                <li><strong>越界寫能觸及返回位址:</strong>當寫入超過陣列容量,多餘的位元組會沿著記憶體往返回位址的方向覆蓋過去。
+                只要攻擊者控制了輸入內容與長度,他就能<em>精準地</em>把返回位址改寫成自己想要的值。</li>
+                <li><strong>改寫控制流程 = 劫持執行:</strong>函式執行 <code>return</code> 時,CPU 信任地跳到返回位址。
+                既然它已被竄改,CPU 就會跳去執行攻擊者指定的程式碼(可能是他注入的指令,或程式內既有的片段)。
+                控制權至此易手。</li>
+              </ol>
+              <p>一句話總結:<strong>因為「能寫入記憶體」在 C 裡可以升級成「能改寫程式的下一步要跳去哪」,
+              而後者就等於控制了程式。</strong>這也是為什麼 DEP(資料不可執行)、ASLR(位址隨機化)、
+              stack canary(哨兵值)這些防護都圍繞著「保護返回位址、阻斷這條鏈」在設計。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>注入攻擊:當資料被當成程式碼執行</h2>
+      <p>
+        你有沒有發現,格式化字串漏洞的本質,跟緩衝區溢位有種詭異的相似?它們都是
+        <strong>「本該是資料的東西,被系統當成了指令」</strong>。這個模式有個正式名字,叫
+        <strong>注入(injection)</strong>,而它常年高居 <strong>OWASP Top 10</strong> 榜首。
+        只要你的程式把「外來字串」拼進某種會被「直譯器」解讀的語句裡——SQL、Shell 指令、HTML、LDAP 查詢——
+        就有注入的風險。
+      </p>
+
+      <h3>SQL 注入:一句話放倒整個資料庫</h3>
+      <p>
+        這是注入家族裡最有名的成員。想像一個登入功能,後端用字串拼接組出 SQL 查詢
+        (我們會在<strong>第八部「資料庫」</strong>正式學 SQL,這裡只需要知道它是「跟資料庫下指令的語言」):
+      </p>
+      <pre><code class="language-python"># ⛔ 災難寫法:把使用者輸入直接拼進 SQL 字串
+def login(username, password):
+    query = (
+        "SELECT * FROM users "
+        "WHERE name = '" + username + "' AND pw = '" + password + "'"
+    )
+    return db.execute(query)</code></pre>
+      <p>
+        平常使用者輸入 <code>akira</code> / <code>mypw</code>,組出來的查詢正常無比。但如果攻擊者在「使用者名稱」
+        欄位填入這串東西:<code>' OR '1'='1' --</code>,會發生什麼事?字串一拼接,整句 SQL 就變了形:
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 320" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- input -->
+  <text x="20" y="40" font-size="12" font-weight="800" fill="#b4541f">攻擊者在「使用者名稱」欄位輸入:</text>
+  <rect x="20" y="50" width="320" height="36" rx="6" fill="#fff" stroke="#b4541f" stroke-width="2"/>
+  <text x="34" y="73" font-size="14" font-family="monospace" fill="#1f2328">' OR '1'='1' --</text>
+
+  <!-- template -->
+  <text x="20" y="124" font-size="12" font-weight="800" fill="#8a929b">程式的 SQL 模板:</text>
+  <rect x="20" y="134" width="680" height="34" rx="6" fill="#f3f4f6" stroke="#8a929b"/>
+  <text x="34" y="156" font-size="12.5" font-family="monospace" fill="#4a5159">SELECT * FROM users WHERE name = '___' AND pw = '___'</text>
+
+  <!-- resulting -->
+  <text x="20" y="206" font-size="12" font-weight="800" fill="#b4541f">拼接後,實際送給資料庫執行的:</text>
+  <rect x="20" y="216" width="680" height="58" rx="6" fill="#fdece5" stroke="#b4541f" stroke-width="2"/>
+  <text x="34" y="240" font-size="12.5" font-family="monospace" fill="#1f2328">SELECT * FROM users WHERE name = '<tspan fill="#b4541f" font-weight="700">' OR '1'='1' --</tspan>' AND pw = '...'</text>
+  <text x="34" y="262" font-size="11" fill="#b4541f">→ 條件變成「name='' 或 '1'='1'」永遠為真;-- 把後面的密碼檢查整段註解掉</text>
+
+  <line x1="180" y1="86" x2="180" y2="132" stroke="#8a929b" stroke-width="2" marker-end="url(#sqlA)"/>
+  <line x1="360" y1="168" x2="360" y2="214" stroke="#b4541f" stroke-width="2" marker-end="url(#sqlB)"/>
+  <defs>
+    <marker id="sqlA" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/></marker>
+    <marker id="sqlB" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#b4541f"/></marker>
+  </defs>
+</svg>
+        <figcaption>圖 36-3:SQL 注入的成因(示意)。使用者輸入裡的單引號「跳出」了字串,後面的 <code>OR '1'='1'</code> 把 WHERE 條件變成恆真,而 <code>--</code> 把原本的密碼檢查註解掉。資料庫忠實地執行了這句「被改寫過」的查詢——於是登入被繞過。</figcaption>
+      </div>
+
+      <p>
+        那句 <code>' OR '1'='1'</code> 讓 WHERE 條件恆為真,<code>--</code> 又把後面的密碼比對註解掉,
+        於是這句查詢回傳了<strong>所有使用者</strong>——登入驗證形同虛設。而這還只是最溫和的玩法;
+        更糟的注入可以讀出整張資料表、竄改資料、甚至(設定不當時)刪掉整個資料庫。
+      </p>
+      <p>
+        <strong>修正的關鍵,是徹底分開「指令」與「資料」</strong>。方法叫<strong>參數化查詢
+        (parameterized query / prepared statement)</strong>:你先給資料庫一個帶「佔位符」的查詢骨架,
+        再把使用者資料當成<strong>參數</strong>分開傳進去。資料庫會把參數<strong>永遠當成純資料</strong>,
+        無論裡面有多少引號、分號、<code>OR '1'='1'</code>,都不會被解讀成 SQL 語法:
+      </p>
+      <pre><code class="language-python"># ✅ 參數化查詢:用 ? 佔位,資料另外傳;使用者輸入永遠是「資料」,不會變成「指令」
+def login(username, password):
+    query = "SELECT * FROM users WHERE name = ? AND pw = ?"
+    return db.execute(query, (username, password))</code></pre>
+      <p>
+        注意:這<strong>不是</strong>「把引號跳脫掉」那種黑名單式的補救(那很容易漏),而是從機制上讓資料
+        <em>不可能</em>被當成語法。這也是為什麼我們說參數化查詢能「一勞永逸」地解決 SQL 注入——
+        它不是堵洞,是換了一道根本不會漏的牆。在實務上,你更該透過 ORM 或查詢建構器,它們預設就用參數化。
+      </p>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">字串格式化也算「拼接」</span>
+          <p>很多人以為只有 <code>"... " + x</code> 才危險,於是改用 f-string 或 <code>.format()</code>——
+          那其實一樣致命:<code>f"SELECT * FROM users WHERE name = '{username}'"</code> 同樣是把使用者輸入直接嵌進 SQL。
+          判斷標準很單純:<strong>使用者資料有沒有「成為 SQL 語句字串的一部分」?</strong>有,就有注入風險。
+          唯一安全的做法是讓它走「參數」這條獨立通道。</p>
+        </div>
+      </div>
+
+      <h3>命令注入:把字串交給 Shell 的代價</h3>
+      <p>
+        同樣的劇本,換個舞台重演。當程式把使用者輸入拼進一條<strong>系統指令</strong>、交給 shell 執行時,
+        就是<strong>命令注入(command injection)</strong>:
+      </p>
+      <pre><code class="language-python">import os
+
+# ⛔ 把使用者輸入拼進 shell 指令
+def ping(host):
+    os.system("ping -c 1 " + host)
+    # host = "8.8.8.8; rm -rf ~"  → shell 會先 ping,再執行那個刪除指令!
+    # ; | &amp;&amp; &gt; ` $() 這些 shell 元字元,全都是攻擊者的武器</code></pre>
+      <p>
+        <code>os.system</code> 把整個字串交給 shell 解讀,而 shell 認得 <code>;</code>、<code>|</code>、
+        <code>&amp;&amp;</code>、反引號、<code>$()</code> 等「元字元」——攻擊者用它們就能在你的 ping 後面，
+        偷渡任意指令。<strong>修法:不要經過 shell,改用「參數陣列」直接執行程式</strong>,
+        讓使用者輸入永遠是「單一一個參數」,而不是一段會被解析的命令文字:
+      </p>
+      <pre><code class="language-python">import subprocess
+
+# ✅ 傳「參數陣列」、且不啟用 shell:host 永遠被當成單一參數,元字元失效
+def ping(host):
+    subprocess.run(["ping", "-c", "1", host], shell=False, timeout=5)
+    # 即使 host = "8.8.8.8; rm -rf ~",它也只會被當成一個(無效的)主機名,不會被執行</code></pre>
+      <p>
+        看出共通的模式了嗎?<strong>不要把資料拼進「會被解讀的字串」,而要讓資料走「參數」的獨立通道。</strong>
+        SQL 注入、命令注入、格式化字串——同一個道理,同一種解法。當然,最理想的還是在前面再加一道白名單驗證
+        (例如 <code>host</code> 只允許合法的 IP 或網域格式)。
+      </p>
+
+      <h3>XSS:注入到別人的瀏覽器</h3>
+      <p>
+        還有一種注入,目標不是你的伺服器,而是<strong>其他使用者的瀏覽器</strong>。
+        <strong>跨站腳本(Cross-Site Scripting,XSS)</strong>發生在:你的網頁把使用者輸入「原封不動」嵌進 HTML,
+        而那段輸入裡藏著 <code>&lt;script&gt;</code>。當別的使用者打開這個頁面,那段腳本就在<em>他們</em>的瀏覽器裡執行了——
+        可以偷 Cookie、冒充身分、竄改畫面。
+      </p>
+      <pre><code class="language-python"># ⛔ 把使用者輸入直接拼進 HTML(Flask 偽碼)
+@app.route("/hello")
+def hello():
+    name = request.args.get("name")
+    return "&lt;p&gt;歡迎," + name + "&lt;/p&gt;"
+    # name = "&lt;script&gt;steal(document.cookie)&lt;/script&gt;" → 腳本在受害者瀏覽器執行</code></pre>
+      <p>
+        解法依然是那組老搭檔:<strong>輸出編碼</strong>(把 <code>&lt;</code>、<code>&gt;</code>、
+        <code>&amp;</code>、引號轉成 HTML 實體,讓瀏覽器把它當文字而非標籤)加上<strong>輸入驗證</strong>。
+        好消息是現代的樣板引擎(如 Jinja2、React)<strong>預設就會自動做 HTML 編碼</strong>——
+        只要你用它們正規的方式輸出變數,而不是手動拼字串。XSS 屬於 Web 安全的核心議題,
+        我們會在<strong>第十三部「Web 安全」(第 52 章)</strong>完整展開;這裡你先記住它也是注入家族的一員。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">所有注入,都是同一個故事</span>
+          <p>SQL 注入、命令注入、XSS、格式化字串、LDAP/XML 注入……骨子裡都是同一句話:
+          <strong>「資料」越界變成了「指令/語法」。</strong>而通用解法也只有兩招:
+          (1) <strong>分離通道</strong>——用參數化把資料和指令徹底分開(參數化查詢、參數陣列);
+          (2) <strong>輸出編碼</strong>——資料進入某個直譯器前,先轉成它眼中的純文字。
+          認得這個模式,你就能在任何新場景裡聞到注入的味道。</p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 36.4 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>下面這個搜尋功能有 SQL 注入漏洞。請(a)說明攻擊者輸入什麼可以撈出整張表;(b)改寫成參數化查詢。</p>
+          <pre><code class="language-python">def search_products(keyword):
+    query = f"SELECT * FROM products WHERE title LIKE '%{keyword}%'"
+    return db.execute(query)</code></pre>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>(a) 攻擊:</strong>因為 <code>keyword</code> 被 f-string 直接嵌進 SQL,攻擊者可輸入類似
+              <code>' OR '1'='1</code> 的字串,讓 <code>WHERE</code> 條件恆真,於是回傳整張 <code>products</code> 表;
+              更進一步還可能用 <code>UNION</code> 之類的手法,從其他資料表(例如 <code>users</code>)撈出資料。
+              重點是:f-string 嵌入跟字串相加一樣危險。</p>
+              <p><strong>(b) 修正:</strong>用參數化查詢,並把萬用字元 <code>%</code> 放進「參數值」裡,而不是 SQL 字串裡:</p>
+              <pre><code class="language-python">def search_products(keyword):
+    query = "SELECT * FROM products WHERE title LIKE ?"
+    pattern = f"%{keyword}%"          # % 是給 LIKE 用的,放在「資料」這一側,安全
+    return db.execute(query, (pattern,))</code></pre>
+              <p>注意 <code>?</code> 只佔「一個值」的位置;<code>LIKE</code> 需要的 <code>%</code> 萬用字元要併進參數值本身。
+              這樣 <code>keyword</code> 裡無論有什麼引號,都只會被當成要搜尋的文字。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>認證、密碼與工作階段:最容易出包的地方</h2>
+      <p>
+        「使用者是誰」與「他能不能做這件事」是每個系統的命門,卻也是錯誤最密集的角落。
+        這一節把幾個高頻地雷一次掃過——許多都直接呼應<strong>第 35 章</strong>學過的密碼學原則。
+      </p>
+
+      <h3>密碼:絕不明文,絕不弱雜湊</h3>
+      <p>
+        最基本、卻仍三天兩頭上新聞的錯誤,是把密碼以<strong>明文</strong>存進資料庫。一旦資料庫外洩,
+        全體使用者的密碼當場裸奔(而且很多人到處重複用同一組密碼)。次一等的錯誤,是用 <code>MD5</code>、
+        <code>SHA-1</code> 這類<strong>快速雜湊</strong>、又不加鹽——它們是為「速度」設計的,
+        而對付密碼,攻擊者要的正是「能每秒試幾十億次」的速度。
+      </p>
+      <pre><code class="language-python">import hashlib
+
+# ⛔ 又快又無鹽:現代 GPU 一秒可試上百億次,加上彩虹表幾乎秒破
+def hash_pw_bad(pw):
+    return hashlib.md5(pw.encode()).hexdigest()
+
+# ✅ 用「為密碼而生」的慢雜湊(bcrypt / argon2 / scrypt):內建加鹽、可調慢
+import bcrypt
+
+def hash_pw_good(pw):
+    return bcrypt.hashpw(pw.encode(), bcrypt.gensalt())   # gensalt 每次產生不同的鹽
+
+def verify(pw, stored):
+    return bcrypt.checkpw(pw.encode(), stored)</code></pre>
+      <p>
+        正確做法在<strong>第 35 章</strong>已詳述:用<strong>專為密碼設計的慢雜湊</strong>
+        (bcrypt、scrypt、Argon2),它們內建<strong>加鹽(salt)</strong>讓相同密碼產生不同雜湊、
+        且<strong>刻意計算很慢</strong>讓暴力破解變得不划算。一句話:密碼處理,直接用這些函式庫,
+        不要自己發明。
+      </p>
+
+      <h3>不安全的隨機數:可預測,就等於沒有</h3>
+      <p>
+        產生 session token、密碼重設連結、API 金鑰、CSRF token 時,你需要的是<strong>無法被預測</strong>的隨機值。
+        而一般程式語言的「普通隨機數」(像 Python 的 <code>random</code>、C 的 <code>rand()</code>)是
+        <strong>偽隨機(pseudo-random)</strong>——它們為了統計上的均勻與速度而設計,但<strong>序列是可預測的</strong>:
+        知道種子或觀察夠多輸出,就能推算出後續的值。拿它來產生安全憑證,等於把鑰匙做成了可猜的號碼。
+      </p>
+      <pre><code class="language-python">import random
+# ⛔ random 是可預測的偽隨機,絕不可用於安全用途
+token_bad = str(random.random())
+
+import secrets
+# ✅ secrets 使用作業系統的密碼學安全隨機源(CSPRNG)
+token_good = secrets.token_urlsafe(32)        # 產生不可預測的安全 token</code></pre>
+      <p>
+        規則很簡單:<strong>任何跟安全有關的隨機,都要用「密碼學安全的隨機數產生器」(CSPRNG)</strong>——
+        Python 用 <code>secrets</code> 模組、C 在 Linux 上讀 <code>/dev/urandom</code> 或用
+        <code>getrandom()</code>。把普通 <code>random</code>/<code>rand()</code> 留給遊戲、模擬、洗牌動畫就好。
+      </p>
+
+      <h3>工作階段固定(session fixation)</h3>
+      <p>
+        使用者登入後,伺服器通常用一個 <strong>session ID</strong> 來「記住」他已通過驗證。
+        <strong>session 固定攻擊</strong>的劇本是:攻擊者先取得一個 session ID,想辦法讓<em>受害者</em>用這個
+        ID 去登入;若伺服器登入前後沿用同一個 ID,那麼受害者登入成功後,攻擊者手上那個 ID 也跟著「升級」成已驗證——
+        他就冒充了受害者。
+      </p>
+      <p>
+        <strong>防禦原則:在權限狀態改變時,重新產生 session ID。</strong>最關鍵的時刻就是「登入成功的那一刻」——
+        丟掉舊 ID、發一個全新的。同時,session ID 本身要用 CSPRNG 產生(夠長、不可預測),
+        cookie 要加上 <code>HttpOnly</code>(擋 XSS 偷取)、<code>Secure</code>(只走 HTTPS)、
+        <code>SameSite</code>(緩解 CSRF)等屬性——這些 Web 細節留待<strong>第 52 章</strong>。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">認證(authentication)vs 授權(authorization)</span>
+          <p>兩個常被混用的詞:<strong>認證</strong>回答「你是誰?」(驗證身分,像登入);
+          <strong>授權</strong>回答「你能做什麼?」(驗證權限,像「這個檔案你能不能刪」)。
+          OWASP Top 10 裡長年的頭號問題其實是<strong>權限控制失當(broken access control)</strong>——
+          也就是授權出錯:使用者透過改網址、改參數,就存取到了不該屬於他的資料或功能。
+          每一個敏感操作,都要在伺服器端<strong>重新檢查當前使用者有沒有權限</strong>,絕不能只靠「前端把按鈕藏起來」。</p>
+        </div>
+      </div>
+
+      <h2>其他你該認得的弱點</h2>
+
+      <h3>不安全的反序列化</h3>
+      <p>
+        <strong>序列化</strong>是把記憶體中的物件轉成可儲存/傳輸的位元組;<strong>反序列化</strong>是反向還原。
+        危險在於:某些語言的反序列化功能<strong>過於強大</strong>,還原時可能順帶執行程式碼。最經典的就是 Python 的
+        <code>pickle</code>:
+      </p>
+      <pre><code class="language-python">import pickle
+# ⛔ 對「不可信來源」的資料做 pickle.loads,等於讓對方在你機器上執行任意程式碼
+obj = pickle.loads(untrusted_bytes)
+
+import json
+# ✅ 交換資料用 JSON 這類「只描述資料、不能挾帶程式碼」的格式
+obj = json.loads(untrusted_text)</code></pre>
+      <p>
+        原則:<strong>絕不要反序列化來自不可信來源的資料</strong>。需要跨系統交換資料時,改用
+        JSON 這類純資料格式;真的需要強型別序列化,也要選擇有安全考量的函式庫並做完整驗證。
+      </p>
+
+      <h3>敏感資訊外洩:別把鑰匙寫進程式碼</h3>
+      <p>
+        把 API 金鑰、資料庫密碼、加密私鑰直接<strong>硬寫在原始碼裡</strong>(hardcode),是極常見又極危險的習慣。
+        因為程式碼會進<strong>版本控制</strong>——而我們在<strong>第 18 章</strong>學過,Git 會永久保存
+        <strong>歷史</strong>。就算你後來把密鑰刪掉再 commit 一次,它依然躺在歷史紀錄裡,任何能讀到 repo 的人
+        (尤其是不小心 push 到公開的 GitHub 時)都能把它挖出來。無數外洩事件,就是爬蟲掃到公開 repo 裡的金鑰開始的。
+      </p>
+      <pre><code class="language-python"># ⛔ 把密鑰寫死在程式裡,一旦進 git 歷史就「永遠」在那
+AWS_SECRET = "AKIA...REAL_SECRET_KEY..."
+
+# ✅ 從環境變數 / 機密管理服務讀取;程式碼本身不含任何密鑰
+import os
+AWS_SECRET = os.environ["AWS_SECRET"]      # 部署環境才注入,程式碼乾乾淨淨</code></pre>
+      <p>
+        正確做法:密鑰放<strong>環境變數</strong>或專門的<strong>機密管理服務</strong>(secrets manager);
+        在 repo 裡用 <code>.gitignore</code> 排除設定檔;用 <code>git-secrets</code>、
+        truffleHog 之類工具在 commit 前掃描攔截。萬一密鑰真的外洩了,記住:刪掉 commit 還不夠,
+        <strong>唯一安全的補救是立刻「輪換(rotate)」那把密鑰</strong>——把外洩的那把作廢。
+      </p>
+
+      <h3>錯誤訊息洩漏:對自己詳細,對使用者沉默</h3>
+      <p>
+        把詳細的錯誤——完整的堆疊追蹤、SQL 語句、檔案路徑、版本號——直接顯示給使用者,等於免費送攻擊者一張地圖。
+        他能從中得知你用什麼資料庫、什麼框架、表結構長怎樣,大幅縮短偵察時間。
+      </p>
+      <pre><code class="language-python"># ⛔ 把內部細節吐給使用者
+try:
+    do_something()
+except Exception as e:
+    return f"錯誤:{e}\n{traceback.format_exc()}"     # 洩漏堆疊、路徑、SQL...
+
+# ✅ 給使用者一句通用訊息;詳細資訊只寫進「伺服器端日誌」
+try:
+    do_something()
+except Exception:
+    log.exception("do_something failed")              # 詳情記在後端,供工程師排查
+    return "系統發生錯誤,請稍後再試。"                  # 對外只說這麼多</code></pre>
+      <p>
+        原則:<strong>詳細留給日誌(給你看),通用回給使用者(給全世界看)。</strong>
+        生產環境務必關閉框架的 debug 模式。</p>
+
+      <h3>TOCTOU:檢查與使用之間的縫隙</h3>
+      <p>
+        <strong>第 24 章</strong>談並行時看過競爭條件(race condition)。資安裡有一類特別經典的競爭條件叫
+        <strong>TOCTOU(Time-Of-Check to Time-Of-Use,檢查時到使用時)</strong>:程式先「檢查」某個條件,
+        再根據檢查結果去「使用」——但在這兩步之間有一道時間縫隙,攻擊者若能在縫隙裡把狀態掉包,
+        檢查就形同虛設。
+      </p>
+      <pre><code class="language-c">/* ⛔ 經典 TOCTOU:先檢查可否存取,再開啟——兩步之間檔案可能被換成符號連結 */
+if (access("/tmp/data", W_OK) == 0) {   /* (檢查時)我有權寫這個檔嗎? */
+    /* ← 攻擊者趁這一瞬間,把 /tmp/data 換成指向 /etc/passwd 的連結 */
+    int fd = open("/tmp/data", O_WRONLY); /* (使用時)結果開到的是別的檔! */
+    write(fd, attacker_data, len);
+}</code></pre>
+      <p>
+        在「檢查」(access)和「使用」(open)之間,攻擊者把那個檔案路徑掉包,程式就在自以為安全的前提下,
+        寫進了一個它根本無權碰的檔案。<strong>防禦原則:讓「檢查」與「使用」變成不可分割的單一動作(原子操作)。</strong>
+        以這個例子,正確做法是先 <code>open</code> 取得檔案描述子,之後所有檢查與操作都針對<em>那個描述子</em>
+        (它鎖定了同一個檔案,不會被路徑掉包),例如用 <code>fstat</code> 而非 <code>access</code>,
+        並善用 <code>O_NOFOLLOW</code>、<code>O_CREAT | O_EXCL</code> 等旗標。</p>
+
+      <h2>OWASP Top 10:貼在牆上的檢查清單</h2>
+      <p>
+        到此你已經認得一大票漏洞了。業界把「最常見、最嚴重」的 Web 應用安全風險,
+        由非營利組織 <strong>OWASP(Open Worldwide Application Security Project)</strong>整理成定期更新的
+        <strong>Top 10</strong> 清單。它不是窮舉,而是一份絕佳的<strong>自我檢查起點</strong>——
+        每次設計或審查系統,都可以拿它逐條問「我這裡守住了嗎?」下表是 2021 版的十大類別,各配一句話:
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>代號</th><th>類別</th><th>一句話</th><th>本章對應</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>A01</td><td>權限控制失當<br>(Broken Access Control)</td><td>使用者能存取到不屬於他的資料或功能(改網址、改參數就越權)。</td><td>認證 vs 授權</td></tr>
+          <tr><td>A02</td><td>加密機制失敗<br>(Cryptographic Failures)</td><td>該加密的沒加密、用了弱演算法、明文存密碼——資料因此外洩。</td><td>密碼/雜湊(第 35 章)</td></tr>
+          <tr><td>A03</td><td>注入<br>(Injection)</td><td>資料被當成指令執行:SQL 注入、命令注入、XSS。</td><td>注入攻擊一節</td></tr>
+          <tr><td>A04</td><td>不安全的設計<br>(Insecure Design)</td><td>問題出在設計階段就沒考慮威脅,不是寫錯一行能補的。</td><td>威脅模型(第 34 章)</td></tr>
+          <tr><td>A05</td><td>安全設定錯誤<br>(Security Misconfiguration)</td><td>預設密碼沒改、debug 模式上線、權限開太大、錯誤訊息外洩。</td><td>錯誤訊息洩漏</td></tr>
+          <tr><td>A06</td><td>使用有漏洞的元件<br>(Vulnerable Components)</td><td>用了有已知漏洞的舊版函式庫/相依套件而不自知。</td><td>相依套件掃描</td></tr>
+          <tr><td>A07</td><td>身分驗證失敗<br>(Authentication Failures)</td><td>弱密碼政策、session 管理不當、缺乏防暴力破解。</td><td>認證/工作階段一節</td></tr>
+          <tr><td>A08</td><td>軟體與資料完整性失敗<br>(Integrity Failures)</td><td>不安全的反序列化、未驗證的更新/CI 來源被竄改。</td><td>不安全的反序列化</td></tr>
+          <tr><td>A09</td><td>記錄與監控不足<br>(Logging &amp; Monitoring Failures)</td><td>沒記錄、沒告警,被入侵了好幾個月都不知道。</td><td>防禦流程一節</td></tr>
+          <tr><td>A10</td><td>伺服器端請求偽造<br>(SSRF)</td><td>誘使伺服器去存取攻擊者指定的內部位址(雲端內網最危險)。</td><td>輸入驗證</td></tr>
+        </tbody>
+      </table></div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 36.5 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>判斷下面這段(偽碼)主要違反了 OWASP Top 10 的哪一條(或哪幾條),並說明理由與修法方向。</p>
+          <pre><code class="language-python">@app.route("/invoice")
+def get_invoice():
+    invoice_id = request.args.get("id")           # 例如 /invoice?id=1042
+    query = f"SELECT * FROM invoices WHERE id = {invoice_id}"
+    row = db.execute(query)
+    return render_invoice(row)                     # 任何人帶上 id 就能看到該帳單</code></pre>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>這段短短四行,同時踩中兩條:</p>
+              <ul>
+                <li><strong>A03 注入:</strong><code>invoice_id</code> 被 f-string 直接拼進 SQL,典型的 SQL 注入。
+                修法:參數化查詢 <code>"SELECT * FROM invoices WHERE id = ?"</code>,把 <code>invoice_id</code> 當參數傳。
+                並對 <code>id</code> 做白名單驗證(應為正整數)。</li>
+                <li><strong>A01 權限控制失當:</strong>就算修好注入,這支 API <strong>完全沒檢查「這張帳單是不是屬於當前登入者」</strong>。
+                攻擊者只要把 <code>id</code> 從 1042 改成 1043、1044…… 就能遍歷別人的帳單(這種攻擊叫 IDOR,
+                不安全的直接物件參考)。修法:在伺服器端比對 <code>invoice.owner_id == current_user.id</code>,
+                不符就回 403/404。</li>
+              </ul>
+              <p>這題的教訓:<strong>修好注入</strong>不代表<strong>修好授權</strong>——它們是兩個獨立的洞,要分別堵。
+              這也呼應了 OWASP 把「權限控制失當」排在第一名的原因:它太常被忽略。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>把安全變成流程,而不是事後補救</h2>
+      <p>
+        到目前為止談的都是「寫程式時」的防禦。但人是會犯錯的,光靠自律不夠可靠。成熟的團隊把安全<strong>系統化</strong>:
+        用工具與流程,自動地、持續地把漏洞攔在上線之前。這呼應了我們在<strong>第 18 章</strong>(Git/CI)與
+        <strong>第 46 章</strong>(除錯與測試)建立的觀念——<strong>安全測試,應該像單元測試一樣融入 CI 流水線</strong>。
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>手段</th><th>它做什麼</th><th>抓什麼</th><th>例子</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><strong>靜態分析 SAST</strong></td><td>不執行程式,直接掃描原始碼找可疑模式</td><td>注入、緩衝區溢位、寫死密鑰等</td><td>Semgrep、CodeQL、Bandit(Py)、Clang Analyzer(C)</td></tr>
+          <tr><td><strong>動態分析 DAST</strong></td><td>對「執行中」的應用發送各種請求探測</td><td>執行期才現形的漏洞(認證、設定)</td><td>OWASP ZAP、Burp Suite</td></tr>
+          <tr><td><strong>模糊測試 Fuzzing</strong></td><td>自動餵入大量畸形/隨機輸入,看程式會不會崩</td><td>記憶體錯誤、未處理的邊界</td><td>AFL++、libFuzzer</td></tr>
+          <tr><td><strong>相依套件掃描 SCA</strong></td><td>比對你用的函式庫有無「已知漏洞」</td><td>OWASP A06(有漏洞的元件)</td><td>Dependabot、<code>pip-audit</code>、<code>npm audit</code></td></tr>
+          <tr><td><strong>程式碼審查</strong></td><td>由人(同儕)帶著安全意識讀過變更</td><td>邏輯/授權漏洞(工具難抓的)</td><td>Pull Request review + 安全 checklist</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        <strong>模糊測試(fuzzing)</strong>特別值得一提:它的精神,正是這一章開頭那句「假設輸入是惡意的」的自動化版本——
+        與其等攻擊者來餵畸形輸入,不如自己先用工具丟幾百萬筆怪異資料進去,把會崩潰的地方先找出來。
+        它在揪出記憶體安全漏洞上效果驚人,許多 C/C++ 函式庫的重大漏洞都是 fuzzing 發現的。
+      </p>
+      <p>
+        最後是執行階段的一條鐵律:<strong>最小權限執行</strong>。你的程式不該用 root/Administrator 跑;
+        資料庫帳號不該有 <code>DROP TABLE</code> 的權限,如果它只需要讀寫幾張表。這樣即使某個漏洞被突破,
+        攻擊者能造成的破壞也被框在最小範圍——這正是下一節要總結的心法之一。
+      </p>
+
+      <h2>安全心法:可以帶走的幾條原則</h2>
+      <p>
+        漏洞的種類會推陳出新,但防禦的<strong>底層原則</strong>數十年來幾乎沒變。這些原則的根源,
+        可追溯到 1975 年 Saltzer 與 Schroeder 的經典論文,也正是<strong>第 34 章</strong>建立的安全設計哲學的延伸。
+        把它們內化成直覺,你面對任何新技術都能站穩腳跟:
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 520 380" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="260" y="26" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">縱深防禦:一層被突破,還有下一層</text>
+  <ellipse cx="260" cy="210" rx="240" ry="150" fill="#f6e7dd" stroke="#b4541f" stroke-width="2"/>
+  <text x="260" y="80" text-anchor="middle" font-size="11" fill="#b4541f">網路邊界:防火牆 / WAF</text>
+  <ellipse cx="260" cy="218" rx="190" ry="118" fill="#fef3c7" stroke="#b4541f" stroke-width="2"/>
+  <text x="260" y="120" text-anchor="middle" font-size="11" fill="#b4541f">輸入驗證 + 輸出編碼</text>
+  <ellipse cx="260" cy="225" rx="140" ry="86" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="260" y="158" text-anchor="middle" font-size="11" fill="#2f6f6a">認證 / 授權 / 最小權限</text>
+  <ellipse cx="260" cy="232" rx="88" ry="52" fill="#ede9fe" stroke="#8b5cf6" stroke-width="2"/>
+  <text x="260" y="206" text-anchor="middle" font-size="11" fill="#8b5cf6">加密儲存</text>
+  <circle cx="260" cy="244" r="30" fill="#2f6f6a"/>
+  <text x="260" y="242" text-anchor="middle" font-size="11" font-weight="800" fill="#fff">資料</text>
+  <text x="260" y="256" text-anchor="middle" font-size="9" fill="#cfe6e2">(要保護的)</text>
+</svg>
+        <figcaption>圖 36-4:縱深防禦(defense in depth)。不把希望全押在單一道防線上;從網路邊界、輸入驗證、授權、到加密儲存,層層設防。任何一層都可能被攻破,但要全部攻破才能拿到核心資料。</figcaption>
+      </div>
+
+      <ul>
+        <li><strong>縱深防禦(defense in depth):</strong>別假設任何單一防線不會失守。多層設防,一層破了還有下一層。</li>
+        <li><strong>最小權限(least privilege):</strong>每個元件、帳號、程序,只給它完成工作<em>剛好需要</em>的權限,不多給。</li>
+        <li><strong>安全的預設值(secure defaults):</strong>系統「開箱」就該是安全的——預設拒絕、預設關閉、預設加密,讓安全是「不用做什麼」的狀態。</li>
+        <li><strong>失敗時要安全(fail securely):</strong>出錯時,要倒向「拒絕」而非「放行」。權限檢查丟出例外?那就當作沒權限,而不是當作通過。</li>
+        <li><strong>保持簡單(keep it simple):</strong>複雜是安全的天敵。越簡單的設計,能藏漏洞的角落越少,也越容易審查。</li>
+        <li><strong>不要自己造密碼學(don't roll your own crypto):</strong>呼應第 35 章——用經過驗證的標準函式庫,別自己發明加密或密碼雜湊。</li>
+        <li><strong>假設你終將被攻破(assume breach):</strong>不只防入侵,也要能<em>偵測</em>與<em>復原</em>——這就是為什麼日誌與監控(OWASP A09)如此重要。</li>
+      </ul>
+
+      <div class="callout danger">
+        <div class="ico">⛔</div>
+        <div class="body">
+          <span class="c-title">最後,守住那條倫理界線</span>
+          <p>這一章教你看穿漏洞、理解攻擊。請務必記得這些能力的<strong>正當用途只有兩個</strong>:
+          把自己(與你受僱保護)的系統寫得更安全,以及在<strong>明確獲得授權</strong>的範圍內進行安全測試。
+          未經授權去探測、攻擊任何不屬於你的系統,即使「只是看看」、即使沒造成損害,在絕大多數司法管轄區都是違法的。
+          發現別人系統的漏洞,正確的做法是<strong>負責任的揭露(responsible disclosure)</strong>——
+          私下通知對方、給予修補時間,而不是公開或利用。技術是中性的,讓它成為盾而非矛,
+          是工程師的職業倫理底線。我們會在<strong>第九部「倫理」</strong>正式深入這個主題。</p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 36.6 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>對下面這支「使用者頭像上傳」的 Python 偽碼做一次安全審查,盡可能列出你看到的<strong>所有</strong>資安問題,
+          並各給一句修法。(提示:至少有五處。)</p>
+          <pre><code class="language-python">import os, pickle
+
+DB_PASSWORD = "p@ssw0rd123"          # 連資料庫用
+
+@app.route("/upload", methods=["POST"])
+def upload():
+    filename = request.form["filename"]
+    data = request.files["file"].read()
+
+    # 存檔
+    path = "/var/www/uploads/" + filename
+    with open(path, "wb") as f:
+        f.write(data)
+
+    # 記錄這次上傳的中繼資料(從表單來的)
+    meta = pickle.loads(request.form["meta"].encode())
+
+    # 寫進資料庫
+    db.execute(f"INSERT INTO uploads(user, file) VALUES ('{meta['user']}', '{filename}')")
+
+    return f"已上傳到 {path}"</code></pre>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>這支短短的函式幾乎是漏洞百科。逐一點名:</p>
+              <ol>
+                <li><strong>寫死的資料庫密碼(A02/敏感資訊外洩):</strong><code>DB_PASSWORD</code> 硬編碼進原始碼,
+                會進 Git 歷史。→ 改從環境變數讀取。</li>
+                <li><strong>路徑遍歷(Path Traversal):</strong><code>filename</code> 未經驗證就拼進路徑,
+                攻擊者用 <code>../../etc/cron.d/x</code> 之類就能寫到任意位置。→ 白名單驗證檔名
+                (只允許安全字元)、用 <code>os.path.basename</code> 去掉路徑、自己產生隨機檔名最保險。</li>
+                <li><strong>不安全的反序列化(A08):</strong><code>pickle.loads</code> 處理來自表單的不可信資料,
+                等於開後門讓對方執行任意程式碼。→ 改用 <code>json.loads</code>。</li>
+                <li><strong>SQL 注入(A03):</strong>f-string 把 <code>meta['user']</code> 與 <code>filename</code>
+                拼進 SQL。→ 參數化查詢。</li>
+                <li><strong>缺乏認證/授權(A01):</strong>看不到任何「誰能上傳、<code>user</code> 是不是當前登入者」的檢查;
+                <code>user</code> 直接信任表單輸入,可任意冒名。→ 從 session 取得當前使用者,而非信任輸入。</li>
+                <li><strong>缺少檔案驗證:</strong>沒有檢查檔案大小(可塞爆磁碟)、型別(可上傳可執行的 <code>.php</code> 等);
+                上傳目錄在 web root 下且可能被當程式執行,風險極高。→ 限制大小與型別、存到 web root 外、設為不可執行。</li>
+                <li><strong>資訊洩漏:</strong>回傳裡把伺服器內部路徑 <code>/var/www/uploads/...</code> 吐給使用者。→ 不回傳內部路徑。</li>
+              </ol>
+              <p>能在一段「看起來很普通」的程式裡聞出這麼多味道,正是這一章想培養的嗅覺。
+              真實世界的漏洞,往往就藏在這種「功能可以動、但每一步都太信任輸入」的程式裡。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>把這一章串起來</h2>
+      <p>
+        我們從一個撼動整個網際網路的小疏忽(Heartbleed)出發,走過了一整圈攻防。回顧這趟旅程的路標:
+      </p>
+      <ul>
+        <li><strong>心態先於技術:</strong>防禦性程式設計的核心,是「永遠假設輸入是惡意的」。所有外來資料,
+        在<strong>信任邊界</strong>用<strong>白名單</strong>驗證;進入別的直譯器前做<strong>輸出編碼</strong>。</li>
+        <li><strong>記憶體安全(C/C++):</strong>緩衝區溢位、整數溢位、off-by-one、格式化字串、use-after-free——
+        都源於「沒人替你檢查邊界」。對策是帶長度、查邊界、free 後 NULL,並善用工具與安全語言。</li>
+        <li><strong>注入是同一個故事:</strong>SQL、命令、XSS——「資料變成指令」。解法永遠是<strong>分離通道</strong>
+        (參數化)與<strong>輸出編碼</strong>。</li>
+        <li><strong>認證與機密:</strong>密碼用慢雜湊加鹽(第 35 章),安全隨機用 CSPRNG,登入時換 session ID,
+        密鑰絕不寫進程式碼。</li>
+        <li><strong>用 OWASP Top 10 當清單,把安全變成流程:</strong>SAST/DAST/fuzzing/相依掃描/code review 融入 CI,
+        並以最小權限執行。</li>
+        <li><strong>心法不變:</strong>縱深防禦、最小權限、安全預設、失敗時安全、保持簡單——以及那條不可逾越的倫理界線。</li>
+      </ul>
+      <p>
+        資訊安全沒有「完成」的一天,它是一種需要終身保持的<strong>警覺</strong>。但你現在已經有了最重要的東西:
+        一雙能看穿「資料」與「指令」界線的眼睛,和一顆「萬一呢?」的偏執之心。帶著它們,
+        你寫的每一行程式碼,都會比昨天更安全一點。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">📚</div>
+        <div class="body">
+          <span class="c-title">想更深入?延伸資源</span>
+          <p>本章對應 OSSU「資訊安全」路線的三門課:
+          <a href="https://www.coursera.org/learn/secure-coding-practices">Principles of Secure Coding</a>、
+          <a href="https://www.coursera.org/learn/identifying-security-vulnerabilities">Identifying Security Vulnerabilities</a>,
+          以及聚焦 C/C++ 記憶體漏洞的
+          <a href="https://www.coursera.org/learn/identifying-security-vulnerabilities-c-programming">Identifying Security Vulnerabilities in C/C++ Programming</a>。
+          實務上最該收藏的是 <a href="https://owasp.org/www-project-top-ten/">OWASP Top 10</a> 與
+          <a href="https://cheatsheetseries.owasp.org/">OWASP Cheat Sheet Series</a>(各類防禦的速查手冊),
+          以及 <a href="https://cwe.mitre.org/">MITRE CWE</a>(常見弱點分類)。
+          想動手練攻防,可在<strong>合法、自架</strong>的靶場(如 OWASP Juice Shop、DVWA)裡安全地實驗——
+          切記絕不對未授權的系統出手。Web 安全的完整版,我們在<strong>第十三部第 52 章</strong>繼續。</p>
+        </div>
+      </div>
+
+          <div class="callout tip">
+        <div class="ico">🧭</div>
+        <div class="body">
+          <span class="c-title">延伸：專修軌道</span>
+          <p>想親眼看見緩衝區溢位如何被利用、又如何防?<a href="72-ctf-pwn-reverse.html">第 72 章《逆向工程與二進位攻防》</a>以教學靶機示範 ret2win/ret2libc 與對應防禦。</p>
+        </div>
+      </div>
+

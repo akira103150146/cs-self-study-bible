@@ -1,0 +1,1524 @@
+<!--meta
+title: 計算機結構:快取與管線
+description: 第 21 章造了一台『能跑』的 CPU,但它很慢。這一章講『如何讓 CPU 快』:效能公式、管線與危障、分支預測、記憶體階層與快取、指令級與資料級平行,以及為什麼你的程式快慢有時取決於你不知道的硬體細節。用洗衣店比喻、SVG 管線與快取圖,加上可量測的 C 範例。
+-->
+
+
+      <div class="eyebrow">第十一部 · 進階系統</div>
+      <h1>計算機結構:快取與管線</h1>
+      <p class="subtitle">第 21 章,我們造了一台「能跑」的 CPU。它正確,但它慢。這一章要回答一個價值數十億美元的問題:在「指令還是那些指令」的前提下,工程師到底動了什麼手腳,讓現代處理器快了上萬倍?而其中有些手腳,會偷偷決定<strong>你寫的程式</strong>跑得快還是慢。</p>
+      <div class="byline">
+        <span class="tag">第 48 章</span>
+        <span>閱讀時間 ≈ 70 分鐘</span>
+        <span>難度:★★★★★</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>怎麼<strong>正確衡量效能</strong>:CPU 時間 = 指令數 × CPI × 時脈週期,以及為什麼「只看 GHz」會騙你</li>
+          <li>用 <strong>Amdahl 定律</strong>判斷「該優化哪裡」——優化常見情況(make the common case fast)</li>
+          <li>RISC 與 CISC 的真實取捨,x86 / ARM / RISC-V 的分野(深化第 21 章)</li>
+          <li><strong>管線(pipelining)</strong>:用洗衣店比喻看懂指令如何重疊執行,以及吞吐量與延遲的差別</li>
+          <li>管線的三種<strong>危障(hazard)</strong>與解法:前饋、停頓,以及<strong>分支預測</strong>為何如此關鍵</li>
+          <li><strong>記憶體階層</strong>與<strong>局部性原理</strong>:為什麼會有 L1/L2/L3 快取這座金字塔</li>
+          <li><strong>快取</strong>怎麼運作:快取行、命中/失誤、對映方式、替換與寫策略、AMAT</li>
+          <li>用 C 親手量到<strong>快取與分支預測對程式速度的真實衝擊</strong>(往往好幾倍)</li>
+          <li>指令級平行(超純量、亂序、推測執行與 Spectre)、執行緒級與資料級平行(SMT、多核、SIMD、GPU)</li>
+          <li>從架構視角重看<strong>虛擬記憶體與 TLB</strong>(呼應第 24 章)</li>
+        </ul>
+      </div>
+
+      <h2>一台「能跑」的 CPU,為什麼還不夠</h2>
+      <p>
+        在第 21 章,我們把 ALU、暫存器、控制單元、程式計數器組裝起來,讓它跑那個永不停止的
+        <strong>取指 → 解碼 → 執行 → 回寫</strong>週期。那台機器是「對」的:你給它一段機器碼,它會老老實實算出正確答案。
+        但如果你拿它去跑現代遊戲,你會等到天荒地老。它<strong>慢</strong>。
+      </p>
+      <p>
+        慢在哪裡?問題就出在那個樸實的指令週期。我們上一章的設計,本質上是「<strong>一條指令做完,才開始下一條</strong>」:
+        取指、解碼、跑 ALU、讀寫記憶體、寫回……整套走完,才回頭抓下一條。這就像一家洗衣店,
+        一次只洗一袋衣服:洗完、烘完、摺完、收進櫃子,才肯收下一位客人的髒衣服。中間大部分機器,大部分時間都在<strong>發呆</strong>。
+      </p>
+      <p>
+        過去半個世紀,計算機結構(computer architecture)這門學問,絕大部分的精力都花在同一件事上:
+        <strong>在「指令集不變、結果不變」的前提下,把同樣一段程式跑得更快</strong>。它靠的不是把時脈無限拉高
+        (那條路早就撞牆了),而是一連串極聰明的把戲——管線、快取、亂序執行、平行……
+      </p>
+      <p>
+        這些把戲絕大多數對你「不可見」:你寫的 C 或 Python 完全不知道它們存在。但有兩個——<strong>快取</strong>與<strong>分支預測</strong>——
+        會從幕後伸出手,讓「邏輯上一模一樣」的兩段程式,實測速度差上好幾倍。這一章的終極目的,就是讓你看懂這些幕後機制,
+        從此能寫出「對硬體友善」的程式。先從一件最基本卻最常被搞錯的事開始:怎麼衡量「快」。
+      </p>
+
+      <h2>衡量效能:別再只盯著 GHz</h2>
+      <p>
+        街頭巷尾比 CPU,大家張口就是「我這顆 4 GHz,比你那顆 3 GHz 快」。這句話<strong>幾乎總是錯的</strong>。
+        要看懂為什麼,我們需要一條計算機結構裡最重要的公式。一個程式真正花掉的 CPU 時間,由三個因子相乘決定:
+      </p>
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">鐵打的效能公式(CPU performance equation)</span>
+          <p>$$\text{CPU 時間} = \underbrace{\text{指令數}}_{\text{IC}} \times \underbrace{\text{CPI}}_{\text{每指令週期數}} \times \underbrace{\text{時脈週期}}_{1/\text{頻率}}$$
+          也就是:跑完一個程式要花多久,取決於(1)<strong>要執行幾條指令</strong>、(2)平均<strong>每條指令花幾個時脈週期(CPI,Cycles Per Instruction)</strong>、(3)<strong>每個時脈週期多長</strong>(時脈頻率的倒數)。GHz 只影響第三項。</p>
+        </div>
+      </div>
+      <p>
+        看清楚了嗎?GHz(頻率)只決定<strong>三個因子裡的一個</strong>。一顆 4 GHz 的 CPU 如果 CPI 很差(每條指令拖很多週期),
+        或者它的指令集需要更多指令才能做完同一件事,照樣可能輸給 3 GHz 的對手。把這三項拆開,你會發現它們分別被誰決定:
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>因子</th><th>主要被誰影響</th><th>怎麼改善</th></tr></thead>
+        <tbody>
+          <tr><td><strong>指令數(IC)</strong></td><td>指令集架構(ISA)、編譯器、你寫的演算法</td><td>更好的演算法 / 編譯器最佳化 / 更強的指令</td></tr>
+          <tr><td><strong>CPI</strong></td><td>CPU 微架構(管線、快取、亂序…)</td><td>本章的主角:管線、快取、ILP</td></tr>
+          <tr><td><strong>時脈週期</strong></td><td>製程、電路設計</td><td>提高頻率(受功耗 / 散熱限制)</td></tr>
+        </tbody>
+      </table></div>
+
+      <div class="diagram">
+<svg viewBox="0 0 700 180" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <rect x="30" y="60" width="170" height="60" rx="10" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="115" y="86" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">指令數 IC</text>
+  <text x="115" y="106" text-anchor="middle" font-size="10" fill="#4a5159">ISA / 編譯器 / 演算法</text>
+  <text x="218" y="96" text-anchor="middle" font-size="22" font-weight="800" fill="#8a929b">×</text>
+  <rect x="240" y="60" width="170" height="60" rx="10" fill="#f6e7dd" stroke="#b4541f" stroke-width="2"/>
+  <text x="325" y="86" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">CPI</text>
+  <text x="325" y="106" text-anchor="middle" font-size="10" fill="#4a5159">微架構:管線 / 快取 / 平行</text>
+  <text x="428" y="96" text-anchor="middle" font-size="22" font-weight="800" fill="#8a929b">×</text>
+  <rect x="450" y="60" width="170" height="60" rx="10" fill="#ede9fe" stroke="#8b5cf6" stroke-width="2"/>
+  <text x="535" y="86" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">時脈週期</text>
+  <text x="535" y="106" text-anchor="middle" font-size="10" fill="#4a5159">= 1 / 頻率(GHz)</text>
+  <text x="650" y="92" font-size="20" font-weight="800" fill="#2f6f6a">⏱</text>
+  <text x="350" y="150" text-anchor="middle" font-size="12" fill="#8a929b">「只看 GHz」= 只看最右邊那一格,卻無視左邊兩格。難怪會被騙。</text>
+</svg>
+        <figcaption>圖 48-1:效能由三個因子相乘決定,GHz 只影響其中一項。本章大部分篇幅,都在攻打中間那一格——<strong>降低 CPI</strong>。</figcaption>
+      </div>
+
+      <p>
+        那要怎麼公平地比兩顆 CPU?業界的答案是<strong>基準測試(benchmark)</strong>:跑一組標準化、有代表性的真實程式
+        (例如 <strong>SPEC CPU</strong>),量它們的實際完成時間,再綜合成分數。一句話總結:
+        <strong>能信的不是規格表上的 GHz,而是「跑你真正在乎的工作,要花多久」</strong>。
+      </p>
+
+      <h3>Amdahl 定律:該優化哪裡?</h3>
+      <p>
+        假設你量了基準測試,發現程式很慢,於是準備動手優化。第一個該問的問題不是「怎麼優化」,而是「<strong>優化哪裡</strong>」。
+        這裡有一條冷酷的定律會幫你算清楚——<strong>Amdahl 定律(Amdahl's Law)</strong>(我們在第 43 章談平行運算時會再深入,這裡先用它的通用形式):
+      </p>
+      <p>
+        如果某個部分占了總時間的比例 $p$,而你把這個部分加速了 $s$ 倍,那麼<strong>整個程式</strong>的總加速比是:
+      </p>
+      <p>$$S_{\text{總}} = \frac{1}{(1 - p) + \dfrac{p}{s}}$$</p>
+      <p>
+        這條式子有個讓人清醒的推論:無論你把那 $p$ 的部分加速到多誇張($s \to \infty$),總加速比也<strong>頂多</strong>只能到 $\dfrac{1}{1-p}$。
+        舉例:某函式占了程式 90% 的時間($p = 0.9$),你把它加速 10 倍($s = 10$):
+      </p>
+      <p>$$S_{\text{總}} = \frac{1}{(1 - 0.9) + \dfrac{0.9}{10}} = \frac{1}{0.1 + 0.09} = \frac{1}{0.19} \approx 5.3 \text{ 倍}$$</p>
+      <p>
+        但如果你跑去優化那只占 10% 的部分,就算把它變成<strong>瞬間完成</strong>,總加速也只有 $\frac{1}{0.9} \approx 1.11$ 倍。
+        這就是計算機結構裡反覆出現的鐵律——
+      </p>
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">優化常見情況(make the common case fast)</span>
+          <p>把力氣花在「執行得最頻繁、占時間最多」的那條路上,回報才大。這正是 CPU 設計者的中心思想:
+          快取為什麼有效?因為「絕大多數記憶體存取」其實集中在一小塊資料上。分支預測為什麼有效?
+          因為「絕大多數分支」其實方向很固定。整顆現代 CPU,就是一台「把常見情況優化到極致」的機器。</p>
+        </div>
+      </div>
+
+      <h2>指令集架構:RISC 與 CISC 的真實取捨</h2>
+      <p>
+        第 21 章我們提過:<strong>指令集架構(ISA)</strong>是硬體與軟體之間的契約——它規定「CPU 聽得懂哪些指令、有哪些暫存器、怎麼定址」。
+        當時我們用一句話帶過 RISC 與 CISC。現在我們有了效能公式,可以看懂這兩派背後的<strong>取捨</strong>到底在賭什麼。
+      </p>
+      <p>
+        回看公式 $\text{CPU 時間} = \text{IC} \times \text{CPI} \times \text{時脈週期}$。兩派其實是在這三個因子之間做不同的押注:
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th></th><th>CISC(複雜指令集)</th><th>RISC(精簡指令集)</th></tr></thead>
+        <tbody>
+          <tr><td>哲學</td><td>一條指令做很多事</td><td>每條指令只做一件簡單的事</td></tr>
+          <tr><td>指令數 IC</td><td>少(一條抵多條)</td><td>多(同樣的事要拆成好幾條)</td></tr>
+          <tr><td>指令長度</td><td>不定長(1~15 bytes)</td><td>固定長(通常 4 bytes)</td></tr>
+          <tr><td>記憶體存取</td><td>運算可直接吃記憶體運算元</td><td>只有 load/store 碰記憶體,運算只碰暫存器</td></tr>
+          <tr><td>解碼難度</td><td>難(變長、複雜)</td><td>易(整齊劃一,好做管線)</td></tr>
+          <tr><td>代表</td><td>x86 / x86-64</td><td>ARM、RISC-V、MIPS</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        CISC 賭的是「降低 IC」:在記憶體又小又貴、編譯器又笨的 1970 年代,讓一條指令幹很多事是合理的——程式更小、人寫組語更省力。
+        RISC 賭的是「降低 CPI、提高頻率」:指令簡單又<strong>定長</strong>,解碼超快,而且整齊到非常好「<strong>管線化</strong>」(下一節的主角)。
+        1980 年代之後記憶體變便宜、編譯器變聰明,RISC 的賭注勝出,成了今天的主流思想。
+      </p>
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">一個你會喜歡的祕密:現代 x86 其實「內心是 RISC」</span>
+          <p>x86 在外表上仍是 CISC(為了相容三十年的軟體),但現代 Intel/AMD 晶片在<strong>解碼階段</strong>,會把每條複雜的 x86 指令
+          拆成數條內部的、類 RISC 的<strong>微指令(micro-ops,μops)</strong>,然後讓後端管線去跑這些簡單的微指令。
+          所以「CISC vs RISC」之爭,某種程度上 RISC 是贏家——連 CISC 都在肚子裡偷偷變成 RISC。
+          至於 <strong>RISC-V</strong>,它是近年崛起的<strong>開放</strong>指令集:任何人都能免費使用、自由實作,不必付授權金,正在學術界與嵌入式領域快速擴張。</p>
+        </div>
+      </div>
+
+      <h2>管線:讓指令重疊起來(重頭戲一)</h2>
+      <p>
+        回到開頭那家「一次只服務一位客人」的洗衣店。它的問題不是機器太慢,而是<strong>機器沒同時用</strong>:
+        烘衣機在轉的時候,洗衣機卻閒著。一個聰明的老闆會怎麼做?
+      </p>
+      <blockquote>
+        當第一袋衣服從洗衣機進到烘衣機,就立刻把第二袋衣服丟進洗衣機。
+      </blockquote>
+      <p>
+        於是洗、烘、摺三道工序<strong>重疊</strong>進行:任一時刻,三台機器可能都在忙不同的衣服。每袋衣服走完全程的時間沒變
+        (這叫<strong>延遲 latency</strong>),但「平均多久能交出一袋乾淨衣服」大幅縮短了(這叫<strong>吞吐量 throughput</strong>)。
+        這就是<strong>管線(pipelining)</strong>的全部精神。
+      </p>
+      <p>
+        CPU 把指令週期切成幾個「工序」,讓多條指令在不同工序裡同時前進。經典的 RISC 設計切成 <strong>5 級</strong>:
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>階段</th><th>英文</th><th>做什麼</th><th>洗衣店類比</th></tr></thead>
+        <tbody>
+          <tr><td>IF</td><td>Instruction Fetch</td><td>從記憶體抓指令</td><td>把髒衣服拿進來</td></tr>
+          <tr><td>ID</td><td>Instruction Decode</td><td>解碼、讀暫存器</td><td>分類、看洗標</td></tr>
+          <tr><td>EX</td><td>Execute</td><td>ALU 運算、算位址</td><td>洗</td></tr>
+          <tr><td>MEM</td><td>Memory access</td><td>讀寫資料記憶體</td><td>烘</td></tr>
+          <tr><td>WB</td><td>Write Back</td><td>把結果寫回暫存器</td><td>摺好收櫃</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        現在來看魔法發生的瞬間。下面這張<strong>管線時空圖(pipeline diagram)</strong>是讀懂管線的關鍵:橫軸是時脈週期,縱軸是一條條指令。
+        注意每條指令都比上一條<strong>晚一個週期</strong>開始,於是同一個時脈裡(看任一直行),五個階段同時都有指令在跑:
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 700 290" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- cycle headers -->
+  <g font-size="11" font-weight="700" fill="#8a929b" text-anchor="middle">
+    <text x="135" y="42">C1</text><text x="187" y="42">C2</text><text x="239" y="42">C3</text>
+    <text x="291" y="42">C4</text><text x="343" y="42">C5</text><text x="395" y="42">C6</text>
+    <text x="447" y="42">C7</text><text x="499" y="42">C8</text><text x="551" y="42">C9</text>
+  </g>
+  <!-- instruction labels -->
+  <g font-size="11" font-weight="700" fill="#1f2328" text-anchor="start">
+    <text x="14" y="85">指令 1</text><text x="14" y="123">指令 2</text><text x="14" y="161">指令 3</text>
+    <text x="14" y="199">指令 4</text><text x="14" y="237">指令 5</text>
+  </g>
+  <!-- helper: stage cells -->
+  <!-- Row1 y=64 -->
+  <rect x="110" y="64" width="50" height="32" rx="4" fill="#e3efed" stroke="#2f6f6a"/><text x="135" y="85" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">IF</text>
+  <rect x="162" y="64" width="50" height="32" rx="4" fill="#cfe6e2" stroke="#2f6f6a"/><text x="187" y="85" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">ID</text>
+  <rect x="214" y="64" width="50" height="32" rx="4" fill="#2f6f6a"/><text x="239" y="85" text-anchor="middle" font-size="12" font-weight="700" fill="#fff">EX</text>
+  <rect x="266" y="64" width="50" height="32" rx="4" fill="#f6e7dd" stroke="#b4541f"/><text x="291" y="85" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2328">MEM</text>
+  <rect x="318" y="64" width="50" height="32" rx="4" fill="#ede9fe" stroke="#8b5cf6"/><text x="343" y="85" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">WB</text>
+  <!-- Row2 y=102 -->
+  <rect x="162" y="102" width="50" height="32" rx="4" fill="#e3efed" stroke="#2f6f6a"/><text x="187" y="123" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">IF</text>
+  <rect x="214" y="102" width="50" height="32" rx="4" fill="#cfe6e2" stroke="#2f6f6a"/><text x="239" y="123" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">ID</text>
+  <rect x="266" y="102" width="50" height="32" rx="4" fill="#2f6f6a"/><text x="291" y="123" text-anchor="middle" font-size="12" font-weight="700" fill="#fff">EX</text>
+  <rect x="318" y="102" width="50" height="32" rx="4" fill="#f6e7dd" stroke="#b4541f"/><text x="343" y="123" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2328">MEM</text>
+  <rect x="370" y="102" width="50" height="32" rx="4" fill="#ede9fe" stroke="#8b5cf6"/><text x="395" y="123" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">WB</text>
+  <!-- Row3 y=140 -->
+  <rect x="214" y="140" width="50" height="32" rx="4" fill="#e3efed" stroke="#2f6f6a"/><text x="239" y="161" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">IF</text>
+  <rect x="266" y="140" width="50" height="32" rx="4" fill="#cfe6e2" stroke="#2f6f6a"/><text x="291" y="161" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">ID</text>
+  <rect x="318" y="140" width="50" height="32" rx="4" fill="#2f6f6a"/><text x="343" y="161" text-anchor="middle" font-size="12" font-weight="700" fill="#fff">EX</text>
+  <rect x="370" y="140" width="50" height="32" rx="4" fill="#f6e7dd" stroke="#b4541f"/><text x="395" y="161" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2328">MEM</text>
+  <rect x="422" y="140" width="50" height="32" rx="4" fill="#ede9fe" stroke="#8b5cf6"/><text x="447" y="161" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">WB</text>
+  <!-- Row4 y=178 -->
+  <rect x="266" y="178" width="50" height="32" rx="4" fill="#e3efed" stroke="#2f6f6a"/><text x="291" y="199" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">IF</text>
+  <rect x="318" y="178" width="50" height="32" rx="4" fill="#cfe6e2" stroke="#2f6f6a"/><text x="343" y="199" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">ID</text>
+  <rect x="370" y="178" width="50" height="32" rx="4" fill="#2f6f6a"/><text x="395" y="199" text-anchor="middle" font-size="12" font-weight="700" fill="#fff">EX</text>
+  <rect x="422" y="178" width="50" height="32" rx="4" fill="#f6e7dd" stroke="#b4541f"/><text x="447" y="199" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2328">MEM</text>
+  <rect x="474" y="178" width="50" height="32" rx="4" fill="#ede9fe" stroke="#8b5cf6"/><text x="499" y="199" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">WB</text>
+  <!-- Row5 y=216 -->
+  <rect x="318" y="216" width="50" height="32" rx="4" fill="#e3efed" stroke="#2f6f6a"/><text x="343" y="237" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">IF</text>
+  <rect x="370" y="216" width="50" height="32" rx="4" fill="#cfe6e2" stroke="#2f6f6a"/><text x="395" y="237" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">ID</text>
+  <rect x="422" y="216" width="50" height="32" rx="4" fill="#2f6f6a"/><text x="447" y="237" text-anchor="middle" font-size="12" font-weight="700" fill="#fff">EX</text>
+  <rect x="474" y="216" width="50" height="32" rx="4" fill="#f6e7dd" stroke="#b4541f"/><text x="499" y="237" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2328">MEM</text>
+  <rect x="526" y="216" width="50" height="32" rx="4" fill="#ede9fe" stroke="#8b5cf6"/><text x="551" y="237" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">WB</text>
+  <!-- highlight column C5 -->
+  <rect x="316" y="60" width="54" height="192" rx="6" fill="none" stroke="#b4541f" stroke-width="2" stroke-dasharray="5 3"/>
+  <text x="343" y="270" text-anchor="middle" font-size="11" font-weight="700" fill="#b4541f">↑ 第 5 個時脈:五條指令、五個階段同時在動</text>
+</svg>
+        <figcaption>圖 48-2:5 級管線時空圖。一旦管線「灌滿」(C5 之後),CPU <strong>每個時脈就完成一條指令</strong>——吞吐量提升到接近 5 倍,即使每條指令的延遲仍是 5 個週期。</figcaption>
+      </div>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">吞吐量 ≠ 延遲</span>
+          <p>管線<strong>不會</strong>讓單一條指令更快走完(延遲不變,甚至因為多了階段暫存器而略增)。它讓<strong>整體吞吐量</strong>暴增——
+          單位時間內「完工」的指令變多了。這是兩個常被混為一談、卻截然不同的效能指標。對使用者而言,真正有感的是吞吐量。</p>
+        </div>
+      </div>
+
+      <h3>管線到底快多少?</h3>
+      <p>
+        假設管線有 $k$ 級、要跑 $n$ 條指令。沒有管線時(每條指令乖乖花 $k$ 個週期才換下一條),總共要 $n \times k$ 個週期。
+        有了管線,第一條指令花 $k$ 個週期灌滿管線,之後每個週期吐一條,總共只要 $k + (n - 1)$ 個週期。加速比:
+      </p>
+      <p>$$\text{加速比} = \frac{n \times k}{k + (n - 1)} \xrightarrow{\;n \to \infty\;} k$$</p>
+      <p>
+        當指令很多($n$ 很大),加速比逼近 $k$——級數越多,理論上越快。那為什麼現代 CPU 不切成 100 級?
+        因為(1)每多一級就多一層暫存器與成本;(2)更致命的是——上面這個漂亮的公式,<strong>假設管線永遠順暢、永不卡住</strong>。
+        現實沒這麼好。管線會卡,而它卡住的原因,叫做<strong>危障</strong>。
+      </p>
+
+      <h2>管線危障與解法:現實的反擊</h2>
+      <p>
+        <strong>危障(hazard)</strong>指的是「某種狀況,讓下一條指令不能在預定的時脈順利進入它的階段」。它有三類,我們逐一擊破。
+      </p>
+
+      <h3>① 結構危障:兩條指令搶同一個零件</h3>
+      <p>
+        <strong>結構危障(structural hazard)</strong>最單純:兩條指令在同一個時脈,想用<strong>同一個硬體資源</strong>。
+        例如,如果指令記憶體和資料記憶體共用同一個埠,那麼當「指令 4 想 IF(讀指令)」碰上「指令 1 想 MEM(讀資料)」,兩者撞車。
+        解法通常是「多給硬體」:把指令快取和資料快取分開(這叫<strong>哈佛式</strong>切法),或讓暫存器檔在前半週期寫、後半週期讀。
+        結構危障靠砸硬體就能消除,所以在設計良好的 CPU 裡很少見。真正棘手的是後兩種。
+      </p>
+
+      <h3>② 資料危障:我要用的數,上一條還沒算好</h3>
+      <p>
+        <strong>資料危障(data hazard)</strong>是管線最常見的麻煩。看這兩條指令(用類 RISC 組語):
+      </p>
+      <pre><code class="language-text">add  r3, r1, r2     # r3 = r1 + r2
+sub  r5, r3, r4     # r5 = r3 - r4   ← 要用上一條算出的 r3!</code></pre>
+      <p>
+        問題來了:<code>add</code> 要到第 5 級(WB)才把結果寫回 <code>r3</code>;但 <code>sub</code> 在第 3 個時脈就要進 ID 去<strong>讀</strong> <code>r3</code>——
+        那時 <code>r3</code> 根本還是舊值!這種「讀取一個還沒被寫回的值」叫 <strong>RAW(Read After Write)</strong>資料危障。
+      </p>
+      <p>
+        最笨的解法是<strong>停頓(stall)</strong>:讓 <code>sub</code> 在原地等,插入幾個空週期(俗稱<strong>泡泡 bubble</strong>),
+        等 <code>r3</code> 真的寫回了再放行。但這浪費了寶貴的週期。聰明得多的解法是<strong>前饋 / 旁路(forwarding / bypassing)</strong>:
+      </p>
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">前饋(forwarding):結果不必等寫回</span>
+          <p>注意一個關鍵事實:<code>add</code> 的結果,其實在它的 <strong>EX 階段結束時就算出來了</strong>(只是還沒「正式」寫回暫存器)。
+          那何不加一條捷徑,把 ALU 的輸出<strong>直接</strong>送到下一條指令的 ALU 輸入,繞過「寫回再讀出」的繞路?
+          這就是前饋。有了它,上面那個 add/sub 完全不用停頓。</p>
+        </div>
+      </div>
+
+      <div class="diagram">
+<svg viewBox="0 0 640 200" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <g font-size="11" font-weight="700" fill="#8a929b" text-anchor="middle">
+    <text x="135" y="40">C1</text><text x="187" y="40">C2</text><text x="239" y="40">C3</text>
+    <text x="291" y="40">C4</text><text x="343" y="40">C5</text><text x="395" y="40">C6</text>
+  </g>
+  <text x="14" y="83" font-size="11" font-weight="700" fill="#1f2328">add r3</text>
+  <text x="14" y="133" font-size="11" font-weight="700" fill="#1f2328">sub r3</text>
+  <!-- add row y=62 -->
+  <rect x="110" y="62" width="50" height="32" rx="4" fill="#e3efed" stroke="#2f6f6a"/><text x="135" y="83" text-anchor="middle" font-size="12" fill="#1f2328">IF</text>
+  <rect x="162" y="62" width="50" height="32" rx="4" fill="#cfe6e2" stroke="#2f6f6a"/><text x="187" y="83" text-anchor="middle" font-size="12" fill="#1f2328">ID</text>
+  <rect x="214" y="62" width="50" height="32" rx="4" fill="#2f6f6a"/><text x="239" y="83" text-anchor="middle" font-size="12" fill="#fff">EX</text>
+  <rect x="266" y="62" width="50" height="32" rx="4" fill="#f6e7dd" stroke="#b4541f"/><text x="291" y="83" text-anchor="middle" font-size="11" fill="#1f2328">MEM</text>
+  <rect x="318" y="62" width="50" height="32" rx="4" fill="#ede9fe" stroke="#8b5cf6"/><text x="343" y="83" text-anchor="middle" font-size="12" fill="#1f2328">WB</text>
+  <!-- sub row y=112 -->
+  <rect x="162" y="112" width="50" height="32" rx="4" fill="#e3efed" stroke="#2f6f6a"/><text x="187" y="133" text-anchor="middle" font-size="12" fill="#1f2328">IF</text>
+  <rect x="214" y="112" width="50" height="32" rx="4" fill="#cfe6e2" stroke="#2f6f6a"/><text x="239" y="133" text-anchor="middle" font-size="12" fill="#1f2328">ID</text>
+  <rect x="266" y="112" width="50" height="32" rx="4" fill="#2f6f6a"/><text x="291" y="133" text-anchor="middle" font-size="12" fill="#fff">EX</text>
+  <rect x="318" y="112" width="50" height="32" rx="4" fill="#f6e7dd" stroke="#b4541f"/><text x="343" y="133" text-anchor="middle" font-size="11" fill="#1f2328">MEM</text>
+  <rect x="370" y="112" width="50" height="32" rx="4" fill="#ede9fe" stroke="#8b5cf6"/><text x="395" y="133" text-anchor="middle" font-size="12" fill="#1f2328">WB</text>
+  <!-- forwarding arrow: add EX(end C3, x239 bottom y94) -> sub EX(start C4 x266 top y112) -->
+  <path d="M239 94 C 239 104, 280 104, 282 112" fill="none" stroke="#b4541f" stroke-width="2.5" marker-end="url(#fwd)"/>
+  <text x="320" y="172" text-anchor="middle" font-size="11" font-weight="700" fill="#b4541f">前饋:add 的 EX 輸出 → 直接餵給 sub 的 EX 輸入(不必等 WB)</text>
+  <defs><marker id="fwd" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#b4541f"/></marker></defs>
+</svg>
+        <figcaption>圖 48-3:前饋(forwarding)。紅色捷徑把 ALU 結果從一條指令的 EX 末端,直接旁路到下一條指令的 EX 輸入,化解 RAW 資料危障,完全不需停頓。</figcaption>
+      </div>
+
+      <p>
+        但前饋並非萬能。有一種情況連它都救不了——<strong>load-use 危障</strong>:當你<strong>從記憶體載入</strong>一個值,
+        然後<strong>立刻</strong>就要用它:
+      </p>
+      <pre><code class="language-text">lw   r1, 0(r2)      # 從記憶體載入到 r1(資料要到 MEM 階段才拿到)
+add  r3, r1, r4     # 立刻用 r1 → 即使有前饋,還是得停 1 拍</code></pre>
+      <p>
+        因為 <code>lw</code> 的資料要到第 4 級(MEM)結束才到手,但 <code>add</code> 的 EX 在第 4 級就需要它,時間上差一步,
+        無論如何都得插一個泡泡。聰明的編譯器會試著「重排指令」,在 <code>lw</code> 和用到它的指令之間塞一條無關的指令來填這個泡泡——
+        這就是編譯器與硬體在背後為你做的優化之一。
+
+      <h3>③ 控制危障:下一條指令到底在哪?</h3>
+      <p>
+        最後、也最昂貴的是<strong>控制危障(control hazard)</strong>,又叫<strong>分支危障</strong>。問題出在:管線需要<strong>持續餵指令</strong>,
+        每個時脈都要 IF 抓下一條。可是當它碰到一個<strong>條件分支</strong>(<code>if</code>、迴圈判斷)時,
+        「下一條指令在哪」要等分支<strong>算完</strong>(可能到 EX 階段)才知道。那在算出來之前的這幾個時脈,管線該抓什麼?
+      </p>
+      <p>
+        總不能讓管線空轉等待(那等於每個分支都付出好幾個泡泡的代價,而程式裡分支多得是)。現代 CPU 的賭徒式解法是
+        <strong>分支預測(branch prediction)</strong>:<em>猜</em>一個方向,然後<strong>大膽地照猜測繼續抓指令、繼續執行</strong>。
+      </p>
+      <ul>
+        <li><strong>猜對了</strong>:賺到!管線從沒卡過,零代價。</li>
+        <li><strong>猜錯了</strong>:糟糕。已經抓進來、跑了一半的「錯路」指令全部得<strong>作廢清空(flush)</strong>,從正確位址重新抓。
+        這個浪費叫<strong>分支錯誤預測代價(misprediction penalty)</strong>,在深管線的現代 CPU 上可能高達 <strong>15~20 個週期</strong>。</li>
+      </ul>
+
+      <div class="diagram">
+<svg viewBox="0 0 660 250" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <g font-size="11" font-weight="700" fill="#8a929b" text-anchor="middle">
+    <text x="135" y="40">C1</text><text x="187" y="40">C2</text><text x="239" y="40">C3</text>
+    <text x="291" y="40">C4</text><text x="343" y="40">C5</text><text x="395" y="40">C6</text><text x="447" y="40">C7</text>
+  </g>
+  <text x="8" y="83" font-size="10.5" font-weight="700" fill="#1f2328">分支 beq</text>
+  <text x="8" y="123" font-size="10.5" font-weight="700" fill="#b4541f">錯路指令</text>
+  <text x="8" y="163" font-size="10.5" font-weight="700" fill="#b4541f">錯路指令</text>
+  <text x="8" y="203" font-size="10.5" font-weight="700" fill="#2f6f6a">正確目標</text>
+  <!-- branch row y=62 -->
+  <rect x="110" y="62" width="50" height="32" rx="4" fill="#e3efed" stroke="#2f6f6a"/><text x="135" y="83" text-anchor="middle" font-size="12" fill="#1f2328">IF</text>
+  <rect x="162" y="62" width="50" height="32" rx="4" fill="#cfe6e2" stroke="#2f6f6a"/><text x="187" y="83" text-anchor="middle" font-size="12" fill="#1f2328">ID</text>
+  <rect x="214" y="62" width="50" height="32" rx="4" fill="#2f6f6a"/><text x="239" y="83" text-anchor="middle" font-size="11" fill="#fff">EX✔</text>
+  <rect x="266" y="62" width="50" height="32" rx="4" fill="#f6e7dd" stroke="#b4541f"/><text x="291" y="83" text-anchor="middle" font-size="11" fill="#1f2328">MEM</text>
+  <rect x="318" y="62" width="50" height="32" rx="4" fill="#ede9fe" stroke="#8b5cf6"/><text x="343" y="83" text-anchor="middle" font-size="12" fill="#1f2328">WB</text>
+  <text x="239" y="56" text-anchor="middle" font-size="9" fill="#b4541f">方向在此確定</text>
+  <!-- wrong1 y=102 -->
+  <rect x="162" y="102" width="50" height="32" rx="4" fill="#fbeae0" stroke="#b4541f" stroke-dasharray="4 2"/><text x="187" y="123" text-anchor="middle" font-size="12" fill="#b4541f">IF</text>
+  <rect x="214" y="102" width="50" height="32" rx="4" fill="#fbeae0" stroke="#b4541f" stroke-dasharray="4 2"/><text x="239" y="123" text-anchor="middle" font-size="12" fill="#b4541f">ID</text>
+  <line x1="266" y1="118" x2="380" y2="118" stroke="#b4541f" stroke-width="1.5" stroke-dasharray="3 3"/>
+  <text x="330" y="114" text-anchor="middle" font-size="10" fill="#b4541f">清空(flush)→ 泡泡</text>
+  <!-- wrong2 y=142 -->
+  <rect x="214" y="142" width="50" height="32" rx="4" fill="#fbeae0" stroke="#b4541f" stroke-dasharray="4 2"/><text x="239" y="163" text-anchor="middle" font-size="12" fill="#b4541f">IF</text>
+  <line x1="266" y1="158" x2="380" y2="158" stroke="#b4541f" stroke-width="1.5" stroke-dasharray="3 3"/>
+  <text x="330" y="154" text-anchor="middle" font-size="10" fill="#b4541f">清空(flush)→ 泡泡</text>
+  <!-- correct y=182 -->
+  <rect x="266" y="182" width="50" height="32" rx="4" fill="#e3efed" stroke="#2f6f6a"/><text x="291" y="203" text-anchor="middle" font-size="12" fill="#1f2328">IF</text>
+  <rect x="318" y="182" width="50" height="32" rx="4" fill="#cfe6e2" stroke="#2f6f6a"/><text x="343" y="203" text-anchor="middle" font-size="12" fill="#1f2328">ID</text>
+  <rect x="370" y="182" width="50" height="32" rx="4" fill="#2f6f6a"/><text x="395" y="203" text-anchor="middle" font-size="12" fill="#fff">EX</text>
+  <rect x="422" y="182" width="50" height="32" rx="4" fill="#f6e7dd" stroke="#b4541f"/><text x="447" y="203" text-anchor="middle" font-size="11" fill="#1f2328">MEM</text>
+  <text x="380" y="238" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2328">預測錯誤的代價 = 被清空的那幾個泡泡(此處 2 個;深管線可達十幾個)</text>
+</svg>
+        <figcaption>圖 48-4:分支錯誤預測。分支方向到 EX 才確定,期間 CPU 已樂觀抓進「錯路」的指令;一旦發現猜錯,這些指令全部作廢,管線重抓正確目標——白白損失數個週期。</figcaption>
+      </div>
+
+      <p>
+        現代分支預測器準到嚇人(命中率常 &gt; 95%),靠的是記錄「這個分支歷史上往哪走」,用<strong>歷史模式</strong>下注。
+        對「迴圈尾巴那個幾乎總是跳回去」的分支,它幾乎不會猜錯。但這也埋下一個對<strong>程式設計師可見</strong>的陷阱:
+        <strong>如果你的分支方向「飄忽不定、毫無規律」,預測器就會頻頻猜錯,你的迴圈會莫名其妙地慢下來。</strong>
+      </p>
+
+      <h3>對程式設計師可見:已排序 vs 未排序的詭異速度差</h3>
+      <p>
+        這是計算機結構裡最有名的「真實案例」。下面這段 C,對一個裝著 0~255 隨機值的大陣列,把所有 ≥ 128 的元素加總,重複很多次:
+      </p>
+      <pre><code class="language-c">#include &lt;stdio.h&gt;
+#include &lt;stdlib.h&gt;
+#include &lt;time.h&gt;
+
+static int cmp(const void *a, const void *b) {
+    return (*(const int *)a) - (*(const int *)b);
+}
+
+int main(void) {
+    const int N = 32768;
+    int *data = malloc(N * sizeof(int));
+    for (int i = 0; i &lt; N; i++)
+        data[i] = rand() % 256;          /* 0..255 的隨機值 */
+
+    /* qsort(data, N, sizeof(int), cmp);   ← 把這行的註解拿掉,陣列就變成「已排序」 */
+
+    clock_t start = clock();
+    long long sum = 0;
+    for (int r = 0; r &lt; 100000; r++)     /* 重複很多次,放大差異 */
+        for (int i = 0; i &lt; N; i++)
+            if (data[i] &gt;= 128)          /* ← 關鍵分支:猜得準不準,全看這裡 */
+                sum += data[i];
+
+    double secs = (double)(clock() - start) / CLOCKS_PER_SEC;
+    printf("sum=%lld, time=%.2f s\n", sum, secs);
+    free(data);
+    return 0;
+}</code></pre>
+      <p>
+        實測結果讓無數人嚇一跳:<strong>把 <code>qsort</code> 那行打開(讓陣列先排序),整段程式會快上好幾倍</strong>
+        ——而它做的<em>計算工作量一模一樣</em>(同樣 N 個元素、同樣的比較與加法)。怎麼會這樣?
+      </p>
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">為什麼排序後會變快?關鍵在那個 <code>if</code></span>
+          <p><strong>未排序</strong>時,<code>data[i] &gt;= 128</code> 的結果在「真/ 假」之間隨機跳動,分支預測器約有一半機率猜錯,
+          每次猜錯就是一次管線清空——成千上萬次的錯誤預測累積成巨大開銷。<strong>排序後</strong>,前半段全部 &lt; 128(分支「總是假」),
+          後半段全部 ≥ 128(分支「總是真」),只有正中間切換一次。預測器面對這種「長條規律」,幾乎全部猜中,
+          錯誤預測趨近於零。<strong>同樣的計算,只因資料的「可預測性」不同,速度天差地別。</strong>這就是硬體偷偷影響你程式的鐵證。</p>
+        </div>
+      </div>
+      <p>
+        順帶一提:這類「靠分支」的瓶頸,有時能用<strong>無分支(branchless)</strong>技巧改寫掉。例如
+        <code>sum += (data[i] &gt;= 128) * data[i];</code> 或用位元遮罩,讓 CPU 不必賭方向。
+        但別急著到處這樣寫——可讀性的代價往往不值得;真正的教訓是:<strong>當你發現一個熱迴圈裡有難以預測的分支,它可能就是你的隱形瓶頸。</strong>
+      </p>
+
+      <h2>記憶體階層:速度與容量的金字塔(重頭戲二)</h2>
+      <p>
+        管線解決了「CPU 內部」的效率。但還有一個更大的瓶頸在外面:<strong>記憶體很慢</strong>。慢到什麼程度?
+        如果把 CPU 存取暫存器的時間想成「1 秒」,那麼跑去主記憶體(DRAM)拿一筆資料,大約等於「<strong>幾分鐘</strong>」。
+        CPU 每等一次記憶體,就是幾百個時脈週期的乾等——管線跑得再順都救不了。
+      </p>
+      <p>
+        為什麼不乾脆把記憶體做得跟暫存器一樣快?因為<strong>又快又大又便宜的記憶體不存在</strong>。這是物理與經濟的鐵則:
+        快的(SRAM)貴又占空間,所以只能做小;大的(DRAM、磁碟)便宜但慢。工程師的妥協,是把不同速度/容量的記憶體
+        <strong>分層疊起來</strong>,形成<strong>記憶體階層(memory hierarchy)</strong>:
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 700 330" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- bands -->
+  <rect x="295" y="46" width="130" height="34" rx="4" fill="#2f6f6a"/><text x="360" y="68" text-anchor="middle" font-size="12" font-weight="800" fill="#fff">暫存器 Registers</text>
+  <rect x="265" y="84" width="190" height="34" rx="4" fill="#4f8f89"/><text x="360" y="106" text-anchor="middle" font-size="12" font-weight="800" fill="#fff">L1 快取</text>
+  <rect x="235" y="122" width="250" height="34" rx="4" fill="#7fb0ab"/><text x="360" y="144" text-anchor="middle" font-size="12" font-weight="800" fill="#1f2328">L2 快取</text>
+  <rect x="205" y="160" width="310" height="34" rx="4" fill="#cfe6e2" stroke="#2f6f6a"/><text x="360" y="182" text-anchor="middle" font-size="12" font-weight="800" fill="#1f2328">L3 快取(多核共用)</text>
+  <rect x="175" y="198" width="370" height="34" rx="4" fill="#f6e7dd" stroke="#b4541f"/><text x="360" y="220" text-anchor="middle" font-size="12" font-weight="800" fill="#1f2328">主記憶體 DRAM</text>
+  <rect x="145" y="236" width="430" height="34" rx="4" fill="#ede9fe" stroke="#8b5cf6"/><text x="360" y="258" text-anchor="middle" font-size="12" font-weight="800" fill="#1f2328">SSD / 硬碟</text>
+  <!-- left latency labels -->
+  <g font-size="10" fill="#4a5159" text-anchor="end">
+    <text x="288" y="67">≈ 1 週期</text>
+    <text x="258" y="105">≈ 1 ns(數 KB)</text>
+    <text x="228" y="143">≈ 4 ns(數百 KB)</text>
+    <text x="198" y="181">≈ 15 ns(數十 MB)</text>
+    <text x="168" y="219">≈ 100 ns(數十 GB)</text>
+    <text x="138" y="257">≈ 10⁴–10⁶ ns(TB)</text>
+  </g>
+  <!-- side arrows -->
+  <line x1="618" y1="270" x2="618" y2="46" stroke="#2f6f6a" stroke-width="2" marker-end="url(#up)"/>
+  <text x="636" y="160" font-size="11" font-weight="700" fill="#2f6f6a" transform="rotate(90 636 160)">越上:越快、越貴、越小</text>
+  <line x1="60" y1="46" x2="60" y2="270" stroke="#b4541f" stroke-width="2" marker-end="url(#dn)"/>
+  <text x="44" y="160" font-size="11" font-weight="700" fill="#b4541f" transform="rotate(-90 44 160)">越下:越慢、越便宜、越大</text>
+  <text x="360" y="298" text-anchor="middle" font-size="11" fill="#8a929b">每往下一層,容量約大 10~1000 倍,速度約慢 10~100 倍</text>
+  <text x="360" y="316" text-anchor="middle" font-size="10.5" fill="#8a929b">(數字為量級,會隨世代與機型變動)</text>
+  <defs>
+    <marker id="up" markerWidth="10" markerHeight="10" refX="4" refY="3" orient="auto"><path d="M0,6 L4,0 L8,6 Z" fill="#2f6f6a"/></marker>
+    <marker id="dn" markerWidth="10" markerHeight="10" refX="4" refY="3" orient="auto"><path d="M0,0 L4,6 L8,0 Z" fill="#b4541f"/></marker>
+  </defs>
+</svg>
+        <figcaption>圖 48-5:記憶體階層金字塔。越靠近 CPU 的層越快越小越貴。L1/L2/L3 快取是夾在「飛快的暫存器」與「龜速的 DRAM」之間的緩衝,它們的存在,是現代電腦能跑得快的關鍵之一。</figcaption>
+      </div>
+
+      <p>
+        但這座金字塔憑什麼有用?如果程式的記憶體存取真的「完全隨機、毫無規律」,那再多快取也救不了——CPU 想要的東西總在最慢的那層。
+        它之所以有效,是因為真實程式有一個美妙的統計傾向,叫<strong>局部性原理(principle of locality)</strong>:
+      </p>
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">兩種局部性(locality)</span>
+          <p><strong>時間局部性(temporal locality)</strong>:剛存取過的資料,<em>很可能很快又會被存取</em>。
+          (例:迴圈裡的計數器、累加變數,每一輪都用到。)<br>
+          <strong>空間局部性(spatial locality)</strong>:存取了某個位址,<em>它附近的位址很可能也快被存取</em>。
+          (例:走訪陣列時,一個接一個,位址連續。)<br>
+          快取的整個設計,就是賭程式有這兩種局部性——而絕大多數程式都有。這又是一次「優化常見情況」。</p>
+        </div>
+      </div>
+
+      <h2>快取:它到底怎麼運作</h2>
+      <p>
+        <strong>快取(cache)</strong>是夾在 CPU 與主記憶體之間的一塊小而快的記憶體,自動保存「最近用過、以及它附近」的資料。
+        它的運作完全自動、對程式透明——你不會在 C 裡寫「請把這個放進 L1」,硬體替你打理一切。我們把它拆開來看。
+      </p>
+
+      <h3>快取行:搬資料以「整塊」為單位</h3>
+      <p>
+        為了利用<strong>空間局部性</strong>,快取不以「一個位元組」為單位搬資料,而是以一整塊連續的位元組——
+        <strong>快取行(cache line / block)</strong>,在現代 x86 上通常是 <strong>64 bytes</strong>。
+        當你存取某個位址,快取會把「包含它的那整條 64 位元組」一次拉上來。所以你讀了 <code>a[0]</code>,
+        其實 <code>a[1]</code> 到 <code>a[15]</code>(假設是 4-byte int)也順便進了快取——下次讀它們,直接命中。
+      </p>
+
+      <h3>命中與失誤</h3>
+      <ul>
+        <li><strong>命中(hit)</strong>:要的資料正好在快取裡,飛快拿到。</li>
+        <li><strong>失誤(miss)</strong>:不在快取裡,得往下一層(L2、L3、DRAM)拿,慢。失誤分三類(著名的 <strong>3C</strong>):
+          <strong>強制失誤</strong>(compulsory,第一次碰當然沒有)、<strong>容量失誤</strong>(capacity,快取裝不下整個工作集)、
+          <strong>衝突失誤</strong>(conflict,好幾塊資料搶同一個位置)。</li>
+      </ul>
+
+      <h3>對映方式:一塊資料能放在快取的哪裡?</h3>
+      <p>
+        主記憶體很大,快取很小,所以多塊記憶體必然要共用快取裡的位置。「一塊記憶體資料<strong>可以放進快取的哪些格子</strong>」,
+        就是<strong>對映方式(mapping / associativity)</strong>。為了查找,CPU 把位址切成三段:
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 700 280" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- address bar -->
+  <rect x="70" y="40" width="300" height="38" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="220" y="64" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">Tag(標籤)</text>
+  <rect x="370" y="40" width="170" height="38" fill="#f6e7dd" stroke="#b4541f" stroke-width="2"/>
+  <text x="455" y="64" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">Index(索引)</text>
+  <rect x="540" y="40" width="120" height="38" fill="#ede9fe" stroke="#8b5cf6" stroke-width="2"/>
+  <text x="600" y="64" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">Offset</text>
+  <text x="70" y="30" font-size="11" font-weight="700" fill="#8a929b">← 記憶體位址(高位)</text>
+  <text x="660" y="30" font-size="11" font-weight="700" fill="#8a929b" text-anchor="end">(低位)→</text>
+  <text x="220" y="98" text-anchor="middle" font-size="10.5" fill="#4a5159">比對:這格裝的是不是我要的那塊?</text>
+  <text x="455" y="98" text-anchor="middle" font-size="10.5" fill="#4a5159">選哪一「組(set)」</text>
+  <text x="600" y="98" text-anchor="middle" font-size="10.5" fill="#4a5159">行內第幾個位元組</text>
+
+  <!-- cache table: 4 sets x 2 ways -->
+  <text x="350" y="140" text-anchor="middle" font-size="12" font-weight="800" fill="#1f2328">2-way 組相聯快取(4 組 × 每組 2 路)</text>
+  <g font-size="10" fill="#8a929b" text-anchor="end">
+    <text x="150" y="178">組 0</text><text x="150" y="206">組 1</text><text x="150" y="234">組 2</text><text x="150" y="262">組 3</text>
+  </g>
+  <text x="270" y="160" text-anchor="middle" font-size="10" fill="#8a929b">路 0</text>
+  <text x="450" y="160" text-anchor="middle" font-size="10" fill="#8a929b">路 1</text>
+  <!-- way0 column -->
+  <g>
+    <rect x="160" y="166" width="220" height="24" fill="#fff" stroke="#2f6f6a"/><rect x="160" y="194" width="220" height="24" fill="#eef6f4" stroke="#2f6f6a"/>
+    <rect x="160" y="222" width="220" height="24" fill="#fff" stroke="#2f6f6a"/><rect x="160" y="250" width="220" height="24" fill="#fff" stroke="#2f6f6a"/>
+    <rect x="400" y="166" width="220" height="24" fill="#fff" stroke="#2f6f6a"/><rect x="400" y="194" width="220" height="24" fill="#eef6f4" stroke="#2f6f6a"/>
+    <rect x="400" y="222" width="220" height="24" fill="#fff" stroke="#2f6f6a"/><rect x="400" y="250" width="220" height="24" fill="#fff" stroke="#2f6f6a"/>
+  </g>
+  <text x="270" y="182" text-anchor="middle" font-size="9.5" fill="#8a929b">tag + 64B 資料</text>
+  <text x="450" y="182" text-anchor="middle" font-size="9.5" fill="#8a929b">tag + 64B 資料</text>
+  <!-- index arrow points to set1 -->
+  <path d="M455 78 C 455 150, 120 150, 120 206 L 156 206" fill="none" stroke="#b4541f" stroke-width="2" marker-end="url(#ix)"/>
+  <text x="105" y="200" text-anchor="end" font-size="10" fill="#b4541f">index 選到組 1</text>
+  <text x="455" y="206" text-anchor="middle" font-size="10" fill="#b4541f">在這 2 路裡平行比對 tag</text>
+  <defs><marker id="ix" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#b4541f"/></marker></defs>
+</svg>
+        <figcaption>圖 48-6:位址被切成 tag / index / offset。index 選出一「組」,接著在組內各「路」平行比對 tag 看是否命中,offset 指出命中後要取行內哪個位元組。</figcaption>
+      </div>
+
+      <p>三種對映方式,其實是「組內有幾路」這個光譜的兩端與中間:</p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>方式</th><th>一塊資料能放哪</th><th>優點</th><th>缺點</th></tr></thead>
+        <tbody>
+          <tr><td><strong>直接對映</strong>(direct-mapped)</td><td>只能放<strong>唯一</strong>一格(1 路)</td><td>查找最快、最便宜</td><td>容易衝突失誤(兩塊搶同一格就互踢)</td></tr>
+          <tr><td><strong>組相聯</strong>(set-associative)</td><td>同一組裡的 N 格任選(N 路)</td><td>衝突少很多,折衷之選</td><td>要平行比對 N 個 tag</td></tr>
+          <tr><td><strong>全相聯</strong>(fully-associative)</td><td>整個快取<strong>任何</strong>一格</td><td>衝突失誤最少</td><td>要比對全部 tag,昂貴,只用於極小的快取(如 TLB)</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        實務上,L1/L2/L3 幾乎都用組相聯(常見 4~16 路),取「彈性」與「成本」的平衡。
+      </p>
+
+      <h3>替換與寫策略</h3>
+      <p>
+        當一組已經滿了、又來一塊新資料,得踢掉一塊。踢哪塊?這就是<strong>替換策略(replacement policy)</strong>。
+        最理想的近似是 <strong>LRU(Least Recently Used,最久沒用的先踢)</strong>——它正是賭<strong>時間局部性</strong>:
+        最久沒碰的,最不可能馬上再用。(LRU 你在第 29 章資料結構裡見過,它在快取硬體裡也是同一個思想;真實硬體常用「偽 LRU」來近似,因為精確 LRU 太貴。)
+      </p>
+      <p>
+        另一個問題:<strong>寫入</strong>資料時,該怎麼跟下層記憶體同步?這是<strong>寫策略(write policy)</strong>:
+      </p>
+      <ul>
+        <li><strong>寫穿(write-through)</strong>:寫快取的同時也寫主記憶體。簡單、資料永遠一致,但每次寫都得碰慢記憶體。</li>
+        <li><strong>寫回(write-back)</strong>:只先寫快取,把該行標記為「髒(dirty)」;等它<strong>要被替換出去時</strong>才一次寫回記憶體。
+        快得多(多次寫只在最後同步一次),代價是複雜度與「資料暫時不一致」(在多核系統裡會引出快取一致性問題)。</li>
+      </ul>
+      <p>現代 CPU 的資料快取幾乎都用<strong>寫回</strong>,因為它對「同一塊資料反覆寫」這種常見情況快得多。</p>
+
+      <h3>AMAT:把這一切收進一條公式</h3>
+      <p>
+        快取好不好,最終要看它讓「平均一次記憶體存取要花多久」變成多少。這個指標叫
+        <strong>AMAT(Average Memory Access Time,平均記憶體存取時間)</strong>:
+      </p>
+      <p>$$\text{AMAT} = \text{命中時間} + \text{失誤率} \times \text{失誤代價}$$</p>
+      <p>
+        舉例:L1 命中要 1 個週期,失誤率 5%,失誤後要跑去記憶體拿要花 100 個週期(失誤代價)。則
+        $\text{AMAT} = 1 + 0.05 \times 100 = 6$ 個週期。注意:失誤率雖然只有 5%,但因為失誤代價極高,
+        它對平均時間的貢獻($0.05 \times 100 = 5$)<strong>遠超過</strong>命中本身的 1——這就是為什麼「降低失誤率」這麼值得。
+      </p>
+      <p>
+        多層快取時,公式會套疊:某層失誤,就遞迴地去問下一層。例如加一層 L2(存取 10 週期、區域失誤率 20%):
+      </p>
+      <p>$$\text{AMAT} = 1 + 0.05 \times \big(10 + 0.20 \times 100\big) = 1 + 0.05 \times 30 = 2.5 \text{ 週期}$$</p>
+      <p>多花一層 L2,就把平均存取時間從 6 個週期壓到 2.5 個——這就是階層式快取的威力。</p>
+
+      <h2>快取對程式效能的真實影響</h2>
+      <p>
+        前面講的都是硬體在背後做的事。現在輪到最重要的問題:<strong>身為程式設計師,這跟我有什麼關係?</strong>
+        關係大了。同一個演算法、同樣的計算量,只因為你「走訪記憶體的順序」不同,就可能差好幾倍——因為一種順序對快取友善,另一種把快取打得稀爛。
+      </p>
+
+      <h3>列優先 vs 行優先:一個改動,數倍差距</h3>
+      <p>
+        C 的二維陣列是<strong>列優先(row-major)</strong>存放的:<code>a[i][j]</code> 在記憶體裡,是「第 0 列整列、接著第 1 列整列……」連續排列。
+        所以同一列裡相鄰的 <code>a[i][0], a[i][1], a[i][2]…</code> 在記憶體上<strong>緊挨著</strong>;但同一行裡的 <code>a[0][j], a[1][j]…</code>
+        之間,卻隔了「一整列」那麼遠。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 700 290" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="120" y="32" text-anchor="middle" font-size="12" font-weight="800" fill="#1f2328">邏輯上的 4×4 陣列</text>
+  <!-- 4x4 grid -->
+  <g font-size="10" fill="#1f2328" text-anchor="middle">
+    <!-- row0 green -->
+    <rect x="40" y="44" width="40" height="30" fill="#e3efed" stroke="#2f6f6a"/><text x="60" y="63">a00</text>
+    <rect x="80" y="44" width="40" height="30" fill="#e3efed" stroke="#2f6f6a"/><text x="100" y="63">a01</text>
+    <rect x="120" y="44" width="40" height="30" fill="#e3efed" stroke="#2f6f6a"/><text x="140" y="63">a02</text>
+    <rect x="160" y="44" width="40" height="30" fill="#e3efed" stroke="#2f6f6a"/><text x="180" y="63">a03</text>
+    <rect x="40" y="74" width="40" height="30" fill="#fff" stroke="#2f6f6a"/><text x="60" y="93">a10</text>
+    <rect x="80" y="74" width="40" height="30" fill="#fff" stroke="#2f6f6a"/><text x="100" y="93">a11</text>
+    <rect x="120" y="74" width="40" height="30" fill="#fff" stroke="#2f6f6a"/><text x="140" y="93">a12</text>
+    <rect x="160" y="74" width="40" height="30" fill="#fff" stroke="#2f6f6a"/><text x="180" y="93">a13</text>
+    <rect x="40" y="104" width="40" height="30" fill="#fff" stroke="#2f6f6a"/><text x="60" y="123">a20</text>
+    <rect x="80" y="104" width="40" height="30" fill="#fff" stroke="#2f6f6a"/><text x="100" y="123">a21</text>
+    <rect x="120" y="104" width="40" height="30" fill="#fff" stroke="#2f6f6a"/><text x="140" y="123">a22</text>
+    <rect x="160" y="104" width="40" height="30" fill="#fff" stroke="#2f6f6a"/><text x="180" y="123">a23</text>
+    <rect x="40" y="134" width="40" height="30" fill="#fff" stroke="#2f6f6a"/><text x="60" y="153">a30</text>
+    <rect x="80" y="134" width="40" height="30" fill="#fff" stroke="#2f6f6a"/><text x="100" y="153">a31</text>
+    <rect x="120" y="134" width="40" height="30" fill="#fff" stroke="#2f6f6a"/><text x="140" y="153">a32</text>
+    <rect x="160" y="134" width="40" height="30" fill="#fff" stroke="#2f6f6a"/><text x="180" y="153">a33</text>
+  </g>
+  <!-- linear memory strip -->
+  <text x="450" y="32" text-anchor="middle" font-size="12" font-weight="800" fill="#1f2328">記憶體裡的實際排列(列優先)</text>
+  <g font-size="9" fill="#1f2328" text-anchor="middle">
+    <!-- 16 cells, group every 4 = a cache line -->
+    <rect x="250" y="44" width="27" height="26" fill="#e3efed" stroke="#2f6f6a"/><text x="263" y="61">a00</text>
+    <rect x="277" y="44" width="27" height="26" fill="#e3efed" stroke="#2f6f6a"/><text x="290" y="61">a01</text>
+    <rect x="304" y="44" width="27" height="26" fill="#e3efed" stroke="#2f6f6a"/><text x="317" y="61">a02</text>
+    <rect x="331" y="44" width="27" height="26" fill="#e3efed" stroke="#2f6f6a"/><text x="344" y="61">a03</text>
+    <rect x="358" y="44" width="27" height="26" fill="#fff" stroke="#8a929b"/><text x="371" y="61">a10</text>
+    <rect x="385" y="44" width="27" height="26" fill="#fff" stroke="#8a929b"/><text x="398" y="61">a11</text>
+    <rect x="412" y="44" width="27" height="26" fill="#fff" stroke="#8a929b"/><text x="425" y="61">a12</text>
+    <rect x="439" y="44" width="27" height="26" fill="#fff" stroke="#8a929b"/><text x="452" y="61">a13</text>
+    <rect x="466" y="44" width="27" height="26" fill="#fff" stroke="#8a929b"/><text x="479" y="61">a20</text>
+    <rect x="493" y="44" width="27" height="26" fill="#fff" stroke="#8a929b"/><text x="506" y="61">a21</text>
+    <rect x="520" y="44" width="27" height="26" fill="#fff" stroke="#8a929b"/><text x="533" y="61">a22</text>
+    <rect x="547" y="44" width="27" height="26" fill="#fff" stroke="#8a929b"/><text x="560" y="61">a23</text>
+    <rect x="574" y="44" width="27" height="26" fill="#fff" stroke="#8a929b"/><text x="587" y="61">a30</text>
+    <rect x="601" y="44" width="27" height="26" fill="#fff" stroke="#8a929b"/><text x="614" y="61">a31</text>
+    <rect x="628" y="44" width="27" height="26" fill="#fff" stroke="#8a929b"/><text x="641" y="61">a32</text>
+    <rect x="655" y="44" width="27" height="26" fill="#fff" stroke="#8a929b"/><text x="668" y="61">a33</text>
+  </g>
+  <path d="M250 80 L358 80" stroke="#2f6f6a" stroke-width="2"/><text x="304" y="92" text-anchor="middle" font-size="9" fill="#2f6f6a">一條快取行</text>
+
+  <!-- good traversal -->
+  <rect x="40" y="190" width="300" height="80" rx="8" fill="#eef6f4" stroke="#2f6f6a"/>
+  <text x="190" y="210" text-anchor="middle" font-size="12" font-weight="800" fill="#2f6f6a">✔ 列優先走訪(內層跑 j)</text>
+  <text x="190" y="230" text-anchor="middle" font-size="11" fill="#1f2328" font-family="ui-monospace, Consolas, monospace">for i: for j: s += a[i][j]</text>
+  <text x="190" y="250" text-anchor="middle" font-size="10.5" fill="#4a5159">沿記憶體連續走 → 一條快取行用好用滿</text>
+  <text x="190" y="264" text-anchor="middle" font-size="10.5" fill="#4a5159">空間局部性極佳,失誤率低</text>
+
+  <rect x="360" y="190" width="300" height="80" rx="8" fill="#fbeae0" stroke="#b4541f"/>
+  <text x="510" y="210" text-anchor="middle" font-size="12" font-weight="800" fill="#b4541f">✘ 行優先走訪(內層跑 i)</text>
+  <text x="510" y="230" text-anchor="middle" font-size="11" fill="#1f2328" font-family="ui-monospace, Consolas, monospace">for j: for i: s += a[i][j]</text>
+  <text x="510" y="250" text-anchor="middle" font-size="10.5" fill="#4a5159">每步跳一整列 → 每次幾乎都換新行</text>
+  <text x="510" y="264" text-anchor="middle" font-size="10.5" fill="#4a5159">局部性差,失誤率高,慢上數倍</text>
+</svg>
+        <figcaption>圖 48-7:同一個陣列,兩種走訪順序。列優先(沿記憶體連續)把每條快取行用好用滿;行優先每步跳一整列,常常剛載入一條行就棄之不用,失誤連連。</figcaption>
+      </div>
+
+      <p>下面這段 C 把兩種順序各跑一次,加總同一個大陣列。計算量完全相同,只有迴圈內外層對調:</p>
+      <pre><code class="language-c">#include &lt;stdio.h&gt;
+#include &lt;time.h&gt;
+
+#define N 4096
+static int a[N][N];          /* 64 MB,遠大於快取,逼出快取效應 */
+
+int main(void) {
+    /* 列優先:內層跑 j,沿記憶體連續走 → 快取友善 */
+    clock_t t1 = clock();
+    long long s1 = 0;
+    for (int i = 0; i &lt; N; i++)
+        for (int j = 0; j &lt; N; j++)
+            s1 += a[i][j];
+    double row = (double)(clock() - t1) / CLOCKS_PER_SEC;
+
+    /* 行優先:內層跑 i,每步跳一整列 → 快取不友善 */
+    clock_t t2 = clock();
+    long long s2 = 0;
+    for (int j = 0; j &lt; N; j++)
+        for (int i = 0; i &lt; N; i++)
+            s2 += a[i][j];
+    double col = (double)(clock() - t2) / CLOCKS_PER_SEC;
+
+    printf("列優先 row-major: %.3f s\n行優先 col-major: %.3f s\n", row, col);
+    return 0;
+}</code></pre>
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">快取友善(cache-friendly)的程式,可以快好幾倍</span>
+          <p>實測上,行優先版本通常比列優先版本<strong>慢 3~10 倍</strong>(視 N、快取行大小、機器而定),儘管兩者做的加法次數一模一樣。
+          差別純粹來自<strong>記憶體存取的順序</strong>:列優先吃飽每條快取行,行優先則不斷浪費剛載入的行。
+          這給你一條極實用的準則:<strong>盡量讓你的記憶體存取「沿著記憶體連續前進」</strong>——這往往比任何花俏的微優化都有效。</p>
+        </div>
+      </div>
+
+      <h3>矩陣相乘:快取效應的經典舞台</h3>
+      <p>
+        最經典的例子是矩陣相乘 $C = A \times B$。教科書的天真寫法用 <code>i, j, k</code> 的順序:
+      </p>
+      <pre><code class="language-c">/* 天真版:i-j-k 順序 */
+for (int i = 0; i &lt; N; i++)
+    for (int j = 0; j &lt; N; j++)
+        for (int k = 0; k &lt; N; k++)
+            C[i][j] += A[i][k] * B[k][j];   /* B[k][j]:k 變動時跳一整列 → 不友善 */</code></pre>
+      <p>
+        問題在 <code>B[k][j]</code>:最內層 <code>k</code> 變動時,它在記憶體上每步跳一整列,對 B 的存取極不友善。
+        只要把迴圈<strong>重排</strong>成 <code>i-k-j</code> 順序,B 與 C 的最內層存取都沿著列連續走,速度往往快上數倍——而結果完全相同:
+      </p>
+      <pre><code class="language-c">/* 快取友善版:i-k-j 順序(只是換了迴圈巢狀次序!) */
+for (int i = 0; i &lt; N; i++)
+    for (int k = 0; k &lt; N; k++)
+        for (int j = 0; j &lt; N; j++)
+            C[i][j] += A[i][k] * B[k][j];   /* 現在 B[k][j]、C[i][j] 都沿列連續 */</code></pre>
+      <p>
+        高效能函式庫(BLAS)更進一步用<strong>分塊(blocking / tiling)</strong>:把大矩陣切成小到能整塊塞進快取的子塊,
+        在子塊內反覆運算榨乾時間局部性,再換下一塊。光是「對快取友善」這一招,就能讓矩陣相乘快上一個數量級——
+        這也是為什麼 NumPy、PyTorch 底層從不自己寫天真三重迴圈,而是呼叫高度調校過的 BLAS。
+      </p>
+
+      <h2>指令級平行(ILP):一個時脈做更多事</h2>
+      <p>
+        管線讓多條指令「重疊」,但它的天花板是「每個時脈完成一條」。能不能<strong>每個時脈完成好幾條</strong>?
+        能——只要不同指令之間沒有相依,就可以真的<strong>同時</strong>跑。挖掘程式裡這種「可平行的潛力」,
+        叫<strong>指令級平行(ILP,Instruction-Level Parallelism)</strong>。現代 CPU 用三招把 ILP 榨到極致:
+      </p>
+      <ul>
+        <li><strong>超純量(superscalar)</strong>:CPU 內建<strong>多套</strong>執行單元(多個 ALU、多個載入/儲存埠),
+        每個時脈一次<strong>發射(issue)好幾條</strong>指令。今天的桌機核心常是 4~8 路超純量。</li>
+        <li><strong>亂序執行(out-of-order execution, OoO)</strong>:不死守程式碼的先後順序。如果第 3 條指令在等記憶體(卡住),
+        而第 5 條的資料都齊了,CPU 就<strong>先跑第 5 條</strong>,別讓執行單元閒著。它靠「保留站」與「重排序緩衝(ROB)」追蹤相依關係,
+        對外仍維持「看起來像照順序完成」的假象。這需要<strong>暫存器重新命名</strong>來消除假相依。</li>
+        <li><strong>推測執行(speculative execution)</strong>:配合分支預測,CPU 不等分支結果就<strong>樂觀地往前衝</strong>,
+        先把猜測路徑上的指令算了;猜對賺到,猜錯就丟棄。它是現代 CPU 高效能的命脈。</li>
+      </ul>
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">推測執行的黑暗面:Spectre 與 Meltdown</span>
+          <p>2018 年,研究者發現推測執行藏著一個世代級的安全漏洞:CPU 在「猜錯後丟棄」那些指令時,雖然會回滾暫存器與記憶體狀態,
+          卻<strong>沒清掉它們在快取裡留下的痕跡</strong>。攻擊者於是能透過「測量某個位址是否被快取」這種<strong>旁路(side channel)</strong>,
+          反推出本不該被讀到的機密(例如別的行程的記憶體)。這就是 <strong>Spectre / Meltdown</strong>。
+          它震撼之處在於:漏洞不在任何軟體 bug,而在<strong>硬體為了快而做的根本性優化</strong>。我們在第七部(資訊安全)談過旁路攻擊的思維——
+          這是「效能」與「安全」在最底層直接對撞的著名一役。</p>
+        </div>
+      </div>
+      <p>
+        還有一條不同的路:<strong>VLIW(超長指令字)</strong>。它把「找出可平行指令」的工作從硬體丟回給<strong>編譯器</strong>,
+        由編譯器事先把多個能並行的運算打包進一條超長指令。Intel 的 Itanium 是著名嘗試,但因為編譯器難以靜態預測動態行為,商業上不算成功——
+        這反而印證了亂序執行那種「動態、在硬體裡見機行事」的路線之強大。
+      </p>
+
+      <h2>更大的平行:執行緒級與資料級</h2>
+      <p>
+        ILP 終究受限於「單一指令流裡能找到多少獨立指令」。要再快,就得跳到更高層次的平行。
+      </p>
+      <ul>
+        <li><strong>同時多執行緒(SMT,即 Intel 的超執行緒 Hyper-Threading)</strong>:讓<strong>一個</strong>實體核心
+        同時跑<strong>兩個</strong>(或更多)硬體執行緒,共用同一套執行單元。當一個執行緒卡在記憶體等待,另一個正好填補空檔,
+        把昂貴的執行單元餵飽。對作業系統而言,它看起來像多了一顆「邏輯核心」。</li>
+        <li><strong>多核(multicore)</strong>:乾脆在一塊晶片上放<strong>好幾顆完整的核心</strong>,真正同時跑多個程式/執行緒。
+        這是過去二十年提升效能的主軸(因為單核頻率撞到功耗牆了)。但多核能帶來多少加速,
+        又回到了 <strong>Amdahl 定律</strong>的轄區——程式裡<em>無法平行</em>的那部分,會限制總加速比。這正是第 43 章「平行與並行」的核心戰場。</li>
+        <li><strong>SIMD / 向量指令(Single Instruction, Multiple Data)</strong>:一條指令同時對<strong>一整排資料</strong>做同樣的運算。
+        例如一條 AVX 指令可以一次加 8 對浮點數。這是<strong>資料級平行</strong>,對影像、訊號、科學運算、機器學習特別有效(x86 的 SSE/AVX、ARM 的 NEON)。</li>
+        <li><strong>GPU</strong>:把資料級平行推到極致——數千個小核心,同時對海量資料跑同一段程式。
+        它正是為「同一招套在幾百萬個像素 / 矩陣元素上」而生,所以圖形(第 39 章)、深度學習都靠它。一句話:CPU 是少數幾個全能的大力士,GPU 是千軍萬馬的小兵團。</li>
+      </ul>
+
+      <h2>從架構看虛擬記憶體與 TLB</h2>
+      <p>
+        我們在第 24 章(作業系統)從「軟體」角度看過<strong>虛擬記憶體</strong>:每個行程都以為自己獨佔一整片連續的記憶體,
+        作業系統用<strong>分頁表(page table)</strong>把虛擬位址翻成實體位址,換來隔離與保護。現在從<strong>硬體架構</strong>角度補上關鍵一塊。
+      </p>
+      <p>
+        位址轉譯如果純靠軟體查表會慢死,所以 CPU 內建一個專責硬體:<strong>MMU(記憶體管理單元)</strong>。
+        但這裡有個「雞生蛋」的效率陷阱:分頁表<strong>自己也住在記憶體裡</strong>,所以每存取一筆資料,豈不是要<em>先多一次</em>記憶體存取去查表?
+        那等於把記憶體存取的成本翻倍。解法你已經很熟了——<strong>加一層快取</strong>:
+      </p>
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">TLB:專門快取「位址翻譯」的快取</span>
+          <p><strong>TLB(Translation Lookaside Buffer)</strong>是 MMU 裡一塊極小、極快、通常全相聯的快取,
+          專門記住最近用過的「虛擬頁 → 實體頁框」對照。每次存取記憶體,CPU 先問 TLB:
+          <strong>命中</strong>就立刻拿到實體位址(幾乎零成本);<strong>失誤</strong>才去走完整的分頁表(page table walk)再把結果存進 TLB。
+          因為程式對「分頁」也有強烈的局部性(同一批頁反覆使用),TLB 命中率極高——這又是一次「優化常見情況」與「記憶體階層」思想的完美再現。</p>
+        </div>
+      </div>
+
+      <div class="diagram">
+<svg viewBox="0 0 700 230" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- virtual address -->
+  <rect x="30" y="40" width="120" height="34" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/><text x="90" y="62" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2328">VPN(虛擬頁號)</text>
+  <rect x="150" y="40" width="80" height="34" fill="#fff" stroke="#2f6f6a"/><text x="190" y="62" text-anchor="middle" font-size="11" fill="#1f2328">offset</text>
+  <text x="130" y="30" text-anchor="middle" font-size="11" font-weight="700" fill="#8a929b">虛擬位址</text>
+  <!-- TLB -->
+  <rect x="300" y="32" width="120" height="60" rx="8" fill="#cfe6e2" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="360" y="56" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">TLB</text>
+  <text x="360" y="74" text-anchor="middle" font-size="9.5" fill="#4a5159">頁翻譯的快取</text>
+  <line x1="230" y1="57" x2="300" y2="60" stroke="#8a929b" stroke-width="2" marker-end="url(#ta)"/>
+  <text x="265" y="50" text-anchor="middle" font-size="9" fill="#8a929b">查 VPN</text>
+  <!-- hit path -->
+  <text x="450" y="40" font-size="11" font-weight="700" fill="#2f6f6a">命中(常見)</text>
+  <line x1="420" y1="50" x2="540" y2="50" stroke="#2f6f6a" stroke-width="2" marker-end="url(#tg)"/>
+  <!-- miss path to page table -->
+  <text x="450" y="120" font-size="11" font-weight="700" fill="#b4541f">失誤(少見)</text>
+  <line x1="360" y1="92" x2="360" y2="135" stroke="#b4541f" stroke-width="2" marker-end="url(#tr)"/>
+  <rect x="290" y="135" width="140" height="42" rx="8" fill="#f6e7dd" stroke="#b4541f" stroke-width="2"/>
+  <text x="360" y="155" text-anchor="middle" font-size="11" font-weight="800" fill="#1f2328">走分頁表</text>
+  <text x="360" y="170" text-anchor="middle" font-size="9" fill="#4a5159">(page table walk,慢)</text>
+  <path d="M430 156 C 510 156, 540 90, 545 64" fill="none" stroke="#b4541f" stroke-width="2" stroke-dasharray="4 3" marker-end="url(#tr)"/>
+  <text x="520" y="135" text-anchor="middle" font-size="9" fill="#b4541f">填回 TLB</text>
+  <!-- physical address -->
+  <rect x="540" y="34" width="110" height="34" fill="#ede9fe" stroke="#8b5cf6" stroke-width="2"/><text x="595" y="56" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2328">實體位址</text>
+  <text x="595" y="86" text-anchor="middle" font-size="9.5" fill="#8a929b">PPN + offset → 存取記憶體/快取</text>
+  <text x="350" y="208" text-anchor="middle" font-size="11" fill="#8a929b">每次記憶體存取都先過 TLB;它命中率極高,所以位址轉譯幾乎不花額外成本。</text>
+  <defs>
+    <marker id="ta" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/></marker>
+    <marker id="tg" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#2f6f6a"/></marker>
+    <marker id="tr" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#b4541f"/></marker>
+  </defs>
+</svg>
+        <figcaption>圖 48-8:位址轉譯的硬體路徑。TLB 命中時直接得到實體頁號;失誤才去走分頁表,並把結果填回 TLB。它本質上就是「為頁翻譯量身打造的一層快取」。</figcaption>
+      </div>
+
+      <p>
+        看出整章的母題了嗎?<strong>遇到慢的東西,就在它前面加一層又快又小的快取,並賭局部性</strong>——
+        資料用快取、指令用指令快取、頁翻譯用 TLB。同一個思想,在 CPU 的每一個角落反覆上演。
+      </p>
+
+      <h2>練習</h2>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 48.1 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>有兩款 CPU 要跑<strong>同一個程式</strong>(指令數相同)。設計 A:時脈 3 GHz、平均 CPI = 2。設計 B:時脈 4 GHz、平均 CPI = 3。
+          只看 GHz 的人會說 B 比較快。用效能公式算算看,到底誰快?快多少?這題想讓你體會什麼?</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>用 $\text{CPU 時間} = \dfrac{\text{IC} \times \text{CPI}}{\text{頻率}}$。設指令數為 IC(兩邊一樣,可直接比係數):</p>
+              <p>$$T_A = \frac{\text{IC} \times 2}{3\times10^9} = \text{IC} \times 0.667\,\text{ns}, \qquad
+                   T_B = \frac{\text{IC} \times 3}{4\times10^9} = \text{IC} \times 0.75\,\text{ns}$$</p>
+              <p>所以 $\dfrac{T_B}{T_A} = \dfrac{0.75}{0.667} \approx 1.125$:<strong>設計 A 反而快約 12.5%</strong>,儘管它的 GHz 比較低。
+              教訓:<strong>頻率只是三個因子之一</strong>。B 雖然時脈快,但它的 CPI 太差(也許管線設計較弱、快取較小),
+              整體反而輸。這就是為什麼「只比 GHz」是外行人的比法。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 48.2 <span class="badge">計算</span></div>
+        <div class="ex-body">
+          <p>(a) 一個 5 級管線,要跑 1000 條指令,理想情況(完全無危障)下,相對於「非管線、每條指令花 5 個週期」的版本,加速比是多少?
+          (b) 為什麼這個加速比達不到理論上限 5?(c) 再用 Amdahl 的精神想:如果把管線加深到 10 級,加速比會自動翻倍嗎?</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>(a)</strong> 非管線:$1000 \times 5 = 5000$ 週期。管線:$k + (n-1) = 5 + 999 = 1004$ 週期。
+              加速比 $= \dfrac{5000}{1004} \approx 4.98$ 倍。</p>
+              <p><strong>(b)</strong> 因為一開始要花 $k-1=4$ 個週期「灌滿」管線(此時還沒有指令完工),這段啟動開銷讓加速比略低於 5。
+              指令數越多,這點開銷被攤得越薄,加速比就越逼近 5——但永遠到不了。</p>
+              <p><strong>(c)</strong> 不會自動翻倍。理論上限變成 10,但<strong>現實中危障會反咬</strong>:管線越深,
+              分支錯誤預測要清空的指令越多(代價越大),load-use 的相對成本也升高。所以加深管線有報酬遞減,
+              甚至過深會因危障而變慢——這也是現代 CPU 管線深度停在十幾級、而非上百級的原因。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 48.3 <span class="badge">分析</span></div>
+        <div class="ex-body">
+          <p>找出下面這段組語裡的<strong>資料危障</strong>:標出哪幾對指令有 RAW 相依、哪些靠<strong>前饋</strong>就能解決、
+          哪一個是即使有前饋也必須<strong>停頓</strong>的(提示:load-use)。</p>
+          <pre><code class="language-text">1:  lw   r1, 0(r6)      # r1 = 記憶體[r6]
+2:  add  r2, r1, r7     # r2 = r1 + r7
+3:  sub  r4, r2, r1     # r4 = r2 - r1
+4:  lw   r5, 4(r6)      # r5 = 記憶體[r6+4]
+5:  or   r8, r9, r10    # r8 = r9 | r10</code></pre>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>逐對找「上一條寫的暫存器,下一條馬上讀」:</p>
+              <ul>
+                <li><strong>1 → 2</strong>(都用 <code>r1</code>):這是 <strong>load-use 危障</strong>!指令 1 是 <code>lw</code>,
+                它的資料要到 MEM 階段才到手,而指令 2 緊接著就要在 EX 用它。<strong>即使有前饋,也得停頓 1 拍</strong>(插一個泡泡)。</li>
+                <li><strong>2 → 3</strong>(都用 <code>r2</code>):一般 RAW。指令 2 是 ALU 運算,結果在它 EX 末端就有了,
+                <strong>靠前饋即可解決,不必停頓</strong>。(指令 3 也用到 <code>r1</code>,但 <code>r1</code> 早已就緒,沒問題。)</li>
+                <li><strong>4、5</strong>:指令 4 的 <code>r5</code> 沒被緊接的指令使用,指令 5 用的 <code>r9, r10</code> 與前面無關——<strong>無危障</strong>。</li>
+              </ul>
+              <p>小optimization:編譯器可以把無關的指令 5(<code>or</code>)<strong>搬到指令 1 和 2 之間</strong>,
+              正好填掉那個 load-use 泡泡,讓管線一拍都不浪費。這就是「指令排程(instruction scheduling)」。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 48.4 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>用你自己的話解釋:為什麼把一個陣列<strong>先排序</strong>,會讓「加總所有 ≥ 128 的元素」這個迴圈快上好幾倍?
+          (明明計算量一樣。)接著想一個進階問題:如果改成「加總所有元素」(<strong>沒有那個 <code>if</code></strong>),排序還會帶來速度差異嗎?為什麼?</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>排序為何變快:</strong>瓶頸在迴圈裡的條件分支 <code>if (data[i] &gt;= 128)</code>。未排序時,資料隨機,
+              這個分支的「真/假」也跟著亂跳,<strong>分支預測器</strong>約一半機率猜錯;每猜錯一次就得清空管線(misprediction penalty)。
+              排序後,前半段全 &lt; 128、後半段全 ≥ 128,分支變成「先連續假、再連續真」的規律模式,預測器幾乎全猜中,
+              錯誤預測趨近零,於是省下了海量的管線清空。<strong>同樣的計算,因資料可預測性不同而快慢迥異。</strong></p>
+              <p><strong>進階:沒有 <code>if</code> 的話,</strong>排序<strong>不會</strong>再帶來明顯差異。因為「加總全部元素」沒有任何依資料而定的分支
+              ——每個元素都照加不誤,沒有東西需要預測。分支預測的勝負舞台消失了,排序與否就無關緊要(走訪順序、快取行為都一樣)。
+              這恰恰反證了:前面的速度差,真的來自<strong>那個分支</strong>,而不是別的。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 48.5 <span class="badge">計算</span></div>
+        <div class="ex-body">
+          <p>(a) 某迴圈循序走訪一個 <code>int</code> 陣列(每個 int 4 bytes),快取行為 64 bytes,陣列遠大於快取。
+          假設沒有預取,理論上的<strong>失誤率</strong>大約是多少?(b) 已知 L1 命中時間 = 1 週期、失誤代價 = 100 週期,用這個失誤率算 <strong>AMAT</strong>。
+          (c) 如果改成<strong>行優先</strong>走訪(每次跳一整列、超過一個快取行),失誤率與 AMAT 又大約變怎樣?</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>(a)</strong> 一條 64-byte 快取行能裝 $64 / 4 = 16$ 個 int。循序走訪時,每 16 次存取只有<strong>第一次</strong>失誤
+              (把整行拉上來),後面 15 次都命中。所以失誤率 $\approx \dfrac{1}{16} = 6.25\%$。這就是空間局部性的紅利。</p>
+              <p><strong>(b)</strong> $\text{AMAT} = 1 + 0.0625 \times 100 = 1 + 6.25 = \mathbf{7.25}$ 週期。</p>
+              <p><strong>(c)</strong> 行優先時,每次存取都跳到不同的快取行,等於<strong>每次都失誤</strong>(剛載入的行只用了 1 個元素就被棄置),
+              失誤率趨近 <strong>100%</strong>。則 $\text{AMAT} \approx 1 + 1.0 \times 100 = \mathbf{101}$ 週期。
+              對比 (b) 的 7.25,慢了約 <strong>14 倍</strong>!這就是「列優先 vs 行優先」速度差的數量級來源(實機因為有硬體預取器與多層快取,差距會比這個理論值溫和一些,但方向完全一致)。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 48.6 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>親手量一次快取效應。寫一支 C 程式,對一個夠大的二維陣列(例如 <code>4096 × 4096</code> 的 int)分別用
+          <strong>列優先</strong>(內層跑 <code>j</code>)與<strong>行優先</strong>(內層跑 <code>i</code>)各加總一次,用 <code>clock()</code> 計時,印出兩者耗時。
+          回報你機器上的倍數差距,並解釋為什麼。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>直接用本章「列優先 vs 行優先」那段程式即可。編譯與執行(建議關掉激進最佳化以免迴圈被改寫,並用 <code>-O1</code> 觀察):</p>
+              <pre><code class="language-bash">gcc -O1 cache_demo.c -o cache_demo
+./cache_demo</code></pre>
+              <p>典型輸出(會因機器而異):</p>
+              <pre><code class="language-text">列優先 row-major: 0.042 s
+行優先 col-major: 0.310 s</code></pre>
+              <p>這台機器上行優先慢了約 <strong>7 倍</strong>。原因:列優先沿記憶體連續走,每條 64-byte 快取行的 16 個 int 都被用到,
+              失誤率約 1/16;行優先每步跳一整列(4096 個 int = 16 KB),遠超一條快取行,幾乎每次存取都失誤,還可能連 TLB 都頻頻失誤。
+              <strong>計算量完全相同,差距純粹來自記憶體存取順序。</strong></p>
+              <div class="callout warn"><div class="ico">⚠️</div><div class="body"><span class="c-title">量測陷阱</span>
+              <p>若用 <code>-O2/-O3</code>,編譯器可能發現你只是在加總、把整個迴圈優化掉或自動向量化,讓你量到假數據。
+              對策:把結果 <code>printf</code> 出來(逼編譯器真的算)、用 <code>volatile</code>、或降低最佳化等級。「正確地量測效能」本身就是一門學問。</p></div></div>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 48.7 <span class="badge">計算</span></div>
+        <div class="ex-body">
+          <p>一個程式,90% 的執行時間花在一個矩陣運算函式上,其餘 10% 是無法平行也無法加速的雜務。
+          (a) 如果你把那個矩陣函式靠快取優化 + SIMD 加速了 8 倍,整個程式的總加速比是多少?
+          (b) 如果你能把那個函式加速到「無限快」,總加速比的上限是多少?(c) 這告訴你接下來該把力氣花在哪?</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>用 Amdahl 定律 $S = \dfrac{1}{(1-p) + p/s}$,這裡 $p = 0.9$。</p>
+              <p><strong>(a)</strong> $s = 8$:$S = \dfrac{1}{0.1 + 0.9/8} = \dfrac{1}{0.1 + 0.1125} = \dfrac{1}{0.2125} \approx \mathbf{4.7}$ 倍。
+              注意:把熱點加速 8 倍,整體只快 4.7 倍——因為那 10% 的雜務開始變成新瓶頸。</p>
+              <p><strong>(b)</strong> $s \to \infty$:$S \to \dfrac{1}{1-0.9} = \dfrac{1}{0.1} = \mathbf{10}$ 倍。這是天花板,再怎麼努力都突破不了。</p>
+              <p><strong>(c)</strong> 你已經拿到 4.7 倍、逼近 10 倍上限的一半以上;繼續死磕這個函式,報酬遞減。
+              此刻更該回頭看那原本只占 10%、現在卻成了新瓶頸的雜務(或思考演算法層面的改變)。
+              這就是 Amdahl 定律的實務智慧:<strong>持續重新評估「現在的瓶頸在哪」,別把力氣浪費在已經不是瓶頸的地方。</strong></p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 48.8 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>天真版矩陣相乘用 <code>i-j-k</code> 順序,把它<strong>重排</strong>成 <code>i-k-j</code> 順序後會明顯變快。
+          (a) 解釋為什麼:在 <code>i-j-k</code> 裡,哪個陣列的存取對快取最不友善?(b) 換成 <code>i-k-j</code> 後,
+          為什麼三個陣列的最內層存取都變友善了?(c) 進一步,「分塊(blocking)」又是靠哪一種局部性再榨出效能的?</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>回顧 <code>C[i][j] += A[i][k] * B[k][j]</code>(列優先儲存)。</p>
+              <p><strong>(a)</strong> 在 <code>i-j-k</code> 裡,最內層是 <code>k</code>。看三個存取:<code>A[i][k]</code> 隨 <code>k</code> 沿列連續(友善);
+              <code>C[i][j]</code> 在最內層不變(超友善);但 <strong><code>B[k][j]</code></strong> 隨 <code>k</code> 變動時,每步跳一整列
+              (位址 +N 個元素),<strong>對 B 的存取最不友善</strong>,是主要瓶頸。</p>
+              <p><strong>(b)</strong> 換成 <code>i-k-j</code> 後,最內層變 <code>j</code>:<code>B[k][j]</code> 隨 <code>j</code> 沿列連續(友善);
+              <code>C[i][j]</code> 也隨 <code>j</code> 沿列連續(友善);<code>A[i][k]</code> 在最內層不變(超友善)。
+              三者全部對快取友善,失誤率大降——而且這只是「換了迴圈巢狀的次序」,結果完全相同。</p>
+              <p><strong>(c)</strong> 分塊(把矩陣切成能整塊塞進快取的小子塊,在子塊內反覆運算後才換下一塊)主要榨的是<strong>時間局部性</strong>:
+              讓一塊載入快取的資料,在被踢出去之前被<strong>反覆重用</strong>到最大化,而不是用一次就丟。
+              這能把矩陣相乘再加速一個數量級,也是 BLAS 等高效能函式庫的核心招數之一。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="callout note"><div class="ico">🧭</div><div class="body"><span class="c-title">延伸:新軌道</span><p>本章的硬體架構為虛擬化技術打下基礎。<a href="92-vm-hypervisor.html">第 86 章「虛擬機與 Hypervisor 底層」</a>深入 Intel VT-x 與 AMD-V 的硬體虛擬化指令、EPT 延伸分頁,以及 hypervisor 如何利用這些特性讓多個 VM 安全共享一顆實體 CPU。</p></div></div>
+
+      <h2>動手實驗室:自己動手寫快取模擬器</h2>
+      <p>
+        前面所有關於快取的討論——命中/失誤、對映方式、LRU 替換——在這個實驗室都能立刻親眼驗證。
+        本節帶你走過三件事:(1) 位址拆解(tag/index/offset)worked example;
+        (2) 一個<strong>互動快取模擬器</strong>,可動態調整快取大小、區塊大小、關聯度,並追蹤任意存取序列;
+        (3) 用兩種走訪樣式(逐列 vs 逐欄)直接量到<strong>局部性對命中率的影響</strong>,以及用衝突示範說明直接對映 vs 組相聯的差異。
+      </p>
+
+      <h3>位址拆解 Worked Example</h3>
+      <p>
+        設定:快取共 <strong>32 位元組</strong>,每個區塊(快取行)<strong>8 位元組</strong>,<strong>直接對映</strong>(1-way)。
+        組數 = 32 ÷ (8 × 1) = <strong>4 組</strong>。以 8-bit 位址空間為例,三個欄位的位元數為:
+      </p>
+      <ul>
+        <li><strong>Offset</strong>(行內偏移,低 3 bits):$\log_2 8 = 3$,選出行內第幾個位元組</li>
+        <li><strong>Index</strong>(組索引,中 2 bits):$\log_2 4 = 2$,選出哪一組</li>
+        <li><strong>Tag</strong>(標籤,高 3 bits):8 − 3 − 2 = 3,在組內比對「這格存的是不是我要的那塊?」</li>
+      </ul>
+      <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>位址(十進位)</th><th>二進位 <code>[tag:3][idx:2][off:3]</code></th>
+          <th>Tag</th><th>Index(組)</th><th>Offset</th>
+        </tr></thead>
+        <tbody>
+          <tr><td>0</td><td><code>000 00 000</code></td><td>0</td><td>0</td><td>0</td></tr>
+          <tr><td>36</td><td><code>001 00 100</code></td><td>1</td><td>0</td><td>4</td></tr>
+          <tr><td>83</td><td><code>010 10 011</code></td><td>2</td><td>2</td><td>3</td></tr>
+          <tr><td>0x54 = 84</td><td><code>010 10 100</code></td><td>2</td><td>2</td><td>4</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        <strong>關鍵觀察</strong>:位址 0 與 36 都對映到<strong>組 0</strong>(index 相同)但 tag 不同。
+        在直接對映快取裡,組 0 只有一格——先存取 0(組 0 存 tag 0),再存取 36(組 0 換成 tag 1),
+        再回頭存取 0 → 又 miss(<strong>衝突失誤</strong>)。位址 83 / 84 對映到組 2,與前兩者無干擾。
+        驗收用:0x54(84)在此快取中的 offset = 4、index = 2、tag = 2。
+      </p>
+
+      <h3>互動快取模擬器</h3>
+      <p>
+        調整快取參數後輸入存取序列(逗號分隔十進位或 <code>0x</code> 十六進位位址),按「模擬」即可看到每次存取的
+        tag / index / offset 與命中 / 失誤,以及最終命中率。快取大小、區塊大小、關聯度(ways)必須都是 2 的冪次。
+        替換策略為 <strong>LRU</strong>(最近最少使用,用陣列前端 = LRU、尾端 = MRU 模擬)。
+      </p>
+
+      <div style="background:#f8f9fa;border:1px solid #dde2e7;border-radius:8px;padding:20px;margin:16px 0">
+        <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;margin-bottom:12px">
+          <label style="display:flex;flex-direction:column;gap:4px;font-size:13px;font-weight:600">
+            快取大小 (bytes)
+            <input id="lab-cache-size" type="number" value="32" min="8" step="8"
+              style="width:100px;padding:4px 8px;border:1px solid #ccc;border-radius:4px;font-size:13px">
+          </label>
+          <label style="display:flex;flex-direction:column;gap:4px;font-size:13px;font-weight:600">
+            區塊大小 (bytes)
+            <input id="lab-block-size" type="number" value="16" min="4" step="4"
+              style="width:100px;padding:4px 8px;border:1px solid #ccc;border-radius:4px;font-size:13px">
+          </label>
+          <label style="display:flex;flex-direction:column;gap:4px;font-size:13px;font-weight:600">
+            關聯度 (ways)
+            <select id="lab-ways"
+              style="width:110px;padding:4px 8px;border:1px solid #ccc;border-radius:4px;font-size:13px">
+              <option value="1">1(直接對映)</option>
+              <option value="2">2-way</option>
+              <option value="4">4-way</option>
+              <option value="8">8-way</option>
+            </select>
+          </label>
+        </div>
+        <label style="display:block;font-size:13px;font-weight:600;margin-bottom:4px">存取序列(逗號分隔位址)</label>
+        <div style="display:flex;gap:8px;margin-bottom:12px">
+          <input id="lab-addrs" type="text"
+            value="0,4,8,12,16,20,24,28,32,36,40,44,48,52,56,60"
+            style="flex:1;padding:6px 10px;border:1px solid #ccc;border-radius:4px;font-family:monospace;font-size:13px">
+          <button onclick="labRunSim()"
+            style="padding:6px 18px;background:#2f6f6a;color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:700;font-size:13px">
+            ▶ 模擬
+          </button>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px;align-items:center">
+          <span style="font-size:12px;font-weight:600;color:#4a5159">預設情境:</span>
+          <button onclick="labLoad('rowmajor')"
+            style="padding:4px 10px;font-size:12px;background:#eef6f4;border:1px solid #2f6f6a;border-radius:4px;cursor:pointer;color:#2f6f6a;font-weight:600">
+            逐列走訪(預期 75%)
+          </button>
+          <button onclick="labLoad('colmajor')"
+            style="padding:4px 10px;font-size:12px;background:#fbeae0;border:1px solid #b4541f;border-radius:4px;cursor:pointer;color:#b4541f;font-weight:600">
+            逐欄走訪(預期 0%)
+          </button>
+          <button onclick="labLoad('conflict1')"
+            style="padding:4px 10px;font-size:12px;background:#fbeae0;border:1px solid #b4541f;border-radius:4px;cursor:pointer;color:#b4541f;font-weight:600">
+            衝突失誤 1-way(0%)
+          </button>
+          <button onclick="labLoad('conflict2')"
+            style="padding:4px 10px;font-size:12px;background:#eef6f4;border:1px solid #2f6f6a;border-radius:4px;cursor:pointer;color:#2f6f6a;font-weight:600">
+            衝突消除 2-way(67%)
+          </button>
+        </div>
+        <div id="lab-output" style="min-height:40px"></div>
+      </div>
+
+      <script>
+(function () {
+  /* 計算 log2(n),n 必須是 2 的冪次 */
+  function lg2(n) { var k = 0; while ((1 << k) < n) k++; return k; }
+  function isPow2(n) { return n > 0 && (n & (n - 1)) === 0; }
+
+  function runSim() {
+    var S   = parseInt(document.getElementById('lab-cache-size').value, 10);
+    var B   = parseInt(document.getElementById('lab-block-size').value, 10);
+    var E   = parseInt(document.getElementById('lab-ways').value, 10);
+    var raw = document.getElementById('lab-addrs').value;
+    var out = document.getElementById('lab-output');
+
+    var sets = Math.floor(S / B / E);
+    if (!isPow2(B) || !isPow2(E) || !isPow2(sets) || sets < 1) {
+      out.innerHTML = '<p style="color:#b4541f">參數錯誤:cache size、block size、ways 必須是 2 的冪次,且 sets = size ÷ (block × ways) ≥ 1。</p>';
+      return;
+    }
+
+    var b = lg2(B);          /* offset bits  */
+    var s = lg2(sets);       /* index  bits  */
+    var offsetMask = (1 << b) - 1;
+    var indexMask  = s > 0 ? (1 << s) - 1 : 0;
+
+    var addrs = raw.split(',').map(function (t) {
+      t = t.trim();
+      if (t === '') return NaN;
+      return (t.indexOf('0x') === 0 || t.indexOf('0X') === 0)
+        ? parseInt(t, 16) : parseInt(t, 10);
+    }).filter(function (n) { return !isNaN(n) && n >= 0; });
+
+    if (addrs.length === 0) {
+      out.innerHTML = '<p style="color:#b4541f">請輸入至少一個非負整數位址。</p>';
+      return;
+    }
+
+    /* cache[i] = 陣列:前端 = LRU,後端 = MRU,每個元素是 tag 值 */
+    var cache = [];
+    for (var i = 0; i < sets; i++) cache.push([]);
+
+    var hits = 0, misses = 0, rows = [];
+
+    for (var a = 0; a < addrs.length; a++) {
+      var addr   = addrs[a];
+      var offset = addr & offsetMask;
+      var index  = s > 0 ? ((addr >> b) & indexMask) : 0;
+      var tag    = addr >> (b + s);
+      var set    = cache[index];
+      var hi     = -1;
+      for (var w = 0; w < set.length; w++) { if (set[w] === tag) { hi = w; break; } }
+      var hit;
+      if (hi !== -1) {
+        hit = true;
+        set.splice(hi, 1); set.push(tag);   /* 移到 MRU 端 */
+        hits++;
+      } else {
+        hit = false;
+        if (set.length >= E) set.shift();   /* 驅逐 LRU */
+        set.push(tag);
+        misses++;
+      }
+      rows.push([addr, tag, index, offset, hit]);
+    }
+
+    /* 建立結果表格 */
+    var h = '<table style="width:100%;border-collapse:collapse;font-size:13px">';
+    h += '<thead><tr style="background:#f0f4f3">';
+    h += '<th style="padding:4px 8px;border:1px solid #ccc">#</th>';
+    h += '<th style="padding:4px 8px;border:1px solid #ccc">位址</th>';
+    h += '<th style="padding:4px 8px;border:1px solid #ccc">Tag</th>';
+    h += '<th style="padding:4px 8px;border:1px solid #ccc">Index(組)</th>';
+    h += '<th style="padding:4px 8px;border:1px solid #ccc">Offset</th>';
+    h += '<th style="padding:4px 8px;border:1px solid #ccc">結果</th>';
+    h += '</tr></thead><tbody>';
+    for (var r = 0; r < rows.length; r++) {
+      var row = rows[r];
+      var bg  = row[4] ? '#eef6f4' : '#fbeae0';
+      var col = row[4] ? '#2f6f6a' : '#b4541f';
+      h += '<tr style="background:' + bg + '">';
+      h += '<td style="padding:4px 8px;border:1px solid #ccc;text-align:center">' + (r + 1) + '</td>';
+      h += '<td style="padding:4px 8px;border:1px solid #ccc;text-align:right">'  + row[0] + '</td>';
+      h += '<td style="padding:4px 8px;border:1px solid #ccc;text-align:right">'  + row[1] + '</td>';
+      h += '<td style="padding:4px 8px;border:1px solid #ccc;text-align:right">'  + row[2] + '</td>';
+      h += '<td style="padding:4px 8px;border:1px solid #ccc;text-align:right">'  + row[3] + '</td>';
+      h += '<td style="padding:4px 8px;border:1px solid #ccc;font-weight:700;color:' + col + '">'
+         + (row[4] ? '✓ 命中' : '✗ 失誤') + '</td>';
+      h += '</tr>';
+    }
+    h += '</tbody></table>';
+
+    var total = hits + misses;
+    var rate  = total > 0 ? (hits * 100 / total).toFixed(1) : '0.0';
+    h += '<div style="margin-top:10px;padding:10px 14px;background:#e3efed;border-left:4px solid #2f6f6a;border-radius:4px;font-size:13px">';
+    h += '<strong>總計:</strong>' + total + ' 次 &nbsp;|&nbsp; ';
+    h += '<strong>命中:</strong>' + hits + ' &nbsp;|&nbsp; ';
+    h += '<strong>失誤:</strong>' + misses + ' &nbsp;|&nbsp; ';
+    h += '<strong>命中率:</strong><span style="font-size:1.2em;color:#2f6f6a;font-weight:800"> ' + rate + '%</span>';
+    h += '</div>';
+    h += '<p style="font-size:11.5px;color:#8a929b;margin-top:6px">參數:快取 ' + S + 'B、區塊 ' + B + 'B、'
+       + E + '-way(' + sets + ' 組)。位址欄位:offset=' + b + ' bits、index=' + s + ' bits、'
+       + 'tag=(位址總位元數 - ' + (b + s) + ') bits。替換策略:LRU。</p>';
+
+    out.innerHTML = h;
+  }
+
+  function labLoad(preset) {
+    var sz = document.getElementById('lab-cache-size');
+    var bs = document.getElementById('lab-block-size');
+    var wy = document.getElementById('lab-ways');
+    var el = document.getElementById('lab-addrs');
+    /* 逐列 vs 逐欄:4×4 int 陣列(4B/元素),快取 32B、區塊 16B、1-way(2 組) */
+    if (preset === 'rowmajor') {
+      sz.value = '32'; bs.value = '16'; wy.value = '1';
+      el.value = '0,4,8,12,16,20,24,28,32,36,40,44,48,52,56,60';
+    } else if (preset === 'colmajor') {
+      sz.value = '32'; bs.value = '16'; wy.value = '1';
+      el.value = '0,16,32,48,4,20,36,52,8,24,40,56,12,28,44,60';
+    /* 衝突示範:位址 0 與 16 同在組 0;1-way 下互相驅逐,2-way 下共存 */
+    } else if (preset === 'conflict1') {
+      sz.value = '16'; bs.value = '4'; wy.value = '1';
+      el.value = '0,16,0,16,0,16';
+    } else if (preset === 'conflict2') {
+      sz.value = '16'; bs.value = '4'; wy.value = '2';
+      el.value = '0,16,0,16,0,16';
+    }
+    runSim();
+  }
+
+  window.labRunSim = runSim;
+  window.labLoad   = labLoad;
+}());
+      </script>
+
+      <h3>局部性效應:逐列 vs 逐欄走訪的預期數字</h3>
+      <p>
+        上面「逐列 / 逐欄走訪」按鈕模擬的是一個 <strong>4 × 4 整數陣列</strong>(每個 <code>int</code> 4 位元組,共 64 位元組)
+        在以下快取條件下的存取行為:快取 32 位元組、區塊 16 位元組、直接對映(2 組,b=4、s=1)。
+        存取 16 個元素(一組走訪):
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>走訪方式</th><th>存取序列</th><th>失誤次數</th><th>命中次數</th><th>命中率</th><th>原因</th>
+        </tr></thead>
+        <tbody>
+          <tr>
+            <td><strong>逐列</strong>(for i, for j)</td>
+            <td><code>0,4,8,12,16,…,60</code></td>
+            <td>4</td><td>12</td><td><strong>75%</strong></td>
+            <td>每條 16B 快取行裝 4 個 int;拉入一次,後 3 次全命中(空間局部性)</td>
+          </tr>
+          <tr>
+            <td><strong>逐欄</strong>(for j, for i)</td>
+            <td><code>0,16,32,48,4,20,…,60</code></td>
+            <td>16</td><td>0</td><td><strong>0%</strong></td>
+            <td>每步跳 16B(一整列),兩組快取行反覆互相驅逐(thrashing)</td>
+          </tr>
+        </tbody>
+      </table></div>
+      <p>
+        衝突示範情境:序列 <code>0, 16, 0, 16, 0, 16</code>。快取 16B、區塊 4B。
+        直接對映(1-way,b=2、s=2):位址 0(index=0,tag=0)與位址 16(index=0,tag=1)
+        每次都把對方驅逐,全 6 次都失誤 → <strong>命中率 0%</strong>。
+        改成 2-way(b=2、s=1):兩個位址都對映到組 0,但 2 路可同時容納,第 3~6 次全命中 → <strong>命中率 67%</strong>。
+        這正是提高關聯度消除衝突失誤(conflict miss)的直接示範。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">驗收:達到以下結果表示你理解了快取行為</span>
+          <ul>
+            <li>模擬器「逐列走訪」輸出 <strong>75%</strong> 命中率、「逐欄走訪」輸出 <strong>0%</strong>——與上表完全吻合</li>
+            <li>衝突示範:1-way 輸出 <strong>0%</strong>、2-way 輸出 <strong>67%</strong></li>
+            <li>能在模擬器的逐行明細中指出每個 miss 的原因(compulsory / conflict / capacity)</li>
+            <li>能對任意地址計算 tag / index / offset(驗收範例:0x54=84 在 32B/8B-block/1-way 中:offset=4、index=2、tag=2)</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 48-L1 <span class="badge">計算</span></div>
+        <div class="ex-body">
+          <p>
+            快取設定:總大小 32 位元組、區塊 8 位元組、直接對映(1-way)→ 4 組;假設 8-bit 位址空間
+            (offset=3 bits、index=2 bits、tag=3 bits)。
+          </p>
+          <p>(a) 填出下表三個位址的拆解:</p>
+          <div class="table-wrap"><table>
+            <thead><tr><th>位址</th><th>Tag</th><th>Index(組)</th><th>Offset</th></tr></thead>
+            <tbody>
+              <tr><td>32</td><td>?</td><td>?</td><td>?</td></tr>
+              <tr><td>68</td><td>?</td><td>?</td><td>?</td></tr>
+              <tr><td>100</td><td>?</td><td>?</td><td>?</td></tr>
+            </tbody>
+          </table></div>
+          <p>(b) 哪兩個位址會在直接對映快取中產生<strong>衝突失誤</strong>?為什麼?</p>
+          <p>(c) 若升級為 2-way(32B 總大小不變,8B 區塊 → 2 組),計算上述三個位址的新 index 與 tag,說明衝突是否消除。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>(a)</strong> 拆解公式:offset = addr &amp; 7(低 3 bits);index = (addr &gt;&gt; 3) &amp; 3(中 2 bits);tag = addr &gt;&gt; 5(高 3 bits)。</p>
+              <div class="table-wrap"><table>
+                <thead><tr><th>位址</th><th>Tag</th><th>Index</th><th>Offset</th></tr></thead>
+                <tbody>
+                  <tr><td>32 = 001 00 000₂</td><td>1</td><td>0</td><td>0</td></tr>
+                  <tr><td>68 = 010 00 100₂</td><td>2</td><td>0</td><td>4</td></tr>
+                  <tr><td>100 = 011 00 100₂</td><td>3</td><td>0</td><td>4</td></tr>
+                </tbody>
+              </table></div>
+              <p><strong>(b)</strong> 三個位址的 index 全部都是 <strong>0(組 0)</strong>,但 tag 各不相同(1、2、3)。直接對映每組只有 1 路,三者輪流進組 0 時,前一個被載入的必定被驅逐——每次再存取都是衝突失誤。極端情況:存取序列 32→68→100→32 會有 4 次 miss、0 次 hit。</p>
+              <p><strong>(c)</strong> 2-way 時:sets = 32/(8×2) = 2 組,s=1。新公式:index = (addr &gt;&gt; 3) &amp; 1;tag = addr &gt;&gt; 4。</p>
+              <div class="table-wrap"><table>
+                <thead><tr><th>位址</th><th>新 Tag</th><th>新 Index</th></tr></thead>
+                <tbody>
+                  <tr><td>32</td><td>2</td><td>0</td></tr>
+                  <tr><td>68</td><td>4</td><td>0</td></tr>
+                  <tr><td>100</td><td>6</td><td>0</td></tr>
+                </tbody>
+              </table></div>
+              <p>三者仍都對映到組 0,但組 0 現在有 <strong>2 路</strong>,最多可同時容納 2 個不同 tag。若工作集只用其中兩個(如 32 和 68 交替存取),第 3 次起全部命中。若三個同時活躍(32、68、100 輪流),組 0 的 2 路仍不夠裝 3 個 tag——此時剩餘的 miss 屬於<strong>容量失誤</strong>(capacity miss)而非衝突失誤。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 48-L2 <span class="badge">計算</span></div>
+        <div class="ex-body">
+          <p>
+            用模擬器(或手算)追蹤以下存取序列,快取設定:16B 總大小、4B 區塊、<strong>直接對映</strong>(4 組,b=2、s=2、8-bit tag)。
+            存取序列:<code>0, 4, 8, 0, 4, 8</code>。
+          </p>
+          <p>(a) 列出每次存取的 tag / index / offset 與 hit / miss。</p>
+          <p>(b) 算出命中率。</p>
+          <p>(c) 改成同樣總大小但 <strong>2-way</strong>(2 組,b=2、s=1)後,重新追蹤並說明命中率的變化原因。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>(a)(b) 1-way 追蹤</strong>(b=2、s=2):</p>
+              <div class="table-wrap"><table>
+                <thead><tr><th>#</th><th>位址</th><th>index</th><th>tag</th><th>結果</th><th>說明</th></tr></thead>
+                <tbody>
+                  <tr><td>1</td><td>0</td><td>0</td><td>0</td><td>miss</td><td>強制失誤(第一次)</td></tr>
+                  <tr><td>2</td><td>4</td><td>1</td><td>0</td><td>miss</td><td>強制失誤</td></tr>
+                  <tr><td>3</td><td>8</td><td>2</td><td>0</td><td>miss</td><td>強制失誤</td></tr>
+                  <tr><td>4</td><td>0</td><td>0</td><td>0</td><td><strong>hit</strong></td><td>組 0 仍保有 tag=0</td></tr>
+                  <tr><td>5</td><td>4</td><td>1</td><td>0</td><td><strong>hit</strong></td><td>組 1 仍保有 tag=0</td></tr>
+                  <tr><td>6</td><td>8</td><td>2</td><td>0</td><td><strong>hit</strong></td><td>組 2 仍保有 tag=0</td></tr>
+                </tbody>
+              </table></div>
+              <p>命中率 = 3/6 = <strong>50%</strong>。(三個位址分屬不同組,不會互相衝突,第二輪全命中。)</p>
+              <p><strong>(c) 2-way</strong>(sets=2,b=2、s=1):</p>
+              <p>新 index:addr 0 → index=0;addr 4 → index=(4&gt;&gt;2)&amp;1=1;addr 8 → index=(8&gt;&gt;2)&amp;1=0。
+              新 tag:addr 0 → 0&gt;&gt;3=0;addr 4 → 4&gt;&gt;3=0;addr 8 → 8&gt;&gt;3=1。</p>
+              <div class="table-wrap"><table>
+                <thead><tr><th>#</th><th>位址</th><th>index</th><th>tag</th><th>結果</th></tr></thead>
+                <tbody>
+                  <tr><td>1</td><td>0</td><td>0</td><td>0</td><td>miss → 組0:[tag0]</td></tr>
+                  <tr><td>2</td><td>4</td><td>1</td><td>0</td><td>miss → 組1:[tag0]</td></tr>
+                  <tr><td>3</td><td>8</td><td>0</td><td>1</td><td>miss → 組0:[tag0, tag1](2 路都用上)</td></tr>
+                  <tr><td>4</td><td>0</td><td>0</td><td>0</td><td><strong>hit</strong></td></tr>
+                  <tr><td>5</td><td>4</td><td>1</td><td>0</td><td><strong>hit</strong></td></tr>
+                  <tr><td>6</td><td>8</td><td>0</td><td>1</td><td><strong>hit</strong></td></tr>
+                </tbody>
+              </table></div>
+              <p>命中率同樣 50%。在這個序列裡,1-way 和 2-way 表現相同——因為三個位址在 1-way 下恰好落在不同組,不產生衝突。如果序列改為 <code>0, 16, 0, 16, …</code>(兩者都落在組 0),差距才會顯現——這正是「衝突失誤情境」按鈕的內容。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 48-L3 <span class="badge">分析</span></div>
+        <div class="ex-body">
+          <p>
+            一個程式依序存取記憶體區塊 A、B、C、D、E(五個不同的 64B 區塊)。快取只能容納 <strong>2 個區塊</strong>。
+            A 與 C 對映到同一個快取組(set 0),B 與 D 對映到 set 1,E 對映到 set 0(本序列並未存取 E,不影響模擬)。
+          </p>
+          <p>存取序列:<strong>A, B, C, D, A, C, A, C</strong>。快取為直接對映(每組 1 路)。</p>
+          <p>(a) 列出每次存取的 hit / miss,並標注每次 miss 的類型(強制失誤 / 衝突失誤 / 容量失誤)。</p>
+          <p>(b) 若快取升級為 <strong>2-way</strong>(容量不變,仍 2 個區塊,但 1 組 2 路),相同序列的命中率會如何改變?</p>
+          <p>(c) 若只增加<strong>快取容量</strong>到 4 個區塊(仍直接對映),命中率又如何?</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>(a) 直接對映,2 個區塊(set 0 = 1路, set 1 = 1路)</strong></p>
+              <div class="table-wrap"><table>
+                <thead><tr><th>#</th><th>存取</th><th>hit/miss</th><th>類型</th><th>組狀態後</th></tr></thead>
+                <tbody>
+                  <tr><td>1</td><td>A(set0)</td><td>miss</td><td>強制(第一次)</td><td>set0=[A]</td></tr>
+                  <tr><td>2</td><td>B(set1)</td><td>miss</td><td>強制</td><td>set1=[B]</td></tr>
+                  <tr><td>3</td><td>C(set0)</td><td>miss</td><td>衝突(A被驅逐)</td><td>set0=[C]</td></tr>
+                  <tr><td>4</td><td>D(set1)</td><td>miss</td><td>衝突(B被驅逐)</td><td>set1=[D]</td></tr>
+                  <tr><td>5</td><td>A(set0)</td><td>miss</td><td>衝突(C被驅逐)</td><td>set0=[A]</td></tr>
+                  <tr><td>6</td><td>C(set0)</td><td>miss</td><td>衝突(A被驅逐)</td><td>set0=[C]</td></tr>
+                  <tr><td>7</td><td>A(set0)</td><td>miss</td><td>衝突</td><td>set0=[A]</td></tr>
+                  <tr><td>8</td><td>C(set0)</td><td>miss</td><td>衝突</td><td>set0=[C]</td></tr>
+                </tbody>
+              </table></div>
+              <p>命中率 = <strong>0/8 = 0%</strong>。A 與 C 不斷在 set 0 互相驅逐——典型的衝突失誤 thrashing。</p>
+              <p><strong>(b) 2-way,1 組,2 路</strong>:所有位址現在都對映到唯一的 set 0,但有 2 路可同時容納。</p>
+              <ul>
+                <li>A: miss → set0=[A]</li>
+                <li>B: miss → set0=[A,B](2 路滿)</li>
+                <li>C: miss,LRU=A 被驅逐 → set0=[B,C]</li>
+                <li>D: miss,LRU=B 被驅逐 → set0=[C,D]</li>
+                <li>A: miss,LRU=C 被驅逐 → set0=[D,A]</li>
+                <li>C: miss,LRU=D 被驅逐 → set0=[A,C]</li>
+                <li>A: <strong>hit!</strong>(在 set0) → set0=[C,A]</li>
+                <li>C: <strong>hit!</strong> → set0=[A,C]</li>
+              </ul>
+              <p>命中率 = <strong>2/8 = 25%</strong>。比 0% 好,但因為 5 個不同區塊輪流衝突,改善有限。
+              第 3~6 次 miss 其實屬於容量失誤(working set = A+B+C+D = 4 塊 &gt; 2-way 容量 2 塊)。</p>
+              <p><strong>(c) 容量擴大到 4 塊,直接對映(4 組)</strong>:A、B、C、D 現在各自有自己的組,不再衝突。</p>
+              <ul>
+                <li>A: miss(強制)</li><li>B: miss(強制)</li><li>C: miss(強制)</li><li>D: miss(強制)</li>
+                <li>A: <strong>hit!</strong></li><li>C: <strong>hit!</strong></li><li>A: <strong>hit!</strong></li><li>C: <strong>hit!</strong></li>
+              </ul>
+              <p>命中率 = <strong>4/8 = 50%</strong>。擴大容量讓整個工作集(A~D)都能駐留快取,第二輪全部命中。
+              <strong>結論</strong>:衝突失誤靠增加關聯度解決;容量失誤靠增加快取容量解決——兩者是不同的問題,對應不同的解法。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>把這一章串起來</h2>
+      <p>
+        第 21 章我們造了一台「能跑」的 CPU;這一章,我們看清了工程師如何讓它「跑得飛快」。回顧這趟旅程的路標:
+      </p>
+      <ul>
+        <li><strong>效能公式</strong> $\text{CPU 時間} = \text{IC} \times \text{CPI} \times \text{時脈週期}$ 是一切的尺。GHz 只管其中一格,「只看 GHz」會騙你。<strong>Amdahl 定律</strong>則告訴你「優化常見情況」。</li>
+        <li><strong>RISC vs CISC</strong> 是在 IC、CPI、頻率之間下不同的賭注。RISC 的「簡單定長、好管線」思想勝出——連現代 x86 內心都偷偷是 RISC。</li>
+        <li><strong>管線</strong>讓指令重疊執行,把吞吐量推向「每週期一條」(加速比逼近級數 $k$);但它會被三種<strong>危障</strong>卡住:結構、資料(靠前饋/停頓解決)、控制(靠<strong>分支預測</strong>賭方向)。</li>
+        <li>分支預測<strong>對程式設計師可見</strong>:難預測的分支(如未排序資料上的 <code>if</code>)會讓迴圈莫名變慢。</li>
+        <li><strong>記憶體階層</strong>與<strong>局部性原理</strong>是現代效能的另一根支柱:在慢記憶體前面層層疊上又快又小的<strong>快取</strong>。</li>
+        <li><strong>快取</strong>的所有機制——快取行、對映、LRU 替換、寫回、AMAT——都在賭時間/空間局部性。而它對你<strong>真實可見</strong>:列優先 vs 行優先、矩陣相乘的迴圈重排,輕鬆差好幾倍。</li>
+        <li>更上層的平行:<strong>ILP</strong>(超純量、亂序、推測執行——以及它的黑暗面 Spectre)、<strong>執行緒/資料級</strong>(SMT、多核、SIMD、GPU)。</li>
+        <li><strong>TLB</strong> 是「為頁翻譯量身打造的快取」——再一次驗證了整章的母題:<strong>遇到慢,就加一層快取,並賭局部性。</strong></li>
+      </ul>
+      <p>
+        最深的一課也許是這個:現代 CPU 是數十年最佳化的層層結晶,而其中有些結晶(快取、分支預測)會<strong>悄悄</strong>決定你程式的快慢。
+        你不必去寫組合語言,但只要心裡裝著「局部性」與「可預測性」這兩把尺,你就能寫出比別人快好幾倍的程式——
+        而且常常,只是把迴圈的次序對調一下而已。這正是「懂硬體」對一個軟體工程師的真正價值。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">📚</div>
+        <div class="body">
+          <span class="c-title">想更深入?延伸資源</span>
+          <p>本章對應 OSSU 的 <a href="https://www.edx.org/learn/computer-programming/massachusetts-institute-of-technology-computation-structures-2-computer-architecture">MIT 6.004.2x「Computation Structures 2: Computer Architecture」</a>
+          與 <a href="https://www.edx.org/learn/computer-science/massachusetts-institute-of-technology-computation-structures-3-computer-organization">6.004.3x「Computation Structures 3: Computer Organization」</a>(MITx,管線、快取、虛擬記憶體、平行)。
+          這個主題公認的「聖經」是 Patterson &amp; Hennessy 的《<em>Computer Organization and Design</em>》(常稱 P&amp;H,有 RISC-V、ARM、MIPS 版本),
+          深入硬體設計的進階讀者則可挑戰他們的《<em>Computer Architecture: A Quantitative Approach</em>》。
+          想看「快取/分支預測對程式的真實衝擊」更多血淋淋的例子,Ulrich Drepper 的長文〈<em>What Every Programmer Should Know About Memory</em>〉是經典。
+          本章承接第 21 章(CPU/機器語言)、第 24 章(虛擬記憶體與 TLB),並與第 43 章(平行運算與 Amdahl)、第 39 章(GPU/圖學)、第七部(資安/旁路攻擊)互相呼應。</p>
+        </div>
+      </div>
+
+    

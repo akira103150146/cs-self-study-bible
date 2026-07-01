@@ -1,0 +1,1075 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>高效 ML:量化、蒸餾、微調與部署 · CS 自學聖經</title>
+<meta name="description" content="FP32→INT4 量化公式、PTQ/QAT/GPTQ/AWQ、知識蒸餾軟標籤與溫度 T、剪枝彩票假說、LoRA 低秩分解 ΔW=BA 連回秩定義、QLoRA 四位元微調、KV-cache、連續批次、推測解碼、vLLM PagedAttention、GGUF 與 on-device 部署——把大模型變小、變快、可部署的完整工具箱。">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;700&family=Noto+Sans+TC:wght@400;700&family=Lora:ital,wght@0,400;0,600;0,700;1,400&family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <main class="main">
+    <article class="content">
+      <div class="eyebrow">第二四部 · 進階人工智慧</div>
+      <h1>高效 ML:量化、蒸餾、微調與部署</h1>
+      <p class="subtitle">模型夠強不夠——它得跑得動、付得起、部得了。這一章是讓龐大的大語言模型走出實驗室、進入真實世界的壓縮工具箱。</p>
+      <div class="byline">
+        <span class="tag">第 109 章</span>
+        <span>閱讀時間 ≈ 85 分鐘</span>
+        <span>難度:★★★★☆</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>大模型的四重壓力:記憶體、延遲、成本與邊緣部署,以及哪種工具解決哪種問題</li>
+          <li><strong>量化(quantization)</strong>:FP32→INT8/INT4 的精確公式、對稱與非對稱量化、PTQ 與 QAT 的差別,以及 GPTQ/AWQ 的直覺</li>
+          <li><strong>知識蒸餾(knowledge distillation)</strong>:軟標籤如何傳遞老師的「黑暗知識」,以及溫度 $T$ 如何控制分布柔軟度</li>
+          <li><strong>剪枝(pruning)</strong>的結構化 vs 非結構化,以及彩票假說(lottery ticket hypothesis)的驚人含義</li>
+          <li><strong>LoRA</strong>低秩分解 $\Delta W = BA$——只更新極少數參數就能微調大模型,與<a href="54-linear-algebra.html">第 54 章〈線性代數〉</a>的秩(rank)定義直接相連</li>
+          <li><strong>QLoRA</strong>:4-bit 量化基底 + BF16 LoRA 適配器,讓單卡微調 65B 模型成為可能</li>
+          <li>推論三寶:KV-cache、連續批次(continuous batching)、推測解碼(speculative decoding)</li>
+          <li>vLLM、GGUF/llama.cpp 與 on-device 部署的選擇邏輯,以及如何用量測數據做取捨決策</li>
+        </ul>
+      </div>
+
+      <!-- ===== §1 ===== -->
+      <h2>大模型很強,但你跑得起嗎?</h2>
+
+      <p>
+        想像你剛剛訓練完一個 LLaMA-3 70B 模型。效果驚人,Benchmark 全紅。
+        你打算把它部署到產品上給一萬個用戶使用。
+        然後你打開計算機,現實迎面而來:
+      </p>
+      <ul>
+        <li>70B 個參數 × 2 bytes(FP16)= <strong>140 GB VRAM</strong>——單張 A100 80GB 根本裝不下</li>
+        <li>租用兩張 A100 做推論:~$6/hr,月費近五千美元,只為服務你的「玩具」模型</li>
+        <li>用戶送出一句話,等到第一個字出現:3.2 秒——這在手機上是無法接受的</li>
+        <li>有人說「能不能把它放到 App 裡面離線用?」——根本想都別想</li>
+      </ul>
+      <p>
+        這就是<strong>高效 ML(Efficient ML)</strong>要解決的問題:讓一個「夠好但太貴」的模型,
+        變成「夠好且跑得起來」。
+        本書在<a href="38-machine-learning.html">第 38 章〈機器學習〉</a>介紹了模型的訓練框架,
+        在<a href="99-gpt-from-scratch.html">第 93 章〈從零打造 GPT〉</a>建立了 Transformer 的底層直覺,
+        在<a href="100-llm-client.html">第 94 章〈手刻你的 LLM client〉</a>與<a href="106-agent-production.html">第 100 章〈從玩具到生產〉</a>處理了 API 呼叫與部署架構。
+        本章補上最後一塊缺口:<strong>如何讓模型變小、變快、可部署</strong>。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">四重壓力與對應工具</span>
+          <p>
+            大模型面對四種壓力,分別有不同的解法——
+            <strong>記憶體</strong>(量化、剪枝)、
+            <strong>訓練成本</strong>(PEFT/LoRA)、
+            <strong>推論速度</strong>(KV-cache、推測解碼)、
+            <strong>邊緣部署</strong>(GGUF/llama.cpp/on-device)。
+            理解每種技術解決的是哪個問題,是本章的核心。
+          </p>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>問題</th><th>主要工具</th><th>典型收益</th></tr></thead>
+          <tbody>
+            <tr><td>模型裝不進記憶體</td><td>量化(INT8/INT4)</td><td>記憶體 2–4×↓,精度微降</td></tr>
+            <tr><td>模型太大難訓練</td><td>知識蒸餾、剪枝</td><td>更小模型,速度相近</td></tr>
+            <tr><td>全量微調太貴</td><td>LoRA / QLoRA (PEFT)</td><td>參數量 100–1000×↓</td></tr>
+            <tr><td>推論吞吐量太低</td><td>連續批次、vLLM</td><td>吞吐量 10–30×↑</td></tr>
+            <tr><td>每步都要重算 KV</td><td>KV-cache</td><td>decode 延遲線性降</td></tr>
+            <tr><td>大模型太慢</td><td>推測解碼</td><td>速度 2–3×↑,品質不變</td></tr>
+            <tr><td>部署到端側裝置</td><td>GGUF / llama.cpp</td><td>CPU 上跑 7B Q4 模型</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- ===== §2 量化 ===== -->
+      <h2>量化:把浮點數壓進整數格</h2>
+
+      <p>
+        一個神經網路的參數通常以 32 位元浮點(FP32)儲存,每個數字佔 4 bytes。
+        但其實這些數字蘊含的「有效資訊」,往往比 32 位元少得多。
+        <strong>量化(quantization)</strong>的想法很簡單:把這些浮點數映射到整數,用更少的位元表示。
+      </p>
+
+      <h3>各種精度的記憶體影響</h3>
+      <p>
+        常見的數值格式與對應的記憶體用量,以 7B 參數模型為例:
+      </p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>格式</th><th>位元數</th><th>bytes/參數</th><th>7B 模型記憶體</th><th>說明</th></tr></thead>
+          <tbody>
+            <tr><td>FP32</td><td>32</td><td>4</td><td>28 GB</td><td>訓練標準格式</td></tr>
+            <tr><td>FP16</td><td>16</td><td>2</td><td>14 GB</td><td>推論常用,動態範圍略小</td></tr>
+            <tr><td>BF16</td><td>16</td><td>2</td><td>14 GB</td><td>動態範圍同 FP32,精度略低</td></tr>
+            <tr><td>INT8</td><td>8</td><td>1</td><td>7 GB</td><td>量化後精度微降,多數任務可接受</td></tr>
+            <tr><td>INT4</td><td>4</td><td>0.5</td><td>3.5 GB</td><td>激進壓縮,需 GPTQ/AWQ 維持品質</td></tr>
+            <tr><td>INT2 / 1.58-bit</td><td>2</td><td>0.25</td><td>1.75 GB</td><td>BitNet 等研究方向,須從頭訓練</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>量化公式:數學上在做什麼?</h3>
+      <p>
+        核心想法是找一個映射,把浮點數 $x$ 對應到有限的整數集合 $x_q$。
+        有兩種主要方案:
+      </p>
+
+      <p>
+        <strong>對稱量化(symmetric quantization)</strong>:假設值域關於 0 對稱,用單一縮放因子 $s$:
+      </p>
+      <p>$$s = \frac{\max|x|}{2^{b-1} - 1}, \quad x_q = \text{clamp}\!\left(\text{round}\!\left(\frac{x}{s}\right),\, -(2^{b-1}),\, 2^{b-1}-1\right)$$</p>
+      <p>
+        反量化:$\hat{x} = s \cdot x_q$。
+        以 INT8($b=8$)、$x$ 的最大絕對值為 0.91 為例:
+        $s = 0.91 / 127 \approx 0.00717$,則 $x = -0.38 \Rightarrow x_q = \text{round}(-0.38 / 0.00717) = -53$。
+      </p>
+
+      <p>
+        <strong>非對稱量化(asymmetric quantization)</strong>:值域可以不對稱,用縮放因子 $s$ 和偏移量 $z$(zero-point):
+      </p>
+      <p>$$s = \frac{x_{\max} - x_{\min}}{2^b - 1}, \quad z = -\text{round}\!\left(\frac{x_{\min}}{s}\right)$$</p>
+      <p>$$x_q = \text{clamp}\!\left(\text{round}\!\left(\frac{x}{s}\right) + z,\; 0,\; 2^b - 1\right), \quad \hat{x} = s(x_q - z)$$</p>
+      <p>
+        非對稱量化對偏態分布(如 ReLU 後的正值激活)更有效率,
+        代價是需要額外儲存和計算 $z$。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 640 230" xmlns="http://www.w3.org/2000/svg" font-family="Inter,'Noto Sans TC',sans-serif">
+  <text x="320" y="20" text-anchor="middle" font-size="14" font-weight="bold" fill="#1f2328">量化(Quantization):浮點連續值 → 整數離散格</text>
+
+  <!-- FP32 row -->
+  <text x="28" y="54" font-size="12" fill="#2f6f6a" font-weight="bold">FP32</text>
+  <line x1="75" y1="52" x2="610" y2="52" stroke="#2f6f6a" stroke-width="2.5"/>
+  <line x1="75" y1="46" x2="75" y2="58" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="60" y="70" font-size="11" fill="#555">−1.0</text>
+  <line x1="209" y1="46" x2="209" y2="58" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="196" y="70" font-size="11" fill="#555">−0.5</text>
+  <line x1="342" y1="46" x2="342" y2="58" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="338" y="70" font-size="11" fill="#555">0</text>
+  <line x1="476" y1="46" x2="476" y2="58" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="464" y="70" font-size="11" fill="#555">+0.5</text>
+  <line x1="610" y1="46" x2="610" y2="58" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="598" y="70" font-size="11" fill="#555">+1.0</text>
+
+  <!-- sampled FP32 values -->
+  <circle cx="228" cy="52" r="6" fill="#2f6f6a"/>
+  <text x="213" y="40" font-size="11" fill="#2f6f6a">−0.38</text>
+  <circle cx="508" cy="52" r="6" fill="#8b5cf6"/>
+  <text x="496" y="40" font-size="11" fill="#8b5cf6">+0.60</text>
+
+  <!-- dashed arrows to INT8 -->
+  <line x1="228" y1="62" x2="231" y2="110" stroke="#b4541f" stroke-width="1.5" stroke-dasharray="4,3"/>
+  <line x1="508" y1="62" x2="508" y2="110" stroke="#b4541f" stroke-width="1.5" stroke-dasharray="4,3"/>
+
+  <!-- formula label -->
+  <rect x="248" y="76" width="155" height="26" rx="5" fill="#fdf3ee" stroke="#b4541f" stroke-width="1"/>
+  <text x="325" y="93" text-anchor="middle" font-size="12" fill="#b4541f">x_q = round(x / s)</text>
+
+  <!-- INT8 row -->
+  <text x="28" y="138" font-size="12" fill="#b4541f" font-weight="bold">INT8</text>
+  <line x1="75" y1="136" x2="610" y2="136" stroke="#b4541f" stroke-width="2.5"/>
+  <!-- ticks every 32 units: -128,−96,−64,−32,0,+32,+64,+96,+127 -->
+  <!-- positions: x = 75 + (q+128)/255 * 535 -->
+  <!-- -128: 75 | -96: 75+67=142 | -64: 75+134=209 | -32: 75+201=276 | 0: 75+268=343 | +32: 75+335=410 | +64: 75+402=477 | +96: 75+469=544 | +127: 610 -->
+  <line x1="75" y1="130" x2="75" y2="142" stroke="#b4541f" stroke-width="2"/>
+  <text x="60" y="158" font-size="10" fill="#555">−128</text>
+  <line x1="142" y1="131" x2="142" y2="141" stroke="#b4541f" stroke-width="1" opacity="0.6"/>
+  <line x1="209" y1="131" x2="209" y2="141" stroke="#b4541f" stroke-width="1.5"/>
+  <text x="199" y="158" font-size="10" fill="#555">−64</text>
+  <line x1="276" y1="131" x2="276" y2="141" stroke="#b4541f" stroke-width="1" opacity="0.6"/>
+  <line x1="343" y1="130" x2="343" y2="142" stroke="#b4541f" stroke-width="2"/>
+  <text x="340" y="158" font-size="10" fill="#555">0</text>
+  <line x1="410" y1="131" x2="410" y2="141" stroke="#b4541f" stroke-width="1" opacity="0.6"/>
+  <line x1="477" y1="131" x2="477" y2="141" stroke="#b4541f" stroke-width="1.5"/>
+  <text x="468" y="158" font-size="10" fill="#555">+64</text>
+  <line x1="544" y1="131" x2="544" y2="141" stroke="#b4541f" stroke-width="1" opacity="0.6"/>
+  <line x1="610" y1="130" x2="610" y2="142" stroke="#b4541f" stroke-width="2"/>
+  <text x="598" y="158" font-size="10" fill="#555">+127</text>
+
+  <!-- INT8 quantized positions: -0.38→-53: x=75+(75/255)*535=75+157=232; +0.60→+76: x=75+(204/255)*535=75+428=503 -->
+  <rect x="226" y="128" width="12" height="16" fill="#2f6f6a" rx="2"/>
+  <text x="218" y="175" font-size="11" fill="#2f6f6a">−53</text>
+  <rect x="502" y="128" width="12" height="16" fill="#8b5cf6" rx="2"/>
+  <text x="497" y="175" font-size="11" fill="#8b5cf6">+76</text>
+
+  <!-- annotation -->
+  <text x="320" y="200" text-anchor="middle" font-size="11" fill="#8a929b">對稱 INT8: s = max|x|/127, z=0 | 非對稱: s=(x_max−x_min)/255, z=−round(x_min/s)</text>
+  <text x="320" y="218" text-anchor="middle" font-size="11" fill="#2f6f6a">FP32(4 bytes) → INT8(1 byte) → 記憶體壓縮 4×,量化誤差通常 &lt; 0.5%</text>
+</svg>
+        <figcaption>圖 109-1:量化把連續浮點值映射到離散整數格,縮放因子 $s$ 決定每格的寬度。顏色標示的點在兩條數線上位置幾乎相同,說明精度損失很小。</figcaption>
+      </div>
+
+      <h3>訓練後量化(PTQ)vs 量化感知訓練(QAT)</h3>
+      <p>
+        <strong>PTQ(Post-Training Quantization)</strong>:模型訓練好後再量化。
+        用一小批「校準資料集(calibration set)」跑一次前向傳播,收集激活值的統計分布,
+        據此決定每層的 $s$ 和 $z$。PTQ 無需重新訓練,快速省事,但對激活值分布差異大的模型精度損失稍高。
+      </p>
+      <p>
+        <strong>QAT(Quantization-Aware Training)</strong>:訓練時模擬量化誤差——在前向傳播中執行「偽量化」
+        (fake quantize:量化再反量化),讓模型在訓練中學會容忍量化噪音。
+        效果通常優於 PTQ,但需要額外訓練步驟。
+      </p>
+
+      <h3>GPTQ 與 AWQ:LLM 專屬的精準 INT4</h3>
+      <p>
+        對大型語言模型做 INT4 量化,普通 PTQ 的精度損失往往不可接受。
+        兩種方法提供了更好的解答:
+      </p>
+      <ul>
+        <li>
+          <strong>GPTQ(Frantar et al., 2022)</strong>:逐層最小化量化重建誤差。
+          目標是找到 $\hat{W}$ 使 $\|WX - \hat{W}X\|_F^2$ 最小,用到 Hessian 資訊(二階導數)做精確的誤差補償。
+          結果是:INT4 量化的 LLaMA-3 70B 通常只比 FP16 版本損失不到 1% MMLU 分數。
+        </li>
+        <li>
+          <strong>AWQ(Lin et al., 2023,Activation-aware Weight Quantization)</strong>:
+          觀察到不同通道的權重對模型輸出的重要性差別很大,
+          用激活值的大小加以縮放,再量化——重要通道「放大後量化」,保留更多精度。
+          計算比 GPTQ 更快,且精度接近。
+        </li>
+      </ul>
+
+      <h3>極端案例:BitNet 1.58-bit</h3>
+      <p>
+        Microsoft Research 的 BitNet b1.58(2024)把權重限制在 $\{-1, 0, +1\}$ 三個值,
+        平均每個參數只佔約 1.58 bit。矩陣乘法退化為加法和減法,
+        幾乎不再需要乘法硬體——理論上可做到極低功耗推論。
+        代價是必須從頭以這套格式訓練,無法對現有模型做 PTQ。
+        目前主要是研究成果,但指出了一個有趣的未來方向。
+      </p>
+
+      <h3>程式碼:手動 INT8 對稱量化</h3>
+      <pre><code class="language-python">import numpy as np
+
+def quantize_int8_symmetric(x: np.ndarray):
+    """對稱量化:把 float32 張量壓成 int8。
+    回傳 (量化後張量, 縮放因子 s)。"""
+    s = float(np.max(np.abs(x))) / 127.0          # 縮放因子
+    x_q = np.clip(np.round(x / s), -128, 127).astype(np.int8)
+    return x_q, s
+
+def dequantize_int8(x_q: np.ndarray, s: float) -&gt; np.ndarray:
+    """反量化:int8 → 近似 float32。"""
+    return x_q.astype(np.float32) * s
+
+# 示範:一個小向量
+x = np.array([-0.38, 0.12, 0.60, -0.91, 0.05], dtype=np.float32)
+x_q, s = quantize_int8_symmetric(x)
+x_hat = dequantize_int8(x_q, s)
+
+print(f"原始值  (float32): {x}")
+print(f"縮放因子 s:        {s:.6f}")
+print(f"量化值  (int8)  : {x_q}")       # [-53  17  84 -127   7]
+print(f"反量化  (approx): {np.round(x_hat, 4)}")
+print(f"最大誤差:         {np.max(np.abs(x - x_hat)):.5f}")
+print(f"記憶體: float32={x.nbytes}B → int8={x_q.nbytes}B ({x.nbytes // x_q.nbytes}× 壓縮)")
+# 記憶體: float32=20B → int8=5B (4× 壓縮)
+</code></pre>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">量化是「每層」決定的,不是全局一刀切</span>
+          <p>實際 LLM 量化時,每層(或每通道)有獨立的 $s$ 和 $z$。
+          某些層(如 Embedding、最後的 LM Head)通常保留 FP16,
+          因為它們對精度特別敏感。GPTQ/AWQ 都有這種「混合精度」設計。</p>
+        </div>
+      </div>
+
+      <!-- ===== §3 蒸餾 ===== -->
+      <h2>知識蒸餾:讓小模型學老師的「思路」</h2>
+
+      <p>
+        假設你有一個 70B 的老師模型,它在某個分類任務上表現優秀。
+        你想訓練一個 7B 的學生模型來取代它。
+        最直觀的方法是:拿已標記的資料集直接訓練 7B 模型。
+        但這樣你只用到了標籤的「硬答案」(hard labels):「正確類別是貓」。
+      </p>
+      <p>
+        <strong>知識蒸餾(knowledge distillation)</strong>的聰明之處在於:
+        老師模型不只告訴學生「答案是貓」,它還說「這張圖片有 82% 機率是貓、14% 是狗、4% 是兔子」。
+        後者包含了更豐富的資訊——「貓和狗很像」這個知識就隱含在這個分布裡。
+        Hinton et al.(2015)把這種豐富的輸出機率稱為「黑暗知識(dark knowledge)」。
+      </p>
+
+      <h3>軟標籤(soft labels)與溫度 $T$</h3>
+      <p>
+        問題是:在一般 softmax 下,模型對正確類別的置信度往往接近 1,
+        其他類別的機率幾乎為 0——軟標籤退化為硬標籤。
+        解法是在 softmax 時加上一個<strong>溫度(temperature)</strong> $T$:
+      </p>
+      <p>$$p_i^{(T)} = \frac{\exp(z_i / T)}{\sum_j \exp(z_j / T)}$$</p>
+      <p>
+        當 $T = 1$,就是普通 softmax;$T &gt; 1$ 讓分布變「軟」(更均勻),
+        使各類之間的相對關係更明顯;$T \to \infty$ 趨近均勻分布。
+        蒸餾訓練時對老師和學生都使用相同的高溫 $T$(如 $T=4$),
+        讓老師的「次要信號」可以被學生學到。
+        這個 softmax 溫度的概念在<a href="111-deep-learning-math.html">第 105 章〈深度學習的數學〉</a>討論 softmax 導數時也提到過。
+      </p>
+
+      <h3>蒸餾損失函數</h3>
+      <p>
+        標準蒸餾損失結合了「對硬標籤學習」和「對老師軟標籤學習」兩個目標:
+      </p>
+      <p>$$\mathcal{L} = \alpha \cdot \underbrace{\text{CE}(y_s,\, y_{\text{true}})}_{\text{硬標籤損失}}
+        + (1-\alpha) \cdot T^2 \cdot \underbrace{\text{KL}\!\left(p_s^{(T)} \,\|\, p_t^{(T)}\right)}_{\text{軟標籤蒸餾}}$$</p>
+      <p>
+        其中 $y_s$ 是學生的預測,$p_s^{(T)}$、$p_t^{(T)}$ 分別是學生與老師在溫度 $T$ 下的輸出分布。
+        $T^2$ 這個縮放因子是為了讓軟標籤梯度的量級和硬標籤梯度一致(源自 Hinton 的推導)。
+        超參數 $\alpha \in [0,1]$ 控制兩個目標的權重;
+        實踐中常用 $\alpha = 0.5$、$T = 4$。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">蒸餾的幾個變體</span>
+          <p>上述是「輸出蒸餾(response-based)」。進階做法還有:<br>
+          <strong>特徵蒸餾(feature-based)</strong>:學生也要模仿老師的中間層表示,傳遞更多「思路」。<br>
+          <strong>自蒸餾(self-distillation)</strong>:模型對自己舊版本或 ensemble 的輸出做蒸餾,無需大老師。<br>
+          <strong>資料蒸餾</strong>:用大模型生成高品質合成資料來訓練小模型,如 Microsoft phi 系列。</p>
+        </div>
+      </div>
+
+      <h3>實際案例</h3>
+      <p>
+        <strong>DistilBERT</strong>(Hugging Face, 2019):將 BERT-base(110M 參數)蒸餾成 66M 的學生模型,
+        速度快 60%、體積小 40%,但 GLUE Benchmark 只損失約 3%。
+        <strong>TinyLLaMA 1.1B</strong>:在 3T tokens 資料上訓練,部分使用 LLaMA-2 7B 的輸出作蒸餾信號,
+        效果遠超同參數量的隨機訓練基線。
+      </p>
+
+      <!-- ===== §4 剪枝 ===== -->
+      <h2>剪枝與稀疏化:刪掉不重要的連結</h2>
+
+      <p>
+        量化是「降低每個參數的精度」,而<strong>剪枝(pruning)</strong>是「直接刪掉某些參數」。
+        靈感來自神經科學:人腦在嬰兒期大量「突觸修剪」,反而讓思維更精準、更有效率。
+      </p>
+
+      <h3>非結構化 vs 結構化剪枝</h3>
+      <p>
+        最直觀的方法是<strong>非結構化剪枝(unstructured pruning)</strong>:
+        找到絕對值最小的一批權重,把它們設為零。
+        比如「刪掉 50% 的最小權重」。
+        問題是:產生的<strong>稀疏矩陣(sparse matrix)</strong>在 GPU 上效率反而更低——
+        現代 GPU 最適合做密集矩陣乘法(dense matmul),不規則的稀疏存取會破壞記憶體局部性。
+      </p>
+      <p>
+        <strong>結構化剪枝(structured pruning)</strong>則刪除整塊結構:
+        移除整個注意力頭(attention head)、整個神經元通道(channel)、甚至整個 Transformer 層。
+        產生的是規則的小矩陣,可直接在標準硬體上高效執行。
+        代價是精度損失通常比非結構化稍高(因為刪除的「單位」更粗)。
+      </p>
+      <p>
+        NVIDIA A100 GPU 原生支援「2:4 稀疏化」——每 4 個權重中恰好有 2 個非零,
+        硬體能以 2× 速度執行這種結構。這是非結構化和結構化之間的一個中間形式。
+      </p>
+
+      <h3>彩票假說(Lottery Ticket Hypothesis)</h3>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">彩票假說(Frankle &amp; Carlin, 2019)</span>
+          <p>
+            「在一個隨機初始化的大型密集網路中,存在一個小型稀疏子網路(『中獎的彩票』),
+            只用這個子網路、用原本的初始值重新訓練,就能達到接近完整網路的精度。」
+          </p>
+        </div>
+      </div>
+
+      <p>
+        怎麼找這張「中獎彩票」?標準流程是:
+      </p>
+      <ol>
+        <li>訓練完整大型網路</li>
+        <li>按權重絕對值大小剪掉最小的 $p$% 的連結</li>
+        <li>把剩餘權重<strong>重設回初始值</strong>(不是重新隨機初始化)</li>
+        <li>只用這個稀疏子網路重新訓練</li>
+        <li>若精度不降,它就是「中獎的子網路」</li>
+      </ol>
+      <p>
+        彩票假說最重要的含義:
+        大型模型之所以需要「大」,不是因為所有參數都必要,
+        而是因為隨機初始化需要足夠大的網路才能「中獎」找到好的稀疏子網路。
+        這解釋了為什麼剪枝效果如此之好——有時候 90% 的參數可以被刪掉,精度只降 1-2%。
+      </p>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">實務上的剪枝流程</span>
+          <p>現代常用「梯度式剪枝(gradual pruning)」:從密集網路開始,
+          在訓練過程中逐漸增加稀疏度(例如每 100 步把稀疏度從 0 增加到目標 70%),
+          同時用損失函數引導剩餘參數補償被刪除的部分。
+          SparseGPT(2023)能在不重新訓練的情況下對 LLM 做到 50% 的非結構化稀疏,
+          且精度損失微乎其微。</p>
+        </div>
+      </div>
+
+      <!-- ===== §5 PEFT / LoRA ===== -->
+      <h2>參數高效微調:LoRA、QLoRA 與 Adapter</h2>
+
+      <p>
+        你想讓一個預訓練的 LLaMA-3 7B 模型學會「用台灣法律術語回答問題」。
+        <strong>全量微調(full fine-tuning)</strong>需要更新所有 70 億個參數——
+        在 Adam 優化器下,除了模型本身的 7B × 4 bytes = 28GB,
+        還需要存梯度(28GB)、Adam 的一階矩估計(28GB)和二階矩估計(28GB)——
+        合計超過 <strong>112 GB</strong>。四張 A100 才勉強夠。
+      </p>
+      <p>
+        <strong>PEFT(Parameter-Efficient Fine-Tuning)</strong>的思路是:
+        我不更新所有參數,只更新一小部分「適配層」,其餘參數凍結。
+        其中最流行的是 <strong>LoRA(Low-Rank Adaptation,Hu et al., 2021)</strong>。
+      </p>
+
+      <h3>LoRA 的數學:低秩分解 $\Delta W = BA$</h3>
+      <p>
+        設某層的原始權重矩陣 $W \in \mathbb{R}^{d \times k}$(全量微調會修改這個矩陣)。
+        LoRA 的想法是:不直接修改 $W$,而是在旁邊加一個<strong>低秩增量(low-rank update)</strong>:
+      </p>
+      <p>$$W' = W + \Delta W = W + BA$$</p>
+      <p>
+        其中 $B \in \mathbb{R}^{d \times r}$、$A \in \mathbb{R}^{r \times k}$,
+        而<strong>秩(rank)</strong> $r \ll \min(d, k)$。
+        在<a href="54-linear-algebra.html">第 54 章〈線性代數〉</a>中我們學過:
+        矩陣的秩是其行空間(或列空間)的維度。
+        由於 $\text{rank}(BA) \leq \min(\text{rank}(B), \text{rank}(A)) \leq r$,
+        增量 $\Delta W$ 的秩最多為 $r$——這就是「低秩」的含義。
+      </p>
+      <p>
+        前向傳播時,輸入 $x$ 的計算為:
+      </p>
+      <p>$$y = Wx + \frac{\alpha}{r} \cdot BA\, x$$</p>
+      <p>
+        其中 $W$ 凍結(不更新),$B$ 和 $A$ 才是需要訓練的參數。
+        初始化時令 $B = 0$,$A \sim \mathcal{N}(0, \sigma^2)$,
+        確保訓練開始時 $\Delta W = BA = 0$,讓微調從原始模型行為開始。
+        $\alpha$ 是縮放超參數(常設 $\alpha = r$,讓縮放因子 $\alpha/r = 1$)。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 640 250" xmlns="http://www.w3.org/2000/svg" font-family="Inter,'Noto Sans TC',sans-serif">
+  <text x="320" y="22" text-anchor="middle" font-size="14" font-weight="bold" fill="#1f2328">LoRA:低秩分解 W' = W + BA  (r ≪ min(d, k))</text>
+
+  <!-- W (frozen) -->
+  <rect x="20" y="50" width="115" height="115" rx="7" fill="#f3f4f6" stroke="#8a929b" stroke-width="2" stroke-dasharray="7,4"/>
+  <text x="78" y="110" text-anchor="middle" font-size="20" font-weight="bold" fill="#8a929b">W</text>
+  <text x="78" y="130" text-anchor="middle" font-size="12" fill="#6b7280">d × k</text>
+  <text x="78" y="148" text-anchor="middle" font-size="11" fill="#9ca3af">凍結 Frozen</text>
+  <!-- dimension labels for W -->
+  <text x="78" y="44" text-anchor="middle" font-size="11" fill="#8a929b">k</text>
+  <text x="8" y="113" text-anchor="middle" font-size="11" fill="#8a929b">d</text>
+
+  <!-- + sign -->
+  <text x="150" y="118" text-anchor="middle" font-size="26" font-weight="bold" fill="#555">+</text>
+
+  <!-- B matrix (d×r, tall thin) -->
+  <rect x="168" y="50" width="32" height="115" rx="5" fill="#e3efed" stroke="#2f6f6a" stroke-width="2.5"/>
+  <text x="184" y="104" text-anchor="middle" font-size="16" font-weight="bold" fill="#2f6f6a">B</text>
+  <text x="184" y="122" text-anchor="middle" font-size="11" fill="#2f6f6a">d×r</text>
+  <!-- B dimension labels -->
+  <text x="184" y="43" text-anchor="middle" font-size="11" fill="#2f6f6a">r</text>
+  <text x="155" y="113" text-anchor="middle" font-size="11" fill="#2f6f6a">d</text>
+
+  <!-- × sign -->
+  <text x="212" y="118" text-anchor="middle" font-size="18" fill="#555">×</text>
+
+  <!-- A matrix (r×k, wide short) -->
+  <rect x="228" y="100" width="115" height="32" rx="5" fill="#ede9fe" stroke="#8b5cf6" stroke-width="2.5"/>
+  <text x="285" y="119" text-anchor="middle" font-size="16" font-weight="bold" fill="#8b5cf6">A</text>
+  <!-- A dimension labels -->
+  <text x="285" y="95" text-anchor="middle" font-size="11" fill="#8b5cf6">k</text>
+  <text x="220" y="119" text-anchor="middle" font-size="11" fill="#8b5cf6">r</text>
+  <text x="285" y="144" text-anchor="middle" font-size="10" fill="#8b5cf6">r×k</text>
+
+  <!-- = sign -->
+  <text x="360" y="118" text-anchor="middle" font-size="26" fill="#555">=</text>
+
+  <!-- ΔW = BA result -->
+  <rect x="380" y="50" width="115" height="115" rx="7" fill="#fef3c7" stroke="#b4541f" stroke-width="2.5"/>
+  <text x="438" y="100" text-anchor="middle" font-size="14" font-weight="bold" fill="#b4541f">ΔW = BA</text>
+  <text x="438" y="118" text-anchor="middle" font-size="12" fill="#b4541f">d × k</text>
+  <text x="438" y="136" text-anchor="middle" font-size="11" fill="#b4541f">rank ≤ r</text>
+
+  <!-- r annotation with arrow -->
+  <line x1="168" y1="180" x2="200" y2="180" stroke="#2f6f6a" stroke-width="1.5" marker-end="url(#ta)"/>
+  <line x1="200" y1="180" x2="168" y2="180" stroke="#2f6f6a" stroke-width="1.5"/>
+  <text x="184" y="195" text-anchor="middle" font-size="11" fill="#2f6f6a">r (小)</text>
+  <defs>
+    <marker id="ta" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+      <polygon points="0,0 6,3 0,6" fill="#2f6f6a"/>
+    </marker>
+  </defs>
+
+  <!-- savings calculation -->
+  <rect x="510" y="48" width="118" height="120" rx="6" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.5"/>
+  <text x="569" y="68" text-anchor="middle" font-size="11" font-weight="bold" fill="#16a34a">參數量對比</text>
+  <text x="569" y="84" text-anchor="middle" font-size="10" fill="#555">W: d×k = 16.8M</text>
+  <text x="569" y="100" text-anchor="middle" font-size="10" fill="#555">B: d×r = 65.5K</text>
+  <text x="569" y="116" text-anchor="middle" font-size="10" fill="#555">A: r×k = 65.5K</text>
+  <line x1="520" y1="124" x2="618" y2="124" stroke="#ddd" stroke-width="1"/>
+  <text x="569" y="140" text-anchor="middle" font-size="10" fill="#16a34a">LoRA 合計: 131K</text>
+  <text x="569" y="156" text-anchor="middle" font-size="11" font-weight="bold" fill="#16a34a">節省 128×</text>
+
+  <text x="320" y="235" text-anchor="middle" font-size="11" fill="#8a929b">範例: d=k=4096, r=16 (GPT-4 等模型的典型 Attention Q/K/V 維度)</text>
+</svg>
+        <figcaption>圖 109-2:LoRA 用兩個小矩陣 $B$($d \times r$)和 $A$($r \times k$)的乘積近似權重更新 $\Delta W$。原始 $W$ 凍結不動,只訓練 $B$ 和 $A$。當 $r=16$、$d=k=4096$ 時,可訓練參數量從 16.8M 降到 131K(節省 128×)。</figcaption>
+      </div>
+
+      <h3>為什麼低秩就夠了?</h3>
+      <p>
+        LoRA 有效的直覺解釋是:
+        預訓練模型已經學到了語言的通用表示,微調任務所需的<strong>「知識差量」</strong>
+        往往可以用低維子空間描述。
+        Hu et al. 的原始論文做了實驗:
+        即使 $r = 1$ 或 $r = 4$,也能在許多任務上達到接近全量微調的效果。
+        這說明任務適配的「方向」並不多,藏在一個很低維的子空間裡。
+      </p>
+
+      <h3>程式碼:LoRA 參數量計算與維度驗證</h3>
+      <pre><code class="language-python">import numpy as np
+
+# 模型設定(LLaMA-2 7B 的 Attention Q 矩陣)
+d, k = 4096, 4096    # 輸出/輸入維度
+r    = 16            # LoRA 秩(rank)
+alpha = 16           # scaling factor
+
+# 參數量對比
+full_params = d * k
+lora_params = d * r + r * k   # B + A
+
+print(f"全量微調 W:    {full_params:&gt;12,} 參數")   # 16,777,216
+print(f"LoRA (B+A):    {lora_params:&gt;12,} 參數")   #    131,072
+print(f"節省比例:       {full_params / lora_params:.0f}×")   # 128×
+
+# 維度模擬
+W = np.zeros((d, k), dtype=np.float32)   # 凍結的原始權重
+A = np.random.randn(r, k).astype(np.float32) * 0.01   # A ∼ N(0, σ²)
+B = np.zeros((d, r), dtype=np.float32)                 # B = 0 → ΔW = BA = 0 at start
+
+x = np.random.randn(k).astype(np.float32)  # 輸入向量
+
+# LoRA 前向傳播
+y_base = W @ x                               # (d,)
+y_lora = (alpha / r) * (B @ (A @ x))        # (d,)
+y_out  = y_base + y_lora
+
+print(f"\n輸出形狀: {y_out.shape}")           # (4096,)
+print(f"rank(B): 至多 {r}  (B 是 {d}×{r})")
+print(f"rank(A): 至多 {r}  (A 是 {r}×{k})")
+print(f"rank(ΔW=BA) ≤ {r}  ← 連回 §54 線代秩的定義")
+</code></pre>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">哪些層套 LoRA?</span>
+          <p>LoRA 通常套在 Transformer 的注意力投影矩陣($Q$、$K$、$V$、輸出投影)上,
+          有時也包含 MLP 層的線性投影。
+          不同的 $r$ 值(4、8、16、64)和目標層的選擇是主要超參數,
+          通常 $r=16$ 是一個可靠的起點。</p>
+        </div>
+      </div>
+
+      <h3>QLoRA:4-bit 量化 + LoRA</h3>
+      <p>
+        Dettmers et al.(2023)把量化和 LoRA 結合起來,
+        讓單張消費級 GPU(48GB)微調 65B 模型成為可能:
+      </p>
+      <ul>
+        <li><strong>基底模型 4-bit NF4 量化</strong>:用 NormalFloat4(NF4)格式載入,
+          針對正態分布的權重優化量化點位,比普通 INT4 更準確。</li>
+        <li><strong>LoRA 適配器 BF16</strong>:$B$ 和 $A$ 保持全精度(BF16)訓練,
+          確保梯度更新品質。</li>
+        <li><strong>雙重量化(Double Quantization)</strong>:連量化常數 $s$ 本身也再量化一次,
+          進一步節省記憶體。</li>
+        <li><strong>Paged Optimizer States</strong>:當 GPU 記憶體不足時,
+          把 Adam 優化器狀態換頁到 CPU RAM,防止 OOM 崩潰。</li>
+      </ul>
+      <p>
+        QLoRA 的關鍵洞見是:基底模型在微調時只做<strong>前向傳播</strong>(不更新),
+        所以 4-bit 量化誤差不影響梯度計算;梯度只流過高精度的 LoRA 適配器。
+        實驗顯示 QLoRA 微調的模型品質接近全量 FP16 微調。
+      </p>
+
+      <h3>其他 PEFT 方法</h3>
+      <p>
+        LoRA/QLoRA 並非唯一選擇:
+      </p>
+      <ul>
+        <li><strong>Adapter(Houlsby et al., 2019)</strong>:在每個 Transformer 層後插入小型瓶頸 MLP(大→小→大),
+          只訓練 Adapter 的參數。推論時略有延遲(額外前向傳播),但訓練簡單。</li>
+        <li><strong>Prefix-Tuning(Li &amp; Liang, 2021)</strong>:在每層的 K、V 前面加上可訓練的「前綴 token」,
+          模型在注意力時會把這些前綴納入考量。參數量更少,對生成任務效果好。</li>
+        <li><strong>IA3</strong>:只學習三個縮放向量(用於 K、V 和 FF 層),參數量極少,適合資源極度受限的場景。</li>
+      </ul>
+
+      <!-- ===== §6 推論優化 ===== -->
+      <h2>推論優化:KV-cache、批次化與推測解碼</h2>
+
+      <p>
+        假設你的量化模型已經裝進 GPU 了。現在問題是:它還不夠快。
+        這一節介紹在<strong>模型不變</strong>的前提下,讓推論速度翻倍甚至翻幾倍的技術。
+      </p>
+
+      <h3>KV-cache:不要重複算已知的東西</h3>
+      <p>
+        在 Transformer 的自注意力(self-attention)中,每次預測下一個 token $t_n$ 時,
+        都要計算對<strong>所有之前 token</strong> $t_1, \ldots, t_{n-1}$ 的注意力。
+        若沒有快取,每步都要重新計算所有 token 的 K 和 V 矩陣:
+      </p>
+      <p>$$\text{Attention} = \text{softmax}\!\left(\frac{QK^\top}{\sqrt{d_h}}\right)V$$</p>
+      <p>
+        在解碼的第 $n$ 步,需要計算 $n$ 個 token 的 $K$ 和 $V$——這是 $O(n^2)$ 的計算量。
+        <strong>KV-cache</strong> 的思路:把每步計算出的 $K$、$V$ 存下來,
+        下一步只計算新 token 的 $Q$、$K$、$V$,舊的直接讀快取。
+        每步的計算量從 $O(n^2)$ 降為 $O(n)$(新 Q 對快取中所有 K、V 做點積)。
+      </p>
+      <p>
+        KV-cache 的記憶體開銷:$2 \times L \times H \times d_h \times n \times B \times \text{bytes}$,
+        其中 $L$ 是層數、$H$ 是注意力頭數、$d_h$ 是 head 維度、$n$ 是序列長度、$B$ 是批次大小。
+        以 LLaMA-2 7B($L=32, H=32, d_h=128$)、$n=2048$、$B=1$、FP16 為例:
+        $2 \times 32 \times 32 \times 128 \times 2048 \times 1 \times 2 = 1.07\,\text{GB}$。
+        長序列(128K tokens)時 KV-cache 會成為記憶體瓶頸,這是 GQA(Grouped-Query Attention)等變體要解決的問題。
+      </p>
+
+      <h3>連續批次(Continuous Batching)與 Orca</h3>
+      <p>
+        傳統批次推論:一個 batch 的所有請求必須等到最長的那個生成結束,才能接受新請求。
+        如果 batch 中一個請求要生成 2000 個 token 而其他都是 10 個,
+        GPU 在多數時間只在為一個用戶服務——浪費嚴重。
+      </p>
+      <p>
+        <strong>連續批次(continuous batching,Yu et al.,Orca 2022)</strong>的解法:
+        在每次<strong>迭代</strong>(生成一個 token)的粒度上動態管理請求——
+        一個序列生成完畢,立刻把下一個排隊的請求填進空出來的 batch slot。
+        這樣 GPU 的利用率大幅提升,實測可提高 36× 吞吐量(相比傳統靜態批次)。
+      </p>
+
+      <h3>推測解碼(Speculative Decoding)</h3>
+      <p>
+        大模型的推論瓶頸在於:每次只能生成一個 token,而一次前向傳播代價很高。
+        <strong>推測解碼(speculative decoding,Leviathan et al., 2022)</strong>利用了一個觀察:
+        雖然單步生成一個 token,大模型驗證多個 token 的代價幾乎和驗證一個 token 一樣
+        (因為所有 token 可以並行計算)。
+      </p>
+      <p>
+        流程:
+      </p>
+      <ol>
+        <li>用一個小型<strong>草稿模型(draft model)</strong>(如 7B vs 70B)快速生成 $k$ 個 token 的候選序列</li>
+        <li>把這 $k$ 個候選 token 一次性送入<strong>目標模型(target model)</strong>做並行驗證</li>
+        <li>從左到右比對:若目標模型接受候選 token(機率符合)就保留,第一個被拒絕的位置重新採樣</li>
+        <li>這一輪只需一次目標模型前向傳播,卻獲得 1 到 $k$ 個 token</li>
+      </ol>
+      <p>
+        當草稿模型和目標模型的分布接近時(相同領域、相似任務),接受率高,實測可獲得 2–3× 加速,
+        且輸出的分布在數學上與純目標模型解碼<strong>完全等同</strong>。
+      </p>
+
+      <h3>FlashAttention:IO 感知的注意力計算</h3>
+      <p>
+        標準注意力計算的問題:$QK^\top$ 產生一個 $n \times n$ 的矩陣,
+        當序列長度 $n = 128\text{K}$ 時,光這個矩陣就需要 $128000^2 \times 2 \approx 32\,\text{GB}$——
+        必須從 GPU 的 HBM(High Bandwidth Memory)寫入再讀出,速度極慢。
+      </p>
+      <p>
+        <strong>FlashAttention(Dao et al., 2022)</strong>的洞見:
+        把 Q、K、V 切成小 tile(小塊),每個 tile 在 GPU 的 SRAM(片上快速記憶體)裡完成計算,
+        中間的 $n \times n$ 注意力矩陣<strong>從不寫入 HBM</strong>。
+        輸出的記憶體複雜度從 $O(n^2)$ 降為 $O(n)$,
+        速度提升 2–4×,支援 128K+ 的超長序列。
+      </p>
+
+      <h3>程式碼:KV-cache 效益的直觀模擬</h3>
+      <pre><code class="language-python">def ops_no_cache(n_tokens: int, n_layers: int, d: int) -&gt; int:
+    """無 KV-cache:每步重算所有 K, V。"""
+    total = 0
+    for step in range(n_tokens):
+        for _ in range(n_layers):
+            seq = step + 1
+            total += seq * d * 3   # Q/K/V projections: O(seq)
+            total += seq * seq     # Attention 分數: O(seq^2)
+    return total
+
+def ops_with_cache(n_tokens: int, n_layers: int, d: int) -&gt; int:
+    """有 KV-cache:每步只算新 token 的 Q/K/V。"""
+    total = 0
+    for step in range(n_tokens):
+        for _ in range(n_layers):
+            seq = step + 1
+            total += 1 * d * 3    # 只算新 token: O(1)
+            total += 1 * seq      # 新 Q 對快取 K 做點積: O(seq)
+    return total
+
+n, L, d = 200, 32, 4096
+no_c = ops_no_cache(n, L, d)
+wi_c = ops_with_cache(n, L, d)
+print(f"無 KV-cache:  {no_c:,} ops")
+print(f"有 KV-cache:  {wi_c:,} ops")
+print(f"速度倍數估算: {no_c / wi_c:.1f}×")
+# n=200 時加速約 67×;n 越長效果越顯著(差距是 O(n) vs O(n^2))
+</code></pre>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">torch.compile:一行程式碼的加速</span>
+          <p>PyTorch 2.0 引入 <code>torch.compile(model)</code>:
+          把 Python 的動態計算圖轉為優化後的靜態 kernel,
+          核心技術包括 kernel 融合(減少 HBM 來回)和運算符消除。
+          對許多模型可獲得 1.5–2× 的速度提升,且程式碼幾乎不用改動。</p>
+        </div>
+      </div>
+
+      <!-- ===== §7 部署 ===== -->
+      <h2>服務與部署:vLLM、GGUF 與 On-Device</h2>
+
+      <p>
+        模型優化好了,下一步是<strong>怎麼讓別人用到它</strong>。
+        根據場景不同,有幾條不同的路徑。
+        <a href="106-agent-production.html">第 100 章〈從玩具到生產〉</a>討論了 Agent 的容器化與 Kubernetes 部署;
+        本節聚焦在 LLM 推論伺服器和端側部署的具體選擇。
+      </p>
+
+      <h3>vLLM:PagedAttention 讓 KV-cache 不再浪費</h3>
+      <p>
+        傳統 LLM 推論伺服器的問題:KV-cache 需要預先分配「最大序列長度」的記憶體,
+        大部分請求實際上遠短於最大長度——記憶體碎片嚴重。
+      </p>
+      <p>
+        <strong>vLLM(Kwon et al., 2023)</strong>引入了 <strong>PagedAttention</strong>:
+        類比作業系統的虛擬記憶體管理,把 KV-cache 切成固定大小的「頁(page)」,
+        按需動態分配和釋放,不同請求的頁可以交叉分配。
+        結果:記憶體浪費接近於零,吞吐量比 HuggingFace Transformers 的樸素實現高出 24×。
+        vLLM 已成為生產部署 LLM 的業界標準之一,搭配 OpenAI 相容的 REST API,無縫替換。
+      </p>
+
+      <h3>GGUF 格式與 llama.cpp</h3>
+      <p>
+        並非所有人都有 A100。對於在自己電腦上跑 LLM 的開發者,
+        <strong>llama.cpp(Georgi Gerganov, 2023)</strong>是最重要的工具。
+        它是純 C/C++ 實現的 LLM 推論引擎,支援 CPU、Apple Metal(M 系列晶片)、CUDA、Vulkan 等後端,
+        讓一台 MacBook Pro 或一般工作站就能跑 7B–13B 的量化模型。
+      </p>
+      <p>
+        llama.cpp 使用 <strong>GGUF(GGML Universal Format)</strong>:
+        一個開放的二進位格式,把模型架構、tokenizer、量化參數和權重全部打包在一個檔案裡,
+        開箱即用。量化層級包括:
+      </p>
+      <ul>
+        <li><code>Q4_K_M</code>:4-bit,k-means 分桶,高品質,~4GB for 7B model</li>
+        <li><code>Q5_K_M</code>:5-bit,更準確但稍大</li>
+        <li><code>Q8_0</code>:8-bit,接近 FP16 品質,~8GB for 7B model</li>
+        <li><code>Q2_K</code>:2-bit,極限壓縮,精度損失明顯</li>
+      </ul>
+      <p>
+        <strong>Ollama</strong> 在 llama.cpp 之上加了 Docker 風格的 CLI 和本地 REST API:
+        <code>ollama run llama3</code> 會自動下載 GGUF 模型並啟動服務。
+        這正是<a href="100-llm-client.html">第 94 章〈手刻你的 LLM client〉</a>中介紹過的本地 LLM 後端。
+      </p>
+
+      <h3>On-Device 部署:手機與瀏覽器</h3>
+      <p>
+        把 LLM 推到用戶端(不需要網路連線)是最激進的部署形式,好處是隱私保護和零延遲。
+        各平台的方案:
+      </p>
+      <ul>
+        <li><strong>iOS/macOS</strong>:Apple CoreML 格式,可利用 Apple Neural Engine(ANE)推論,
+          消耗極少電量。MLX(Apple 的機器學習框架)也支援直接在 M 系列晶片上跑 LLM。</li>
+        <li><strong>Android</strong>:ONNX Runtime、TFLite、ExecuTorch(PyTorch Mobile 的繼任者)。
+          部分高階旗艦機搭載 NPU(神經處理單元),可加速 INT8/INT4 推論。</li>
+        <li><strong>瀏覽器</strong>:Hugging Face 的 <code>transformers.js</code> 用 ONNX Runtime Web 在瀏覽器中跑小型模型;
+          WebGPU API 讓更大的模型成為可能。
+          WebAssembly(WASM)也是一個跨平台選項(待第 114 章詳述)。</li>
+      </ul>
+      <p>
+        實際限制:手機通常有 4–12 GB RAM,1B–3B 的量化模型是現實可行的上限;
+        7B 模型的 Q4 版本(約 4 GB)在高階手機上勉強可行但速度慢。
+        Google Gemini Nano 是 1.8B 專為端側設計的模型,在 Pixel 8 上能達到實用速度。
+      </p>
+
+      <div class="callout history">
+        <div class="ico">📜</div>
+        <div class="body">
+          <span class="c-title">TGI:HuggingFace 的推論伺服器</span>
+          <p>Text Generation Inference(TGI)是 HuggingFace 的開源 LLM 推論伺服器,
+          支援 GPTQ/AWQ 量化、流式輸出(streaming)、張量並行(tensor parallelism)
+          和 OpenAI 相容 API。常用場景:雲端小規模部署或公司內網 LLM 服務。
+          vLLM 和 TGI 是目前主流的兩個選擇,兩者功能日趨重疊。</p>
+        </div>
+      </div>
+
+      <!-- ===== §8 取捨 ===== -->
+      <h2>取捨矩陣:怎麼量測、怎麼選</h2>
+
+      <p>
+        「壓縮了,但還能用嗎?」「更快了,但快多少?值得嗎?」
+        這些問題都需要<strong>量測</strong>才能回答。高效 ML 的從業者通常追蹤以下幾個指標:
+      </p>
+
+      <h3>量測指標</h3>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>指標</th><th>縮寫</th><th>定義</th><th>關注場景</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>首 token 延遲</td><td>TTFT</td><td>送出請求到第一個字出現的時間</td><td>互動式聊天</td></tr>
+            <tr><td>每 token 延遲</td><td>TPOT</td><td>生成每個後續 token 的平均時間</td><td>解碼效率</td></tr>
+            <tr><td>吞吐量</td><td>TPS</td><td>伺服器每秒輸出的 token 總數</td><td>高並發 API</td></tr>
+            <tr><td>峰值記憶體</td><td>—</td><td>推論過程中 GPU 的最高 VRAM 用量</td><td>硬體選型</td></tr>
+            <tr><td>模型品質</td><td>PPL/MMLU</td><td>困惑度(perplexity)、或特定 Benchmark 分數</td><td>壓縮後評估</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>各技術的取捨實測(以 LLaMA-2 7B 為基準)</h3>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>技術</th><th>記憶體</th><th>速度</th><th>MMLU 損失</th><th>適用場景</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>FP16(基準)</td><td>14 GB</td><td>1×</td><td>0%</td><td>有足夠 GPU 的基準線</td></tr>
+            <tr><td>INT8 PTQ</td><td>7 GB(−50%)</td><td>1.2–1.5×</td><td>0.5–1%</td><td>幾乎無損的首選</td></tr>
+            <tr><td>GPTQ INT4</td><td>3.5 GB(−75%)</td><td>1.5–2×</td><td>1–2%</td><td>記憶體受限場景</td></tr>
+            <tr><td>LoRA 微調</td><td>~16 GB 訓練時</td><td>—</td><td>接近全量微調</td><td>任務適配首選</td></tr>
+            <tr><td>QLoRA 微調</td><td>~8 GB 訓練時</td><td>—</td><td>接近全量微調</td><td>單卡微調大模型</td></tr>
+            <tr><td>推測解碼</td><td>+草稿模型(~1 GB)</td><td>2–3×↑</td><td>0%(等同分布)</td><td>高品質互動場景</td></tr>
+            <tr><td>vLLM 批次</td><td>同 FP16</td><td>吞吐 10–24×↑</td><td>0%</td><td>多用戶 API 服務</td></tr>
+            <tr><td>GGUF Q4_K_M</td><td>4 GB</td><td>CPU 可跑</td><td>1–2%</td><td>本機/離線部署</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>決策流程</h3>
+      <p>
+        面對一個新的部署需求,可以用這個流程快速決策:
+      </p>
+      <ol>
+        <li><strong>先問記憶體</strong>:你有幾 GB 的 VRAM?如果不夠裝 FP16 模型,必須量化(INT8 或 INT4)。</li>
+        <li><strong>再問場景</strong>:是高並發 API 服務→vLLM;是本機/離線→GGUF+llama.cpp;是邊緣裝置→ONNX/CoreML。</li>
+        <li><strong>再問品質</strong>:用量化後的模型在你的任務 Benchmark 上評估,若損失可接受就完成;若不可接受,嘗試 AWQ/GPTQ 代替普通 INT4。</li>
+        <li><strong>若需要微調</strong>:資源足夠→LoRA;GPU 只有 16–24 GB→QLoRA;模型是你的訓練好的小模型→知識蒸餾。</li>
+        <li><strong>若需要更快推論</strong>:已有大小模型配對→推測解碼;批次場景→連續批次。</li>
+      </ol>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">「壓縮後一定要跑 Benchmark」</span>
+          <p>量化/蒸餾/剪枝後,模型在<strong>特定任務</strong>的表現可能和整體 MMLU 的損失不成正比:
+          有些任務比其他任務更容易被量化破壞(如需要精確數值推理的任務)。
+          永遠在你自己的測試集或任務 Benchmark 上量測,不要只看通用 Benchmark。</p>
+        </div>
+      </div>
+
+      <!-- ===== 練習 ===== -->
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 109.1 <span class="badge">計算</span></div>
+        <div class="ex-body">
+          <p>
+            某 Transformer 模型有一個注意力層,其查詢矩陣 $W_Q \in \mathbb{R}^{2048 \times 2048}$。
+            現在對它套用 LoRA,秩 $r = 8$。
+            (a) 全量微調需要更新多少個參數?
+            (b) LoRA 微調需要更新多少個參數($B$ 和 $A$ 合計)?
+            (c) 節省了幾倍?
+          </p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p>
+                (a) 全量微調:$d \times k = 2048 \times 2048 = 4{,}194{,}304$ 個參數。
+              </p>
+              <p>
+                (b) LoRA:$B \in \mathbb{R}^{2048 \times 8}$,參數量 = $2048 \times 8 = 16{,}384$;
+                $A \in \mathbb{R}^{8 \times 2048}$,參數量 = $8 \times 2048 = 16{,}384$。
+                合計 $r(d + k) = 8 \times (2048 + 2048) = 32{,}768$ 個參數。
+              </p>
+              <p>
+                (c) 節省比例:$\frac{4{,}194{,}304}{32{,}768} = 128$ 倍。
+                一般公式:當 $d = k$ 時節省 $\frac{d}{2r}$ 倍。這裡 $2048 / (2 \times 8) = 128$。
+              </p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 109.2 <span class="badge">計算</span></div>
+        <div class="ex-body">
+          <p>
+            一個 GPT 風格模型有 13 億(1.3B)個參數。
+            (a) 以 FP32 儲存時佔用多少 GB?
+            (b) 以 FP16 儲存時呢?
+            (c) 以 INT8 量化後呢?
+            (d) 以 INT4 量化後呢?
+            (e) 若要全量微調(FP32 模型 + Adam 優化器),
+                至少需要多少 GB 的 GPU 記憶體?(提示:Adam 需要一階矩和二階矩各一份梯度大小)
+          </p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p>
+                首先換算:1.3B 個參數 = $1.3 \times 10^9$。
+              </p>
+              <p>
+                (a) FP32:$1.3 \times 10^9 \times 4 \,\text{bytes} = 5.2 \,\text{GB}$。
+              </p>
+              <p>
+                (b) FP16:$1.3 \times 10^9 \times 2 \,\text{bytes} = 2.6 \,\text{GB}$。
+              </p>
+              <p>
+                (c) INT8:$1.3 \times 10^9 \times 1 \,\text{byte} = 1.3 \,\text{GB}$。
+              </p>
+              <p>
+                (d) INT4:$1.3 \times 10^9 \times 0.5 \,\text{bytes} = 0.65 \,\text{GB}$。
+              </p>
+              <p>
+                (e) FP32 全量微調的記憶體需求 = 模型(4 bytes) + 梯度(4 bytes) + Adam m(4 bytes) + Adam v(4 bytes)
+                = $1.3 \times 10^9 \times 16 \,\text{bytes} = 20.8 \,\text{GB}$。
+                外加激活值與批次資料的開銷,實際上至少需要 24 GB,常見 32 GB 以上才舒適。
+              </p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 109.3 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>
+            解釋以下三個問題:
+          </p>
+          <p>
+            (a) KV-cache 為什麼能加速 LLM 的文字生成?如果序列長度從 100 增加到 1000,
+                有快取和沒有快取的計算量分別如何變化?
+          </p>
+          <p>
+            (b) 推測解碼為什麼不會改變最終輸出的分布?(提示:思考「拒絕採樣」)
+          </p>
+          <p>
+            (c) 為什麼 QLoRA 在 4-bit 量化的基底模型上訓練 LoRA 仍然有效,
+                而直接在 4-bit 模型上做全量微調效果很差?
+          </p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p>
+                <strong>(a) KV-cache 加速的原因</strong>:
+                自注意力中,生成第 $n$ 個 token 需要對前 $n-1$ 個 token 計算 K 和 V。
+                沒有快取:第 $n$ 步要重算所有 $n-1$ 個 K 和 V,總計算量是 $O(\sum_{i=1}^{N} i^2) = O(N^3)$。
+                有快取:每步只算新 token 的 K 和 V(O(1)),再和快取做內積(O(n)),
+                總計算量是 $O(\sum_{i=1}^{N} i) = O(N^2)$。
+                從 100 到 1000 tokens:沒有快取的計算量增加約 1000 倍,有快取的增加約 100 倍。
+              </p>
+              <p>
+                <strong>(b) 推測解碼不改變輸出分布的原因</strong>:
+                驗證步驟使用「拒絕採樣(rejection sampling)」的思想。
+                目標模型對草稿序列的每個 token 計算接受機率:
+                若草稿模型對某 token 的機率過高(高於目標模型),
+                就按比例拒絕並重新從目標模型採樣。
+                被接受的 token 序列恰好服從目標模型的分布。
+                因此,推測解碼是一種「加速採樣」技巧,不是近似——輸出分布完全等同。
+              </p>
+              <p>
+                <strong>(c) QLoRA 有效的原因</strong>:
+                LoRA 的梯度不流過量化後的基底模型權重——基底模型是「凍結」的,
+                梯度只更新 B 和 A 兩個小矩陣(保持 BF16 高精度)。
+                4-bit 量化的基底模型只在前向傳播中用到,提供「原始語言知識」的上下文。
+                相比之下,全量微調在 4-bit 下做反向傳播會積累量化誤差到梯度裡,
+                導致訓練不穩定。QLoRA 巧妙地把量化(存儲)和訓練(精度)分開。
+              </p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ===== §9 串起來 ===== -->
+      <h2>把這一章串起來</h2>
+
+      <p>
+        本章是一幅「讓大模型進入真實世界的完整地圖」。讓我們從頭回顧這張地圖的結構:
+      </p>
+
+      <p>
+        首先是<strong>壓縮模型體積</strong>的三條路:
+        <strong>量化</strong>把每個參數的位元數從 32 降到 8 甚至 4,用縮放因子 $s$ 和偏移量 $z$ 保留最大資訊;
+        PTQ 快速但略遜,QAT 品質更好但需重訓,GPTQ/AWQ 是針對 LLM 精心設計的 INT4 方案。
+        <strong>知識蒸餾</strong>訓練一個小學生模型來模仿大老師的「軟輸出」,溫度 $T$ 讓更多「黑暗知識」流動。
+        <strong>剪枝</strong>直接刪掉不重要的連結,彩票假說告訴我們好的稀疏子網路其實一直都在那裡——
+        只需要我們去找。
+      </p>
+
+      <p>
+        接著是<strong>高效微調</strong>:全量微調的記憶體代價讓大多數人望而卻步,
+        LoRA 用低秩分解 $\Delta W = BA$(秩 $r \leq \min(d,k)$,連回<a href="54-linear-algebra.html">第 54 章</a>的定義)
+        把訓練參數量壓低 100–1000 倍;
+        QLoRA 再把基底模型壓到 4-bit,讓單張消費級 GPU 微調 65B 模型成為現實。
+      </p>
+
+      <p>
+        然後是<strong>推論加速</strong>:
+        KV-cache 消除了自注意力中的重複計算;
+        連續批次讓 GPU 的每次迭代都儘量飽和;
+        推測解碼讓大模型在不損失品質的前提下速度提升 2–3×;
+        FlashAttention 從 IO 複雜度的角度根本改造了注意力計算。
+      </p>
+
+      <p>
+        最後是<strong>部署</strong>:
+        vLLM 的 PagedAttention 讓多用戶 API 服務的吞吐量提升 24×;
+        GGUF/llama.cpp 讓任何人用筆記型電腦就能跑量化 LLM;
+        on-device 部署把隱私和低延遲帶到手機和瀏覽器。
+      </p>
+
+      <blockquote>
+        <p>
+          高效 ML 不是讓你在好模型和壞模型之間選擇——
+          而是讓你在「理論最佳模型」和「真正可以用的模型」之間找到最短路徑。
+        </p>
+      </blockquote>
+
+      <h3>這一章在整本書裡的位置</h3>
+      <p>
+        本章承接<a href="38-machine-learning.html">第 38 章〈機器學習〉</a>的訓練框架,
+        承接<a href="99-gpt-from-scratch.html">第 93 章〈從零打造 GPT〉</a>的 Transformer 架構,
+        在<a href="111-deep-learning-math.html">第 105 章〈深度學習的數學〉</a>的數學基礎上展開量化公式和蒸餾損失,
+        並與<a href="106-agent-production.html">第 100 章〈從玩具到生產〉</a>的部署視角形成完整閉環。
+        第 112 章(GPU 架構與 CUDA)將深入 GPU 的底層,讓你理解 FlashAttention 和量化 kernel 為何能在硬體上如此高效。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">延伸學習資源</span>
+          <p>
+            <strong>Hugging Face smol-course</strong>:手把手教你用 LoRA/QLoRA 微調 SmolLM 等小型模型,
+            含完整 Colab notebook。<br>
+            <strong>llama.cpp repo</strong>(github.com/ggerganov/llama.cpp):
+            閱讀 INT4/INT8 量化的 C 實作,是理解量化硬體細節的最佳一手資料。<br>
+            <strong>MLSys 論文集</strong>:推測解碼(Leviathan 2022)、vLLM(Kwon 2023)、
+            FlashAttention(Dao 2022)都在此發表,直接閱讀原始論文收穫最大。<br>
+            <strong>bitsandbytes + PEFT 函式庫</strong>:HuggingFace 生態中 QLoRA 和 LoRA 的參考實作,
+            一行程式碼即可啟用 4-bit 量化微調。
+          </p>
+        </div>
+      </div>
+</article>
+  </main>
+</div>
+<script src="../assets/book.js"></script>
+</body>
+</html>

@@ -1,0 +1,961 @@
+<!--meta
+title: 組譯器
+description: 承接機器語言,親手拆開抽象高塔裡的第一道翻譯橋:組譯器。理解助記符與符號、組譯其實是『查表替換』、三種符號(預定義/標籤/變數)、為何非得『兩遍』不可,並用 Python 從零寫出一個完整、可運作的 Hack 組譯器,把人話翻成 0 與 1。
+-->
+
+
+      <div class="eyebrow">第五部 · 計算機系統</div>
+      <h1>組譯器</h1>
+      <p class="subtitle">上一章我們學會了讀懂機器碼、手寫組合語言。但人總不能一輩子手動把 <code>D=D+A</code> 翻成 <code>1110000010010000</code>。這一章,我們讓程式來做這件翻譯——親手打造抽象高塔裡,從「人話」通往「機器」的第一道橋。</p>
+      <div class="byline">
+        <span class="tag">第 22 章</span>
+        <span>閱讀時間 ≈ 45 分鐘</span>
+        <span>難度:★★★☆☆</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>為什麼需要<strong>組譯器(assembler)</strong>,以及為什麼它是「最簡單、也最早出現的語言翻譯器」</li>
+          <li><strong>助記符(mnemonic)</strong>與<strong>符號(symbol)</strong>怎麼當機器碼的「人類可讀別名」</li>
+          <li>組譯的本質,其實大多只是<strong>查表替換</strong>——直接接回第 21 章的 comp / dest / jump 三張表</li>
+          <li>三種符號:<strong>預定義符號</strong>、<strong>標籤(label)</strong>、<strong>變數(variable)</strong>,以及變數如何從 RAM 位址 16 自動配置</li>
+          <li>為什麼非得「<strong>兩遍(two-pass)</strong>」不可——<strong>向前參照(forward reference)</strong>這個真正的難關</li>
+          <li>用 Python <strong>從零</strong>寫出一個完整、可運作的 Hack 組譯器(parser + symbol table + code + 兩遍流程),並親眼看一個 <code>.asm</code> 變成 16 位元機器碼</li>
+          <li>組譯器在整條「翻譯鏈」裡的位置,以及它和編譯器、真實世界 <code>as</code> / <code>objdump</code> 的關係,預告第 23 章</li>
+        </ul>
+      </div>
+
+      <h2>從「讀懂」到「自動翻譯」</h2>
+      <p>
+        第 21 章的結尾,你已經是個能與機器對話的人了。你能盯著 <code>1110000010010000</code> 這串 0 與 1,
+        把它拆成 comp / dest / jump,讀出它的意思是「<code>D=D+A</code>」;反過來,你也能把心裡的想法寫成
+        <code>@i</code>、<code>D=M</code>、<code>0;JMP</code> 這樣的組合語言。
+      </p>
+      <p>
+        但你大概也已經受夠了。手寫組合語言的迴圈,還得自己<strong>數位址</strong>——「跳回去」要跳到第幾條指令?
+        用到一個變數 <code>i</code>,它該擺在記憶體第幾格?每改一行,後面所有位址都得重算。
+        更別說最後還要逐條把助記符對照成 16 個位元,抄錯一位,整個程式就壞了。
+      </p>
+      <p>
+        這正是 1950 年代第一批程式設計師的真實處境。他們很快就想到一個念頭:
+        <strong>這種機械、無腦、照規則替換的苦工,不正是電腦最擅長的事嗎?</strong>
+        既然第 21 章我們悟到了「指令也只是數字」,那「把組合語言翻成機器碼」就只是一個
+        「讀進一堆文字、吐出一堆數字」的普通程式而已。這個程式,就叫做<strong>組譯器(assembler)</strong>。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">第一個語言翻譯器</span>
+          <p>組譯器是人類寫出的<strong>第一種、也是最簡單的「語言翻譯器(language translator)」</strong>——
+          一種「吃進一種語言、吐出另一種語言」的程式。它把<strong>組合語言(assembly language)</strong>(給人看的)
+          翻成<strong>機器語言(machine language)</strong>(給 CPU 看的)。
+          往上,還有更高階的翻譯器:把 C 翻成組語的<strong>編譯器(compiler)</strong>、把位元組碼翻成機器碼的
+          <strong>VM 翻譯器</strong>……它們全都建立在同一個洞見上,只是層級更高、活更難。
+          學會這一章,你就掌握了所有語言處理器的<strong>共通骨架</strong>。</p>
+        </div>
+      </div>
+
+      <h2>助記符與符號:給位元取個好名字</h2>
+      <p>
+        組合語言到底「友善」在哪?說穿了,就兩件事:<strong>助記符</strong>與<strong>符號</strong>。
+      </p>
+      <p>
+        <strong>助記符(mnemonic)</strong>是好記的英文縮寫,代替難記的位元組合。
+        與其寫 <code>1110000010010000</code>,我們寫 <code>D=D+A</code>;與其背 jump 欄位的 <code>001</code>,
+        我們寫 <code>JGT</code>(Jump if Greater Than,大於就跳)。<code>D</code>、<code>M</code>、<code>+</code>、<code>JMP</code>
+        ——這些都是人腦能瞬間理解、機器碼欄位的「別名」。
+      </p>
+      <p>
+        <strong>符號(symbol)</strong>更進一步,是替「數字位址」取的名字。比起 <code>@24576</code>,
+        寫 <code>@KBD</code>(鍵盤)一眼就懂用途;比起記住「迴圈起點在第 6 條指令、所以寫 <code>@6</code>」,
+        寫 <code>@LOOP</code> 既好讀、又不會因為你在前面插了一行而失準。
+      </p>
+      <p>
+        回憶一下第 21 章那兩種 Hack 指令,它們的組語寫法就是助記符與符號的組合:
+      </p>
+      <ul>
+        <li><strong>A 指令</strong>:<code>@值</code> 或 <code>@符號</code>。例如 <code>@21</code>(載入數值 21)、<code>@LOOP</code>(載入 LOOP 所代表的位址)。</li>
+        <li><strong>C 指令</strong>:完整格式是 <code>dest = comp ; jump</code>,其中 <code>dest=</code> 與 <code>;jump</code> 都可省略。例如 <code>D=D+A</code>、<code>M=M+1</code>、<code>D;JGT</code>、<code>0;JMP</code>。</li>
+      </ul>
+      <p>
+        組譯器的工作,就是把這些好記的文字,<strong>一行一行</strong>變回 CPU 唯一聽得懂的 16 位元數字。
+        而且因為組語和機器碼是<strong>一對一</strong>的(一行組語剛好對應一條機器指令),這個翻譯出奇地直接——
+        我們先來看它最單純的那一面。
+      </p>
+
+      <h2>組譯的本質:其實大多是「查表替換」</h2>
+      <p>
+        先把符號放一邊(假裝 <code>@</code> 後面永遠是數字、程式裡沒有任何標籤)。在這個簡化世界裡,
+        組譯幾乎<strong>沒有任何「智慧」可言</strong>,它只是三件笨事:
+      </p>
+      <ol>
+        <li>看一行是 A 指令還是 C 指令(看開頭是不是 <code>@</code>)。</li>
+        <li>A 指令:把 <code>@</code> 後面的數字轉成 15 位元二進位,前面補一個 <code>0</code>。</li>
+        <li>C 指令:把它拆成 <code>dest</code>、<code>comp</code>、<code>jump</code> 三段,各自<strong>查表</strong>換成位元,前面接上 <code>111</code>。</li>
+      </ol>
+      <p>
+        那三張「表」,正是第 21 章你已經見過的 comp / dest / jump 對照表。組譯器把它們直接寫成 Python 字典——
+        這就是整個組譯器的「<strong>code(轉碼)模組</strong>」:
+      </p>
+
+      <pre><code class="language-python"># comp 欄位對照表:鍵是助記符,值是「a 位 + 6 個 ALU 控制位元」共 7 位
+# (這 6 個位元,字面上就是第 20 章那顆 ALU 的 zx,nx,zy,ny,f,no)
+COMP = {
+    "0":  "0101010", "1":  "0111111", "-1": "0111010",
+    "D":  "0001100", "A":  "0110000", "M":  "1110000",
+    "!D": "0001101", "!A": "0110001", "!M": "1110001",
+    "-D": "0001111", "-A": "0110011", "-M": "1110011",
+    "D+1":"0011111", "A+1":"0110111", "M+1":"1110111",
+    "D-1":"0001110", "A-1":"0110010", "M-1":"1110010",
+    "D+A":"0000010", "D+M":"1000010",
+    "D-A":"0010011", "D-M":"1010011",
+    "A-D":"0000111", "M-D":"1000111",
+    "D&amp;A":"0000000", "D&amp;M":"1000000",
+    "D|A":"0010101", "D|M":"1010101",
+}
+
+# dest 欄位:三個獨立開關 d1 d2 d3 → 要不要存到 A、D、M
+DEST = {None:"000", "M":"001", "D":"010", "MD":"011",
+        "A":"100", "AM":"101", "AD":"110", "AMD":"111"}
+
+# jump 欄位:三個位元 j1 j2 j3 → 拿 comp 的結果跟 0 比,符合就跳
+JUMP = {None:"000", "JGT":"001", "JEQ":"010", "JGE":"011",
+        "JLT":"100", "JNE":"101", "JLE":"110", "JMP":"111"}</code></pre>
+
+      <p>
+        有了這三張表,翻譯一條 C 指令就只是「拆字串 → 查字典 → 拼起來」。我們先寫一個只懂「數字版」A 指令的迷你組譯器,
+        感受一下那種「毫無智慧」的直接:
+      </p>
+
+      <pre><code class="language-python">def translate(line):
+    """把『單獨一條』指令翻成 16 位元(假設沒有符號、@ 後面都是數字)。"""
+    if line.startswith("@"):
+        # A 指令:0 + 15 位元的數值
+        value = int(line[1:])
+        return "0" + format(value, "015b")    # format(.., "015b") = 補滿 15 位的二進位
+    else:
+        # C 指令:dest=comp;jump,dest= 和 ;jump 都可能省略
+        dest = comp = jump = None
+        rest = line
+        if "=" in rest:
+            dest, rest = rest.split("=", 1)     # 切出 dest
+        if ";" in rest:
+            comp, jump = rest.split(";", 1)     # 切出 jump
+        else:
+            comp = rest
+        return "111" + COMP[comp] + DEST[dest] + JUMP[jump]
+
+for asm in ["@2", "D=A", "@3", "D=D+A", "@0", "M=D"]:
+    print(asm, "-&gt;", translate(asm))</code></pre>
+
+      <p>跑出來,正是第 21 章那段「<code>RAM[0] = 2 + 3</code>」的機器碼:</p>
+      <pre><code class="language-text">@2    -&gt; 0000000000000010
+D=A   -&gt; 1110110000010000
+@3    -&gt; 0000000000000011
+D=D+A -&gt; 1110000010010000
+@0    -&gt; 0000000000000000
+M=D   -&gt; 1110001100001000</code></pre>
+
+      <div class="callout note">
+        <div class="ico">🔍</div>
+        <div class="body">
+          <span class="c-title">驗算一下,別只是相信我</span>
+          <p>拿 <code>D=D+A</code> 對照:<code>dest=D</code> 查表得 <code>010</code>、<code>comp=D+A</code> 查表得 <code>0000010</code>、
+          <code>jump</code> 省略得 <code>000</code>,接上開頭的 <code>111</code>,合起來
+          <code>111</code> + <code>0000010</code> + <code>010</code> + <code>000</code> = <code>1110000010010000</code>。
+          和第 21 章圖 21-4 解剖的那條一模一樣。組譯器沒做別的,就是把這個對照過程<strong>自動化</strong>而已。</p>
+        </div>
+      </div>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 250" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- input instruction -->
+  <text x="60" y="40" font-size="13" font-weight="800" fill="#1f2328">輸入一行 C 指令</text>
+  <rect x="60" y="52" width="230" height="40" rx="6" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="175" y="78" text-anchor="middle" font-size="16" font-weight="800" fill="#1f2328" font-family="ui-monospace, Menlo, Consolas, monospace">MD = M+1 ; JGT</text>
+
+  <!-- split into three -->
+  <text x="120" y="128" text-anchor="middle" font-size="13" font-weight="700" fill="#2f6f6a">dest = MD</text>
+  <text x="300" y="128" text-anchor="middle" font-size="13" font-weight="700" fill="#8b5cf6">comp = M+1</text>
+  <text x="470" y="128" text-anchor="middle" font-size="13" font-weight="700" fill="#b4541f">jump = JGT</text>
+
+  <!-- arrows from input to three -->
+  <line x1="130" y1="92" x2="120" y2="116" stroke="#8a929b" stroke-width="1.5" marker-end="url(#asA)"/>
+  <line x1="190" y1="92" x2="300" y2="116" stroke="#8a929b" stroke-width="1.5" marker-end="url(#asA)"/>
+  <line x1="250" y1="92" x2="470" y2="116" stroke="#8a929b" stroke-width="1.5" marker-end="url(#asA)"/>
+
+  <!-- table lookup label -->
+  <text x="600" y="128" text-anchor="middle" font-size="11" fill="#8a929b">↑ 各自查表 ↑</text>
+
+  <!-- resulting bits -->
+  <text x="120" y="170" text-anchor="middle" font-size="14" font-weight="800" fill="#2f6f6a" font-family="ui-monospace, monospace">011</text>
+  <text x="300" y="170" text-anchor="middle" font-size="14" font-weight="800" fill="#8b5cf6" font-family="ui-monospace, monospace">1110111</text>
+  <text x="470" y="170" text-anchor="middle" font-size="14" font-weight="800" fill="#b4541f" font-family="ui-monospace, monospace">001</text>
+
+  <line x1="120" y1="134" x2="120" y2="156" stroke="#8a929b" stroke-width="1.5" marker-end="url(#asA)"/>
+  <line x1="300" y1="134" x2="300" y2="156" stroke="#8a929b" stroke-width="1.5" marker-end="url(#asA)"/>
+  <line x1="470" y1="134" x2="470" y2="156" stroke="#8a929b" stroke-width="1.5" marker-end="url(#asA)"/>
+
+  <!-- final assembled -->
+  <rect x="170" y="200" width="380" height="40" rx="6" fill="#fbeae0" stroke="#b4541f" stroke-width="2"/>
+  <text x="225" y="226" text-anchor="middle" font-size="15" font-weight="800" fill="#1f2328" font-family="ui-monospace, monospace">111</text>
+  <text x="360" y="226" text-anchor="middle" font-size="15" font-weight="800" fill="#1f2328" font-family="ui-monospace, monospace">1110111 011 001</text>
+  <text x="120" y="226" text-anchor="middle" font-size="11" fill="#b4541f">開頭固定</text>
+
+  <defs><marker id="asA" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/></marker></defs>
+</svg>
+        <figcaption>圖 22-1:組譯一條 C 指令,本質就是「切三段、各自查表、拼起來」。<code>MD=M+1;JGT</code> → <code>111 1110111 011 001</code> = <code>1111110111011001</code>。沒有思考,只有查表替換。</figcaption>
+      </div>
+
+      <p>
+        如果世界上所有組合語言程式都長得像「<code>RAM[0] = 2 + 3</code>」這麼乖——沒有迴圈、沒有變數、
+        <code>@</code> 後面永遠是數字——那組譯器到這裡就寫完了。可惜真實程式不長這樣。一碰到符號,
+        真正的好戲才開始。
+      </p>
+
+      <h2>符號:組譯器真正的難關</h2>
+      <p>
+        翻開任何一段像樣的組語(例如第 21 章那個累加迴圈),你會看到三種「不是數字」的符號:
+      </p>
+      <pre><code class="language-text">    @R0          // R0 是什麼?
+    D=M
+    @i           // i 是什麼?
+    M=1
+(LOOP)           // (LOOP) 又是什麼?
+    @i
+    ...
+    @LOOP        // 這裡的 LOOP 要變成哪個數字?
+    0;JMP</code></pre>
+      <p>
+        組譯器必須把每個符號<strong>解析成一個確切的數字</strong>,才能繼續查表。而符號其實分三種,
+        各有各的處理方式——搞懂這三種,你就抓住了組譯器的精華。
+      </p>
+
+      <h3>一、預定義符號(predefined symbols)</h3>
+      <p>
+        有些符號是 Hack 平台<strong>內建、固定</strong>的,組譯器一開始就該知道它們等於多少。
+        它們只是「常用位址的好記別名」:
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>符號</th><th>數值(位址)</th><th>用途</th></tr></thead>
+        <tbody>
+          <tr><td><code>R0</code> ~ <code>R15</code></td><td>0 ~ 15</td><td>最前面 16 格 RAM 的別名,當「虛擬暫存器」用</td></tr>
+          <tr><td><code>SP</code> / <code>LCL</code> / <code>ARG</code> / <code>THIS</code> / <code>THAT</code></td><td>0 / 1 / 2 / 3 / 4</td><td>之後的 VM 與編譯器會用到的指標(和 R0~R4 是同一批位址的別名)</td></tr>
+          <tr><td><code>SCREEN</code></td><td>16384</td><td>螢幕記憶體區的起點(記憶體映射 I/O)</td></tr>
+          <tr><td><code>KBD</code></td><td>24576</td><td>鍵盤那一格</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        處理方式最簡單:組譯器啟動時,先把這些放進一張<strong>符號表(symbol table)</strong>——
+        說穿了就是一個「符號 → 數字」的字典。
+      </p>
+
+      <h3>二、標籤符號(label symbols)</h3>
+      <p>
+        程式碼裡用括號寫的 <code>(LOOP)</code>、<code>(END)</code> 叫<strong>標籤(label)</strong>。
+        它<strong>不是一條真正的指令</strong>(不會佔記憶體、不會產生機器碼),而是一個「書籤」:
+        它代表「<strong>緊接在它下面那條指令</strong>的位址」。這樣 <code>@LOOP</code> 才知道該跳到第幾條。
+      </p>
+      <p>
+        關鍵在於:標籤代表的是<strong>指令位址(ROM 位址)</strong>,也就是「這是程式裡的第幾條指令」。
+        因為標籤行本身不算指令,所以為它編位址時要<strong>跳過它自己</strong>。
+      </p>
+
+      <h3>三、變數符號(variable symbols)</h3>
+      <p>
+        既不是預定義、也不是標籤的符號(例如 <code>@i</code>、<code>@sum</code>、<code>@counter</code>),
+        就是<strong>變數(variable)</strong>——程式想用、卻沒明講擺哪的一格記憶體。組譯器的責任,
+        是替每個新變數<strong>自動配置一格 RAM</strong>。Hack 的慣例是:變數從<strong>位址 16</strong> 開始,
+        遇到一個沒見過的新變數就給它下一個位址(16、17、18……)。
+      </p>
+      <p>
+        為什麼從 16?因為 0~15 已經被 <code>R0</code>~<code>R15</code> 佔走了。所以第一個變數拿到 16,
+        第二個拿到 17,以此類推。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">標籤 vs 變數:同樣是符號,意義天差地遠</span>
+          <p>這是最容易搞混的一點:<strong>標籤(label)代表「指令在 ROM 裡的位址」</strong>,給 <code>jump</code> 當跳躍目標;
+          <strong>變數(variable)代表「資料在 RAM 裡的位址」</strong>,給你存取數值。
+          一個指向「程式」、一個指向「資料」。組譯器靠一條簡單規則分辨它們:
+          <strong>有沒有用 <code>(...)</code> 定義過?</strong>有,就是標籤;沒有(又不是預定義),就當成變數,配一格 RAM 給它。</p>
+        </div>
+      </div>
+
+      <h2>為什麼非得「兩遍」不可?</h2>
+      <p>
+        現在我們要面對組譯器最有名的設計決定:它通常要把原始碼<strong>掃過兩遍(two-pass)</strong>。
+        為什麼不能一遍搞定?問題出在標籤。看這一行:
+      </p>
+      <pre><code class="language-text">    @END        // 這裡用到 END
+    D;JGT
+    ...
+(END)           // 但 END 到這裡才定義!</code></pre>
+      <p>
+        當組譯器從上往下讀,讀到 <code>@END</code> 時,它<strong>還不知道</strong> <code>END</code> 是第幾條指令——
+        因為 <code>(END)</code> 出現在<em>後面</em>。這叫<strong>向前參照(forward reference)</strong>:
+        「用到一個之後才定義的名字」。迴圈裡往前跳、<code>if</code> 往後跳出去,都會製造向前參照,
+        它幾乎無所不在。
+      </p>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">一遍為什麼會卡住</span>
+          <p>如果硬要一遍翻完,讀到 <code>@END</code> 時你只能<strong>猜</strong>或<strong>留白</strong>,
+          等之後看到 <code>(END)</code> 再回頭補。「回頭補」是可行的(這叫 backpatching),但很麻煩、容易出錯。
+          更簡單、更清楚的辦法是:<strong>先專心把所有標籤的位址找齊,再來翻譯。</strong>於是就有了兩遍。</p>
+        </div>
+      </div>
+
+      <p>兩遍的分工乾淨俐落:</p>
+      <ul>
+        <li><strong>第一遍(Pass 1):只建符號表。</strong>從頭掃一次,<em>不</em>產生任何機器碼。
+        維護一個「指令位址計數器」,每遇到一條真指令就 +1;每遇到一個標籤 <code>(XXX)</code>,
+        就把 <code>XXX → 目前的位址</code> 記進符號表(注意:標籤行不讓計數器 +1)。掃完,所有標籤的位址都齊了。</li>
+        <li><strong>第二遍(Pass 2):才真正翻譯。</strong>再掃一次,逐條產生機器碼。這次遇到 <code>@符號</code>,
+        符號保證查得到:若是預定義或標籤,直接查表;若還是查不到,那它就是個<strong>新變數</strong>,
+        當場配一格 RAM(從 16 起)並記進表裡。C 指令照舊查 comp/dest/jump。</li>
+      </ul>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 380" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- source -->
+  <rect x="40" y="30" width="150" height="60" rx="8" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="115" y="56" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">原始碼 .asm</text>
+  <text x="115" y="76" text-anchor="middle" font-size="11" fill="#4a5159">一行行的組合語言</text>
+
+  <!-- pass 1 -->
+  <rect x="270" y="20" width="180" height="80" rx="10" fill="#fff" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="360" y="46" text-anchor="middle" font-size="13" font-weight="800" fill="#2f6f6a">第一遍 Pass 1</text>
+  <text x="360" y="68" text-anchor="middle" font-size="11" fill="#4a5159">掃描、數指令位址</text>
+  <text x="360" y="86" text-anchor="middle" font-size="11" fill="#4a5159">遇 (LABEL) 記進符號表</text>
+
+  <!-- symbol table -->
+  <rect x="520" y="20" width="160" height="120" rx="10" fill="#ede9fe" stroke="#8b5cf6" stroke-width="2"/>
+  <text x="600" y="44" text-anchor="middle" font-size="13" font-weight="800" fill="#8b5cf6">符號表</text>
+  <text x="600" y="44" text-anchor="middle" font-size="13" font-weight="800" fill="#8b5cf6"></text>
+  <text x="535" y="66" font-size="11" fill="#1f2328" font-family="ui-monospace, monospace">R0 → 0</text>
+  <text x="535" y="84" font-size="11" fill="#1f2328" font-family="ui-monospace, monospace">SCREEN → 16384</text>
+  <text x="535" y="102" font-size="11" fill="#1f2328" font-family="ui-monospace, monospace">LOOP → 6</text>
+  <text x="535" y="120" font-size="11" fill="#1f2328" font-family="ui-monospace, monospace">END → 22</text>
+  <text x="535" y="134" font-size="10" fill="#8a929b">(+ 第二遍配的變數)</text>
+
+  <!-- pass 2 -->
+  <rect x="270" y="230" width="180" height="90" rx="10" fill="#fff" stroke="#b4541f" stroke-width="2"/>
+  <text x="360" y="258" text-anchor="middle" font-size="13" font-weight="800" fill="#b4541f">第二遍 Pass 2</text>
+  <text x="360" y="280" text-anchor="middle" font-size="11" fill="#4a5159">逐條翻譯成 16 位元</text>
+  <text x="360" y="298" text-anchor="middle" font-size="11" fill="#4a5159">查符號表;新變數配 RAM</text>
+  <text x="360" y="314" text-anchor="middle" font-size="11" fill="#4a5159">查 comp/dest/jump 表</text>
+
+  <!-- output -->
+  <rect x="40" y="245" width="150" height="60" rx="8" fill="#fbeae0" stroke="#b4541f" stroke-width="2"/>
+  <text x="115" y="271" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">機器碼 .hack</text>
+  <text x="115" y="291" text-anchor="middle" font-size="11" fill="#4a5159">一行行的 0 與 1</text>
+
+  <!-- arrows -->
+  <line x1="190" y1="60" x2="270" y2="60" stroke="#8a929b" stroke-width="2" marker-end="url(#tpA)"/>
+  <line x1="450" y1="70" x2="520" y2="80" stroke="#8a929b" stroke-width="2" marker-end="url(#tpA)"/>
+  <text x="500" y="64" font-size="10" fill="#8a929b">寫入</text>
+
+  <!-- symbol table feeds pass 2 -->
+  <path d="M600 140 C 600 200, 360 180, 360 230" fill="none" stroke="#8b5cf6" stroke-width="2" stroke-dasharray="5 3" marker-end="url(#tpC)"/>
+  <text x="470" y="190" text-anchor="middle" font-size="10" fill="#8b5cf6">第二遍查它</text>
+
+  <!-- source feeds pass 2 (read again) -->
+  <path d="M115 90 C 115 170, 200 200, 270 255" fill="none" stroke="#8a929b" stroke-width="2" stroke-dasharray="5 3" marker-end="url(#tpA)"/>
+  <text x="150" y="180" text-anchor="middle" font-size="10" fill="#8a929b">再讀一次原始碼</text>
+
+  <!-- pass2 to output -->
+  <line x1="270" y1="275" x2="190" y2="275" stroke="#b4541f" stroke-width="2" marker-end="url(#tpB)"/>
+
+  <defs>
+    <marker id="tpA" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/></marker>
+    <marker id="tpB" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#b4541f"/></marker>
+    <marker id="tpC" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8b5cf6"/></marker>
+  </defs>
+</svg>
+        <figcaption>圖 22-2:兩遍組譯流程。第一遍只讀原始碼、把標籤位址填進符號表(完全不輸出);第二遍重讀原始碼,靠著已經齊全的符號表逐條翻譯,順便替新變數配 RAM。符號表是兩遍之間傳遞的橋樑。</figcaption>
+      </div>
+
+      <h3>走一遍兩個 pass(用第 21 章的累加迴圈)</h3>
+      <p>
+        抽象講完,我們拿一段真程式走一遍。這就是第 21 章那個「<code>R1 = 1 + 2 + … + R0</code>」的累加迴圈,
+        裡頭三種符號齊全:預定義 <code>R0</code>/<code>R1</code>、標籤 <code>LOOP</code>/<code>END</code>、變數 <code>i</code>/<code>sum</code>。
+        右邊標出了<strong>第一遍</strong>數出來的指令位址(注意標籤行不佔位址):
+      </p>
+      <pre><code class="language-text">    @R0          // 位址 0
+    D=M          // 1     D = n
+    @i           // 2
+    M=1          // 3     i = 1
+    @sum         // 4
+    M=0          // 5     sum = 0
+(LOOP)           //       ← 標籤!不佔位址,LOOP = 6
+    @i           // 6
+    D=M          // 7
+    @R0          // 8
+    D=D-M        // 9     D = i - n
+    @END         // 10
+    D;JGT        // 11    i &gt; n 就跳到 END
+    @sum         // 12
+    D=M          // 13
+    @i           // 14
+    D=D+M        // 15    D = sum + i
+    @sum         // 16
+    M=D          // 17    sum = sum + i
+    @i           // 18
+    M=M+1        // 19    i = i + 1
+    @LOOP        // 20
+    0;JMP        // 21    跳回 LOOP
+(END)            //       ← 標籤!END = 22
+    @END         // 22
+    0;JMP        // 23</code></pre>
+      <p>
+        <strong>第一遍結束</strong>,符號表在預定義符號之外,多了兩個標籤:
+        <code>LOOP → 6</code>、<code>END → 22</code>。注意 <code>(LOOP)</code> 寫在位址 5 的指令<em>之後</em>、
+        位址 6 的指令<em>之前</em>,所以它等於 6。
+      </p>
+      <p>
+        <strong>第二遍</strong>從頭再掃,逐條翻譯。一路上第一次遇到沒見過的變數就配 RAM:
+        <code>@i</code>(在位址 2 那行第一次出現)→ 配到 <strong>16</strong>;接著 <code>@sum</code> → 配到 <strong>17</strong>。
+        (<code>R0</code>、<code>R1</code> 是預定義,早就在表裡,不用配。)於是最終符號表新增了:
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>符號</th><th>種類</th><th>值</th><th>在哪一遍決定的</th></tr></thead>
+        <tbody>
+          <tr><td><code>LOOP</code></td><td>標籤</td><td>6</td><td>第一遍</td></tr>
+          <tr><td><code>END</code></td><td>標籤</td><td>22</td><td>第一遍</td></tr>
+          <tr><td><code>i</code></td><td>變數</td><td>16</td><td>第二遍(第一個新變數)</td></tr>
+          <tr><td><code>sum</code></td><td>變數</td><td>17</td><td>第二遍(第二個新變數)</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        看懂這張表,你就看懂了組譯器的靈魂。剩下的,是把它寫成程式。
+      </p>
+
+      <h2>從零打造一個 Hack 組譯器</h2>
+      <p>
+        我們現在把所有零件組裝成一個<strong>完整、可直接執行</strong>的 Hack 組譯器。它由四個小模組構成,
+        每個都對應前面講過的一個概念:
+      </p>
+      <ul>
+        <li><strong>Parser(剖析)</strong>:去掉空白與註解,留下乾淨的指令行。</li>
+        <li><strong>Symbol table(符號表)</strong>:那張「符號 → 數字」的字典,先塞滿預定義符號。</li>
+        <li><strong>Code(轉碼)</strong>:comp / dest / jump 三張表(上面已經寫好)。</li>
+        <li><strong>兩遍流程</strong>:把它們串起來的主程式。</li>
+      </ul>
+
+      <h3>Parser:洗掉雜訊</h3>
+      <p>
+        原始碼裡有縮排、空行、行內註解(<code>//</code> 之後到行尾)。這些對人類友善,對組譯器卻是雜訊。
+        Parser 第一件事就是把它們清掉,只留下「真正有意義」的行:
+      </p>
+      <pre><code class="language-python">def clean(lines):
+    """去掉註解與所有空白,丟掉空行,回傳乾淨的指令/標籤行串列。"""
+    result = []
+    for line in lines:
+        pos = line.find("//")          # 找行內註解
+        if pos != -1:
+            line = line[:pos]          # 砍掉 // 到行尾
+        line = "".join(line.split())   # 去掉所有空白(含前後縮排與中間空格、tab)
+        if line:                       # 跳過空行
+            result.append(line)
+    return result</code></pre>
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">為什麼用 <code>"".join(line.split())</code> 去空白?</span>
+          <p><code>line.split()</code> 會依任意空白(空格、tab、換行)把字串切成單字串列,
+          <code>"".join(...)</code> 再無縫接回去——一口氣清掉<strong>前後縮排和中間所有空白</strong>。
+          這樣即使有人把 <code>D = M + 1</code> 寫得鬆鬆散散,也能正確變成 <code>D=M+1</code>。
+          對 Hack 來說這安全,因為它的指令裡本來就沒有「有意義的空白」。</p>
+        </div>
+      </div>
+
+      <h3>Symbol table:先塞滿預定義符號</h3>
+      <pre><code class="language-python">def initial_symbols():
+    """建立符號表,先放入所有 Hack 預定義符號。"""
+    table = {
+        "SP": 0, "LCL": 1, "ARG": 2, "THIS": 3, "THAT": 4,
+        "SCREEN": 16384, "KBD": 24576,
+    }
+    for i in range(16):
+        table["R" + str(i)] = i      # R0..R15 → 0..15
+    return table</code></pre>
+
+      <h3>第一遍:建立標籤位址</h3>
+      <pre><code class="language-python">def first_pass(lines, table):
+    """掃一遍,把每個 (LABEL) 的『指令位址』記進符號表。不產生任何輸出。"""
+    address = 0                       # 下一條『真指令』的 ROM 位址
+    for line in lines:
+        if line.startswith("(") and line.endswith(")"):
+            label = line[1:-1]       # 去掉括號,取出標籤名
+            table[label] = address   # 標籤 = 緊接其後那條指令的位址
+            # 注意:標籤行不是指令,所以 address 不 +1
+        else:
+            address += 1             # 只有真指令才佔一個位址</code></pre>
+
+      <h3>第二遍:翻譯,順便配置變數</h3>
+      <pre><code class="language-python">def second_pass(lines, table):
+    """再掃一遍,逐條翻成 16 位元;遇到新變數就從位址 16 起配置 RAM。"""
+    output = []
+    next_var = 16                    # 下一個變數要配的 RAM 位址
+    for line in lines:
+        if line.startswith("("):
+            continue                 # 標籤不產生機器碼,跳過
+
+        if line.startswith("@"):     # ---- A 指令 ----
+            symbol = line[1:]
+            if symbol.isdigit():
+                value = int(symbol)              # @數字:直接用
+            else:
+                if symbol not in table:          # 沒見過 → 是新變數
+                    table[symbol] = next_var     # 配一格 RAM
+                    next_var += 1
+                value = table[symbol]            # 查表(預定義/標籤/剛配的變數)
+            output.append("0" + format(value, "015b"))
+
+        else:                        # ---- C 指令 ----
+            dest = comp = jump = None
+            rest = line
+            if "=" in rest:
+                dest, rest = rest.split("=", 1)
+            if ";" in rest:
+                comp, jump = rest.split(";", 1)
+            else:
+                comp = rest
+            output.append("111" + COMP[comp] + DEST[dest] + JUMP[jump])
+    return output</code></pre>
+
+      <h3>主程式:把四個模組串起來</h3>
+      <pre><code class="language-python">def assemble(source_text):
+    """完整的 Hack 組譯器:吃進組語字串,吐出機器碼字串(每行 16 位元)。"""
+    lines = clean(source_text.splitlines())   # Parser
+    table = initial_symbols()                 # Symbol table(預定義)
+    first_pass(lines, table)                  # 第一遍:標籤位址
+    machine = second_pass(lines, table)       # 第二遍:翻譯 + 配變數
+    return "\n".join(machine)
+
+
+# ---- 試跑:第 21 章的累加迴圈 ----
+program = """
+    @R0
+    D=M
+    @i
+    M=1
+    @sum
+    M=0
+(LOOP)
+    @i
+    D=M
+    @R0
+    D=D-M
+    @END
+    D;JGT
+    @sum
+    D=M
+    @i
+    D=D+M
+    @sum
+    M=D
+    @i
+    M=M+1
+    @LOOP
+    0;JMP
+(END)
+    @END
+    0;JMP
+"""
+
+print(assemble(program))</code></pre>
+
+      <p>把上面所有片段接在一起(別忘了最前面那三張 <code>COMP</code> / <code>DEST</code> / <code>JUMP</code> 表)執行,輸出就是:</p>
+      <pre><code class="language-text">0000000000000000   ← @R0   (R0 = 0)
+1111110000010000   ← D=M
+0000000000010000   ← @i    (i 被配到 16!)
+1110111111001000   ← M=1
+0000000000010001   ← @sum  (sum 被配到 17!)
+1110101010001000   ← M=0
+0000000000010000   ← @i
+1111110000010000   ← D=M
+0000000000000000   ← @R0
+1111010011010000   ← D=D-M
+0000000000010110   ← @END  (END = 22)
+1110001100000001   ← D;JGT
+0000000000010001   ← @sum
+1111110000010000   ← D=M
+0000000000010000   ← @i
+1111000010010000   ← D=D+M
+0000000000010001   ← @sum
+1110001100001000   ← M=D
+0000000000010000   ← @i
+1111110111001000   ← M=M+1
+0000000000000110   ← @LOOP (LOOP = 6)
+1110101010000111   ← 0;JMP
+0000000000010110   ← @END
+1110101010000111   ← 0;JMP</code></pre>
+      <p>
+        盯著那幾條 A 指令的數字看:<code>@i</code> 變成了 <code>...10000</code> = 16、<code>@sum</code> 變成
+        <code>...10001</code> = 17、<code>@LOOP</code> 變成 <code>...00110</code> = 6、<code>@END</code> 變成
+        <code>...10110</code> = 22。<strong>這四個數字,完全就是我們手算那張符號表的內容。</strong>
+        你剛剛,用不到 70 行 Python,造了一個真正能用的語言翻譯器。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">組譯器其實「不懂」程式</span>
+          <p>注意整個過程裡,組譯器<strong>完全不理解</strong>這段程式在算什麼——它不知道這是個迴圈、不知道在做累加。
+          它只是忠實地「切字串、查表、配位址、拼位元」。這正是<strong>翻譯器</strong>的本質:
+          它做的是<strong>形式轉換(syntactic translation)</strong>,而不是「理解語意」。
+          這也是為什麼組譯這麼快、這麼可靠——因為它笨,但它笨得精確。</p>
+        </div>
+      </div>
+
+      <h2>把它放進大圖:翻譯鏈的第一環</h2>
+      <p>
+        退一步看。第 21 章圖 21-6 那座「抽象高塔」,從 Python 一路降到 0 與 1,中間每一層之間的箭頭,
+        都是一個「翻譯器」。組譯器,就是這條翻譯鏈<strong>最底下、最簡單的第一環</strong>:
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 250" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- boxes -->
+  <rect x="20"  y="100" width="120" height="50" rx="8" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="80" y="122" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">高階語言</text>
+  <text x="80" y="140" text-anchor="middle" font-size="11" fill="#4a5159">Jack / C / Python</text>
+
+  <rect x="220" y="100" width="120" height="50" rx="8" fill="#eef6f4" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="280" y="122" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">VM / 位元組碼</text>
+  <text x="280" y="140" text-anchor="middle" font-size="11" fill="#4a5159">中間語言</text>
+
+  <rect x="420" y="100" width="120" height="50" rx="8" fill="#f6e7dd" stroke="#b4541f" stroke-width="2"/>
+  <text x="480" y="122" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">組合語言</text>
+  <text x="480" y="140" text-anchor="middle" font-size="11" fill="#4a5159">.asm</text>
+
+  <rect x="600" y="100" width="100" height="50" rx="8" fill="#fbeae0" stroke="#b4541f" stroke-width="2"/>
+  <text x="650" y="122" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">機器碼</text>
+  <text x="650" y="140" text-anchor="middle" font-size="11" fill="#4a5159">.hack(0/1)</text>
+
+  <!-- arrows with translator labels -->
+  <line x1="140" y1="125" x2="220" y2="125" stroke="#8a929b" stroke-width="2" marker-end="url(#chA)"/>
+  <text x="180" y="92" text-anchor="middle" font-size="11" font-weight="700" fill="#8b5cf6">編譯器</text>
+  <text x="180" y="78" text-anchor="middle" font-size="10" fill="#8a929b">第 23 章</text>
+
+  <line x1="340" y1="125" x2="420" y2="125" stroke="#8a929b" stroke-width="2" marker-end="url(#chA)"/>
+  <text x="380" y="92" text-anchor="middle" font-size="11" font-weight="700" fill="#8b5cf6">VM 翻譯器</text>
+  <text x="380" y="78" text-anchor="middle" font-size="10" fill="#8a929b">第 23 章</text>
+
+  <line x1="540" y1="125" x2="600" y2="125" stroke="#b4541f" stroke-width="3" marker-end="url(#chB)"/>
+  <text x="570" y="92" text-anchor="middle" font-size="12" font-weight="800" fill="#b4541f">組譯器</text>
+  <text x="570" y="78" text-anchor="middle" font-size="10" fill="#b4541f">★ 本章 ★</text>
+
+  <text x="360" y="200" text-anchor="middle" font-size="12" fill="#4a5159">每一個箭頭,都是一個「讀進一種語言、吐出另一種語言」的程式。</text>
+  <text x="360" y="222" text-anchor="middle" font-size="12" fill="#4a5159">層級越高,翻譯越難;但思維,全都和組譯器一脈相承。</text>
+
+  <defs>
+    <marker id="chA" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/></marker>
+    <marker id="chB" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#b4541f"/></marker>
+  </defs>
+</svg>
+        <figcaption>圖 22-3:翻譯鏈。組譯器是最右邊、最簡單的一環(組語→機器碼,幾乎一對一)。往左,VM 翻譯器與編譯器要處理「一對多」「結構不對應」等難得多的問題,但核心思維(剖析→符號表→查表/生成)完全相同。第 23 章我們就往上爬一層。</figcaption>
+      </div>
+
+      <p>
+        為什麼從組譯器開始學翻譯器,是聰明的安排?因為它把「翻譯」這件事剝到只剩骨架:
+        輸入和輸出<strong>一對一</strong>、沒有複雜的語法結構、不需要理解語意。你在這裡學到的每一個觀念——
+        <strong>剖析輸入、維護符號表、向前參照、兩遍流程、查表生成</strong>——
+        到了編譯器那裡<strong>原封不動</strong>還會再出現,只是規模和難度升級。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">真實世界裡的組譯器</span>
+          <p>你電腦裡此刻就躺著一個工業級組譯器:GNU 的 <code>as</code>(也叫 <strong>gas</strong>),
+          它把 <code>.s</code> 組語檔翻成 <code>.o</code> 目的檔(機器碼)。反過來,<code>objdump -d 某執行檔</code>
+          會把機器碼<strong>反組譯(disassemble)</strong>回組合語言給你看——正是我們做的事倒過來跑。
+          真實的 <code>as</code> 還要處理多種定址、巨集、和「連結器(linker)」之間的配合,複雜得多,
+          但最核心的「助記符查表 + 符號表 + 多遍掃描」,和你剛寫的這 70 行,本質一模一樣。</p>
+        </div>
+      </div>
+
+      <h2>動手練習</h2>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 22.1 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>當一回組譯器,把下面四行 Hack 組語<strong>手動</strong>翻成 16 位元機器碼。
+          (用本章的 comp / dest / jump 三張表;C 指令格式是 <code>111 a-cccccc ddd jjj</code>。)</p>
+          <pre><code class="language-text">(a)  @5
+(b)  D=A
+(c)  MD=M+1
+(d)  D;JGT</code></pre>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>(a) <code>@5</code></strong>:A 指令,開頭 <code>0</code>,後面 15 位是 5 的二進位 <code>000000000000101</code>
+              → <code>0000000000000101</code>。</p>
+              <p><strong>(b) <code>D=A</code></strong>:C 指令。<code>comp=A</code> 查表得 <code>0110000</code>、<code>dest=D</code> 得 <code>010</code>、無 jump 得 <code>000</code>。
+              接上 <code>111</code> → <code>111 0110000 010 000</code> = <code>1110110000010000</code>。</p>
+              <p><strong>(c) <code>MD=M+1</code></strong>:<code>comp=M+1</code> 得 <code>1110111</code>(a=1)、<code>dest=MD</code> 得 <code>011</code>、無 jump 得 <code>000</code>
+              → <code>111 1110111 011 000</code> = <code>1111110111011000</code>。</p>
+              <p><strong>(d) <code>D;JGT</code></strong>:<code>comp=D</code> 得 <code>0001100</code>、無 dest 得 <code>000</code>、<code>jump=JGT</code> 得 <code>001</code>
+              → <code>111 0001100 000 001</code> = <code>1110001100000001</code>。</p>
+              <p>不放心的話,把它們丟進本章的 <code>assemble()</code> 跑一遍核對——這正是「先手算、再用程式驗證」的好習慣。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 22.2 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>用你自己的話解釋:為什麼組譯器通常需要<strong>兩遍</strong>?如果硬要只掃一遍,具體會在哪種指令上卡住?
+          舉一個會出問題的最小例子。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>核心原因是<strong>向前參照(forward reference)</strong>:程式可以「用到一個在後面才定義的標籤」。
+              組譯器從上往下讀,讀到 <code>@END</code> 時,如果 <code>(END)</code> 還在下面、尚未掃到,它就<strong>不知道 END 等於幾</strong>,
+              無法把這條 A 指令翻成正確的數字。</p>
+              <p>最小例子:</p>
+              <pre><code class="language-text">@SKIP      // 用到 SKIP
+0;JMP
+@5
+(SKIP)     // SKIP 到這裡才定義
+M=1</code></pre>
+              <p>一遍流程讀到第一行 <code>@SKIP</code> 時,<code>SKIP</code> 還沒進符號表,只能猜或留空。
+              兩遍則乾淨地解決它:<strong>第一遍</strong>先把所有標籤位址找齊(這裡 <code>SKIP = 3</code>),
+              <strong>第二遍</strong>翻譯時 <code>@SKIP</code> 保證查得到。
+              (附帶一提:變數不會有這個困擾,因為變數沒有「先用後定義」的問題——第一次用到就現場配位址即可。
+              真正逼出兩遍的,是<strong>標籤</strong>。)</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 22.3 <span class="badge">追蹤</span></div>
+        <div class="ex-body">
+          <p>對下面這段程式,寫出組譯器<strong>跑完兩遍後</strong>,符號表裡<strong>新增</strong>的所有條目
+          (預定義符號不用列),並標明每個是標籤還是變數、值是多少、在第幾遍決定。</p>
+          <pre><code class="language-text">    @count
+    M=0
+(BACK)
+    @count
+    M=M+1
+    @x
+    D=M
+    @BACK
+    D;JLT
+    @done
+    M=1
+(STOP)
+    @STOP
+    0;JMP</code></pre>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>先數第一遍的指令位址(標籤行不佔位址):</p>
+              <pre><code class="language-text">@count    0
+M=0       1
+(BACK)    → BACK = 2
+@count    2
+M=M+1     3
+@x        4
+D=M       5
+@BACK     6
+D;JLT     7
+@done     8
+M=1       9
+(STOP)    → STOP = 10
+@STOP     10
+0;JMP     11</code></pre>
+              <p><strong>第一遍</strong>建立兩個標籤:<code>BACK = 2</code>、<code>STOP = 10</code>。</p>
+              <p><strong>第二遍</strong>依「第一次出現的順序」配置變數,從 16 起:
+              先遇到 <code>@count</code> → 16,再遇到 <code>@x</code> → 17,再遇到 <code>@done</code> → 18。
+              (<code>@BACK</code>、<code>@STOP</code> 是標籤,早在表裡,不算新變數。)</p>
+              <div class="table-wrap">
+              <table>
+                <thead><tr><th>符號</th><th>種類</th><th>值</th><th>哪一遍</th></tr></thead>
+                <tbody>
+                  <tr><td><code>BACK</code></td><td>標籤</td><td>2</td><td>第一遍</td></tr>
+                  <tr><td><code>STOP</code></td><td>標籤</td><td>10</td><td>第一遍</td></tr>
+                  <tr><td><code>count</code></td><td>變數</td><td>16</td><td>第二遍</td></tr>
+                  <tr><td><code>x</code></td><td>變數</td><td>17</td><td>第二遍</td></tr>
+                  <tr><td><code>done</code></td><td>變數</td><td>18</td><td>第二遍</td></tr>
+                </tbody>
+              </table></div>
+              <p>易錯點:變數順序看的是<strong>第一次出現</strong>的位置,不是字母順序;標籤位址看的是「下一條<strong>真指令</strong>」,別把標籤行也數進去。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 22.4 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>本章的 <code>clean()</code> 只處理 <code>//</code> 行內註解。請<strong>擴充它</strong>,讓它也能處理跨多行的
+          <strong>區塊註解</strong> <code>/* ... */</code>(可能整段橫跨好幾行,像 C 那樣)。寫出新版函式,並想一個能測出它正確的例子。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>區塊註解可能跨行,所以不能一行一行獨立處理——要用一個<strong>狀態旗標</strong>記住「現在是不是正處於註解中」。
+              最簡單的做法:先把整份原始碼當成一個大字串,用一個小迴圈掃過,在「正常」與「註解中」兩個狀態間切換:</p>
+              <pre><code class="language-python">def strip_block_comments(text):
+    """移除所有 /* ... */ 區塊註解(可跨行)。"""
+    result = []
+    i = 0
+    in_comment = False
+    while i &lt; len(text):
+        if not in_comment and text[i:i+2] == "/*":
+            in_comment = True
+            i += 2
+        elif in_comment and text[i:i+2] == "*/":
+            in_comment = False
+            i += 2
+        elif in_comment:
+            i += 1                      # 註解中:整個字元丟掉
+        else:
+            result.append(text[i])      # 正常:保留
+            i += 1
+    return "".join(result)
+
+def clean(lines_or_text):
+    """先去區塊註解,再去 // 行內註解與空白。"""
+    text = lines_or_text if isinstance(lines_or_text, str) else "\n".join(lines_or_text)
+    text = strip_block_comments(text)   # 先處理跨行的 /* ... */
+    result = []
+    for line in text.splitlines():
+        pos = line.find("//")
+        if pos != -1:
+            line = line[:pos]
+        line = "".join(line.split())
+        if line:
+            result.append(line)
+    return result</code></pre>
+              <p>測試例子(註解橫跨三行,還跟程式擠在同一行):</p>
+              <pre><code class="language-python">src = """@2  /* 把 2
+載入 A，這段註解
+跨了好幾行 */  D=A
+@3"""
+print(clean(src))   # ['@2', 'D=A', '@3']</code></pre>
+              <p>關鍵測點:(1) 跨行註解被整段吃掉;(2) 註解<em>後面</em>同一行的 <code>D=A</code> 要保留;
+              (3) 一般 <code>//</code> 與空白照樣處理。進階者可以再想:如果字串裡同時有 <code>//</code> 和 <code>/*</code> 該誰先?
+              (Hack 沒有字串字面值,所以不用煩惱「註解符號出現在字串裡」這種更棘手的情況。)</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 22.5 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>別再用查表了——請<strong>用計算</strong>實作 <code>dest</code> 模組。寫一個函式 <code>dest_bits(dest)</code>,
+          吃進像 <code>"AMD"</code>、<code>"MD"</code>、<code>"D"</code> 或 <code>None</code> 的 dest 助記符,
+          回傳 3 位元字串 <code>d1 d2 d3</code>。(提示:<code>d1</code>=有沒有 <code>A</code>、<code>d2</code>=有沒有 <code>D</code>、<code>d3</code>=有沒有 <code>M</code>。)
+          並驗證它對所有合法 dest 都和本章的 <code>DEST</code> 表一致。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>dest 的三個位元,各自就是「結果要不要存進 A / D / M」這三個獨立開關。
+              所以只要檢查字串裡有沒有出現對應字母即可,根本不需要查表:</p>
+              <pre><code class="language-python">def dest_bits(dest):
+    if dest is None:
+        return "000"
+    d1 = "1" if "A" in dest else "0"   # 要不要存 A
+    d2 = "1" if "D" in dest else "0"   # 要不要存 D
+    d3 = "1" if "M" in dest else "0"   # 要不要存 M
+    return d1 + d2 + d3
+
+# 對照本章的 DEST 表,逐一驗證
+DEST = {None:"000","M":"001","D":"010","MD":"011",
+        "A":"100","AM":"101","AD":"110","AMD":"111"}
+for key, expected in DEST.items():
+    assert dest_bits(key) == expected, (key, dest_bits(key), expected)
+print("全部一致！")</code></pre>
+              <p>這題的價值在於:它讓你看清楚 dest 欄位的<strong>物理意義</strong>——三個位元不是隨便編號的,
+              它們<em>就是</em>「A 載入開關、D 載入開關、M 載入開關」三條獨立的控制線(呼應第 21 章說的「控制單元只是佈線」)。
+              查表只是把這個結構「背下來」,用算的才真正<strong>懂</strong>它。
+              想再進一步?試著用同樣的「拆位元」精神,寫一個把 16 位元機器碼<strong>反組譯</strong>回組語的 <code>disassemble()</code>。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 22.6 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>把本章的組譯器補成一支真正能用的<strong>命令列工具</strong>:讀進一個 <code>.asm</code> 檔(例如 <code>Sum.asm</code>),
+          產生同名的 <code>.hack</code> 檔(<code>Sum.hack</code>),每行一條 16 位元機器碼。
+          (這正是 Nand2Tetris Project 6 要交的東西。)</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>我們已經有了 <code>assemble(source_text)</code> 這個核心,剩下的只是「讀檔、改副檔名、寫檔」的外殼:</p>
+              <pre><code class="language-python">import sys
+
+def main():
+    in_path = sys.argv[1]                       # 例如 Sum.asm
+    with open(in_path, encoding="utf-8") as f:
+        source = f.read()
+
+    machine = assemble(source)                  # 重用本章的核心組譯器
+
+    out_path = in_path.rsplit(".", 1)[0] + ".hack"   # Sum.asm → Sum.hack
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write(machine + "\n")
+
+    print("已輸出:", out_path)
+
+if __name__ == "__main__":
+    main()</code></pre>
+              <p>用 <code>python assembler.py Sum.asm</code> 執行,就會生出 <code>Sum.hack</code>。
+              想確認對不對?把你的 <code>.hack</code> 丟進 Nand2Tetris 官方的 <strong>CPU Emulator</strong> 載入執行,
+              或拿官方組譯器產生的標準答案逐行 <code>diff</code> 比對。
+              真正交作業時還會加上一些防呆:檢查指令是否合法、A 指令數值是否超過 32767、給出清楚的錯誤行號——
+              這些「健壯性(robustness)」處理,正是教學玩具和工業工具之間的差距所在。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>把這一章串起來</h2>
+      <p>這一章,我們把第 21 章「能讀懂、能手寫」的能力,升級成「讓程式自動翻譯」。回顧路標:</p>
+      <ul>
+        <li><strong>組譯器</strong>是人類第一個、也最簡單的<strong>語言翻譯器</strong>:把組合語言(給人看)變成機器碼(給 CPU 看)。它存在的前提,正是第 21 章那句「指令也只是數字」。</li>
+        <li>組譯的本質,大半只是<strong>查表替換</strong>:A 指令轉二進位;C 指令切成 comp/dest/jump,各自查表,接上 <code>111</code>。三張表直接接回第 21 章的 ALU 控制位元。</li>
+        <li>真正的精華在<strong>符號</strong>。三種:<strong>預定義</strong>(R0~R15、SP、SCREEN、KBD…)、<strong>標籤</strong>(代表指令位址,給 jump 用)、<strong>變數</strong>(代表 RAM 位址,從 16 起自動配置)。</li>
+        <li>因為有<strong>向前參照</strong>,組譯器要掃<strong>兩遍</strong>:第一遍只建標籤位址,第二遍才翻譯、順便配變數。符號表是兩遍之間的橋。</li>
+        <li>我們用不到 70 行 Python,寫出一個<strong>完整可運作</strong>的 Hack 組譯器,親眼看 <code>@i</code>、<code>@LOOP</code> 變成正確的位址數字。</li>
+        <li>組譯器是<strong>翻譯鏈的第一環</strong>。往上,編譯器與 VM 翻譯器用的是同一套思維(剖析、符號表、生成),只是層級更高。</li>
+      </ul>
+      <p>
+        我們已經打通了從「組合語言」到「機器碼」的最後一哩路。但人類也不會直接用組合語言寫大程式——太累、太貼近硬體了。
+        我們真正想用的是有變數、有函式、有物件的<strong>高階語言</strong>。那從高階語言到組合語言這一大段落差,又是誰來填補?
+        下一章,我們要往抽象高塔上爬一層,認識<strong>編譯器(compiler)與 VM 翻譯器</strong>——
+        同樣是「翻譯」,但這次,輸入和輸出不再一對一,難度也將真正升級。你在組譯器這裡建立的每一個直覺,都會帶著你走下去。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">📚</div>
+        <div class="body">
+          <span class="c-title">想更深入?延伸資源</span>
+          <p>本章對應 <a href="https://www.nand2tetris.org/">Nand2Tetris(The Elements of Computing Systems)</a>
+          的第 6 章「組譯器(Assembler)」,也就是著名的 <strong>Project 6</strong>——它正是銜接 Part I(從邏輯閘蓋出硬體)
+          與 Part II(在硬體上蓋出軟體)的那座橋。官網有完整的作業說明、測試用的 <code>.asm</code> 範例,
+          以及能載入你 <code>.hack</code> 輸出的 CPU 模擬器,強烈建議親手把本章的組譯器寫完、跑通官方測試。
+          配套教材《<em>The Elements of Computing Systems</em>》(Nisan &amp; Schocken)第 6 章把符號表與兩遍流程講得乾淨透徹。
+          想看真實世界的版本,可在自己電腦上玩玩 <code>as</code>(GNU 組譯器)與 <code>objdump -d</code>(反組譯),
+          對照本章的觀念,會很有感。</p>
+        </div>
+      </div>
+
+    

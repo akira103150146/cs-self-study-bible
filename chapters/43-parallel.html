@@ -1,0 +1,1254 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>平行程式設計 · CS 自學聖經</title>
+<meta name="description" content="時脈不再飆升,要更快只能「同時做」。本章從摩爾定律的轉彎講起,釐清並行與平行的差別、用 Amdahl 定律算出加速的天花板、深化共享記憶體的危險(競爭條件、鎖、死結),誠實面對 Python 的 GIL,走訪分治平行、map-reduce、fork-join、pipeline 等設計模式,並說明為什麼函數式思維天生適合平行。最後用 Python multiprocessing 與 concurrent.futures 榨出真正的加速。">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;700&family=Noto+Sans+TC:wght@400;700&family=Lora:ital,wght@0,400;0,600;0,700;1,400&family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <main class="main">
+    <article class="content">
+
+      <div class="eyebrow">第十部 · 進階程式設計</div>
+      <h1>平行程式設計</h1>
+      <p class="subtitle">有三十年的時間,程式設計師躺著就能變快——每隔一兩年,CPU 自己會加速,你什麼都不用做。然後,大約在 2005 年,這份「免費的午餐」結束了。要再快下去,你得學會一件全新的、也困難得多的事:讓很多事<strong>同時</strong>發生。</p>
+      <div class="byline">
+        <span class="tag">第 43 章</span>
+        <span>閱讀時間 ≈ 60 分鐘</span>
+        <span>難度:★★★★☆</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>為什麼「平行(parallelism)」從一個小眾技巧,變成每個程式設計師都該懂的基本功——摩爾定律轉彎的故事</li>
+          <li>分清楚四個常被混用的詞:<strong>並行 vs 平行</strong>、<strong>資料平行 vs 任務平行</strong></li>
+          <li>平行能讓你多快?<strong>加速比</strong>、<strong>Amdahl 定律</strong>為什麼給加速設了一道天花板,以及 Gustafson 的樂觀回應</li>
+          <li>共享記憶體的危險(深化第 24 章):為什麼 <code>x += 1</code> 不是原子的、競爭條件、鎖、死結、活鎖、原子操作</li>
+          <li>誠實面對 <strong>Python 的 GIL</strong>:為什麼多執行緒在 Python 做不到 CPU 平行,以及 <code>multiprocessing</code> 怎麼救你</li>
+          <li>平行的經典設計模式:分治平行、map-reduce、fork-join、pipeline、工作竊取</li>
+          <li>為什麼<strong>函數式</strong>(無共享可變狀態、不可變、純函式)天生適合平行(呼應第 6 章)</li>
+          <li>同步的高階工具(屏障、號誌、future、actor、訊息傳遞),以及用 Python 榨出真正的加速</li>
+        </ul>
+      </div>
+
+      <h2>免費的午餐,結束了</h2>
+      <p>
+        假設你 1995 年寫了一個跑得有點慢的程式。最聰明的做法,可能是——<strong>什麼都別做,等兩年</strong>。
+        因為兩年後的 CPU 時脈會快一倍,你那行原封不動的程式碼,會自己變成兩倍快。這不是玩笑,
+        而是那個時代真實的工程策略。整整三十年,軟體的速度像搭了一部免費的電梯,被硬體一路往上載。
+      </p>
+      <p>
+        然後電梯停了。大約在 2005 年前後,CPU 的時脈撞上了一道牆——再往上飆,晶片會熱到融化、耗電到不切實際。
+        硬體工程師於是改走另一條路:既然單一核心快不上去,那就<strong>多塞幾顆核心</strong>進去。
+        今天你手上的手機可能有 8 顆核心,一台伺服器可能有上百顆。算力其實還在飆漲——
+        只是漲的方式,從「一顆更快」變成了「很多顆一起」。
+      </p>
+      <p>
+        這個轉變,對程式設計師是一記悶棍。因為一個普通、循序(sequential)寫法的程式,
+        <strong>放到 8 顆核心上,還是只用 1 顆</strong>——其餘 7 顆在旁邊閒著看戲。免費的午餐沒了:
+        想吃到多核的紅利,你得自己動手,把程式拆成能「同時跑」的好幾塊。這門手藝,就是<strong>平行程式設計(parallel programming)</strong>。
+      </p>
+
+      <div class="callout history">
+        <div class="ico">📜</div>
+        <div class="body">
+          <span class="c-title">「The Free Lunch Is Over」</span>
+          <p>2005 年,C++ 大師 Herb Sutter 寫了一篇後來被瘋傳的文章,標題就叫
+          <em>The Free Lunch Is Over</em>(免費的午餐結束了)。他斷言:時脈成長已死,未來的效能只能靠
+          <strong>並行(concurrency)</strong>來換,而這會是自物件導向以來,程式設計界最大的一次思維轉變。
+          二十年後回頭看,他說對了。你現在讀的這一章,就是那頓「自己動手做」的午餐。</p>
+        </div>
+      </div>
+
+      <h2>為什麼是現在?摩爾定律的轉彎</h2>
+      <p>
+        要看懂這場轉變,得先認識一條 CS 界最有名的「定律」。1965 年,Intel 創辦人之一
+        <strong>戈登・摩爾(Gordon Moore)</strong>觀察到:積體電路上能塞下的電晶體數量,大約<strong>每兩年翻一倍</strong>。
+        這就是<strong>摩爾定律(Moore's law)</strong>。注意——它講的是「電晶體數量」,不是「速度」。
+        很長一段時間,這兩件事是同一件事:電晶體越多越小,時脈就能拉越高,程式就越快。大家便把摩爾定律
+        <em>等同於</em>「電腦會自己變快」。
+      </p>
+      <p>
+        但這個等號在 2000 年代初悄悄斷裂了。時脈拉高的代價是發熱與耗電,而且兩者隨頻率<strong>不成比例地暴增</strong>
+        (這現象有個名字叫「功率牆 power wall」)。到了 3∼4 GHz 附近,再往上推,散熱就成了無法承受之重。
+        於是摩爾定律的「電晶體還在變多」依然成立,但這些多出來的電晶體,不再用來「讓一顆核心更快」,
+        而是拿去「多做幾顆核心」。下面這張圖,把這個歷史性的轉彎畫了出來:
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 380" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- axes -->
+  <line x1="80" y1="330" x2="690" y2="330" stroke="#1f2328" stroke-width="1.5"/>
+  <line x1="80" y1="330" x2="80" y2="40" stroke="#1f2328" stroke-width="1.5"/>
+  <text x="385" y="365" text-anchor="middle" font-size="12" fill="#4a5159">年份</text>
+  <text x="40" y="50" font-size="11" fill="#4a5159">高</text>
+  <text x="40" y="325" font-size="11" fill="#4a5159">低</text>
+
+  <!-- x ticks -->
+  <g font-size="10" fill="#8a929b" text-anchor="middle">
+    <text x="90" y="348">1990</text>
+    <text x="280" y="348">2000</text>
+    <text x="375" y="348">2005</text>
+    <text x="470" y="348">2010</text>
+    <text x="660" y="348">2020</text>
+  </g>
+
+  <!-- turning-point line -->
+  <line x1="375" y1="60" x2="375" y2="330" stroke="#8a929b" stroke-width="1.5" stroke-dasharray="5 4"/>
+  <text x="383" y="76" font-size="11" font-weight="700" fill="#8a929b">～2005 轉折點</text>
+  <text x="383" y="92" font-size="10" fill="#8a929b">時脈撞牆,改走多核</text>
+
+  <!-- clock speed (teal): rise then plateau -->
+  <polyline points="90,317 185,300 280,250 337,150 356,118 375,112 470,124 565,112 660,96" fill="none" stroke="#2f6f6a" stroke-width="3"/>
+  <circle cx="356" cy="118" r="4" fill="#2f6f6a"/>
+  <text x="150" y="240" font-size="12" font-weight="800" fill="#2f6f6a">時脈速度</text>
+  <text x="150" y="256" font-size="10" fill="#2f6f6a">(單核多快)</text>
+  <text x="500" y="118" font-size="10" fill="#2f6f6a">→ 卡在 3∼4 GHz,上不去了</text>
+
+  <!-- core count (brick): flat then rise -->
+  <polyline points="90,300 375,300 394,262 432,224 489,184 565,144 660,100" fill="none" stroke="#b4541f" stroke-width="3"/>
+  <circle cx="660" cy="100" r="4" fill="#b4541f"/>
+  <text x="540" y="290" font-size="12" font-weight="800" fill="#b4541f">核心數量</text>
+  <text x="540" y="306" font-size="10" fill="#b4541f">(有幾顆核心)</text>
+  <text x="120" y="294" font-size="10" fill="#b4541f">長期 = 1 顆</text>
+</svg>
+        <figcaption>圖 43-1:摩爾定律的轉彎。2005 年之前,效能來自「單核時脈」一路飆高;之後時脈撞上功率牆、停滯不前,廠商轉而堆疊「核心數量」。算力總量還在成長,但成長的形式變了——而循序寫的程式,只吃得到那條停滯的綠線,吃不到那條向上的紅線。</figcaption>
+      </div>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">為什麼你「非學不可」</span>
+          <p>過去,讓程式變快是<strong>硬體的事</strong>(等新 CPU);現在,讓程式變快是<strong>你的事</strong>(把工作拆給多核)。
+          這就是平行程式設計從「高效能運算的小眾絕活」變成「主流工程師基本功」的根本原因。
+          你電腦裡那些閒置的核心,不會自己跑起來——得由你寫的程式去叫醒它們。</p>
+        </div>
+      </div>
+
+      <h2>先把名詞分清楚:並行不等於平行</h2>
+      <p>
+        這個領域有四個詞天天被混用,但它們不一樣。先處理最重要的一對:<strong>並行(concurrency)</strong>
+        與<strong>平行(parallelism)</strong>。Go 語言之父 Rob Pike 有一句被引用到爛、但真的很精準的話:
+      </p>
+      <blockquote>
+        並行是「同時<em>處理</em>很多事」的<strong>結構</strong>;平行是「同時<em>做</em>很多事」的<strong>執行</strong>。<br>
+        Concurrency is about <em>dealing with</em> lots of things at once. Parallelism is about <em>doing</em> lots of things at once.
+      </blockquote>
+      <p>
+        翻成白話:<strong>並行</strong>是一種<em>程式的組織方式</em>——你把程式寫成「好幾條可以獨立推進的執行流」,
+        它們在邏輯上「同時進行」。但這幾條流,實際上可能只是在<strong>一顆</strong>核心上飛快地輪流切換
+        (第 24 章的分時多工),製造出「同時」的<em>錯覺</em>。<strong>平行</strong>則是貨真價實的<em>同時執行</em>:
+        在<strong>好幾顆</strong>核心上,真的有好幾件事在同一個物理瞬間發生。
+      </p>
+      <p>
+        一個經典比喻:一位咖啡師,左手沖一杯手沖、同時右眼盯著旁邊的義式機萃取——他<em>一個人</em>把兩件事
+        交錯處理得有條不紊,這是<strong>並行</strong>。換成兩位咖啡師各做各的,這才是<strong>平行</strong>。
+        並行是「設計」,平行是「執行」;你可以有並行而沒有平行(單核上交錯),也可以兩者兼具(多核上真的同時跑)。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 320" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- concurrency: one core interleaving -->
+  <text x="30" y="40" font-size="13" font-weight="800" fill="#2f6f6a">並行 Concurrency(單核,飛快交錯)</text>
+  <text x="30" y="58" font-size="10" fill="#8a929b">一顆核心輪流跑 A、B,看起來像同時,其實是切換的錯覺</text>
+  <text x="30" y="92" font-size="11" fill="#4a5159">核心 1</text>
+  <g font-size="11" font-weight="700" text-anchor="middle">
+    <rect x="90" y="72" width="60" height="34" fill="#e3efed" stroke="#2f6f6a"/><text x="120" y="94">A</text>
+    <rect x="150" y="72" width="60" height="34" fill="#f6e7dd" stroke="#b4541f"/><text x="180" y="94">B</text>
+    <rect x="210" y="72" width="60" height="34" fill="#e3efed" stroke="#2f6f6a"/><text x="240" y="94">A</text>
+    <rect x="270" y="72" width="60" height="34" fill="#f6e7dd" stroke="#b4541f"/><text x="300" y="94">B</text>
+    <rect x="330" y="72" width="60" height="34" fill="#e3efed" stroke="#2f6f6a"/><text x="360" y="94">A</text>
+    <rect x="390" y="72" width="60" height="34" fill="#f6e7dd" stroke="#b4541f"/><text x="420" y="94">B</text>
+    <rect x="450" y="72" width="60" height="34" fill="#e3efed" stroke="#2f6f6a"/><text x="480" y="94">A</text>
+    <rect x="510" y="72" width="60" height="34" fill="#f6e7dd" stroke="#b4541f"/><text x="540" y="94">B</text>
+  </g>
+  <line x1="90" y1="118" x2="630" y2="118" stroke="#8a929b" stroke-width="1.5" marker-end="url(#cpTime)"/>
+  <text x="630" y="132" font-size="10" fill="#8a929b" text-anchor="end">時間 →</text>
+
+  <!-- parallelism: two cores -->
+  <text x="30" y="184" font-size="13" font-weight="800" fill="#b4541f">平行 Parallelism(雙核,真正同時)</text>
+  <text x="30" y="202" font-size="10" fill="#8a929b">兩顆核心各跑一條,同一瞬間真的在同時計算 → 省一半時間</text>
+  <text x="30" y="236" font-size="11" fill="#4a5159">核心 1</text>
+  <rect x="90" y="216" width="240" height="34" fill="#e3efed" stroke="#2f6f6a"/><text x="210" y="238" text-anchor="middle" font-size="11" font-weight="700">A(完整)</text>
+  <text x="30" y="280" font-size="11" fill="#4a5159">核心 2</text>
+  <rect x="90" y="260" width="240" height="34" fill="#f6e7dd" stroke="#b4541f"/><text x="210" y="282" text-anchor="middle" font-size="11" font-weight="700">B(完整)</text>
+  <line x1="90" y1="306" x2="360" y2="306" stroke="#8a929b" stroke-width="1.5" marker-end="url(#cpTime)"/>
+  <text x="372" y="266" font-size="11" font-weight="800" fill="#2f6f6a">同一段時間</text>
+  <text x="372" y="282" font-size="10" fill="#8a929b">就做完了兩件事</text>
+
+  <defs><marker id="cpTime" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#8a929b"/></marker></defs>
+</svg>
+        <figcaption>圖 43-2:並行 vs 平行。上排是並行——單一核心把 A、B 切成小段交錯跑,製造「同時」的錯覺,但總時間沒省。下排是平行——兩顆核心真的同時各跑一條,同樣的牆上時間(wall-clock time)做完了兩倍的事。並行是「結構」,平行是「執行」。</figcaption>
+      </div>
+
+      <h3>第二對:資料平行 vs 任務平行</h3>
+      <p>
+        當你真的要平行時,還有兩種截然不同的拆法。<strong>資料平行(data parallelism)</strong>:
+        對<em>一大堆資料</em>做<em>同一件事</em>,把資料切成好幾塊,每塊交給一個工人用<strong>同樣的程式</strong>處理。
+        例如把一百萬張圖片各自縮圖、把一個大陣列每個元素都平方。
+        <strong>任務平行(task parallelism)</strong>:把<em>不同的工作</em>分給不同工人<strong>同時</strong>做。
+        例如一個影片播放器:一條執行緒解碼、一條套濾鏡、一條輸出聲音——大家做的事不一樣,但同時進行。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 300" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- data parallelism -->
+  <text x="180" y="30" text-anchor="middle" font-size="13" font-weight="800" fill="#2f6f6a">資料平行</text>
+  <text x="180" y="48" text-anchor="middle" font-size="10" fill="#8a929b">同一個函式 f,套在不同資料塊上</text>
+  <g font-size="10" text-anchor="middle">
+    <rect x="40" y="64" width="60" height="30" fill="#e3efed" stroke="#2f6f6a"/><text x="70" y="84">資料塊1</text>
+    <rect x="40" y="104" width="60" height="30" fill="#e3efed" stroke="#2f6f6a"/><text x="70" y="124">資料塊2</text>
+    <rect x="40" y="144" width="60" height="30" fill="#e3efed" stroke="#2f6f6a"/><text x="70" y="164">資料塊3</text>
+    <rect x="40" y="184" width="60" height="30" fill="#e3efed" stroke="#2f6f6a"/><text x="70" y="204">資料塊4</text>
+  </g>
+  <g font-size="11" font-weight="700" text-anchor="middle">
+    <rect x="160" y="62" width="70" height="34" rx="6" fill="#2f6f6a"/><text x="195" y="84" fill="#fff">f</text>
+    <rect x="160" y="102" width="70" height="34" rx="6" fill="#2f6f6a"/><text x="195" y="124" fill="#fff">f</text>
+    <rect x="160" y="142" width="70" height="34" rx="6" fill="#2f6f6a"/><text x="195" y="164" fill="#fff">f</text>
+    <rect x="160" y="182" width="70" height="34" rx="6" fill="#2f6f6a"/><text x="195" y="204" fill="#fff">f</text>
+  </g>
+  <line x1="100" y1="79" x2="158" y2="79" stroke="#8a929b" stroke-width="1.3" marker-end="url(#dpA)"/>
+  <line x1="100" y1="119" x2="158" y2="119" stroke="#8a929b" stroke-width="1.3" marker-end="url(#dpA)"/>
+  <line x1="100" y1="159" x2="158" y2="159" stroke="#8a929b" stroke-width="1.3" marker-end="url(#dpA)"/>
+  <line x1="100" y1="199" x2="158" y2="199" stroke="#8a929b" stroke-width="1.3" marker-end="url(#dpA)"/>
+  <text x="180" y="244" text-anchor="middle" font-size="10" fill="#4a5159">「同樣的事 × 很多份資料」</text>
+
+  <!-- divider -->
+  <line x1="370" y1="40" x2="370" y2="250" stroke="#e3e7eb" stroke-width="2"/>
+
+  <!-- task parallelism -->
+  <text x="545" y="30" text-anchor="middle" font-size="13" font-weight="800" fill="#b4541f">任務平行</text>
+  <text x="545" y="48" text-anchor="middle" font-size="10" fill="#8a929b">不同的工作,同時進行</text>
+  <rect x="410" y="120" width="70" height="40" rx="6" fill="#f6e7dd" stroke="#b4541f"/><text x="445" y="144" text-anchor="middle" font-size="11" font-weight="700">影片串流</text>
+  <g font-size="10" font-weight="700" text-anchor="middle">
+    <rect x="560" y="64" width="120" height="34" rx="6" fill="#ede9fe" stroke="#8b5cf6"/><text x="620" y="85">任務A:解碼</text>
+    <rect x="560" y="122" width="120" height="34" rx="6" fill="#ede9fe" stroke="#8b5cf6"/><text x="620" y="143">任務B:套濾鏡</text>
+    <rect x="560" y="180" width="120" height="34" rx="6" fill="#ede9fe" stroke="#8b5cf6"/><text x="620" y="201">任務C:輸出聲音</text>
+  </g>
+  <line x1="480" y1="135" x2="558" y2="82" stroke="#8a929b" stroke-width="1.3" marker-end="url(#dpA)"/>
+  <line x1="480" y1="140" x2="558" y2="139" stroke="#8a929b" stroke-width="1.3" marker-end="url(#dpA)"/>
+  <line x1="480" y1="145" x2="558" y2="196" stroke="#8a929b" stroke-width="1.3" marker-end="url(#dpA)"/>
+  <text x="545" y="244" text-anchor="middle" font-size="10" fill="#4a5159">「不同的事 × 同時做」</text>
+
+  <defs><marker id="dpA" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#8a929b"/></marker></defs>
+</svg>
+        <figcaption>圖 43-3:資料平行 vs 任務平行。資料平行是「同一個函式,套在很多份資料上」(最容易擴展,核心越多越快);任務平行是「不同的工作同時跑」(受限於工作的種類數量)。本章的實戰多半屬於資料平行——它是榨取多核最直接的方式。</figcaption>
+      </div>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">這四個詞怎麼搭在一起</span>
+          <p>「並行/平行」講的是<strong>怎麼執行</strong>(交錯 vs 真同時);「資料/任務平行」講的是<strong>怎麼拆工作</strong>
+          (切資料 vs 切任務)。它們是兩個獨立的維度,可以任意組合。本章的重點是<strong>平行</strong>(真的用上多核)、
+          且以<strong>資料平行</strong>為主——因為它最好懂、也最容易隨著核心數成長而變快。</p>
+        </div>
+      </div>
+
+      <h2>平行能讓你多快?加速比與 Amdahl 定律</h2>
+      <p>
+        直覺上,把工作分給 $n$ 顆核心,應該快 $n$ 倍吧?可惜,現實幾乎從不這麼慷慨。
+        我們先定義怎麼衡量「變快了多少」。設一個程式用 1 顆核心要跑 $T_1$ 的時間,用 $n$ 顆核心要跑 $T_n$,
+        那麼<strong>加速比(speedup)</strong>定義為:
+      </p>
+      <p>$$S(n) = \frac{T_1}{T_n}$$</p>
+      <p>
+        $S(n) = n$ 叫做<strong>理想線性加速</strong>(8 顆核心快 8 倍),是夢寐以求的上限。但夢想很快會撞上一個冷酷的事實:
+        <strong>幾乎沒有程式能 100% 平行化</strong>。總有一些部分天生是循序的——讀取輸入、最後彙整結果、
+        某些必須照順序做的步驟。1967 年,電腦架構先驅 <strong>Gene Amdahl</strong> 把這個限制寫成了一條公式。
+      </p>
+      <p>
+        設一個程式裡,比例 $p$ 的部分<strong>可以</strong>完美平行,剩下的 $1-p$ 是<strong>無論如何都得循序</strong>的。
+        那麼用 $n$ 顆核心時,可平行的部分縮短成 $p/n$,循序的部分還是 $1-p$,於是總時間的比值給出
+        <strong>Amdahl 定律(Amdahl's law)</strong>:
+      </p>
+      <p>$$S(n) = \frac{1}{(1-p) + \dfrac{p}{n}}$$</p>
+      <p>
+        這條公式有一個讓人清醒的推論。當你把核心數推到無窮多($n \to \infty$),那個 $p/n$ 趨近於 0,於是:
+      </p>
+      <p>$$S(\infty) = \frac{1}{1-p}$$</p>
+      <p>
+        換句話說,<strong>加速比的天花板,完全由那個「不能平行的循序部分」決定</strong>,跟你買幾顆核心無關!
+        如果有 5% 的程式碼是循序的($p=0.95$),那不管你堆上一萬顆核心,最多也只能快 $1/0.05 = 20$ 倍。
+        如果循序部分占 50%,天花板就只有 2 倍——加再多核心都是浪費。下圖把這份「越加越不划算」畫得淋漓盡致:
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 400" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- axes -->
+  <line x1="80" y1="360" x2="690" y2="360" stroke="#1f2328" stroke-width="1.5"/>
+  <line x1="80" y1="360" x2="80" y2="40" stroke="#1f2328" stroke-width="1.5"/>
+  <text x="385" y="392" text-anchor="middle" font-size="12" fill="#4a5159">核心數 n →</text>
+  <text x="24" y="200" font-size="12" fill="#4a5159" transform="rotate(-90 24 200)">加速比 S(n) →</text>
+
+  <!-- x ticks -->
+  <g font-size="10" fill="#8a929b" text-anchor="middle">
+    <text x="80" y="376">1</text><text x="119" y="376">2</text><text x="196" y="376">4</text>
+    <text x="351" y="376">8</text><text x="660" y="376">16</text>
+  </g>
+  <!-- y ticks -->
+  <g font-size="10" fill="#8a929b" text-anchor="end">
+    <text x="73" y="364">0×</text><text x="73" y="311">2×</text><text x="73" y="257">4×</text>
+    <text x="73" y="204">6×</text><text x="73" y="150">8×</text><text x="73" y="97">10×</text>
+  </g>
+  <line x1="76" y1="306.7" x2="80" y2="306.7" stroke="#8a929b"/>
+  <line x1="76" y1="253.3" x2="80" y2="253.3" stroke="#8a929b"/>
+  <line x1="76" y1="200" x2="80" y2="200" stroke="#8a929b"/>
+  <line x1="76" y1="146.7" x2="80" y2="146.7" stroke="#8a929b"/>
+  <line x1="76" y1="93.3" x2="80" y2="93.3" stroke="#8a929b"/>
+
+  <!-- ideal linear S=n -->
+  <line x1="80" y1="333" x2="505" y2="40" stroke="#8a929b" stroke-width="1.5" stroke-dasharray="6 4"/>
+  <text x="430" y="70" font-size="11" fill="#8a929b" transform="rotate(-35 430 70)">理想線性 S = n</text>
+
+  <!-- p=0.90 (teal) -->
+  <polyline points="80,333 119,312 196,278 351,235 660,189" fill="none" stroke="#2f6f6a" stroke-width="3"/>
+  <line x1="80" y1="93.3" x2="660" y2="93.3" stroke="#2f6f6a" stroke-width="1.2" stroke-dasharray="4 4"/>
+  <text x="500" y="184" font-size="11" font-weight="700" fill="#2f6f6a">p = 0.90</text>
+  <text x="500" y="88" font-size="10" fill="#2f6f6a">上限 = 1/(1−0.9) = 10×</text>
+
+  <!-- p=0.75 (brick) -->
+  <polyline points="80,333 119,317 196,299 351,282 660,270" fill="none" stroke="#b4541f" stroke-width="3"/>
+  <line x1="80" y1="253.3" x2="660" y2="253.3" stroke="#b4541f" stroke-width="1.2" stroke-dasharray="4 4"/>
+  <text x="500" y="266" font-size="11" font-weight="700" fill="#b4541f">p = 0.75</text>
+  <text x="500" y="248" font-size="10" fill="#b4541f">上限 = 4×</text>
+
+  <!-- p=0.50 (purple) -->
+  <polyline points="80,333 119,325 196,317 351,313 660,310" fill="none" stroke="#8b5cf6" stroke-width="3"/>
+  <line x1="80" y1="306.7" x2="660" y2="306.7" stroke="#8b5cf6" stroke-width="1.2" stroke-dasharray="4 4"/>
+  <text x="500" y="324" font-size="11" font-weight="700" fill="#8b5cf6">p = 0.50　上限 = 2×</text>
+</svg>
+        <figcaption>圖 43-4:Amdahl 定律的天花板。三條曲線是平行比例 $p$ 不同的程式,加速比隨核心數增加而上升,卻很快壓向各自的水平上限 $\frac{1}{1-p}$(虛線)。離理想線性(灰色斜線)越來越遠。寓意殘酷:你的程式裡那一小段「非平行不可」的循序碼,決定了你砸再多硬體也突破不了的極限。</figcaption>
+      </div>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">Amdahl 定律的一句話</span>
+          <p>一條鐵鏈的強度,取決於最弱的那一環;一個程式的加速,取決於<strong>最頑固的那段循序碼</strong>。
+          所以平行優化的第一要務,往往不是「把可平行的部分加速」,而是<strong>盡量縮小那段不能平行的部分</strong>。
+          這也是為什麼「先量測、找出真正的瓶頸」比「悶頭加核心」重要得多。</p>
+        </div>
+      </div>
+
+      <h3>Gustafson 的反駁:別這麼悲觀</h3>
+      <p>
+        Amdahl 定律聽起來像在說「平行沒前途」,但 1988 年 <strong>John Gustafson</strong> 提出一個關鍵反駁:
+        Amdahl 假設<strong>問題規模固定不變</strong>。可現實中,我們買更多核心,往往是為了解<strong>更大的問題</strong>
+        ——更高解析度的模擬、更大的資料集。而當問題變大,通常<em>可平行的部分</em>會跟著膨脹,
+        循序部分的占比反而相對縮小。一句話:<strong>核心越多,我們就把問題做得越大,於是加速比能持續成長。</strong>
+        Amdahl 看的是「同一個問題能多快」,Gustafson 看的是「同樣時間內能做多大」——兩者都對,只是問了不同的問題。
+      </p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 43.1 <span class="badge">計算</span></div>
+        <div class="ex-body">
+          <p>你有一個程式,經量測後發現:<strong>90%</strong> 的執行時間花在一個可以完美平行的迴圈上,
+          其餘 <strong>10%</strong>(讀檔、彙整)是循序的。請用 Amdahl 定律回答:</p>
+          <ol>
+            <li>用 4 顆核心,加速比是多少?</li>
+            <li>用 16 顆核心呢?</li>
+            <li>就算給你無限多核心,加速比的天花板是多少?</li>
+            <li>從 4 顆增到 16 顆(多花 4 倍硬體),加速比成長了幾倍?你覺得划算嗎?</li>
+          </ol>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>套用 $S(n) = \dfrac{1}{(1-p)+p/n}$,其中 $p = 0.9$、$1-p = 0.1$:</p>
+              <ul>
+                <li><strong>n = 4</strong>:$S = \dfrac{1}{0.1 + 0.9/4} = \dfrac{1}{0.1+0.225} = \dfrac{1}{0.325} \approx 3.08$ 倍。</li>
+                <li><strong>n = 16</strong>:$S = \dfrac{1}{0.1 + 0.9/16} = \dfrac{1}{0.1+0.05625} = \dfrac{1}{0.15625} = 6.4$ 倍。</li>
+                <li><strong>n → ∞</strong>:$S = \dfrac{1}{1-p} = \dfrac{1}{0.1} = 10$ 倍。這是無論如何都突破不了的天花板。</li>
+                <li>從 3.08 倍到 6.4 倍,只成長了約 <strong>2.08 倍</strong>——你花了 4 倍的硬體,卻只換來 2 倍的加速。
+                這就是「報酬遞減」的鐵律。是否划算,要看那段循序的 10% 能不能再壓低:把 $p$ 從 0.9 提到 0.99,
+                天花板就從 10 倍跳到 100 倍。<strong>優化循序部分,常常比加核心更值錢。</strong></li>
+              </ul>
+              <p>用 Python 把這條定律寫成函式,你可以自己玩各種數字:</p>
+              <pre><code class="language-python">def amdahl(p, n):
+    """p:可平行比例;n:核心數。回傳加速比。"""
+    return 1 / ((1 - p) + p / n)
+
+for n in [1, 2, 4, 8, 16, 1024, 10**9]:
+    print(f"{n:&gt;10} 核心 → {amdahl(0.9, n):.2f}× 加速")
+# 不管 n 多大,都逼近 10.00× 而停住</code></pre>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>共享記憶體的危險(深化第 24 章)</h2>
+      <p>
+        在第 24 章,我們用 C 與 pthread 初嘗了並行的惡夢:競爭條件與鎖。這一節我們用 Python 把它再走一遍、
+        並挖得更深一點——因為這些坑,是<strong>所有</strong>共享記憶體平行程式的共同宿命,不分語言。
+      </p>
+      <p>
+        回憶一下最核心的陷阱:當多條執行流共享同一塊記憶體,那行看似無害的 <code>x += 1</code>,其實<strong>不是一個動作</strong>。
+        在機器層面,它是三步:<strong>讀</strong>(把 <code>x</code> 載入暫存器)、<strong>加</strong>(暫存器 +1)、
+        <strong>寫</strong>(寫回記憶體)。這三步之間,執行緒隨時可能被切換出去。我們說 <code>x += 1</code>
+        <strong>不是原子的(not atomic)</strong>——它不可分割性不成立。用 Python 親眼看一次:
+      </p>
+      <pre><code class="language-python">import threading
+
+counter = 0
+
+def worker():
+    global counter
+    for _ in range(1_000_000):
+        counter += 1          # 看似一步,實則「讀-加-寫」三步,中間可被插隊
+
+t1 = threading.Thread(target=worker)
+t2 = threading.Thread(target=worker)
+t1.start(); t2.start()
+t1.join();  t2.join()
+
+print(counter)   # 你以為是 2000000,實際常常是 1378655 之類、每次都不同的怪數字</code></pre>
+      <p>
+        為什麼結果會「變小」?因為發生了<strong>遺失更新(lost update)</strong>:執行緒 A 讀到 <code>counter = 5</code>、
+        還沒寫回就被切走;B 也讀到 5、加成 6 寫回;A 回來,手上還握著舊的 5,加成 6 又寫回。
+        兩次遞增,只生效了一次——有一次被悄悄吃掉了。結果取決於兩條執行緒「碰巧」誰先誰後的時序,
+        這就是<strong>競爭條件(race condition)</strong>。
+      </p>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">就算有 GIL,Python 一樣會 race</span>
+          <p>你可能聽說 Python 有個「全域鎖」(下一節詳談),會以為它能擋住這種錯誤——<strong>不會</strong>。
+          那個鎖保護的是直譯器的內部狀態,而 <code>counter += 1</code> 會被編譯成<em>好幾條</em>位元碼,
+          直譯器可能在這幾條之間切換執行緒。所以上面的程式真的會跑出錯的答案。
+          競爭條件是共享可變狀態的<strong>本質</strong>問題,沒有哪個語言能替你免費豁免。</p>
+        </div>
+      </div>
+
+      <h3>用鎖修正:把臨界區變回原子</h3>
+      <p>
+        那段「讀-加-寫」共享資料、不能被打斷的程式碼,叫<strong>臨界區(critical section)</strong>。
+        我們要強制它「一次只有一條執行緒能進去」。最基本的工具就是<strong>鎖(lock,又稱互斥鎖 mutex)</strong>:
+        進臨界區前先上鎖,別人想進就得在門外等;出來時解鎖,放下一個進來。Python 的 <code>threading.Lock</code>
+        搭配 <code>with</code> 用起來特別乾淨——離開 <code>with</code> 區塊會自動解鎖(連發生例外也會):
+      </p>
+      <pre><code class="language-python">import threading
+
+counter = 0
+lock = threading.Lock()          # 宣告一把鎖
+
+def worker():
+    global counter
+    for _ in range(1_000_000):
+        with lock:               # 進入臨界區:搶鎖(若被佔則在此等待)
+            counter += 1         # 這一段現在「不可分割」了
+        # 離開 with → 自動解鎖,放下一個進來
+
+t1 = threading.Thread(target=worker)
+t2 = threading.Thread(target=worker)
+t1.start(); t2.start()
+t1.join();  t2.join()
+
+print(counter)   # 現在穩穩是 2000000</code></pre>
+      <p>
+        鎖把「同時很多人改」硬是變成「一次只有一人改」,正確性回來了。但鎖不是免費的午餐——它帶來三個新麻煩。
+      </p>
+
+      <h3>鎖的三個新麻煩:死結、活鎖、效能</h3>
+      <p>
+        <strong>死結(deadlock)</strong>:第 24 章講過——A 握著鎖 1、想要鎖 2;B 握著鎖 2、想要鎖 1,
+        兩個永遠互等。最實用的解法是破壞「循環等待」:<strong>替所有鎖編號,規定一律由小到大上鎖</strong>,
+        環就形不成了。
+      </p>
+      <p>
+        <strong>活鎖(livelock)</strong>:一個比死結更狡猾的親戚。死結是大家「卡住不動」,活鎖是大家「忙個不停卻沒進展」。
+        想像走廊上兩人迎面相遇,你向左讓、他也向左,撞上;你再向右、他也向右,又撞上……兩人都<em>非常努力</em>地閃避,
+        卻永遠過不去。程式裡的典型場景:兩條執行緒都「拿不到第二把鎖就禮貌地放掉手上的、稍後重試」,
+        但它們的節奏剛好同步,於是不斷同時放手、同時重搶、再同時放手。解法通常是引入<strong>隨機退讓(random backoff)</strong>,
+        打破這種致命的同步。
+      </p>
+      <p>
+        <strong>效能</strong>:鎖會把平行<em>變回</em>循序。當一堆執行緒擠在同一把鎖前排隊(<strong>鎖競爭 lock contention</strong>),
+        它們其實是輪流跑,多核的意義就蒸發了。鎖的範圍越大、持有越久,平行度就越低。這呼應了 Amdahl——
+        <strong>臨界區就是你親手製造的「循序部分」</strong>。
+      </p>
+
+      <h3>原子操作:不用鎖的另一條路</h3>
+      <p>
+        有沒有辦法讓 <code>x += 1</code> 真的「一步到位、不可分割」?有——靠硬體提供的<strong>原子操作(atomic operation)</strong>。
+        現代 CPU 提供像 <strong>比較並交換(compare-and-swap,CAS)</strong>這樣的指令:它「比較某位址是不是某值,
+        是的話就換成新值」這整件事一氣呵成,中間絕不會被插隊。基於 CAS,可以蓋出完全<strong>不用鎖</strong>的
+        <strong>無鎖(lock-free)</strong>資料結構,避開死結、減少競爭。代價是極難寫對——
+        無鎖程式是並行領域公認的高難度黑魔法,通常交給專家寫好的函式庫(如 Java 的 <code>AtomicInteger</code>、
+        C++ 的 <code>std::atomic</code>),你直接用就好。
+      </p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 43.2 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>下面這段「多執行緒從共同帳戶提款」的程式有一個競爭條件,可能導致帳戶<strong>被透支成負數</strong>
+          (明明檢查過「餘額夠不夠」了)。請指出 race 發生在哪兩行之間,並用鎖修正它。</p>
+          <pre><code class="language-python">import threading
+
+balance = 100
+
+def withdraw(amount):
+    global balance
+    if balance &gt;= amount:        # ① 檢查餘額夠不夠
+        # …如果在這裡被切換出去呢?…
+        balance -= amount        # ② 扣款
+
+threads = [threading.Thread(target=withdraw, args=(100,)) for _ in range(2)]
+for t in threads: t.start()
+for t in threads: t.join()
+print(balance)   # 可能印出 -100!</code></pre>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>race 在 ① 和 ② 之間。</strong>兩條執行緒可能<em>都</em>先通過了 ① 的檢查
+              (此時餘額還是 100,兩邊都覺得「夠提」),然後才各自執行 ②,於是 100 被扣了兩次,變成 −100。
+              「檢查」和「動作」之間出現空檔,是競爭條件最經典的形態,有個名字叫
+              <strong>TOCTOU(Time-Of-Check to Time-Of-Use)</strong>。</p>
+              <p>關鍵修正:把「檢查 + 扣款」整段包進<strong>同一個</strong>臨界區,讓它不可分割。</p>
+              <pre><code class="language-python">import threading
+
+balance = 100
+lock = threading.Lock()
+
+def withdraw(amount):
+    global balance
+    with lock:                   # 檢查與扣款,必須在同一把鎖內,不能被插隊
+        if balance &gt;= amount:
+            balance -= amount
+
+threads = [threading.Thread(target=withdraw, args=(100,)) for _ in range(2)]
+for t in threads: t.start()
+for t in threads: t.join()
+print(balance)   # 穩穩是 0:只有一筆提款成功</code></pre>
+              <p>常見錯誤:有人只把 <code>balance -= amount</code> 包進鎖,卻把 <code>if</code> 留在外面——那 race 依舊存在。
+              <strong>「檢查」與「依檢查結果做的動作」必須在同一個臨界區內</strong>,這是修 TOCTOU 的鐵則。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>房間裡的大象:Python 的 GIL</h2>
+      <p>
+        講到這裡,該誠實面對 Python 的一個著名特性了。你或許已經起疑:既然多執行緒能共享記憶體、又能用鎖修好,
+        那我用 Python 開一堆執行緒、丟到 8 顆核心上,不就爽快地平行了嗎?
+      </p>
+      <p>
+        很遺憾——在標準的 Python(CPython)裡,<strong>不行</strong>。因為有一道叫
+        <strong>GIL(全域直譯器鎖,Global Interpreter Lock)</strong>的設計:它規定<strong>同一個 Python 行程裡,
+        任何時刻最多只有一條執行緒能真正執行 Python 位元碼</strong>。你開了 8 條執行緒,它們會輪流持有這把 GIL,
+        但<em>永遠不會</em>有兩條同時在跑 Python 程式碼。結果就是:<strong>CPython 的多執行緒,做不到 CPU 平行</strong>。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 250" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="360" y="28" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">CPython 的 GIL:8 條執行緒,卻只有「一張通行證」</text>
+
+  <!-- the GIL token -->
+  <rect x="320" y="46" width="80" height="36" rx="8" fill="#fef3c7" stroke="#b4541f" stroke-width="2"/>
+  <text x="360" y="69" text-anchor="middle" font-size="13" font-weight="800" fill="#b4541f">GIL 🎫</text>
+  <text x="360" y="98" text-anchor="middle" font-size="10" fill="#8a929b">同一時刻只有一條執行緒拿得到</text>
+
+  <!-- threads -->
+  <g font-size="11" font-weight="700" text-anchor="middle">
+    <rect x="60" y="140" width="120" height="44" rx="8" fill="#2f6f6a"/><text x="120" y="160" fill="#fff">執行緒 1</text><text x="120" y="176" fill="#cfe6e2" font-size="9" font-weight="400">執行中(持證)</text>
+    <rect x="220" y="140" width="120" height="44" rx="8" fill="#fff" stroke="#8a929b"/><text x="280" y="160">執行緒 2</text><text x="280" y="176" font-size="9" font-weight="400" fill="#8a929b">等待</text>
+    <rect x="380" y="140" width="120" height="44" rx="8" fill="#fff" stroke="#8a929b"/><text x="440" y="160">執行緒 3</text><text x="440" y="176" font-size="9" font-weight="400" fill="#8a929b">等待</text>
+    <rect x="540" y="140" width="120" height="44" rx="8" fill="#fff" stroke="#8a929b"/><text x="600" y="160">執行緒 4…</text><text x="600" y="176" font-size="9" font-weight="400" fill="#8a929b">等待</text>
+  </g>
+  <line x1="350" y1="84" x2="135" y2="138" stroke="#b4541f" stroke-width="2" marker-end="url(#gilA)"/>
+  <text x="360" y="222" text-anchor="middle" font-size="11" fill="#4a5159">→ CPU 密集工作:其餘核心閒置,多執行緒等於白開。要 CPU 平行,得改用多「行程」。</text>
+  <defs><marker id="gilA" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#b4541f"/></marker></defs>
+</svg>
+        <figcaption>圖 43-5:GIL 像一張「同時只有一人能拿」的通行證。多執行緒在 CPU 密集任務上幾乎沒有加速,因為它們在搶同一張證、輪流跑。這是 CPython 的實作選擇,不是 Python 語言的本質——但它是你今天必須面對的現實。</figcaption>
+      </div>
+
+      <h3>那執行緒在 Python 裡還有用嗎?有,對 I/O</h3>
+      <p>
+        GIL 有一個關鍵的「但是」:當一條執行緒去做<strong>I/O</strong>(等網路回應、等磁碟、等使用者輸入)時,
+        它會<strong>主動放掉 GIL</strong>,讓別的執行緒趁這段空檔跑。因為 I/O 的本質就是「在那邊乾等」,
+        放掉 GIL 一點都不可惜。所以:
+      </p>
+      <ul>
+        <li><strong>I/O 密集(I/O-bound)</strong>任務——同時下載 100 個網頁、同時讀 1000 個檔案——
+        用多執行緒<strong>非常有效</strong>。大家都在「等」,GIL 在等待時被釋放,執行緒之間漂亮地重疊。</li>
+        <li><strong>CPU 密集(CPU-bound)</strong>任務——大量數值計算、影像處理、跑迴圈——
+        多執行緒<strong>幾乎沒用</strong>,因為大家都在搶 GIL 真刀真槍地算,擠成一條循序。</li>
+      </ul>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">Python 平行的黃金分流</span>
+          <p><strong>I/O 密集</strong> → 用<strong>多執行緒</strong>(<code>threading</code> / <code>ThreadPoolExecutor</code>),
+          或更現代的 <code>asyncio</code>。<br>
+          <strong>CPU 密集</strong> → 用<strong>多行程</strong>(<code>multiprocessing</code> / <code>ProcessPoolExecutor</code>)。
+          每個行程有<em>自己獨立的</em> Python 直譯器、自己的 GIL,於是能真正同時用上多顆核心。
+          記住這條分流,你就避開了 Python 平行九成的踩雷。</p>
+        </div>
+      </div>
+
+      <p>
+        為什麼多<strong>行程</strong>就能繞過 GIL?因為 GIL 是「每個直譯器行程一把」。
+        開 4 個行程,就有 4 把獨立的 GIL、4 個獨立的記憶體空間,它們在 4 顆核心上真正並肩計算
+        (回想第 24 章:行程之間記憶體是隔離的)。代價是:行程比執行緒重,而且因為記憶體不共享,
+        資料要在行程間傳遞,得經過<strong>序列化(serialization)</strong>來回搬運——這份開銷,等一下實戰時你會親眼看到。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">GIL 正在鬆動</span>
+          <p>GIL 一直是 Python 最受爭議的設計。好消息是,Python 3.13(2024)起,官方開始實驗性地提供
+          <strong>「free-threaded」(無 GIL)</strong>的建置版本,讓多執行緒終於能做到 CPU 平行。
+          這仍在早期階段、預設沒開,生態系也還在適應。但方向很明確:這頭房間裡的大象,終於開始挪動了。
+          在它完全離開之前,本章教你的「CPU 密集就用多行程」依然是最穩妥的做法。</p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 43.3 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>你的同事寫了兩個 Python 程式,都改用「8 條執行緒」想加速,卻得到完全不同的結果:</p>
+          <ul>
+            <li><strong>程式甲</strong>:從 8 個網址各下載一個大檔案。改多執行緒後,<strong>快了將近 8 倍</strong>。</li>
+            <li><strong>程式乙</strong>:計算 8 個大矩陣的乘法。改多執行緒後,<strong>幾乎沒變快,甚至略慢</strong>。</li>
+          </ul>
+          <p>請用 GIL 解釋這兩個現象。對程式乙,你會建議他怎麼改?</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>程式甲是 I/O 密集</strong>:每條執行緒大部分時間在「等網路傳資料回來」。等待時 GIL 被釋放,
+              其他執行緒趁機去發自己的請求,於是 8 個下載漂亮地重疊在一起、幾乎同時進行——接近 8 倍加速很合理。</p>
+              <p><strong>程式乙是 CPU 密集</strong>:矩陣乘法是純計算,每條執行緒都想「真刀真槍地算」,
+              但 GIL 規定同一時刻只能一條跑 Python 位元碼。於是 8 條執行緒其實是輪流上場、擠成一條循序;
+              再加上執行緒切換與搶鎖的額外開銷,反而可能比單執行緒還慢。</p>
+              <p><strong>建議:</strong>程式乙改用 <code>multiprocessing</code> / <code>ProcessPoolExecutor</code>,
+              讓 8 個<em>行程</em>各自擁有獨立的 GIL,在 8 顆核心上真正同時算。或者——更務實的一招——
+              改用底層以 C/Fortran 實作的數值函式庫 <strong>NumPy</strong>:它在做大矩陣運算時會<em>主動釋放 GIL</em>,
+              讓計算落到沒有 GIL 限制的原生程式碼裡。很多「Python 很慢」的問題,其實是「沒用對工具」。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>平行的設計模式</h2>
+      <p>
+        平行不是一團亂麻——前人已經把「怎麼拆工作」歸納成幾個反覆出現的<strong>設計模式</strong>。認得它們,
+        你面對新問題時就有了現成的模板。
+      </p>
+
+      <h3>分治平行(呼應第 27 章)</h3>
+      <p>
+        第 27 章的<strong>分治法(divide and conquer)</strong>——把大問題劈成兩半、各自解決、再合併——
+        簡直是為平行量身打造的。因為「各自解決」的那兩半<strong>彼此獨立、互不干擾</strong>,
+        完全可以丟到不同核心上<em>同時</em>進行!以合併排序(merge sort)為例:左半段和右半段的排序毫無瓜葛,
+        天生可以平行。這就是<strong>分治平行</strong>:
+      </p>
+      <pre><code class="language-python">from concurrent.futures import ProcessPoolExecutor
+
+def merge(a, b):                      # 合併兩個已排序串列(這步是循序的)
+    result, i, j = [], 0, 0
+    while i &lt; len(a) and j &lt; len(b):
+        if a[i] &lt;= b[j]:
+            result.append(a[i]); i += 1
+        else:
+            result.append(b[j]); j += 1
+    result.extend(a[i:]); result.extend(b[j:])
+    return result
+
+def msort(xs):                        # 一般(循序)合併排序
+    if len(xs) &lt;= 1:
+        return xs
+    mid = len(xs) // 2
+    return merge(msort(xs[:mid]), msort(xs[mid:]))
+
+def parallel_msort(xs):               # 只在最頂層把左右兩半分給兩個行程
+    if len(xs) &lt;= 1:
+        return xs
+    mid = len(xs) // 2
+    with ProcessPoolExecutor(max_workers=2) as pool:
+        left  = pool.submit(msort, xs[:mid])   # 左半:丟給一個行程
+        right = pool.submit(msort, xs[mid:])   # 右半:丟給另一個行程
+        return merge(left.result(), right.result())  # 兩半都排好了,再合併</code></pre>
+      <p>
+        注意一個 Amdahl 的影子:最後那個 <code>merge</code> 是<strong>循序</strong>的——它得等左右兩半都排完才能動,
+        而且自己無法平行。它就是這個演算法「不能平行的那一段」,限制了加速上限。
+      </p>
+
+      <h3>fork-join 與工作竊取</h3>
+      <p>
+        分治平行的通用骨架,叫 <strong>fork-join</strong>:遇到可拆的工作就「分叉(fork)」成子任務丟出去,
+        再「會合(join)」等它們全部回來、彙整結果。這正是上面 <code>submit</code> 然後 <code>.result()</code> 在做的事。
+        成熟的 fork-join 框架(Java 的 <code>ForkJoinPool</code>、Scala 平行集合背後)還有一招漂亮的調度術:
+        <strong>工作竊取(work stealing)</strong>——閒下來的執行緒,會主動去「偷」別人佇列尾端還沒做的工作來做,
+        讓忙閒自動均衡,沒有人翹腳、也沒有人累死。
+      </p>
+
+      <h3>map-reduce(呼應第 6 章)</h3>
+      <p>
+        還記得第 6 章的兩位高階函式 <code>map</code> 與 <code>reduce</code> 嗎?它們合起來,是<strong>資料平行</strong>最優雅的範式。
+        <strong>map</strong> 階段:把同一個函式<em>獨立地</em>套到每一塊資料上——每塊互不相干,所以可以<strong>完美平行</strong>。
+        <strong>reduce</strong> 階段:把這些局部結果<em>合併</em>成最終答案(只要合併操作滿足結合律,合併本身也能部分平行)。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 300" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- input -->
+  <rect x="30" y="125" width="90" height="50" rx="8" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="75" y="148" text-anchor="middle" font-size="11" font-weight="700">大資料</text>
+  <text x="75" y="165" text-anchor="middle" font-size="9" fill="#8a929b">切成數塊</text>
+
+  <!-- map workers -->
+  <text x="290" y="32" text-anchor="middle" font-size="12" font-weight="800" fill="#b4541f">map(平行)</text>
+  <g font-size="10" font-weight="700" text-anchor="middle">
+    <rect x="220" y="50" width="140" height="34" rx="6" fill="#f6e7dd" stroke="#b4541f"/><text x="290" y="71">塊1 → 局部結果</text>
+    <rect x="220" y="98" width="140" height="34" rx="6" fill="#f6e7dd" stroke="#b4541f"/><text x="290" y="119">塊2 → 局部結果</text>
+    <rect x="220" y="146" width="140" height="34" rx="6" fill="#f6e7dd" stroke="#b4541f"/><text x="290" y="167">塊3 → 局部結果</text>
+    <rect x="220" y="194" width="140" height="34" rx="6" fill="#f6e7dd" stroke="#b4541f"/><text x="290" y="215">塊4 → 局部結果</text>
+  </g>
+  <line x1="120" y1="150" x2="218" y2="67" stroke="#8a929b" stroke-width="1.3" marker-end="url(#mrA)"/>
+  <line x1="120" y1="150" x2="218" y2="115" stroke="#8a929b" stroke-width="1.3" marker-end="url(#mrA)"/>
+  <line x1="120" y1="150" x2="218" y2="163" stroke="#8a929b" stroke-width="1.3" marker-end="url(#mrA)"/>
+  <line x1="120" y1="150" x2="218" y2="211" stroke="#8a929b" stroke-width="1.3" marker-end="url(#mrA)"/>
+
+  <!-- reduce -->
+  <text x="500" y="32" text-anchor="middle" font-size="12" font-weight="800" fill="#8b5cf6">reduce(合併)</text>
+  <rect x="450" y="110" width="110" height="80" rx="8" fill="#ede9fe" stroke="#8b5cf6" stroke-width="2"/>
+  <text x="505" y="148" text-anchor="middle" font-size="11" font-weight="700">合併所有</text>
+  <text x="505" y="166" text-anchor="middle" font-size="11" font-weight="700">局部結果</text>
+  <line x1="360" y1="67" x2="448" y2="135" stroke="#8a929b" stroke-width="1.3" marker-end="url(#mrA)"/>
+  <line x1="360" y1="115" x2="448" y2="145" stroke="#8a929b" stroke-width="1.3" marker-end="url(#mrA)"/>
+  <line x1="360" y1="163" x2="448" y2="155" stroke="#8a929b" stroke-width="1.3" marker-end="url(#mrA)"/>
+  <line x1="360" y1="211" x2="448" y2="165" stroke="#8a929b" stroke-width="1.3" marker-end="url(#mrA)"/>
+
+  <!-- output -->
+  <rect x="610" y="125" width="90" height="50" rx="8" fill="#2f6f6a"/>
+  <text x="655" y="155" text-anchor="middle" font-size="12" font-weight="800" fill="#fff">最終答案</text>
+  <line x1="560" y1="150" x2="608" y2="150" stroke="#8a929b" stroke-width="1.5" marker-end="url(#mrA)"/>
+
+  <text x="360" y="270" text-anchor="middle" font-size="11" fill="#4a5159">map 階段各塊獨立 → 完美平行;reduce 階段把局部結果折疊成一個</text>
+  <defs><marker id="mrA" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#8a929b"/></marker></defs>
+</svg>
+        <figcaption>圖 43-6:map-reduce。把大資料切塊,每塊用同一個函式平行 map 出局部結果,再 reduce 合併成最終答案。這個簡單的範式不但能用滿一台機器的所有核心,放大到「多台機器」就成了 Google 的 MapReduce 與後來的 Spark——我們稍後會回到這條線。</figcaption>
+      </div>
+
+      <h3>pipeline(呼應第 11 章)</h3>
+      <p>
+        第 11 章的<strong>管線-過濾器(pipe-and-filter)</strong>架構,也是一種平行模式。把工作切成連續的好幾<strong>站(stage)</strong>,
+        像工廠輸送帶:第一站處理完傳給第二站,自己<em>立刻</em>開始處理下一筆。當輸送帶填滿,所有站<strong>同時</strong>在忙
+        ——這就是任務平行的一種。影片串流(解碼 → 濾鏡 → 編碼)、編譯器的各個階段、甚至 Unix 的
+        <code>cat file | grep foo | sort</code>(第四部),都是 pipeline 在發揮平行的威力。
+      </p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 43.4 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>上面的 <code>parallel_msort</code> 只在<strong>最頂層</strong>分成兩半。如果你有 8 顆核心,
+          這樣只用得到 2 顆。請思考:要怎麼改,才能用上更多核心?把分治「往下再展開幾層」會遇到什麼新成本?
+          (不必寫出完美程式,講清楚想法與權衡即可。)</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>想法:</strong>不要只切一刀,而是<strong>遞迴地往下切到一定深度</strong>。例如再切一層,
+              就把資料分成 4 塊、丟給 4 個行程;切兩層就是 8 塊、8 個行程,剛好餵飽 8 顆核心。
+              一個乾淨的寫法是設一個<strong>深度(或大小)門檻</strong>:超過門檻就繼續平行分,
+              低於門檻就直接用循序的 <code>msort</code>(別再開行程)。</p>
+              <pre><code class="language-python">from concurrent.futures import ProcessPoolExecutor
+
+def pmsort(xs, depth):
+    if len(xs) &lt;= 1:
+        return xs
+    if depth == 0:                    # 到底了:剩下的用循序排,別再開行程
+        return msort(xs)
+    mid = len(xs) // 2
+    with ProcessPoolExecutor(max_workers=2) as pool:
+        left  = pool.submit(pmsort, xs[:mid], depth - 1)
+        right = pool.submit(pmsort, xs[mid:], depth - 1)
+        return merge(left.result(), right.result())
+# depth=3 → 最多 2^3 = 8 個葉子任務,餵飽 8 核</code></pre>
+              <p><strong>新成本(權衡):</strong></p>
+              <ul>
+                <li><strong>行程開銷</strong>:每開一個行程都要付出建立、序列化資料來回搬運的代價。切太細,
+                當每個子任務小到「搬資料的時間比算的時間還長」,平行就<em>得不償失</em>,甚至比循序還慢。</li>
+                <li><strong>核心數有限</strong>:開遠超過核心數的行程沒有意義——它們只會互相搶 CPU、增加切換成本。
+                門檻通常設成「子任務數量 ≈ 核心數」最甜。</li>
+                <li><strong>merge 仍是循序瓶頸</strong>:越往上層的合併,資料越大、越花時間,而它無法平行。
+                這再次呼應 Amdahl:那段循序的合併,鎖死了你的加速上限。</li>
+              </ul>
+              <p>結論:平行的「顆粒度(granularity)」要剛剛好——太粗用不滿核心,太細被開銷吃掉。找到甜蜜點,是平行調校的核心藝術。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>為什麼函數式特別適合平行(呼應第 6 章)</h2>
+      <p>
+        看完前面共享記憶體的滿地陷阱(競爭、死結、活鎖),你可能會想:有沒有辦法<strong>從根本上</strong>避開它們?
+        有。回想第 6 章——那一章的尾聲其實埋了一個伏筆:函數式思維之所以在多核時代「重新大紅」,
+        正是因為它天生剋制這些惡夢。道理出奇地簡單:
+      </p>
+      <blockquote>
+        所有的並行惡夢,根源都是「多個執行流<strong>共享、並同時修改</strong>同一塊狀態」。<br>
+        那如果——根本就<strong>沒有共享的可變狀態</strong>呢?
+      </blockquote>
+      <p>
+        這正是函數式程式設計的兩塊基石所提供的。<strong>不可變性(immutability)</strong>:資料一旦建立就<em>永不修改</em>。
+        既然沒人能改它,那「兩個人同時改同一個東西」這件事根本<strong>不可能發生</strong>——競爭條件從定義上就被消滅了。
+        多少條執行緒同時<em>讀</em>同一份不可變資料,都絕對安全,完全不需要鎖。
+      </p>
+      <p>
+        <strong>純函式(pure function)</strong>:它的輸出只取決於輸入,且<em>不碰外界任何狀態</em>(沒有副作用)。
+        這意味著「算第 5 筆」和「算第 50 萬筆」之間<strong>毫無瓜葛</strong>——你可以把它們灑到任意多顆核心上同時算,
+        結果保證跟循序跑一模一樣。純函式是「天生可安全平行」的。第 6 章那個 <code>map(平方)</code> 之所以能瞬間平行化,
+        正因為「平方」是純的。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">無共享可變狀態 = 無競爭</span>
+          <p>共享記憶體模型的策略是:<em>允許</em>共享與修改,再用鎖小心翼翼地「管制」它——累、易錯、難 debug。
+          函數式的策略是:<strong>從源頭就不共享可變狀態</strong>,於是整類問題<em>不存在</em>。
+          這不是說函數式比較「快」,而是它讓平行程式<strong>容易寫對</strong>——在並行的世界裡,「容易寫對」是無價的。</p>
+        </div>
+      </div>
+
+      <p>
+        這套哲學最漂亮的體現,是 Scala 的<strong>平行集合(parallel collections)</strong>。一個普通的循序運算:
+      </p>
+      <pre><code class="language-scala">// Scala:循序版
+val total = (1 to 1000000).map(x =&gt; x * x).sum</code></pre>
+      <p>
+        想讓它用滿所有核心?只要加一個 <code>.par</code>:
+      </p>
+      <pre><code class="language-scala">// Scala:平行版,只多了 .par
+val total = (1 to 1000000).par.map(x =&gt; x * x).sum</code></pre>
+      <p>
+        就這樣。背後的 fork-join + 工作竊取會自動把資料切塊、灑到多核、再合併。為什麼能這麼輕鬆?
+        因為 <code>x =&gt; x * x</code> 是<strong>純函式</strong>、整個集合是<strong>不可變</strong>的——沒有共享狀態要擔心,
+        平行就成了「免費」的。這就是 OSSU 對應課程(EPFL 的 Parallel Programming,用 Scala)想傳達的核心訊息:
+        <strong>先把資料與運算寫成函數式的樣子,平行就會變得簡單而安全。</strong>
+      </p>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">在 Python 裡借用這個思維</span>
+          <p>Python 雖然不是純函數式語言,但你完全可以<em>採用這個習慣</em>:讓你打算平行化的函式保持<strong>純粹</strong>
+          (只靠參數、只回傳新值、不碰全域變數、不就地改傳進來的串列)。這樣它丟給
+          <code>ProcessPoolExecutor.map</code> 時就天然安全。下一節的實戰程式,每一個 worker 函式都是純的——
+          這不是巧合,而是刻意的設計。</p>
+        </div>
+      </div>
+
+      <h2>同步的高階工具</h2>
+      <p>
+        鎖是最底層的同步原語,但直接用鎖既累又危險。實務上,我們更常用蓋在它之上的<strong>高階工具</strong>,
+        它們把常見的協作模式封裝成好用、不易錯的介面。
+      </p>
+      <ul>
+        <li><strong>屏障(barrier)</strong>:一個「集合點」。一群執行緒各做各的,但都得在屏障前<em>停下來等</em>,
+        直到<strong>大家都到齊</strong>,才一起放行進入下一階段。科學模擬常用:每條執行緒算完自己負責的一格,
+        全部算完才能一起進入下一個時間步。Python:<code>threading.Barrier(n)</code>。</li>
+        <li><strong>號誌(semaphore)</strong>:一個帶計數的許可證發放器(由 Dijkstra 發明)。計數設為 $N$,
+        就代表「最多允許 $N$ 個同時進入」。常用來限制資源用量,例如「同時最多 5 個下載連線」。
+        計數設為 1 時,它就退化成一把鎖。Python:<code>threading.Semaphore(N)</code>。</li>
+        <li><strong>future / promise</strong>:代表「一個<em>還沒算好</em>的結果」的憑證。你發起一個非同步工作,
+        立刻拿到一個 future;之後想要結果時,呼叫 <code>.result()</code>(若還沒好就在此等待)。
+        它讓「發起工作」與「取用結果」漂亮地解耦——前面實戰用的 <code>pool.submit(...)</code> 回傳的正是 future。</li>
+      </ul>
+
+      <h3>另一條路:訊息傳遞與 actor 模型</h3>
+      <p>
+        前面所有工具,都建立在「<strong>共享記憶體</strong>」的世界觀上——大家共用一塊記憶體,再用同步原語管制存取。
+        但還有一個截然不同、且越來越受歡迎的世界觀:<strong>訊息傳遞(message passing)</strong>。
+      </p>
+      <p>
+        它的精神是:<strong>各自管好自己的記憶體,誰都別碰別人的;要協作,就「傳訊息」。</strong>
+        沒有共享狀態,自然就沒有競爭條件、不需要鎖。這個思想最有名的化身是 <strong>actor 模型</strong>:
+        把系統拆成許多獨立的「actor」,每個 actor 有自己私有的狀態與一個信箱;它們不直接呼叫彼此,
+        只往對方的信箱<em>投遞訊息</em>,各自依序處理自己收到的訊息。<strong>Erlang</strong> 語言與
+        <strong>Akka</strong> 框架把這套發揮到極致,用來打造極高可靠度的並行系統。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 290" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- shared memory -->
+  <text x="180" y="30" text-anchor="middle" font-size="13" font-weight="800" fill="#2f6f6a">共享記憶體</text>
+  <text x="180" y="48" text-anchor="middle" font-size="10" fill="#8a929b">共用一塊記憶體,用鎖管制</text>
+  <rect x="120" y="120" width="120" height="56" rx="8" fill="#fef3c7" stroke="#b4541f" stroke-width="2"/>
+  <text x="180" y="146" text-anchor="middle" font-size="11" font-weight="700" fill="#b4541f">共享資料 🔒</text>
+  <text x="180" y="164" text-anchor="middle" font-size="9" fill="#8a929b">(需要鎖保護)</text>
+  <g font-size="10" font-weight="700" text-anchor="middle">
+    <rect x="40" y="64" width="80" height="32" rx="6" fill="#e3efed" stroke="#2f6f6a"/><text x="80" y="84">執行緒A</text>
+    <rect x="240" y="64" width="80" height="32" rx="6" fill="#e3efed" stroke="#2f6f6a"/><text x="280" y="84">執行緒B</text>
+    <rect x="40" y="200" width="80" height="32" rx="6" fill="#e3efed" stroke="#2f6f6a"/><text x="80" y="220">執行緒C</text>
+    <rect x="240" y="200" width="80" height="32" rx="6" fill="#e3efed" stroke="#2f6f6a"/><text x="280" y="220">執行緒D</text>
+  </g>
+  <line x1="90" y1="96" x2="150" y2="118" stroke="#8a929b" stroke-width="1.3"/>
+  <line x1="270" y1="96" x2="210" y2="118" stroke="#8a929b" stroke-width="1.3"/>
+  <line x1="90" y1="200" x2="150" y2="178" stroke="#8a929b" stroke-width="1.3"/>
+  <line x1="270" y1="200" x2="210" y2="178" stroke="#8a929b" stroke-width="1.3"/>
+
+  <!-- divider -->
+  <line x1="370" y1="36" x2="370" y2="250" stroke="#e3e7eb" stroke-width="2"/>
+
+  <!-- message passing -->
+  <text x="545" y="30" text-anchor="middle" font-size="13" font-weight="800" fill="#8b5cf6">訊息傳遞 / actor</text>
+  <text x="545" y="48" text-anchor="middle" font-size="10" fill="#8a929b">各管各的記憶體,靠投遞訊息協作</text>
+  <g font-size="10" font-weight="700" text-anchor="middle">
+    <rect x="410" y="80" width="120" height="48" rx="8" fill="#ede9fe" stroke="#8b5cf6"/><text x="470" y="100">actor 1</text><text x="470" y="116" font-size="8" font-weight="400" fill="#8a929b">私有狀態+信箱</text>
+    <rect x="560" y="80" width="120" height="48" rx="8" fill="#ede9fe" stroke="#8b5cf6"/><text x="620" y="100">actor 2</text><text x="620" y="116" font-size="8" font-weight="400" fill="#8a929b">私有狀態+信箱</text>
+    <rect x="410" y="180" width="120" height="48" rx="8" fill="#ede9fe" stroke="#8b5cf6"/><text x="470" y="200">actor 3</text><text x="470" y="216" font-size="8" font-weight="400" fill="#8a929b">私有狀態+信箱</text>
+    <rect x="560" y="180" width="120" height="48" rx="8" fill="#ede9fe" stroke="#8b5cf6"/><text x="620" y="200">actor 4</text><text x="620" y="216" font-size="8" font-weight="400" fill="#8a929b">私有狀態+信箱</text>
+  </g>
+  <line x1="530" y1="104" x2="558" y2="104" stroke="#8b5cf6" stroke-width="1.5" marker-end="url(#msgA)"/>
+  <line x1="470" y1="128" x2="470" y2="178" stroke="#8b5cf6" stroke-width="1.5" marker-end="url(#msgA)"/>
+  <line x1="560" y1="204" x2="532" y2="204" stroke="#8b5cf6" stroke-width="1.5" marker-end="url(#msgA)"/>
+  <line x1="558" y1="190" x2="492" y2="120" stroke="#8b5cf6" stroke-width="1.5" stroke-dasharray="3 3" marker-end="url(#msgA)"/>
+  <text x="545" y="262" text-anchor="middle" font-size="10" fill="#4a5159">沒有共享 → 沒有競爭 → 不需要鎖</text>
+  <defs><marker id="msgA" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#8b5cf6"/></marker></defs>
+</svg>
+        <figcaption>圖 43-7:兩種世界觀。左:共享記憶體——共用資料、用鎖管制(快,但易錯)。右:訊息傳遞 / actor——各自封閉、靠投遞訊息協作(沒有共享狀態,所以沒有競爭、不需要鎖)。後者的代價是搬資料(複製/序列化)有開銷,但換來大幅簡化的正確性推理。多行程的 Python(每個行程記憶體隔離)其實就偏向右邊這套。</figcaption>
+      </div>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">這正是 Python 多行程的世界</span>
+          <p>還記得嗎——多行程之間記憶體是<strong>隔離</strong>的,資料要透過序列化「傳遞」過去。
+          所以用 <code>multiprocessing</code> 寫平行,你其實已經站在「訊息傳遞」這一側了:沒有共享可變狀態,
+          自然也就少了一整類競爭條件的煩惱。這是多行程除了「繞過 GIL」之外,常被忽略的一個好處。</p>
+        </div>
+      </div>
+
+      <h2>動手做:用 Python 榨出真正的加速</h2>
+      <p>
+        理論講夠了,來真的。我們用 <code>concurrent.futures</code>——Python 標準庫裡最好用的高階平行介面。
+        它只有兩個主角,介面幾乎一樣,但用途天差地別(記得前面的黃金分流):
+      </p>
+      <ul>
+        <li><code>ThreadPoolExecutor</code>:一池<strong>執行緒</strong>。給 <strong>I/O 密集</strong>用。</li>
+        <li><code>ProcessPoolExecutor</code>:一池<strong>行程</strong>。給 <strong>CPU 密集</strong>用,真正吃多核。</li>
+      </ul>
+
+      <h3>CPU 密集:用 multiprocessing 看見真實加速</h3>
+      <p>
+        我們故意設計一個 CPU 密集任務:數一段範圍內有幾個質數(純計算、沒有 I/O)。然後比較「循序」與「平行」的時間:
+      </p>
+      <pre><code class="language-python">import time
+from concurrent.futures import ProcessPoolExecutor
+
+def count_primes(limit):
+    """CPU 密集:數 2..limit 之間的質數個數(純函式,天生可平行)。"""
+    count = 0
+    for x in range(2, limit):
+        is_prime = True
+        for d in range(2, int(x ** 0.5) + 1):
+            if x % d == 0:
+                is_prime = False
+                break
+        if is_prime:
+            count += 1
+    return count
+
+tasks = [200_000, 200_000, 200_000, 200_000]   # 四個同樣大的工作
+
+if __name__ == "__main__":          # ★ multiprocessing 在 Windows/macOS 必須有這層保護 ★
+    # --- 循序:一個一個算 ---
+    t0 = time.perf_counter()
+    serial = [count_primes(n) for n in tasks]
+    print(f"循序:{time.perf_counter() - t0:.2f} 秒")
+
+    # --- 平行:四個行程同時算 ---
+    t0 = time.perf_counter()
+    with ProcessPoolExecutor() as pool:
+        parallel = list(pool.map(count_primes, tasks))
+    print(f"平行:{time.perf_counter() - t0:.2f} 秒")
+
+    print("結果一致:", serial == parallel)</code></pre>
+      <p>
+        在一台 4 核機器上,你會看到類似這樣的輸出——平行版接近(但達不到)4 倍快:
+      </p>
+      <pre><code class="language-text">循序:6.81 秒
+平行:1.97 秒
+結果一致: True</code></pre>
+      <p>
+        為什麼是「接近但達不到」4 倍?因為有開銷:啟動行程、把任務與結果在行程間序列化搬運,
+        都要花時間。這正是 Amdahl 定律的<em>實機版</em>——那些不可平行的「行政成本」,
+        以及無法被多核分攤的部分,讓你拿不到理論上限。但 6.81 → 1.97 秒已是巨大的勝利。
+      </p>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">那行 <code>if __name__ == "__main__"</code> 不能省</span>
+          <p>在 Windows 與 macOS 上,<code>multiprocessing</code> 啟動子行程時會<strong>重新 import 你的主程式</strong>。
+          如果建立行程池的程式碼<em>不</em>放在 <code>if __name__ == "__main__"</code> 底下,
+          子行程一 import 又會去建行程池、再生子行程……無限遞迴、瞬間炸開。這是 Python 平行的頭號新手坑,
+          切記。</p>
+        </div>
+      </div>
+
+      <h3>I/O 密集:用執行緒重疊等待</h3>
+      <p>
+        換成 I/O 密集(例如同時抓很多網頁),這時候<strong>執行緒</strong>就管用了——大家都在等網路,
+        GIL 在等待期間被釋放,於是請求漂亮地重疊。注意:介面跟上面幾乎一模一樣,只是把 <code>Process</code> 換成 <code>Thread</code>:
+      </p>
+      <pre><code class="language-python">import time, urllib.request
+from concurrent.futures import ThreadPoolExecutor
+
+urls = ["https://example.com"] * 20      # 假設要抓 20 個頁面
+
+def fetch(url):
+    with urllib.request.urlopen(url) as r:   # 大部分時間在「等」網路 → GIL 被釋放
+        return len(r.read())
+
+t0 = time.perf_counter()
+with ThreadPoolExecutor(max_workers=8) as pool:   # 8 條執行緒同時抓
+    sizes = list(pool.map(fetch, urls))
+print(f"抓完 20 頁:{time.perf_counter() - t0:.2f} 秒(循序會慢上好幾倍)")</code></pre>
+      <p>
+        同樣一批下載,循序做要把每次的網路延遲<em>一個一個</em>加起來;多執行緒則讓這些「等待」彼此重疊,
+        總時間趨近於「最慢那一個」而非「全部相加」。這就是為什麼 CPU 密集要用行程、I/O 密集用執行緒——
+        對症下藥,藥到病除。
+      </p>
+
+      <h3>map-reduce 風格:平行統計大量資料</h3>
+      <p>
+        最後把第 6 章的 map-reduce 落地成一個真實任務:統計一大批文字裡最常出現的單字。
+        策略是——把資料切塊,<strong>平行 map</strong> 出每塊的局部計數,再 <strong>reduce 合併</strong>成總計數:
+      </p>
+      <pre><code class="language-python">from collections import Counter
+from functools import reduce
+from concurrent.futures import ProcessPoolExecutor
+
+def count_words(chunk):              # map:把一塊文字數成局部計數(純函式!)
+    return Counter(chunk.split())
+
+def merge_counts(a, b):             # reduce 用的合併:兩個 Counter 相加
+    return a + b
+
+if __name__ == "__main__":
+    # 假裝這是一個被切成許多塊的超大文件
+    big_text = "the quick brown fox the lazy dog the fox " * 100_000
+    chunks = [big_text[i:i + 10_000] for i in range(0, len(big_text), 10_000)]
+
+    with ProcessPoolExecutor() as pool:
+        partials = pool.map(count_words, chunks)        # ① 平行 map:各塊獨立計數
+
+    total = reduce(merge_counts, partials, Counter())   # ② reduce:把局部計數疊起來
+    print(total.most_common(3))     # 例如 [('the', 300000), ('fox', 200000), ...]</code></pre>
+      <p>
+        看出這個結構的威力了嗎?<strong>map 階段完美平行</strong>(每塊互不相干);
+        <strong>reduce 階段</strong>把局部結果折疊成一個。而且——這個一模一樣的結構,只要把「行程」換成「機器」、
+        把「行程池」換成「叢集」,就直接放大成了能處理 PB 級資料的分散式系統。這就是我們的下一站。
+      </p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 43.5 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>你有一個 100 萬筆數字的串列,想算出它的總和。請用 map-reduce 的思路把它<strong>平行化</strong>:
+          把串列切成 $k$ 塊,平行算出每塊的「局部和」,再把這些局部和加起來。
+          完成後思考:對「加總」這種任務,你預期會看到漂亮的線性加速嗎?為什麼?</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">from functools import reduce
+from concurrent.futures import ProcessPoolExecutor
+
+def partial_sum(chunk):             # map:算一塊的局部和(純函式)
+    return sum(chunk)
+
+if __name__ == "__main__":
+    data = list(range(1, 1_000_001))
+    k = 4                            # 切成 4 塊
+    size = len(data) // k
+    chunks = [data[i:i + size] for i in range(0, len(data), size)]
+
+    with ProcessPoolExecutor(max_workers=k) as pool:
+        partials = pool.map(partial_sum, chunks)   # 平行算各塊局部和
+
+    total = reduce(lambda a, b: a + b, partials, 0)  # 合併:把局部和相加
+    print(total)                    # 500000500000(= n(n+1)/2)</code></pre>
+              <p><strong>會不會線性加速?多半不會,甚至可能比循序的 <code>sum(data)</code> 還慢!</strong>原因很值得記住:</p>
+              <ul>
+                <li><strong>加總本身太便宜</strong>:加一個數字快得不得了,這是「記憶體頻寬受限」而非「計算受限」的任務。</li>
+                <li><strong>開銷相對太貴</strong>:把每塊資料<em>序列化、搬到子行程、再把結果搬回來</em>,
+                這些成本可能遠超過「加起來」省下的時間。當「搬資料的時間 &gt; 算的時間」,平行就是賠本生意。</li>
+              </ul>
+              <p>這是個刻意的反例,提醒你一條鐵律:<strong>不是每件事都值得平行</strong>。
+              平行的甜蜜點是「每筆資料的計算夠重(像數質數),且資料搬運相對便宜」。
+              對又輕又多的操作(像加總),循序的 <code>sum()</code> 往往才是贏家。<strong>先量測,再決定要不要平行。</strong></p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 43.6 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>拿本節「數質數」的 CPU 密集任務,做一個小實驗:用 <code>ProcessPoolExecutor(max_workers=k)</code>,
+          分別讓 <code>k = 1, 2, 4</code>(或到你機器的核心數)去跑同一批任務,各自量時間、算出加速比。
+          然後回答:你量到的加速比,是否如 Amdahl 定律所預測的「低於理想線性」?是哪些開銷把你拉離了理想?</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>沿用前面的 <code>count_primes</code>,加一層「掃描不同 worker 數」的迴圈:</p>
+              <pre><code class="language-python">import time
+from concurrent.futures import ProcessPoolExecutor
+
+# (count_primes 定義同前)
+tasks = [200_000] * 8               # 八個同樣大的工作
+
+if __name__ == "__main__":
+    # 先量「循序」當基準 T1
+    t0 = time.perf_counter()
+    base = [count_primes(n) for n in tasks]
+    t1 = time.perf_counter() - t0
+    print(f"循序基準 T1 = {t1:.2f} 秒")
+
+    for k in [1, 2, 4]:             # 不同核心數
+        t0 = time.perf_counter()
+        with ProcessPoolExecutor(max_workers=k) as pool:
+            out = list(pool.map(count_primes, tasks))
+        tk = time.perf_counter() - t0
+        assert out == base          # 金律二:先確定正確
+        print(f"k={k}:{tk:.2f} 秒,加速比 = {t1 / tk:.2f}×")</code></pre>
+              <p>典型輸出(4 核機器)會像這樣——加速比一路成長,但<strong>始終低於理想的 1×、2×、4×</strong>:</p>
+              <pre><code class="language-text">循序基準 T1 = 13.6 秒
+k=1:13.9 秒,加速比 = 0.98×
+k=2:7.3 秒,加速比 = 1.86×
+k=4:3.9 秒,加速比 = 3.49×</code></pre>
+              <p>為什麼達不到理想線性?幾個把你拉離理想的開銷:</p>
+              <ul>
+                <li><strong>行程建立成本</strong>:啟動每個子行程、複製直譯器環境都要時間(<code>k=1</code> 甚至比純循序略慢,就是這層開銷)。</li>
+                <li><strong>序列化搬運</strong>:任務參數送進子行程、結果送回主行程,都得序列化/反序列化。</li>
+                <li><strong>不完美的負載均衡與系統雜訊</strong>:作業系統還在跑別的東西,核心未必 100% 專心服務你。</li>
+              </ul>
+              <p>這正是 Amdahl 定律的<strong>實機體現</strong>:那些「協調與搬運」的成本,扮演了無法被多核分攤的「循序部分」,
+              替你的加速比設下了一道現實的天花板。實驗一遍,你就把這一章的理論真正握在手裡了。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>從多核到多機:分散式一瞥</h2>
+      <p>
+        本章一路在「一台機器、多顆核心」裡打轉。但當資料大到一台機器裝不下、或計算重到一台機器算不完,
+        下一步自然是:<strong>把工作分給很多台機器</strong>。這就跨進了<strong>分散式計算(distributed computing)</strong>的領域。
+      </p>
+      <p>
+        概念上,它和本章的多行程驚人地相似——每台機器有自己獨立的記憶體,靠<strong>網路傳訊息</strong>協作
+        (這就是為什麼第 25 章的網路是它的基石)。事實上,你已經學會了它的核心範式:
+        Google 2004 年發表的 <strong>MapReduce</strong>,正是把本章的 map-reduce<strong>放大到數千台機器</strong>——
+        資料散在叢集各處,每台機器對自己手上那塊跑 map,再把結果匯總 reduce。後來的 <strong>Apache Spark</strong>
+        把它做得更快、更通用,成了大數據處理的事實標準。
+      </p>
+      <p>
+        但別被「只是放大」騙了——多了「網路」這個變數,難度是<strong>指數級</strong>上升的:網路會逾時、
+        機器會半路掛掉(一千台機器,天天都有幾台壞)、訊息會亂序或重複、資料一致性極難維持
+        (這些第 11 章談微服務時也碰過)。「在多核上平行」與「在多機上分散」共享同一套思維起點,
+        但分散式系統自成一門又深又難的學問,值得用整本書去講。本章先讓你站穩「平行」這塊基石——
+        它是通往分散式的必經之路。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">🧭</div>
+        <div class="body">
+          <span class="c-title">一條清晰的升級路線</span>
+          <p><strong>一顆核心</strong>(循序)→ <strong>多顆核心</strong>(本章:執行緒/行程,共享或不共享記憶體)→
+          <strong>多台機器</strong>(分散式:純訊息傳遞,網路相連)。每往右一步,能處理的規模躍升一個量級,
+          但「協調的難度」也跟著躍升。你在本章學到的所有觀念——Amdahl 的天花板、競爭與同步、map-reduce、
+          訊息傳遞——在每一個層級都成立。它們是會跟著你一路向上的硬通貨。</p>
+        </div>
+      </div>
+
+      <h2>平行程式設計的金律</h2>
+      <p>
+        平行很強大,但也是公認最容易出錯的領域之一。最後,把前人用無數個不眠之夜換來的教訓,濃縮成三條金律:
+      </p>
+      <ol>
+        <li>
+          <strong>能不共享,就不共享。</strong>所有並行惡夢的根源,都是「共享可變狀態」。
+          所以第一選擇永遠是:讓任務彼此獨立(資料平行)、用純函式、用不可變資料、用訊息傳遞取代共享記憶體。
+          <em>沒有共享,就沒有競爭</em>——這比「小心地用鎖」高明一個檔次。
+        </li>
+        <li>
+          <strong>先確定正確,再追求快。</strong>一個又快又錯的平行程式,毫無價值。
+          平行不該改變程式的結果——它只該改變花的時間。請先寫出正確的循序版當作「標準答案」,
+          平行化後務必比對兩者結果一致(像前面實戰那行 <code>serial == parallel</code>)。
+          而且——<strong>先量測再優化</strong>:很多東西平行化後反而更慢(練習 43.5),別憑直覺亂加核心。
+        </li>
+        <li>
+          <strong>平行很難 debug,因為 bug 不可重現。</strong>競爭條件這類 bug,取決於執行緒「碰巧」的時序——
+          它可能跑一千次都正常,在你 demo 給老闆看時偏偏出錯。這種「海森堡 bug(Heisenbug)」
+          無法用「重跑一次看看」來抓。所以對付它的正道,不是事後 debug,而是<strong>事前用對的設計從源頭避免</strong>
+          (回到金律一)。在並行的世界,紀律遠比聰明重要。
+        </li>
+      </ol>
+
+      <div class="callout danger">
+        <div class="ico">⛔</div>
+        <div class="body">
+          <span class="c-title">最危險的心態</span>
+          <p>「我跑了好幾次都對,應該沒問題吧?」——這是平行程式最致命的自我安慰。
+          競爭條件的本質就是「<em>大部分時候</em>對」。它不會在測試時出現,只會在某個流量高峰、某次微妙的時序下,
+          在生產環境給你致命一擊。<strong>並行的正確性,要靠推理與設計來保證,不能靠「測過幾次沒事」來賭。</strong></p>
+        </div>
+      </div>
+
+      <div class="callout note"><div class="ico">🧭</div><div class="body"><span class="c-title">延伸:新軌道</span><p>本章提到的資料競爭,Rust 以根本性的方式解決了它——在編譯期就消滅。<a href="88-rust-concurrency.html">第 82 章「無懼並行與非同步」</a>展示 Rust 的所有權系統如何讓「fearless concurrency(無懼並行)」成為語言保證,而不是依靠程式員的紀律。</p></div></div>
+
+      <h2>把這一章串起來</h2>
+      <p>
+        我們從一頓結束的「免費午餐」出發,走完了平行程式設計的全景。回顧這趟旅程的路標:
+      </p>
+      <ul>
+        <li><strong>為什麼要平行</strong>:摩爾定律轉彎——時脈撞牆、改走多核。要更快,只能讓很多事「同時做」。</li>
+        <li><strong>分清名詞</strong>:並行(結構,可能只是交錯)≠ 平行(執行,真的同時);資料平行(同函式 × 多資料)vs 任務平行(多工作同時)。</li>
+        <li><strong>潛力與極限</strong>:加速比 $S=T_1/T_n$;Amdahl 定律 $S=\frac{1}{(1-p)+p/n}$ 說「循序部分決定天花板 $\frac{1}{1-p}$」;Gustafson 樂觀回應「問題會越做越大」。</li>
+        <li><strong>共享記憶體的危險</strong>:<code>x += 1</code> 不是原子的 → 競爭條件;用鎖修正,但帶來死結、活鎖、效能三個新麻煩;原子操作/無鎖是另一條難路。</li>
+        <li><strong>Python 的 GIL</strong>:多執行緒做不到 CPU 平行(只利於 I/O);CPU 密集要用 <code>multiprocessing</code> 才能吃多核。</li>
+        <li><strong>設計模式</strong>:分治平行、fork-join、工作竊取、map-reduce、pipeline。</li>
+        <li><strong>函數式的優勢</strong>:無共享可變狀態 = 無競爭;不可變 + 純函式 = 天生安全可平行(Scala 的 <code>.par</code>)。</li>
+        <li><strong>高階工具</strong>:屏障、號誌、future;以及訊息傳遞 / actor 模型這條「不共享」的康莊大道。</li>
+        <li><strong>放大到多機</strong>:同一套思維 → 分散式(MapReduce / Spark),但多了網路,難度躍升。</li>
+        <li><strong>三條金律</strong>:能不共享就不共享;先正確再求快;平行 bug 不可重現,要靠設計從源頭避免。</li>
+      </ul>
+      <p>
+        如果這一章只留下一句話,那就是:<strong>平行不是「把程式跑得更快的開關」,而是「換一種思考程式的方式」。</strong>
+        當你開始習慣性地問「這些工作彼此獨立嗎?有沒有共享狀態?」,你就已經跨進了現代程式設計師的核心素養。
+        那些閒置的核心,正等著你叫醒它們。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">📚</div>
+        <div class="body">
+          <span class="c-title">想更深入?延伸資源</span>
+          <p>本章對應 OSSU 的 <a href="https://www.coursera.org/learn/scala-parallel-programming">Parallel Programming(EPFL,Scala,Coursera)</a>
+          ——由 Viktor Kunčak 與 Aleksandar Prokopec 主講,把分治平行、Amdahl/任務平行、平行集合、資料結構的平行化講得既嚴謹又實用
+          (它是「Functional Programming in Scala」專項課程的一環,正好印證本章「函數式 × 平行」的主線)。
+          若你偏好 Python 實戰,官方文件的
+          <a href="https://docs.python.org/3/library/concurrent.futures.html"><code>concurrent.futures</code></a> 與
+          <a href="https://docs.python.org/3/library/multiprocessing.html"><code>multiprocessing</code></a> 兩章是最好的起點。
+          想搞懂 GIL 的來龍去脈,可搜尋 David Beazley 的經典演講「Understanding the Python GIL」。
+          本章承接第 24 章(並行、同步原語)與第 6 章(函數式、無副作用),並通往分散式系統——
+          你已經為那一步,打好了最重要的地基。</p>
+        </div>
+      </div>
+
+    </article>
+  </main>
+</div>
+<script src="../assets/book.js"></script>
+</body>
+</html>

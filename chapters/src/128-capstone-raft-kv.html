@@ -1,0 +1,1385 @@
+<!--meta
+title: 實戰:分散式 KV 與 Raft
+description: 從零動手實作 Raft 共識演算法，搭建一個支援容錯的分散式 KV store——覆蓋領導選舉、日誌複寫、安全性約束、持久化崩潰復原，以及故障注入測試，作為全書的終章收尾。
+-->
+
+      <div class="eyebrow">第二七部 · 動手實戰專案</div>
+      <h1>實戰:分散式 KV 與 Raft</h1>
+      <p class="subtitle">當你把單機的所有知識——網路、作業系統、資料庫、測試——組合起來，試圖讓一個服務在節點故障、網路分區中仍不丟資料，你就踏入了分散式系統最核心的戰場。</p>
+      <div class="byline">
+        <span class="tag">第 122 章</span>
+        <span>閱讀時間 ≈ 120 分鐘</span>
+        <span>難度:★★★★★</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會</div>
+        <ul>
+          <li>理解 Raft 共識演算法的三大子問題:領導選舉、日誌複寫、安全性約束</li>
+          <li>以 Go 從零動手實作 Raft,包括 RequestVote/AppendEntries RPC、計時器、持久化</li>
+          <li>在 Raft 之上搭建線性化(linearizable)的 KV store,正確處理客戶端去重</li>
+          <li>掌握 Figure 8 情境的精確含義:為何選舉限制加日誌 term 檢查缺一不可</li>
+          <li>撰寫故障注入測試:殺 leader、製造網路分區,驗證系統仍一致不丟資料</li>
+          <li>把全書的網路(§25)、資料庫(§37)、除錯與測試(§46)、分散式概念(§92)整合到一個真實專案</li>
+        </ul>
+      </div>
+
+      <!-- ===== §1 開場 ===== -->
+      <h2>開場:為什麼分散式很難?</h2>
+
+      <p>
+        我們先回到一個最基本的問題。假設你替一家公司寫了一個鍵值儲存服務(key-value store),
+        上線第一個月跑得很好。但某天下午,那台機器的硬碟壞掉了——資料全毀、服務全停。
+        客戶損失了錢,你的老闆來找你談話。
+      </p>
+      <p>
+        解決方案看起來很明顯:多開幾台機器,每台都存一份資料的副本(replica)。這樣只要有一台
+        還在運作,服務就不會中斷——這就是<strong>複寫(replication)</strong>。
+      </p>
+      <p>
+        但問題立刻變複雜了。假設你有三台機器,Client 對 A 寫了 <code>x=5</code>。A 還來不及
+        把這個更新同步給 B 和 C,A 就當機了。這時 Client 轉而連上 B,讀到的是舊值 <code>x=0</code>——
+        資料明明已經「寫成功」了,卻像是被吃掉了。這就是<strong>部分失效(partial failure)</strong>
+        製造的幽靈:在單機世界裡,一件事要麼做了要麼沒做;在多機世界裡,一件事可能「做了一半」。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">分散式的根本難題</span>
+          <p>網路分區(network partition)、節點故障、訊息延遲,讓你無法區分「對方死了」和「對方只是很慢」。
+          CAP 定理(<a href="98-distributed-systems.html">§92</a>)告訴我們:在分區存在的情況下,
+          一致性(Consistency)與可用性(Availability)必須取捨。<strong>Raft</strong> 選擇 CP——
+          在多數節點存活時保證強一致,少數節點孤立時拒絕提供服務。</p>
+        </div>
+      </div>
+
+      <h3>本章成品的全貌</h3>
+      <p>
+        我們將打造一個 <strong>3 節點(或可擴展至 5 節點)的容錯 KV store</strong>,核心是手刻的 Raft 共識層。
+        成品支援:
+      </p>
+      <ul>
+        <li><strong>Get / Put / Delete</strong> 操作,具備線性化保證</li>
+        <li>在 1 個節點故障的情況下仍可正常讀寫(3 節點多數派 = 2)</li>
+        <li>Leader 崩潰後,Follower 自動選出新 Leader 並繼續服務</li>
+        <li>重啟後從持久化狀態恢復,不丟已提交的日誌</li>
+      </ul>
+
+      <div class="diagram">
+<svg viewBox="0 0 700 280" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="arr1" markerWidth="10" markerHeight="7" refX="8" refY="3.5" orient="auto">
+      <path d="M0,0 L8,3.5 L0,7 Z" fill="#2f6f6a"/>
+    </marker>
+    <marker id="arr2" markerWidth="10" markerHeight="7" refX="8" refY="3.5" orient="auto">
+      <path d="M0,0 L8,3.5 L0,7 Z" fill="#b4541f"/>
+    </marker>
+  </defs>
+  <!-- Client -->
+  <rect x="10" y="110" width="100" height="56" rx="10" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="60" y="140" text-anchor="middle" font-size="13" font-weight="700" fill="#2f6f6a">Client</text>
+  <text x="60" y="157" text-anchor="middle" font-size="10" fill="#666">Get/Put</text>
+  <!-- Leader -->
+  <rect x="220" y="90" width="130" height="76" rx="10" fill="#2f6f6a"/>
+  <text x="285" y="118" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">Leader</text>
+  <text x="285" y="135" text-anchor="middle" font-size="10" fill="#cfe6e2">Node 0</text>
+  <text x="285" y="152" text-anchor="middle" font-size="10" fill="#cfe6e2">log: [1,2,3…]</text>
+  <!-- Follower 1 -->
+  <rect x="470" y="30" width="120" height="66" rx="10" fill="#b4541f"/>
+  <text x="530" y="58" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">Follower</text>
+  <text x="530" y="74" text-anchor="middle" font-size="10" fill="#f6e7dd">Node 1</text>
+  <text x="530" y="88" text-anchor="middle" font-size="10" fill="#f6e7dd">replica</text>
+  <!-- Follower 2 -->
+  <rect x="470" y="180" width="120" height="66" rx="10" fill="#b4541f"/>
+  <text x="530" y="208" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">Follower</text>
+  <text x="530" y="224" text-anchor="middle" font-size="10" fill="#f6e7dd">Node 2</text>
+  <text x="530" y="238" text-anchor="middle" font-size="10" fill="#f6e7dd">replica</text>
+  <!-- State Machine (KV) -->
+  <rect x="220" y="200" width="130" height="56" rx="10" fill="#8b5cf6"/>
+  <text x="285" y="225" text-anchor="middle" font-size="12" font-weight="700" fill="#fff">KV 狀態機</text>
+  <text x="285" y="243" text-anchor="middle" font-size="10" fill="#ece5ff">apply committed log</text>
+  <!-- Arrows client→leader -->
+  <line x1="110" y1="138" x2="218" y2="130" stroke="#2f6f6a" stroke-width="2" marker-end="url(#arr1)"/>
+  <text x="155" y="128" text-anchor="middle" font-size="10" fill="#2f6f6a">請求</text>
+  <!-- Leader→Followers -->
+  <line x1="350" y1="115" x2="468" y2="72" stroke="#b4541f" stroke-width="2" marker-end="url(#arr2)"/>
+  <line x1="350" y1="145" x2="468" y2="207" stroke="#b4541f" stroke-width="2" marker-end="url(#arr2)"/>
+  <text x="420" y="108" text-anchor="middle" font-size="10" fill="#b4541f">AppendEntries</text>
+  <!-- Leader→KV -->
+  <line x1="285" y1="166" x2="285" y2="198" stroke="#8b5cf6" stroke-width="2" marker-end="url(#arr2)"/>
+  <text x="310" y="186" font-size="10" fill="#8b5cf6">commit</text>
+  <!-- ack back -->
+  <line x1="468" y1="83" x2="350" y2="125" stroke="#8a929b" stroke-width="1.5" stroke-dasharray="5,3"/>
+  <line x1="468" y1="215" x2="350" y2="152" stroke="#8a929b" stroke-width="1.5" stroke-dasharray="5,3"/>
+  <text x="420" y="168" text-anchor="middle" font-size="10" fill="#8a929b">ack</text>
+</svg>
+        <figcaption>圖 122-1:本章成品架構。Client 把請求送給 Leader,Leader 透過 AppendEntries RPC 複寫到 Followers,多數成功後提交,由 KV 狀態機執行。</figcaption>
+      </div>
+
+      <!-- ===== §2 共識問題與 Raft 概觀 ===== -->
+      <h2>共識問題與 Raft 概觀</h2>
+
+      <h3>為什麼需要共識(consensus)?</h3>
+      <p>
+        如果只是「每台機器各自存一份資料」,問題會很簡單——但多個副本就意味著你需要多個副本
+        <em>同意</em>同一件事:下一筆要寫入的是什麼?以什麼順序寫入?
+        這個「讓分散的節點對某個值達成一致」的問題,就叫<strong>共識問題(consensus problem)</strong>。
+      </p>
+      <p>
+        共識是分散式系統的核心難題。著名的 FLP 不可能定理說明:在一個可能有節點失效的非同步網路中,
+        不可能設計出一個「保證在有限步驟內達成共識」的演算法。
+        現實系統的解法是引入<em>部分同步(partial synchrony)</em>假設——在大多數時候,
+        訊息會在有限時間內送達,這樣共識才變得可能。
+      </p>
+
+      <h3>Raft 三大子問題</h3>
+      <p>
+        2014 年,Diego Ongaro 在他的論文《In Search of an Understandable Consensus Algorithm》
+        中提出了 <strong>Raft</strong>。Raft 的設計目標是「可理解性(understandability)」——
+        相較於業界更早的 Paxos,Raft 把問題拆成三個相對獨立、容易理解的子問題:
+      </p>
+      <ol>
+        <li><strong>領導選舉(Leader Election)</strong>:在某個 Leader 故障後,選出一個新 Leader。</li>
+        <li><strong>日誌複寫(Log Replication)</strong>:Leader 接受來自 Client 的命令,複寫到所有 Followers。</li>
+        <li><strong>安全性(Safety)</strong>:在任何節點故障情況下,保證所有節點最終在相同順序應用相同命令。</li>
+      </ol>
+
+      <h3>term 與角色狀態機</h3>
+      <p>
+        Raft 用<strong>任期(term)</strong>這個概念來邏輯分割時間。Term 是一個單調遞增的整數;
+        每一次選舉就開啟一個新 term。Term 充當一個「邏輯時鐘」:如果某節點收到一條訊息,
+        帶著比自己 currentTerm 更大的 term,它立刻知道「自己已落後,需要更新」。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">Term 是 Raft 的邏輯時鐘</span>
+          <p>任何節點若收到 term 更大的 RPC,必須立即把自己的 currentTerm 更新為對方的 term,
+          並轉換為 Follower。這條規則是 Raft 正確性的基礎——舊 Leader 回來後,
+          它的 term 比現在的小,不可能再成為 Leader。</p>
+        </div>
+      </div>
+
+      <p>每個 Raft 節點同一時間只處於三種角色之一:</p>
+      <ul>
+        <li><strong>Follower</strong>:被動接受 Leader 的心跳與日誌;一段時間沒收到心跳就轉 Candidate。</li>
+        <li><strong>Candidate</strong>:發起選舉,向其他節點請求投票;收到多數票就成為 Leader。</li>
+        <li><strong>Leader</strong>:唯一接受寫入的節點;透過心跳維持權威;負責複寫日誌。</li>
+      </ul>
+
+      <div class="callout history">
+        <div class="ico">📜</div>
+        <div class="body">
+          <span class="c-title">Raft vs Paxos</span>
+          <p>Paxos(Leslie Lamport,1989)是共識演算法的奠基之作,但惡名昭彰地難以理解與實作。
+          Raft 的作者在設計時把「understandability」列為第一優先考量,
+          甚至在論文中做了使用者研究來驗證 Raft 確實比 Paxos 易懂。
+          etcd、TiKV、CockroachDB 等知名系統都採用 Raft。</p>
+        </div>
+      </div>
+
+      <!-- ===== §3 里程碑 1:RPC 與節點骨架 ===== -->
+      <h2>里程碑 1 — RPC 與節點骨架</h2>
+
+      <p>
+        在動手寫任何 Raft 邏輯之前,我們先建好「鷹架」:節點的狀態結構、RPC 介面定義、
+        以及驅動整個機制的計時器迴圈。語言選用 Go——它的 goroutine 與 channel 天然適合
+        並發的分散式節點模擬(<a href="25-networking.html">§25</a>)。
+      </p>
+
+      <h3>節點狀態結構</h3>
+      <pre><code class="language-go">package raft
+
+import (
+    "math/rand"
+    "sync"
+    "time"
+)
+
+// RoleType 代表節點角色
+type RoleType int
+
+const (
+    Follower  RoleType = iota
+    Candidate
+    Leader
+)
+
+// LogEntry 是日誌中的一條記錄
+type LogEntry struct {
+    Term    int         // 這條日誌在哪個 term 被 Leader 建立
+    Command interface{} // 狀態機指令(例如 KV 操作)
+}
+
+// Raft 節點的核心狀態
+type Raft struct {
+    mu        sync.Mutex // 保護以下所有欄位
+    peers     []string   // 所有節點的地址列表(含自己)
+    me        int        // 自己在 peers 中的索引
+
+    // ---- 需要持久化的欄位(節點重啟後必須恢復) ----
+    currentTerm int        // 見過的最大 term
+    votedFor    int        // 本 term 投票給誰(-1 表示尚未投)
+    log         []LogEntry // 日誌條目(index 從 1 開始,index 0 是哨兵)
+
+    // ---- 揮發性欄位 ----
+    commitIndex int // 已知已提交的最高日誌索引
+    lastApplied int // 已應用到狀態機的最高日誌索引
+
+    // ---- Leader 專用揮發性欄位(選舉後重新初始化) ----
+    nextIndex  []int // 下一個要發給各 Follower 的日誌索引
+    matchIndex []int // 各 Follower 已複寫的最高日誌索引
+
+    // ---- 計時器 ----
+    role            RoleType
+    electionTimer   *time.Timer
+    heartbeatTicker *time.Ticker
+
+    // ---- 狀態機通道 ----
+    applyCh chan ApplyMsg // 提交的日誌送到此通道由上層狀態機消化
+}
+
+// ApplyMsg 是傳給狀態機的訊息
+type ApplyMsg struct {
+    CommandValid bool
+    Command      interface{}
+    CommandIndex int
+}</code></pre>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">日誌索引從 1 開始</span>
+          <p>Raft 論文的日誌索引從 1 開始,index 0 通常放一個空哨兵條目(term=0,command=nil),
+          方便邊界判斷。初始 commitIndex=0、lastApplied=0 都代表「尚無任何條目」。</p>
+        </div>
+      </div>
+
+      <h3>RPC 結構定義</h3>
+      <p>Raft 的核心只有兩種 RPC。在實際系統中你會用 gRPC 或標準 HTTP/JSON,
+      這裡我們先定義結構,之後用 Go 的 <code>net/rpc</code> 發送:</p>
+      <pre><code class="language-go">// RequestVoteArgs:Candidate 向其他節點請求投票
+type RequestVoteArgs struct {
+    Term         int // Candidate 的 currentTerm
+    CandidateId  int // Candidate 在 peers 中的索引
+    LastLogIndex int // Candidate 日誌的最後一個索引
+    LastLogTerm  int // 最後一個日誌條目的 term
+}
+
+type RequestVoteReply struct {
+    Term        int  // 回應者的 currentTerm(若更大,Candidate 應退回 Follower)
+    VoteGranted bool // true 表示投票給 Candidate
+}
+
+// AppendEntriesArgs:Leader 複寫日誌/發送心跳
+type AppendEntriesArgs struct {
+    Term         int        // Leader 的 currentTerm
+    LeaderId     int        // 讓 Follower 知道向誰轉發 Client 請求
+    PrevLogIndex int        // 緊接在新條目之前的日誌索引
+    PrevLogTerm  int        // PrevLogIndex 對應條目的 term
+    Entries      []LogEntry // 要追加的條目(心跳時為空)
+    LeaderCommit int        // Leader 的 commitIndex
+}
+
+type AppendEntriesReply struct {
+    Term    int  // 回應者的 currentTerm
+    Success bool // Follower 的一致性檢查是否通過
+    // 以下為快速回退最佳化欄位(避免逐一回退)
+    ConflictTerm  int // Follower 在 PrevLogIndex 的 term(若不一致)
+    ConflictIndex int // 該 term 最早出現的日誌索引
+}</code></pre>
+
+      <h3>計時器初始化與事件迴圈</h3>
+      <pre><code class="language-go">// resetElectionTimer 重設選舉超時,時間隨機在 [150,300) ms
+func (rf *Raft) resetElectionTimer() {
+    d := time.Duration(150+rand.Intn(150)) * time.Millisecond
+    if rf.electionTimer == nil {
+        rf.electionTimer = time.NewTimer(d)
+    } else {
+        // Stop 後 drain 通道,再 Reset 是安全的慣用模式
+        if !rf.electionTimer.Stop() {
+            select {
+            case &lt;-rf.electionTimer.C:
+            default:
+            }
+        }
+        rf.electionTimer.Reset(d)
+    }
+}
+
+// tickerLoop 是每個節點的主事件驅動迴圈
+func (rf *Raft) tickerLoop() {
+    for {
+        select {
+        case &lt;-rf.electionTimer.C:
+            rf.mu.Lock()
+            if rf.role != Leader {
+                rf.startElection()
+            }
+            rf.resetElectionTimer()
+            rf.mu.Unlock()
+
+        case &lt;-rf.heartbeatTicker.C:
+            rf.mu.Lock()
+            if rf.role == Leader {
+                rf.broadcastAppendEntries(true) // true = 心跳模式
+            }
+            rf.mu.Unlock()
+        }
+    }
+}</code></pre>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">隨機化超時防止分票</span>
+          <p>選舉超時使用 [150, 300) ms 的<strong>隨機</strong>區間。心跳週期通常設為 50–100 ms,
+          遠小於選舉超時下界,確保 Leader 在任何一個 Follower 超時之前就先發出心跳。
+          隨機化讓多個 Follower 幾乎不可能同時超時,大幅減少分票機率。</p>
+        </div>
+      </div>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">鎖與計時器的陷阱</span>
+          <p>Go 的 <code>time.Timer.Stop()</code> 不保證停止後通道為空,必須手動 drain。
+          在持有鎖的情況下發送 RPC 會造成死鎖——請在釋放鎖後再異步呼叫 RPC,
+          並在收到回覆後重新取鎖才處理結果。</p>
+        </div>
+      </div>
+
+      <h3>里程碑 1 驗收</h3>
+      <div class="callout note">
+        <div class="ico">✅</div>
+        <div class="body">
+          <span class="c-title">里程碑 1 完成標準</span>
+          <ul>
+            <li>三個節點能夠啟動,各自打印自己的角色(初始全為 Follower)</li>
+            <li>節點間 RPC 層通道建好,可以互相呼叫 <code>RequestVote</code> / <code>AppendEntries</code>(先回傳空 reply 即可)</li>
+            <li>計時器迴圈運行:選舉超時觸發時打印「election timeout, starting election」</li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- ===== §4 里程碑 2:領導選舉 ===== -->
+      <h2>里程碑 2 — 領導選舉</h2>
+
+      <p>
+        領導選舉是 Raft 的心臟。節點在以下情況會發起選舉:
+        在選舉超時時間內,沒有收到任何合法 Leader 的心跳。
+        讓我們一步步實作 <code>startElection</code> 和 <code>RequestVote</code> 的處理邏輯。
+      </p>
+
+      <h3>發起選舉:startElection</h3>
+      <pre><code class="language-go">// startElection 在持有鎖的情況下呼叫
+func (rf *Raft) startElection() {
+    rf.currentTerm++          // 遞增 term,進入新選舉週期
+    rf.role = Candidate
+    rf.votedFor = rf.me       // 先投給自己
+    rf.persist()              // 持久化(term/votedFor 改變時必須)
+
+    term := rf.currentTerm
+    lastIdx, lastTerm := rf.lastLogIndexAndTerm()
+    votes := 1 // 自己的票
+
+    for i := range rf.peers {
+        if i == rf.me {
+            continue
+        }
+        go func(peer int) {
+            args := &amp;RequestVoteArgs{
+                Term:         term,
+                CandidateId:  rf.me,
+                LastLogIndex: lastIdx,
+                LastLogTerm:  lastTerm,
+            }
+            reply := &amp;RequestVoteReply{}
+            if ok := rf.sendRequestVote(peer, args, reply); !ok {
+                return
+            }
+            rf.mu.Lock()
+            defer rf.mu.Unlock()
+
+            // 若對方的 term 更大,退回 Follower
+            if reply.Term &gt; rf.currentTerm {
+                rf.becomeFollower(reply.Term)
+                return
+            }
+            // 確認我們仍處於同一 term 且仍是 Candidate
+            if rf.role != Candidate || rf.currentTerm != term {
+                return
+            }
+            if reply.VoteGranted {
+                votes++
+                if votes &gt; len(rf.peers)/2 {
+                    rf.becomeLeader()
+                }
+            }
+        }(i)
+    }
+}
+
+func (rf *Raft) lastLogIndexAndTerm() (int, int) {
+    n := len(rf.log)
+    if n == 0 {
+        return 0, 0
+    }
+    return n - 1, rf.log[n-1].Term
+}</code></pre>
+
+      <h3>回應投票:RequestVote RPC 處理器</h3>
+      <pre><code class="language-go">func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
+    rf.mu.Lock()
+    defer rf.mu.Unlock()
+
+    reply.Term = rf.currentTerm
+    reply.VoteGranted = false
+
+    // 規則 1:若 Candidate 的 term 比自己小,拒絕投票
+    if args.Term &lt; rf.currentTerm {
+        return
+    }
+    // 若 Candidate 的 term 更大,先更新自己的 term 並退回 Follower
+    if args.Term &gt; rf.currentTerm {
+        rf.becomeFollower(args.Term)
+        reply.Term = rf.currentTerm
+    }
+
+    // 規則 2:只在尚未投票(或已投給同一候選人)時,才考慮投票
+    alreadyVoted := rf.votedFor != -1 &amp;&amp; rf.votedFor != args.CandidateId
+    if alreadyVoted {
+        return
+    }
+
+    // 規則 3:選舉限制(Election Restriction)——只投給日誌至少與自己一樣新的 Candidate
+    myLastIdx, myLastTerm := rf.lastLogIndexAndTerm()
+    candidateLogUpToDate := args.LastLogTerm &gt; myLastTerm ||
+        (args.LastLogTerm == myLastTerm &amp;&amp; args.LastLogIndex &gt;= myLastIdx)
+    if !candidateLogUpToDate {
+        return
+    }
+
+    // 投票
+    rf.votedFor = args.CandidateId
+    rf.persist()
+    rf.resetElectionTimer() // 投票後重設計時器,避免立即發起新選舉
+    reply.VoteGranted = true
+}</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">投票的三個條件</span>
+          <p>
+            節點投票給 Candidate 必須同時滿足三個條件:
+            (1) Candidate 的 term ≥ 自己的 term;
+            (2) 本 term 尚未投給別人(或已投給這個 Candidate);
+            (3) Candidate 的日誌至少與自己一樣新——這是<strong>選舉限制</strong>,
+            確保新 Leader 一定擁有所有已提交的日誌條目。缺少任何一條,系統安全性就會被破壞。
+          </p>
+        </div>
+      </div>
+
+      <h3>成為 Leader 後的初始化</h3>
+      <pre><code class="language-go">func (rf *Raft) becomeLeader() {
+    rf.role = Leader
+    n := len(rf.log)
+    // nextIndex 初始化為自己日誌長度(下一個要發送的索引)
+    for i := range rf.peers {
+        rf.nextIndex[i] = n
+        rf.matchIndex[i] = 0
+    }
+    // 立即發送心跳,宣示 Leader 身份(帶著新 term 壓制其他 Candidate)
+    rf.broadcastAppendEntries(true)
+}</code></pre>
+
+      <h3>becomeFollower 的實作與持久化保證</h3>
+      <p>
+        <code>becomeFollower(term)</code> 是 Raft 中最頻繁被呼叫的輔助函式——每當收到更高 term 的 RPC,
+        就必須立即退回 Follower 並更新 <code>currentTerm</code>。
+        <strong>核心正確性要求</strong>:任何改動 <code>currentTerm</code>、<code>votedFor</code>、
+        或 <code>log[]</code> 的操作,都必須在改動後立即呼叫 <code>persist()</code>——否則節點崩潰重啟後
+        狀態回退,可能在同一 term 重複投票,導致雙 Leader。
+        <code>becomeFollower</code> 負責 term 變更的持久化,把 <code>persist()</code> 封進函式內部,
+        確保所有呼叫點都不會遺漏。
+      </p>
+      <pre><code class="language-go">// becomeFollower 在持有 rf.mu 的情況下呼叫。
+// 只要 term 實際改變就立刻 persist(),涵蓋所有早返路徑:
+//   - RequestVote 的 alreadyVoted / 選舉限制早返
+//   - AppendEntries 一致性檢查失敗早返
+//   - 投票 goroutine 的 becomeFollower(reply.Term); return
+func (rf *Raft) becomeFollower(term int) {
+    changed := term &gt; rf.currentTerm
+    if changed {
+        rf.currentTerm = term
+        rf.votedFor = -1 // 新 term 尚未投票
+    }
+    rf.role = Follower
+    if changed {
+        rf.persist() // ← term/votedFor 變更必須持久化
+    }
+}</code></pre>
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">persist() 必須覆蓋所有路徑</span>
+          <p>若 <code>becomeFollower</code> 不自行持久化,以下路徑都會漏掉:
+          (1) <code>RequestVote</code> 中因 <code>alreadyVoted</code> 或選舉限制失敗提前 return;
+          (2) <code>AppendEntries</code> 一致性檢查失敗提前 return;
+          (3) 投票 goroutine 裡 <code>becomeFollower(reply.Term); return</code>。
+          崩潰重啟後 <code>currentTerm</code> 回退,節點可能在同一 term 再次投票,造成雙 Leader。
+          將 <code>persist()</code> 封入 <code>becomeFollower</code> 後,所有呼叫點自動被覆蓋。</p>
+        </div>
+      </div>
+
+      <h3>領導選舉時序圖</h3>
+      <div class="diagram">
+<svg viewBox="0 0 660 340" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="arr1b" markerWidth="10" markerHeight="7" refX="8" refY="3.5" orient="auto">
+      <path d="M0,0 L8,3.5 L0,7 Z" fill="#2f6f6a"/>
+    </marker>
+    <marker id="arr2b" markerWidth="10" markerHeight="7" refX="8" refY="3.5" orient="auto">
+      <path d="M0,0 L8,3.5 L0,7 Z" fill="#b4541f"/>
+    </marker>
+  </defs>
+  <!-- 時間軸背景 -->
+  <rect x="0" y="0" width="660" height="340" fill="#f9fafb"/>
+  <!-- 節點標頭 -->
+  <rect x="30" y="10" width="120" height="36" rx="6" fill="#2f6f6a"/>
+  <text x="90" y="34" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">Node 0</text>
+  <rect x="270" y="10" width="120" height="36" rx="6" fill="#8a929b"/>
+  <text x="330" y="34" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">Node 1</text>
+  <rect x="510" y="10" width="120" height="36" rx="6" fill="#8a929b"/>
+  <text x="570" y="34" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">Node 2</text>
+  <!-- 時間線 -->
+  <line x1="90" y1="46" x2="90" y2="330" stroke="#2f6f6a" stroke-width="2" stroke-dasharray="4,3"/>
+  <line x1="330" y1="46" x2="330" y2="330" stroke="#8a929b" stroke-width="2" stroke-dasharray="4,3"/>
+  <line x1="570" y1="46" x2="570" y2="330" stroke="#8a929b" stroke-width="2" stroke-dasharray="4,3"/>
+  <!-- 事件1:election timeout -->
+  <rect x="30" y="58" width="120" height="26" rx="4" fill="#e3efed"/>
+  <text x="90" y="75" text-anchor="middle" font-size="11" fill="#2f6f6a">election timeout</text>
+  <text x="90" y="90" text-anchor="middle" font-size="10" fill="#666">term→1, Candidate</text>
+  <!-- RequestVote 箭頭 -->
+  <line x1="110" y1="105" x2="308" y2="118" stroke="#b4541f" stroke-width="2" marker-end="url(#arr2b)"/>
+  <line x1="110" y1="105" x2="548" y2="118" stroke="#b4541f" stroke-width="2" marker-end="url(#arr2b)"/>
+  <text x="200" y="100" font-size="10" fill="#b4541f">RequestVote(term=1)</text>
+  <!-- Node 1 收到 -->
+  <rect x="270" y="120" width="120" height="26" rx="4" fill="#fff3e0"/>
+  <text x="330" y="138" text-anchor="middle" font-size="11" fill="#b4541f">收到 RequestVote</text>
+  <!-- Node 2 收到 -->
+  <rect x="510" y="120" width="120" height="26" rx="4" fill="#fff3e0"/>
+  <text x="570" y="138" text-anchor="middle" font-size="11" fill="#b4541f">收到 RequestVote</text>
+  <!-- vote granted 回覆 -->
+  <line x1="310" y1="155" x2="112" y2="168" stroke="#2f6f6a" stroke-width="2" marker-end="url(#arr1b)"/>
+  <line x1="550" y1="155" x2="112" y2="178" stroke="#2f6f6a" stroke-width="2" marker-end="url(#arr1b)"/>
+  <text x="190" y="152" text-anchor="middle" font-size="10" fill="#2f6f6a">VoteGranted=true</text>
+  <!-- 成為 Leader -->
+  <rect x="30" y="185" width="120" height="32" rx="4" fill="#2f6f6a"/>
+  <text x="90" y="200" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">votes=3 &gt; 3/2</text>
+  <text x="90" y="213" text-anchor="middle" font-size="10" fill="#cfe6e2">→ 成為 Leader!</text>
+  <!-- 心跳 -->
+  <line x1="110" y1="225" x2="308" y2="240" stroke="#2f6f6a" stroke-width="1.5" stroke-dasharray="6,2" marker-end="url(#arr1b)"/>
+  <line x1="110" y1="225" x2="548" y2="240" stroke="#2f6f6a" stroke-width="1.5" stroke-dasharray="6,2" marker-end="url(#arr1b)"/>
+  <text x="240" y="222" text-anchor="middle" font-size="10" fill="#2f6f6a">heartbeat (AppendEntries,空)</text>
+  <!-- Node1 Node2 更新狀態 -->
+  <rect x="270" y="245" width="120" height="26" rx="4" fill="#e3efed"/>
+  <text x="330" y="262" text-anchor="middle" font-size="11" fill="#2f6f6a">確認 Leader=0</text>
+  <rect x="510" y="245" width="120" height="26" rx="4" fill="#e3efed"/>
+  <text x="570" y="262" text-anchor="middle" font-size="11" fill="#2f6f6a">確認 Leader=0</text>
+</svg>
+        <figcaption>圖 122-2:領導選舉時序。Node 0 最先超時,遞增 term、向其他節點發送 RequestVote;收到多數票後立即宣告 Leader 並發送心跳。</figcaption>
+      </div>
+
+      <h3>里程碑 2 驗收</h3>
+      <div class="callout note">
+        <div class="ico">✅</div>
+        <div class="body">
+          <span class="c-title">里程碑 2 完成標準</span>
+          <ul>
+            <li>3 個節點啟動後,在一個選舉超時週期內選出一個 Leader</li>
+            <li>打印:「Node X elected as Leader in term Y」</li>
+            <li>手動終止 Leader 進程,剩餘兩個節點能在下一個選舉超時後重新選出新 Leader</li>
+            <li>舊 Leader 重新上線後,收到心跳中 term 更大,自動退回 Follower</li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- ===== §5 里程碑 3:日誌複寫 ===== -->
+      <h2>里程碑 3 — 日誌複寫</h2>
+
+      <p>
+        有了 Leader,下一步是讓它接受 Client 的指令,並把日誌安全地複寫到多數節點。
+        Raft 的日誌複寫透過 <strong>AppendEntries RPC</strong> 完成——這個 RPC 同時扮演
+        「複寫新條目」和「心跳」兩個角色。
+      </p>
+
+      <h3>Leader 接受新指令:Start()</h3>
+      <pre><code class="language-go">// Start 由上層 KV 服務呼叫,要求 Raft 把 command 複寫到狀態機
+// 若自己不是 Leader,回傳 isLeader=false
+func (rf *Raft) Start(command interface{}) (index int, term int, isLeader bool) {
+    rf.mu.Lock()
+    defer rf.mu.Unlock()
+
+    if rf.role != Leader {
+        return -1, rf.currentTerm, false
+    }
+    // 把新命令追加到自己的日誌
+    entry := LogEntry{Term: rf.currentTerm, Command: command}
+    rf.log = append(rf.log, entry)
+    index = len(rf.log) - 1
+    term = rf.currentTerm
+    rf.persist()
+
+    // 立即觸發一輪 AppendEntries(而不等心跳週期)
+    go rf.broadcastAppendEntries(false)
+    return index, term, true
+}</code></pre>
+
+      <h3>AppendEntries 一致性檢查</h3>
+      <p>
+        AppendEntries 的關鍵是「一致性檢查(consistency check)」:Leader 在每次 RPC 裡帶上
+        <code>PrevLogIndex</code> 和 <code>PrevLogTerm</code>——緊接在新條目之前那一筆的索引和 term。
+        Follower 必須先確認自己日誌的該位置有相同的 term,才接受新條目。這保證了:
+        <em>如果兩份日誌在某個索引的 term 相同,那麼這之前的所有日誌也完全相同。</em>
+      </p>
+      <pre><code class="language-go">func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+    rf.mu.Lock()
+    defer rf.mu.Unlock()
+
+    reply.Term = rf.currentTerm
+    reply.Success = false
+
+    // 1. 若 Leader 的 term 比自己小,拒絕
+    if args.Term &lt; rf.currentTerm {
+        return
+    }
+    // 2. 收到合法 Leader 的訊息,重設選舉計時器
+    if args.Term &gt; rf.currentTerm {
+        rf.becomeFollower(args.Term)
+        reply.Term = rf.currentTerm
+    }
+    rf.resetElectionTimer()
+    rf.role = Follower // 即使 term 相等,也確認自己是 Follower
+
+    // 3. 一致性檢查
+    if args.PrevLogIndex &gt;= len(rf.log) {
+        // Follower 日誌太短,沒有 PrevLogIndex 這個位置
+        reply.ConflictIndex = len(rf.log)
+        reply.ConflictTerm = -1
+        return
+    }
+    if rf.log[args.PrevLogIndex].Term != args.PrevLogTerm {
+        // term 衝突,回報衝突 term 及其最早出現位置,幫助 Leader 快速回退
+        reply.ConflictTerm = rf.log[args.PrevLogIndex].Term
+        reply.ConflictIndex = rf.firstIndexOfTerm(reply.ConflictTerm)
+        return
+    }
+
+    // 4. 追加新條目(若有衝突則先截斷再追加)
+    for i, entry := range args.Entries {
+        idx := args.PrevLogIndex + 1 + i
+        if idx &lt; len(rf.log) {
+            if rf.log[idx].Term != entry.Term {
+                rf.log = rf.log[:idx] // 截斷衝突的部分
+                rf.log = append(rf.log, args.Entries[i:]...)
+                break
+            }
+            // 條目已存在且 term 相同,跳過
+        } else {
+            rf.log = append(rf.log, args.Entries[i:]...)
+            break
+        }
+    }
+    rf.persist()
+
+    // 5. 更新 commitIndex
+    if args.LeaderCommit &gt; rf.commitIndex {
+        lastNewIdx := args.PrevLogIndex + len(args.Entries)
+        if args.LeaderCommit &lt; lastNewIdx {
+            rf.commitIndex = args.LeaderCommit
+        } else {
+            rf.commitIndex = lastNewIdx
+        }
+        rf.applyEntries()
+    }
+    reply.Success = true
+}</code></pre>
+
+      <h3>Leader 更新 commitIndex</h3>
+      <p>
+        Leader 在每次收到 Follower 的成功回覆後,更新 <code>matchIndex[peer]</code>,
+        然後掃描是否有某個索引 N,使得:
+      </p>
+      <ol>
+        <li><code>N &gt; commitIndex</code></li>
+        <li>多數節點的 <code>matchIndex &gt;= N</code></li>
+        <li><strong>log[N].Term == currentTerm</strong>(安全性關鍵!詳見里程碑 4)</li>
+      </ol>
+      <pre><code class="language-go">func (rf *Raft) maybeAdvanceCommitIndex() {
+    // 從日誌末尾往前找,找到多數節點已複寫且 term 正確的最高索引
+    for n := len(rf.log) - 1; n &gt; rf.commitIndex; n-- {
+        if rf.log[n].Term != rf.currentTerm {
+            continue // 關鍵:只能提交當前 term 的日誌(間接提交舊 term)
+        }
+        count := 1 // 自己算一票
+        for peer, mi := range rf.matchIndex {
+            if peer != rf.me &amp;&amp; mi &gt;= n {
+                count++
+            }
+        }
+        if count &gt; len(rf.peers)/2 {
+            rf.commitIndex = n
+            rf.applyEntries()
+            break
+        }
+    }
+}</code></pre>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">只能直接提交當前 term 的日誌</span>
+          <p>Leader 不能僅憑「多數節點已複寫」就提交屬於<em>舊 term</em>的日誌條目——
+          那會導致 Figure 8 安全性違反。正確做法是:等一條<em>當前 term</em>的新日誌達到多數,
+          舊 term 的日誌才隨之被間接提交。這條規則由 <code>rf.log[n].Term != rf.currentTerm</code>
+          的 continue 保證。</p>
+        </div>
+      </div>
+
+      <h3>里程碑 3 驗收</h3>
+      <div class="callout note">
+        <div class="ico">✅</div>
+        <div class="body">
+          <span class="c-title">里程碑 3 完成標準</span>
+          <ul>
+            <li>呼叫 <code>Start(command)</code>,Leader 把命令複寫到所有 Followers</li>
+            <li>打印每個節點的 commitIndex 推進過程,三節點的 commitIndex 應最終一致</li>
+            <li>已提交的條目透過 <code>applyCh</code> 傳出,上層可記錄應用順序</li>
+            <li>Follower 短暫掉線後重連,Leader 補發缺失日誌,使其日誌追上</li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- ===== §6 里程碑 4:安全性 ===== -->
+      <h2>里程碑 4 — 安全性:選舉限制與 Figure 8</h2>
+
+      <p>
+        Raft 的「安全性」屬性有一個精確的表述:
+        <em>如果任何節點把索引 i 的日誌條目應用到狀態機,那麼任何其他節點在索引 i 應用的也一定是相同的命令。</em>
+        這個屬性由以下兩個規則共同保證:
+      </p>
+
+      <h3>選舉限制(Election Restriction)</h3>
+      <p>
+        在 <code>RequestVote</code> 的處理邏輯中,我們已實作了選舉限制:
+        <strong>只投票給日誌至少和自己一樣新的 Candidate</strong>。
+        「至少一樣新」的判斷方式:
+      </p>
+      <ul>
+        <li>若 <code>LastLogTerm</code> 不同,term 較大的日誌更新</li>
+        <li>若 <code>LastLogTerm</code> 相同,<code>LastLogIndex</code> 較大的更新</li>
+      </ul>
+      <p>
+        這條規則確保:任何當選 Leader 的節點,一定擁有所有<em>已提交</em>的日誌條目——
+        因為一條日誌要「已提交」,就必須已經在多數節點上。新 Leader 要獲得多數票,
+        也必須至少有一個擁有最新已提交日誌的節點投票給它(鴿巢原理)。
+      </p>
+
+      <h3>Figure 8:為什麼不能直接提交舊 term 的日誌</h3>
+      <p>
+        Raft 論文的 Figure 8 是理解安全性最關鍵的一個反例。讓我們逐步展開:
+      </p>
+      <ol>
+        <li>
+          <strong>狀態(a)</strong>:Leader S1(term 2)把索引 2 的條目複寫到了 S2,但還來不及複寫到 S3–S5 就崩潰了。
+        </li>
+        <li>
+          <strong>狀態(b)</strong>:S5 選舉為 term 3 的 Leader(S3/S4/S5 投票),S5 在索引 2 寫入自己的條目。
+          但 S5 也崩潰了。
+        </li>
+        <li>
+          <strong>狀態(c)</strong>:S1 在 term 4 重新當選(S1/S2/S3 的多數票)。
+          S1 繼續把「自己 term 2 的索引 2 日誌」複寫給 S3。
+          <em>此時如果 S1 看到多數節點(S1/S2/S3)已有索引 2,就以為可以提交它——這是錯誤的!</em>
+        </li>
+        <li>
+          <strong>狀態(d)</strong>:S1 再次崩潰,S5 靠 S3/S4/S5 的選票成為 Leader,
+          並用自己 term 3 的索引 2 日誌覆蓋掉 S3 上 term 2 的那條——
+          如果之前「提交了」 term 2 的索引 2,就發生了已提交資料被覆蓋的災難。
+        </li>
+        <li>
+          <strong>狀態(e,正確)</strong>:若 S1 在 term 4 先追加一條 <em>term 4</em> 的新日誌(索引 3),
+          等多數節點複寫了索引 3 後,才提交索引 3——此時索引 2(term 2)被間接提交。
+          這時 S5 因為日誌沒有索引 3,無法獲得 S1/S2/S3 的投票,選舉失敗,安全性得以保持。
+        </li>
+      </ol>
+
+      <div class="callout danger">
+        <div class="ico">⛔</div>
+        <div class="body">
+          <span class="c-title">Figure 8 是最常被誤實作的地方</span>
+          <p>很多 Raft 實作因為「看到多數節點都有了就直接提交」而在 Figure 8 情境下出現資料覆蓋。
+          正確規則:Leader 只能在看到多數節點擁有<em>當前 term</em>的某條日誌後,才推進 commitIndex。
+          舊 term 的日誌只能被間接提交,絕對不能被直接判斷為已提交。</p>
+        </div>
+      </div>
+
+      <h3>「不會有兩個 Leader 同時提交」的直覺</h3>
+      <p>
+        Raft 的安全性屬性由一個投票多數派論證保證:要選出一個 Leader 需要多數節點投票,
+        而這個多數派與任何一個已提交日誌的多數派必然有<strong>至少一個節點重疊</strong>。
+        那個重疊節點擁有已提交的日誌,而選舉限制確保它只投票給日誌至少跟自己一樣新的 Candidate——
+        因此新 Leader 必然擁有那條已提交的日誌。這個論證構成了 Raft 安全性定理的核心。
+      </p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 122.1 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>假設 5 節點的 Raft 叢集在 term 3,Leader 把索引 5 的日誌複寫到了節點 A、B、C(三個多數),
+          於是提交了該條目。之後 Leader 崩潰,而節點 D 和 E 聯合節點 C 的票選出了新 Leader。
+          為什麼這種情況「其實不可能發生」?(提示:從選舉限制和已提交日誌的多數派思考)</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>D 和 E 各自的日誌在索引 5 沒有 term 3 的條目(只有舊的或空的)。
+              而 C 擁有索引 5 的 term 3 條目,其日誌比 D 和 E 更新。
+              根據選舉限制,C 不會投票給日誌比自己舊的 D 或 E。
+              因此 D 或 E 最多只能獲得 D+E 兩票,不到多數(5/2+1=3),無法選出——
+              新 Leader 必須在 A/B/C 中產生,而它們都擁有已提交的索引 5 日誌。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ===== §7 里程碑 5:持久化 ===== -->
+      <h2>里程碑 5 — 持久化與崩潰復原</h2>
+
+      <p>
+        節點會崩潰、重啟。Raft 需要把某些狀態寫到非揮發性儲存(磁碟/SSD),
+        否則重啟後會忘記自己的承諾,破壞安全性。
+        這與<a href="37-databases.html">§37 資料庫</a>中 WAL(Write-Ahead Log)的精神完全一致——
+        先寫日誌,再做動作。
+      </p>
+
+      <h3>哪些狀態必須持久化?</h3>
+      <p>Raft 論文明確指出三個必須持久化的欄位:</p>
+      <ul>
+        <li><strong>currentTerm</strong>:防止節點重啟後使用舊 term 再次投票給已在該 term 投過票的 Candidate,造成同一 term 有兩個節點各獲得「一票」的幻覺。</li>
+        <li><strong>votedFor</strong>:防止重啟後「忘記自己投過票」,再次投給另一個 Candidate,導致同一 term 出現兩個 Leader。</li>
+        <li><strong>log[]</strong>:已追加的日誌條目必須持久化,否則重啟後節點日誌比 Leader 短,可能錯誤地截斷掉其他節點已提交的條目。</li>
+      </ul>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">commitIndex 不需要持久化!</span>
+          <p><code>commitIndex</code> 是揮發的:節點重啟後 commitIndex 從 0 開始,
+          但透過與 Leader 的 AppendEntries 交互,很快就能追上——Leader 的心跳裡帶有 <code>LeaderCommit</code>。
+          不持久化 commitIndex 是刻意的設計,簡化實作。</p>
+        </div>
+      </div>
+
+      <h3>persist() 的實作</h3>
+      <pre><code class="language-go">import (
+    "bytes"
+    "encoding/gob"
+)
+
+// persist 必須在 currentTerm / votedFor / log 任何一個改變之後立即呼叫
+// 且必須在持有鎖的情況下呼叫
+func (rf *Raft) persist() {
+    buf := new(bytes.Buffer)
+    enc := gob.NewEncoder(buf)
+    enc.Encode(rf.currentTerm)
+    enc.Encode(rf.votedFor)
+    enc.Encode(rf.log)
+    rf.persister.SaveRaftState(buf.Bytes())
+}
+
+// readPersist 在節點啟動時恢復狀態
+func (rf *Raft) readPersist(data []byte) {
+    if len(data) == 0 {
+        return // 第一次啟動,沒有持久化資料
+    }
+    buf := bytes.NewBuffer(data)
+    dec := gob.NewDecoder(buf)
+    var term int
+    var voted int
+    var log []LogEntry
+    if err := dec.Decode(&amp;term); err != nil { panic(err) }
+    if err := dec.Decode(&amp;voted); err != nil { panic(err) }
+    if err := dec.Decode(&amp;log); err != nil { panic(err) }
+    rf.currentTerm = term
+    rf.votedFor = voted
+    rf.log = log
+}</code></pre>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">持久化必須在 RPC 回覆之前完成</span>
+          <p>在 <code>RequestVote</code> 裡更新 votedFor 後、在回覆 reply 之前,必須呼叫 <code>persist()</code>。
+          若在回覆成功後才持久化,節點崩潰重啟會「忘記已投票」,可能重複投票造成雙 Leader。
+          持久化是一個同步操作——確保寫到磁碟再繼續。</p>
+        </div>
+      </div>
+
+      <h3>里程碑 5 驗收</h3>
+      <div class="callout note">
+        <div class="ico">✅</div>
+        <div class="body">
+          <span class="c-title">里程碑 5 完成標準</span>
+          <ul>
+            <li>強制終止任意一個節點(模擬崩潰),重啟後它能從持久化狀態恢復 term/votedFor/log</li>
+            <li>重啟節點的日誌能透過 Leader 的 AppendEntries 追上,commitIndex 重新對齊</li>
+            <li>即使 Leader 在提交某條日誌後立即崩潰,新 Leader 仍能透過已有多數副本的日誌將其提交</li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- ===== §8 里程碑 6:狀態機與 KV ===== -->
+      <h2>里程碑 6 — 狀態機與 KV:線性化讀寫</h2>
+
+      <p>
+        Raft 本身只是一個「讓所有節點按相同順序執行相同命令」的機制,
+        它並不規定命令的語義。現在我們在 Raft 上層套一個 <strong>KV 狀態機</strong>,
+        讓它支援 Get、Put、Delete 三種操作,並達到<strong>線性化(linearizability)</strong>的一致性保證。
+      </p>
+
+      <h3>KV 服務的整體架構</h3>
+      <pre><code class="language-go">// Op 是 KV 狀態機的操作命令
+type Op struct {
+    Type     string // "Put" | "Get" | "Delete"
+    Key      string
+    Value    string
+    ClientId int64  // 哪個客戶端發的
+    SeqNum   int    // 請求序號(用於去重)
+}
+
+type KVServer struct {
+    mu      sync.Mutex
+    rf      *Raft      // 底層 Raft 實例
+    applyCh chan raft.ApplyMsg
+
+    kvMap    map[string]string // 實際的 KV 儲存
+    // 去重表:記錄每個 client 最後成功執行的 SeqNum
+    lastApplied map[int64]int
+    // 等待特定 log index 提交的 channel
+    waitCh  map[int]chan OpResult
+}
+
+type OpResult struct {
+    Value string
+    Err   string
+}</code></pre>
+
+      <h3>處理客戶端請求</h3>
+      <pre><code class="language-go">func (kv *KVServer) Put(args *PutArgs, reply *PutReply) {
+    op := Op{
+        Type:     "Put",
+        Key:      args.Key,
+        Value:    args.Value,
+        ClientId: args.ClientId,
+        SeqNum:   args.SeqNum,
+    }
+
+    // 送給 Raft;若自己不是 Leader,拒絕並回傳 ErrWrongLeader
+    index, _, isLeader := kv.rf.Start(op)
+    if !isLeader {
+        reply.Err = "ErrWrongLeader"
+        return
+    }
+
+    // 等待 Raft 提交並應用這條 log
+    ch := make(chan OpResult, 1)
+    kv.mu.Lock()
+    kv.waitCh[index] = ch
+    kv.mu.Unlock()
+
+    select {
+    case result := &lt;-ch:
+        reply.Err = result.Err
+    case &lt;-time.After(500 * time.Millisecond):
+        reply.Err = "ErrTimeout"
+    }
+
+    kv.mu.Lock()
+    delete(kv.waitCh, index)
+    kv.mu.Unlock()
+}
+
+// applyLoop 持續從 applyCh 取出已提交的 log 並應用到狀態機
+func (kv *KVServer) applyLoop() {
+    for msg := range kv.applyCh {
+        if !msg.CommandValid {
+            continue
+        }
+        op := msg.Command.(Op)
+
+        kv.mu.Lock()
+        var result OpResult
+
+        // 去重:若已執行過相同 SeqNum 的請求,直接回傳快取結果
+        if kv.lastApplied[op.ClientId] &lt; op.SeqNum {
+            switch op.Type {
+            case "Put":
+                kv.kvMap[op.Key] = op.Value
+            case "Delete":
+                delete(kv.kvMap, op.Key)
+            case "Get":
+                v, ok := kv.kvMap[op.Key]
+                if ok {
+                    result.Value = v
+                } else {
+                    result.Err = "ErrNoKey"
+                }
+            }
+            kv.lastApplied[op.ClientId] = op.SeqNum
+        }
+
+        // 通知等待的 handler
+        if ch, ok := kv.waitCh[msg.CommandIndex]; ok {
+            ch &lt;- result
+        }
+        kv.mu.Unlock()
+    }
+}</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">線性化的三個關鍵</span>
+          <p>
+            (1) <strong>所有寫操作透過 Raft 日誌序列化</strong>:不直接寫 kvMap,而是先送給 Raft.Start(),
+            等 Raft 提交後再由 applyLoop 應用——保證所有節點按相同順序應用。<br>
+            (2) <strong>客戶端去重(at-most-once semantics)</strong>:每個客戶端請求帶上唯一的 SeqNum;
+            狀態機記錄每個 ClientId 最後執行的 SeqNum,重複請求直接跳過,防止網路重試導致雙重寫入。<br>
+            (3) <strong>線性化讀</strong>:Get 操作也必須走 Raft 日誌(不能直接讀 kvMap),
+            否則 Follower 可能返回過時的值。
+          </p>
+        </div>
+      </div>
+
+      <h3>選填:快照(Snapshot)與日誌壓縮</h3>
+      <p>
+        隨著服務運行,Raft 的日誌會無限增長。實際系統會定期做<strong>快照(snapshot)</strong>:
+        把狀態機在某個 commitIndex 的完整狀態序列化到磁碟,
+        然後把該索引之前的日誌條目全部丟棄。這樣重啟時只需從快照恢復,再應用快照之後的少量日誌即可。
+        MIT 6.824 Lab 2D 完整實作了這個機制,如果你想挑戰,請參考 Raft 論文的 §7。
+      </p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 122.2 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>在你的 KV 服務中,實作以下測試場景:啟動三個節點的叢集,
+          用客戶端連續發送 100 個 Put 請求(key: <code>counter</code>,value: 遞增整數)。
+          在第 50 個請求之後,終止 Leader 節點,觀察:
+          (a) 客戶端在超時後是否自動重試並找到新 Leader?
+          (b) 所有請求最終都被執行了嗎(通過 Get 驗證)?
+          (c) 是否有任何一個 Put 被重複執行了兩次?</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>預期行為:
+              (a) 客戶端收到 ErrWrongLeader 或 ErrTimeout 後,應輪詢所有節點找到新 Leader 再重試。
+              (b) 若客戶端正確實作了重試,所有 100 個 Put 都應該執行。
+              (c) 若客戶端帶上 SeqNum 且服務端有去重邏輯,即使重試也不會雙重執行。
+              若你的最終 Get(counter) 回傳的是 100 而不是其他值,說明實作正確。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ===== §9 故障注入測試 ===== -->
+      <h2>驗收與故障注入測試</h2>
+
+      <p>
+        Raft 的正確性不靠人眼審查就能保證——你需要<strong>故障注入測試(fault injection testing)</strong>。
+        這呼應了<a href="46-debugging-testing.html">§46 除錯與測試</a>的核心思想:
+        把你最擔心的假設設計成可重複的測試案例。
+      </p>
+
+      <h3>測試框架設計</h3>
+      <p>
+        典型的 Raft 測試框架會提供「可控的網路層」:你能夠用程式控制任意兩個節點之間的訊息是否被丟棄,
+        從而模擬網路分區。MIT 6.824 的 <code>labrpc</code> 就是這樣的工具。
+        以下展示幾個關鍵測試案例的偽碼:
+      </p>
+      <pre><code class="language-go">// TestBasicElection:最基本的領導選舉測試
+func TestBasicElection(t *testing.T) {
+    cfg := makeConfig(t, 3) // 建立 3 節點叢集
+    defer cfg.cleanup()
+
+    leader1 := cfg.checkOneLeader() // 確認有且只有一個 Leader
+    term1 := cfg.currentTerm(leader1)
+
+    // 等兩個選舉超時,確認 Leader 穩定(沒有無謂的重選)
+    time.Sleep(2 * RaftElectionTimeout)
+    leader2 := cfg.checkOneLeader()
+    if leader1 != leader2 {
+        t.Errorf("leader changed without crash: %d -&gt; %d", leader1, leader2)
+    }
+    term2 := cfg.currentTerm(leader2)
+    if term1 != term2 {
+        t.Errorf("term changed without crash: %d -&gt; %d", term1, term2)
+    }
+}
+
+// TestLeaderCrash:殺掉 Leader,確認新 Leader 選出且服務不中斷
+func TestLeaderCrash(t *testing.T) {
+    cfg := makeConfig(t, 3)
+    defer cfg.cleanup()
+
+    leader := cfg.checkOneLeader()
+
+    // 寫入幾條資料
+    for i := 0; i &lt; 5; i++ {
+        cfg.rafts[leader].Start(i)
+    }
+
+    // 殺掉 Leader
+    cfg.disconnect(leader)
+
+    // 剩餘兩個節點應在 2 倍選舉超時內選出新 Leader
+    cfg.checkOneLeader()
+
+    // 重新連上舊 Leader
+    cfg.connect(leader)
+
+    // 確認所有節點的已提交日誌一致
+    cfg.checkLogs()
+}
+
+// TestNetworkPartition:製造 [1] vs [2,3] 的網路分區
+func TestNetworkPartition(t *testing.T) {
+    cfg := makeConfig(t, 3)
+    defer cfg.cleanup()
+
+    // 分區:節點 0 與節點 1/2 互相不通
+    cfg.disconnect(0)
+
+    // 節點 1/2 應選出新 Leader
+    newLeader := cfg.checkOneLeader()
+    if newLeader == 0 {
+        t.Fatal("isolated node became leader")
+    }
+
+    // 在新 Leader 端寫入
+    idx, _, ok := cfg.rafts[newLeader].Start("post-partition-value")
+    if !ok {
+        t.Fatal("leader rejected command")
+    }
+
+    // 等待提交
+    cfg.waitCommitted(idx, 2) // 需要 2 個節點確認
+
+    // 修復分區
+    cfg.connect(0)
+
+    // 節點 0 應追上日誌,commitIndex 對齊
+    cfg.waitCommitted(idx, 3) // 現在三個節點都要確認
+    cfg.checkLogs()
+}</code></pre>
+
+      <h3>線性一致性驗證</h3>
+      <p>
+        除了 Raft 層的測試,KV 服務還需要驗證「對外表現是否線性化」。
+        <a href="https://github.com/anishathalye/porcupine">Porcupine</a> 是一個 Go 的線性化驗證工具:
+        你把所有客戶端操作的「呼叫時間戳」和「回傳時間戳」記錄下來,
+        Porcupine 幫你驗證這些操作是否存在一個符合線性化的執行序。
+        MIT 6.824 的測試套件已整合 Porcupine,非常值得參考。
+      </p>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">故障測試的黃金法則</span>
+          <p>好的 Raft 測試有三個特徵:(1) <strong>可重複</strong>——給定相同的隨機種子,每次結果相同;
+          (2) <strong>覆蓋 corner case</strong>——分票、網路分區、重啟後立即選舉;
+          (3) <strong>有獨立的正確性判斷</strong>——不只檢查「沒有崩潰」,也要驗證所有節點的日誌最終一致。
+          MIT 6.824 Lab 2 的測試套件是公認最嚴格的 Raft 測試基準,通過它才算真正實作正確。</p>
+        </div>
+      </div>
+
+      <h3>完整里程碑驗收總表</h3>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>里程碑</th>
+              <th>完成標準</th>
+              <th>對應測試</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>1 — RPC 骨架</td>
+              <td>節點啟動,RPC 層通,計時器運行</td>
+              <td>人工觀察 log 輸出</td>
+            </tr>
+            <tr>
+              <td>2 — 領導選舉</td>
+              <td>選出 Leader;殺 Leader 後重新選;舊 Leader 退回 Follower</td>
+              <td>TestBasicElection, TestLeaderCrash</td>
+            </tr>
+            <tr>
+              <td>3 — 日誌複寫</td>
+              <td>Start() 後多數節點複寫;掉線後追上;commitIndex 推進</td>
+              <td>TestBasicAgree, TestFollowerFailure</td>
+            </tr>
+            <tr>
+              <td>4 — 安全性</td>
+              <td>Figure 8 情境不丟資料;選舉限制正確;只提交當前 term</td>
+              <td>TestFigure8, TestUnreliableAgree</td>
+            </tr>
+            <tr>
+              <td>5 — 持久化</td>
+              <td>崩潰重啟後 term/votedFor/log 恢復;不影響一致性</td>
+              <td>TestPersist1, TestPersist2</td>
+            </tr>
+            <tr>
+              <td>6 — KV 狀態機</td>
+              <td>Get/Put/Delete 線性化;去重正確;網路分區後一致</td>
+              <td>TestNetworkPartition, Porcupine 驗證</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 122.3 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>實作快速日誌回退最佳化:在 AppendEntries 回覆中加入 <code>ConflictTerm</code>
+          和 <code>ConflictIndex</code>,使 Leader 能在 O(衝突 term 數) 而非 O(日誌長度)
+          的 RPC 輪次內讓 Follower 日誌追上 Leader。請解釋:當 <code>ConflictTerm == -1</code>
+          時,Leader 應該把 nextIndex[peer] 設為什麼值?</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>當 <code>ConflictTerm == -1</code> 時,表示 Follower 的日誌比 <code>PrevLogIndex</code>
+              短(沒有那個位置),Leader 應直接把 <code>nextIndex[peer] = ConflictIndex</code>
+              (ConflictIndex 此時設為 Follower 的日誌長度 <code>len(log)</code>),
+              從 Follower 日誌末尾開始重新發送,效果是一次跳到正確起點而非一條一條回退。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ===== §10 把這一章串起來——全書終章 ===== -->
+      <h2>把這一章串起來——全書終章</h2>
+
+      <p>
+        你剛剛做完了這本書中難度最高的一個專案。讓我們停下來,看看你真正建造了什麼。
+      </p>
+      <p>
+        這個分散式 KV store 之所以能夠運作,是因為它站在整本書所有知識的肩膀上:
+      </p>
+      <ul>
+        <li>
+          <strong>網路(<a href="25-networking.html">§25</a>)</strong>:
+          RPC 層依賴 TCP 連線和序列化——你理解了封包如何在節點間傳遞、
+          為何需要超時重試、為何訊息可能亂序或遺失。
+        </li>
+        <li>
+          <strong>作業系統與並發(<a href="24-operating-system.html">§24</a>)</strong>:
+          每個 Raft 節點是一個 goroutine 的集合,mutex 保護共享狀態——
+          你從死鎖、race condition、計時器 drain 的陷阱中爬出來,才讓並發正確。
+        </li>
+        <li>
+          <strong>資料庫與持久化(<a href="37-databases.html">§37</a>)</strong>:
+          <code>persist()</code> 在改變狀態之前先寫磁碟,和資料庫的 WAL 是同一個思路——
+          先承諾(寫日誌),再執行。
+        </li>
+        <li>
+          <strong>除錯與測試(<a href="46-debugging-testing.html">§46</a>)</strong>:
+          故障注入測試讓你能夠「讓壞事在受控環境中發生」,而不是在生產環境被客戶發現。
+          線性化驗證器是你最好的朋友。
+        </li>
+        <li>
+          <strong>分散式系統理論(<a href="98-distributed-systems.html">§92</a>)</strong>:
+          CAP 定理、共識問題、部分失效——這一章讓那些理論變成了你親手寫過的程式碼。
+        </li>
+      </ul>
+
+      <h3>你現在站在哪裡?</h3>
+      <p>
+        很多工作多年的工程師從來沒有讀過 Raft 論文、更沒有嘗試實作它。
+        你做到了。你不只知道「Raft 是什麼」,你知道它為什麼這樣設計——
+        每一條規則背後都有一個如果缺少它就會出錯的反例。
+        你遇到過死鎖、計時器陷阱、Figure 8 的幽靈,然後你修好了它們。
+      </p>
+      <p>
+        這種「在不可靠環境中建造可靠系統」的能力,不會因為工具變了而過時。
+        無論是 etcd 的 Raft、Kafka 的複寫協議、Google Spanner 的 Paxos,
+        還是你未來工作中會遇到的任何分散式系統,核心的思維模式都和你剛剛親手實踐的一樣。
+      </p>
+
+      <h3>全書的回顧</h3>
+      <p>
+        這一章是本書的最後一章。從第一章的 <code>print("Hello, world")</code>,
+        到現在一個在節點崩潰、網路分區下仍能保持一致性的分散式系統——
+        你走過的這段路,是真實的計算機科學教育應該帶你走的路。
+      </p>
+      <p>
+        你學會了<strong>計算的本質</strong>(可計算性、複雜度);學會了<strong>系統如何運作</strong>
+        (硬體、OS、網路、資料庫);學會了<strong>演算法如何設計</strong>(正確性、效率、測試);
+        學會了<strong>軟體如何生長</strong>(設計模式、編譯器、版本控制)。
+        最後這幾個 capstone 章節讓你把這些知識「用起來」——
+        從手寫 OS,到手寫編譯器,再到現在的手寫 Raft。
+      </p>
+      <p>
+        知道和能做,是兩件不同的事。你現在兩件事都有了。
+      </p>
+
+      <blockquote>
+        「分散式計算的最大挑戰,不是讓系統在好的時候正常運作,
+        而是讓它在最糟糕的時候做出正確的決定。你剛剛為自己親手建造了那個判斷力。」
+      </blockquote>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">全書核心觀念</span>
+          <p>計算機科學是一門研究「如何在有限、不完美的資源下,可靠地完成任務」的學問。
+          從一個位元組的布林邏輯,到跨越多台機器的共識演算法,本質從未改變——
+          <strong>把不確定性納入設計,讓系統在最壞情況下依然正確</strong>。</p>
+        </div>
+      </div>
+
+      <h3>延伸學習</h3>
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">繼續深入 Raft 與分散式系統</span>
+          <ul>
+            <li><strong>Raft 論文</strong>:Diego Ongaro &amp; John Ousterhout,《In Search of an Understandable Consensus Algorithm》(2014)。這是最值得一讀的系統論文之一,可視覺化互動版見 <a href="https://raft.github.io/">raft.github.io</a>。</li>
+            <li><strong>MIT 6.824 Distributed Systems</strong>:全書最接近的「原始課程」。Lab 2(Raft)&rarr; Lab 3(KV service) 是本章的完整作業版,有嚴格的測試套件。課程頁面公開在 <a href="https://pdos.csail.mit.edu/6.824/">pdos.csail.mit.edu/6.824</a>。</li>
+            <li><strong>《Designing Data-Intensive Applications》</strong>(Martin Kleppmann):把這一章的所有概念放在實際工業系統中討論,是分散式系統工程師的必讀書。</li>
+            <li><strong>etcd / TiKV 源碼</strong>:世界上最重要的兩個 Raft 實作,Go 和 Rust 各一份,可以和你自己的實作對比。</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 122.4 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>閱讀 Raft 論文的 §6「成員變更(Membership Changes)」。
+          Raft 的單步成員變更(one-server-at-a-time)如何保證在任何時刻「新舊兩種配置的多數派至少有一個節點重疊」?
+          若你想在自己的 KV 叢集中加入第四個節點,應該透過哪個 API?</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>Raft 論文的單步成員變更保證:每次只加入或移除一個節點,新舊配置的多數派必然有至少一個節點重疊——
+              這個重疊節點保證了新 Leader 不可能與舊 Leader 同時存在並各自取得多數。
+              加入第四個節點的流程:把包含新節點資訊的 <code>AddServer</code> 命令透過 <code>Start()</code> 送入 Raft 日誌,
+              等該日誌提交後,新節點才正式成為投票成員。
+              在新節點的日誌追上之前,Leader 可以先以「非投票觀察者」身份同步日誌。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+

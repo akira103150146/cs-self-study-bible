@@ -1,0 +1,909 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>型別、trait、列舉與錯誤處理 · CS 自學聖經</title>
+<meta name="description" content="深入 Rust 的 trait 系統與 Result 錯誤處理：從 trait bound、單型化到 ? 運算子與自訂錯誤型別，以所有權視角理解 Rust 的零成本抽象。">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;700&family=Noto+Sans+TC:wght@400;700&family=Lora:ital,wght@0,400;0,600;0,700;1,400&family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <main class="main">
+    <article class="content">
+      <div class="eyebrow">第二十部 · Rust 系統程式設計</div>
+      <h1>型別、trait、列舉與錯誤處理</h1>
+      <p class="subtitle">「讓錯誤成為型別系統的一部分」——這句話就是 Rust 錯誤哲學的全部。</p>
+      <div class="byline">
+        <span class="tag">第 80 章</span>
+        <span>閱讀時間 ≈ 55 分鐘</span>
+        <span>難度:★★★☆☆</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>trait 如何取代 OOP 的繼承,實現多型與程式碼重用</li>
+          <li>泛型(generics)與單型化(monomorphization)如何達成零成本抽象</li>
+          <li>為何 Rust 用 <code>Result&lt;T, E&gt;</code> 取代例外(exception),以及所有權視角下的錯誤傳播</li>
+          <li><code>?</code> 運算子如何讓錯誤傳播變得簡潔</li>
+          <li>如何設計自訂錯誤型別,以及 <code>Box&lt;dyn Error&gt;</code> 的取捨</li>
+          <li>trait object(<code>dyn Trait</code>)與靜態分派的差異</li>
+        </ul>
+      </div>
+
+      <!-- ==================== h2 ① ==================== -->
+      <h2>一分鐘複習:你已學過的抽象工具</h2>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">去重提示:你已在 §9 和 §44 學過這些</span>
+          <p>
+            <a href="09-types.html">第 9 章</a>講過代數資料型別(ADT)、和型別(sum type)、<code>Option</code>/<code>Maybe</code>、泛型與多型;
+            <a href="44-haskell.html">第 44 章</a>深入了 Haskell 的型別類別(type class)、模式比對(pattern matching)與列舉(enum)。
+            本章不重教這些基礎——而是聚焦在 Rust 的<strong>特有實作</strong>:
+            trait 系統的「所有權視角」、<code>Result&lt;T, E&gt;</code> 的錯誤即值哲學,以及讓這套系統零成本運作的單型化機制。
+          </p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ② ==================== -->
+      <h2>trait 是什麼:Rust 的抽象基石</h2>
+
+      <p>
+        在 Java 或 C++ 裡,你用<strong>繼承(inheritance)</strong>來共享行為:
+        讓 <code>Dog</code> 繼承 <code>Animal</code>,自動擁有 <code>eat()</code>、<code>sleep()</code>。
+        但繼承有個臭名昭彰的問題——它把<strong>型別的是誰(identity)</strong>和<strong>型別能做什麼(capability)</strong>混在一起,
+        產生深層耦合、菱形繼承、脆弱基底類別等難題。
+        Rust 選擇了另一條路:<strong>trait(特徵)</strong>。
+      </p>
+
+      <p>
+        trait 是<strong>能力的聲明</strong>,不是身份的繼承。
+        它只說「任何型別,只要你能做這些事,就算實作了這個 trait」。
+        這和 Haskell 的 type class(<a href="44-haskell.html">第 44 章</a>)在精神上一脈相承——
+        但 Rust 多了一層:trait 的方法會透過借用規則約束 <code>&amp;self</code> 或 <code>&amp;mut self</code> 的使用,
+        讓多型與所有權系統自然融合。
+      </p>
+
+      <pre><code class="language-rust">// 定義一個 trait:能描述自己的事物
+trait Describe {
+    fn describe(&amp;self) -&gt; String;           // 必須實作的方法(無預設實作)
+
+    fn label(&amp;self) -&gt; String {             // 預設方法(default method):有實作體
+        format!("[{}]", self.describe())    // 呼叫方可選擇覆寫或沿用
+    }
+}
+
+// 為 String 實作 Describe
+impl Describe for String {
+    fn describe(&amp;self) -&gt; String {
+        format!("字串 {:?},長度 {}", self, self.len())
+    }
+}
+
+// 為自訂型別 Point 實作 Describe
+struct Point { x: f64, y: f64 }
+
+impl Describe for Point {
+    fn describe(&amp;self) -&gt; String {
+        format!("座標 ({}, {})", self.x, self.y)
+    }
+}
+
+fn main() {
+    let s = String::from("hello");
+    let p = Point { x: 3.0, y: 4.0 };
+
+    println!("{}", s.describe());    // 字串 "hello",長度 5
+    println!("{}", p.label());       // [座標 (3, 4)],使用預設 label 實作
+}</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">trait 與 OOP interface 的關鍵差異</span>
+          <p>
+            Java 的 <code>interface</code> 要在<strong>定義型別時</strong>宣告它實作什麼介面。
+            Rust 的 trait 可以在<strong>任何地方</strong>為任何型別補上實作——包括你沒有原始碼的標準庫型別
+            (只要 trait 或型別其中一個是你自己定義的,即<strong>孤兒規則 orphan rule</strong>)。
+            這讓第三方擴充更靈活,不需要繼承或包裝器(wrapper)。
+          </p>
+        </div>
+      </div>
+
+      <h3>trait bound:泛型函式的能力限制</h3>
+
+      <p>
+        單獨的 trait 宣告只是「能力契約」;真正的力量在<strong>trait bound</strong>——
+        讓泛型函式能「接受任何實作了某 trait 的型別」:
+      </p>
+
+      <pre><code class="language-rust">// 接受任何實作了 Describe trait 的型別 T
+fn print_label&lt;T: Describe&gt;(item: &amp;T) {
+    println!("{}", item.label());
+}
+
+// 等價寫法:where 子句(多個 trait bound 時更清晰)
+fn print_label_v2&lt;T&gt;(item: &amp;T)
+where
+    T: Describe + std::fmt::Debug,   // T 必須同時實作 Describe 和 Debug
+{
+    println!("{:?} -&gt; {}", item, item.label());
+}
+
+fn main() {
+    let s = String::from("world");
+    let p = Point { x: 1.0, y: 2.0 };
+    print_label(&amp;s);   // 傳 &amp;String
+    print_label(&amp;p);   // 傳 &amp;Point —— 同一個函式,不同型別
+}</code></pre>
+
+      <p>
+        <code>T: Describe</code> 不是在說「T 繼承自 Describe」,而是「T 必須有 Describe 所要求的能力」。
+        這個約束在<strong>編譯期</strong>確認——違反時程式直接編不過,且錯誤訊息會精確指出缺少哪個方法實作。
+      </p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 80.1 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>定義一個 trait <code>Area</code>,包含一個方法 <code>fn area(&amp;self) -&gt; f64</code>。
+          分別為 <code>struct Circle { radius: f64 }</code> 和 <code>struct Rectangle { w: f64, h: f64 }</code> 實作這個 trait。
+          再寫一個泛型函式 <code>print_area&lt;T: Area&gt;(shape: &amp;T)</code> 印出面積。
+          在 <code>main()</code> 裡各建一個實例並呼叫 <code>print_area</code>。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-rust">trait Area {
+    fn area(&amp;self) -&gt; f64;
+}
+
+struct Circle    { radius: f64 }
+struct Rectangle { w: f64, h: f64 }
+
+impl Area for Circle {
+    fn area(&amp;self) -&gt; f64 {
+        std::f64::consts::PI * self.radius * self.radius
+    }
+}
+
+impl Area for Rectangle {
+    fn area(&amp;self) -&gt; f64 { self.w * self.h }
+}
+
+fn print_area&lt;T: Area&gt;(shape: &amp;T) {
+    println!("面積: {:.4}", shape.area());
+}
+
+fn main() {
+    let c = Circle    { radius: 3.0 };
+    let r = Rectangle { w: 4.0, h: 5.0 };
+    print_area(&amp;c);   // 面積: 28.2743
+    print_area(&amp;r);   // 面積: 20.0000
+}</code></pre>
+              <p>重點:兩個完全不同的型別共享同一個 <code>print_area</code> 函式——
+              靠的是 trait bound,而非繼承層次結構。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ③ ==================== -->
+      <h2>泛型與單型化:零成本的由來</h2>
+
+      <p>
+        Rust 的泛型讓你寫一次、適用多種型別。
+        但它和 Java 的泛型有一個根本差異:Java 靠<strong>型別抹除(type erasure)</strong>在執行時把泛型參數擦掉,
+        統一用 <code>Object</code> 存放,每次使用都需要轉型;
+        Rust 靠<strong>單型化(monomorphization)</strong>——
+        在<strong>編譯期</strong>為每個具體型別生成<em>獨立的機器碼</em>。
+      </p>
+
+      <pre><code class="language-rust">fn largest&lt;T: PartialOrd&gt;(a: T, b: T) -&gt; T {
+    if a &gt; b { a } else { b }   // PartialOrd 提供了 &gt; 運算子
+}
+
+fn main() {
+    println!("{}", largest(3_i32, 7_i32));     // 編譯器為 i32 生成一份 largest
+    println!("{}", largest(3.0_f64, 7.0_f64)); // 另生成一份 largest for f64
+}</code></pre>
+
+      <p>
+        上面的程式在<strong>編譯後</strong>等同於你手寫了兩個函式:
+        <code>largest_i32</code> 和 <code>largest_f64</code>——
+        呼叫時沒有任何執行時的虛擬分派開銷,甚至可能被 inline 展開。
+        這就是「零成本抽象(zero-cost abstraction)」的由來:
+        <strong>你用高層次的泛型語法撰寫,執行時的效率和手寫特化版本完全相同</strong>。
+      </p>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">單型化的代價:編譯時間與二進位大小</span>
+          <p>天下沒有白吃的午餐。單型化讓執行時零成本,但代價是:
+          每個具體型別都生成一份機器碼,導致<strong>編譯時間增加</strong>和<strong>二進位檔變大</strong>。
+          這正是 Rust 大型專案編譯時間較長的主要原因之一。
+          若需要節省二進位大小、或型別在編譯時無法確定,可改用 <code>dyn Trait</code>(見第七節)。</p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ④ ==================== -->
+      <h2>用 <code>Result&lt;T, E&gt;</code> 表達錯誤:錯誤即值</h2>
+
+      <p>
+        為什麼 Rust 不用例外(exception)?
+        讓我們從所有權的視角來思考:exception 是<strong>跨越作用域邊界的隱式跳躍</strong>——
+        函式可以在任何一行悄悄拋出例外、退出執行,把清理責任丟給 stack unwinding 機制。
+        這和 Rust 的精神相違背:Rust 希望每個資源的釋放都是<strong>確定的、可見的</strong>。
+      </p>
+
+      <p>
+        Rust 的解法是讓<strong>錯誤成為回傳值</strong>。
+        <code>Result&lt;T, E&gt;</code> 是標準庫定義的 enum——
+        它正是<a href="09-types.html">第 9 章</a>所說的「和型別(sum type)」的直接應用:
+      </p>
+
+      <pre><code class="language-rust">// Result&lt;T, E&gt; 的定義(標準庫):
+// enum Result&lt;T, E&gt; {
+//     Ok(T),    // 成功時裝著結果值 T
+//     Err(E),   // 失敗時裝著錯誤值 E
+// }
+
+use std::fs;
+use std::io;
+
+// 回傳型別明確告訴呼叫者:這個函式可能失敗,失敗時給你 io::Error
+fn read_file(path: &amp;str) -&gt; Result&lt;String, io::Error&gt; {
+    let content = fs::read_to_string(path)?;   // ? 運算子,下一節詳述
+    Ok(content)
+}
+
+fn main() {
+    match read_file("data.txt") {
+        Ok(content) =&gt; println!("讀到 {} 個字元", content.len()),
+        Err(e)      =&gt; eprintln!("讀取失敗: {}", e),
+    }
+}</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">為什麼「錯誤即值」更好</span>
+          <p>
+            用 exception 時,函式簽名<strong>看不出</strong>它可能拋出什麼錯誤(除非語言有 checked exceptions,但那又帶來另一種樣板地獄)。
+            用 <code>Result&lt;T, E&gt;</code>,錯誤的可能性<strong>刻在型別裡</strong>:
+            呼叫者被迫處理(或明確說「我接受 panic」),不可能無聲無息地忽略。
+            編譯器會因為「未使用的 Result」發出警告——這是一道安全網。
+          </p>
+        </div>
+      </div>
+
+      <p>
+        從所有權的角度看錯誤傳播:當函式回傳 <code>Err(e)</code>,<code>e</code> 的所有權移交給呼叫者——
+        呼叫者決定如何處理、何時釋放。沒有隱式的 stack unwinding,沒有神秘的 destructor 呼叫順序,
+        一切都在型別系統的掌控之中。
+      </p>
+
+      <!-- ==================== h2 ⑤ ==================== -->
+      <h2><code>?</code> 運算子:優雅傳播錯誤</h2>
+
+      <p>
+        如果沒有語法糖,逐一 match <code>Result</code> 傳播錯誤會很囉嗦:
+      </p>
+
+      <pre><code class="language-rust">use std::fs;
+use std::io;
+
+// ✗ 沒有 ? 的版本:充滿重複的樣板程式碼
+fn process_v1(path: &amp;str) -&gt; Result&lt;usize, io::Error&gt; {
+    let content = match fs::read_to_string(path) {
+        Ok(s)  =&gt; s,
+        Err(e) =&gt; return Err(e),
+    };
+    Ok(content.len())
+}</code></pre>
+
+      <pre><code class="language-rust">// ✓ 用 ? 的版本:清晰如同「不會出錯的程式碼」
+fn process_v2(path: &amp;str) -&gt; Result&lt;usize, io::Error&gt; {
+    let content = fs::read_to_string(path)?;   // 失敗 → 立即 return Err
+    Ok(content.len())
+}</code></pre>
+
+      <p><code>?</code> 做了三件事:</p>
+      <ol>
+        <li>若值是 <code>Ok(v)</code>,解包取出 <code>v</code>。</li>
+        <li>若值是 <code>Err(e)</code>,呼叫 <code>From::from(e)</code> 轉換錯誤型別(如需要),然後 <code>return Err(converted_e)</code>。</li>
+        <li>只能在回傳型別為 <code>Result</code>(或 <code>Option</code>)的函式裡使用。</li>
+      </ol>
+
+      <p>
+        步驟 2 的「自動型別轉換」特別重要:當你的函式回傳 <code>Result&lt;T, AppError&gt;</code>,
+        而你呼叫的函式回傳 <code>Result&lt;T, io::Error&gt;</code>,
+        只要你為 <code>AppError</code> 實作了 <code>From&lt;io::Error&gt;</code>,
+        <code>?</code> 就會自動幫你做轉換。這是下一節的主角。
+      </p>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title"><code>?</code> 只能在 Result 或 Option 函式裡用</span>
+          <p>在 <code>main()</code> 使用 <code>?</code>,需把簽名改為
+          <code>fn main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt;</code>。
+          在回傳 <code>Option</code> 的函式裡,<code>?</code> 遇到 <code>None</code> 時直接回傳 <code>None</code>。
+          兩種情境不能混用。</p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 80.2 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>下面這段程式用 <code>unwrap()</code> 處理錯誤,當輸入不是有效整數時會 panic。
+          請改寫 <code>parse_and_double</code>,讓它回傳 <code>Result&lt;i32, std::num::ParseIntError&gt;</code>,
+          並在 <code>main()</code> 裡用 <code>match</code> 優雅處理兩種情況:</p>
+          <pre><code class="language-rust">fn parse_and_double(s: &amp;str) -&gt; i32 {
+    let n: i32 = s.trim().parse().unwrap();   // ← 把這行改掉
+    n * 2
+}
+
+fn main() {
+    println!("{}", parse_and_double("21"));   // 42
+    println!("{}", parse_and_double("abc"));  // panic!
+}</code></pre>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-rust">fn parse_and_double(s: &amp;str) -&gt; Result&lt;i32, std::num::ParseIntError&gt; {
+    let n: i32 = s.trim().parse()?;   // 失敗 → 回傳 ParseIntError
+    Ok(n * 2)
+}
+
+fn main() {
+    match parse_and_double("21") {
+        Ok(v)  =&gt; println!("{}", v),           // 42
+        Err(e) =&gt; eprintln!("錯誤: {}", e),
+    }
+    match parse_and_double("abc") {
+        Ok(v)  =&gt; println!("{}", v),
+        Err(e) =&gt; eprintln!("錯誤: {}", e),   // 錯誤: invalid digit found in string
+    }
+}</code></pre>
+              <p>這個改動很小,但意義重大:現在呼叫者<strong>被型別系統強制</strong>考慮失敗的情況,
+              而不是任由程式在執行時崩潰。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑥ ==================== -->
+      <h2>自訂錯誤型別與型別轉換</h2>
+
+      <p>
+        當程式可能遭遇多種不同來源的錯誤時,<strong>自訂錯誤型別</strong>是整理它們的好方法。
+        Rust 慣例是定義一個 <code>enum</code> 列舉所有可能的失敗情境,並實作幾個關鍵 trait:
+      </p>
+
+      <pre><code class="language-rust">use std::fmt;
+use std::num::ParseIntError;
+use std::io;
+
+// 自訂錯誤型別:用 enum 列舉所有可能的失敗原因
+#[derive(Debug)]                      // 自動實作 Debug,方便印出除錯資訊
+enum AppError {
+    Io(io::Error),                    // 包裝 IO 錯誤
+    Parse(ParseIntError),             // 包裝解析錯誤
+    InvalidRange(i64),                // 純語意錯誤:數值超出有效範圍
+}
+
+// 實作 Display:給終端使用者看的友善訊息
+impl fmt::Display for AppError {
+    fn fmt(&amp;self, f: &amp;mut fmt::Formatter&lt;'_&gt;) -&gt; fmt::Result {
+        match self {
+            AppError::Io(e)           =&gt; write!(f, "IO 錯誤: {}", e),
+            AppError::Parse(e)        =&gt; write!(f, "解析錯誤: {}", e),
+            AppError::InvalidRange(n) =&gt; write!(f, "數值 {} 超出有效範圍 [0, 100]", n),
+        }
+    }
+}
+
+// 實作 std::error::Error trait(幾乎所有錯誤型別都需要)
+impl std::error::Error for AppError {}
+
+// 實作 From:讓 ? 自動把 io::Error 轉換成 AppError
+impl From&lt;io::Error&gt; for AppError {
+    fn from(e: io::Error) -&gt; Self { AppError::Io(e) }
+}
+
+// 實作 From:讓 ? 自動把 ParseIntError 轉換成 AppError
+impl From&lt;ParseIntError&gt; for AppError {
+    fn from(e: ParseIntError) -&gt; Self { AppError::Parse(e) }
+}
+
+fn load_score(path: &amp;str) -&gt; Result&lt;i64, AppError&gt; {
+    let content = std::fs::read_to_string(path)?;   // io::Error -&gt; AppError::Io(e)
+    let n: i64  = content.trim().parse()?;           // ParseIntError -&gt; AppError::Parse(e)
+    if !(0..=100).contains(&amp;n) {
+        return Err(AppError::InvalidRange(n));        // 自訂語意錯誤
+    }
+    Ok(n)
+}
+
+fn main() {
+    match load_score("score.txt") {
+        Ok(n)  =&gt; println!("分數: {}", n),
+        Err(e) =&gt; eprintln!("載入失敗: {}", e),
+    }
+}</code></pre>
+
+      <h3><code>Box&lt;dyn Error&gt;</code>:快速原型的捷徑</h3>
+
+      <p>
+        設計完整的自訂錯誤型別需要些樣板程式碼。在原型開發或小型工具裡,
+        <code>Box&lt;dyn std::error::Error&gt;</code> 是更快速的選擇——
+        它利用 trait object 接受任何實作了 <code>Error</code> trait 的型別:
+      </p>
+
+      <pre><code class="language-rust">fn quick_parse(s: &amp;str) -&gt; Result&lt;i32, Box&lt;dyn std::error::Error&gt;&gt; {
+    let n: i32 = s.trim().parse()?;    // 任何錯誤都被 Box 裝起來回傳
+    Ok(n * 2)
+}
+
+fn main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
+    println!("{}", quick_parse("21")?);    // 42
+    Ok(())
+}</code></pre>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">何時用自訂錯誤型別,何時用 Box&lt;dyn Error&gt;</span>
+          <p>
+            <strong>函式庫(library crate)</strong>:優先用自訂錯誤型別。
+            呼叫者需要能夠 <code>match</code> 你的錯誤做出不同回應——<code>Box&lt;dyn Error&gt;</code> 把型別資訊藏起來了,呼叫者只能印出訊息,無法精確處理。<br>
+            <strong>應用程式(binary crate / 快速原型)</strong>:<code>Box&lt;dyn Error&gt;</code> 或社群的 <code>anyhow</code> 套件是更省力的選擇。
+          </p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 80.3 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>定義一個自訂錯誤型別 <code>MathError</code>,包含兩個變體:
+          <code>DivisionByZero</code> 和 <code>NegativeSqrt(f64)</code>。
+          實作 <code>fmt::Display</code> 和 <code>std::error::Error</code>。
+          再寫一個函式 <code>safe_sqrt_div(a: f64, b: f64) -&gt; Result&lt;f64, MathError&gt;</code>,
+          計算 <code>sqrt(a) / b</code>,若 <code>a &lt; 0.0</code> 回傳 <code>NegativeSqrt</code>,
+          若 <code>b == 0.0</code> 回傳 <code>DivisionByZero</code>。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-rust">use std::fmt;
+
+#[derive(Debug)]
+enum MathError {
+    DivisionByZero,
+    NegativeSqrt(f64),
+}
+
+impl fmt::Display for MathError {
+    fn fmt(&amp;self, f: &amp;mut fmt::Formatter&lt;'_&gt;) -&gt; fmt::Result {
+        match self {
+            MathError::DivisionByZero   =&gt; write!(f, "除以零"),
+            MathError::NegativeSqrt(n)  =&gt; write!(f, "不能對負數 {} 取平方根", n),
+        }
+    }
+}
+
+impl std::error::Error for MathError {}
+
+fn safe_sqrt_div(a: f64, b: f64) -&gt; Result&lt;f64, MathError&gt; {
+    if a &lt; 0.0 { return Err(MathError::NegativeSqrt(a)); }
+    if b == 0.0 { return Err(MathError::DivisionByZero); }
+    Ok(a.sqrt() / b)
+}
+
+fn main() {
+    println!("{:?}", safe_sqrt_div(9.0, 3.0));   // Ok(1.0)
+    println!("{:?}", safe_sqrt_div(-1.0, 3.0));  // Err(NegativeSqrt(-1.0))
+    println!("{:?}", safe_sqrt_div(9.0, 0.0));   // Err(DivisionByZero)
+}</code></pre>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑦ ==================== -->
+      <h2>trait objects 與動態分派</h2>
+
+      <p>
+        泛型用<strong>靜態分派(static dispatch)</strong>——編譯時決定呼叫哪個具體實作。
+        但有時你需要在<strong>執行時</strong>決定:
+        例如一個 <code>Vec</code> 裡要放多種不同型別的物件,只要它們都實作了同一個 trait。
+        這就是 <strong>trait object</strong> 的用途:<code>dyn Trait</code>。
+      </p>
+
+      <pre><code class="language-rust">trait Shape {
+    fn area(&amp;self) -&gt; f64;
+    fn name(&amp;self) -&gt; &amp;str;
+}
+
+struct Circle { radius: f64 }
+struct Square { side: f64   }
+
+impl Shape for Circle {
+    fn area(&amp;self) -&gt; f64 { std::f64::consts::PI * self.radius * self.radius }
+    fn name(&amp;self) -&gt; &amp;str { "圓形" }
+}
+
+impl Shape for Square {
+    fn area(&amp;self) -&gt; f64 { self.side * self.side }
+    fn name(&amp;self) -&gt; &amp;str { "正方形" }
+}
+
+fn main() {
+    // Box&lt;dyn Shape&gt;:在 heap 上放一個「實作了 Shape 的某個型別」
+    let shapes: Vec&lt;Box&lt;dyn Shape&gt;&gt; = vec![
+        Box::new(Circle { radius: 3.0 }),
+        Box::new(Square { side: 4.0   }),
+    ];
+
+    for shape in &amp;shapes {
+        // 執行時才決定呼叫 Circle::area 還是 Square::area
+        println!("{} 面積: {:.2}", shape.name(), shape.area());
+    }
+}</code></pre>
+
+      <p>
+        <code>dyn Shape</code> 是<strong>胖指標(fat pointer)</strong>——包含兩個指標:
+        一個指向實際資料,一個指向<strong>虛擬函式表(vtable)</strong>,記錄這個型別各個 trait 方法的位址。
+        這就是「動態分派(dynamic dispatch)」——執行時查表,有少量額外開銷。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 680 310" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <rect width="680" height="310" fill="#f8fafb" rx="10"/>
+  <text x="340" y="22" text-anchor="middle" font-size="13" font-weight="bold" fill="#333">靜態分派(泛型) vs 動態分派(dyn Trait)</text>
+
+  <!-- Left: static dispatch -->
+  <rect x="10" y="34" width="310" height="260" rx="8" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="165" y="54" text-anchor="middle" font-size="12" font-weight="bold" fill="#2f6f6a">靜態分派 — 泛型 + 單型化</text>
+
+  <rect x="68" y="66" width="196" height="36" rx="6" fill="#2f6f6a"/>
+  <text x="166" y="89" text-anchor="middle" font-size="12" fill="#fff">fn print_area&lt;T: Area&gt;(x: &amp;T)</text>
+
+  <text x="166" y="122" text-anchor="middle" font-size="11" fill="#2f6f6a">編譯期展開為多份機器碼</text>
+
+  <rect x="28" y="134" width="120" height="32" rx="6" fill="#fff" stroke="#2f6f6a" stroke-width="1.5"/>
+  <text x="88" y="155" text-anchor="middle" font-size="11" fill="#2f6f6a">print_area_Circle</text>
+
+  <rect x="162" y="134" width="130" height="32" rx="6" fill="#fff" stroke="#2f6f6a" stroke-width="1.5"/>
+  <text x="227" y="155" text-anchor="middle" font-size="11" fill="#2f6f6a">print_area_Rectangle</text>
+
+  <defs>
+    <marker id="ch86-ag" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 Z" fill="#2f6f6a"/>
+    </marker>
+    <marker id="ch86-ar" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 Z" fill="#b4541f"/>
+    </marker>
+  </defs>
+  <line x1="166" y1="102" x2="88"  y2="134" stroke="#2f6f6a" stroke-width="1.5" marker-end="url(#ch86-ag)"/>
+  <line x1="166" y1="102" x2="227" y2="134" stroke="#2f6f6a" stroke-width="1.5" marker-end="url(#ch86-ag)"/>
+
+  <text x="165" y="192" text-anchor="middle" font-size="11" fill="#2f6f6a">呼叫開銷 = 0(可 inline)</text>
+  <text x="165" y="210" text-anchor="middle" font-size="11" fill="#8a929b">二進位較大、編譯較慢</text>
+  <text x="165" y="278" text-anchor="middle" font-size="12" font-weight="bold" fill="#2f6f6a">✓ 效能敏感路徑首選</text>
+
+  <!-- Right: dynamic dispatch -->
+  <rect x="360" y="34" width="310" height="260" rx="8" fill="#fef3ec" stroke="#b4541f" stroke-width="2"/>
+  <text x="515" y="54" text-anchor="middle" font-size="12" font-weight="bold" fill="#b4541f">動態分派 — dyn Trait + vtable</text>
+
+  <!-- fat pointer box -->
+  <rect x="410" y="66" width="200" height="52" rx="6" fill="#b4541f"/>
+  <text x="510" y="85" text-anchor="middle" font-size="12" fill="#fff" font-weight="bold">Box&lt;dyn Shape&gt;(胖指標)</text>
+  <text x="450" y="107" text-anchor="middle" font-size="11" fill="#ffe">data ptr</text>
+  <text x="570" y="107" text-anchor="middle" font-size="11" fill="#ffe">vtable ptr</text>
+
+  <!-- vtable -->
+  <rect x="440" y="160" width="100" height="82" rx="6" fill="#fff" stroke="#b4541f" stroke-width="1.5"/>
+  <text x="490" y="178" text-anchor="middle" font-size="10" font-weight="bold" fill="#b4541f">vtable</text>
+  <text x="490" y="196" text-anchor="middle" font-size="10" fill="#333">Circle::area</text>
+  <text x="490" y="212" text-anchor="middle" font-size="10" fill="#333">Circle::name</text>
+  <text x="490" y="228" text-anchor="middle" font-size="10" fill="#8a929b">drop glue ...</text>
+
+  <!-- data -->
+  <rect x="574" y="172" width="72" height="40" rx="6" fill="#fff" stroke="#b4541f" stroke-width="1.5"/>
+  <text x="610" y="197" text-anchor="middle" font-size="11" fill="#333">資料</text>
+
+  <line x1="450" y1="118" x2="490" y2="160" stroke="#b4541f" stroke-width="1.5" marker-end="url(#ch86-ar)"/>
+  <line x1="570" y1="118" x2="610" y2="172" stroke="#b4541f" stroke-width="1.5" marker-end="url(#ch86-ar)"/>
+
+  <text x="515" y="262" text-anchor="middle" font-size="11" fill="#b4541f">執行時查 vtable:些微開銷</text>
+  <text x="515" y="278" text-anchor="middle" font-size="12" font-weight="bold" fill="#b4541f">✓ 異質集合/外掛架構首選</text>
+</svg>
+        <figcaption>圖 80-1:靜態分派 vs 動態分派。左側的泛型在編譯期為每個具體型別生成獨立機器碼,呼叫開銷為零;右側的 <code>dyn Trait</code> 在執行時透過胖指標查 vtable,能在同一集合裡放不同型別。兩者各有適用場景,不存在絕對優劣。</figcaption>
+      </div>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">object safety:並非所有 trait 都能做成 dyn Trait</span>
+          <p>
+            trait object 有一個限制:該 trait 必須是<strong>object-safe</strong>的。
+            簡單說,trait 的方法不能有泛型型別參數、不能回傳 <code>Self</code>——
+            因為 vtable 無法表示這些「執行時才確定的型別」。
+            <code>Clone</code>(<code>fn clone(&amp;self) -&gt; Self</code>)就不是 object-safe 的,所以你不能用 <code>dyn Clone</code>。
+          </p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑧ ==================== -->
+      <h2>慣用錯誤處理模式</h2>
+
+      <p>
+        學了 <code>Result</code>、<code>?</code>、自訂錯誤,接下來面對的是實際判斷:
+        <em>在這個位置,我到底應該怎麼處理這個錯誤?</em>
+      </p>
+
+      <h3><code>unwrap</code> 和 <code>expect</code>:何時可以用</h3>
+
+      <pre><code class="language-rust">// unwrap():若 Err,直接 panic
+let val = some_result.unwrap();
+
+// expect("訊息"):若 Err,panic 並附上說明(比 unwrap 好,因為有 context)
+let val = some_result.expect("讀取設定檔失敗,請確認檔案存在於當前目錄");</code></pre>
+
+      <p><code>unwrap</code> 和 <code>expect</code> 是<strong>合法選擇</strong>的情境:</p>
+      <ul>
+        <li>你<strong>邏輯上確定</strong>不可能失敗(例如解析一個編譯期硬寫的字串常數)。</li>
+        <li><strong>原型開發/測試</strong>期間,不想在架構未定時先費心處理每個錯誤路徑。</li>
+        <li>失敗代表<strong>不可恢復的程式邏輯錯誤</strong>(而非使用者輸入問題),此時 panic 是正確的選擇。</li>
+      </ul>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">函式庫裡永遠不要在使用者輸入路徑上呼叫 unwrap</span>
+          <p>若你的函式庫呼叫了 <code>unwrap()</code> 而使用者的輸入觸發了 <code>Err</code>,
+          整個呼叫端程式會 panic 崩潰。函式庫應該把錯誤傳回給呼叫者,由呼叫者決定怎麼處理。</p>
+        </div>
+      </div>
+
+      <h3><code>Option</code> 與 <code>Result</code> 的互轉</h3>
+
+      <pre><code class="language-rust">// Option -&gt; Result:提供「沒有值時的錯誤說明」
+let opt: Option&lt;i32&gt; = Some(42);
+let res: Result&lt;i32, &amp;str&gt; = opt.ok_or("值不存在");    // Some(42) -&gt; Ok(42)
+
+// Result -&gt; Option:丟棄錯誤資訊,只在乎有沒有值
+let res: Result&lt;i32, &amp;str&gt; = Ok(42);
+let opt: Option&lt;i32&gt; = res.ok();    // Ok(42) -&gt; Some(42);  Err(..) -&gt; None</code></pre>
+
+      <h3><code>anyhow</code> 與 <code>thiserror</code>:社群標準解</h3>
+
+      <p>在真實應用程式中,多數 Rust 社群使用兩個輕量套件簡化錯誤處理:</p>
+      <ul>
+        <li><strong><code>anyhow</code></strong>:為應用程式設計。<code>anyhow::Result&lt;T&gt;</code> 包裝任何錯誤,支援 <code>.context("做什麼時失敗")</code> 附加說明,比 <code>Box&lt;dyn Error&gt;</code> API 更人性化。</li>
+        <li><strong><code>thiserror</code></strong>:為函式庫設計。<code>#[derive(thiserror::Error)]</code> 自動生成 <code>Display</code>、<code>Error</code>、<code>From</code> 的樣板程式碼,省去手寫之苦。</li>
+      </ul>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">本章只介紹這兩個套件的定位</span>
+          <p>理解了本章的原理(Result、?、From、dyn Error),翻一翻官方 README 就能上手這兩個套件。
+          真正重要的是底層機制,而非背誦套件 API。</p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑨ ==================== -->
+      <h2>手刻:帶錯誤處理的迷你表示式求值器</h2>
+
+      <p>
+        把本章所有工具組合起來,實作一個小型表示式求值器。
+        它用 <code>enum</code> 表示 AST(抽象語法樹),用 <code>Result</code> 傳播求值錯誤,
+        用 <code>?</code> 保持程式碼整潔。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">連結:編譯器與直譯器</span>
+          <p>這個範例是<a href="42-compilers.html">第 42 章</a>介紹的直譯器/求值器的 Rust 實作版本——
+          但這次我們把重點放在:用 <code>enum</code> + <code>Box</code> 表示遞迴 AST、用 <code>Result</code> 傳播求值錯誤、用 <code>?</code> 讓程式碼如「快樂路徑」一樣清晰。</p>
+        </div>
+      </div>
+
+      <pre><code class="language-rust">use std::fmt;
+
+// 表示式 AST(抽象語法樹):用 enum 表達遞迴結構
+#[derive(Debug)]
+enum Expr {
+    Num(f64),                         // 數值字面量
+    Add(Box&lt;Expr&gt;, Box&lt;Expr&gt;),       // 加法
+    Mul(Box&lt;Expr&gt;, Box&lt;Expr&gt;),       // 乘法
+    Div(Box&lt;Expr&gt;, Box&lt;Expr&gt;),       // 除法(可能除以零)
+}
+
+// 求值錯誤
+#[derive(Debug)]
+enum EvalError {
+    DivisionByZero,
+}
+
+impl fmt::Display for EvalError {
+    fn fmt(&amp;self, f: &amp;mut fmt::Formatter&lt;'_&gt;) -&gt; fmt::Result {
+        match self {
+            EvalError::DivisionByZero =&gt; write!(f, "除以零"),
+        }
+    }
+}
+
+impl std::error::Error for EvalError {}
+
+// 遞迴求值:遇到錯誤用 ? 立即傳播
+fn eval(expr: &amp;Expr) -&gt; Result&lt;f64, EvalError&gt; {
+    match expr {
+        Expr::Num(n) =&gt; Ok(*n),
+        Expr::Add(l, r) =&gt; Ok(eval(l)? + eval(r)?),   // ? 傳播 EvalError
+        Expr::Mul(l, r) =&gt; Ok(eval(l)? * eval(r)?),
+        Expr::Div(l, r) =&gt; {
+            let divisor = eval(r)?;
+            if divisor == 0.0 {
+                Err(EvalError::DivisionByZero)          // 回傳語意錯誤
+            } else {
+                Ok(eval(l)? / divisor)
+            }
+        }
+    }
+}
+
+fn main() {
+    // 建構 (3.0 + 4.0) * 2.0
+    let expr = Expr::Mul(
+        Box::new(Expr::Add(
+            Box::new(Expr::Num(3.0)),
+            Box::new(Expr::Num(4.0)),
+        )),
+        Box::new(Expr::Num(2.0)),
+    );
+    match eval(&amp;expr) {
+        Ok(v)  =&gt; println!("結果: {}", v),    // 結果: 14
+        Err(e) =&gt; eprintln!("錯誤: {}", e),
+    }
+
+    // 10.0 / 0.0:觸發 DivisionByZero
+    let bad = Expr::Div(
+        Box::new(Expr::Num(10.0)),
+        Box::new(Expr::Num(0.0)),
+    );
+    println!("{:?}", eval(&amp;bad));   // Err(DivisionByZero)
+}</code></pre>
+
+      <p>
+        注意這個設計的優雅之處:<code>eval(l)?</code> 一旦遇到 <code>Err</code>,
+        整個呼叫鏈立即中止,錯誤「冒泡」到最頂層——
+        行為和 exception 類似,但<strong>完全顯式</strong>:所有可能失敗的點都有 <code>?</code> 標記,
+        讀者一眼就知道哪裡可能出錯、哪裡保證安全。
+      </p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 80.4 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>擴充上面的求值器,新增兩個功能:</p>
+          <ol>
+            <li>新增 <code>Neg(Box&lt;Expr&gt;)</code> 變體,對子表示式取負號。</li>
+            <li>新增 <code>EvalError::Overflow</code> 變體:當結果的絕對值超過 <code>1e15</code> 時回傳此錯誤。</li>
+          </ol>
+          <p>確保 <code>eval</code> 在每次計算後都檢查溢位條件,並讓 <code>Display</code> 印出有意義的訊息。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-rust">use std::fmt;
+
+#[derive(Debug)]
+enum Expr {
+    Num(f64),
+    Neg(Box&lt;Expr&gt;),
+    Add(Box&lt;Expr&gt;, Box&lt;Expr&gt;),
+    Mul(Box&lt;Expr&gt;, Box&lt;Expr&gt;),
+    Div(Box&lt;Expr&gt;, Box&lt;Expr&gt;),
+}
+
+#[derive(Debug)]
+enum EvalError {
+    DivisionByZero,
+    Overflow(f64),
+}
+
+impl fmt::Display for EvalError {
+    fn fmt(&amp;self, f: &amp;mut fmt::Formatter&lt;'_&gt;) -&gt; fmt::Result {
+        match self {
+            EvalError::DivisionByZero =&gt; write!(f, "除以零"),
+            EvalError::Overflow(v)    =&gt; write!(f, "溢位:結果 {} 超出範圍", v),
+        }
+    }
+}
+
+impl std::error::Error for EvalError {}
+
+const LIMIT: f64 = 1e15;
+
+fn check(v: f64) -&gt; Result&lt;f64, EvalError&gt; {
+    if v.abs() &gt; LIMIT { Err(EvalError::Overflow(v)) } else { Ok(v) }
+}
+
+fn eval(expr: &amp;Expr) -&gt; Result&lt;f64, EvalError&gt; {
+    match expr {
+        Expr::Num(n)    =&gt; check(*n),
+        Expr::Neg(e)    =&gt; check(-eval(e)?),
+        Expr::Add(l, r) =&gt; check(eval(l)? + eval(r)?),
+        Expr::Mul(l, r) =&gt; check(eval(l)? * eval(r)?),
+        Expr::Div(l, r) =&gt; {
+            let d = eval(r)?;
+            if d == 0.0 { return Err(EvalError::DivisionByZero); }
+            check(eval(l)? / d)
+        }
+    }
+}
+
+fn main() {
+    let e = Expr::Neg(Box::new(Expr::Num(5.0)));
+    println!("{:?}", eval(&amp;e));   // Ok(-5.0)
+
+    let big = Expr::Mul(
+        Box::new(Expr::Num(1e10)),
+        Box::new(Expr::Num(1e10)),
+    );
+    println!("{:?}", eval(&amp;big)); // Err(Overflow(1e20))
+}</code></pre>
+              <p>關鍵技巧:把「檢查溢位」抽成 <code>check()</code> 輔助函式,
+              再用 <code>?</code> 在每個計算後呼叫——讓錯誤傳播保持簡潔。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑩ ==================== -->
+      <h2>把這一章串起來</h2>
+
+      <p>
+        從 trait 的能力宣告出發,走過泛型的零成本展開,最後抵達 Rust 最具特色的錯誤哲學。
+        幾個值得帶走的核心觀念:
+      </p>
+
+      <ul>
+        <li><strong>trait 是能力,不是身份</strong>:任何型別在任何時候都能實作任何 trait(孤兒規則除外),比 OOP 繼承更靈活、更組合。預設方法讓 trait 能提供合理的實作,使用者只需覆寫有意義的部分。</li>
+        <li><strong>泛型 + 單型化 = 零成本抽象</strong>:寫一次泛型程式碼,編譯器為每個具體型別生成手寫特化版本效率相同的機器碼。代價是編譯時間與二進位大小。</li>
+        <li><strong>錯誤即值(<code>Result&lt;T, E&gt;</code>)</strong>:把失敗的可能性刻在回傳型別裡,讓呼叫者無法遺忘。所有權確保錯誤值被明確處理後才釋放。</li>
+        <li><strong><code>?</code> 運算子</strong>:自動傳播錯誤、透過 <code>From</code> 自動型別轉換,讓錯誤處理的程式碼和「快樂路徑」一樣清晰。</li>
+        <li><strong>靜態 vs 動態分派</strong>:泛型給你零成本的靜態分派;<code>dyn Trait</code> 給你執行時的彈性。根據場景選擇,而非教條地偏好其中一種。</li>
+      </ul>
+
+      <p>
+        至此,Rust 的兩大系統——所有權(<a href="85-rust-ownership.html">第 79 章</a>)與型別/trait/錯誤處理(本章)——已為你打下了閱讀真實 Rust 程式碼的基礎。
+        這套系統的核心精神始終如一:<strong>把盡可能多的保證推進型別系統,讓編譯器替你守門</strong>。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">📚</div>
+        <div class="body">
+          <span class="c-title">延伸資源</span>
+          <p>
+            <strong><a href="https://doc.rust-lang.org/book/ch10-00-generics.html" target="_blank">The Rust Book 第 10 章</a></strong>:泛型、trait 與生命週期的官方完整說明。<br>
+            <strong><a href="https://doc.rust-lang.org/book/ch09-00-error-handling.html" target="_blank">The Rust Book 第 9 章</a></strong>:錯誤處理(panic vs Result、? 運算子)——本章所有內容的官方詳版。<br>
+            <strong><a href="https://course.rs/basic/result-error/result.html" target="_blank">Rust 語言聖經:Result 與錯誤處理</a></strong>:中文深度解說,涵蓋自訂錯誤型別與 anyhow/thiserror。<br>
+            <strong><a href="https://docs.rs/anyhow" target="_blank">anyhow</a></strong> 與 <strong><a href="https://docs.rs/thiserror" target="_blank">thiserror</a></strong>:在理解本章原理後,這兩個套件讓真實專案的錯誤處理更省力。
+          </p>
+        </div>
+      </div>
+</article>
+  </main>
+</div>
+<script src="../assets/book.js"></script>
+</body>
+</html>

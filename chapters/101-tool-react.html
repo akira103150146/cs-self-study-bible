@@ -1,0 +1,1056 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>工具呼叫與 ReAct 迴圈 · CS 自學聖經</title>
+<meta name="description" content="從第 94 章的 LLMClient 出發,手刻 Tool、ToolRegistry 與 run_react 三個核心元件,打造 ReAct 迴圈讓 agent 能真正動手——安全算數、讀檔、執行 shell;含沙箱警告、迴圈上限與失敗降級。">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;700&family=Noto+Sans+TC:wght@400;700&family=Lora:ital,wght@0,400;0,600;0,700;1,400&family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <main class="main">
+    <article class="content">
+      <div class="eyebrow">第二二部 · 動手打造 LLM Agent</div>
+      <h1>工具呼叫與 ReAct 迴圈</h1>
+      <p class="subtitle">LLM 能說、能想,卻不能「動手」——直到你給它工具。這一章,我們手刻三個核心元件,讓 agent 從「說話機器」進化成「能動手的夥伴」。</p>
+      <div class="byline">
+        <span class="tag">第 95 章</span>
+        <span>閱讀時間 ≈ 65 分鐘</span>
+        <span>難度:★★★★☆</span>
+      </div>
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>tool/function calling 的原理:你給 LLM 工具描述(name + description + JSON schema)→ 模型輸出結構化呼叫 → 你執行 → 回填結果</li>
+          <li>如何手刻 <code>Tool</code>(name / description / parameters / run)與 <code>ToolRegistry</code>(新增、描述生成、依名稱分派)兩個抽象</li>
+          <li>ReAct 範式(Thought → Action → Observation)為何比「一步到位」更可靠</li>
+          <li>如何手刻 <code>run_react(client, registry, task: str) -&gt; str</code>:組提示、解析 Action、呼叫工具、回填 Observation、迴圈上限防失控</li>
+          <li>如何用 Python <code>ast</code> 模組安全地求值算式(不用裸 <code>eval</code>)</li>
+          <li>讀檔、寫檔與 shell 工具的安全風險,以及沙箱的必要性(連回第 88 章)</li>
+          <li>模型格式錯誤、工具拋錯、重複迴圈的優雅降級策略</li>
+        </ul>
+      </div>
+
+      <!-- ========== h2 ①:開場 ========== -->
+      <h2>開場:LLM 只會吐字,怎麼讓它動手?</h2>
+      <p>
+        假設你剛完成了<a href="100-llm-client.html">第 94 章</a>的 <code>LLMClient</code>,現在你的 agent 能和 LLM 對話了。
+        你給它一個任務:
+      </p>
+      <pre><code class="language-python">from llm_client import get_client
+
+client = get_client()
+answer = client.complete(
+    "請計算 (12 + 5) × 3 的結果,然後把答案寫進 result.txt。"
+)
+print(answer)</code></pre>
+      <p>
+        模型可能回答:「(12 + 5) = 17,17 × 3 = 51,我已把結果 51 寫進 result.txt。」
+        聽起來完美——但 <code>result.txt</code> 根本沒有被建立。
+        模型說「我已寫入」,是在「預測一個語氣上合理的 token 序列」,不是在「執行程式碼」。
+        LLM 的本質是語言預測機器:所有輸出都是文字。文字裡說「完成了」不代表真的完成了。
+      </p>
+      <p>
+        更麻煩的是數學。讓模型直接算 <code>(123456789 × 987654321) mod 31</code>?
+        它有可能給你一個「看起來合理」但實際上算錯的答案——這正是
+        「幻覺(hallucination)」在數值計算上的典型表現。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">LLM 是語言機器,不是執行環境</span>
+          <p>LLM 只能輸出文字。要讓 agent 真正「動手」——計算、讀檔、搜尋、呼叫 API——
+          你需要把<strong>工具(tool)</strong>交給它:讓模型決定「什麼時候用哪個工具、用什麼參數」,
+          然後由<strong>你的程式碼</strong>實際執行工具,再把結果回報給模型。
+          這個「決定 + 執行 + 回報」的循環,就是本章的主題。</p>
+        </div>
+      </div>
+
+      <p>這一章我們會手刻三個核心元件,它們會被後續所有 agent 章節直接 import 使用:</p>
+      <ul>
+        <li><strong><code>Tool</code></strong>:代表一個外部能力的抽象(name、description、parameters schema、run)</li>
+        <li><strong><code>ToolRegistry</code></strong>:管理工具集合、生成給 LLM 的描述清單、依名稱分派執行</li>
+        <li><strong><code>run_react(client, registry, task)</code></strong>:ReAct 主迴圈——讓 LLM 在「推理」和「呼叫工具」之間交替,直到任務完成</li>
+      </ul>
+
+      <!-- ========== h2 ②:Tool Calling 原理 ========== -->
+      <h2>Tool Calling 原理:你描述,LLM 決定,你執行</h2>
+      <p>
+        「Tool calling」(有時也叫「function calling」)是現代 LLM API 提供的一種能力:
+        你在請求裡附上一份「工具說明書」,模型在需要使用工具時,
+        會輸出一段結構化的「工具呼叫指令」而不是普通文字。
+        然後你解析這個指令、執行工具、把結果回填,模型再繼續推理。
+      </p>
+      <p>
+        整個流程是個<strong>四步循環</strong>,如圖所示:
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 760 230" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="arr-g" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#8a929b"/>
+    </marker>
+    <marker id="arr-t" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#2f6f6a"/>
+    </marker>
+  </defs>
+
+  <!-- 標題 -->
+  <text x="380" y="22" text-anchor="middle" font-size="14" font-weight="700" fill="#1f2328">Tool Calling 四步循環</text>
+
+  <!-- ① 描述工具 -->
+  <rect x="10" y="42" width="158" height="90" rx="8" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="89" y="67" text-anchor="middle" font-size="13" font-weight="700" fill="#1f2328">① 描述工具</text>
+  <text x="89" y="87" text-anchor="middle" font-size="11" fill="#4a5159">name + description</text>
+  <text x="89" y="104" text-anchor="middle" font-size="11" fill="#4a5159">+ JSON schema</text>
+  <text x="89" y="121" text-anchor="middle" font-size="11" fill="#2f6f6a">→ LLM 輸入</text>
+
+  <!-- → -->
+  <line x1="168" y1="87" x2="205" y2="87" stroke="#8a929b" stroke-width="2" marker-end="url(#arr-g)"/>
+
+  <!-- ② LLM 決策 -->
+  <rect x="207" y="42" width="158" height="90" rx="8" fill="#ede4fb" stroke="#8b5cf6" stroke-width="2"/>
+  <text x="286" y="67" text-anchor="middle" font-size="13" font-weight="700" fill="#1f2328">② LLM 決策</text>
+  <text x="286" y="87" text-anchor="middle" font-size="11" fill="#4a5159">輸出 Action:</text>
+  <text x="286" y="104" text-anchor="middle" font-size="10" fill="#6d28d9">{"tool": "calc",</text>
+  <text x="286" y="121" text-anchor="middle" font-size="10" fill="#6d28d9"> "args": {...}}</text>
+
+  <!-- → -->
+  <line x1="365" y1="87" x2="402" y2="87" stroke="#8a929b" stroke-width="2" marker-end="url(#arr-g)"/>
+
+  <!-- ③ 執行工具 -->
+  <rect x="404" y="42" width="158" height="90" rx="8" fill="#f6e7dd" stroke="#b4541f" stroke-width="2"/>
+  <text x="483" y="67" text-anchor="middle" font-size="13" font-weight="700" fill="#1f2328">③ 執行工具</text>
+  <text x="483" y="87" text-anchor="middle" font-size="11" fill="#4a5159">你的程式碼解析</text>
+  <text x="483" y="104" text-anchor="middle" font-size="11" fill="#4a5159">registry.dispatch()</text>
+  <text x="483" y="121" text-anchor="middle" font-size="11" fill="#b4541f">tool.run(**args)</text>
+
+  <!-- → -->
+  <line x1="562" y1="87" x2="599" y2="87" stroke="#8a929b" stroke-width="2" marker-end="url(#arr-g)"/>
+
+  <!-- ④ 回填結果 -->
+  <rect x="601" y="42" width="150" height="90" rx="8" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="676" y="67" text-anchor="middle" font-size="13" font-weight="700" fill="#1f2328">④ 回填結果</text>
+  <text x="676" y="87" text-anchor="middle" font-size="11" fill="#4a5159">Observation</text>
+  <text x="676" y="104" text-anchor="middle" font-size="11" fill="#4a5159">加入 messages</text>
+  <text x="676" y="121" text-anchor="middle" font-size="11" fill="#2f6f6a">→ LLM 繼續推理</text>
+
+  <!-- 回路:從④底部 → 下方橫線 → ②底部 -->
+  <path d="M676,132 L676,178 L286,178 L286,132" stroke="#2f6f6a" stroke-width="1.5"
+        fill="none" stroke-dasharray="5,3" marker-end="url(#arr-t)"/>
+  <text x="481" y="196" text-anchor="middle" font-size="11" fill="#2f6f6a">重複直到 Final Answer</text>
+</svg>
+        <figcaption>圖 95-1:Tool Calling 四步循環。LLM 只負責「決策」(決定用哪個工具、給什麼參數);你的程式碼負責「執行」——職責分明,安全可控。</figcaption>
+      </div>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">原生 API tool calling vs. 手刻</span>
+          <p>Anthropic Claude、OpenAI GPT-4 等模型有「原生 function calling」——你可以在 API 請求裡傳
+          <code>tools</code> 欄位,模型會回傳格式化的 <code>tool_use</code> 物件。
+          本章我們選擇<strong>手刻</strong>:在系統提示裡描述工具、讓模型用文字輸出 Action JSON、
+          再用正則解析。這種方式<strong>不依賴特定 API 欄位</strong>,Ollama 本地模型也能跑,
+          而且讓你完全理解每一步在幹嘛。理解了手刻版,再看原生 API 就一目瞭然。</p>
+        </div>
+      </div>
+
+      <!-- ========== h2 ③:手刻 Tool 與 ToolRegistry ========== -->
+      <h2>手刻工具抽象:Tool 與 ToolRegistry</h2>
+      <p>
+        我們要定義兩個類別。<strong><code>Tool</code></strong> 代表「一個工具」;
+        <strong><code>ToolRegistry</code></strong> 是工具的「登記表」,負責管理工具集合並為 LLM 生成說明文件。
+      </p>
+
+      <pre><code class="language-python">"""tool_registry.py — Tool 與 ToolRegistry 的定義(後續章節直接 import)"""
+import json
+from typing import Callable, Any
+
+
+class Tool:
+    """代表 agent 可呼叫的一個外部工具。
+
+    後續章節(第 96–100 章)假設 Tool 具備這四個屬性與 run() 方法。
+
+    Attributes:
+        name        — 唯一識別名稱,LLM 輸出 Action 時會寫這個名稱
+        description — 一句話說明這個工具能做什麼,給 LLM 讀
+        parameters  — JSON Schema 格式描述參數(dict);可為空 dict
+        _run        — 實際執行函式,接受與 parameters 對應的 kwargs
+    """
+
+    def __init__(
+        self,
+        name: str,
+        description: str,
+        parameters: dict,
+        run_fn: Callable[..., Any],
+    ) -&gt; None:
+        self.name        = name
+        self.description = description
+        self.parameters  = parameters
+        self._run        = run_fn
+
+    def run(self, **kwargs: Any) -&gt; str:
+        """執行工具,回傳字串結果(供模型讀取)。
+        任何例外都包成字串——由 ToolRegistry.dispatch() 捕捉。
+        """
+        return str(self._run(**kwargs))
+
+
+class ToolRegistry:
+    """工具登記表:管理、描述、分派。
+
+    用法:
+        registry = ToolRegistry()
+        registry.register(my_tool)
+        desc = registry.describe_all()          # 送給 LLM
+        result = registry.dispatch("my_tool", {"x": 1})
+    """
+
+    def __init__(self) -&gt; None:
+        self._tools: dict[str, Tool] = {}
+
+    def register(self, tool: Tool) -&gt; None:
+        """把工具加入登記表。重複名稱會覆蓋。"""
+        self._tools[tool.name] = tool
+
+    def describe_all(self) -&gt; str:
+        """產生給 LLM 看的工具說明清單。"""
+        lines = []
+        for tool in self._tools.values():
+            params_json = json.dumps(tool.parameters, ensure_ascii=False)
+            lines.append(
+                f"- {tool.name}: {tool.description}\n"
+                f"  參數 schema: {params_json}"
+            )
+        return "\n".join(lines) if lines else "(無可用工具)"
+
+    def dispatch(self, name: str, args: dict) -&gt; str:
+        """依名稱找工具並執行;不存在或執行失敗時回傳錯誤訊息字串。"""
+        if name not in self._tools:
+            available = list(self._tools.keys())
+            return f"[錯誤] 工具 '{name}' 不存在。可用工具:{available}"
+        try:
+            return self._tools[name].run(**args)
+        except TypeError as e:
+            return f"[參數錯誤] {e}"
+        except Exception as e:
+            return f"[工具執行錯誤] {type(e).__name__}: {e}"</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">介面契約:Tool 與 ToolRegistry(後續章節依賴此定義)</span>
+          <p><code>Tool(name, description, parameters, run_fn)</code>:四個屬性 + <code>run(**kwargs) -&gt; str</code>。<br>
+          <code>ToolRegistry.register(tool)</code>:新增工具。<br>
+          <code>ToolRegistry.describe_all() -&gt; str</code>:產生給 LLM 的文字說明。<br>
+          <code>ToolRegistry.dispatch(name, args) -&gt; str</code>:依名稱執行工具,永遠回傳字串(包含錯誤訊息)。<br>
+          第 96–100 章的所有程式碼都假設 registry 符合此介面。</p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 95.1 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>
+            為 agent 加一個「查目前日期與時間」工具 <code>get_current_time</code>。
+            它不需要任何參數(parameters 為空 dict),呼叫後回傳格式化的目前時間字串,例如
+            <code>"2026-07-01 14:32:00"</code>。把它 register 進一個 <code>ToolRegistry</code>,
+            並呼叫 <code>registry.describe_all()</code> 確認輸出正確。
+          </p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">from datetime import datetime
+from tool_registry import Tool, ToolRegistry
+
+time_tool = Tool(
+    name="get_current_time",
+    description="查詢目前的日期與時間。無需參數。",
+    parameters={},
+    run_fn=lambda: datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+)
+
+registry = ToolRegistry()
+registry.register(time_tool)
+print(registry.describe_all())
+# - get_current_time: 查詢目前的日期與時間。無需參數。
+#   參數 schema: {}
+
+print(registry.dispatch("get_current_time", {}))
+# 2026-07-01 14:32:00</code></pre>
+              <p>觀察:<code>run_fn</code> 是 <code>lambda: ...</code>,不接收任何參數——
+              <code>dispatch</code> 呼叫 <code>tool.run(**{})</code> 等於 <code>tool.run()</code>,
+              剛好符合無參數 lambda 的定義。
+              當 agent 需要知道「現在幾點」或「今天是幾號」時,這個工具就派上用場了。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ========== h2 ④:ReAct 範式 ========== -->
+      <h2>ReAct 範式:先想再做,迴圈到完成</h2>
+      <p>
+        2022 年,Google 與 Princeton 的研究者發表了 <em>ReAct: Synergizing Reasoning and Acting in Language Models</em>
+        (Yao et al., 2022),提出了一個優雅的想法:<strong>讓模型在每次「行動」之前先「推理」</strong>。
+      </p>
+      <p>
+        ReAct 的核心格式是三步迴圈:
+      </p>
+      <ul>
+        <li><strong>Thought(推理)</strong>:模型用自然語言說明它目前的推理過程與下一步計畫</li>
+        <li><strong>Action(行動)</strong>:模型決定要呼叫哪個工具、用什麼參數</li>
+        <li><strong>Observation(觀察)</strong>:你的程式碼執行工具後,把結果回填進對話</li>
+      </ul>
+      <p>
+        這個迴圈不斷重複,直到模型判斷「我已經能回答了」,輸出 <strong>Final Answer</strong> 結束。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 560 370" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="ra" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#8a929b"/>
+    </marker>
+    <marker id="rb" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#2f6f6a"/>
+    </marker>
+    <marker id="rc" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#8b5cf6"/>
+    </marker>
+  </defs>
+
+  <!-- 標題 -->
+  <text x="280" y="22" text-anchor="middle" font-size="14" font-weight="700" fill="#1f2328">ReAct 迴圈:Thought → Action → Observation</text>
+
+  <!-- 任務輸入 -->
+  <rect x="185" y="38" width="190" height="40" rx="8" fill="#f0f2f5" stroke="#8a929b" stroke-width="1.5"/>
+  <text x="280" y="64" text-anchor="middle" font-size="12" fill="#4a5159">任務輸入(task)</text>
+  <line x1="280" y1="78" x2="280" y2="100" stroke="#8a929b" stroke-width="1.5" marker-end="url(#ra)"/>
+
+  <!-- Thought -->
+  <rect x="155" y="102" width="250" height="60" rx="10" fill="#ede4fb" stroke="#8b5cf6" stroke-width="2"/>
+  <text x="280" y="128" text-anchor="middle" font-size="13" font-weight="700" fill="#6d28d9">Thought</text>
+  <text x="280" y="148" text-anchor="middle" font-size="11" fill="#4a5159">模型推理:我現在應該做什麼?</text>
+
+  <!-- Thought 往右:能回答 → Final Answer -->
+  <line x1="405" y1="132" x2="455" y2="132" stroke="#8b5cf6" stroke-width="1.5" marker-end="url(#rc)"/>
+  <text x="430" y="124" text-anchor="middle" font-size="10" fill="#8b5cf6">能回答</text>
+  <rect x="457" y="112" width="90" height="40" rx="8" fill="#ede4fb" stroke="#8b5cf6" stroke-width="2"/>
+  <text x="502" y="133" text-anchor="middle" font-size="12" font-weight="700" fill="#6d28d9">Final</text>
+  <text x="502" y="148" text-anchor="middle" font-size="12" font-weight="700" fill="#6d28d9">Answer</text>
+  <!-- Final Answer → 結束 -->
+  <line x1="502" y1="152" x2="502" y2="185" stroke="#8b5cf6" stroke-width="1.5" marker-end="url(#rc)"/>
+  <text x="502" y="200" text-anchor="middle" font-size="11" fill="#6d28d9">✓ 結束回傳</text>
+
+  <!-- Thought → Action(需要工具) -->
+  <line x1="280" y1="162" x2="280" y2="192" stroke="#8a929b" stroke-width="1.5" marker-end="url(#ra)"/>
+  <text x="310" y="182" font-size="10" fill="#8a929b">需要工具</text>
+
+  <!-- Action -->
+  <rect x="155" y="194" width="250" height="60" rx="10" fill="#f6e7dd" stroke="#b4541f" stroke-width="2"/>
+  <text x="280" y="220" text-anchor="middle" font-size="13" font-weight="700" fill="#b4541f">Action</text>
+  <text x="280" y="240" text-anchor="middle" font-size="11" fill="#4a5159">{"tool": "...", "args": {...}}</text>
+
+  <!-- Action → 執行工具 -->
+  <line x1="280" y1="254" x2="280" y2="278" stroke="#8a929b" stroke-width="1.5" marker-end="url(#ra)"/>
+
+  <!-- 執行工具 -->
+  <rect x="155" y="280" width="250" height="50" rx="10" fill="#fff4e6" stroke="#b4541f" stroke-width="1.5"/>
+  <text x="280" y="302" text-anchor="middle" font-size="12" font-weight="700" fill="#b4541f">執行工具</text>
+  <text x="280" y="320" text-anchor="middle" font-size="11" fill="#4a5159">registry.dispatch(name, args)</text>
+
+  <!-- 執行工具 → Observation -->
+  <line x1="280" y1="330" x2="280" y2="348" stroke="#8a929b" stroke-width="1.5" marker-end="url(#ra)"/>
+
+  <!-- Observation -->
+  <rect x="155" y="350" width="250" height="0" rx="10"/>
+  <!-- Use text directly below -->
+  <text x="280" y="363" text-anchor="middle" font-size="12" font-weight="700" fill="#2f6f6a">Observation(回填 messages)</text>
+
+  <!-- Observation → 回到 Thought (左側回路) -->
+  <path d="M155,355 L80,355 L80,132 L155,132" stroke="#2f6f6a" stroke-width="1.5"
+        fill="none" stroke-dasharray="5,3" marker-end="url(#rb)"/>
+  <text x="45" y="250" text-anchor="middle" font-size="10" fill="#2f6f6a" transform="rotate(-90, 45, 250)">繼續推理</text>
+</svg>
+        <figcaption>圖 95-2:ReAct 迴圈。每一輪模型先寫 Thought(推理),再決定 Action(呼叫工具)或 Final Answer(結束)。執行工具後把 Observation 回填進對話,下一輪模型有了更多資訊再繼續推理。</figcaption>
+      </div>
+
+      <h3>為何「先想再做」比一步到位更可靠?</h3>
+      <p>
+        想像你問一個朋友:「幫我查台灣所有縣市的人口,算出前三名的平均。」
+        一步到位的方式是朋友直接給你一個數字——但你怎麼知道它對不對?
+        ReAct 的方式是:朋友先說「我要先查各縣市人口」(Thought),再去查(Action),
+        拿到資料(Observation)後再說「我要排序取前三名並求平均」(Thought),
+        再計算(Action),最後回答你(Final Answer)。
+      </p>
+      <p>
+        這個「邊想邊做」的結構帶來幾個好處:
+      </p>
+      <ul>
+        <li><strong>可追蹤</strong>:你可以看到模型的推理步驟,方便除錯</li>
+        <li><strong>可自我修正</strong>:如果工具回傳錯誤或意外結果,Thought 可以反映並改變策略</li>
+        <li><strong>不容易幻覺</strong>:模型在 Thought 裡宣稱「我要去查」之後,它必須真的輸出 Action;如果它直接給 Final Answer 卻沒有查詢,邏輯上就說不通</li>
+      </ul>
+
+      <div class="callout history">
+        <div class="ico">📜</div>
+        <div class="body">
+          <span class="c-title">ReAct 論文與後繼影響</span>
+          <p>Yao et al. (2022)「ReAct: Synergizing Reasoning and Acting in Language Models」
+          (arXiv:2210.03629)在 HotpotQA、Fever、ALFWorld 等任務上展示 ReAct 顯著優於純 Chain-of-Thought
+          或純 Action 的基線。它影響了 LangChain Agent、AutoGPT、BabyAGI 等早期 agent 框架,
+          也是現在主流 agent loop 設計的直接前身。</p>
+        </div>
+      </div>
+
+      <!-- ========== h2 ⑤:手刻 run_react ========== -->
+      <h2>手刻 run_react:ReAct 主迴圈程式碼</h2>
+      <p>
+        理解了原理,我們來把它寫成程式碼。
+        <code>run_react</code> 是本章最重要的產物,也是後續所有 agent 章節依賴的介面。
+      </p>
+
+      <pre><code class="language-python">"""react_loop.py — run_react:ReAct 主迴圈
+
+後續章節統一 import:
+    from react_loop import run_react
+"""
+import json
+import re
+
+from llm_client import LLMClient   # 第 94 章定義
+from tool_registry import ToolRegistry  # 本章定義
+
+MAX_STEPS = 10   # 最多幾輪 Thought/Action,防止無窮迴圈
+
+
+def run_react(client: LLMClient, registry: ToolRegistry, task: str) -&gt; str:
+    """ReAct 主迴圈:Thought → Action → Observation → … → Final Answer。
+
+    介面契約(後續第 96–100 章依賴此定義):
+        client   — 符合 LLMClient 介面的物件(第 94 章定義)
+        registry — ToolRegistry 物件(本章定義)
+        task     — 自然語言任務描述字串
+        回傳值   — agent 的最終答案字串
+
+    迴圈最多執行 MAX_STEPS 輪。超過上限時回傳失敗訊息而非無限等待。
+    """
+    # ── 組系統提示 ──────────────────────────────────────────────────────────
+    system_prompt = (
+        "你是一個能使用工具的 AI agent。解決任務時,請嚴格遵循以下格式:\n\n"
+        "Thought: 你的推理過程(繁體中文)\n"
+        'Action: {"tool": "工具名稱", "args": {"參數名": "參數值"}}\n\n'
+        "或,當你已能回答時:\n"
+        "Final Answer: 最終答案\n\n"
+        "規則:\n"
+        "1. 每次只輸出一個 Thought/Action 或 Thought/Final Answer。\n"
+        "2. Action 必須是合法 JSON 物件,tool 欄位為工具名稱,args 為參數 dict。\n"
+        "3. 不要猜測工具的回傳值;等 Observation 回來再繼續。\n\n"
+        f"可用工具:\n{registry.describe_all()}"
+    )
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user",   "content": f"任務:{task}"},
+    ]
+
+    # ── ReAct 主迴圈 ─────────────────────────────────────────────────────────
+    for step in range(MAX_STEPS):
+        reply = client.chat(messages)
+        messages.append({"role": "assistant", "content": reply})
+
+        # 1. 偵測重複(陷入迴圈保護)
+        if _is_repeating(messages):
+            return "[偵測到連續重複輸出,agent 可能陷入迴圈,已中止]"
+
+        # 2. 偵測 Final Answer
+        fa_match = re.search(r"Final Answer[:：]\s*(.+)", reply, re.DOTALL)
+        if fa_match:
+            return fa_match.group(1).strip()
+
+        # 3. 解析 Action JSON
+        act_match = re.search(r'Action[:：]\s*(\{[\s\S]*?\})', reply)
+        if not act_match:
+            # 模型沒有輸出 Action 也沒有 Final Answer → 提示它繼續
+            messages.append({
+                "role": "user",
+                "content": "請繼續:輸出 Action(JSON)或 Final Answer。",
+            })
+            continue
+
+        # 4. 解析工具名稱與參數
+        try:
+            action    = json.loads(act_match.group(1))
+            tool_name = action["tool"]
+            args      = action.get("args", {})
+        except (json.JSONDecodeError, KeyError) as e:
+            observation = f"[解析 Action 失敗:{e}。請確認 Action 是合法的 JSON 物件,且含 'tool' 欄位。]"
+        else:
+            # 5. 分派工具執行
+            observation = registry.dispatch(tool_name, args)
+
+        # 6. 把 Observation 回填進對話
+        messages.append({
+            "role": "user",
+            "content": f"Observation: {observation}",
+        })
+
+    # 超過步數上限
+    return f"[超過最大步數上限({MAX_STEPS}),agent 無法在限定步數內完成任務]"
+
+
+def _is_repeating(messages: list, window: int = 4) -&gt; bool:
+    """偵測 messages 末尾 window 輪的 assistant 回應是否出現連續重複。"""
+    assistant_msgs = [m["content"] for m in messages if m["role"] == "assistant"]
+    if len(assistant_msgs) &lt; window:
+        return False
+    recent = assistant_msgs[-window:]
+    # 如果最新的兩條 assistant 回應完全相同,判定為重複
+    return recent[-1] == recent[-2]</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">run_react 介面契約(後續章節依賴此定義)</span>
+          <p><code>run_react(client: LLMClient, registry: ToolRegistry, task: str) -&gt; str</code><br>
+          — 輸入一個 LLM 客戶端、一個工具登記表、一個任務字串<br>
+          — 回傳 agent 的最終答案(字串)<br>
+          — 內部最多執行 MAX_STEPS(=10)輪,超過則回傳失敗訊息<br>
+          第 96–100 章的 agent 都以此函式為主迴圈基礎。</p>
+        </div>
+      </div>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">小模型的 Tool Calling 限制</span>
+          <p>本地小模型(如 Llama 3.2 3B)對「嚴格遵循 JSON 格式輸出 Action」的表現<strong>差異很大</strong>——
+          有時輸出多餘文字包裹在 Action 前後,有時省略 tool 欄位,有時 JSON 有語法錯誤。
+          我們的解析已加入容錯(從包裹文字裡找第一個 <code>{...}</code>),但小模型的 ReAct 成功率仍然不如大模型穩定。
+          開發 agent 時,建議先用 Claude 或 GPT-4 級別的模型驗證邏輯;
+          確認流程正確後,再測試較小的本地模型。</p>
+        </div>
+      </div>
+
+      <!-- ========== h2 ⑥:安全計算機 ========== -->
+      <h2>工具一:安全計算機——告別裸 eval</h2>
+      <p>
+        第一個工具:計算機。最直覺的實作是 <code>eval(expression)</code>——
+        但這是一個<strong>嚴重的安全漏洞</strong>。
+        如果 LLM(或惡意 prompt injection)讓模型輸出:
+      </p>
+      <pre><code class="language-python">action = {"tool": "calculator", "args": {"expression": "__import__('os').system('rm -rf /')}"}
+</code></pre>
+      <p>
+        <code>eval</code> 會乖乖執行。這叫<strong>程式碼注入(code injection)</strong>。
+        對於純算術,我們應該只允許數字和算術運算子——用 Python 的 <code>ast</code> 模組可以做到。
+      </p>
+      <pre><code class="language-python">"""safe_eval.py — 用 ast 模組安全求值純算術表達式"""
+import ast
+import operator as op
+
+# 允許的運算子:純算術,不含位元運算或函式呼叫
+_SAFE_OPS = {
+    ast.Add:  op.add,    # +
+    ast.Sub:  op.sub,    # -
+    ast.Mult: op.mul,    # *
+    ast.Div:  op.truediv, # /
+    ast.Mod:  op.mod,    # %
+    ast.Pow:  op.pow,    # **
+    ast.USub: op.neg,    # 一元負號 -x
+    ast.UAdd: op.pos,    # 一元正號 +x
+}
+
+
+def safe_eval(expr: str) -&gt; float:
+    """用 AST 安全求值純算術表達式。
+    只允許數字常數與算術運算子——無函式呼叫、無屬性存取、無變數。
+    """
+    try:
+        tree = ast.parse(expr.strip(), mode="eval")
+    except SyntaxError as e:
+        raise ValueError(f"無法解析算式: {e}") from e
+
+    def _eval(node: ast.expr) -&gt; float:
+        # 數字常數
+        if isinstance(node, ast.Constant):
+            if isinstance(node.value, (int, float)):
+                return float(node.value)
+            raise ValueError(f"不支援非數字常數: {node.value!r}")
+        # 二元運算(+、-、*、/ 等)
+        if isinstance(node, ast.BinOp):
+            fn = _SAFE_OPS.get(type(node.op))
+            if fn is None:
+                raise ValueError(f"不允許的運算子: {type(node.op).__name__}")
+            return fn(_eval(node.left), _eval(node.right))
+        # 一元運算(-x、+x)
+        if isinstance(node, ast.UnaryOp):
+            fn = _SAFE_OPS.get(type(node.op))
+            if fn is None:
+                raise ValueError(f"不允許的一元運算子: {type(node.op).__name__}")
+            return fn(_eval(node.operand))
+        # 括號表達式(AST 不單獨表示括號,它就是優先解析的子樹)
+        raise ValueError(f"不支援的語法節點: {type(node).__name__}")
+
+    return _eval(tree.body)
+
+
+# ── 建立計算機工具 ────────────────────────────────────────────────────────────
+
+from tool_registry import Tool
+
+calculator_tool = Tool(
+    name="calculator",
+    description="安全地計算算術表達式,回傳數值結果。不能呼叫函式或存取變數。",
+    parameters={
+        "expression": {
+            "type": "string",
+            "description": "合法的算術表達式,例如 '(12+5)*3' 或 '100/7'",
+        }
+    },
+    run_fn=lambda expression: safe_eval(expression),
+)
+
+
+# ── 測試 ─────────────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    tests = [
+        ("(12 + 5) * 3",   51.0),
+        ("100 / 7",        100 / 7),
+        ("2 ** 10",        1024.0),
+        ("-5 + 3",         -2.0),
+    ]
+    for expr, expected in tests:
+        result = safe_eval(expr)
+        status = "✓" if abs(result - expected) &lt; 1e-9 else "✗"
+        print(f"{status} safe_eval({expr!r}) = {result}")</code></pre>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">永遠不要用裸 eval 執行 LLM 輸出</span>
+          <p>Python 的 <code>eval()</code> 能執行任意程式碼。
+          如果 LLM 輸出的 <code>expression</code> 被惡意構造(例如透過 prompt injection 攻擊),
+          裸 <code>eval</code> 會執行惡意程式碼。
+          <code>ast</code>-based safe eval 只解析「算術語法樹」——任何函式呼叫、屬性存取、import 都無法通過 AST 節點型別檢查,會直接拋出 <code>ValueError</code>。</p>
+        </div>
+      </div>
+
+      <!-- ========== h2 ⑦:讀檔、寫檔與 Shell ========== -->
+      <h2>工具二/三:讀檔、寫檔與 Shell 執行器</h2>
+      <p>
+        計算機以外,agent 最常需要的就是<strong>讀寫檔案</strong>與<strong>執行系統指令</strong>。
+        這兩類工具功能強大,但也帶來安全風險——需要認真對待。
+      </p>
+
+      <h3>讀檔與寫檔工具</h3>
+      <pre><code class="language-python">"""file_tools.py — 讀檔與寫檔工具"""
+import pathlib
+from tool_registry import Tool
+
+
+def _read_file(path: str) -&gt; str:
+    """讀取文字檔案。只允許相對路徑,防止目錄穿越攻擊。"""
+    p = pathlib.Path(path)
+    if p.is_absolute():
+        return "[錯誤] 只允許相對路徑,拒絕絕對路徑。"
+    if ".." in p.parts:
+        return "[錯誤] 路徑不可含 '..',防止目錄穿越(path traversal)攻擊。"
+    try:
+        content = p.read_text(encoding="utf-8")
+        return content if content else "(空檔案)"
+    except FileNotFoundError:
+        return f"[錯誤] 找不到檔案: {path}"
+    except PermissionError:
+        return "[錯誤] 沒有讀取權限。"
+    except Exception as e:
+        return f"[錯誤] {e}"
+
+
+def _write_file(path: str, content: str) -&gt; str:
+    """寫入文字檔案。只允許相對路徑。"""
+    p = pathlib.Path(path)
+    if p.is_absolute() or ".." in p.parts:
+        return "[錯誤] 只允許相對路徑。"
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content, encoding="utf-8")
+        return f"已寫入 {path}({len(content)} 個字元)。"
+    except PermissionError:
+        return "[錯誤] 沒有寫入權限。"
+    except Exception as e:
+        return f"[錯誤] {e}"
+
+
+read_file_tool = Tool(
+    name="read_file",
+    description="讀取文字檔案的內容。只允許相對路徑。",
+    parameters={
+        "path": {"type": "string", "description": "相對路徑,例如 'data.txt'"},
+    },
+    run_fn=_read_file,
+)
+
+write_file_tool = Tool(
+    name="write_file",
+    description="把指定內容寫入文字檔案(相對路徑)。若檔案不存在則建立。",
+    parameters={
+        "path":    {"type": "string", "description": "相對路徑,例如 'result.txt'"},
+        "content": {"type": "string", "description": "要寫入的文字內容"},
+    },
+    run_fn=_write_file,
+)</code></pre>
+
+      <h3>Shell 執行器工具(⚠️ 高風險——務必搭配沙箱)</h3>
+      <p>
+        Shell 工具讓 agent 能執行系統指令——功能強大,但也是最危險的工具之一。
+        如果 agent 能執行任意 shell 指令,惡意的 prompt injection 攻擊可能讓它刪除檔案、
+        竊取資料或安裝惡意程式。
+      </p>
+
+      <div class="callout danger">
+        <div class="ico">⛔</div>
+        <div class="body">
+          <span class="c-title">Shell 工具需要容器沙箱隔離</span>
+          <p>在生產環境中,shell 工具<strong>絕對必須</strong>在隔離的容器環境中執行——
+          透過 namespace、cgroups 與 seccomp profile 限制它能做的事。
+          <a href="93-container-internals.html">第 87 章</a>解釋了容器隔離的底層原理;
+          <a href="94-mini-docker.html">第 88 章</a>示範了手寫 container runtime 的實作。
+          本章的白名單機制只是<strong>教學用最小防護</strong>,不足以替代真正的沙箱。</p>
+        </div>
+      </div>
+
+      <pre><code class="language-python">"""shell_tool.py — 白名單保護的 shell 執行工具(⚠️ 生產環境需加容器沙箱)"""
+import shlex
+import subprocess
+from tool_registry import Tool
+
+# 白名單:只允許無破壞性的唯讀/展示指令
+_ALLOWED_PREFIXES = (
+    "echo ",      # 顯示字串
+    "ls",         # 列目錄(ls、ls -la 等)
+    "pwd",        # 顯示工作目錄
+    "date",       # 顯示日期時間
+    "cat ",       # 讀檔(補充 read_file 工具)
+    "python3 -c ", # 執行簡單 Python 片段
+)
+
+
+def _run_shell(command: str, timeout: int = 10) -&gt; str:
+    """在受限白名單中執行 shell 指令。
+    ⚠️ 警告:這只是教學用白名單保護。生產環境請用容器沙箱(見第 88 章)。
+    """
+    cmd = command.strip()
+    # 白名單檢查
+    if not any(cmd == p.strip() or cmd.startswith(p) for p in _ALLOWED_PREFIXES):
+        return (
+            f"[拒絕] 指令 '{cmd}' 未在允許清單中。\n"
+            "⚠️ 安全提示:shell 工具可執行任意系統指令。"
+            "生產環境請用容器沙箱隔離(見第 88 章)。"
+        )
+    try:
+        result = subprocess.run(
+            shlex.split(cmd),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        output = (result.stdout + result.stderr).strip()
+        return output if output else "(無輸出)"
+    except subprocess.TimeoutExpired:
+        return f"[超時] 指令超過 {timeout} 秒時限。"
+    except FileNotFoundError as e:
+        return f"[錯誤] 找不到指令: {e}"
+    except Exception as e:
+        return f"[錯誤] {e}"
+
+
+shell_tool = Tool(
+    name="shell",
+    description=(
+        "執行 shell 指令(白名單限制:echo/ls/pwd/date/cat/python3 -c)。"
+        "⚠️ 生產環境務必搭配容器沙箱。"
+    ),
+    parameters={
+        "command": {
+            "type": "string",
+            "description": "shell 指令字串,例如 'echo hello' 或 'ls -la'",
+        }
+    },
+    run_fn=_run_shell,
+)</code></pre>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">沙箱的進階做法</span>
+          <p>生產級 agent(如 GitHub Copilot Workspace、Devin)的 shell 執行通常有幾層防護:
+          (1) 在容器內執行(<a href="94-mini-docker.html">第 88 章</a>介紹的 namespace + cgroups 隔離);
+          (2) seccomp 限制可呼叫的 syscall 集合;
+          (3) 網路隔離(限制容器出口流量);
+          (4) 執行時間與記憶體上限(cgroups)。
+          最小化攻擊面才是正確的 agent 安全工程。</p>
+        </div>
+      </div>
+
+      <!-- ========== h2 ⑧:失敗處理 ========== -->
+      <h2>失敗處理:格式亂、工具炸、圈圈轉</h2>
+      <p>
+        在真實使用中,agent 會遇到各種失敗情況。
+        好的設計不是「假裝不會失敗」,而是「優雅地處理每一種失敗」。
+      </p>
+
+      <h3>失敗一:模型輸出格式錯誤</h3>
+      <p>
+        模型沒有輸出 <code>Action:</code> 也沒有 <code>Final Answer:</code>——
+        例如它只說了一段 Thought 就停下來,或者輸出了一段無關的文字。
+      </p>
+      <p>
+        我們的 <code>run_react</code> 已處理這個情況:
+        如果正則找不到 Action 或 Final Answer,就追加一條 user 訊息
+        <code>"請繼續:輸出 Action(JSON)或 Final Answer。"</code> 後繼續下一輪。
+        這個提示通常能喚醒模型回到正確格式。
+      </p>
+
+      <h3>失敗二:Action JSON 解析失敗</h3>
+      <p>
+        模型輸出了 <code>Action:</code>,但 JSON 有語法錯誤(多餘逗號、單引號等)。
+        我們的實作用 <code>re.search</code> 提取第一個 <code>{...}</code> 區塊再嘗試 <code>json.loads</code>;
+        失敗時把錯誤訊息作為 Observation 回填,讓模型有機會修正:
+      </p>
+      <pre><code class="language-python"># 解析失敗的 Observation 範例:
+observation = "[解析 Action 失敗:Expecting ',' delimiter: line 1 column 25 (char 24)。請確認 Action 是合法的 JSON 物件,且含 'tool' 欄位。]"
+
+# 模型下一輪的 Thought 通常會是:
+# Thought: 剛才的 Action JSON 有語法錯誤,讓我重新格式化。
+# Action: {"tool": "calculator", "args": {"expression": "(12+5)*3"}}</code></pre>
+
+      <h3>失敗三:工具執行拋出例外</h3>
+      <p>
+        工具本身丟出了例外(例如除以零、檔案不存在)。
+        <code>ToolRegistry.dispatch()</code> 已經用 <code>try/except</code> 包住 <code>tool.run()</code>,
+        把任何例外轉成字串 <code>"[工具執行錯誤] ZeroDivisionError: division by zero"</code> 作為 Observation。
+        模型讀到這個訊息,通常能自行修改參數重試。
+      </p>
+
+      <h3>失敗四:無窮迴圈</h3>
+      <p>
+        模型陷入重複——每輪都輸出相同的 Action,工具也每次回傳相同的 Observation。
+        這種情況下 <code>MAX_STEPS</code> 是最後的保險,確保迴圈一定結束。
+        此外,我們的 <code>_is_repeating()</code> 函式能提前偵測並中止:
+      </p>
+      <pre><code class="language-python">def _is_repeating(messages: list, window: int = 4) -&gt; bool:
+    """偵測連續重複的 assistant 輸出。"""
+    assistant_msgs = [m["content"] for m in messages if m["role"] == "assistant"]
+    if len(assistant_msgs) &lt; window:
+        return False
+    recent = assistant_msgs[-window:]
+    return recent[-1] == recent[-2]   # 最新兩條 assistant 回應完全相同</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">失敗處理設計原則</span>
+          <p>好的 agent 設計把「失敗」當成 Observation 的一部份回填給模型,讓模型有機會自我修正——
+          而不是直接拋出例外讓整個程式崩潰。
+          但同時必須有最終的「出口」(MAX_STEPS + 重複偵測),否則 agent 可能無限耗費資源。
+          這個「給機會修正 + 設硬性出口」的雙層設計,是 agent 可靠性工程的基本模式。</p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 95.2 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>
+            假設 agent 的 ReAct 迴圈陷入了一種「軟卡死」:
+            每輪模型都輸出合法的 Action(工具名稱和參數也正確),
+            但工具每次都回傳 <code>"[錯誤] 找不到檔案: missing.txt"</code>——
+            模型沒有學到教訓,繼續用一樣的參數呼叫。
+            <br><br>
+            (a) 說明 <code>_is_repeating()</code> 是否能偵測到這種情況。
+            (b) 如果不能,你會如何改進偵測邏輯?
+            (c) 有沒有辦法在系統提示層面就預防這種情況?
+          </p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>(a)</strong> 能偵測。因為 <code>_is_repeating</code> 比較的是 <code>assistant</code> 角色的訊息,而每輪模型都輸出同樣的 Thought + Action,所以 <code>recent[-1] == recent[-2]</code> 為 True,會在第 2 次重複後中止。</p>
+              <p><strong>(b)</strong> 如果模型每輪的 Thought 稍有不同但 Action 相同(例如 Thought 說「再試一次」),那麼 <code>assistant</code> 訊息不完全一樣,就會偵測失敗。改進方式:只提取 Action JSON 部分來做比較:</p>
+              <pre><code class="language-python">def _is_action_repeating(messages: list, window: int = 3) -&gt; bool:
+    actions = []
+    for m in messages:
+        if m["role"] == "assistant":
+            match = re.search(r'Action[:：]\s*(\{[\s\S]*?\})', m["content"])
+            if match:
+                actions.append(match.group(1).strip())
+    if len(actions) &lt; window:
+        return False
+    return len(set(actions[-window:])) == 1   # 最近 window 個 Action 全部相同</code></pre>
+              <p><strong>(c)</strong> 在系統提示加上規則:「如果工具兩次回傳相同錯誤,請改變策略或輸出 Final Answer 說明無法完成任務。」給模型明確的「放棄策略」,比用程式碼偵測更根本。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ========== h2 ⑨:完整示範 ========== -->
+      <h2>完整示範:讓 agent 計算並存檔</h2>
+      <p>
+        把所有元件組起來,看看 agent 跑一個多步任務的完整流程:
+        「計算 (12 + 5) × 3,然後把結果寫進 answer.txt」。
+      </p>
+      <pre><code class="language-python">#!/usr/bin/env python3
+"""agent_demo.py — 完整示範:用 run_react 解一個多步任務"""
+
+from llm_client import get_client          # 第 94 章
+from tool_registry import ToolRegistry     # 本章
+from safe_eval import calculator_tool      # 本章
+from file_tools import write_file_tool     # 本章
+from react_loop import run_react           # 本章
+
+# ── 組裝工具登記表 ────────────────────────────────────────────────────────────
+registry = ToolRegistry()
+registry.register(calculator_tool)
+registry.register(write_file_tool)
+
+# ── 取得 LLM 客戶端(第 94 章定義的工廠函式) ──────────────────────────────────
+client = get_client()
+print(f"使用後端:{type(client).__name__}")
+
+# ── 執行 agent ───────────────────────────────────────────────────────────────
+task = "請計算 (12 + 5) × 3 的結果,並把答案寫進 answer.txt 檔案裡。"
+
+print(f"\n任務:{task}\n")
+answer = run_react(client, registry, task)
+print(f"\n最終答案:{answer}")</code></pre>
+
+      <p>在使用 Claude 或強力本地模型的情況下,對話會大致像這樣流轉:</p>
+      <pre><code class="language-text">--- 步驟 1 ---
+[assistant] Thought: 我需要先計算 (12 + 5) × 3。
+            Action: {"tool": "calculator", "args": {"expression": "(12+5)*3"}}
+
+[user]      Observation: 51.0
+
+--- 步驟 2 ---
+[assistant] Thought: 計算結果是 51。現在我要把答案寫進 answer.txt。
+            Action: {"tool": "write_file", "args": {"path": "answer.txt", "content": "51"}}
+
+[user]      Observation: 已寫入 answer.txt(2 個字元)。
+
+--- 步驟 3 ---
+[assistant] Thought: 計算完成且檔案已建立。
+            Final Answer: (12 + 5) × 3 = 51,已寫入 answer.txt。
+
+最終答案: (12 + 5) × 3 = 51,已寫入 answer.txt。</code></pre>
+
+      <p>
+        執行後你會發現工作目錄裡多了一個 <code>answer.txt</code>,內容是 <code>51</code>。
+        這一次,agent 真的「動手」了——不只是說「我已完成」。
+      </p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 95.3 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>
+            擴展上面的示範:讓 agent 解一個需要<strong>三個工具</strong>的任務——
+            同時用到計算機、讀檔與寫檔:
+            <br><br>
+            任務字串:「讀取 numbers.txt 的內容(一行一個整數),把所有數字加總,再把結果寫進 sum.txt。」
+            <br><br>
+            步驟提示:
+            (1) 先用 Python 建立一個 <code>numbers.txt</code>(例如內容為 <code>"10\n20\n30"</code>)。
+            (2) 把 <code>read_file_tool</code> 也 register 進 registry。
+            (3) 執行 <code>run_react</code>,觀察 agent 如何分三步完成任務。
+            (4) 如果 agent 嘗試用 <code>calculator</code> 工具解析字串,說明為何會失敗,以及如何在系統提示或工具描述裡改善。
+          </p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">import pathlib
+from llm_client import get_client
+from tool_registry import ToolRegistry
+from safe_eval import calculator_tool
+from file_tools import read_file_tool, write_file_tool
+from react_loop import run_react
+
+# 1. 建立測試檔案
+pathlib.Path("numbers.txt").write_text("10\n20\n30", encoding="utf-8")
+
+# 2. 組裝工具
+registry = ToolRegistry()
+registry.register(read_file_tool)
+registry.register(calculator_tool)
+registry.register(write_file_tool)
+
+# 3. 執行
+client = get_client()
+task = "讀取 numbers.txt 的內容(一行一個整數),把所有數字加總,再把結果寫進 sum.txt。"
+answer = run_react(client, registry, task)
+print("最終答案:", answer)
+print("sum.txt 內容:", pathlib.Path("sum.txt").read_text())</code></pre>
+              <p><strong>關於失敗場景:</strong>calculator 工具的 <code>safe_eval</code> 無法解析字串
+              <code>"10\n20\n30"</code>——它只懂算術表達式。agent 可能需要先把讀到的內容整理成算式
+              <code>"10+20+30"</code> 再呼叫 calculator。改善方式:(a) 在任務描述裡說清楚
+              「請先把每行數字提取成算術表達式」;(b) 加一個「加總列表」工具,直接接受多行數字字串;
+              (c) 換用能直接執行 Python 程式碼的 shell 工具。</p>
+              <p>這個練習說明了工具的<strong>粒度設計</strong>:工具太粗(shell 直接執行任意程式)有安全風險;
+              工具太細(只能算四則運算)讓 agent 需要更多步驟。好的工具集設計需要在能力和安全之間取得平衡。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ========== h2 ⑩:把這一章串起來 ========== -->
+      <h2>把這一章串起來</h2>
+      <p>這一章是整個 agent 宇宙的「心臟」——讓 LLM 能真正動手。回顧幾個關鍵決策:</p>
+      <ul>
+        <li><strong>Tool 抽象</strong>:四個屬性(name / description / parameters / run_fn)+ 一個方法(<code>run(**kwargs) -&gt; str</code>)。
+        簡單、可組合、後續章節可自由擴充。</li>
+        <li><strong>ToolRegistry</strong>:管理、描述、分派三個責任合一。<code>describe_all()</code> 生成 LLM 可讀的說明;<code>dispatch()</code> 永遠回傳字串(錯誤也是)——讓 agent 迴圈永不因工具失敗而崩潰。</li>
+        <li><strong>run_react 介面契約</strong>:<code>run_react(client, registry, task) -&gt; str</code>。
+        接收 LLMClient、ToolRegistry 和任務字串;回傳最終答案或失敗訊息。MAX_STEPS 與重複偵測是兩道保險。</li>
+        <li><strong>安全計算機</strong>:AST-based <code>safe_eval</code> 替代裸 <code>eval</code>——只允許數字與算術運算子。</li>
+        <li><strong>Shell 工具需要沙箱</strong>:白名單只是最小防護。生產環境必須搭配<a href="94-mini-docker.html">第 88 章</a>介紹的容器隔離機制。</li>
+        <li><strong>失敗是 Observation</strong>:工具錯誤、格式錯誤都回填為 Observation,讓模型有機會自我修正——而不是直接 raise。</li>
+      </ul>
+      <p>
+        接下來,第 96 章會給 agent 加上<strong>記憶與檢索(RAG)</strong>——
+        讓它能從外部知識庫查詢資料,而不只是依賴 LLM 訓練時看過的知識。
+        第 97 章會把「工具」這個概念標準化成 <strong>MCP(Model Context Protocol)</strong>——
+        讓工具可以跨 agent、跨平台複用。
+        這兩章的 agent 主迴圈都會直接使用我們今天定義的
+        <code>Tool</code>、<code>ToolRegistry</code> 與 <code>run_react</code>。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">📚</div>
+        <div class="body">
+          <span class="c-title">延伸資源</span>
+          <p><strong>ReAct 原論文</strong>:Yao et al. (2022)「ReAct: Synergizing Reasoning and Acting in Language Models」
+          — <a href="https://arxiv.org/abs/2210.03629">arxiv.org/abs/2210.03629</a>。
+          了解 ReAct 與純 Chain-of-Thought、純 Action 的實驗對比。</p>
+          <p><strong>nanoDeepResearch</strong>:一個極簡的 agent 實作(<a href="https://github.com/McGill-NLP/nano-deepresearch">github.com/McGill-NLP/nano-deepresearch</a>),
+          展示用幾百行程式碼實作 DeepResearch 風格的 web agent——ReAct 迴圈的真實應用。</p>
+          <p><strong>how-to-build-a-coding-agent</strong>:Simon Willison 的文章
+          <a href="https://simonwillison.net/2025/Mar/2/how-to-build-a-coding-agent/">simonwillison.net/2025/Mar/2/how-to-build-a-coding-agent/</a>——
+          從零手刻 coding agent 的實際心得,強調沙箱安全與工具設計。</p>
+          <p>本章使用了<a href="100-llm-client.html">第 94 章《手刻你的 LLM client》</a>定義的 LLMClient 介面。
+          Shell 工具的沙箱概念在<a href="93-container-internals.html">第 87 章《容器的真相》</a>與
+          <a href="94-mini-docker.html">第 88 章《手寫迷你 Docker》</a>有完整說明。</p>
+        </div>
+      </div>
+</article>
+  </main>
+</div>
+<script src="../assets/book.js"></script>
+</body>
+</html>

@@ -1,0 +1,1054 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>實戰:打造搜尋引擎 · CS 自學聖經</title>
+<meta name="description" content="里程碑式 Capstone 專案：從爬取語料、建倒排索引、布林與 TF-IDF/BM25 排序，到 PageRank 連結分析、向量語意檢索、查詢評估，用 Python 親手打造一個完整的小搜尋引擎。">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;700&family=Noto+Sans+TC:wght@400;700&family=Lora:ital,wght@0,400;0,600;0,700;1,400&family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <main class="main">
+    <article class="content">
+      <div class="eyebrow">第二七部 · 動手實戰專案</div>
+      <h1>實戰:打造搜尋引擎</h1>
+      <p class="subtitle">Google 在 0.3 秒內從 500 億個網頁裡給你最準的答案——這背後不是魔法，是幾個精妙疊加的演算法。今天你要親手把這條管線從頭到尾走一遍。</p>
+      <div class="byline">
+        <span class="tag">第 120 章</span>
+        <span>閱讀時間 ≈ 120 分鐘</span>
+        <span>難度:★★★★☆</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會能做到</div>
+        <ul>
+          <li>描述搜尋引擎的完整管線:爬取 → 索引 → 排序 → 服務</li>
+          <li>用 Python 建立<strong>倒排索引(inverted index)</strong>並支援布林查詢</li>
+          <li>推導並實作 <strong>TF-IDF</strong> 與 <strong>BM25</strong> 評分公式</li>
+          <li>用冪迭代法計算小圖的 <strong>PageRank</strong></li>
+          <li>整合句子嵌入(sentence embedding)進行語意向量檢索</li>
+          <li>用 Precision、Recall、MAP、nDCG 評估搜尋品質</li>
+        </ul>
+      </div>
+
+      <!-- ══════════════════════════════════════════════════════════ -->
+      <h2>Google 在 0.3 秒做了什麼?搜尋引擎管線全覽</h2>
+      <!-- ══════════════════════════════════════════════════════════ -->
+
+      <p>
+        你在鍵盤上敲下「搜尋引擎原理」，按下 Enter，0.3 秒後畫面上冒出一頁精準的結果。
+        在那 0.3 秒裡，有什麼事情沒有發生？<strong>Google 沒有在那一刻才去爬網頁</strong>——
+        那早就做完了；它也沒有剛才才建索引——那也早就建好了。
+        你按下 Enter 那一刻，真正在跑的只有最後一步：查索引、算分數、回傳前十名。
+      </p>
+      <p>
+        一個搜尋引擎由四個大模組串在一起：
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 760 160" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif" font-size="13">
+  <defs>
+    <marker id="arr" markerWidth="10" markerHeight="8" refX="8" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 Z" fill="#8a929b"/>
+    </marker>
+  </defs>
+  <!-- Box 1: Crawler -->
+  <rect x="20" y="50" width="150" height="60" rx="10" fill="#2f6f6a"/>
+  <text x="95" y="76" fill="#fff" font-weight="700" text-anchor="middle">爬蟲(Crawler)</text>
+  <text x="95" y="95" fill="#cfe6e2" font-size="11" text-anchor="middle">抓取 · 下載 · 去重</text>
+  <!-- Arrow -->
+  <line x1="170" y1="80" x2="208" y2="80" stroke="#8a929b" stroke-width="2" marker-end="url(#arr)"/>
+  <!-- Box 2: Indexer -->
+  <rect x="210" y="50" width="150" height="60" rx="10" fill="#b4541f"/>
+  <text x="285" y="76" fill="#fff" font-weight="700" text-anchor="middle">索引器(Indexer)</text>
+  <text x="285" y="95" fill="#f6e7dd" font-size="11" text-anchor="middle">分詞 · 倒排索引</text>
+  <!-- Arrow -->
+  <line x1="360" y1="80" x2="398" y2="80" stroke="#8a929b" stroke-width="2" marker-end="url(#arr)"/>
+  <!-- Box 3: Ranker -->
+  <rect x="400" y="50" width="150" height="60" rx="10" fill="#8b5cf6"/>
+  <text x="475" y="76" fill="#fff" font-weight="700" text-anchor="middle">排序器(Ranker)</text>
+  <text x="475" y="95" fill="#ece5ff" font-size="11" text-anchor="middle">BM25 · PageRank</text>
+  <!-- Arrow -->
+  <line x1="550" y1="80" x2="588" y2="80" stroke="#8a929b" stroke-width="2" marker-end="url(#arr)"/>
+  <!-- Box 4: Query Server -->
+  <rect x="590" y="50" width="150" height="60" rx="10" fill="#2f6f6a"/>
+  <text x="665" y="76" fill="#fff" font-weight="700" text-anchor="middle">查詢服務(Server)</text>
+  <text x="665" y="95" fill="#cfe6e2" font-size="11" text-anchor="middle">解析 · 查詢 · 回傳</text>
+  <!-- Offline label -->
+  <rect x="20" y="125" width="530" height="24" rx="6" fill="#e3efed"/>
+  <text x="285" y="141" fill="#2f6f6a" font-size="11" font-weight="600" text-anchor="middle">離線(Offline)：可能花數天持續執行</text>
+  <!-- Online label -->
+  <rect x="590" y="125" width="150" height="24" rx="6" fill="#ece5ff"/>
+  <text x="665" y="141" fill="#8b5cf6" font-size="11" font-weight="600" text-anchor="middle">線上(Online)：&lt; 300 ms</text>
+</svg>
+        <figcaption>圖 120-1：搜尋引擎四大模組。爬蟲、索引器、排序器是離線批次工作；查詢服務才是使用者感受到的即時部分。</figcaption>
+      </div>
+
+      <p>
+        本章就沿著這條管線，一個里程碑一個里程碑地走。我們不處理 500 億個頁面——
+        我們先用一份數十篇的小語料，把所有核心機制都跑通；觀念一模一樣，規模才是不同的東西。
+      </p>
+
+      <div class="callout history">
+        <div class="ico">📜</div>
+        <div class="body">
+          <span class="c-title">資訊檢索的先驅</span>
+          <p>現代資訊檢索(information retrieval, IR)的理論基礎由 Gerard Salton 在 1960–80 年代奠定，
+          他發明了向量空間模型與 TF-IDF 的早期版本。
+          1996 年 Larry Page 與 Sergey Brin 在史丹佛提出 PageRank，翌年用它創辦了 Google。
+          深度學習嵌入向量的普及則是 2010 年代後的事。
+          今日的搜尋引擎是這三個時代的技術疊加。</p>
+        </div>
+      </div>
+
+      <!-- ══════════════════════════════════════════════════════════ -->
+      <h2>里程碑 1 — 爬取與文件處理</h2>
+      <!-- ══════════════════════════════════════════════════════════ -->
+
+      <p>
+        搜尋引擎的食材是文字。在真實場景，爬蟲(web crawler)從種子 URL 出發，
+        持續抓取網頁、解析連結、再抓新頁面，形成廣度優先的圖遍歷
+        (正是<a href="30-graph-algorithms.html">第 30 章</a>的 BFS)。
+        在我們的小專案裡，語料(corpus)直接存成純文字檔就好。
+      </p>
+
+      <h3>分詞與正規化</h3>
+      <p>
+        把原始文字切成可索引的詞語(token)，是搜尋的第一步。
+        典型的正規化流程包含：
+      </p>
+      <ul>
+        <li><strong>小寫化(lowercasing)</strong>：讓 "Python" 與 "python" 視為同一詞。</li>
+        <li><strong>停用詞(stop words)移除</strong>：濾掉 "the", "is", "的", "了" 等高頻但無資訊量的詞。</li>
+        <li><strong>詞幹提取(stemming)</strong> 或 <strong>詞形還原(lemmatization)</strong>：把 "running", "runs", "ran" 映射到同一詞根 "run"。</li>
+      </ul>
+
+<pre><code class="language-python">"""
+milestone1_preprocess.py — 文件讀取、分詞、正規化
+需要: pip install nltk
+"""
+import re, string
+from pathlib import Path
+
+# 簡易停用詞集(英文示範；中文可換 jieba + 停用詞表)
+STOP_WORDS = {
+    "the", "a", "an", "is", "in", "of", "to", "and", "for",
+    "on", "with", "at", "by", "this", "that", "it", "as"
+}
+
+def tokenize(text: str) -&gt; list[str]:
+    """小寫 → 去標點 → 分詞 → 去停用詞"""
+    text = text.lower()
+    text = re.sub(r"[{}]".format(re.escape(string.punctuation)), " ", text)
+    tokens = text.split()
+    return [t for t in tokens if t not in STOP_WORDS and len(t) &gt; 1]
+
+def load_corpus(folder: str) -&gt; dict[str, list[str]]:
+    """讀取資料夾中的 .txt 檔，回傳 {doc_id: [token, ...]}"""
+    corpus = {}
+    for path in sorted(Path(folder).glob("*.txt")):
+        doc_id = path.stem          # 以檔名(無副檔名)當 doc_id
+        tokens = tokenize(path.read_text(encoding="utf-8"))
+        corpus[doc_id] = tokens
+        print(f"  載入 {doc_id}: {len(tokens)} 個 token")
+    return corpus
+
+if __name__ == "__main__":
+    corpus = load_corpus("docs/")
+    print(f"\n語料共 {len(corpus)} 篇文件")
+</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">核心觀念</span>
+          <p>分詞與正規化的品質直接決定搜尋精準度的上限——垃圾進、垃圾出。
+          停用詞移除可以讓索引縮小 30–50%，stemming 則能大幅提升召回率(recall)。</p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 120.1 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>若不移除停用詞，對"is python fast"這個查詢，"is"會出現在幾乎每篇文件的 posting list 裡。
+          這會造成什麼問題？停用詞移除如何解決它？</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p>"is" 的 posting list 幾乎包含所有文件，AND 查詢時需要合併一份巨大的 list，
+              浪費時間且不提供任何過濾效果。移除停用詞後，"is" 不進索引，
+              AND 合併只需處理 "python" 與 "fast" 這兩份較短的 posting list。
+              這正是<a href="28-sorting-searching.html">第 28 章</a>「早期截斷」的精神。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ══════════════════════════════════════════════════════════ -->
+      <h2>里程碑 2 — 倒排索引</h2>
+      <!-- ══════════════════════════════════════════════════════════ -->
+
+      <p>
+        有了分好的 token，下一步是建<strong>倒排索引(inverted index)</strong>。
+        它是資訊檢索的核心資料結構——一本「詞語 → 出現此詞的文件清單」的反向字典。
+        相對於「文件 → 詞語」的正向索引，倒排索引讓你從詞語出發，瞬間找到所有相關文件。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 680 260" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif" font-size="13">
+  <!-- Title -->
+  <text x="340" y="22" fill="#2f6f6a" font-size="14" font-weight="700" text-anchor="middle">倒排索引結構</text>
+  <!-- Dictionary column -->
+  <rect x="20" y="35" width="140" height="210" rx="8" fill="#e3efed" stroke="#2f6f6a" stroke-width="1.5"/>
+  <text x="90" y="55" fill="#2f6f6a" font-weight="700" text-anchor="middle">詞典(Dictionary)</text>
+  <text x="90" y="80" fill="#2f6f6a" text-anchor="middle">python</text>
+  <text x="90" y="110" fill="#2f6f6a" text-anchor="middle">fast</text>
+  <text x="90" y="140" fill="#2f6f6a" text-anchor="middle">index</text>
+  <text x="90" y="170" fill="#2f6f6a" text-anchor="middle">search</text>
+  <text x="90" y="200" fill="#2f6f6a" text-anchor="middle">algorithm</text>
+  <!-- Arrows -->
+  <line x1="160" y1="80" x2="200" y2="80" stroke="#8a929b" stroke-width="1.5" marker-end="url(#arr2)"/>
+  <line x1="160" y1="110" x2="200" y2="110" stroke="#8a929b" stroke-width="1.5" marker-end="url(#arr2)"/>
+  <line x1="160" y1="140" x2="200" y2="140" stroke="#8a929b" stroke-width="1.5" marker-end="url(#arr2)"/>
+  <line x1="160" y1="170" x2="200" y2="170" stroke="#8a929b" stroke-width="1.5" marker-end="url(#arr2)"/>
+  <line x1="160" y1="200" x2="200" y2="200" stroke="#8a929b" stroke-width="1.5" marker-end="url(#arr2)"/>
+  <defs>
+    <marker id="arr2" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M0,0 L7,4 L0,8 Z" fill="#8a929b"/>
+    </marker>
+  </defs>
+  <!-- Posting lists -->
+  <!-- python -->
+  <rect x="200" y="66" width="60" height="28" rx="6" fill="#b4541f"/>
+  <text x="230" y="84" fill="#fff" text-anchor="middle" font-size="12">doc1</text>
+  <line x1="260" y1="80" x2="280" y2="80" stroke="#8a929b" stroke-width="1.5" marker-end="url(#arr2)"/>
+  <rect x="280" y="66" width="60" height="28" rx="6" fill="#b4541f"/>
+  <text x="310" y="84" fill="#fff" text-anchor="middle" font-size="12">doc3</text>
+  <line x1="340" y1="80" x2="360" y2="80" stroke="#8a929b" stroke-width="1.5" marker-end="url(#arr2)"/>
+  <rect x="360" y="66" width="60" height="28" rx="6" fill="#b4541f"/>
+  <text x="390" y="84" fill="#fff" text-anchor="middle" font-size="12">doc5</text>
+  <!-- fast -->
+  <rect x="200" y="96" width="60" height="28" rx="6" fill="#8b5cf6"/>
+  <text x="230" y="114" fill="#fff" text-anchor="middle" font-size="12">doc1</text>
+  <line x1="260" y1="110" x2="280" y2="110" stroke="#8a929b" stroke-width="1.5" marker-end="url(#arr2)"/>
+  <rect x="280" y="96" width="60" height="28" rx="6" fill="#8b5cf6"/>
+  <text x="310" y="114" fill="#fff" text-anchor="middle" font-size="12">doc4</text>
+  <!-- index -->
+  <rect x="200" y="126" width="60" height="28" rx="6" fill="#2f6f6a"/>
+  <text x="230" y="144" fill="#fff" text-anchor="middle" font-size="12">doc2</text>
+  <line x1="260" y1="140" x2="280" y2="140" stroke="#8a929b" stroke-width="1.5" marker-end="url(#arr2)"/>
+  <rect x="280" y="126" width="60" height="28" rx="6" fill="#2f6f6a"/>
+  <text x="310" y="144" fill="#fff" text-anchor="middle" font-size="12">doc3</text>
+  <!-- search -->
+  <rect x="200" y="156" width="60" height="28" rx="6" fill="#b4541f"/>
+  <text x="230" y="174" fill="#fff" text-anchor="middle" font-size="12">doc1</text>
+  <line x1="260" y1="170" x2="280" y2="170" stroke="#8a929b" stroke-width="1.5" marker-end="url(#arr2)"/>
+  <rect x="280" y="156" width="60" height="28" rx="6" fill="#b4541f"/>
+  <text x="310" y="174" fill="#fff" text-anchor="middle" font-size="12">doc2</text>
+  <line x1="340" y1="170" x2="360" y2="170" stroke="#8a929b" stroke-width="1.5" marker-end="url(#arr2)"/>
+  <rect x="360" y="156" width="60" height="28" rx="6" fill="#b4541f"/>
+  <text x="390" y="174" fill="#fff" text-anchor="middle" font-size="12">doc5</text>
+  <!-- algorithm -->
+  <rect x="200" y="186" width="60" height="28" rx="6" fill="#8b5cf6"/>
+  <text x="230" y="204" fill="#fff" text-anchor="middle" font-size="12">doc2</text>
+  <line x1="260" y1="200" x2="280" y2="200" stroke="#8a929b" stroke-width="1.5" marker-end="url(#arr2)"/>
+  <rect x="280" y="186" width="60" height="28" rx="6" fill="#8b5cf6"/>
+  <text x="310" y="204" fill="#fff" text-anchor="middle" font-size="12">doc4</text>
+  <!-- label -->
+  <text x="460" y="80" fill="#b4541f" font-size="11" font-weight="600">← Posting List(已排序 doc_id)</text>
+  <text x="460" y="100" fill="#8a929b" font-size="11">每個節點含:doc_id, 詞頻(tf)</text>
+  <text x="460" y="120" fill="#8a929b" font-size="11">可選:位置列表(positions)</text>
+</svg>
+        <figcaption>圖 120-2：倒排索引。詞典中每個詞條指向一條 Posting List，按 doc_id 排序，方便 AND/OR 合併。</figcaption>
+      </div>
+
+<pre><code class="language-python">"""
+milestone2_index.py — 建立倒排索引
+"""
+from collections import defaultdict
+
+def build_inverted_index(corpus: dict[str, list[str]]) -&gt; dict[str, list[tuple]]:
+    """
+    回傳: { term: [(doc_id, tf), ...] }
+    posting list 依 doc_id 排序，方便後續合併
+    """
+    # 先統計每篇文件裡每個詞的詞頻
+    tf: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    for doc_id, tokens in corpus.items():
+        for token in tokens:
+            tf[token][doc_id] += 1
+
+    # 整理成倒排索引，並按 doc_id 排序
+    index: dict[str, list[tuple]] = {}
+    for term, doc_freq in tf.items():
+        # [(doc_id, freq), ...] 已按 doc_id 排序
+        index[term] = sorted(doc_freq.items(), key=lambda x: x[0])
+    return index
+
+def index_stats(index: dict, corpus: dict) -&gt; None:
+    """印出索引統計"""
+    total_postings = sum(len(pl) for pl in index.values())
+    print(f"詞彙量(vocabulary): {len(index):,}")
+    print(f"文件數: {len(corpus)}")
+    print(f"總 posting 數: {total_postings:,}")
+    # 最長的 10 條 posting list
+    top = sorted(index.items(), key=lambda x: -len(x[1]))[:10]
+    print("最高頻詞:")
+    for term, pl in top:
+        print(f"  {term!r:20s} → {len(pl)} 篇文件")
+</code></pre>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">壓縮 Posting List(選修)</span>
+          <p>真實搜尋引擎的 posting list 可能有數億條。
+          <a href="108-information-theory.html">第 102 章</a>的可變長度編碼(Variable-Byte encoding, VB code)
+          可將相鄰 doc_id 的差值(gap)編碼，把儲存量壓縮 4–10 倍。
+          Google 的 posting list 壓縮後才能塞進記憶體。</p>
+        </div>
+      </div>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">里程碑 2 驗收</span>
+          <p>建好索引後，查詢 <code>index["python"]</code> 應回傳含有 "python" 的所有文件及其詞頻；
+          <code>len(index)</code> 應遠小於所有文件的 token 總數(因為同一詞在多篇文件只記一條)。</p>
+        </div>
+      </div>
+
+      <!-- ══════════════════════════════════════════════════════════ -->
+      <h2>里程碑 3 — 布林檢索</h2>
+      <!-- ══════════════════════════════════════════════════════════ -->
+
+      <p>
+        有了倒排索引，最簡單的查詢模式是<strong>布林檢索(Boolean retrieval)</strong>：
+        回傳「完全匹配」條件的文件集合，沒有排名。
+        AND 查詢代表「兩個詞都要有」，OR 代表「至少有一個」，NOT 代表「不含某詞」。
+      </p>
+      <p>
+        AND 查詢的核心操作是「合併兩條已排序的 posting list 取交集」——
+        這正是<a href="28-sorting-searching.html">第 28 章</a>的雙指標合併，時間複雜度 $O(|P_1| + |P_2|)$，
+        遠優於 $O(|P_1| \times |P_2|)$ 的暴力比對。
+      </p>
+
+<pre><code class="language-python">"""
+milestone3_boolean.py — 布林查詢
+"""
+def posting_ids(pl: list[tuple]) -&gt; list[str]:
+    """從 posting list 取出 doc_id 列表"""
+    return [doc_id for doc_id, _ in pl]
+
+def intersect(list1: list[str], list2: list[str]) -&gt; list[str]:
+    """AND: 雙指標合併取交集，O(m+n)"""
+    result, i, j = [], 0, 0
+    while i &lt; len(list1) and j &lt; len(list2):
+        if list1[i] == list2[j]:
+            result.append(list1[i]); i += 1; j += 1
+        elif list1[i] &lt; list2[j]:
+            i += 1
+        else:
+            j += 1
+    return result
+
+def union(list1: list[str], list2: list[str]) -&gt; list[str]:
+    """OR: 雙指標合併取聯集"""
+    result, i, j = [], 0, 0
+    while i &lt; len(list1) and j &lt; len(list2):
+        if list1[i] == list2[j]:
+            result.append(list1[i]); i += 1; j += 1
+        elif list1[i] &lt; list2[j]:
+            result.append(list1[i]); i += 1
+        else:
+            result.append(list2[j]); j += 1
+    result.extend(list1[i:]); result.extend(list2[j:])
+    return result
+
+def boolean_query(index: dict, query: str) -&gt; list[str]:
+    """
+    支援 AND / OR / NOT 的簡易查詢解析器
+    例: "python AND fast"  "search OR index"  "python NOT slow"
+    """
+    if " AND " in query:
+        terms = [t.strip() for t in query.split(" AND ")]
+        results = posting_ids(index.get(terms[0], []))
+        for term in terms[1:]:
+            results = intersect(results, posting_ids(index.get(term, [])))
+        return results
+    elif " OR " in query:
+        terms = [t.strip() for t in query.split(" OR ")]
+        results = posting_ids(index.get(terms[0], []))
+        for term in terms[1:]:
+            results = union(results, posting_ids(index.get(term, [])))
+        return results
+    elif " NOT " in query:
+        pos_term, neg_term = [t.strip() for t in query.split(" NOT ", 1)]
+        pos = set(posting_ids(index.get(pos_term, [])))
+        neg = set(posting_ids(index.get(neg_term, [])))
+        return sorted(pos - neg)
+    else:
+        return posting_ids(index.get(query.strip(), []))
+
+# 測試
+# results = boolean_query(index, "python AND fast")
+# print(results)   # → ["doc1"] 等
+</code></pre>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">AND 查詢的最佳化：先處理最短的 posting list</span>
+          <p>若查詢有多個 AND 詞，把最稀有(posting list 最短)的詞排在最前面合併，
+          可以最快縮小候選集合。這是一個簡單但有效的查詢最佳化。</p>
+        </div>
+      </div>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">里程碑 3 驗收</span>
+          <p>執行 <code>boolean_query(index, "python AND fast")</code> 與 <code>boolean_query(index, "python OR search")</code>，
+          確認回傳的 doc_id 確實滿足條件；手動翻查對應文件驗證正確性。</p>
+        </div>
+      </div>
+
+      <!-- ══════════════════════════════════════════════════════════ -->
+      <h2>里程碑 4 — 排序:TF-IDF 與 BM25</h2>
+      <!-- ══════════════════════════════════════════════════════════ -->
+
+      <p>
+        布林檢索只能告訴你「有沒有」，無法告訴你「哪篇最相關」。
+        真實的搜尋引擎需要<strong>排序模型(ranking model)</strong>，給每篇文件算出一個分數，依分數由高到低回傳。
+      </p>
+
+      <h3>TF-IDF:詞頻-逆文件頻率</h3>
+      <p>
+        直覺：一個詞在一篇文件裡出現越多次(高 TF)，代表這篇文件越相關；
+        但如果這個詞在幾乎每篇文件裡都出現(高 DF)，它其實沒什麼鑑別力——IDF 用來懲罰這類詞。
+      </p>
+
+      <p>設文件集大小為 $N$，詞 $t$ 的文件頻率為 $df_t$，TF-IDF 定義為：</p>
+      $$\text{TF-IDF}(t, d) = \underbrace{f(t, d)}_{\text{詞頻 tf}} \cdot \underbrace{\log\frac{N}{df_t}}_{\text{逆文件頻率 idf}}$$
+
+      <h3>BM25:更強的排序公式</h3>
+      <p>
+        TF-IDF 有個問題：詞頻再高，分數也會一直上漲，沒有飽和效果。
+        <strong>BM25(Best Match 25)</strong> 是 Okapi BM25 的簡稱，加入詞頻飽和與文件長度正規化，
+        是目前工業界最常用的關鍵字排序基線：
+      </p>
+      $$\text{BM25}(q, d) = \sum_{t \in q} \text{IDF}(t) \cdot \frac{f(t,d)\,(k_1+1)}{f(t,d) + k_1\!\left(1 - b + b\,\dfrac{|d|}{\text{avgdl}}\right)}$$
+
+      <p>其中 IDF 使用修正版公式(避免負值)：</p>
+      $$\text{IDF}(t) = \ln\!\left(\frac{N - n_t + 0.5}{n_t + 0.5} + 1\right)$$
+
+      <p>
+        參數 $k_1 \in [1.2, 2.0]$ 控制詞頻飽和速度；$b \in [0, 1]$ 控制文件長度正規化強度($b=0.75$ 是慣例)。
+        $|d|$ 是文件長度，$\text{avgdl}$ 是語料平均文件長度。
+      </p>
+
+<pre><code class="language-python">"""
+milestone4_bm25.py — TF-IDF 與 BM25 排序
+"""
+import math
+from collections import defaultdict
+
+def compute_idf(index: dict, N: int) -&gt; dict[str, float]:
+    """計算每個詞的 IDF(BM25 修正版)"""
+    idf = {}
+    for term, pl in index.items():
+        n_t = len(pl)
+        idf[term] = math.log((N - n_t + 0.5) / (n_t + 0.5) + 1)
+    return idf
+
+def bm25_score(
+    query_tokens: list[str],
+    doc_id: str,
+    tf_map: dict,          # {term: {doc_id: freq}}
+    idf: dict[str, float],
+    doc_len: int,
+    avgdl: float,
+    k1: float = 1.5,
+    b: float = 0.75,
+) -&gt; float:
+    """計算單篇文件對一個查詢的 BM25 分數"""
+    score = 0.0
+    for term in query_tokens:
+        if term not in idf:
+            continue
+        f = tf_map.get(term, {}).get(doc_id, 0)
+        numerator = f * (k1 + 1)
+        denominator = f + k1 * (1 - b + b * doc_len / avgdl)
+        score += idf[term] * numerator / denominator
+    return score
+
+def bm25_search(
+    query: str,
+    corpus: dict[str, list[str]],
+    index: dict,
+    top_k: int = 5,
+) -&gt; list[tuple]:
+    """
+    BM25 排序搜尋，回傳 [(doc_id, score), ...] top_k 筆
+    """
+    from milestone1_preprocess import tokenize  # 重用分詞函式
+    query_tokens = tokenize(query)
+
+    N = len(corpus)
+    doc_lengths = {doc_id: len(tokens) for doc_id, tokens in corpus.items()}
+    avgdl = sum(doc_lengths.values()) / N
+
+    idf = compute_idf(index, N)
+
+    # 建立 tf 查找表: {term: {doc_id: freq}}
+    tf_map: dict[str, dict[str, int]] = defaultdict(dict)
+    for term, pl in index.items():
+        for doc_id, freq in pl:
+            tf_map[term][doc_id] = freq
+
+    # 只考慮包含至少一個查詢詞的候選文件
+    candidates: set[str] = set()
+    for token in query_tokens:
+        for doc_id, _ in index.get(token, []):
+            candidates.add(doc_id)
+
+    # 計算 BM25 分數並排序
+    scored = [
+        (doc_id, bm25_score(
+            query_tokens, doc_id, tf_map, idf,
+            doc_lengths[doc_id], avgdl
+        ))
+        for doc_id in candidates
+    ]
+    scored.sort(key=lambda x: -x[1])
+    return scored[:top_k]
+
+# 使用範例:
+# results = bm25_search("fast python search", corpus, index)
+# for doc_id, score in results:
+#     print(f"{doc_id}: {score:.4f}")
+</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">里程碑 4 驗收</span>
+          <p>對同一個查詢，BM25 回傳的 top-5 文件排序應比布林「只看有沒有」更符合直覺。
+          試著把 $b=0$ 與 $b=0.75$ 對比：$b=0$ 完全忽略文件長度，長文章會被優待。</p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 120.2 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>實作 <strong>TF-IDF 餘弦相似度(cosine similarity)</strong>排序，與 BM25 比較結果差異。
+          TF-IDF 向量化後，文件向量與查詢向量的餘弦相似度為：</p>
+          $$\cos(\theta) = \frac{\mathbf{q} \cdot \mathbf{d}}{\|\mathbf{q}\|\,\|\mathbf{d}\|}$$
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+<pre><code class="language-python">import math
+
+def cosine_tfidf_search(query: str, corpus, index, top_k=5):
+    from milestone1_preprocess import tokenize
+    from milestone4_bm25 import compute_idf
+    query_tokens = tokenize(query)
+    N = len(corpus)
+    idf = compute_idf(index, N)
+    # 查詢向量
+    q_vec = {}
+    for t in query_tokens:
+        q_vec[t] = q_vec.get(t, 0) + 1
+    for t in q_vec:
+        q_vec[t] = (1 + math.log(q_vec[t])) * idf.get(t, 0)
+    q_norm = math.sqrt(sum(v**2 for v in q_vec.values()))
+    # 文件向量 &amp; 相似度
+    scores = {}
+    for term, weight in q_vec.items():
+        for doc_id, tf in index.get(term, []):
+            d_weight = (1 + math.log(tf)) * idf.get(term, 0)
+            scores[doc_id] = scores.get(doc_id, 0) + weight * d_weight
+    # 除以範數(需預先算好文件 norm，此處省略)
+    return sorted(scores.items(), key=lambda x: -x[1])[:top_k]
+</code></pre>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ══════════════════════════════════════════════════════════ -->
+      <h2>里程碑 5 — 連結分析:PageRank</h2>
+      <!-- ══════════════════════════════════════════════════════════ -->
+
+      <p>
+        關鍵字評分只看文件本身的內容；但網頁的「重要性」還取決於<strong>誰連到它</strong>。
+        1996 年，Larry Page 提出 <strong>PageRank</strong>：把超連結視為「投票」，
+        被高品質頁面連結的頁面本身也更有可能是高品質的——這是一個循環定義，
+        用線性代數的語言，它正是<a href="30-graph-algorithms.html">第 30 章</a>圖的隨機遊走(random walk)的穩態分布。
+      </p>
+
+      <p>設有 $N$ 個頁面，$B_u$ 是所有連結到 $u$ 的頁面集合，$L(v)$ 是頁面 $v$ 的出鏈數量，阻尼因子 $d \approx 0.85$：</p>
+      $$PR(u) = \frac{1-d}{N} + d\sum_{v \in B_u} \frac{PR(v)}{L(v)}$$
+
+      <p>
+        直覺：想像一個隨機上網者，有 $d = 85\%$ 的機率點擊當前頁面的連結，
+        有 $1-d = 15\%$ 的機率隨機跳到任意頁面。PageRank 就是這個隨機遊走的長期停留機率。
+        它也等同於<a href="54-linear-algebra.html">第 54 章</a>轉移矩陣的主特徵向量(dominant eigenvector)。
+      </p>
+
+<pre><code class="language-python">"""
+milestone5_pagerank.py — 冪迭代法計算 PageRank
+"""
+
+def pagerank(
+    graph: dict[str, list[str]],  # {page: [outbound_links]}
+    d: float = 0.85,
+    max_iter: int = 100,
+    tol: float = 1e-6,
+) -&gt; dict[str, float]:
+    """
+    graph: 有向圖，{node: [neighbors]}
+    回傳每個節點的 PageRank 分數
+    """
+    nodes = list(graph.keys())
+    N = len(nodes)
+    # 初始化:每個頁面得到相同 PR
+    pr = {node: 1.0 / N for node in nodes}
+
+    # 預先計算每個節點的出鏈數量
+    out_degree = {node: len(links) for node, links in graph.items()}
+
+    for iteration in range(max_iter):
+        new_pr = {}
+        for u in nodes:
+            # 隨機跳轉的基礎分
+            rank_sum = (1 - d) / N
+            # 收集所有入鏈的貢獻
+            for v, links in graph.items():
+                if u in links:
+                    if out_degree[v] &gt; 0:
+                        rank_sum += d * pr[v] / out_degree[v]
+            new_pr[u] = rank_sum
+
+        # 檢查收斂:所有 PR 值的變化量 &lt; tol
+        delta = sum(abs(new_pr[u] - pr[u]) for u in nodes)
+        pr = new_pr
+        if delta &lt; tol:
+            print(f"收斂於第 {iteration+1} 次迭代, delta={delta:.2e}")
+            break
+    else:
+        print(f"達到最大迭代次數 {max_iter}")
+
+    return pr
+
+# ── 範例: 5 個頁面的小圖 ──────────────────────────
+if __name__ == "__main__":
+    graph = {
+        "A": ["B", "C"],
+        "B": ["C"],
+        "C": ["A"],
+        "D": ["C"],
+        "E": ["D"],
+    }
+    scores = pagerank(graph)
+    ranked = sorted(scores.items(), key=lambda x: -x[1])
+    print("\nPageRank 排名:")
+    for page, score in ranked:
+        print(f"  {page}: {score:.6f}")
+    # 預期 C 最高(被 A, B, D 連入)
+</code></pre>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">Dangling Nodes(懸掛節點)</span>
+          <p>沒有出鏈的頁面(dangling node)會造成 PageRank 的總質量洩漏。
+          常見處理方式：把它的 PR 值均分給所有頁面（等同於加一條連到所有節點的虛擬邊）。</p>
+        </div>
+      </div>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">里程碑 5 驗收</span>
+          <p>在上方 5 節點範例中，C 應有最高 PageRank（被三個節點入鏈），E 應最低（無入鏈）。
+          試著改變 $d$ 值，觀察分數分布的變化。</p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 120.3 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>用冪迭代法對以下圖跑 PageRank，並驗收收斂結果(誤差 &lt; 1e-6)：</p>
+          <pre><code class="language-python">graph = {
+    "維基百科": ["Python", "演算法", "搜尋引擎"],
+    "Python":   ["演算法"],
+    "演算法":   ["搜尋引擎"],
+    "搜尋引擎": ["維基百科", "Python"],
+}</code></pre>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p>直接代入上方 <code>pagerank()</code> 函式即可。「搜尋引擎」被「維基百科」與「演算法」連入，
+              且本身連出品質高，預期排名: 搜尋引擎 ≈ 維基百科 &gt; 演算法 &gt; Python。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ══════════════════════════════════════════════════════════ -->
+      <h2>里程碑 6 — 語意向量檢索</h2>
+      <!-- ══════════════════════════════════════════════════════════ -->
+
+      <p>
+        關鍵字搜尋有個根本的缺陷：它只比對文字，不理解語意。
+        搜尋「速度快的程式語言」找不到只提到「high-performance」的文件。
+        <strong>語意向量檢索(semantic vector search)</strong>用嵌入向量(embedding)解決這個問題：
+        把每篇文件和每個查詢映射到同一個語意空間，用餘弦相似度找最近鄰。
+      </p>
+      <p>
+        這正是<a href="102-rag-from-scratch.html">第 96 章「手刻最小 RAG」</a>的核心技術。
+        我們在這裡接上它，用 <code>sentence-transformers</code> 這個輕量函式庫取得語意嵌入。
+      </p>
+
+<pre><code class="language-python">"""
+milestone6_semantic.py — 語意向量檢索
+pip install sentence-transformers numpy
+"""
+import numpy as np
+from sentence_transformers import SentenceTransformer
+
+# 載入預訓練多語言嵌入模型
+model = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
+
+def embed_corpus(corpus: dict[str, list[str]]) -&gt; dict[str, np.ndarray]:
+    """把每篇文件(token 拼回字串)轉成嵌入向量"""
+    doc_embeddings = {}
+    doc_ids = list(corpus.keys())
+    texts = [" ".join(tokens) for tokens in corpus.values()]
+    vectors = model.encode(texts, convert_to_numpy=True, show_progress_bar=True)
+    for doc_id, vec in zip(doc_ids, vectors):
+        # L2 正規化，方便用點積計算餘弦相似度
+        doc_embeddings[doc_id] = vec / np.linalg.norm(vec)
+    return doc_embeddings
+
+def semantic_search(
+    query: str,
+    doc_embeddings: dict[str, np.ndarray],
+    top_k: int = 5,
+) -&gt; list[tuple]:
+    """語意最近鄰搜尋"""
+    q_vec = model.encode([query], convert_to_numpy=True)[0]
+    q_vec = q_vec / np.linalg.norm(q_vec)
+    # 計算餘弦相似度(已正規化，等於點積)
+    scores = {
+        doc_id: float(np.dot(q_vec, d_vec))
+        for doc_id, d_vec in doc_embeddings.items()
+    }
+    return sorted(scores.items(), key=lambda x: -x[1])[:top_k]
+
+def hybrid_search(
+    query: str,
+    corpus,
+    index,
+    doc_embeddings: dict,
+    alpha: float = 0.5,
+    top_k: int = 5,
+) -&gt; list[tuple]:
+    """
+    混合排序 = alpha * BM25 + (1-alpha) * 語意相似度
+    alpha=1: 純關鍵字; alpha=0: 純語意
+    """
+    from milestone4_bm25 import bm25_search
+    bm25_results = dict(bm25_search(query, corpus, index, top_k=20))
+    sem_results  = dict(semantic_search(query, doc_embeddings, top_k=20))
+    # 正規化分數到 [0,1]
+    def normalize(d):
+        if not d: return d
+        lo, hi = min(d.values()), max(d.values())
+        if hi == lo: return {k: 1.0 for k in d}
+        return {k: (v - lo) / (hi - lo) for k, v in d.items()}
+    bm25_n = normalize(bm25_results)
+    sem_n  = normalize(sem_results)
+    all_docs = set(bm25_n) | set(sem_n)
+    combined = {
+        doc: alpha * bm25_n.get(doc, 0) + (1 - alpha) * sem_n.get(doc, 0)
+        for doc in all_docs
+    }
+    return sorted(combined.items(), key=lambda x: -x[1])[:top_k]
+</code></pre>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">大規模近似最近鄰(ANN)</span>
+          <p>百萬文件量級時，暴力計算所有文件的餘弦相似度太慢($O(N)$ per query)。
+          工業界用 FAISS、HNSW 等<strong>近似最近鄰(Approximate Nearest Neighbor, ANN)</strong>演算法，
+          在亞線性時間找到 top-k，召回率 &gt; 95%。
+          詳見<a href="102-rag-from-scratch.html">第 96 章</a>的向量資料庫小節。</p>
+        </div>
+      </div>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">里程碑 6 驗收</span>
+          <p>搜尋「高效能程式語言」，純關鍵字 BM25 與語意搜尋的排名可能不同。
+          混合排序(alpha=0.5)通常比任一單一方法都好。</p>
+        </div>
+      </div>
+
+      <!-- ══════════════════════════════════════════════════════════ -->
+      <h2>里程碑 7 — 查詢介面與評估指標</h2>
+      <!-- ══════════════════════════════════════════════════════════ -->
+
+      <p>
+        搜尋引擎寫好了，怎麼知道它「夠好」？光看幾個例子不可靠——你需要量化的評估指標。
+        資訊檢索的評估體系從<a href="38-machine-learning.html">第 38 章</a>的分類指標出發，
+        延伸到排序感知的 MAP 與 nDCG。
+      </p>
+
+      <h3>精準率與召回率</h3>
+      <p>
+        對一個查詢，設相關文件集合為 $R$，系統回傳的集合為 $A$：
+      </p>
+      $$\text{Precision} = \frac{|R \cap A|}{|A|} \qquad \text{Recall} = \frac{|R \cap A|}{|R|}$$
+
+      <h3>MAP — 平均精準率的平均</h3>
+      <p>
+        Average Precision(AP)對每個查詢計算「在每個相關文件被召回的位置上，precision 的平均值」；
+        MAP(Mean Average Precision)再對所有查詢取平均：
+      </p>
+      $$\text{AP}(q) = \frac{1}{|R_q|}\sum_{k=1}^{|A|} P@k \cdot \text{rel}(k) \qquad \text{MAP} = \frac{1}{|Q|}\sum_{q \in Q} \text{AP}(q)$$
+
+      <h3>nDCG — 正規化折扣累積增益</h3>
+      <p>
+        MAP 把相關性視為二元(相關/不相關)；nDCG 支援多級相關性評分(例如 0–3 分)：
+      </p>
+      $$\text{DCG}@k = \sum_{i=1}^{k} \frac{2^{\text{rel}_i} - 1}{\log_2(i+1)} \qquad \text{nDCG}@k = \frac{\text{DCG}@k}{\text{IDCG}@k}$$
+
+<pre><code class="language-python">"""
+milestone7_evaluate.py — 評估指標
+"""
+import math
+
+def precision_at_k(retrieved: list[str], relevant: set[str], k: int) -&gt; float:
+    """P@k: 前 k 個結果中有幾個相關"""
+    top_k = retrieved[:k]
+    return sum(1 for doc in top_k if doc in relevant) / k
+
+def average_precision(retrieved: list[str], relevant: set[str]) -&gt; float:
+    """AP: 相關文件出現位置的 precision 平均"""
+    if not relevant:
+        return 0.0
+    hits, ap = 0, 0.0
+    for i, doc in enumerate(retrieved, 1):
+        if doc in relevant:
+            hits += 1
+            ap += hits / i
+    return ap / len(relevant)
+
+def ndcg_at_k(retrieved: list[str], relevance: dict[str, int], k: int) -&gt; float:
+    """
+    nDCG@k: 正規化折扣累積增益
+    relevance: {doc_id: grade}，grade 可為 0-3
+    """
+    def dcg(docs, rel, cutoff):
+        return sum(
+            (2 ** rel.get(doc, 0) - 1) / math.log2(i + 2)
+            for i, doc in enumerate(docs[:cutoff])
+        )
+    ideal = sorted(relevance.values(), reverse=True)
+    ideal_docs = [f"__ideal_{i}__" for i in range(len(ideal))]
+    ideal_rel  = {d: g for d, g in zip(ideal_docs, ideal)}
+    idcg = dcg(ideal_docs, ideal_rel, k)
+    if idcg == 0:
+        return 0.0
+    return dcg(retrieved, relevance, k) / idcg
+
+def evaluate_system(
+    queries: dict[str, str],      # {qid: query_text}
+    qrels:   dict[str, set[str]], # {qid: set of relevant doc_ids}
+    search_fn,                    # callable: (query_text) -&gt; [(doc_id, score)]
+) -&gt; dict:
+    """對所有查詢計算評估指標並輸出報告"""
+    aps, ndcgs, p10s = [], [], []
+    for qid, query in queries.items():
+        results = [doc_id for doc_id, _ in search_fn(query)]
+        relevant = qrels.get(qid, set())
+        ap  = average_precision(results, relevant)
+        p10 = precision_at_k(results, relevant, k=10)
+        ng  = ndcg_at_k(results, {d: 1 for d in relevant}, k=10)
+        aps.append(ap); p10s.append(p10); ndcgs.append(ng)
+    return {
+        "MAP":     sum(aps)   / len(aps),
+        "P@10":    sum(p10s)  / len(p10s),
+        "nDCG@10": sum(ndcgs) / len(ndcgs),
+    }
+</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">里程碑 7 驗收</span>
+          <p>準備一份小型查詢集(5–10 個查詢)與手工標記的相關文件(qrels)，
+          分別對 BM25、語意、混合三種搜尋策略跑 MAP 與 nDCG@10，比較哪種策略勝出。</p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 120.4 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>一個系統回傳 20 篇文件，其中 10 篇相關，全部放在後 10 名；
+          另一個系統只回傳 5 篇，全部相關。哪個系統的 P@5 較高？哪個 MAP 較高？</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>P@5</strong>：第一系統前 5 名全不相關，P@5 = 0；第二系統前 5 名全相關，P@5 = 1.0。
+              第二系統勝。</p>
+              <p><strong>MAP</strong>：第一系統的 10 個相關文件在位置 11–20，AP 很低（&lt; 0.1）；
+              第二系統 5 個相關文件全在前 5，AP = 1.0。第二系統仍然勝。</p>
+              <p>這說明 MAP 同時獎勵高精準與早期召回，而 Recall 單指標會被第一系統矇騙。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ══════════════════════════════════════════════════════════ -->
+      <h2>驗收總覽與延伸挑戰</h2>
+      <!-- ══════════════════════════════════════════════════════════ -->
+
+      <h3>里程碑完整驗收清單</h3>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>里程碑</th>
+              <th>驗收條件</th>
+              <th>核心技術</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>1 — 文件處理</td>
+              <td>語料正確分詞；停用詞移除後 token 數減少 20% 以上</td>
+              <td>tokenize、stopwords、stemming</td>
+            </tr>
+            <tr>
+              <td>2 — 倒排索引</td>
+              <td>詞典大小 &lt; 全語料 token 數；posting list 按 doc_id 排序</td>
+              <td>inverted index、posting list</td>
+            </tr>
+            <tr>
+              <td>3 — 布林查詢</td>
+              <td>AND/OR/NOT 查詢結果正確；雙指標合併驗證</td>
+              <td>Boolean retrieval、set intersection</td>
+            </tr>
+            <tr>
+              <td>4 — BM25</td>
+              <td>同查詢下 BM25 排序優於隨機；$b=0$ vs $b=0.75$ 有可見差異</td>
+              <td>TF-IDF、BM25、cosine similarity</td>
+            </tr>
+            <tr>
+              <td>5 — PageRank</td>
+              <td>冪迭代在 &lt; 50 次內收斂；入鏈多的節點 PR 較高</td>
+              <td>PageRank、power iteration</td>
+            </tr>
+            <tr>
+              <td>6 — 語意檢索</td>
+              <td>語意查詢能召回關鍵字不匹配但語意相近的文件</td>
+              <td>embedding、cosine similarity、ANN</td>
+            </tr>
+            <tr>
+              <td>7 — 評估</td>
+              <td>MAP、P@10、nDCG@10 三個指標皆有輸出；混合搜尋 MAP 最高</td>
+              <td>Precision, Recall, MAP, nDCG</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>延伸挑戰</h3>
+      <ul>
+        <li>
+          <strong>分散式索引</strong>：當語料超過單機記憶體時，如何分片(shard)？
+          見<a href="98-distributed-systems.html">第 92 章</a>的一致性雜湊(consistent hashing)與 MapReduce。
+        </li>
+        <li>
+          <strong>拼字校正</strong>：用編輯距離(edit distance)與 n-gram 語言模型提供「你是不是要搜尋…」。
+        </li>
+        <li>
+          <strong>學習排序(Learning to Rank, LTR)</strong>：把 BM25、PageRank、語意相似度、點擊率等特徵餵給
+          機器學習模型(LambdaMART、RankNet)，讓它自動學出最佳排序組合。
+          見<a href="38-machine-learning.html">第 38 章</a>。
+        </li>
+        <li>
+          <strong>向量資料庫整合</strong>：把嵌入索引搬到 Chroma、Milvus 或 FAISS，
+          把向量搜尋延伸成完整的 RAG 管線，見<a href="102-rag-from-scratch.html">第 96 章</a>。
+        </li>
+      </ul>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">延伸資源</span>
+          <p>
+            標準教材：Christopher Manning 等人的
+            <a href="https://nlp.stanford.edu/IR-book/" target="_blank"><em>Introduction to Information Retrieval</em></a>
+            (Stanford NLP Group 免費線上版)，涵蓋本章所有主題的嚴格版本。
+            程式庫：<a href="https://pypi.org/project/rank-bm25/" target="_blank">rank-bm25</a>、
+            <a href="https://github.com/facebookresearch/faiss" target="_blank">FAISS</a>、
+            <a href="https://www.sbert.net/" target="_blank">sentence-transformers</a>。
+            基準評估集：TREC Cranfield collection、MS MARCO。
+          </p>
+        </div>
+      </div>
+
+      <!-- ══════════════════════════════════════════════════════════ -->
+      <h2>把這一章串起來</h2>
+      <!-- ══════════════════════════════════════════════════════════ -->
+
+      <p>
+        你剛才走完了一條從零到搜尋引擎的完整管線。讓我們盤點一下這一路串起來的知識：
+      </p>
+      <ul>
+        <li>
+          <strong>爬取與分詞</strong>：語料的準備，連到圖的 BFS 遍歷(<a href="30-graph-algorithms.html">第 30 章</a>)與
+          資料庫儲存(<a href="37-databases.html">第 37 章</a>)。
+        </li>
+        <li>
+          <strong>倒排索引</strong>：核心資料結構，與<a href="29-data-structures.html">第 29 章</a>的 B-tree/雜湊表並列，
+          posting list 壓縮呼應<a href="108-information-theory.html">第 102 章</a>的熵編碼。
+        </li>
+        <li>
+          <strong>布林查詢</strong>：雙指標合併取交集，是<a href="28-sorting-searching.html">第 28 章</a>排序演算法在 IR 的直接應用。
+        </li>
+        <li>
+          <strong>TF-IDF / BM25</strong>：從資訊量的角度為詞語加權，與<a href="108-information-theory.html">第 102 章</a>的資訊熵一脈相承。
+        </li>
+        <li>
+          <strong>PageRank</strong>：圖的隨機遊走穩態，是<a href="30-graph-algorithms.html">第 30 章</a>圖理論與
+          <a href="54-linear-algebra.html">第 54 章</a>特徵向量的美妙結合。
+        </li>
+        <li>
+          <strong>語意向量檢索</strong>：句子嵌入 + 餘弦相似度，直接串接<a href="102-rag-from-scratch.html">第 96 章</a>的 RAG 技術。
+        </li>
+        <li>
+          <strong>評估指標</strong>：MAP 與 nDCG 把<a href="38-machine-learning.html">第 38 章</a>的精準率/召回率延伸到排序場景。
+        </li>
+      </ul>
+
+      <p>
+        搜尋引擎是計算機科學中最精彩的整合體之一：它需要圖論、線性代數、資訊理論、機器學習、
+        分散式系統同時上場。你今天打造的版本雖然只跑在本機，但所有的核心機制與 Google 用的是同一套邏輯。
+        下一步，把語料換成你真正感興趣的領域，調整 BM25 參數，試著讓評估指標更高——
+        這就是搜尋引擎工程師每天在做的事。
+      </p>
+</article>
+  </main>
+</div>
+<script src="../assets/mathjax"></script>
+<script src="../assets/book.js"></script>
+</body>
+</html>

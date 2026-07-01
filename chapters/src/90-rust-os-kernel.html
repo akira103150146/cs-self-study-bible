@@ -1,0 +1,910 @@
+<!--meta
+title: 用 Rust 手寫迷你作業系統核心
+description: 跟著 blog_os 的路線，從 bare-metal no_std 出發，實作開機接力、VGA 文字輸出、中斷與分頁概念，親眼看見一顆核心如何從開機到印出第一行字的最小骨幹。
+-->
+
+      <div class="eyebrow">第二十部 · Rust 系統程式設計</div>
+      <h1>用 Rust 手寫迷你作業系統核心</h1>
+      <p class="subtitle">OS 不是魔法——它也只是一支程式，只是底下什麼都沒有。這一章，我們用 Rust 親手搭出那個「什麼都沒有」的世界，看見從開機到印出第一行字，每一個位元組都是你親手放上去的。</p>
+      <div class="byline">
+        <span class="tag">第 84 章</span>
+        <span>閱讀時間 ≈ 75 分鐘</span>
+        <span>難度:★★★★★</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章，你會知道</div>
+        <ul>
+          <li>什麼是 bare-metal 程式與 <code>#![no_std]</code>；核心為何不能用標準函式庫</li>
+          <li>如何在 Rust 裡定義 <code>panic_handler</code>、停用 <code>main</code>、使用 <code>_start</code> 入口</li>
+          <li>從韌體（BIOS/UEFI）→ Bootloader → 核心 <code>_start</code> 的開機接力全流程</li>
+          <li>VGA 文字緩衝區在 <code>0xb8000</code>、每字元 2 bytes 的格式，以及為何寫它要 <code>unsafe</code></li>
+          <li>中斷描述符表（IDT）的直覺與 CPU 例外處理機制</li>
+          <li>分頁（paging）如何把虛擬位址對應到實體位址，呼應<a href="24-operating-system.html">第 24 章</a>的 OS 概念</li>
+          <li>合作式 vs 搶佔式排程的概念差異，以及 context switch 的直覺</li>
+          <li>用 QEMU 與 <code>bootimage</code> 跑起來的工具鏈全貌</li>
+        </ul>
+      </div>
+
+      <!-- ==================== h2 ① ==================== -->
+      <h2>當你的程式底下「什麼都沒有」——freestanding 程式的意義</h2>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">誠實標示：這是教學用最小版本（non-production OS）</span>
+          <p>
+            這一章是<strong>導引式精簡核心，教學用最小版本，非生產級作業系統</strong>。我們不從頭造完整的 OS——那需要幾年、數十萬行程式碼、嚴格的硬體測試。我們的目標是：跟著 <strong>blog_os</strong>（Philipp Oppermann 的《Writing an OS in Rust》）的路線，理解「一顆核心如何從開機到印出第一行字」的關鍵骨幹。本章節錄關鍵程式碼讓你看見形狀；完整的可跑專案請移步 <a href="https://os.phil-opp.com/" target="_blank">os.phil-opp.com</a>。
+          </p>
+        </div>
+      </div>
+
+      <p>
+        在前五章的 Rust 旅程裡——<a href="85-rust-ownership.html">第 79 章</a>的所有權、第 80 章的型別、第 81 章的資料結構、第 82 章的無懼並行、第 83 章的實戰 CLI——你的程式都站在一個「溫暖的環境」裡：有作業系統幫你管記憶體、有標準函式庫幫你做 I/O、有執行環境幫你設好 heap 分配器。
+      </p>
+      <p>
+        現在，我們要把這一切抽掉。
+      </p>
+      <p>
+        想像你剛按下開機鍵，CPU 醒來，執行的第一行程式碼是韌體（BIOS 或 UEFI）；韌體跑完它的初始化，把控制權交給 bootloader；bootloader 載入你的核心，然後……跳進 <code>_start</code>。你的程式就從那個跳躍點開始。
+      </p>
+      <p>
+        這個跳躍點的環境是：
+      </p>
+      <ul>
+        <li>沒有作業系統（因為你就是作業系統）</li>
+        <li>沒有 C 標準函式庫、沒有 Rust 標準函式庫（<code>std</code>）</li>
+        <li>沒有 heap 分配器——你必須自己架設，或者根本不用 heap</li>
+        <li>沒有 stack 溢出保護、沒有 ASLR、沒有任何 OS 的安全網</li>
+        <li>但你有：全部的 CPU 暫存器、全部的記憶體，以及完全的掌控</li>
+      </ul>
+      <p>
+        這就是 <strong>bare-metal（裸機）</strong>程式設計，或稱 <strong>freestanding（獨立式）</strong>程式——你的程式不依賴任何作業系統或執行環境。Rust 的類型系統和 <code>no_std</code> 機制，讓這件事比在 C 裡做要安全得多，但仍然需要你非常小心。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">OS 也是程式，只是沒有 OS 幫它</span>
+          <p>
+            作業系統核心的本質，是一個在開機後第一個取得 CPU 控制權的程式。它不能呼叫 <code>println!</code>，不能用 <code>malloc</code>，不能呼叫系統呼叫——因為這些東西都是 OS 才能提供的，而 OS 就是它自己。這是整個 OS 設計最根本的遞迴：核心必須先架好自己需要的一切，才能提供給別人用。
+          </p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ② ==================== -->
+      <h2><code>#![no_std]</code>：核心不能用標準庫，只能用 <code>core</code></h2>
+
+      <p>
+        Rust 的標準函式庫（<code>std</code>）依賴作業系統——它使用 OS 的系統呼叫（syscalls）來做執行緒、I/O、記憶體分配等。在 bare-metal 環境裡，根本沒有 OS，所以 <code>std</code> 裡的大多數東西都無法使用。我們在檔案頂端加一行宣告，告訴 Rust 編譯器不要連結 <code>std</code>：
+      </p>
+
+      <pre><code class="language-rust">// src/main.rs — 最小 no_std 核心骨架
+#![no_std]    // 不連結 Rust 標準函式庫（std）
+#![no_main]   // 停用 Rust 的 main 包裝入口（它依賴 std 的初始化）</code></pre>
+
+      <p>
+        去掉 <code>std</code> 之後，你仍然有 <strong><code>core</code></strong>——Rust 標準函式庫的「純語言子集」。<code>core</code> 不依賴 OS，提供基本型別（<code>Option</code>、<code>Result</code>、切片、迭代器等），是 bare-metal 程式設計的基石。
+      </p>
+
+      <h3>強制要求：自訂 panic handler</h3>
+
+      <p>
+        當你去掉 <code>std</code>，Rust 就失去了預設的 panic 處理器（它通常會印出訊息然後結束行程）。你必須提供自己的 <code>panic_handler</code>，否則程式根本不能編譯：
+      </p>
+
+      <pre><code class="language-rust">use core::panic::PanicInfo;
+
+/// panic handler：no_std 的強制要求
+/// 當程式碼發生 panic 時，Rust 編譯器會呼叫這個函式
+/// -&gt; ! 表示這個函式「永遠不會回傳」（diverging function）
+#[panic_handler]
+fn panic(_info: &amp;PanicInfo) -&gt; ! {
+    // 在最小核心裡：進入無限迴圈（bare metal 沒有 OS 可以 exit）
+    // 正式核心通常會：印出 panic 訊息到序列埠、停機（hlt 指令）
+    loop {}
+}</code></pre>
+
+      <h3>停用 main，改用 <code>_start</code> 入口</h3>
+
+      <p>
+        Rust 的 <code>main</code> 函式其實不是真正的程式進入點——它被 Rust 執行環境（runtime）包了一層，負責設定 stack、初始化 <code>std</code>、呼叫 <code>main</code>、再做善後清理。這個包裝層依賴 <code>std</code>，我們用 <code>#![no_main]</code> 把它關掉，然後直接定義連結器（linker）真正要找的進入點 <code>_start</code>：
+      </p>
+
+      <pre><code class="language-rust">/// 核心真正的入口點
+/// 連結器（linker）預設尋找名為 _start 的符號作為程式入口
+///
+/// #[no_mangle]：禁止 Rust 對這個函式的名稱做任何修改（name mangling）
+///   Rust 預設會把函式名稱改成類似 _ZN4main4core5_start7h1a2b3c 的形式
+///   加上 #[no_mangle] 才能讓連結器找到「_start」這個名稱
+///
+/// extern "C"：使用 C 語言的呼叫約定（calling convention）
+///   確保與 bootloader 傳來的呼叫方式相容
+#[no_mangle]
+pub extern "C" fn _start() -&gt; ! {
+    // 這裡就是核心的起點：什麼都還沒準備好
+    // 後面幾節會在這裡逐步加入 VGA 輸出、中斷初始化等
+    loop {}
+}</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">三個必知屬性：no_mangle、extern "C"、panic_handler</span>
+          <p>
+            <code>#[no_mangle]</code> 讓連結器能找到你的函式；<code>extern "C"</code> 確保 ABI（應用程式二進位介面）相容；<code>#[panic_handler]</code> 告訴 Rust 運行時「panic 時呼叫我」。這三個屬性在 bare-metal Rust 裡無處不在——每次看到，都要記住它們解決的是「在沒有 OS 的世界裡如何讓函式能被找到並被正確呼叫」這個基礎問題。
+          </p>
+        </div>
+      </div>
+
+      <h3>cargo 設定：自訂目標與 panic 策略</h3>
+
+      <p>
+        bare-metal 核心需要告訴 Cargo 「編譯給哪個目標」，以及 panic 時採「立即中止」而非「堆疊展開」（stack unwinding）——因為展開需要 OS 支援：
+      </p>
+
+      <pre><code class="language-text"># Cargo.toml（片段）
+[profile.dev]
+panic = "abort"     # panic 時直接中止；不做 stack unwinding（需要 OS）
+
+[profile.release]
+panic = "abort"     # release build 同樣中止
+
+# .cargo/config.toml
+[build]
+target = "x86_64-unknown-none"   # 編譯目標：x86_64 架構、沒有 OS（none）</code></pre>
+
+      <p>
+        <code>x86_64-unknown-none</code> 是 Rust 的「裸機 x86_64 目標」：x86_64 架構（64-bit Intel/AMD）、廠商未知、沒有作業系統（none）。這讓 Rust 工具鏈知道：不要連結任何 OS 相關的程式庫。
+      </p>
+
+      <!-- ==================== h2 ③ ==================== -->
+      <h2>開機流程：從韌體到核心入口</h2>
+
+      <p>
+        你按下電源鍵，到你的核心的 <code>_start</code> 被呼叫，中間發生了一系列精心設計的「接力」。理解這個接力，是理解「為何 bare-metal 程式必須做那麼多準備工作」的前提。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 680 260" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <rect width="680" height="260" fill="#f8fafb" rx="10"/>
+  <text x="340" y="26" text-anchor="middle" font-size="14" font-weight="bold" fill="#1f2328">開機接力：從韌體到核心的每一步</text>
+
+  <defs>
+    <marker id="ch90-arrow" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 Z" fill="#2f6f6a"/>
+    </marker>
+  </defs>
+
+  <!-- 第 1 格：韌體 BIOS/UEFI -->
+  <rect x="20" y="50" width="130" height="90" rx="8" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="85" y="82" text-anchor="middle" font-size="12" font-weight="bold" fill="#2f6f6a">韌體</text>
+  <text x="85" y="100" text-anchor="middle" font-size="11" fill="#2f6f6a">BIOS / UEFI</text>
+  <text x="85" y="120" text-anchor="middle" font-size="10" fill="#555">POST + 硬體初始化</text>
+  <text x="85" y="135" text-anchor="middle" font-size="10" fill="#555">尋找可開機裝置</text>
+  <text x="85" y="165" text-anchor="middle" font-size="10" fill="#8a929b">儲存在 ROM/Flash</text>
+
+  <!-- 箭頭 1 -->
+  <line x1="150" y1="95" x2="180" y2="95" stroke="#2f6f6a" stroke-width="2" marker-end="url(#ch90-arrow)"/>
+  <text x="165" y="88" text-anchor="middle" font-size="9" fill="#555">讀磁碟</text>
+
+  <!-- 第 2 格：Bootloader -->
+  <rect x="185" y="50" width="130" height="90" rx="8" fill="#fef3ec" stroke="#b4541f" stroke-width="2"/>
+  <text x="250" y="82" text-anchor="middle" font-size="12" font-weight="bold" fill="#b4541f">Bootloader</text>
+  <text x="250" y="100" text-anchor="middle" font-size="10" fill="#b4541f">bootimage crate</text>
+  <text x="250" y="120" text-anchor="middle" font-size="10" fill="#555">切換 64-bit long mode</text>
+  <text x="250" y="135" text-anchor="middle" font-size="10" fill="#555">設基本分頁表</text>
+  <text x="250" y="165" text-anchor="middle" font-size="10" fill="#8a929b">blog_os 幫我們準備好</text>
+
+  <!-- 箭頭 2 -->
+  <line x1="315" y1="95" x2="345" y2="95" stroke="#2f6f6a" stroke-width="2" marker-end="url(#ch90-arrow)"/>
+  <text x="330" y="88" text-anchor="middle" font-size="9" fill="#555">跳躍</text>
+
+  <!-- 第 3 格：核心 _start -->
+  <rect x="350" y="50" width="130" height="90" rx="8" fill="#f5f3ff" stroke="#8b5cf6" stroke-width="2"/>
+  <text x="415" y="82" text-anchor="middle" font-size="12" font-weight="bold" fill="#8b5cf6">核心 _start</text>
+  <text x="415" y="100" text-anchor="middle" font-size="10" fill="#8b5cf6">Rust 入口</text>
+  <text x="415" y="120" text-anchor="middle" font-size="10" fill="#555">初始化中斷表</text>
+  <text x="415" y="135" text-anchor="middle" font-size="10" fill="#555">設分頁、驅動</text>
+  <text x="415" y="165" text-anchor="middle" font-size="10" fill="#8a929b">你自己寫的程式碼</text>
+
+  <!-- 箭頭 3 -->
+  <line x1="480" y1="95" x2="510" y2="95" stroke="#2f6f6a" stroke-width="2" marker-end="url(#ch90-arrow)"/>
+  <text x="495" y="88" text-anchor="middle" font-size="9" fill="#555">輸出</text>
+
+  <!-- 第 4 格：VGA 輸出 -->
+  <rect x="515" y="50" width="145" height="90" rx="8" fill="#1f2328" stroke="#8a929b" stroke-width="2"/>
+  <text x="592" y="82" text-anchor="middle" font-size="12" font-weight="bold" fill="#4ade80">Hello, Kernel!</text>
+  <text x="592" y="100" text-anchor="middle" font-size="10" fill="#8a929b">VGA text buffer</text>
+  <text x="592" y="120" text-anchor="middle" font-size="10" fill="#8a929b">0xb8000</text>
+  <text x="592" y="135" text-anchor="middle" font-size="10" fill="#8a929b">80 × 25 字元</text>
+  <text x="592" y="165" text-anchor="middle" font-size="10" fill="#6b7280">虛擬終端機畫面</text>
+
+  <!-- 底部說明 -->
+  <text x="340" y="220" text-anchor="middle" font-size="11" fill="#555">CPU 開機時從韌體 ROM 開始執行 → 韌體讀磁碟 → Bootloader 切換模式、載核心 → 核心 _start → 印字</text>
+  <text x="340" y="240" text-anchor="middle" font-size="10" fill="#8a929b">blog_os 的 bootimage crate 封裝了 Bootloader 這一層；我們只需要撰寫 _start 以後的部分</text>
+</svg>
+        <figcaption>圖 84-1：開機接力流程。從韌體（BIOS/UEFI）到 Bootloader，再到你的 Rust 核心 <code>_start</code>，最後寫入 VGA 文字緩衝區顯示第一行字。blog_os 的 <code>bootimage</code> crate 封裝了 Bootloader 層，讓我們能聚焦在核心本身。</figcaption>
+      </div>
+
+      <h3>BIOS 時代的開機（x86 傳統）</h3>
+
+      <p>
+        在傳統 BIOS 模式下，韌體在 POST 後讀取磁碟第一個磁區（512 bytes，稱為 MBR——主開機記錄 Master Boot Record），載入到實體位址 <code>0x7c00</code>，然後跳轉執行。這 512 bytes 就是 bootloader 的第一段，它的工作是：把 CPU 從 16-bit real mode 切換到 32-bit protected mode，再切換到 64-bit long mode，設好基本分頁表，然後把核心從磁碟讀進來並跳過去。
+      </p>
+
+      <p>
+        在<a href="21-cpu-machine-language.html">第 21 章</a>，我們看過 CPU 的取指-解碼-執行週期。這個過程從開機的那一刻就開始了——只是一開始的指令是韌體的，而不是你的。
+      </p>
+
+      <h3>blog_os 的簡化：bootimage crate</h3>
+
+      <p>
+        把 bootloader 從零寫起本身就是一個大工程（需要 16-bit 組合語言）。blog_os 提供了 <code>bootloader</code> crate 和 <code>bootimage</code> 工具，幫我們把這層封裝好。<code>cargo bootimage</code> 指令會把你的核心和 bootloader 合併成一個可開機的磁碟映像（disk image），你只需要用 QEMU 載入它就能跑。這讓我們能直接聚焦在 <code>_start</code> 之後的部分——那才是真正的核心邏輯。
+      </p>
+
+      <!-- ==================== h2 ④ ==================== -->
+      <h2>印出第一行字：VGA 文字緩衝區</h2>
+
+      <p>
+        在 bare-metal 環境裡，沒有 <code>println!</code>，沒有標準輸出（stdout）。最早、最簡單的輸出方式，是直接寫入 <strong>VGA 文字緩衝區（VGA text buffer）</strong>——一塊在 x86 架構上位於實體位址 <code>0xb8000</code> 的記憶體，顯示卡會定期讀取這塊記憶體的內容，然後顯示在螢幕上。
+      </p>
+
+      <h3>VGA text buffer 的格式</h3>
+
+      <p>
+        VGA 文字模式的螢幕是 <strong>80 欄 × 25 列 = 2000 個字元格</strong>。每個字元格佔 <strong>2 bytes</strong>：
+      </p>
+      <ul>
+        <li><strong>位元組 0（低位元組）</strong>：字元的 ASCII 碼（例如 <code>0x48</code> = 'H'）</li>
+        <li><strong>位元組 1（高位元組）</strong>：屬性位元組（attribute byte）
+          <ul>
+            <li>Bits 3–0：前景色（foreground color），16 種顏色</li>
+            <li>Bits 6–4：背景色（background color），8 種顏色</li>
+            <li>Bit 7：閃爍 blink（或高亮背景，視模式而定）</li>
+          </ul>
+        </li>
+      </ul>
+      <p>
+        因此，整個 VGA 文字緩衝區的大小是 80 × 25 × 2 = <strong>4000 bytes</strong>。要在第 <code>row</code> 列、第 <code>col</code> 欄印出一個字元，位元組偏移量（offset）是 <code>(row * 80 + col) * 2</code>。
+      </p>
+      <p>
+        常用屬性值：<code>0x0f</code> = 黑底（背景色 0 = black）白字（前景色 0xf = white）；<code>0x0a</code> = 黑底亮綠字；<code>0x4f</code> = 紅底白字。
+      </p>
+
+      <h3>直接寫記憶體：unsafe 是必要的</h3>
+
+      <pre><code class="language-rust">// src/vga.rs — VGA 文字輸出的最小實作（節錄自 blog_os 路線）
+
+/// VGA 文字緩衝區的實體位址（x86 傳統映射）
+/// 在 bootloader 設好分頁後，這個位址在核心的虛擬位址空間中也能直接存取
+const VGA_BUFFER: *mut u8 = 0xb8000 as *mut u8;
+
+/// 在螢幕第 row 列、第 col 欄，寫入字元 byte，顏色屬性 attr
+///
+/// # Safety
+/// - VGA_BUFFER 是原始指標（raw pointer），沒有 Rust 的借用檢查保護
+/// - 呼叫者必須確保 row &lt; 25、col &lt; 80（否則會越界寫入其他記憶體）
+/// - write_volatile 告訴編譯器「此寫入有硬體副作用，不可最佳化掉」
+pub unsafe fn vga_write_char(row: usize, col: usize, byte: u8, attr: u8) {
+    let offset = (row * 80 + col) * 2; // 每字元 2 bytes；第 row 列第 col 欄
+    // write_volatile：確保每次寫入都真正送出，不被編譯器的最佳化省略
+    VGA_BUFFER.add(offset).write_volatile(byte);        // 位元組 0：ASCII 碼
+    VGA_BUFFER.add(offset + 1).write_volatile(attr);    // 位元組 1：顏色屬性
+}
+
+/// 從第 0 列印出一條訊息（最多 80 個字元）
+pub fn print_hello() {
+    let msg = b"Hello, Kernel!";   // b"..." 是 byte string literal，型別 &amp;[u8; N]
+    for (col, &amp;byte) in msg.iter().enumerate() {
+        // SAFETY：row=0, col &lt; 14 &lt; 80，位址合法
+        unsafe { vga_write_char(0, col, byte, 0x0f); }  // 0x0f = 黑底白字
+    }
+}
+
+// 在 _start 中呼叫：
+// #[no_mangle]
+// pub extern "C" fn _start() -&gt; ! {
+//     print_hello();
+//     loop {}
+// }</code></pre>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">為何一定要用 <code>write_volatile</code>？</span>
+          <p>
+            Rust（以及 C/C++）的編譯器可能「最佳化掉」看起來沒有被讀回的記憶體寫入——它不知道 VGA 顯示卡會從那個位址讀資料。<code>write_volatile</code> 告訴編譯器：「這個寫入有外部副作用（side effect），請保留每一次寫入，不要合併或省略。」若改用普通的指標解參考 <code>*ptr = byte</code>，編譯器在 <code>--release</code> 最佳化下可能把所有寫入都省略掉，螢幕一片空白。
+          </p>
+        </div>
+      </div>
+
+      <p>
+        整段 VGA 寫入程式碼用了 <code>unsafe</code>，因為：
+      </p>
+      <ol>
+        <li><strong>原始指標解參考（raw pointer dereference）</strong>：<code>*mut u8</code> 指標不受 borrow checker 保護，越界就寫壞記憶體。</li>
+        <li><strong>無任何對應分配（no allocation）</strong>：這個位址是硬體映射，不是 Rust 的記憶體分配器管的——呼叫者必須自己保證位址正確。</li>
+        <li><strong>可能的別名（aliasing）</strong>：多段程式碼可能同時持有指向同一塊 VGA 緩衝區的 <code>*mut u8</code>，違反 Rust 的「同一時間只能有一個可變參考」規則，但硬體限制讓我們別無選擇，只能用 <code>unsafe</code> 並自己管理存取順序。</li>
+      </ol>
+
+      <p>
+        呼應<a href="85-rust-ownership.html">第 79 章</a>的 borrow checker 概念：在安全 Rust 裡，編譯器幫你確保不會有懸空指標或別名問題。但在核心的 bare-metal 層，硬體世界裡這些規則本來就不存在，<code>unsafe</code> 區塊是你對編譯器說「我知道我在做什麼，請讓我做」的聲明。
+      </p>
+
+      <!-- ==================== 練習 1 ==================== -->
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 84.1 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>
+            在 <code>no_std</code> 的核心程式碼裡，無法使用 <code>println!</code> 巨集。請解釋：
+          </p>
+          <ol>
+            <li>為何 <code>println!</code> 在 <code>no_std</code> 環境不可用？它依賴了哪些 OS 功能？</li>
+            <li>在最小 Rust 核心裡，若想「印出一段訊息」，有哪些替代方案？請舉出至少兩種。</li>
+          </ol>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>1. println! 依賴 std 的原因：</strong></p>
+              <p>
+                <code>println!</code> 最終呼叫 <code>std::io::stdout().write()</code>，而 <code>stdout()</code> 是透過作業系統的 <strong>write 系統呼叫（syscall）</strong>把資料送到檔案描述符 1（standard output）。在 bare-metal 核心裡，根本沒有 OS，也沒有檔案描述符的概念，<code>std::io</code> 無從使用，所以 <code>println!</code> 無法存在。<code>#![no_std]</code> 宣告後，<code>println!</code> 連定義都沒有，直接編譯錯誤。
+              </p>
+              <p><strong>2. 替代方案：</strong></p>
+              <ul>
+                <li>
+                  <strong>VGA 文字緩衝區（本章的做法）</strong>：直接用 <code>unsafe</code> 寫入 <code>0xb8000</code>，顯示卡會把這塊記憶體顯示在螢幕上。速度快、不需任何初始化，但只支援 80×25 字元的文字模式。
+                </li>
+                <li>
+                  <strong>序列埠輸出（serial port/UART）</strong>：透過 x86 的 I/O 指令（<code>out</code> 指令）寫入序列埠暫存器（如 COM1 的基址 0x3f8），可以把文字傳到外部終端機或 QEMU 的 serial console。blog_os 後期章節採用這個方式，因為序列埠輸出更可靠、不受 VGA 文字模式限制。
+                </li>
+              </ul>
+              <p>
+                兩種方式都需要 <code>unsafe</code>，因為都是直接操作硬體位址或 I/O 指令。
+              </p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑤ ==================== -->
+      <h2>中斷與例外（Interrupts &amp; Exceptions）：IDT 概念</h2>
+
+      <p>
+        核心不能只是一個「從頭到尾跑一遍的程式」——它必須能<strong>回應外部事件</strong>（鍵盤按下、網路封包到達、硬碟讀完）和 <strong>處理程式錯誤</strong>（除以零、存取非法位址）。這靠的是 CPU 的<strong>中斷與例外機制</strong>。
+      </p>
+
+      <h3>CPU 例外（CPU Exceptions）</h3>
+
+      <p>
+        x86_64 架構定義了一系列由 CPU 自動觸發的「例外（exceptions）」——程式做了 CPU 不允許的事時，CPU 會停止目前的執行，跳到一個預先設好的處理函式去執行。常見例外：
+      </p>
+
+      <ul>
+        <li><strong>#DE（向量 0）除以零（Divide Error）</strong>：整數除法分母為零時觸發</li>
+        <li><strong>#BP（向量 3）中斷點（Breakpoint）</strong>：執行到 <code>int3</code> 指令時觸發；除錯器用這個</li>
+        <li><strong>#DF（向量 8）雙重錯誤（Double Fault）</strong>：處理其他例外時又發生例外</li>
+        <li><strong>#GP（向量 13）一般保護錯誤（General Protection Fault）</strong>：各種非法操作</li>
+        <li><strong>#PF（向量 14）分頁錯誤（Page Fault）</strong>：存取未映射或無權存取的位址</li>
+      </ul>
+
+      <h3>中斷描述符表（IDT）</h3>
+
+      <p>
+        CPU 怎麼知道「發生例外時要跳到哪裡」？靠一張叫做 <strong>中斷描述符表（Interrupt Descriptor Table，IDT）</strong> 的表格。IDT 有 256 個項目（entry），每個項目儲存一個處理函式的位址（以及一些旗標）。當例外或中斷發生時，CPU 用例外/中斷的向量號（0–255）當索引，從 IDT 取出對應處理函式的位址，然後跳過去執行。
+      </p>
+
+      <pre><code class="language-rust">// 使用 x86_64 crate（blog_os 使用的輔助函式庫）設置 IDT
+// Cargo.toml: x86_64 = "0.14"
+use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame};
+
+// 靜態 IDT（核心只有一個）
+// 注意：在真實 blog_os 中，需要用 lazy_static! 確保靜態初始化安全
+static mut IDT: InterruptDescriptorTable = InterruptDescriptorTable::new();
+
+/// 設置 IDT 並載入（在 _start 裡呼叫）
+pub fn init_idt() {
+    unsafe {
+        // 設置 #BP（中斷點）的處理函式
+        IDT.breakpoint.set_handler_fn(breakpoint_handler);
+        // 設置 #DF（Double Fault）的處理函式
+        IDT.double_fault.set_handler_fn(double_fault_handler);
+        // lidt 指令：把 IDT 的位址載入 IDTR 暫存器
+        IDT.load();
+    }
+}
+
+/// 中斷點例外處理函式
+/// InterruptStackFrame 包含例外發生時的 CPU 狀態（RIP、CS、RFLAGS、RSP、SS）
+extern "x86-interrupt" fn breakpoint_handler(stack_frame: InterruptStackFrame) {
+    // 在實際 blog_os 中，這裡會把資訊印到序列埠
+    // 教學版本：只是在此標示「例外被處理了」
+    let _ = stack_frame;
+}
+
+extern "x86-interrupt" fn double_fault_handler(
+    stack_frame: InterruptStackFrame, _error_code: u64) -&gt; !
+{
+    // Double Fault 是不可恢復的錯誤，只能停機
+    panic!("Double Fault 發生！");
+}</code></pre>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title"><code>extern "x86-interrupt"</code> 呼叫約定</span>
+          <p>
+            中斷處理函式有特殊的呼叫約定（calling convention）：CPU 在跳入處理函式前，會自動把部分暫存器推到 stack（push to stack），函式結束時用 <code>iretq</code> 指令恢復，而不是普通的 <code>ret</code>。<code>extern "x86-interrupt"</code> 告訴 Rust 編譯器遵守這個約定，讓 Rust 生成正確的 prologue/epilogue。
+          </p>
+        </div>
+      </div>
+
+      <!-- ==================== 練習 2 ==================== -->
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 84.2 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>
+            解釋下列程式碼中，為何 <code>unsafe</code> 是必要的，以及各個屬性的作用：
+          </p>
+          <pre><code class="language-rust">const VGA_BUFFER: *mut u8 = 0xb8000 as *mut u8;
+
+#[no_mangle]
+pub extern "C" fn _start() -&gt; ! {
+    unsafe {
+        VGA_BUFFER.write_volatile(b'H');          // 寫入字元 'H'
+        VGA_BUFFER.add(1).write_volatile(0x0f);   // 寫入屬性：黑底白字
+    }
+    loop {}
+}</code></pre>
+          <p>具體回答：</p>
+          <ol>
+            <li>為何 <code>VGA_BUFFER.write_volatile(b'H')</code> 需要在 <code>unsafe</code> 區塊裡？</li>
+            <li><code>#[no_mangle]</code> 的作用是什麼？若沒有它，會發生什麼？</li>
+            <li>為何使用 <code>write_volatile</code> 而非普通的指標解參考 <code>*ptr = value</code>？</li>
+          </ol>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>1. 為何需要 unsafe：</strong></p>
+              <p>
+                <code>VGA_BUFFER</code> 是一個原始指標（raw pointer，<code>*mut u8</code>）。在 Rust 中，解參考原始指標（讀或寫其指向的記憶體）必須在 <code>unsafe</code> 區塊裡，因為：
+              </p>
+              <ul>
+                <li>原始指標可能是 null（空指標）</li>
+                <li>原始指標可能未對齊</li>
+                <li>原始指標可能指向非法位址（在這裡是 0xb8000，但 Rust 無法靜態驗證這個位址是合法的）</li>
+                <li>對同一位址可能有多個 <code>*mut</code> 指標同時存在（違反排他可變借用規則）</li>
+              </ul>
+              <p>我們用 <code>unsafe</code> 告訴編譯器：「我知道這些風險，我保證這個位址是有效的 VGA 緩衝區位址。」</p>
+
+              <p><strong>2. #[no_mangle] 的作用：</strong></p>
+              <p>
+                Rust 為了支援泛型、模組、crate 等功能，預設會對函式名稱做「名稱修飾（name mangling）」，把 <code>_start</code> 變成類似 <code>_ZN4mini_kernel6_start17h3a2b4c...</code> 的字串。連結器（linker）在查找程式進入點時，找的是「<code>_start</code>」這個確切名稱；若有名稱修飾，連結器就找不到，程式無法連結。<code>#[no_mangle]</code> 禁止名稱修飾，確保函式名稱保持為 <code>_start</code>。
+              </p>
+
+              <p><strong>3. write_volatile vs 普通解參考：</strong></p>
+              <p>
+                普通的 <code>*ptr = value</code> 寫入，若編譯器判斷「這個值之後沒有被讀取」，可能在 <code>--release</code> 最佳化模式下把它省略掉（dead store elimination）。VGA 緩衝區的寫入是由顯示卡從外部「讀取」的，Rust 編譯器不知道這件事，可能認為這個寫入沒有用處而省略。<code>write_volatile</code> 明確告訴編譯器：「這個寫入有外部副作用，必須保留每一次，不可最佳化掉。」
+              </p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑥ ==================== -->
+      <h2>分頁與虛擬記憶體：核心如何看待位址空間</h2>
+
+      <p>
+        在<a href="24-operating-system.html">第 24 章</a>，我們從 OS 使用者的視角看分頁（paging）——每個行程（process）看到的是一個連續的「虛擬位址空間」，OS 偷偷把虛擬位址對應到實體記憶體的不同地方。這一節，我們從核心開發者的視角看：核心自己是怎麼建立和使用這套分頁機制的。
+      </p>
+
+      <h3>x86_64 的四層分頁表</h3>
+
+      <p>
+        x86_64 架構使用四層分頁表（4-level page tables）把 64-bit 虛擬位址對應到實體位址：
+      </p>
+      <ul>
+        <li>虛擬位址共 64 bits，但 x86_64 實際只用低 48 bits（63:48 bits 必須是 bit 47 的符號延伸）</li>
+        <li>低 48 bits 分成 5 個欄位：PML4 index（9 bits）| PDPT index（9 bits）| PD index（9 bits）| PT index（9 bits）| 頁內偏移（12 bits）</li>
+        <li>每個 9-bit index = 512 個項目（entry），每個項目 8 bytes = 4096 bytes = 1 個頁面大小</li>
+        <li>頁面大小：4 KiB（4096 bytes），2^12 = 4096</li>
+      </ul>
+
+      <div class="diagram">
+<svg viewBox="0 0 680 340" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <rect width="680" height="340" fill="#f8fafb" rx="10"/>
+  <text x="340" y="26" text-anchor="middle" font-size="14" font-weight="bold" fill="#1f2328">x86_64 四層分頁：虛擬位址 → 實體位址</text>
+
+  <defs>
+    <marker id="ch90-page-arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 Z" fill="#b4541f"/>
+    </marker>
+  </defs>
+
+  <!-- 頂部：虛擬位址分解 -->
+  <rect x="15" y="40" width="650" height="36" rx="4" fill="#e3efed" stroke="#2f6f6a" stroke-width="1.5"/>
+  <text x="340" y="54" text-anchor="middle" font-size="11" font-weight="bold" fill="#2f6f6a">虛擬位址（48 bits 有效，bit 47 的符號延伸填入 bits 63:48）</text>
+  <!-- 虛擬位址各欄位 -->
+  <rect x="15" y="62" width="118" height="14" rx="2" fill="#8b5cf6" opacity="0.7"/>
+  <text x="74" y="73" text-anchor="middle" font-size="9" fill="white">PML4 index [47:39] 9 bits</text>
+  <rect x="135" y="62" width="118" height="14" rx="2" fill="#2f6f6a" opacity="0.7"/>
+  <text x="194" y="73" text-anchor="middle" font-size="9" fill="white">PDPT index [38:30] 9 bits</text>
+  <rect x="255" y="62" width="118" height="14" rx="2" fill="#b4541f" opacity="0.7"/>
+  <text x="314" y="73" text-anchor="middle" font-size="9" fill="white">PD index [29:21] 9 bits</text>
+  <rect x="375" y="62" width="118" height="14" rx="2" fill="#4b5563" opacity="0.7"/>
+  <text x="434" y="73" text-anchor="middle" font-size="9" fill="white">PT index [20:12] 9 bits</text>
+  <rect x="495" y="62" width="170" height="14" rx="2" fill="#6b7280" opacity="0.6"/>
+  <text x="580" y="73" text-anchor="middle" font-size="9" fill="white">頁內偏移 [11:0] 12 bits</text>
+
+  <!-- CR3 暫存器 -->
+  <rect x="15" y="95" width="72" height="36" rx="4" fill="#1f2328" stroke="#8a929b" stroke-width="1"/>
+  <text x="51" y="109" text-anchor="middle" font-size="10" font-weight="bold" fill="#4ade80">CR3</text>
+  <text x="51" y="124" text-anchor="middle" font-size="9" fill="#8a929b">PML4 位址</text>
+  <line x1="87" y1="113" x2="110" y2="113" stroke="#b4541f" stroke-width="1.5" marker-end="url(#ch90-page-arrow)"/>
+
+  <!-- PML4 表 -->
+  <rect x="112" y="88" width="100" height="50" rx="4" fill="#f5f3ff" stroke="#8b5cf6" stroke-width="2"/>
+  <text x="162" y="104" text-anchor="middle" font-size="11" font-weight="bold" fill="#8b5cf6">PML4</text>
+  <text x="162" y="118" text-anchor="middle" font-size="9" fill="#555">512 entries</text>
+  <text x="162" y="131" text-anchor="middle" font-size="9" fill="#555">each → PDPT</text>
+  <line x1="212" y1="113" x2="235" y2="113" stroke="#b4541f" stroke-width="1.5" marker-end="url(#ch90-page-arrow)"/>
+
+  <!-- PDPT 表 -->
+  <rect x="237" y="88" width="100" height="50" rx="4" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="287" y="104" text-anchor="middle" font-size="11" font-weight="bold" fill="#2f6f6a">PDPT</text>
+  <text x="287" y="118" text-anchor="middle" font-size="9" fill="#555">512 entries</text>
+  <text x="287" y="131" text-anchor="middle" font-size="9" fill="#555">each → PD</text>
+  <line x1="337" y1="113" x2="360" y2="113" stroke="#b4541f" stroke-width="1.5" marker-end="url(#ch90-page-arrow)"/>
+
+  <!-- PD 表 -->
+  <rect x="362" y="88" width="100" height="50" rx="4" fill="#fef3ec" stroke="#b4541f" stroke-width="2"/>
+  <text x="412" y="104" text-anchor="middle" font-size="11" font-weight="bold" fill="#b4541f">PD</text>
+  <text x="412" y="118" text-anchor="middle" font-size="9" fill="#555">512 entries</text>
+  <text x="412" y="131" text-anchor="middle" font-size="9" fill="#555">each → PT</text>
+  <line x1="462" y1="113" x2="485" y2="113" stroke="#b4541f" stroke-width="1.5" marker-end="url(#ch90-page-arrow)"/>
+
+  <!-- PT 表 -->
+  <rect x="487" y="88" width="100" height="50" rx="4" fill="#fff7ed" stroke="#92400e" stroke-width="2"/>
+  <text x="537" y="104" text-anchor="middle" font-size="11" font-weight="bold" fill="#92400e">PT</text>
+  <text x="537" y="118" text-anchor="middle" font-size="9" fill="#555">512 entries</text>
+  <text x="537" y="131" text-anchor="middle" font-size="9" fill="#555">each → 頁框</text>
+  <line x1="587" y1="113" x2="610" y2="113" stroke="#b4541f" stroke-width="1.5" marker-end="url(#ch90-page-arrow)"/>
+
+  <!-- 實體頁框 -->
+  <rect x="612" y="88" width="56" height="50" rx="4" fill="#1f2328" stroke="#4ade80" stroke-width="2"/>
+  <text x="640" y="108" text-anchor="middle" font-size="10" font-weight="bold" fill="#4ade80">實體</text>
+  <text x="640" y="122" text-anchor="middle" font-size="10" fill="#4ade80">頁框</text>
+  <text x="640" y="133" text-anchor="middle" font-size="9" fill="#6b7280">4 KiB</text>
+
+  <!-- 分隔線 -->
+  <line x1="15" y1="160" x2="665" y2="160" stroke="#e5e7eb" stroke-width="1" stroke-dasharray="4 4"/>
+
+  <!-- 下方：核心位址空間佈局 -->
+  <text x="340" y="178" text-anchor="middle" font-size="12" font-weight="bold" fill="#1f2328">核心的虛擬位址空間佈局（典型 x86_64）</text>
+
+  <!-- 虛擬位址空間條 -->
+  <rect x="30" y="190" width="60" height="130" rx="4" fill="#f3f4f6" stroke="#8a929b" stroke-width="1.5"/>
+  <text x="60" y="208" text-anchor="middle" font-size="9" fill="#555">0xffff...</text>
+
+  <!-- 核心區段 -->
+  <rect x="30" y="200" width="60" height="36" rx="0" fill="#8b5cf6" opacity="0.8"/>
+  <text x="60" y="220" text-anchor="middle" font-size="9" font-weight="bold" fill="white">核心</text>
+
+  <!-- 中間空白 -->
+  <rect x="30" y="237" width="60" height="40" rx="0" fill="#e5e7eb"/>
+  <text x="60" y="259" text-anchor="middle" font-size="9" fill="#9ca3af">保留</text>
+
+  <!-- 使用者區段 -->
+  <rect x="30" y="278" width="60" height="36" rx="0" fill="#2f6f6a" opacity="0.8"/>
+  <text x="60" y="298" text-anchor="middle" font-size="9" font-weight="bold" fill="white">使用者</text>
+  <text x="60" y="318" text-anchor="middle" font-size="9" fill="#555">0x0000...</text>
+
+  <!-- 說明文字 -->
+  <text x="110" y="220" font-size="10" fill="#8b5cf6">核心空間（kernel space）：0xffff8000_00000000 以上</text>
+  <text x="110" y="235" font-size="10" fill="#555">　核心程式碼、資料、stack、分頁表全放這裡</text>
+  <text x="110" y="258" font-size="10" fill="#555">中間位址：x86_64 不合法（規格要求 bit 47 符號延伸）</text>
+  <text x="110" y="298" font-size="10" fill="#2f6f6a">使用者空間（user space）：0x0000_0000 到 0x0000_7fff…</text>
+  <text x="110" y="313" font-size="10" fill="#555">　各行程的程式碼、heap、stack；核心模式才能存取核心空間</text>
+</svg>
+        <figcaption>圖 84-2：x86_64 四層分頁表與核心位址空間佈局。CPU 透過 CR3 暫存器找到 PML4 表，層層查找四個 9-bit 索引，最終加上 12-bit 頁內偏移得到實體位址。核心空間在高位址（bit 47=1 的符號延伸），使用者空間在低位址；兩者用分頁表的存取旗標隔離。</figcaption>
+      </div>
+
+      <h3>核心如何建立分頁表</h3>
+
+      <p>
+        bootloader 在把控制權交給核心之前，已經設好了一個最基本的恆等映射（identity mapping）：虛擬位址 = 實體位址。核心接手後，通常會：
+      </p>
+      <ol>
+        <li>建立自己的分頁表，把核心程式碼映射到高位址（如 <code>0xffffffff80000000</code>）</li>
+        <li>設定 VGA 緩衝區的映射（<code>0xb8000</code> 的虛擬位址對應實體位址 <code>0xb8000</code>）</li>
+        <li>為使用者行程的每個 virtual address space 維護各自的分頁表，實現隔離</li>
+      </ol>
+
+      <p>
+        分頁表項目（page table entry，PTE）除了儲存實體頁框號，還有旗標欄位：<code>Present</code>（此映射是否有效）、<code>Writable</code>（是否可寫）、<code>User Accessible</code>（使用者模式是否能存取）等。核心透過設定這些旗標來實現記憶體保護——使用者行程嘗試存取核心空間，就會觸發 #PF（Page Fault）例外，核心可以安全地終止該行程。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">分頁是 OS 隔離機制的根基</span>
+          <p>
+            分頁表讓每個行程「以為自己擁有整個位址空間」，而實際上各行程的虛擬位址對應的是不同的實體頁框。這就是<a href="24-operating-system.html">第 24 章</a>提到的「虛擬記憶體」——OS 是魔術師，分頁表是那頂帽子。核心開發者要做的，就是親手設計那頂帽子裡的結構。
+          </p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑦ ==================== -->
+      <h2>一個玩具排程器：合作式與搶佔式</h2>
+
+      <p>
+        作業系統最重要的工作之一，是讓多個程式「同時」跑在有限的 CPU 核心上。這靠的是<strong>排程器（scheduler）</strong>和 <strong>context switch（上下文切換）</strong>。
+      </p>
+
+      <h3>合作式排程（Cooperative Scheduling）</h3>
+
+      <p>
+        最簡單的排程策略：每個任務自願讓出 CPU。任務呼叫 <code>yield()</code> 函式，告訴排程器「我現在不急，讓別人先跑」；排程器選下一個任務繼續執行。
+      </p>
+
+      <pre><code class="language-text">任務 A 跑 ... yield() → 排程器 → 任務 B 跑 ... yield() → 排程器 → 任務 A 跑 ...</code></pre>
+
+      <p>
+        優點：實作簡單，context switch 只在 <code>yield</code> 點發生，沒有競態問題。
+        缺點：如果任務 A 進入了一個永無止境的迴圈而忘了 <code>yield</code>，整台機器就卡死——其他任務永遠不會得到 CPU。早期的 Windows（3.x）和 macOS（9 以前）就是合作式排程，因此一個瘋狂的應用程式能凍結整個系統。
+      </p>
+
+      <h3>搶佔式排程（Preemptive Scheduling）</h3>
+
+      <p>
+        現代作業系統用的是搶佔式排程：硬體計時器（hardware timer）每隔固定時間（如 10 ms）發出一個中斷，強制切換任務，不管任務願不願意讓出 CPU。
+      </p>
+
+      <pre><code class="language-text">任務 A 跑 ... [計時器中斷！] → 排程器 → 任務 B 跑 ... [計時器中斷！] → 排程器 → 任務 A 跑 ...</code></pre>
+
+      <p>
+        任務感受不到這個切換——切換發生在中斷處理的瞬間，對任務來說好像時間靜止了一下又繼續。
+      </p>
+
+      <h3>Context Switch：切換任務時發生什麼</h3>
+
+      <p>
+        切換任務時，排程器必須完整儲存目前任務的「執行狀態」，再載入下一個任務的狀態，讓它從上次停下來的地方繼續。這份狀態稱為 <strong>context（上下文）</strong>，最少包含：
+      </p>
+      <ul>
+        <li><strong>通用暫存器</strong>（x86_64 有 16 個：RAX、RBX、RCX、RDX、RSI、RDI、RBP、RSP、R8–R15）</li>
+        <li><strong>程式計數器（RIP）</strong>：下一條要執行的指令位址</li>
+        <li><strong>旗標暫存器（RFLAGS）</strong>：進位、零、符號等條件旗標</li>
+        <li><strong>stack 指標（RSP）</strong>：每個任務有自己的 stack</li>
+        <li><strong>CR3 暫存器</strong>（若切換到不同行程）：各行程有各自的分頁表</li>
+      </ul>
+
+      <pre><code class="language-rust">// 玩具 context switch（x86_64，僅示意；實際需要精確的組語實作）
+// 儲存目前任務的暫存器、載入下一個任務的暫存器
+// 在真實核心中，這段通常用 x86_64 組合語言（inline asm）撰寫
+
+// 概念示意（偽程式碼）：
+// fn switch_context(from: &amp;mut TaskContext, to: &amp;TaskContext) {
+//     // 儲存：push 所有暫存器到 from.registers
+//     // 切換 stack：rsp = to.stack_pointer
+//     // 載入：pop 所有暫存器從 to.registers
+//     // 跳躍：jmp to.instruction_pointer
+// }</code></pre>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">blog_os 的 async/await 排程器</span>
+          <p>
+            blog_os 後期章節使用 Rust 的 <code>async</code>/<code>await</code> 機制實作了一個簡單的<strong>合作式任務排程器（cooperative task executor）</strong>——利用 <code>Future</code> 的 <code>poll</code> 機制，讓任務在「等待」時（如等待鍵盤輸入）自動 yield，不需要 OS 級的 context switch 硬體支援。這是在 bare-metal 環境裡嘗試非同步的有趣方法，呼應了第 82 章的 async/await 概念。
+          </p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑧ ==================== -->
+      <h2>在 QEMU 跑起來：工具鏈概觀</h2>
+
+      <p>
+        在真實硬體上跑自己寫的核心又慢又危險（一個 bug 就能磚掉機器）。開發核心時，標準做法是用 <strong>QEMU</strong>——一個開源的硬體模擬器——在你的電腦上跑一個「虛擬 x86_64 機器」。
+      </p>
+
+      <h3>所需工具</h3>
+
+      <pre><code class="language-bash"># 1. 安裝 Rust nightly（bare-metal 開發需要 nightly 特性）
+rustup toolchain install nightly
+rustup default nightly
+
+# 2. 加入 x86_64 bare-metal 目標
+rustup target add x86_64-unknown-none
+
+# 3. 安裝 bootimage 工具（幫你把核心包成可開機磁碟映像）
+cargo install bootimage
+
+# 4. 安裝 QEMU（macOS 用 brew，Ubuntu 用 apt，Windows 用官網安裝包）
+brew install qemu           # macOS
+apt install qemu-system-x86 # Ubuntu/Debian</code></pre>
+
+      <h3>Cargo.toml 依賴設定（節錄）</h3>
+
+      <pre><code class="language-text">[package]
+name    = "mini-kernel"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bootloader = "0.9"    # 提供 bootloader，讓 bootimage 把它和核心合併
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"</code></pre>
+
+      <h3>建置與執行</h3>
+
+      <pre><code class="language-bash"># 建置：把核心 + bootloader 合併成可開機磁碟映像（.bin）
+cargo bootimage
+
+# 用 QEMU 執行（-nographic 把 VGA 輸出重導到終端機，方便 CI）
+qemu-system-x86_64 \
+  -drive format=raw,file=target/x86_64-unknown-none/debug/bootimage-mini-kernel.bin \
+  -nographic
+
+# 或者：在 .cargo/config.toml 設置 runner，之後只需 cargo run
+# [target.x86_64-unknown-none]
+# runner = "bootimage runner"</code></pre>
+
+      <p>
+        執行後，你應該會在 QEMU 視窗（或 -nographic 模式下的終端機）看到：
+      </p>
+
+      <pre><code class="language-text">Hello, Kernel!</code></pre>
+
+      <p>
+        這 14 個字元，是你的程式在「裸機」上，不靠任何作業系統，直接對硬體說的第一句話。感受一下這件事的重量。
+      </p>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">除錯技巧：QEMU + GDB</span>
+          <p>
+            QEMU 支援 GDB remote debugging：加上 <code>-s -S</code> 旗標啟動 QEMU，它會在 TCP port 1234 等待 GDB 連入，並在開機時暫停。然後在另一個終端機用 <code>gdb target/x86_64-unknown-none/debug/mini-kernel</code> 連入，就能設中斷點、單步執行、查看暫存器，像偵測一般程式一樣偵測你的核心。bare-metal 除錯難就難在這裡——你需要的工具，全都要自己架設。
+          </p>
+        </div>
+      </div>
+
+      <!-- ==================== 練習 3 ==================== -->
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 84.3 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>
+            跟著 blog_os（<a href="https://os.phil-opp.com/" target="_blank">os.phil-opp.com</a>）的前三篇文章，在本地建立一個能在 QEMU 中印出「Hello World」的最小 Rust 核心。請依序回答以下步驟問題：
+          </p>
+          <ol>
+            <li>你需要在 <code>.cargo/config.toml</code> 裡指定什麼，才能讓 Cargo 編譯到 bare-metal 目標？</li>
+            <li><code>src/main.rs</code> 需要哪三個東西（屬性 + 函式）才能通過編譯？</li>
+            <li><code>cargo bootimage</code> 和一般的 <code>cargo build</code> 差別在哪裡？</li>
+          </ol>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>1. .cargo/config.toml 設定：</strong></p>
+              <pre><code class="language-text"># .cargo/config.toml
+[build]
+target = "x86_64-unknown-none"  # bare-metal x86_64，沒有 OS
+
+[unstable]
+# 讓 Cargo 從原始碼重新建置 core 與 compiler_builtins
+# 針對我們的裸機目標做最佳化（需要 nightly）
+build-std = ["core", "compiler_builtins"]
+build-std-features = ["compiler-builtins-mem"]</code></pre>
+
+              <p><strong>2. src/main.rs 三個必要元件：</strong></p>
+              <pre><code class="language-rust">#![no_std]   // ① 屬性：不連結 std
+#![no_main]  // ② 屬性：停用 main 包裝
+
+use core::panic::PanicInfo;
+
+// ③-a：panic handler（強制要求）
+#[panic_handler]
+fn panic(_info: &amp;PanicInfo) -&gt; ! { loop {} }
+
+// ③-b：_start 入口（連結器的進入點）
+#[no_mangle]
+pub extern "C" fn _start() -&gt; ! {
+    // 這裡印出 Hello World（用 VGA 緩衝區寫入）
+    loop {}
+}</code></pre>
+              <p>
+                三個必要元件：<code>#![no_std]</code>、<code>#![no_main]</code>、<code>panic_handler</code>。再加上 <code>_start</code> 作為真正的進入點（否則連結器找不到入口）。
+              </p>
+
+              <p><strong>3. cargo bootimage vs cargo build 的差別：</strong></p>
+              <p>
+                <code>cargo build</code> 只把你的 Rust 核心程式碼編譯成一個 ELF 執行檔（或目標碼），但這個 ELF 不能直接開機——它沒有 bootloader，沒有 MBR，x86 韌體不知道怎麼把它載入。
+              </p>
+              <p>
+                <code>cargo bootimage</code> 做了兩件事：
+              </p>
+              <ol>
+                <li>先用 <code>cargo build</code> 編譯你的核心</li>
+                <li>把 <code>bootloader</code> crate 提供的 bootloader（包含 16-bit 組語、模式切換、基本分頁設定）和你的核心合併，打包成一個可開機的磁碟映像（raw binary，.bin）</li>
+              </ol>
+              <p>
+                最終的 .bin 映像可以直接用 QEMU 的 <code>-drive format=raw</code> 載入，或者 <code>dd</code> 燒到 USB 隨身碟在真實硬體上開機。
+              </p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑨ ==================== -->
+      <h2>把這一章串起來</h2>
+
+      <p>
+        這一章，我們走過了「一顆 Rust 核心從開機到印出第一行字」的最小骨幹。讓我們把各層的技術棧整理一遍：
+      </p>
+
+      <ul>
+        <li>
+          <strong><code>#![no_std]</code> 與 bare-metal</strong>：核心不能依賴作業系統，因為它就是作業系統。<code>#![no_std]</code> 去掉 <code>std</code>，只留 <code>core</code>；<code>#[panic_handler]</code> 和 <code>#[no_mangle] extern "C" fn _start() -&gt; !</code> 是最小的 bare-metal 骨架。
+        </li>
+        <li>
+          <strong>開機接力</strong>：韌體（BIOS/UEFI）→ Bootloader（切換 long mode、設分頁）→ 核心 <code>_start</code>。blog_os 的 <code>bootimage</code> crate 封裝了 Bootloader，讓我們能專注在核心邏輯。
+        </li>
+        <li>
+          <strong>VGA 文字緩衝區</strong>：實體位址 <code>0xb8000</code>，80×25 字元，每字元 2 bytes（ASCII + 屬性）。直接寫這個位址就能讓螢幕顯示文字——<code>write_volatile</code> 防止編譯器最佳化掉寫入，<code>unsafe</code> 因為這是原始指標操作。
+        </li>
+        <li>
+          <strong>中斷與 IDT</strong>：CPU 例外（除以零、分頁錯誤等）靠中斷描述符表（IDT）導引到核心的處理函式。<code>extern "x86-interrupt"</code> 呼叫約定讓 Rust 生成正確的中斷處理框架。
+        </li>
+        <li>
+          <strong>分頁</strong>：x86_64 四層分頁表把虛擬位址對應到實體位址，實現隔離與保護。核心建立並維護這張對應表；使用者行程看到的「連續位址空間」是核心施的魔法。
+        </li>
+        <li>
+          <strong>排程</strong>：合作式排程（任務自願 yield）實作簡單但脆弱；搶佔式排程（計時器中斷強制切換）是現代 OS 的標配。Context switch 儲存並恢復任務的完整 CPU 狀態。
+        </li>
+        <li>
+          <strong>工具鏈</strong>：Rust nightly + <code>x86_64-unknown-none</code> 目標 + <code>bootimage</code> + QEMU——這四件套讓你能在桌機上開發和測試核心，而不必冒著磚掉真實硬體的風險。
+        </li>
+      </ul>
+
+      <blockquote>
+        「沒有一層抽象是理所當然的。<code>println!</code>、<code>malloc</code>、行程、檔案——這一切都是有人坐下來，從 bare-metal 開始，一層一層疊起來的。」
+      </blockquote>
+
+      <h3>從 NAND 到 OS 到容器：一條縱向的線</h3>
+
+      <p>
+        這本書從第 1 部的「計算是什麼」出發，到<a href="21-cpu-machine-language.html">第 21 章</a>的 CPU 機器語言，到<a href="24-operating-system.html">第 24 章</a>的作業系統，再到現在——你用 Rust 親手搭了一個能開機、能印字、能初步理解中斷和分頁的最小核心。這條線，從 NAND 閘到 CPU 到 OS，你已經親眼走了大半。
+      </p>
+      <p>
+        下一步是什麼？作業系統之上，有容器（container）——Linux namespace 和 cgroup 讓行程「以為自己是獨立的機器」。在未來的第 88 章「手寫迷你 Docker」中，我們將在 OS 之上，用類似的精神手刻容器隔離的骨幹：用 Linux 核心的 clone 系統呼叫建立 namespace，限制資源，讓一個行程活在自己的小宇宙裡——正如分頁讓行程以為自己擁有整個位址空間。
+      </p>
+      <p>
+        從裸機到 OS 到容器，每一層都在做同樣一件事：<strong>把複雜的硬體資源，變成對上層更乾淨、更安全、更好用的抽象</strong>。Rust 的角色，是讓這件事在沒有 GC 的前提下，盡可能有保證地做到。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">Rust 在系統程式設計的位置</span>
+          <p>
+            這一章展示了 Rust 的終極適用場景：在沒有 OS、沒有執行環境、沒有任何安全網的地方，用型別系統和所有權模型把「容易出錯的 unsafe 操作」約束在最小的邊界內，讓其他程式碼能安全地使用。<code>unsafe</code> 不是「Rust 放棄了」，而是「Rust 在這裡信任了你，你要把它的信任用在刀口上」。
+          </p>
+        </div>
+      </div>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">延伸學習資源</span>
+          <p>
+            <a href="https://os.phil-opp.com/" target="_blank">《Writing an OS in Rust》（Phil Oppermann，blog_os）</a>——本章的主要靈感來源。從最小核心到中斷、分頁、heap 分配器、async 排程，一步步帶你建構完整教學核心，是 Rust OS 開發最優質的中文友善英文教程。<br><br>
+            <a href="https://rcore-os.cn/rCore-Tutorial-Book-v3/" target="_blank">rCore-Tutorial（清華大學 OS 課程）</a>——以 Rust 撰寫的 RISC-V 教學作業系統，中文教材，涵蓋特權模式、系統呼叫、行程、虛擬記憶體、檔案系統全套；是繁中 Rust OS 學習的重要資源。<br><br>
+            <a href="https://github.com/rcore-os/rust-based-os-comp" target="_blank">rust-based-os-comp</a>——中國高校 OS 競賽，以 Rust 為主要語言，提供大量學習資源與動手實驗；適合深入 OS 核心開發的學習者。<br><br>
+            <a href="https://doc.rust-lang.org/stable/embedded-book/" target="_blank">The Embedded Rust Book</a>——Rust 嵌入式（embedded）開發指南，與 OS 核心開發有大量共通技術（bare-metal、no_std、HAL 架構），適合同時有嵌入式需求的讀者。
+          </p>
+        </div>
+      </div>

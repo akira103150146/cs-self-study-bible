@@ -1,0 +1,725 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>浮點數與 IEEE 754 · CS 自學聖經</title>
+<meta name="description" content="為何 0.1 + 0.2 不等於 0.3?從定點數的困境出發,深入 IEEE 754 浮點格式:符號位、偏移指數、隱含位元、特殊值(NaN、Inf、subnormal)以及大數吃小數、相減抵銷等實務陷阱。">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;700&family=Noto+Sans+TC:wght@400;700&family=Lora:ital,wght@0,400;0,600;0,700;1,400&family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <main class="main">
+    <article class="content">
+      <div class="eyebrow">第二三部 · 進階補充:位元、資訊與最佳化</div>
+      <h1>浮點數與 IEEE 754</h1>
+      <p class="subtitle">你每天都在用它,卻從未真正看見它的面目——那藏在 64 個位元裡,關於「無限精度」的一份有限妥協。</p>
+      <div class="byline">
+        <span class="tag">第 101 章</span>
+        <span>閱讀時間 ≈ 65 分鐘</span>
+        <span>難度:★★★★☆</span>
+      </div>
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>為什麼 <code>0.1 + 0.2 != 0.3</code> 不是 bug,而是 IEEE 754 的必然結果</li>
+          <li>定點數(fixed-point)為何撐不住動態範圍,浮點數如何解決它</li>
+          <li>IEEE 754 浮點格式的三個欄位:符號(sign)、偏移指數(biased exponent)、尾數(significand)——單精度 32 位元與雙精度 64 位元的確切佈局</li>
+          <li>正規化(normalization)與隱含前導 1(implicit leading 1)的運作原理,以及偏移碼(bias)的設計用意</li>
+          <li>如何把一個十進位數手算編碼成 IEEE 754,並反向解碼</li>
+          <li>特殊值:+0/−0、+∞/−∞、NaN、次正規數(subnormal)的位元樣式與語意</li>
+          <li>機器精度(machine epsilon)、ulp、捨入模式,以及為何用 <code>math.isclose</code> 而非 <code>==</code></li>
+          <li>浮點實務陷阱:大數吃小數、相減抵銷、累加順序影響、<code>NaN != NaN</code>——以及如何自保</li>
+        </ul>
+      </div>
+
+      <!-- ─── §1 開場 ─── -->
+      <h2>開場:當電腦說 0.1 + 0.2 = 0.30000000000000004</h2>
+      <p>
+        打開 Python 直譯器,輸入這三行:
+      </p>
+      <pre><code class="language-python">&gt;&gt;&gt; 0.1 + 0.2
+0.30000000000000004
+&gt;&gt;&gt; 0.1 + 0.2 == 0.3
+False</code></pre>
+      <p>
+        如果你是第一次看到這個結果,或許會覺得懷疑人生。電腦不是應該很精確嗎?
+        0.1 加 0.2,不就是 0.3 嗎?但它回答了 <code>False</code>。
+        這不是 Python 的 bug,不是哪個函式庫的問題,
+        而是幾乎所有主流程式語言——C、C++、Java、JavaScript、Rust、Go——共同遵守的一套標準所帶來的必然結果。
+        這套標準叫做 <strong>IEEE 754</strong>。
+      </p>
+      <p>
+        要理解這件事,我們得先問一個更根本的問題:電腦怎麼儲存小數?
+        在<a href="20-combinational-sequential.html">第 20 章</a>中,我們看到整數可以用<strong>二補數(two's complement)</strong>精確地表示任何整數。
+        但浮點數是另一個故事——整數的世界是離散而精確的,實數的世界是連續而無窮的,
+        而記憶體是有限的。把無窮壓縮進有限,必然有所取捨。IEEE 754 就是那份取捨協議。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">本章的主旋律</span>
+          <p><strong>浮點數是一份妥協協議</strong>——它說清楚了:我們保留哪些資訊、丟掉哪些、什麼時候會產生奇怪的結果。
+          讀懂這份協議,你才能真正「駕馭」浮點數,而不是被它玩弄。</p>
+        </div>
+      </div>
+
+      <!-- ─── §2 定點數 ─── -->
+      <h2>定點數的困境:範圍與精度不能兩全</h2>
+      <p>
+        要理解「為什麼需要浮點數」,先來看看不用浮點數的世界——<strong>定點數(fixed-point number)</strong>。
+      </p>
+      <p>
+        假設我們有 32 個位元,決定用前 16 位存整數部分、後 16 位存小數部分——小數點「固定」在第 16 位之後,這就是定點。
+        後 16 位的精度是 $\frac{1}{2^{16}} \approx 0.0000153$,最大可表示約 $32767$。
+        這聽起來不錯,但問題立刻浮現:
+      </p>
+      <ul>
+        <li>想表示地球到月亮的距離 384,400,000 公尺?超出 32767——<strong>溢位</strong>。</li>
+        <li>想表示一個氫原子的半徑 $5.29 \times 10^{-11}$ 公尺?精度遠遠不夠——<strong>下溢</strong>。</li>
+        <li>如果把精度調細(更多位給小數部分),最大可表示的整數又更小。</li>
+      </ul>
+      <p>
+        定點數的致命弱點:<strong>動態範圍(dynamic range)</strong>太窄。
+        真實世界的數字跨度,從次原子尺度到宇宙尺度差了大約 $10^{60}$,
+        而定點數只能「顧好一個小區間」。
+      </p>
+      <p>
+        浮點數的靈感來自科學記號(scientific notation):與其固定小數點的位置,
+        不如讓它「浮動」。$6.674 \times 10^{-11}$ 牛頓力——先記住有效數字(6.674),再記住指數(−11)。
+        同樣的 32 個位元,換成浮點格式就可以同時覆蓋極大與極小的數,
+        代價是精度不再均勻分布在數線上(越靠近零越密,越遠離零越稀)。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">定點數並未消失</span>
+          <p>在嵌入式系統、DSP(數位訊號處理器)、金融計算(用整數的「分」避免浮點誤差)、
+          遊戲引擎的確定性物理等場合,定點數至今仍然活躍——因為它快速、可預測、沒有浮點的奇怪邊界情況。
+          浮點數並不是唯一答案,選哪種取決於應用。</p>
+        </div>
+      </div>
+
+      <!-- ─── §3 IEEE 754 格式 ─── -->
+      <h2>IEEE 754 格式:符號、指數、尾數</h2>
+      <p>
+        1985 年,IEEE(電機電子工程師學會)發布了 <strong>IEEE 754</strong> 標準,統一了業界的浮點數表示法。
+        在此之前,各家晶片廠商各有格式,程式在不同機器之間跑出不同結果是家常便飯。
+        IEEE 754 終結了這個混亂——它精確定義了位元佈局,讓浮點計算在任何符合標準的機器上都一致。
+      </p>
+      <p>
+        IEEE 754 定義了兩種最常用的格式:
+      </p>
+      <ul>
+        <li><strong>單精度(single-precision, float32)</strong>:32 位元,精度約 7 位十進位有效數字,範圍約 $\pm 3.4 \times 10^{38}$。</li>
+        <li><strong>雙精度(double-precision, float64)</strong>:64 位元,精度約 15–16 位十進位有效數字,範圍約 $\pm 1.8 \times 10^{308}$。Python 的 <code>float</code> 預設就是 float64。</li>
+      </ul>
+      <p>
+        兩者都由三個欄位組成:
+      </p>
+      <ul>
+        <li><strong>符號位(sign bit, S)</strong>:1 位元。0 = 正,1 = 負。</li>
+        <li><strong>指數欄(exponent)</strong>:儲存「2 的幾次方」,用<strong>偏移碼(biased exponent)</strong>表示。</li>
+        <li><strong>尾數欄(fraction / significand / mantissa)</strong>:儲存有效數字的小數部分。</li>
+      </ul>
+
+      <div class="diagram">
+<svg viewBox="0 0 760 200" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="380" y="18" text-anchor="middle" font-size="13" font-weight="700" fill="#1f2328">IEEE 754 位元佈局</text>
+
+  <!-- ── float32 ── -->
+  <text x="10" y="46" font-size="11" font-weight="600" fill="#1f2328">float32</text>
+  <text x="10" y="60" font-size="10" fill="#8a929b">32 bits</text>
+
+  <!-- proportional: total draw width 700px starting x=50, 32 bits total -->
+  <!-- sign=1 bit → 21.9px ≈ 22px; exp=8 bits → 175px; frac=23 bits → 503px -->
+  <rect x="50" y="36" width="22" height="46" rx="3" fill="#fdeade" stroke="#b4541f" stroke-width="1.5"/>
+  <text x="61" y="56" text-anchor="middle" font-size="11" font-weight="700" fill="#b4541f">S</text>
+  <text x="61" y="72" text-anchor="middle" font-size="9" fill="#b4541f">1 bit</text>
+
+  <rect x="72" y="36" width="175" height="46" rx="3" fill="#ede9fb" stroke="#8b5cf6" stroke-width="1.5"/>
+  <text x="159" y="54" text-anchor="middle" font-size="11" font-weight="700" fill="#6d28d9">Exponent</text>
+  <text x="159" y="70" text-anchor="middle" font-size="9" fill="#6d28d9">8 bits  (bias = 127)</text>
+
+  <rect x="247" y="36" width="503" height="46" rx="3" fill="#e3efed" stroke="#2f6f6a" stroke-width="1.5"/>
+  <text x="498" y="54" text-anchor="middle" font-size="11" font-weight="700" fill="#2f6f6a">Fraction / Significand</text>
+  <text x="498" y="70" text-anchor="middle" font-size="9" fill="#2f6f6a">23 bits</text>
+
+  <!-- bit labels -->
+  <text x="61" y="93" text-anchor="middle" font-size="8" fill="#8a929b">31</text>
+  <text x="73" y="93" text-anchor="start"  font-size="8" fill="#8a929b">30</text>
+  <text x="246" y="93" text-anchor="end"   font-size="8" fill="#8a929b">23</text>
+  <text x="248" y="93" text-anchor="start" font-size="8" fill="#8a929b">22</text>
+  <text x="750" y="93" text-anchor="end"   font-size="8" fill="#8a929b">0</text>
+
+  <!-- ── float64 ── -->
+  <text x="10" y="122" font-size="11" font-weight="600" fill="#1f2328">float64</text>
+  <text x="10" y="136" font-size="10" fill="#8a929b">64 bits</text>
+
+  <!-- sign=1/64 * 700≈11px; exp=11/64*700≈120px; frac=52/64*700≈569px -->
+  <rect x="50" y="112" width="11" height="46" rx="3" fill="#fdeade" stroke="#b4541f" stroke-width="1.5"/>
+  <text x="55" y="133" text-anchor="middle" font-size="9" font-weight="700" fill="#b4541f">S</text>
+  <text x="55" y="148" text-anchor="middle" font-size="8" fill="#b4541f">1</text>
+
+  <rect x="61" y="112" width="120" height="46" rx="3" fill="#ede9fb" stroke="#8b5cf6" stroke-width="1.5"/>
+  <text x="121" y="130" text-anchor="middle" font-size="11" font-weight="700" fill="#6d28d9">Exponent</text>
+  <text x="121" y="146" text-anchor="middle" font-size="9" fill="#6d28d9">11 bits  (bias = 1023)</text>
+
+  <rect x="181" y="112" width="569" height="46" rx="3" fill="#e3efed" stroke="#2f6f6a" stroke-width="1.5"/>
+  <text x="465" y="130" text-anchor="middle" font-size="11" font-weight="700" fill="#2f6f6a">Fraction / Significand</text>
+  <text x="465" y="146" text-anchor="middle" font-size="9" fill="#2f6f6a">52 bits</text>
+
+  <!-- bit labels -->
+  <text x="55"  y="169" text-anchor="middle" font-size="8" fill="#8a929b">63</text>
+  <text x="62"  y="169" text-anchor="start"  font-size="8" fill="#8a929b">62</text>
+  <text x="180" y="169" text-anchor="end"    font-size="8" fill="#8a929b">52</text>
+  <text x="182" y="169" text-anchor="start"  font-size="8" fill="#8a929b">51</text>
+  <text x="750" y="169" text-anchor="end"    font-size="8" fill="#8a929b">0</text>
+
+  <!-- Formula -->
+  <text x="380" y="192" text-anchor="middle" font-size="10" fill="#4a5159">值 = (−1)^S × 1.fraction₂ × 2^(exponent − bias)   （正規化數）</text>
+</svg>
+        <figcaption>圖 101-1:IEEE 754 單精度(float32)與雙精度(float64)位元佈局。紅=符號位、紫=偏移指數、青綠=尾數(significand)。寬度與位元數成比例。</figcaption>
+      </div>
+
+      <p>
+        一個<strong>正規化浮點數</strong>的值公式為:
+      </p>
+      $$\text{值} = (-1)^{S} \times 1.f_{n-1}f_{n-2}\cdots f_0 \big|_2 \times 2^{E_{\text{stored}} - \text{bias}}$$
+      <p>
+        其中 $E_{\text{stored}}$ 是指數欄中存放的無符號整數,$\text{bias}$ 是偏移量(float32 為 127,float64 為 1023),$1.f\ldots$ 是以隱含前導 1 開頭的二進位小數。
+      </p>
+
+      <!-- ─── §4 正規化與隱含位元 ─── -->
+      <h2>正規化與隱含前導 1:免費多一位精度</h2>
+      <p>
+        二進位的科學記號與十進位類似:任何非零數都可以寫成 $1.xxx\ldots \times 2^n$ 的形式,
+        使得整數部分恰好是 1。這個過程叫做<strong>正規化(normalization)</strong>。
+      </p>
+      <p>
+        例如:$1101.011_2 = 1.101011 \times 2^3$。注意整數部分的「1」是<em>固定的</em>——
+        在二進位裡,正規化數的整數部分一定是 1(非零)。
+        IEEE 754 聰明地利用了這一點:<strong>不儲存那個固定的 1</strong>,只儲存小數點後的部分(fraction)。
+        這叫做<strong>隱含前導 1(implicit leading 1)</strong>。
+        如此一來,float32 的 23 個 fraction 位元實際上提供了 24 位元的精度(因為那個 1 是免費的)。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">隱含 1 = 免費多一位精度</span>
+          <p>float32 的 fraction 欄有 23 位元,但加上隱含的前導 1,實際有效位數是 24 位元;
+          float64 的 fraction 欄有 52 位元,加上隱含 1 共 53 位元。
+          這就是為什麼 float64 能提供約 15–16 位十進位有效數字
+          ($2^{53} \approx 9 \times 10^{15}$,取 $\log_{10}$ ≈ 15.95)。</p>
+        </div>
+      </div>
+
+      <h3>偏移碼(bias)的用意</h3>
+      <p>
+        指數欄存的不是帶正負號的整數,而是一個<strong>偏移碼</strong>:實際指數加上偏移量之後存入。
+        float32 的偏移量是 127,所以真正的指數 $e = E_{\text{stored}} - 127$。
+        例如指數欄存 130($= 10000010_2$),真正指數就是 $130 - 127 = 3$。
+      </p>
+      <p>
+        這樣設計的原因有兩個:
+      </p>
+      <ul>
+        <li><strong>比較方便</strong>:偏移碼讓整個 32 位元浮點數可以直接當作<em>無號整數</em>比較大小(除了符號位要特別處理),實作排序或最小/最大值時不需要先解析格式。</li>
+        <li><strong>統一化</strong>:避免分別設計正指數與負指數的儲存方式,一個無號整數欄位全部搞定。</li>
+      </ul>
+      <p>
+        float32 指數欄 8 位元,偏移 127:可表示真實指數範圍 $-126$ 到 $+127$(指數 0 和 255 保留給特殊值)。
+        float64 指數欄 11 位元,偏移 1023:真實指數範圍 $-1022$ 到 $+1023$。
+      </p>
+
+      <!-- ─── §5 手算編碼 ─── -->
+      <h2>手算編碼:把 13.375 存進 32 個位元</h2>
+      <p>
+        理論夠了——來親手把一個數字編碼成 IEEE 754 single precision,走一遍每一步:
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 760 310" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#8a929b"/>
+    </marker>
+  </defs>
+
+  <!-- Title -->
+  <text x="380" y="18" text-anchor="middle" font-size="13" font-weight="700" fill="#1f2328">手算範例:13.375 → IEEE 754 float32</text>
+
+  <!-- Step 1 -->
+  <rect x="10" y="28" width="740" height="54" rx="6" fill="#f8f9fa" stroke="#d0d7de"/>
+  <text x="20" y="46" font-size="11" font-weight="700" fill="#2f6f6a">步驟 1:轉二進位</text>
+  <text x="20" y="64" font-size="11" fill="#1f2328">整數 13 = 1101₂　　小數 0.375: 0.375×2=0.75(0)→ 0.75×2=1.5(1)→ 0.5×2=1.0(1)　⟹　0.375 = .011₂</text>
+  <text x="20" y="77" font-size="11" fill="#1f2328">13.375₁₀ = 1101.011₂</text>
+
+  <!-- Step 2 -->
+  <rect x="10" y="92" width="740" height="44" rx="6" fill="#f8f9fa" stroke="#d0d7de"/>
+  <text x="20" y="110" font-size="11" font-weight="700" fill="#2f6f6a">步驟 2:正規化</text>
+  <text x="20" y="126" font-size="11" fill="#1f2328">1101.011₂ = 1.101011 × 2³　　（小數點左移 3 位，指數 = 3）</text>
+
+  <!-- Step 3 -->
+  <rect x="10" y="146" width="740" height="44" rx="6" fill="#f8f9fa" stroke="#d0d7de"/>
+  <text x="20" y="164" font-size="11" font-weight="700" fill="#2f6f6a">步驟 3:編碼三個欄位</text>
+  <text x="20" y="180" font-size="11" fill="#1f2328">符號 S = 0（正數）　指數欄 = 3 + 127 = 130 = 10000010₂　尾數 = 101011 補 17 個 0 → 10101100000000000000000</text>
+
+  <!-- Final bit layout -->
+  <text x="380" y="214" text-anchor="middle" font-size="11" font-weight="600" fill="#1f2328">最終 32 位元：</text>
+
+  <!-- Sign cell -->
+  <rect x="50" y="222" width="40" height="40" rx="3" fill="#fdeade" stroke="#b4541f" stroke-width="1.5"/>
+  <text x="70" y="238" text-anchor="middle" font-size="12" font-weight="700" fill="#b4541f">0</text>
+  <text x="70" y="255" text-anchor="middle" font-size="9" fill="#b4541f">S</text>
+
+  <!-- Exponent cells (8 bits) -->
+  <rect x="96" y="222" width="220" height="40" rx="3" fill="#ede9fb" stroke="#8b5cf6" stroke-width="1.5"/>
+  <text x="206" y="238" text-anchor="middle" font-size="12" font-weight="700" fill="#6d28d9" letter-spacing="4">10000010</text>
+  <text x="206" y="255" text-anchor="middle" font-size="9" fill="#6d28d9">指數 = 130 (真實指數 3)</text>
+
+  <!-- Fraction cells (23 bits) -->
+  <rect x="322" y="222" width="388" height="40" rx="3" fill="#e3efed" stroke="#2f6f6a" stroke-width="1.5"/>
+  <text x="516" y="238" text-anchor="middle" font-size="11" font-weight="700" fill="#2f6f6a" letter-spacing="2">10101100000000000000000</text>
+  <text x="516" y="255" text-anchor="middle" font-size="9" fill="#2f6f6a">尾數（隱含 1. 之後的 23 位）</text>
+
+  <!-- Hex -->
+  <text x="380" y="286" text-anchor="middle" font-size="11" fill="#4a5159">= 0x41560000 (hex)　　Python 驗證: struct.pack('&gt;f', 13.375).hex() → '41560000'</text>
+  <text x="380" y="302" text-anchor="middle" font-size="10" fill="#8a929b">解讀：(−1)⁰ × 1.101011₂ × 2³ = 1.671875 × 8 = 13.375 ✓</text>
+</svg>
+        <figcaption>圖 101-2:把 13.375 手算編碼成 IEEE 754 float32 的完整步驟。最終 32 位元可用 Python <code>struct</code> 驗證。</figcaption>
+      </div>
+
+      <p>
+        用 Python 驗證,同時學會位元觀察的工具:
+      </p>
+      <pre><code class="language-python">import struct
+
+def float32_bits(x):
+    """把 float32 印出符號/指數/尾數三欄"""
+    # '&gt;f' = big-endian float; '&gt;I' = big-endian unsigned int
+    bits = struct.unpack('&gt;I', struct.pack('&gt;f', x))[0]
+    b = f'{bits:032b}'
+    sign = b[0]
+    exp  = b[1:9]
+    frac = b[9:]
+    e_stored = int(exp, 2)
+    print(f"符號   : {sign}  ({'正' if sign=='0' else '負'})")
+    print(f"指數欄 : {exp} = {e_stored}  (真實指數 = {e_stored - 127})")
+    print(f"尾數欄 : {frac}")
+    print(f"Hex    : {bits:08X}")
+
+float32_bits(13.375)</code></pre>
+      <pre><code class="language-text">符號   : 0  (正)
+指數欄 : 10000010 = 130  (真實指數 = 3)
+尾數欄 : 10101100000000000000000
+Hex    : 41560000</code></pre>
+
+      <h3>反向解碼:從位元回到數值</h3>
+      <p>
+        給你一串位元,同樣可以反推回數值。以 float32 的 <code>0x3FC00000</code> 為例:
+      </p>
+      <pre><code class="language-python">bits = 0x3FC00000
+b = f'{bits:032b}'              # '00111111110000000000000000000000'
+S    = int(b[0])                # 0 → 正
+E    = int(b[1:9], 2)           # 01111111 = 127
+frac = b[9:]                    # 10000000000000000000000
+
+value = (-1)**S * (1 + int(frac, 2) / 2**23) * 2**(E - 127)
+print(value)                    # 1.5</code></pre>
+      <p>
+        解析:$(-1)^0 \times 1.1_2 \times 2^{127-127} = 1.5 \times 1 = 1.5$。正確!
+      </p>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">Python 的 float.hex() 更直覺</span>
+          <p><code>(1.5).hex()</code> 回傳 <code>'0x1.8p+0'</code>,
+          意思是 $1.8_{16} \times 2^0 = 1.5_{10}$。
+          <code>(0.1).hex()</code> 回傳 <code>'0x1.999999999999ap-4'</code>——注意那個永遠跑不完的 9,正是 0.1 無法精確表示的直接體現。</p>
+        </div>
+      </div>
+
+      <!-- ─── §6 特殊值 ─── -->
+      <h2>特殊值:零、無窮大、NaN 與次正規數</h2>
+      <p>
+        IEEE 754 保留了一些特殊位元樣式來表示「超出正規化數範圍」的情況。
+        判斷方法:看指數欄是全 0 還是全 1。
+      </p>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>名稱</th><th>指數欄</th><th>尾數欄</th><th>符號位</th><th>語意</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>+0</td><td>全 0</td><td>全 0</td><td>0</td><td>正零</td></tr>
+            <tr><td>−0</td><td>全 0</td><td>全 0</td><td>1</td><td>負零(計算上 = +0,但符號不同)</td></tr>
+            <tr><td>次正規數 (subnormal)</td><td>全 0</td><td>非全 0</td><td>任意</td><td>極小數,不帶隱含 1;漸進下溢</td></tr>
+            <tr><td>+∞</td><td>全 1</td><td>全 0</td><td>0</td><td>正無窮大</td></tr>
+            <tr><td>−∞</td><td>全 1</td><td>全 0</td><td>1</td><td>負無窮大</td></tr>
+            <tr><td>NaN</td><td>全 1</td><td>非全 0</td><td>任意</td><td>Not a Number;非數值結果</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>零與負零</h3>
+      <p>
+        IEEE 754 有兩個零:+0 和 −0。在大多數情況下 <code>+0 == -0</code> 為 <code>True</code>,
+        但它們在除法等運算中行為不同:<code>1.0 / +0.0</code> 得 <code>+∞</code>,
+        <code>1.0 / -0.0</code> 得 <code>-∞</code>。Python 因為會先丟出 <code>ZeroDivisionError</code> 而看不到這個,
+        在 C 中開啟 IEEE 模式就能觀察到。
+      </p>
+
+      <h3>無窮大(Infinity)</h3>
+      <p>
+        溢位或正數除以零的結果。Inf 可以參與運算:
+      </p>
+      <pre><code class="language-python">inf = float('inf')
+print(inf + 1)        # inf
+print(inf * 2)        # inf
+print(inf - inf)      # nan  ← 無窮減無窮沒有意義
+print(1.0 / inf)      # 0.0</code></pre>
+
+      <h3>NaN:不是數字</h3>
+      <p>
+        <code>0.0 / 0.0</code>、<code>inf - inf</code>、對負數開平方根——這些運算沒有有意義的實數結果,IEEE 754 用 <strong>NaN(Not a Number)</strong> 表示。
+        NaN 有一個非常反直覺的特性:
+      </p>
+      <pre><code class="language-python">nan = float('nan')
+print(nan == nan)   # False  ← NaN 是唯一不等於自己的東西
+print(nan != nan)   # True
+print(nan &gt; 0)      # False
+print(nan &lt; 0)      # False
+import math
+print(math.isnan(nan))   # True  ← 正確的 NaN 檢測方式</code></pre>
+      <p>
+        <code>NaN != NaN</code> 這個規則出自 IEEE 754 的刻意設計:
+        「無意義的結果」本來就無法比較——連「是不是同一個無意義」都說不清楚。
+        這個特性是很多 bug 的來源,我們在第八節會再提到。
+      </p>
+
+      <h3>次正規數(Subnormal / Denormal)</h3>
+      <p>
+        float32 最小的正規化數約為 $1.18 \times 10^{-38}$(指數 = 1,fraction = 0)。
+        如果計算結果比這還小怎麼辦?直接變成零會造成突然的「突然下溢」——兩個非零數相除突然得到零。
+        IEEE 754 用次正規數解決這個問題:<strong>當指數欄全為 0 且尾數欄非零時,去掉隱含的前導 1</strong>,
+        改成 $0.f\ldots \times 2^{-126}$。這讓浮點數能「漸進式地」接近零,
+        代價是有效位數減少。
+      </p>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">次正規數很慢</span>
+          <p>許多 CPU 處理次正規數時需要走軟體路徑(因為硬體浮點單元不直接支援),
+          速度可能比正規數慢 10–100 倍。效能敏感的程式(神經網路訓練、音訊處理)有時會設置
+          DAZ/FTZ 旗標(Denormals Are Zero / Flush To Zero)把次正規數強制歸零以換取速度。</p>
+        </div>
+      </div>
+
+      <!-- ─── §7 為何 0.1 存不進去 ─── -->
+      <h2>為什麼 0.1 存不進去:機器精度與捨入</h2>
+      <p>
+        我們現在回頭看 $0.1$。把它轉成二進位:
+      </p>
+      $$0.1 \times 2 = 0.2 \Rightarrow 0$$
+      $$0.2 \times 2 = 0.4 \Rightarrow 0$$
+      $$0.4 \times 2 = 0.8 \Rightarrow 0$$
+      $$0.8 \times 2 = 1.6 \Rightarrow 1$$
+      $$0.6 \times 2 = 1.2 \Rightarrow 1$$
+      $$0.2 \times 2 = 0.4 \Rightarrow 0 \quad \text{(重複!)}$$
+      <p>
+        所以 $0.1_{10} = 0.0\overline{0011}_2$——一個無限循環二進位小數,
+        就像 $\frac{1}{3}$ 在十進位裡寫不完一樣。
+        float64 只有 52 個 fraction 位元,必須在某一位截斷,
+        存進去的實際上是離 $0.1$ 最近、但<em>不完全相等</em>的值:
+      </p>
+      <pre><code class="language-python">&gt;&gt;&gt; format(0.1, '.55f')
+'0.1000000000000000055511151231257827021181583404541015625'</code></pre>
+      <p>
+        這個值和 $0.1$ 的誤差約 $5.5 \times 10^{-18}$——極小,但確實存在。
+        $0.1$ 加 $0.2$ 的誤差累積之後,就和 $0.3$ 的誤差不一樣,所以比較結果是 <code>False</code>。
+      </p>
+
+      <h3>機器精度(Machine Epsilon)與 ulp</h3>
+      <p>
+        <strong>機器精度(machine epsilon)</strong> $\varepsilon_m$ 是「1.0 與它相鄰的下一個可表示浮點數之間的距離」,
+        也就是相對捨入誤差的最大上界:$|fl(x)-x|/|x| \le \varepsilon_m/2$。
+      </p>
+      $$\varepsilon_m = 2^{-52} \approx 2.22 \times 10^{-16} \quad \text{(float64)}$$
+      <pre><code class="language-python">import sys
+print(sys.float_info.epsilon)   # 2.220446049250313e-16
+# 驗證: 1.0 和下一個 float64 的差
+import math
+print(math.nextafter(1.0, 2.0) - 1.0)  # 2.220446049250313e-16</code></pre>
+      <p>
+        <strong>ulp(unit in the last place)</strong> 是某個數 $x$ 附近兩個相鄰浮點數的間距。
+        不同大小的數有不同的 ulp:靠近 $1.0$ 的 ulp 是 $\varepsilon_m$,
+        靠近 $10^{15}$ 的 ulp 大得多,靠近 $0.001$ 的 ulp 小得多。
+        這反映了浮點數「靠近零越密、遠離零越稀」的本質。
+      </p>
+
+      <h3>捨入模式</h3>
+      <p>
+        當一個實數無法精確表示時,IEEE 754 規定如何捨入。預設模式是
+        <strong>就近捨入——雙數優先(round to nearest, ties to even)</strong>,也叫「銀行家捨入」:
+        精確落在兩個相鄰浮點數正中間時,選偶數尾數的那個。
+        這能讓大量捨入誤差在統計上相互抵消,比「遇五入」的累積偏差小。
+      </p>
+
+      <h3>不要用 <code>==</code> 比較浮點數</h3>
+      <p>
+        第 55 章在談<a href="55-numerical-methods.html">數值誤差</a>時已經指出這個原則。浮點數的正確比較方式是給定一個容忍範圍:
+      </p>
+      <pre><code class="language-python">import math
+
+# 錯誤:直接比較
+print(0.1 + 0.2 == 0.3)          # False
+
+# 正確:用 math.isclose
+print(math.isclose(0.1 + 0.2, 0.3))               # True
+# isclose 預設 rel_tol=1e-9, abs_tol=0.0
+# 含義: |a-b| &lt;= max(rel_tol * max(|a|,|b|), abs_tol)
+
+# 當比較對象接近 0 時,要同時給 abs_tol
+print(math.isclose(1e-15, 0.0, abs_tol=1e-12))    # True</code></pre>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">永遠不要用 == 比較浮點數</span>
+          <p>唯一的例外:比較是否為 NaN 時用 <code>math.isnan(x)</code>,
+          比較是否為無窮大時用 <code>math.isinf(x)</code>。
+          若真的需要精確小數(金融計算),改用 Python 的 <code>decimal.Decimal</code> 模組。</p>
+        </div>
+      </div>
+
+      <!-- ─── §8 浮點陷阱 ─── -->
+      <h2>浮點陷阱:大數吃小數、相減抵銷、累加順序</h2>
+      <p>
+        浮點誤差不只是「小小的精度問題」——在特定情況下,它會讓計算結果<em>大錯特錯</em>。以下是幾個經典陷阱。
+      </p>
+
+      <h3>陷阱一:大數吃小數(Absorption)</h3>
+      <p>
+        把一個非常小的數加到非常大的數上時,小數「消失」了:
+      </p>
+      <pre><code class="language-python">big   = 1e16    # 10 的 16 次方
+small = 1.0
+
+result = big + small - big
+print(result)   # 0.0,不是 1.0!
+
+# 原因:big 的 ulp 遠大於 small
+import math
+print(math.ulp(big))   # 2.0 — big 附近相鄰浮點數的間距是 2,加 1 根本沒反應</code></pre>
+      <p>
+        在大量數值求和時,這個問題尤其嚴重。解法是用
+        <strong>Kahan 補償求和(Kahan summation)</strong>或 Python 的 <code>math.fsum</code>:
+      </p>
+      <pre><code class="language-python">import math
+
+nums = [1.0, 1e16, -1e16]          # 理想結果 = 1.0
+print(sum(nums))                    # 0.0  ← 錯誤
+print(math.fsum(nums))              # 1.0  ← 正確(Kahan 補償)</code></pre>
+
+      <h3>陷阱二:相減抵銷(Catastrophic Cancellation)</h3>
+      <p>
+        兩個幾乎相等的數相減,有效位數會大量消失——因為前幾位完全抵消,剩下的都是捨入誤差:
+      </p>
+      <pre><code class="language-python">a = 1.00000001
+b = 1.00000000
+diff = a - b
+print(diff)                # 1.0000000116860974e-08
+print(1e-8)                # 1e-08
+# 差了 1.17e-16,相對誤差約 1.17%——遠超 float64 本身的 ulp 精度
+
+# 更嚴重的例子:sqrt(x+1) - sqrt(x) 當 x 很大
+import math
+x = 1e15
+naive  = math.sqrt(x + 1) - math.sqrt(x)
+better = 1.0 / (math.sqrt(x + 1) + math.sqrt(x))   # 有理化分母
+print(f'直接算: {naive}')    # 1.4901161193847656e-08 (不準)
+print(f'有理化: {better}')   # 1.5811388300842022e-08 (準確)</code></pre>
+      <p>
+        修法:改用數學等價但數值更穩定的公式。例如 $\sqrt{x+1} - \sqrt{x} = \frac{1}{\sqrt{x+1}+\sqrt{x}}$。
+      </p>
+
+      <h3>陷阱三:累加順序影響結果</h3>
+      <p>
+        浮點加法<em>不滿足結合律</em>——$(a + b) + c$ 不一定等於 $a + (b + c)$:
+      </p>
+      <pre><code class="language-python">a, b, c = 1e15, -1e15, 1.0
+
+print((a + b) + c)   # 1.0   ← 正確
+print(a + (b + c))   # 0.0   ← 錯誤:b+c 先算,1.0 被 1e15 吃掉</code></pre>
+      <p>
+        這也解釋了為什麼並行浮點運算(GPU、多執行緒)的結果可能不具可重複性——
+        執行緒的完成順序不同,累加順序就不同,結果就可能有微小差異。
+      </p>
+
+      <h3>陷阱四:NaN 的傳染性</h3>
+      <p>
+        NaN 會「感染」它參與的所有運算,產生更多 NaN:
+      </p>
+      <pre><code class="language-python">nan = float('nan')
+print(nan + 1)     # nan
+print(nan * 0)     # nan
+print(nan &gt; 0)     # False
+print(nan &lt; 0)     # False
+print(nan == nan)  # False  ← 用 == 永遠抓不到 NaN!</code></pre>
+      <p>
+        因為 <code>nan != nan</code>,<em>任何用 <code>==</code> 偵測 NaN 的程式都是 bug</em>。
+        正確作法是 <code>math.isnan(x)</code> 或 <code>x != x</code>(後者雖然有效但不推薦,難讀)。
+      </p>
+
+      <div class="callout danger">
+        <div class="ico">⛔</div>
+        <div class="body">
+          <span class="c-title">NaN 靜靜地傳播</span>
+          <p>NaN 不會丟出例外——它靜靜地傳播,污染後續所有計算結果,最終你才發現輸出全是 NaN。
+          在進行複雜的數值計算前後,加上 <code>assert not any(math.isnan(v) for v in results)</code> 是防禦性編程的好習慣。</p>
+        </div>
+      </div>
+
+      <!-- ─── 練習 ─── -->
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 101.1 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>
+            手算:把 <strong>−0.75</strong> 編碼成 IEEE 754 <strong>float32</strong>。
+            給出符號位、指數欄(8 位元二進位)、尾數欄(23 位元二進位),以及最終的 4-byte 十六進位表示。
+          </p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>步驟 1:轉二進位</strong></p>
+              <p>$0.75_{10} = 0.11_2$（$0.75 \times 2 = 1.5 \to 1$；$0.5 \times 2 = 1.0 \to 1$）</p>
+              <p><strong>步驟 2:正規化</strong></p>
+              <p>$0.11_2 = 1.1 \times 2^{-1}$</p>
+              <p><strong>步驟 3:編碼</strong></p>
+              <ul>
+                <li>符號:負數 → <code>S = 1</code></li>
+                <li>指數欄:$-1 + 127 = 126 = 01111110_2$</li>
+                <li>尾數欄:$1_2$ 之後補 22 個 0 → <code>10000000000000000000000</code></li>
+              </ul>
+              <p>完整 32 位元:<code>1 01111110 10000000000000000000000</code></p>
+              <p>十六進位:<code>0xBF400000</code></p>
+              <p><strong>Python 驗證:</strong></p>
+              <pre><code class="language-python">import struct
+struct.pack('&gt;f', -0.75).hex()   # 'bf400000'</code></pre>
+              <p>解讀:$(-1)^1 \times 1.1_2 \times 2^{-1} = -1.5 \times 0.5 = -0.75$ ✓</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 101.2 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>
+            預測以下每一段 Python 程式的輸出,並解釋原因:
+          </p>
+          <pre><code class="language-python"># (a)
+x = 0.1 + 0.1 + 0.1
+print(x == 0.3)
+
+# (b)
+import math
+big = 2.0 ** 53          # float64 最大連續整數
+print(big + 1 == big)
+
+# (c)
+inf = float('inf')
+nan = float('nan')
+print(inf - inf == nan)</code></pre>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>(a) False</strong></p>
+              <p><code>0.1</code> 存進去已有誤差,三個誤差累積後和精確 <code>0.3</code> 的誤差樣式不同。用 <code>math.isclose(x, 0.3)</code> 才會得 <code>True</code>。</p>
+              <p><strong>(b) True</strong></p>
+              <p>$2^{53}$ 是 float64 連續整數的上限。在這個量級,ulp = 2,所以 $2^{53} + 1$ 會被捨入回 $2^{53}$。因此 <code>big + 1 == big</code> 為 <code>True</code>。這正是大數吃小數的典型案例。</p>
+              <p><strong>(c) False</strong></p>
+              <p><code>inf - inf</code> 確實等於 <code>nan</code>——但 <code>nan == nan</code> 永遠是 <code>False</code>!所以整個運算式為 <code>False</code>。要偵測 NaN 要用 <code>math.isnan(inf - inf)</code>。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 101.3 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>
+            以下這個函式計算兩數的<strong>調和平均數(harmonic mean)</strong>:$H(a,b) = \frac{2ab}{a+b}$。
+          </p>
+          <pre><code class="language-python">def harmonic_mean(a, b):
+    return 2 * a * b / (a + b)</code></pre>
+          <p>
+            (1) 若 <code>a = 1e308</code>、<code>b = 1e308</code>,呼叫 <code>harmonic_mean(a, b)</code> 會得到什麼?為什麼?<br>
+            (2) 想一個數學等價但不會溢位的改寫方式。
+          </p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>(1)</strong> 結果是 <code>inf</code>。原因:<code>2 * 1e308 * 1e308</code> 超出 float64 最大值($\approx 1.8 \times 10^{308}$),產生溢位成為 <code>inf</code>。<code>inf / (a + b)</code> 仍然是 <code>inf</code>。</p>
+              <p>實際正確答案應為 <code>1e308</code>($H(x,x) = x$)。</p>
+              <p><strong>(2)</strong> 化簡可得:</p>
+              $$H(a,b) = \frac{2ab}{a+b} = \frac{2}{\frac{1}{a}+\frac{1}{b}}$$
+              <pre><code class="language-python">def harmonic_mean_safe(a, b):
+    return 2.0 / (1.0/a + 1.0/b)
+
+print(harmonic_mean_safe(1e308, 1e308))   # 1e308 ✓</code></pre>
+              <p>先做倒數讓數值縮小,避免中間結果溢位。這種「數學等價但數值更穩定的重寫」是數值計算的核心技巧,第 55 章中也有更多例子。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ─── §9 串起來 ─── -->
+      <h2>把這一章串起來</h2>
+      <p>
+        我們從一個讓人困惑的 Python 輸出出發,走過了整個 IEEE 754 的世界。回顧幾個核心路標:
+      </p>
+      <ul>
+        <li><strong>浮點數 = 有限位元的妥協</strong>:不是所有實數都能精確表示;多數情況下存的是「最近的浮點數」。</li>
+        <li><strong>IEEE 754 三欄位</strong>:符號(1位)+ 偏移指數(8/11位)+ 尾數(23/52位),加上隱含前導 1,float32 有 24 位有效位元、float64 有 53 位。</li>
+        <li><strong>偏移碼(bias)</strong>:指數存 $e + 127$(float32)或 $e + 1023$(float64),讓整個浮點數可以當無號整數比大小。</li>
+        <li><strong>特殊值</strong>:指數全 0 → 零/次正規數;指數全 1 → Inf/NaN。次正規數讓下溢漸進化;NaN 是傳染性的「毒」。</li>
+        <li><strong>0.1 存不進去</strong>是結構性問題,不是 bug——$0.1_{10}$ 在二進位是無限循環小數,被截斷後有微小誤差。</li>
+        <li><strong>實務鐵則</strong>:浮點比較用 <code>math.isclose</code>;NaN 偵測用 <code>math.isnan</code>;累加大量數字用 <code>math.fsum</code>;數學等價不代表數值等價。</li>
+      </ul>
+      <p>
+        這一章是<a href="20-combinational-sequential.html">第 20 章(整數二補數)</a>的浮點對應:那裡我們看懂了整數在位元層的面貌,這裡我們看懂了小數。
+        而在<a href="55-numerical-methods.html">第 55 章(數值方法)</a>中,我們用這個知識去分析誤差的累積與演算法穩定性——
+        如果你還沒讀那一章,現在帶著這章的理解回去,很多東西會豁然開朗。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">📚</div>
+        <div class="body">
+          <span class="c-title">想更深入?</span>
+          <p>浮點數最完整的參考文獻是 David Goldberg 1991 年的論文
+          <a href="https://docs.oracle.com/cd/E19957-01/806-3568/ncg_goldberg.html"><em>What Every Computer Scientist Should Know About Floating-Point Arithmetic</em></a>——
+          標題有點嚇人,但前半段非常易讀,強力推薦。
+          想玩位元的話,<a href="https://float.exposed/">float.exposed</a> 是個互動式工具,可以即時看任意浮點數的位元佈局與值。
+          Python 的 <code>decimal</code> 模組提供任意精度的十進位小數,是金融場景的正確選擇。</p>
+        </div>
+      </div>
+</article>
+  </main>
+</div>
+<script src="../assets/book.js"></script>
+</body>
+</html>

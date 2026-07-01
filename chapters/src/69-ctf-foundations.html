@@ -1,0 +1,931 @@
+<!--meta
+title: 駭客工作台、終端機尋寶與編碼
+description: 從零踏進 CTF(奪旗競賽):認識六大題型與 flag 文化、為什麼學攻擊能讓你成為更好的防禦者(白帽倫理紅線);建立 WSL2 駭客工作台與終端機求生指令、玩一場終端機尋寶;從 C/C++ 無痛切到 Python 寫資安腳本;徹底搞懂「編碼不是加密」——ASCII、hex、Base64 原理、URL 編碼與 XOR,並親手寫一支編碼瑞士刀,剝開包了三層的 flag。
+-->
+
+
+      <div class="eyebrow">第十八部 · 實戰資安 CTF</div>
+      <h1>駭客工作台、終端機尋寶與編碼</h1>
+      <p class="subtitle">第 34 章教你「像攻擊者一樣思考」,這一章開始,我們真的動手——但全程在一個合法、安全、專門為練習而生的遊樂場裡。歡迎來到 CTF。</p>
+      <div class="byline">
+        <span class="tag">第 69 章</span>
+        <span>閱讀時間 ≈ 48 分鐘</span>
+        <span>難度:★★☆☆☆</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>什麼是 <strong>CTF(Capture The Flag,奪旗競賽)</strong>、六大題型,以及 <code>FLAG{...}</code> 這個文化暗號</li>
+          <li>為什麼「學會解題」會讓你成為<strong>更強的防禦者</strong>,以及一條絕不能跨越的<strong>法律與倫理紅線</strong></li>
+          <li>怎麼用 <strong>WSL2</strong> 建立一個「駭客工作台」,以及為什麼終端機是駭客的主場</li>
+          <li>每個 CTF 玩家都該反射性使用的求生指令:<code>grep</code> / <code>find</code> / <code>file</code> / <code>strings</code> / <code>xxd</code> / <code>base64</code></li>
+          <li>原本學 C/C++ 的你,如何<strong>無痛切到 Python</strong> 寫資安腳本,以及 <code>bytes</code> 與 <code>str</code> 的大坑</li>
+          <li>資安界最重要的觀念之一:<strong>「編碼(encoding)不是加密(encryption)」</strong></li>
+          <li>ASCII、十六進位、<strong>Base64 為什麼把 3 bytes 變成 4 個字元</strong>、URL 編碼、以及 <strong>XOR</strong> 的可逆魔法</li>
+          <li>親手寫一支<strong>編碼瑞士刀</strong>,並剝開一個被包了三層的 flag</li>
+        </ul>
+      </div>
+
+      <h2>一個不是 PNG 的 PNG</h2>
+      <p>
+        比賽開始三分鐘,你下載了第一題的附件:一個叫 <code>cat.png</code> 的檔案。雙擊它——
+        圖片打不開,系統說「檔案毀損」。換成別人可能就放棄了:「啊,壞檔。」但你打開終端機,
+        敲了一行 <code>file cat.png</code>,螢幕回你:<code>cat.png: ASCII text</code>。
+      </p>
+      <p>
+        有意思。這根本不是圖片,是純文字偽裝的。你再敲 <code>cat cat.png</code>,跳出一行
+        <code>RkxBR3tuMHRfYV9yM2FsX2NhdH0=</code>——結尾那個 <code>=</code> 號、清一色的英數字,
+        是 Base64 的長相。你把它丟給 <code>base64 -d</code>,畫面浮出:<code>FLAG{n0t_a_r3al_cat}</code>。
+        第一題,解出。
+      </p>
+      <p>
+        這就是 CTF 的日常:一連串「東西不是它看起來的樣子」的小謎題,而你手裡握著一把把工具,
+        一層層把真相剝出來。沒有人被駭、沒有真實系統受害——所有題目都是出題者<strong>故意藏好、等你來找</strong>的。
+        這一章,我們就從零把你帶進這個世界:先弄懂遊戲規則,搭好工作台,然後玩第一場尋寶、寫第一支解碼工具。
+      </p>
+
+      <h2>從「奪旗」說起:CTF 是什麼</h2>
+      <p>
+        <strong>CTF(Capture The Flag)</strong>直譯是「搶旗子」,本來是一種戶外遊戲:兩隊各守一面旗,
+        想辦法攻進對方陣地把旗搶回來。資安界借用了這個名字,辦成一種<strong>競賽兼遊戲</strong>:
+        主辦方設計一堆刻意藏有漏洞或謎題的題目,你解開之後,會得到一小串特殊字串——那就是「旗(flag)」——
+        把旗貼回計分板,就得分。誰分數高誰贏。
+      </p>
+      <p>
+        CTF 是全世界資安人「練功」與「較量」的共通語言。從高中生的入門賽(像 <strong>picoCTF</strong>),
+        到頂尖戰隊的世界大賽(像 DEF CON CTF),用的都是同一套精神。它最迷人的地方在於:
+        <strong>它把「攻擊」這件危險的事,圈進一個完全合法、可重來、不傷害任何人的沙盒裡</strong>,
+        讓你能放手嘗試、失敗、再嘗試。
+      </p>
+
+      <h3>flag 長什麼樣子</h3>
+      <p>
+        旗通常是一段一眼就認得出來的字串,最常見的格式是:
+      </p>
+      <pre><code class="language-text">FLAG{some_text_here}
+picoCTF{y0u_g0t_1t_4b2c1d}
+flag{th1s_1s_th3_pr1z3}</code></pre>
+      <p>
+        前面的 <code>FLAG</code>(或比賽自訂的前綴)像個「招牌」,大括號裡是內容。
+        這個格式不是隨便定的,它有兩個實用目的:第一,<strong>讓你一眼認出「找到了!」</strong>——
+        在一堆亂碼裡看到 <code>FLAG{</code> 開頭,就知道挖到寶了;第二,<strong>方便機器自動比對</strong>。
+        後面寫工具時你會看到,我們常常就是寫程式去檢查「解出來的東西是不是以 <code>FLAG{</code> 開頭」。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">🚩</div>
+        <div class="body">
+          <span class="c-title">為什麼旗裡常是「火星文」</span>
+          <p>你會發現 flag 內容常把 <code>e</code> 寫成 <code>3</code>、<code>i</code> 寫成 <code>1</code>、<code>o</code> 寫成 <code>0</code>
+          (這叫 <em>leetspeak</em>)。一部分是駭客文化的趣味,一部分是<strong>避免旗剛好等於某個正常單字</strong>,
+          以免在文章或程式裡誤觸發比對。看到 <code>l1k3_th1s</code> 別緊張,它就是「like this」。</p>
+        </div>
+      </div>
+
+      <h3>六大題型:你會遇到哪些挑戰</h3>
+      <p>
+        CTF 題目五花八門,但大致歸成六大類。認識它們,等於拿到一張 CTF 世界的地圖——
+        每一類都對應到資安的一個專業領域,也對應到本書不同的章節:
+      </p>
+
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>類別</th><th>一句話</th><th>在考你什麼</th><th>本書對應</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Crypto</strong><br>密碼學</td><td>解開被編碼或加密的訊息</td><td>編碼、古典密碼、XOR、雜湊、RSA</td><td>第 35 章<br>(本章打地基)</td></tr>
+          <tr><td><strong>Web</strong><br>網站安全</td><td>找出網站的漏洞</td><td>SQL injection、XSS、IDOR、Cookie</td><td>第 36、52 章</td></tr>
+          <tr><td><strong>Pwn</strong><br>二進位攻擊</td><td>利用記憶體漏洞控制程式</td><td>緩衝區溢位、堆疊、shellcode</td><td>第 21、24 章</td></tr>
+          <tr><td><strong>Reverse</strong><br>逆向工程</td><td>反推程式到底在做什麼</td><td>組合語言、反組譯、靜態分析</td><td>第 22、42 章</td></tr>
+          <tr><td><strong>Forensics</strong><br>數位鑑識</td><td>從檔案、封包、記憶體挖證據</td><td>檔案結構、隱寫術、封包分析</td><td>第 25、53 章</td></tr>
+          <tr><td><strong>Misc</strong><br>雜項</td><td>不歸類的有趣雜題</td><td>終端機技巧、程式設計、腦筋急轉彎</td><td>第 16 章<br>(本章入門)</td></tr>
+        </tbody>
+      </table>
+      </div>
+
+      <p>
+        別被這張表嚇到。整個第十八部會帶你逐類攻略;<strong>這一章只專注在最入門、最沒有門檻的兩塊:
+        Misc(終端機與雜項)與 Crypto 裡的「編碼」</strong>。它們不需要高深背景,卻是<em>每一題</em>都會用到的基本功。
+        把這兩塊練紮實,你才扛得動後面的硬題。
+      </p>
+
+      <h3>學「攻擊」,是為了更會「防守」</h3>
+      <p>
+        你可能會問:一本立場是「防禦」的書,為什麼要教我解 CTF、教我「攻擊」的思維?
+        答案在<strong>第 34 章</strong>那句話裡——<strong>你無法防禦你不認識的東西</strong>。
+        一個從沒看過 SQL injection 怎麼打的工程師,寫出來的查詢就是會有洞;
+        一個親手用 <code>strings</code> 從執行檔裡撈出過硬寫密碼的人,以後絕不會把密碼寫死在程式裡。
+      </p>
+      <p>
+        CTF 是把「攻擊者視角」訓練到肌肉記憶最有效的方法。當你解過幾十題「開發者相信了不該相信的輸入」,
+        你寫程式時就會<em>自動</em>對所有輸入起疑心。這正是<strong>第 36 章「安全程式設計」</strong>反覆強調的習慣——
+        而 CTF,是養成這個習慣的健身房。每一道你親手攻破的題,日後都變成你親手堵上的洞。
+      </p>
+
+      <div class="callout danger">
+        <div class="ico">⛔</div>
+        <div class="body">
+          <span class="c-title">動手之前,先記住這條紅線(呼應第 41 章)</span>
+          <p>這一章開始,你會學到真實的工具與技巧。請把這段話刻進腦子裡:</p>
+          <ul>
+            <li><strong>只在「授權環境」練習</strong>:你自己的電腦、CTF 平台、合法靶場(本章末會給)。這些地方<em>歡迎</em>你攻擊。</li>
+            <li><strong>絕不碰真實的、未經授權的系統</strong>——學校、同學、公司、任何不屬於你的網站或機器。</li>
+            <li><strong>負責任揭露</strong>:萬一在真實系統裡<em>意外</em>發現漏洞,通報管理者,別公開、別利用。</li>
+          </ul>
+          <p>在台灣,未經授權入侵或干擾他人電腦,觸犯《刑法》妨害電腦使用罪——<strong>即使你「只是好奇」、「沒造成損害」,也是犯罪</strong>。
+          技術中立,但用途有責。<strong>技術力越強,越要守住這條線。</strong>完整的倫理討論在<strong>第 41 章</strong>。</p>
+        </div>
+      </div>
+
+      <h2>建立你的駭客工作台</h2>
+      <p>
+        玩 CTF 的第一件事,不是學什麼神祕指令,而是<strong>搭一個能跑工具的環境</strong>。
+        幾乎所有 CTF 工具都生長在 <strong>Linux</strong> 的土壤上;而對絕大多數用 Windows 的同學來說,
+        最省事、最不會把主系統搞壞的方法,是裝 <strong>WSL2(Windows Subsystem for Linux)</strong>——
+        它讓你在 Windows 裡跑一個<em>真正的</em> Ubuntu Linux,共用你的檔案,卻互不干擾。
+      </p>
+      <pre><code class="language-bash"># 在 Windows 的 PowerShell(用系統管理員身分開啟)輸入這一行,然後重開機:
+wsl --install
+
+# 重開機後它會自動裝好 Ubuntu,要你設定一組 Linux 的帳號與密碼。
+# 之後在開始選單打 "Ubuntu" 就能進入你的 Linux 終端機。
+
+# 進去後,先把套件清單更新、裝幾個 CTF 基本工具:
+sudo apt update
+sudo apt install -y xxd binutils coreutils file grep findutils</code></pre>
+      <p>
+        (用 macOS 或本來就用 Linux 的同學更輕鬆,你的終端機已經就位,多數工具內建,缺的用
+        <code>brew</code> 或 <code>apt</code> 補即可。)裝好之後,你就有了一個「駭客工作台」——
+        說穿了就是一個<strong>裝好工具的 Linux 終端機</strong>。沒有駭客電影裡滿螢幕滾動的綠色字,
+        就是一個樸素的黑底白字視窗。但這個視窗,是你接下來所有冒險的起點。
+      </p>
+
+      <h3>為什麼終端機是駭客的主場</h3>
+      <p>
+        <strong>第 16 章</strong>已經告訴你終端機的威力:可組合、可自動化、可重現。對 CTF 來說,
+        還要再加一個關鍵理由——<strong>圖形介面只給你「開發者想讓你看到」的東西,而 CTF 的旗,
+        偏偏都藏在「沒人想讓你看到」的地方</strong>:隱藏檔、檔案的尾端、二進位的縫隙、被編碼過的字串。
+        滑鼠雙擊一個「壞掉」的圖片,你只會看到「無法開啟」;但一行 <code>file</code> 指令,就揭穿了它的偽裝。
+      </p>
+      <p>
+        終端機讓你<strong>直視位元組的真相</strong>,而不是作業系統幫你「美化」過的表象。這就是為什麼,
+        在 CTF 圈,鍵盤永遠比滑鼠快、比滑鼠強。下面這幾個指令,你會用到天荒地老:
+      </p>
+
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>指令</th><th>它做什麼</th><th>CTF 典型用途</th></tr></thead>
+        <tbody>
+          <tr><td><code>ls -a</code></td><td>列出檔案(含隱藏檔)</td><td>找出 <code>.</code> 開頭的隱藏旗檔</td></tr>
+          <tr><td><code>cd</code></td><td>切換目錄</td><td>鑽進層層巢狀的資料夾</td></tr>
+          <tr><td><code>cat</code></td><td>把整個檔案倒出來</td><td>讀文字檔、看旗</td></tr>
+          <tr><td><code>grep</code></td><td>搜尋符合模式的行</td><td><code>grep -r FLAG .</code> 一次掃遍整棵目錄</td></tr>
+          <tr><td><code>find</code></td><td>遞迴尋找檔案</td><td>在深層目錄裡定位某個檔名</td></tr>
+          <tr><td><code>file</code></td><td>判斷檔案<em>真正</em>的類型</td><td>揭穿「假副檔名」的偽裝</td></tr>
+          <tr><td><code>strings</code></td><td>從二進位檔撈出可讀文字</td><td>從執行檔/圖片裡挖出藏字</td></tr>
+          <tr><td><code>xxd</code></td><td>看/還原十六進位</td><td><code>xxd -r -p</code> 把 hex 變回原檔</td></tr>
+          <tr><td><code>base64</code></td><td>Base64 編碼/解碼</td><td><code>base64 -d</code> 解開 Base64 字串</td></tr>
+          <tr><td><code>man</code></td><td>查指令說明書</td><td>忘記旗標怎麼用時的救命稻草</td></tr>
+        </tbody>
+      </table>
+      </div>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">卡住了?先問 <code>man</code>,別先問人</span>
+          <p>記不得 <code>grep</code> 怎麼遞迴搜尋?打 <code>man grep</code>,裡面有完整說明,按 <code>q</code> 離開。
+          學會「自己查手冊」是駭客最重要的軟實力之一——CTF 沒有標準答案,只有「你願不願意自己挖」。
+          真的卡死再問人,但<strong>先說清楚你已經試了什麼</strong>,這是這個圈子的禮貌。</p>
+        </div>
+      </div>
+
+      <h3>玩一場「終端機尋寶」</h3>
+      <p>
+        光看指令表記不住。最好的學法,是把它當尋寶遊戲玩。想像有一個資料夾,裡面藏了 8 面旗,
+        每一面都用一個不同的指令才挖得出來,而且<strong>解開一面旗,它會提示你下一面藏在哪</strong>。
+        這就是「終端機尋寶」——CTF 社團公認最有效的 Linux 入門法。它的關卡設計大概像這樣:
+      </p>
+      <pre><code class="language-bash"># 第 1 關:最基本的「看」。先看有什麼,再讀第一個檔。
+$ ls
+welcome.txt
+$ cat welcome.txt
+歡迎來到尋寶場!你的第一面旗是 FLAG{...}
+下一關提示:有些檔案是「隱藏」的,試試 ls 的某個旗標……
+
+# 第 2 關:隱藏檔。檔名以 . 開頭的,要 -a 才看得到。
+$ ls -a
+.   ..   .hidden_flag   welcome.txt
+$ cat .hidden_flag
+
+# 第 3 關:大海撈針。旗藏在 logs/ 裡上百個檔的某一行。
+$ grep -r FLAG logs/        # -r:遞迴鑽進每個子目錄找含 FLAG 的行
+
+# 第 4 關:深層迷宮。旗檔藏在很深的資料夾,但你知道它的檔名。
+$ find . -name 'flag*'      # 從目前目錄往下,找檔名以 flag 開頭的
+
+# 第 5 關:偽裝的二進位。data.bin 看似亂碼,其實藏了可讀的字。
+$ file data.bin             # 先問它「你到底是什麼」
+$ strings data.bin | grep FLAG    # 把可讀文字撈出來,再篩出旗
+
+# 第 6 關:十六進位。secret.hex 是一串 hex,還原它。
+$ xxd -r -p secret.hex      # -r 還原、-p 用純 hex 格式
+
+# 第 7 關:Base64。message.b64 結尾有 = 號……
+$ base64 -d message.b64     # 解開後你會懂「編碼不是加密」(下一節主角!)
+
+# 第 8 關:大檔尾端。旗在一個超大 log 的最後幾行。
+$ tail bigfile.log          # 看尾端;或直接 grep FLAG bigfile.log</code></pre>
+      <p>
+        看出門道了嗎?<strong>每一關都不是「猜」,而是「用對工具」。</strong>第 7 關尤其關鍵——
+        那個被 Base64 包起來的旗,任何人只要會 <code>base64 -d</code> 就能解開,<em>完全不需要密碼</em>。
+        這個「咦,不用鑰匙就解得開?」的疑惑,正是我們下一大節要展開的核心觀念。
+        本章末的練習 69.1,就讓你親手玩一遍這種尋寶。
+      </p>
+
+      <h2>C 到 Python 速成:資安腳本的母語</h2>
+      <p>
+        指令能解掉很多入門題,但稍微複雜一點——要批次嘗試、要做運算、要跟一個遠端服務來回對話——
+        你就需要<strong>寫程式</strong>。而在 CTF 與資安圈,程式語言幾乎只有一個答案:<strong>Python</strong>。
+      </p>
+      <p>
+        為什麼?因為 Python <strong>寫得快</strong>(一個想法十分鐘變成可跑的腳本)、
+        <strong>函式庫多</strong>(處理位元、網路、密碼學的工具一應俱全:<code>pwntools</code>、<code>requests</code>、
+        <code>pycryptodome</code>……),而且<strong>幾乎所有公開的解題範例(writeup)都用 Python 寫</strong>。
+        在這個圈子,Python 就是通用語。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">🔗</div>
+        <div class="body">
+          <span class="c-title">給原本學 C/C++ 的你(呼應第 59 章)</span>
+          <p>很多人從 <strong>第 59 章 C/C++</strong> 一路打底過來,對 Python 還不熟。好消息是:
+          <strong>你已經會了最難的部分</strong>。變數、迴圈、函式、陣列,還有資安最吃的
+          <strong>位元運算、十六進位、記憶體概念</strong>——這些 Python 一個都不用你重學,而且寫法還更簡單。
+          你缺的只是一層「語法皮」。下面這張對照表,十分鐘就能讓你切換過去。
+          (C 不會被丟掉——它在第十八部後段的 Pwn 與逆向題裡,才是真正的主角。)</p>
+        </div>
+      </div>
+
+      <h3>語法對照:同一件事,兩種寫法</h3>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>概念</th><th>C / C++</th><th>Python</th></tr></thead>
+        <tbody>
+          <tr><td>區塊</td><td><code>{ ... }</code> 大括號</td><td><strong>縮排</strong>(同層對齊即可)</td></tr>
+          <tr><td>行尾</td><td>分號 <code>;</code></td><td>不用,換行就好</td></tr>
+          <tr><td>宣告變數</td><td><code>int x = 5;</code></td><td><code>x = 5</code>(不用寫型別)</td></tr>
+          <tr><td>印出</td><td><code>printf("%d\n", x);</code></td><td><code>print(x)</code></td></tr>
+          <tr><td>迴圈</td><td><code>for (int i=0; i&lt;n; i++)</code></td><td><code>for i in range(n):</code></td></tr>
+          <tr><td>陣列/清單</td><td><code>int a[3] = {1,2,3};</code></td><td><code>a = [1, 2, 3]</code></td></tr>
+          <tr><td>函式</td><td><code>int add(int a,int b){...}</code></td><td><code>def add(a, b):</code></td></tr>
+          <tr><td>十六進位</td><td><code>0x5A</code></td><td><code>0x5A</code>(<strong>一模一樣!</strong>)</td></tr>
+          <tr><td>位元運算</td><td><code>a ^ b</code>、<code>a &amp; b</code>、<code>a &lt;&lt; 2</code></td><td><strong>完全相同</strong>的符號</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>
+        看到最後兩列了嗎?<strong>十六進位寫法與位元運算符號,C 和 Python 一字不差</strong>。
+        這正是學過 C 的人玩 CTF 的最大紅利:那些讓初學者頭痛的 <code>^</code>(XOR)、<code>&amp;</code>(AND)、
+        <code>&lt;&lt;</code>(左移),你早就熟得很。同一段邏輯,兩種語言對照一下:
+      </p>
+      <pre><code class="language-c">// C:把每個位元組與金鑰 0x5A 做 XOR
+#include &lt;stdio.h&gt;
+int main(void) {
+    unsigned char data[] = {0x12, 0x34, 0x56};
+    for (int i = 0; i &lt; 3; i++) {
+        printf("%02x ", data[i] ^ 0x5A);   // ^ 是 XOR
+    }
+    return 0;
+}</code></pre>
+      <pre><code class="language-python"># Python:一模一樣的邏輯,但短得多
+data = [0x12, 0x34, 0x56]
+for b in data:
+    print(f"{b ^ 0x5A:02x}", end=" ")   # ^ 一樣是 XOR,f-string 補零成兩位 hex</code></pre>
+
+      <h3>Python 的頭號大坑:<code>bytes</code> ≠ <code>str</code></h3>
+      <p>
+        如果說有一個觀念能讓 C 出身的人在 Python 玩 CTF 時少踩一半的坑,那就是這個:
+        <strong>Python 嚴格區分「文字(<code>str</code>)」和「位元組(<code>bytes</code>)」,它們是兩種不同的東西</strong>。
+      </p>
+      <ul>
+        <li><strong><code>str</code></strong>:給<em>人</em>看的文字,例如 <code>"Hello"</code>。</li>
+        <li><strong><code>bytes</code></strong>:給<em>機器</em>處理的原始位元組,前面加個 <code>b</code>,例如 <code>b"Hello"</code>。</li>
+      </ul>
+      <p>
+        在 C 裡,字串本來就是一串 <code>char</code>(其實就是位元組),兩者沒分。但在 Python,
+        所有<strong>加密、編碼、雜湊、網路傳輸</strong>的函式,吃的、吐的都是 <code>bytes</code>——因為位元組才是世界的真相。
+        兩者之間用 <code>.encode()</code> 和 <code>.decode()</code> 來回轉換:
+      </p>
+      <pre><code class="language-python">s = "FLAG"            # str,文字
+b = s.encode()        # str -&gt; bytes,得到 b'FLAG'
+print(b)              # b'FLAG'
+print(list(b))        # [70, 76, 65, 71]  ← 每個字元的 ASCII 數值!
+
+b2 = b'FLAG'
+s2 = b2.decode()      # bytes -&gt; str,變回 'FLAG'
+
+# 常見錯誤:把 str 丟給只吃 bytes 的函式
+import base64
+# base64.b64encode("FLAG")    # ✗ TypeError!它只吃 bytes
+base64.b64encode(b"FLAG")     # ✓ 正確,得到 b'RkxBRw=='</code></pre>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">看到 <code>TypeError: ... requires a bytes-like object</code> 別慌</span>
+          <p>這是初學者最常撞的錯誤,意思永遠是同一個:<strong>「你給了我文字,但我只收位元組。」</strong>
+          解法也永遠一樣:在你傳進去的那個值後面加 <code>.encode()</code>。反過來,如果結果印出來是
+          <code>b'...'</code> 帶個 <code>b</code> 開頭、你想要乾淨的文字,就加 <code>.decode()</code>。
+          把這兩個動作練成反射,Python 玩 CTF 就順了一大半。</p>
+        </div>
+      </div>
+
+      <h2>本章主菜:編碼,不是加密</h2>
+      <p>
+        現在來到全章最重要的觀念。回想終端機尋寶的第 7 關:那面旗只是被 <strong>Base64</strong> 包了一下,
+        你不需要任何密碼、任何鑰匙,一行 <code>base64 -d</code> 就解開了。如果那是「加密」,
+        怎麼可能沒鑰匙就解得開?答案是:<strong>它根本不是加密,是「編碼」。</strong>
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">編碼 ≠ 加密(這是 Crypto 入門的第一課)</span>
+          <p><strong>編碼(encoding)</strong>是為了「<em>方便傳輸或表示</em>」而換一種寫法,規則<strong>完全公開</strong>,
+          任何人都能還原——它<em>不提供任何機密性</em>。Base64、hex、URL 編碼都屬於這類。<br>
+          <strong>加密(encryption)</strong>則是為了「<em>保密</em>」,沒有<strong>金鑰</strong>就還原不了——它<em>提供機密性</em>。<br>
+          一句話分辨:<strong>需要鑰匙才能解開的,才是加密;人人都能解開的,只是編碼。</strong>
+          把編碼當成保護,是 CTF 裡(也是真實世界裡)最常見的安全錯誤之一。</p>
+        </div>
+      </div>
+
+      <p>
+        為什麼要先搞懂這個?因為 CTF 的 Crypto 題,有一大半根本不是「破解加密」,而是
+        <strong>「認出這是哪種編碼,然後反向還原」</strong>。能不能一眼認出 <code>=</code> 結尾是 Base64、
+        全是 0–9a–f 是 hex、滿是 <code>%20</code> 是 URL 編碼——這就是基本功。接下來我們一個一個拆。
+      </p>
+
+      <h3>萬物的起點:ASCII</h3>
+      <p>
+        電腦只懂數字,那它怎麼存「文字」?靠一張對照表:<strong>ASCII</strong>。它規定每個英文字母、
+        數字、符號各對應一個 0–127 的數字。例如大寫 <code>A</code> 是 65、<code>F</code> 是 70、
+        <code>a</code> 是 97、空格是 32。所以當你存下字串 <code>"FLAG"</code>,記憶體裡其實是四個數字:
+      </p>
+      <pre><code class="language-python"># 用 Python 看穿一個字串「真正的樣子」
+for ch in "FLAG":
+    print(ch, "-&gt;", ord(ch))      # ord:字元轉 ASCII 數值
+# F -&gt; 70    L -&gt; 76    A -&gt; 65    G -&gt; 71
+
+print(chr(70))     # chr:反過來,數值轉字元 -&gt; 'F'</code></pre>
+      <p>
+        記住這件事:<strong>文字的底層就是一串數字(位元組)</strong>。所有編碼,玩的都是
+        「同一串位元組,換個方式寫出來」的把戲。理解了這點,後面全都通了。
+      </p>
+
+      <h3>十六進位(hex):位元組的素顏照</h3>
+      <p>
+        一個位元組是 8 個位元,能表示 0–255。每次寫 8 個 0/1 太累,所以我們用
+        <strong>十六進位(hexadecimal,簡稱 hex)</strong>:用 <code>0</code>–<code>9</code> 和 <code>a</code>–<code>f</code>
+        這 16 個符號,<strong>剛好兩個 hex 字元 = 一個位元組</strong>(因為 16×16 = 256)。
+        於是任何資料都能寫成一串乾淨的 hex:
+      </p>
+      <pre><code class="language-python">data = b"FLAG"
+print(data.hex())                 # bytes -&gt; hex 字串:'464c4147'
+#   F=0x46  L=0x4c  A=0x41  G=0x47   ← 每兩個 hex 一個位元組
+
+print(bytes.fromhex("464c4147"))  # hex 字串 -&gt; bytes:b'FLAG'</code></pre>
+      <p>
+        在終端機裡,<code>xxd</code> 做的就是這件事(看 hex);<code>xxd -r -p</code> 則是反向(把 hex 還原成原始位元組)。
+        看到一長串只有 <code>0-9a-f</code> 的字串,你的第一個念頭就該是:「這是 hex,先還原看看。」
+      </p>
+
+      <h3>Base64:為什麼 3 個位元組變成 4 個字元?</h3>
+      <p>
+        Base64 是 CTF 裡出現頻率最高的編碼,沒有之一。它的任務是:<strong>把「任意位元組」(可能含有
+        無法顯示的控制字元)安全地塞進「只能傳純文字」的管道</strong>——例如 email、網址、JSON。
+        它的做法很巧妙,而且理解它,你就真正懂了「編碼」在玩什麼。
+      </p>
+      <p>
+        核心訣竅是<strong>「換一種切法」</strong>:原始資料是一個位元組 8 個位元地排;Base64 不管位元組邊界,
+        把所有位元接成一長條,然後<strong>每 6 個位元切一刀</strong>。為什麼是 6?因為 $2^6 = 64$,
+        剛好可以用一張 64 個字元的表(<code>A–Z</code>、<code>a–z</code>、<code>0–9</code>、<code>+</code>、<code>/</code>)來表示每一段。
+        於是:<strong>每 3 個位元組(24 位元)= 4 段 6 位元 = 4 個字元</strong>。這就是「3 變 4」的祕密:
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 320" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="360" y="26" text-anchor="middle" font-size="14" font-weight="800" fill="#2f6f6a">Base64:把 3 個位元組(24 bit)重新切成 4 段(每段 6 bit)</text>
+
+  <!-- 原始 3 bytes -->
+  <text x="40" y="64" font-size="12" font-weight="700" fill="#b4541f">原始 3 bytes</text>
+  <g font-size="12.5" font-weight="700" text-anchor="middle">
+    <rect x="120" y="50" width="150" height="34" rx="6" fill="#f6e7dd" stroke="#b4541f"/><text x="195" y="72" fill="#1f2328">'M' = 77</text>
+    <rect x="285" y="50" width="150" height="34" rx="6" fill="#f6e7dd" stroke="#b4541f"/><text x="360" y="72" fill="#1f2328">'a' = 97</text>
+    <rect x="450" y="50" width="150" height="34" rx="6" fill="#f6e7dd" stroke="#b4541f"/><text x="525" y="72" fill="#1f2328">'n' = 110</text>
+  </g>
+
+  <!-- 24 bits -->
+  <text x="40" y="124" font-size="12" font-weight="700" fill="#8a929b">24 個位元</text>
+  <g font-size="13" font-weight="700" text-anchor="middle" fill="#1f2328">
+    <rect x="120" y="108" width="150" height="32" rx="6" fill="#eef3f2" stroke="#8a929b"/><text x="195" y="129">01001101</text>
+    <rect x="285" y="108" width="150" height="32" rx="6" fill="#eef3f2" stroke="#8a929b"/><text x="360" y="129">01100001</text>
+    <rect x="450" y="108" width="150" height="32" rx="6" fill="#eef3f2" stroke="#8a929b"/><text x="525" y="129">01101110</text>
+  </g>
+
+  <!-- 重新切成 6-bit -->
+  <text x="40" y="184" font-size="12" font-weight="700" fill="#2f6f6a">每 6 bit 切一刀</text>
+  <g font-size="13" font-weight="700" text-anchor="middle" fill="#1f2328">
+    <rect x="120" y="168" width="113" height="32" rx="6" fill="#e3efed" stroke="#2f6f6a"/><text x="176" y="189">010011</text>
+    <rect x="240" y="168" width="113" height="32" rx="6" fill="#e3efed" stroke="#2f6f6a"/><text x="296" y="189">010110</text>
+    <rect x="360" y="168" width="113" height="32" rx="6" fill="#e3efed" stroke="#2f6f6a"/><text x="416" y="189">000101</text>
+    <rect x="480" y="168" width="113" height="32" rx="6" fill="#e3efed" stroke="#2f6f6a"/><text x="536" y="189">101110</text>
+  </g>
+
+  <!-- 查表 -->
+  <text x="40" y="244" font-size="12" font-weight="700" fill="#8b5cf6">查 64 字元表</text>
+  <g font-size="12" text-anchor="middle" fill="#4a5159">
+    <text x="176" y="228">= 19</text><text x="296" y="228">= 22</text><text x="416" y="228">= 5</text><text x="536" y="228">= 46</text>
+  </g>
+  <g font-size="18" font-weight="800" text-anchor="middle" fill="#1f2328">
+    <rect x="120" y="236" width="113" height="40" rx="8" fill="#ece6f9" stroke="#8b5cf6"/><text x="176" y="263">T</text>
+    <rect x="240" y="236" width="113" height="40" rx="8" fill="#ece6f9" stroke="#8b5cf6"/><text x="296" y="263">W</text>
+    <rect x="360" y="236" width="113" height="40" rx="8" fill="#ece6f9" stroke="#8b5cf6"/><text x="416" y="263">F</text>
+    <rect x="480" y="236" width="113" height="40" rx="8" fill="#ece6f9" stroke="#8b5cf6"/><text x="536" y="263">u</text>
+  </g>
+  <text x="360" y="302" text-anchor="middle" font-size="12.5" font-weight="700" fill="#2f6f6a">"Man"(3 bytes)→ "TWFu"(4 字元)</text>
+</svg>
+        <figcaption>圖 69-1:Base64 把 <code>"Man"</code> 編成 <code>"TWFu"</code>。三個位元組的 24 個位元,被重新切成四段各 6 位元,每段查一張 64 字元的表,得到一個字元。3 進 4 出,長度因此膨脹約 1/3。</figcaption>
+      </div>
+
+      <p>
+        那如果位元組數不是 3 的倍數呢?Base64 會用 <code>=</code> 補位。這就是為什麼
+        <strong>Base64 字串常以一兩個 <code>=</code> 結尾</strong>——它是你認出 Base64 的最佳線索:
+      </p>
+      <pre><code class="language-python">import base64
+print(base64.b64encode(b"Man"))   # b'TWFu'   3 bytes -&gt; 4 字元,剛好,無 =
+print(base64.b64encode(b"Hi"))    # b'SGk='   2 bytes -&gt; 補 1 個 =
+print(base64.b64encode(b"M"))     # b'TQ=='   1 byte  -&gt; 補 2 個 =
+
+print(base64.b64decode("TWFu"))   # b'Man'    反向還原,完全不需要金鑰</code></pre>
+
+      <h3>URL 編碼:網址裡的 %20</h3>
+      <p>
+        你一定看過網址裡出現 <code>%20</code>、<code>%3D</code> 這種東西。因為網址不能直接包含空格、
+        <code>&amp;</code>、<code>=</code> 這些有特殊意義的字元,於是 <strong>URL 編碼(percent-encoding)</strong>
+        把它們換成 <code>%</code> 加上該字元的 hex 值。空格是 ASCII 32 = 0x20,所以變成 <code>%20</code>:
+      </p>
+      <pre><code class="language-python">import urllib.parse
+print(urllib.parse.quote("a b&amp;c=1"))    # 'a%20b%26c%3D1'
+print(urllib.parse.unquote("a%20b%26c%3D1"))  # 'a b&amp;c=1'</code></pre>
+      <p>看到滿是 <code>%</code> 跟兩位 hex 的字串,你就知道:這是 URL 編碼,解開它。</p>
+
+      <h3>XOR:CTF 最愛的「可逆魔法」(呼應第 35 章)</h3>
+      <p>
+        前面三種是「換寫法」的編碼。XOR 則站在編碼與加密的<strong>交界處</strong>:它是一個位元運算,
+        卻也是許多真實加密法的核心零件(<strong>第 35 章</strong>會看到它撐起一次性密碼本與串流加密)。
+        對 CTF 來說,你只要先抓住它一個神奇性質:<strong>XOR 同一個值兩次,會變回原樣。</strong>
+      </p>
+      <p>
+        XOR(互斥或,寫作 <code>^</code>)的規則只有一條:<strong>兩個位元相同得 0,不同得 1</strong>。
+        從這條規則,可以推出那個讓它在密碼學裡無所不在的性質:
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 300" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- 真值表 -->
+  <text x="150" y="34" text-anchor="middle" font-size="13" font-weight="800" fill="#2f6f6a">XOR 真值表</text>
+  <g font-size="14" font-weight="700" text-anchor="middle" fill="#1f2328">
+    <rect x="40" y="48" width="220" height="34" rx="6" fill="#e3efed" stroke="#2f6f6a"/>
+    <text x="90" y="70">0 ^ 0 = 0</text><text x="210" y="70">1 ^ 0 = 1</text>
+    <rect x="40" y="86" width="220" height="34" rx="6" fill="#e3efed" stroke="#2f6f6a"/>
+    <text x="90" y="108">0 ^ 1 = 1</text><text x="210" y="108">1 ^ 1 = 0</text>
+  </g>
+  <text x="150" y="146" text-anchor="middle" font-size="11.5" fill="#8a929b">相同得 0,不同得 1</text>
+
+  <!-- 可逆性 -->
+  <text x="500" y="34" text-anchor="middle" font-size="13" font-weight="800" fill="#b4541f">同一把鑰匙,加密=解密</text>
+  <g font-size="13" font-weight="700" text-anchor="middle" fill="#1f2328">
+    <rect x="330" y="52" width="150" height="36" rx="6" fill="#f6e7dd" stroke="#b4541f"/><text x="405" y="75">明文 P</text>
+    <rect x="540" y="52" width="150" height="36" rx="6" fill="#f6e7dd" stroke="#b4541f"/><text x="615" y="75">密文 C</text>
+    <rect x="330" y="180" width="150" height="36" rx="6" fill="#ece6f9" stroke="#8b5cf6"/><text x="405" y="203">還原的 P</text>
+    <rect x="540" y="180" width="150" height="36" rx="6" fill="#f6e7dd" stroke="#b4541f"/><text x="615" y="203">密文 C</text>
+  </g>
+  <defs>
+    <marker id="x-arr" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/></marker>
+  </defs>
+  <line x1="480" y1="70" x2="538" y2="70" stroke="#8a929b" stroke-width="2" marker-end="url(#x-arr)"/>
+  <text x="509" y="60" text-anchor="middle" font-size="12" font-weight="700" fill="#2f6f6a">^ K</text>
+  <line x1="615" y1="90" x2="615" y2="178" stroke="#8a929b" stroke-width="2" marker-end="url(#x-arr)"/>
+  <line x1="538" y1="198" x2="482" y2="198" stroke="#8a929b" stroke-width="2" marker-end="url(#x-arr)"/>
+  <text x="509" y="188" text-anchor="middle" font-size="12" font-weight="700" fill="#8b5cf6">^ K</text>
+  <text x="405" y="258" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">P ^ K ^ K = P　(因為 K ^ K = 0,而 P ^ 0 = P)</text>
+  <text x="405" y="282" text-anchor="middle" font-size="11.5" fill="#8a929b">所以「加密」和「解密」用的是同一個運算、同一把鑰匙</text>
+</svg>
+        <figcaption>圖 69-2:XOR 的可逆性。把明文 P 跟金鑰 K 做 XOR 得到密文 C;把 C 再跟<em>同一個</em> K 做一次 XOR,因為 <code>K ^ K = 0</code>,就乾淨地還原成 P。這個對稱性,正是 XOR 在 CTF 與密碼學裡無所不在的原因。</figcaption>
+      </div>
+
+      <pre><code class="language-python"># XOR 的可逆性,用 Python 一眼看穿
+P = ord('A')      # 65
+K = 0x2A          # 金鑰(隨便一個位元組)
+C = P ^ K         # 「加密」
+print(C)          # 111
+print(C ^ K)      # 「解密」:再 XOR 一次同樣的 K -&gt; 65,變回 'A'</code></pre>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">單位元組 XOR:看似加密,其實一秒破</span>
+          <p>有些題目把旗用「<strong>單一個位元組</strong>」當金鑰去 XOR,以為這樣就安全了。錯。
+          金鑰只有 1 個位元組,代表只有 <strong>256 種可能</strong>(0 到 255)。你可以寫個迴圈把 256 把鑰匙
+          <em>全部試一遍</em>,看哪一把解出來的結果長得像 <code>FLAG{...}</code>——這叫<strong>暴力破解(brute force)</strong>,
+          現代電腦眨眼就跑完。這也再次說明:鑰匙太短的「加密」,跟沒加密差不多。練習 69.4 就讓你親手做這件事。</p>
+        </div>
+      </div>
+
+      <h2>動手做:寫一支「編碼瑞士刀」</h2>
+      <p>
+        觀念講完,該把它們組裝成一個能用的工具了。CTF 老手人人都有一支自己的「編碼瑞士刀」——
+        一個能在 文字、hex、Base64、URL、XOR 之間自由互轉的小程式。我們現在就來寫一支。
+        它不長,但把這一章的所有觀念全串了起來:
+      </p>
+      <pre><code class="language-python">#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""編碼瑞士刀:文字 / hex / Base64 / URL / XOR 互轉。CTF 入門必備。"""
+import base64
+import urllib.parse
+
+# ---------- 編碼方向(把原始 bytes 換種寫法)----------
+def to_hex(data: bytes) -&gt; str:
+    return data.hex()
+
+def to_b64(data: bytes) -&gt; str:
+    return base64.b64encode(data).decode()
+
+def to_url(text: str) -&gt; str:
+    return urllib.parse.quote(text)
+
+# ---------- 解碼方向(還原回原始 bytes)----------
+def from_hex(text: str) -&gt; bytes:
+    return bytes.fromhex(text.strip())
+
+def from_b64(text: str) -&gt; bytes:
+    return base64.b64decode(text.strip())
+
+def from_url(text: str) -&gt; str:
+    return urllib.parse.unquote(text)
+
+# ---------- XOR(加密=解密,key 為 bytes,循環使用)----------
+def xor(data: bytes, key: bytes) -&gt; bytes:
+    # 把 data 的每個位元組,跟 key 對應位置的位元組做 XOR
+    # key 比 data 短時,用 i % len(key) 讓金鑰循環重複
+    return bytes(data[i] ^ key[i % len(key)] for i in range(len(data)))
+
+# ---------- 試跑:每種轉換都「轉過去再轉回來」驗證正確 ----------
+if __name__ == "__main__":
+    s = "FLAG{sw1ss_kn1f3}"
+    b = s.encode()                 # str -&gt; bytes
+
+    print("原文     :", s)
+    print("hex      :", to_hex(b))
+    print("  還原   :", from_hex(to_hex(b)).decode())
+    print("base64   :", to_b64(b))
+    print("  還原   :", from_b64(to_b64(b)).decode())
+    print("url      :", to_url(s))
+    print("  還原   :", from_url(to_url(s)))
+
+    # XOR 兩次同樣金鑰,應該變回原文
+    k = b"\x5a"                    # 單位元組金鑰 0x5A
+    once = xor(b, k)
+    twice = xor(once, k)
+    print("XOR 兩次 :", twice.decode())   # FLAG{sw1ss_kn1f3}</code></pre>
+      <p>
+        執行它,你會看到每一種編碼「去」與「回」都對得上,XOR 兩次也乖乖變回原文。
+        恭喜,你有了第一件親手打造的 CTF 武器。現在,讓我們用它來打一個大魔王。
+      </p>
+
+      <h3>大魔王:剝開包了三層的 flag</h3>
+      <p>
+        真實的 CTF 題,往往不會只用一層編碼,而是<strong>層層包裹</strong>,故意讓你多繞幾圈。
+        經典的「洋蔥題」長這樣:出題者拿到 flag,先 XOR、再 Base64、再 hex,一層層往外包;
+        你拿到的只是最外面那串 hex,得<strong>反著順序、一層層往內剝</strong>:
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 280" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="o-arr" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#b4541f"/></marker>
+    <marker id="o-arr2" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#2f6f6a"/></marker>
+  </defs>
+  <!-- 同心層 -->
+  <rect x="150" y="40" width="420" height="200" rx="14" fill="#f6e7dd" stroke="#b4541f"/>
+  <text x="360" y="62" text-anchor="middle" font-size="12" font-weight="700" fill="#b4541f">第 3 層:hex(你拿到的字串)</text>
+  <rect x="210" y="80" width="300" height="120" rx="12" fill="#fbeede" stroke="#d98a4f"/>
+  <text x="360" y="100" text-anchor="middle" font-size="12" font-weight="700" fill="#b4541f">第 2 層:Base64</text>
+  <rect x="265" y="116" width="190" height="64" rx="10" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="360" y="136" text-anchor="middle" font-size="12" font-weight="700" fill="#2f6f6a">第 1 層:XOR(0x5A)</text>
+  <rect x="300" y="146" width="120" height="26" rx="8" fill="#8b5cf6"/>
+  <text x="360" y="164" text-anchor="middle" font-size="12" font-weight="800" fill="#fff">FLAG{...}</text>
+
+  <!-- 包裝方向 -->
+  <text x="40" y="120" font-size="11.5" font-weight="700" fill="#8a929b">出題:由內往外包</text>
+  <line x1="40" y1="135" x2="40" y2="210" stroke="#b4541f" stroke-width="2" marker-end="url(#o-arr)"/>
+  <!-- 剝開方向 -->
+  <text x="600" y="120" font-size="11.5" font-weight="700" fill="#8a929b">解題:由外往內剝</text>
+  <line x1="685" y1="210" x2="685" y2="135" stroke="#2f6f6a" stroke-width="2" marker-end="url(#o-arr2)"/>
+  <text x="360" y="266" text-anchor="middle" font-size="12" fill="#4a5159">from_hex → from_b64 → xor(0x5A) → 得到 flag</text>
+</svg>
+        <figcaption>圖 69-3:多層編碼像剝洋蔥。出題者由內往外一層層包(XOR → Base64 → hex);解題者必須<strong>反過來、由外往內</strong>一層層剝。順序錯了就解不出來——這也是這類題在考你的:認出每一層、用對的順序拆。</figcaption>
+      </div>
+
+      <pre><code class="language-python"># 接續上面的瑞士刀,加上「剝洋蔥」函式
+def peel(payload_hex: str) -&gt; str:
+    """拿到最外層的 hex,反向剝開 hex -&gt; base64 -&gt; xor(0x5A) -&gt; flag"""
+    step1 = from_hex(payload_hex)         # 剝掉 hex 層 -&gt; 得到 Base64 文字(bytes)
+    step2 = from_b64(step1.decode())      # 剝掉 Base64 層 -&gt; 得到 XOR 後的 bytes
+    flag  = xor(step2, b"\x5a")           # 剝掉 XOR 層 -&gt; 還原成 flag
+    return flag.decode()
+
+# 出題者給你的(只有最外層那串 hex):
+challenge = "48425962485345324f794d2f4b436b464e6a4d78507755374e4155314e444d314e43633d"
+print(peel(challenge))     # FLAG{layers_like_an_onion}</code></pre>
+      <p>
+        跑跑看,旗就跳出來了。注意解題函式 <code>peel</code> 的順序,正好是出題包裝的<strong>相反</strong>:
+        包的時候是 XOR→Base64→hex,剝的時候就是 hex→Base64→XOR。這種「認出層次、反向拆解」的思路,
+        會貫穿你整個 CTF 生涯。練習 69.5 留了一題類似的給你親手剝。
+      </p>
+
+      <h2>工具速覽:不必每次都重造輪子</h2>
+      <p>
+        自己寫瑞士刀是為了<strong>真懂原理</strong>;但實戰比賽分秒必爭,很多時候你會直接用現成工具。
+        兩個你一定要認識:
+      </p>
+      <ul>
+        <li><strong>CyberChef</strong>:一個瀏覽器裡的「編碼/解碼瑞士刀」,被暱稱為「網路的瑞士刀」。
+        它把上百種操作做成積木,你用拖拉的方式串成一條「食譜(recipe)」——例如「From Hex → From Base64 → XOR」——
+        貼上資料就即時看到結果。本章的剝洋蔥題,在 CyberChef 上三個積木就解完了。它甚至有個「Magic」功能,
+        能自動猜測資料被哪些編碼包過。<strong>這是入門 Crypto/Misc 題的神器</strong>,而且它純前端、可離線使用。</li>
+        <li><strong>命令列工具</strong>:你已經見過的 <code>base64</code>、<code>xxd</code>、<code>strings</code>、<code>file</code>,
+        加上 <code>tr</code>(字元替換)、<code>rev</code>(反轉)、<code>od</code>(看八進位/十六進位)。它們的好處是
+        <strong>能串進管線、能自動化</strong>——當你要對一千個檔案做同一件事,終端機完勝任何網頁工具。</li>
+      </ul>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">先用工具拿分,賽後再回頭手刻</span>
+          <p>學習期,自己寫程式理解原理;比賽時,先用 CyberChef 之類的工具快速拿旗。<strong>兩者不衝突。</strong>
+          很多高手的成長路徑是:比賽時用工具解開 → 賽後寫 writeup 時,逼自己用 Python 重做一遍、徹底搞懂。
+          「會用工具」讓你能解題,「懂得原理」讓你能解<em>沒人解過</em>的題。</p>
+        </div>
+      </div>
+
+      <h2>CTF 學習路線:雙軌並進</h2>
+      <p>
+        最後,給你一張接下來的地圖。學 CTF 最有效的方式,是<strong>雙軌並進</strong>:
+        一條「主線」由淺入深、做出能跑的成品(就像這一章你做出了瑞士刀);
+        另一條「平行訓練」是天天上靶場刷題,把手感養出來。兩條軌互相餵養——
+        主線學到的觀念,馬上能在靶場用上;靶場遇到的卡關,回頭在主線補強。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 250" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="path-arr" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/></marker>
+  </defs>
+  <!-- 主線 -->
+  <text x="30" y="56" font-size="12.5" font-weight="800" fill="#2f6f6a">主線(做出成品)</text>
+  <g font-size="12" font-weight="700" text-anchor="middle" fill="#1f2328">
+    <rect x="200" y="36" width="120" height="40" rx="9" fill="#e3efed" stroke="#2f6f6a"/><text x="260" y="56">工作台</text><text x="260" y="70" font-size="10" font-weight="400" fill="#8a929b">本章</text>
+    <rect x="345" y="36" width="120" height="40" rx="9" fill="#e3efed" stroke="#2f6f6a"/><text x="405" y="56">編碼瑞士刀</text><text x="405" y="70" font-size="10" font-weight="400" fill="#8a929b">本章</text>
+    <rect x="490" y="36" width="120" height="40" rx="9" fill="#eef3f2" stroke="#2f6f6a"/><text x="550" y="56">密碼 / Web</text><text x="550" y="70" font-size="10" font-weight="400" fill="#8a929b">後續章節 …</text>
+  </g>
+  <line x1="320" y1="56" x2="343" y2="56" stroke="#8a929b" stroke-width="2" marker-end="url(#path-arr)"/>
+  <line x1="465" y1="56" x2="488" y2="56" stroke="#8a929b" stroke-width="2" marker-end="url(#path-arr)"/>
+
+  <!-- 平行 -->
+  <text x="30" y="166" font-size="12.5" font-weight="800" fill="#b4541f">平行訓練(天天養手感)</text>
+  <g font-size="12" font-weight="700" text-anchor="middle" fill="#1f2328">
+    <rect x="200" y="146" width="120" height="40" rx="9" fill="#f6e7dd" stroke="#b4541f"/><text x="260" y="166">Bandit</text><text x="260" y="180" font-size="10" font-weight="400" fill="#8a929b">Linux 基本功</text>
+    <rect x="345" y="146" width="120" height="40" rx="9" fill="#f6e7dd" stroke="#b4541f"/><text x="405" y="166">picoGym</text><text x="405" y="180" font-size="10" font-weight="400" fill="#8a929b">各類別海量題</text>
+    <rect x="490" y="146" width="120" height="40" rx="9" fill="#fbeede" stroke="#d98a4f"/><text x="550" y="166">正式賽</text><text x="550" y="180" font-size="10" font-weight="400" fill="#8a929b">picoCTF 等</text>
+  </g>
+  <line x1="320" y1="166" x2="343" y2="166" stroke="#8a929b" stroke-width="2" marker-end="url(#path-arr)"/>
+  <line x1="465" y1="166" x2="488" y2="166" stroke="#8a929b" stroke-width="2" marker-end="url(#path-arr)"/>
+
+  <!-- 互相餵養 -->
+  <line x1="405" y1="78" x2="405" y2="144" stroke="#8b5cf6" stroke-width="1.6" stroke-dasharray="5 4"/>
+  <text x="415" y="116" font-size="11" fill="#8b5cf6">互相餵養</text>
+  <text x="360" y="226" text-anchor="middle" font-size="11.5" fill="#8a929b">每天一兩題靶場暖身 + 持續往主線推進,是公認最有效的進步節奏</text>
+</svg>
+        <figcaption>圖 69-4:CTF 學習雙軌。主線「做出能跑的成品」累積真本事,平行靶場(OverTheWire Bandit → picoGym → 正式賽)天天養手感。兩軌互相餵養,進步最快。</figcaption>
+      </div>
+
+      <p>
+        平行訓練最棒的入門靶場有兩個,本章末會給連結:
+      </p>
+      <ul>
+        <li><strong>OverTheWire — Bandit</strong>:公認最棒的新手 wargame,專練 Linux/終端機。它把這一章的指令練習,
+        變成一關接一關的線上闖關(你會用 ssh 連進去解)。<strong>強烈建議從這裡開始</strong>——破到第 15 關左右,
+        你的終端機就「住熟」了。</li>
+        <li><strong>picoGym / picoCTF</strong>:由卡內基美隆大學辦的著名入門賽 picoCTF 的「練習場」,各類別都有海量入門題,
+        難度標示清楚,邊學邊累積題數。它的 General Skills 與 Cryptography 類,正好接住你這一章學的東西。</li>
+      </ul>
+
+      <h2>把這一章串起來</h2>
+      <p>
+        我們從一個「不是 PNG 的 PNG」出發,走完了 CTF 的第一段路。回顧這趟旅程:
+      </p>
+      <ul>
+        <li><strong>CTF 是什麼</strong>:資安界的競賽兼遊戲,在合法沙盒裡解題奪 <code>FLAG{...}</code>;六大類別
+        (Crypto / Web / Pwn / Reverse / Forensics / Misc)是一張地圖。學攻擊,是為了更會防守(呼應第 34、36 章)。</li>
+        <li><strong>紅線先於技術</strong>:只在授權環境練習、絕不碰真實系統、負責任揭露——技術中立,用途有責(呼應第 41 章)。</li>
+        <li><strong>駭客工作台</strong>:WSL2 + 一個裝好工具的終端機;<code>ls -a</code>/<code>grep</code>/<code>find</code>/<code>file</code>/<code>strings</code>/<code>xxd</code>/<code>base64</code>/<code>man</code>
+        是你的求生指令(呼應第 16 章)。終端機讓你直視位元組的真相。</li>
+        <li><strong>Python 是資安母語</strong>:從 C/C++ 切過來只差語法皮,位元運算與 0x 寫法一字不差(呼應第 59 章);
+        牢記 <code>bytes ≠ str</code>,用 <code>.encode()</code>/<code>.decode()</code> 來回。</li>
+        <li><strong>編碼不是加密</strong>:這是 Crypto 第一課。ASCII 是底層數字;hex 是位元組的素顏;
+        Base64 把 3 bytes 重切成 4 個 6-bit 字元(所以 3 變 4、常以 <code>=</code> 結尾);URL 編碼用 <code>%</code>;
+        XOR 同值兩次會還原,單位元組 XOR 可暴力破解(呼應第 35 章)。</li>
+        <li><strong>動手做</strong>:你寫出了一支編碼瑞士刀,還剝開了包三層的洋蔥旗;也認識了 CyberChef 這把現成的瑞士刀。</li>
+        <li><strong>雙軌學習</strong>:主線做成品 + 平行刷靶場(Bandit → picoGym → 正式賽),互相餵養。</li>
+      </ul>
+      <p>
+        你現在握著的,是進入 CTF 世界的兩把鑰匙:<strong>一個能跑工具的終端機</strong>,和<strong>「編碼/加密」的清晰分界</strong>。
+        這正是整個第十八部的地基。下一站,我們會把「編碼」往前推進到真正的<strong>密碼學</strong>——
+        古典密碼怎麼用頻率分析破譯、現代雜湊為什麼不可逆——把這一章埋下的 XOR 種子,長成完整的破譯本領。
+        旗,在前面等你。動手吧。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">📚</div>
+        <div class="body">
+          <span class="c-title">想更深入?延伸資源</span>
+          <p>本章是「動手玩」資安的起點,以下都在<strong>合法、為練習而生</strong>的環境裡:</p>
+          <ul>
+            <li><strong><a href="https://overthewire.org/wargames/bandit/">OverTheWire — Bandit</a></strong>:最棒的終端機/Linux 新手 wargame,把本章的指令變成線上闖關。從這裡開始。</li>
+            <li><strong><a href="https://picoctf.org/">picoCTF / picoGym</a></strong>:卡內基美隆大學辦的著名入門 CTF 與練習場,各類別海量入門題,適合天天刷。</li>
+            <li><strong><a href="https://gchq.github.io/CyberChef/">CyberChef</a></strong>:瀏覽器裡的編碼/解碼瑞士刀,拖拉積木就能解大多數 Crypto/Misc 入門題,可離線使用。</li>
+          </ul>
+          <p>本章的精神承襲「<strong>專案制、做出能跑的成品、分級由淺到深</strong>」的資安自學路線:每一關都做出一個會動的小工具,
+          再用靶場養手感。最後再提醒一次——<strong>所有練習,只在你擁有或獲得明確授權的環境裡進行</strong>(第 41 章)。</p>
+        </div>
+      </div>
+
+      <h2>練習</h2>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 69.1 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>你有一個 <code>treasure/</code> 資料夾,旗藏在三個不同的地方。請用<strong>終端機指令</strong>把它們挖出來:</p>
+          <ol>
+            <li>資料夾裡有上百個 <code>.txt</code> 檔,其中<em>某一個</em>的某一行含有 <code>FLAG{...}</code>。怎麼一次找出來?</li>
+            <li>有個檔叫 <code>image.bin</code>,<code>cat</code> 它只看到亂碼,但裡面藏了可讀的旗。怎麼撈?</li>
+            <li>旗檔深藏在好幾層子目錄裡,你只知道它的檔名以 <code>flag</code> 開頭。怎麼定位它?</li>
+          </ol>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>第 1 題——遞迴搜尋字串,用 <code>grep -r</code>:</strong></p>
+              <pre><code class="language-bash">$ grep -r "FLAG{" treasure/        # -r 鑽進每個子目錄,印出含 FLAG{ 的行
+$ grep -rn "FLAG{" treasure/       # 加 -n 連「在哪個檔的第幾行」都告訴你</code></pre>
+              <p><strong>第 2 題——先認類型,再用 <code>strings</code> 撈可讀文字:</strong></p>
+              <pre><code class="language-bash">$ file image.bin                   # 先問它到底是什麼
+$ strings image.bin | grep "FLAG"  # 把所有可讀字串撈出來,再篩出旗</code></pre>
+              <p><strong>第 3 題——用 <code>find</code> 依檔名遞迴尋找:</strong></p>
+              <pre><code class="language-bash">$ find treasure/ -name 'flag*'     # 找檔名以 flag 開頭的檔案
+$ cat $(find treasure/ -name 'flag*')   # 找到後直接讀它的內容</code></pre>
+              <p>這三招(<code>grep -r</code> 搜內容、<code>strings</code> 撈藏字、<code>find</code> 找檔名)是 Misc/Forensics 題的鐵三角,
+              幾乎每場比賽都用得到。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 69.2 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>你攔截到一段字串 <code>RkxBR3tiYXNlNjRfaXNfbm90X2VuY3J5cHRpb259</code>。
+          (a) 你怎麼一眼判斷它「可能」是 Base64?(b) 用 Python 把它解開。
+          (c) 這題想提醒你什麼觀念?</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>(a)</strong> 它只由 <code>A–Z a–z 0–9 + /</code> 組成、長度是 4 的倍數——這是 Base64 的典型特徵
+              (這串剛好沒有 <code>=</code> 結尾,因為長度正好對齊;有 <code>=</code> 結尾就更篤定)。</p>
+              <p><strong>(b)</strong> 用 Python 的 <code>base64</code> 模組:</p>
+              <pre><code class="language-python">import base64
+s = "RkxBR3tiYXNlNjRfaXNfbm90X2VuY3J5cHRpb259"
+print(base64.b64decode(s).decode())   # 記得 .decode() 把 bytes 變成可讀文字
+# FLAG{base64_is_not_encryption}</code></pre>
+              <p>在終端機裡更快:<code>echo RkxBR3t... | base64 -d</code>。</p>
+              <p><strong>(c)</strong> 旗的內容自己說了:<strong>Base64 不是加密!</strong>沒有任何金鑰,任何人都能還原。
+              這正是本章的核心觀念——編碼只是「換種寫法」,不提供機密性。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 69.3 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>實作 hex 與 bytes 的<strong>雙向轉換</strong>。
+          (a) 先用 Python 內建方法,把 <code>b"FLAG"</code> 轉成 hex 字串,再轉回來。
+          (b) <strong>進階:不准用 <code>.hex()</code> 和 <code>bytes.fromhex()</code></strong>,自己刻一個 hex→bytes 的函式,
+          證明你真的懂「兩個 hex 字元 = 一個位元組」。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>(a)</strong> 內建方法最簡單:</p>
+              <pre><code class="language-python">b = b"FLAG"
+h = b.hex()                 # bytes -&gt; hex:'464c4147'
+print(h)
+print(bytes.fromhex(h))     # hex -&gt; bytes:b'FLAG'</code></pre>
+              <p><strong>(b)</strong> 自己刻 hex→bytes:每兩個字元取一段,用 16 進位解讀成一個位元組值。
+              關鍵是 <code>int(段, 16)</code> 能把 <code>"4c"</code> 這種兩位 hex 轉成數字 76:</p>
+              <pre><code class="language-python">def my_from_hex(h: str) -&gt; bytes:
+    h = h.strip()
+    out = bytearray()
+    for i in range(0, len(h), 2):     # 每次跳 2 個字元
+        pair = h[i:i+2]               # 取兩個 hex 字元,例如 '4c'
+        out.append(int(pair, 16))     # int(_, 16):當 16 進位解讀 -&gt; 76
+    return bytes(out)
+
+print(my_from_hex("464c4147"))        # b'FLAG'
+
+# 反方向:bytes -&gt; hex,也自己刻
+def my_to_hex(b: bytes) -&gt; str:
+    return "".join(f"{x:02x}" for x in b)   # 每個位元組補零成兩位 hex
+
+print(my_to_hex(b"FLAG"))             # '464c4147'</code></pre>
+              <p>能自己刻出這兩個函式,代表你真正理解了「位元組」和「它的十六進位寫法」之間的關係——
+              這是後面所有 Crypto 題的底層直覺。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 69.4 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>你拿到一段被<strong>單一位元組金鑰</strong> XOR 過的密文(以 hex 表示),但<strong>不知道金鑰是多少</strong>:</p>
+          <pre><code class="language-text">6c666b6d51521a58751b5975405f595e754b4e4e435e43454457</code></pre>
+          <p>請寫一支 Python 程式,<strong>暴力破解</strong>出金鑰並還原旗。提示:單位元組金鑰只有 256 種可能,
+          全部試一遍,看哪一把解出來的結果以 <code>FLAG{</code> 開頭。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>核心思路:把 256 把鑰匙(0~255)逐一拿去 XOR,用「結果是否以 <code>FLAG{</code> 開頭」當作判斷對錯的訊號。</p>
+              <pre><code class="language-python">cipher = bytes.fromhex("6c666b6d51521a58751b5975405f595e754b4e4e435e43454457")
+
+for key in range(256):                    # 試遍每一把可能的鑰匙
+    # 用同一把 key 對整段密文做 XOR(XOR 加解密同一運算)
+    plain = bytes(b ^ key for b in cipher)
+    if plain.startswith(b"FLAG{"):        # 認得出旗的長相,就是它!
+        print(f"金鑰 = {key} (十六進位 {key:#x})")
+        print("旗 =", plain.decode())
+        break
+
+# 金鑰 = 42 (十六進位 0x2a)
+# 旗 = FLAG{x0r_1s_just_addition}</code></pre>
+              <p>這就是<strong>「已知明文特徵 + 暴力搜尋」</strong>的經典套路:金鑰空間小到能全試時,
+              你不需要任何聰明的數學,只要一個迴圈加一個「認得出答案」的判斷式。也再次印證:
+              <strong>鑰匙太短的加密,等於沒加密。</strong></p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 69.5 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>大魔王回歸。下面這串 hex,是一面旗被<strong>三層</strong>包起來的結果,包裝順序是
+          <code>XOR(金鑰 0x5A) → Base64 → hex</code>。請反向剝開,拿到旗:</p>
+          <pre><code class="language-text">48425962485345324f794d2f4b436b464e6a4d78507755374e4155314e444d314e43633d</code></pre>
+          <p>提示:剝的順序,和包的順序<strong>相反</strong>。先剝最外層的 hex……</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>包裝是「由內往外」XOR→Base64→hex,所以解題要「由外往內」hex→Base64→XOR,順序反過來:</p>
+              <pre><code class="language-python">import base64
+
+payload = "48425962485345324f794d2f4b436b464e6a4d78507755374e4155314e444d314e43633d"
+
+step1 = bytes.fromhex(payload)            # ① 剝掉 hex 層 -&gt; 得到一段 Base64 文字
+print("剝掉 hex:", step1)                 # b'HBYbHSE2OyM/KCkFNjMxPwU7NAU1NDM1NCc='
+
+step2 = base64.b64decode(step1.decode())  # ② 剝掉 Base64 層 -&gt; 得到 XOR 後的 bytes
+
+# ③ 剝掉 XOR 層:每個位元組再 XOR 一次 0x5A 還原
+flag = bytes(b ^ 0x5A for b in step2)
+print("旗:", flag.decode())               # FLAG{layers_like_an_onion}</code></pre>
+              <p>觀察那個結尾的 <code>=</code>(在 <code>step1</code> 印出來時可見):它出賣了「中間那層是 Base64」。
+              在真實比賽裡,出題者不會告訴你包了哪幾層、用什麼金鑰——你得靠這些<strong>蛛絲馬跡</strong>(<code>=</code> 結尾、
+              全是 hex 字元、可印字元的分布)自己推理。若懶得手刻,把這串 hex 丟進 <strong>CyberChef</strong>,
+              用 <code>From Hex → From Base64 → XOR(0x5A)</code> 三個積木也能解,還能用它的「Magic」自動猜層次。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+    

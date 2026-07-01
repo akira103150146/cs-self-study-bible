@@ -1,0 +1,923 @@
+<!--meta
+title: 最佳化:線性規劃與凸優化
+description: 從目標函數與可行域出發,把散見各章的最佳化概念收成一門:線性規劃與單純形法、凸集與凸函數、梯度下降、拉格朗日乘子、KKT 條件、對偶理論,以及求解器與大規模 ML 的實務。
+-->
+
+      <div class="eyebrow">第二三部 · 進階補充:位元、資訊與最佳化</div>
+      <h1>最佳化:線性規劃與凸優化</h1>
+      <p class="subtitle">Google Maps 找最短路、工廠排程資源分配、神經網路訓練調整幾億個參數——它們骨子裡都在做同一件事:在約束之內,讓某個數字變到最好。這門學問叫<strong>最佳化(optimization)</strong>,是運籌學與機器學習的共同數學地基。</p>
+      <div class="byline">
+        <span class="tag">第 103 章</span>
+        <span>閱讀時間 ≈ 70 分鐘</span>
+        <span>難度:★★★★☆</span>
+      </div>
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>最佳化問題的標準語言:決策變數(decision variable)、目標函數(objective function)、約束(constraint)與可行域(feasible region)</li>
+          <li>線性規劃(LP)的標準式、幾何直覺(可行多面體的頂點一定包含最優解),以及單純形法(simplex method)如何沿邊走到最優頂點</li>
+          <li>凸集(convex set)與凸函數(convex function)的嚴格定義,以及「凸」為什麼是最關鍵的分水嶺:局部最優 = 全域最優</li>
+          <li>無約束最佳化:梯度下降(gradient descent)、學習率選擇、牛頓法,以及它們與第 55 章數值方法的連結</li>
+          <li>有約束最佳化:拉格朗日乘子(Lagrange multiplier)、KKT 條件四大要件(正確版本)、以及對偶問題(dual problem)的弱對偶與強對偶</li>
+          <li>實務工具:cvxpy 求解器的設計哲學、為何大規模 ML(見<a href="38-machine-learning.html">第 38 章</a>)用 SGD/Adam 而非精確求解器</li>
+          <li>離散最佳化與連續最佳化的橋:LP 鬆弛(relaxation)如何連回第 31/32 章的貪婪與動態規劃</li>
+        </ul>
+      </div>
+
+      <!-- ===== h2 ① 開場 ===== -->
+      <h2>最佳化無所不在——從找路到訓練 GPT</h2>
+
+      <p>
+        你今天早上用 Google Maps 查了一條路線。在那個「計算中…」的瞬間,背後的演算法正在做一件事:
+        在幾百條可能路徑之中,找出預計時間最短的那一條。這就是一個最佳化問題。
+      </p>
+      <p>
+        再往深想:某家航空公司每週要把幾千個班次安排進幾百架飛機與幾萬名機組員的時間表裡,
+        同時讓燃油費用最低、又不違反每位機師的飛行時數法規。這也是最佳化問題,只是大很多。
+        訓練一個 GPT 模型,是把幾百億個參數往某個方向調整,讓在訓練資料上的預測損失降到最低——
+        同樣是最佳化問題,只是參數多到超乎想像。
+      </p>
+      <p>
+        最佳化在這本書裡並不是第一次出現。<a href="31-greedy.html">第 31 章</a>的貪婪演算法、
+        <a href="32-dynamic-programming.html">第 32 章</a>的動態規劃,都是針對特定結構的離散最佳化策略。
+        <a href="55-numerical-methods.html">第 55 章</a>的梯度法、牛頓法,是連續最佳化的入門計算工具。
+        本章的任務是把這些片段收成一門:專注於<strong>連續最佳化(continuous optimization)</strong>,
+        建立嚴謹的語言框架,然後依序攀登 LP → 凸優化 → 帶約束優化這條階梯。
+        離散最佳化的部分(貪婪、DP、整數規劃)我們不重講,
+        但在最後一節會說清楚它們如何透過「鬆弛」技巧與連續世界相通。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">本章定位</span>
+          <p>本章是<strong>連續最佳化</strong>的地基課。它是運籌學(operations research, OR)與機器學習(ML)的共同語言。
+          讀完這一章,你會看懂 SVM、邏輯回歸、神經網路訓練、資源排程背後共同的數學骨架。</p>
+        </div>
+      </div>
+
+      <!-- ===== h2 ② 語言 ===== -->
+      <h2>最佳化問題的語言:目標、約束與可行域</h2>
+
+      <p>
+        在進入任何演算法之前,先學會描述問題。一個最佳化問題由三個元素組成:
+      </p>
+
+      <h3>決策變數(decision variables)</h3>
+      <p>
+        你「可以控制」的量,記做向量 $\mathbf{x} = (x_1, x_2, \ldots, x_n)^T \in \mathbb{R}^n$。
+        例如:工廠每天要生產幾個 A 產品、幾個 B 產品。
+        機器學習裡,決策變數就是模型的全部參數 $\boldsymbol{\theta}$。
+      </p>
+
+      <h3>目標函數(objective function)</h3>
+      <p>
+        你想最小化或最大化的數量,寫成 $f(\mathbf{x})$:一個把決策變數映射到實數的函數。
+        習慣上把問題統一寫成<strong>最小化</strong>(minimization):
+        $$\min_{\mathbf{x}} f(\mathbf{x})$$
+        最大化問題 $\max f(\mathbf{x})$ 等同於 $\min -f(\mathbf{x})$,可以互換。
+      </p>
+
+      <h3>約束(constraints)</h3>
+      <p>
+        你必須滿足的限制。常見有兩種:
+      </p>
+      <ul>
+        <li><strong>不等式約束</strong>: $g_i(\mathbf{x}) \leq 0$,例如「使用資源不超過庫存」。</li>
+        <li><strong>等式約束</strong>: $h_j(\mathbf{x}) = 0$,例如「預算必須剛好用完」。</li>
+      </ul>
+      <p>
+        滿足所有約束的 $\mathbf{x}$ 的集合,叫<strong>可行域(feasible region / feasible set)</strong> $\mathcal{F}$。
+        最佳化的目標是在 $\mathcal{F}$ 內找到讓 $f$ 最小的 $\mathbf{x}^*$。
+      </p>
+
+      <h3>全域最小 vs 局部最小</h3>
+      <p>
+        $\mathbf{x}^*$ 是<strong>全域最小(global minimum)</strong>,如果對所有 $\mathbf{x} \in \mathcal{F}$,
+        都有 $f(\mathbf{x}^*) \leq f(\mathbf{x})$。
+        $\mathbf{x}^*$ 是<strong>局部最小(local minimum)</strong>,如果只在某個鄰域內它最小。
+        這個區分至關重要:大多數演算法只保證找到局部最小;我們需要特殊結構(例如「凸性」)才能保證局部等於全域。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">問題分類速查</span>
+          <p>
+            • <strong>線性規劃(LP)</strong>:$f$ 與所有約束都是線性函數。<br>
+            • <strong>二次規劃(QP)</strong>:$f$ 是二次函數,約束是線性。<br>
+            • <strong>凸優化</strong>:$f$ 與可行域都是凸的(LP、QP 是特例)。<br>
+            • <strong>非線性規劃(NLP)</strong>:其餘的更一般情況。<br>
+            • <strong>整數規劃(IP)</strong>:決策變數有整數約束(離散,見第 31/32 章)。
+          </p>
+        </div>
+      </div>
+
+      <!-- ===== h2 ③ LP ===== -->
+      <h2>線性規劃:沿著可行多面體的頂點走</h2>
+
+      <p>
+        線性規劃是最佳化世界的「Hello World」:目標函數和所有約束都是<em>線性</em>的。
+        雖然看似受限,但它能解決大量真實問題——運輸調度、工廠排程、廣告預算分配、電力網絡最優潮流……
+        而且有多項式時間的實用演算法。
+      </p>
+
+      <h3>標準式(standard form)</h3>
+      <p>LP 的最大化標準式為:</p>
+      $$\max_{\mathbf{x}} \; \mathbf{c}^T \mathbf{x}$$
+      $$\text{subject to} \quad A\mathbf{x} \leq \mathbf{b}, \quad \mathbf{x} \geq \mathbf{0}$$
+      <p>
+        其中 $\mathbf{c} \in \mathbb{R}^n$ 是目標係數向量,$A \in \mathbb{R}^{m \times n}$ 是約束矩陣,
+        $\mathbf{b} \in \mathbb{R}^m$ 是約束右側值。用引入<strong>鬆弛變數(slack variable)</strong>的方式,
+        不等式可以轉成等式:引入 $\mathbf{s} \geq 0$,令 $A\mathbf{x} + \mathbf{s} = \mathbf{b}$,
+        就得到<strong>等式標準式(equality standard form)</strong>(鬆弛變數 $\mathbf{s}$ 補的是 $A\mathbf{x}$ 與 $\mathbf{b}$ 的差)。
+      </p>
+      <p><small>📝 <strong>命名說明</strong>:本書以不等式形式作為入門「標準式」;部分教材(如 Boyd &amp; Vandenberghe)以等式形式為 standard form、不等式形式稱 inequality form,各教材慣例略有不同,閱讀文獻時請留意。</small></p>
+
+      <h3>幾何直覺:可行多面體的頂點</h3>
+      <p>
+        我們先看一個二維例子,讓幾何直覺直接映入眼簾。
+        考慮:最大化利潤 $z = 5x_1 + 4x_2$(產品 A 和 B 的生產量),
+        約束為:$x_1 + x_2 \leq 5$(工人工時),
+        $2x_1 + x_2 \leq 8$(機器小時),
+        $x_1, x_2 \geq 0$。
+      </p>
+      <p>
+        可行域是一個凸多邊形,頂點為 $(0,0)$、$(4,0)$、$(3,2)$、$(0,5)$。
+        目標函數的等值線(isocurve,即 $5x_1+4x_2 = k$)是一族平行直線,
+        沿法線方向 $(5,4)$ 往外推可使 $k$ 增大。等值線最後「掃到」頂點 $(3,2)$,
+        算出 $z=5 \times 3 + 4 \times 2 = 23$——這就是最優解。
+      </p>
+
+      <div class="diagram">
+        <svg viewBox="0 0 420 310" width="420" height="310" font-family="Inter, 'Noto Sans TC', sans-serif" font-size="12">
+          <!-- 背景 -->
+          <rect x="0" y="0" width="420" height="310" fill="#fafafa" rx="6"/>
+
+          <!-- 可行域填色 (頂點: (0,0)=50,280; (4,0)=290,280; (3,2)=230,200; (0,5)=50,80) -->
+          <polygon points="50,280 290,280 230,200 50,80" fill="#e3efed" stroke="none"/>
+
+          <!-- 格線 -->
+          <g stroke="#dde" stroke-width="0.5">
+            <line x1="50" y1="240" x2="390" y2="240"/>
+            <line x1="50" y1="200" x2="390" y2="200"/>
+            <line x1="50" y1="160" x2="390" y2="160"/>
+            <line x1="50" y1="120" x2="390" y2="120"/>
+            <line x1="50" y1="80" x2="390" y2="80"/>
+            <line x1="110" y1="20" x2="110" y2="280"/>
+            <line x1="170" y1="20" x2="170" y2="280"/>
+            <line x1="230" y1="20" x2="230" y2="280"/>
+            <line x1="290" y1="20" x2="290" y2="280"/>
+            <line x1="350" y1="20" x2="350" y2="280"/>
+          </g>
+
+          <!-- 約束線:x1+x2=5 → (0,5)至(5,0) → SVG (50,80)→(350,280) -->
+          <line x1="50" y1="80" x2="360" y2="284" stroke="#2f6f6a" stroke-width="1.5" stroke-dasharray="6,3"/>
+          <!-- 約束線:2x1+x2=8 → 當y=6時x=1 → SVG (110,40)→(4,0)=(290,280) -->
+          <line x1="110" y1="40" x2="305" y2="284" stroke="#b4541f" stroke-width="1.5" stroke-dasharray="6,3"/>
+
+          <!-- 目標等值線 z=5x+4y -->
+          <!-- z=12: 5x+4y=12 → (0,3)=(50,160)到(2.4,0)=(194,280) -->
+          <line x1="50" y1="160" x2="194" y2="280" stroke="#8b5cf6" stroke-width="1" stroke-dasharray="3,3" opacity="0.6"/>
+          <!-- z=20: 5x+4y=20 → (0,5)=(50,80)到(4,0)=(290,280) -->
+          <line x1="50" y1="80" x2="290" y2="280" stroke="#8b5cf6" stroke-width="1" stroke-dasharray="3,3" opacity="0.6"/>
+          <!-- z=23 (最優): 5x+4y=23 → (0,5.75)=(50,50)到(4.6,0)=(326,280) -->
+          <line x1="50" y1="50" x2="326" y2="280" stroke="#8b5cf6" stroke-width="1.8" stroke-dasharray="4,2"/>
+
+          <!-- 單純形走法箭頭: (0,0)→(4,0)→(3,2) -->
+          <defs>
+            <marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+              <path d="M0,0 L0,6 L8,3 Z" fill="#b4541f"/>
+            </marker>
+          </defs>
+          <line x1="50" y1="280" x2="282" y2="280" stroke="#b4541f" stroke-width="2" marker-end="url(#arr)"/>
+          <line x1="290" y1="280" x2="238" y2="208" stroke="#b4541f" stroke-width="2" marker-end="url(#arr)"/>
+
+          <!-- 座標軸 -->
+          <line x1="50" y1="280" x2="390" y2="280" stroke="#333" stroke-width="2"/>
+          <line x1="50" y1="280" x2="50" y2="20" stroke="#333" stroke-width="2"/>
+          <!-- 軸標 -->
+          <text x="395" y="284" fill="#333">x₁</text>
+          <text x="44" y="16" fill="#333">x₂</text>
+          <!-- 刻度標籤 -->
+          <text x="108" y="294" fill="#666" text-anchor="middle">1</text>
+          <text x="168" y="294" fill="#666" text-anchor="middle">2</text>
+          <text x="228" y="294" fill="#666" text-anchor="middle">3</text>
+          <text x="288" y="294" fill="#666" text-anchor="middle">4</text>
+          <text x="348" y="294" fill="#666" text-anchor="middle">5</text>
+          <text x="42" y="283" fill="#666" text-anchor="end">0</text>
+          <text x="42" y="243" fill="#666" text-anchor="end">1</text>
+          <text x="42" y="203" fill="#666" text-anchor="end">2</text>
+          <text x="42" y="163" fill="#666" text-anchor="end">3</text>
+          <text x="42" y="123" fill="#666" text-anchor="end">4</text>
+          <text x="42" y="83" fill="#666" text-anchor="end">5</text>
+
+          <!-- 頂點標記 -->
+          <circle cx="50" cy="280" r="4" fill="#8a929b"/>
+          <circle cx="290" cy="280" r="4" fill="#8a929b"/>
+          <circle cx="50" cy="80" r="4" fill="#8a929b"/>
+          <!-- 最優頂點 -->
+          <circle cx="230" cy="200" r="7" fill="#b4541f"/>
+          <circle cx="230" cy="200" r="4" fill="white"/>
+
+          <!-- 標籤 -->
+          <text x="54" y="275" fill="#8a929b" font-size="11">(0,0)</text>
+          <text x="295" y="275" fill="#8a929b" font-size="11">(4,0)</text>
+          <text x="30" y="78" fill="#8a929b" font-size="11">(0,5)</text>
+          <text x="238" y="196" fill="#b4541f" font-weight="bold" font-size="11">(3,2) z*=23</text>
+
+          <!-- 圖例 -->
+          <line x1="60" y1="30" x2="90" y2="30" stroke="#2f6f6a" stroke-width="1.5" stroke-dasharray="6,3"/>
+          <text x="94" y="34" fill="#2f6f6a" font-size="11">x₁+x₂≤5</text>
+          <line x1="180" y1="30" x2="210" y2="30" stroke="#b4541f" stroke-width="1.5" stroke-dasharray="6,3"/>
+          <text x="214" y="34" fill="#b4541f" font-size="11">2x₁+x₂≤8</text>
+          <line x1="300" y1="30" x2="330" y2="30" stroke="#8b5cf6" stroke-width="1.5" stroke-dasharray="3,3"/>
+          <text x="334" y="34" fill="#8b5cf6" font-size="11">等值線</text>
+
+          <!-- 可行域標籤 -->
+          <text x="130" y="200" fill="#2f6f6a" font-size="13" opacity="0.8">可行域</text>
+        </svg>
+        <figcaption>圖 103-1:二維 LP 的幾何直覺。藍綠色陰影為可行域(convex polygon);紫色虛線為目標函數等值線,往右上方推值越大;橙色箭頭顯示單純形法的頂點走法 $(0,0) \to (4,0) \to (3,2)$;實心橙點為最優頂點。</figcaption>
+      </div>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">LP 最基本定理</span>
+          <p>若 LP 有有限最優解,<strong>最優解一定在可行多面體的某個頂點(extreme point / vertex)取到</strong>。
+          這個性質讓我們不必搜遍無窮多個可行點,只要遍歷(有限個)頂點就夠了。</p>
+        </div>
+      </div>
+
+      <h3>單純形法(Simplex Method)的直覺</h3>
+      <p>
+        由 George Dantzig 於 1947 年發明的單純形法,正是把上述幾何直覺變成演算法:
+      </p>
+      <ol>
+        <li><strong>從一個頂點出發</strong>(通常是原點,若原點可行的話)。</li>
+        <li><strong>查看相鄰頂點</strong>(即沿一條邊走到隔壁頂點):選擇讓目標值改善最多的那個移動。</li>
+        <li><strong>重複</strong>,直到所有相鄰頂點的目標值都不比當前更好——此時已到達最優。</li>
+      </ol>
+      <p>
+        在上圖中,單純形法從 $(0,0)$ 出發($z=0$),發現往 $(4,0)$ 移動可得 $z=20$,
+        再從 $(4,0)$ 往 $(3,2)$ 移動得 $z=23$,此時所有相鄰頂點都更差,停止。
+      </p>
+      <p>
+        單純形法在實際問題中表現極佳(雖然最壞情況是指數時間),工業求解器(如 CPLEX、Gurobi)
+        對它做了大量工程優化。1984 年 Karmarkar 發明了保證多項式時間的<strong>內點法(interior-point method)</strong>,
+        但單純形法在稀疏大型 LP 上往往仍更快。
+      </p>
+
+      <h3>Python 求解 LP:用 scipy.optimize</h3>
+      <pre><code class="language-python">from scipy.optimize import linprog
+
+# 最大化 z = 5x1 + 4x2
+# 等同最小化 -z = -5x1 - 4x2
+c = [-5, -4]                    # 目標係數 (取負號因為 linprog 只做最小化)
+
+# 不等式約束 Ax &lt;= b
+A_ub = [
+    [1, 1],    # x1 + x2 &lt;= 5
+    [2, 1],    # 2x1 + x2 &lt;= 8
+]
+b_ub = [5, 8]
+
+# 變數範圍 x1, x2 &gt;= 0
+bounds = [(0, None), (0, None)]
+
+res = linprog(c, A_ub=A_ub, b_ub=b_ub, bounds=bounds, method='highs')
+print(f"最優解: x1={res.x[0]:.2f}, x2={res.x[1]:.2f}")
+print(f"最優值: z={-res.fun:.2f}")
+# 輸出: 最優解: x1=3.00, x2=2.00
+#        最優值: z=23.00
+</code></pre>
+
+      <!-- ===== h2 ④ 凸性 ===== -->
+      <h2>凸集與凸函數:「凸」為什麼是分水嶺?</h2>
+
+      <p>
+        在最佳化的世界裡,「凸」這個字眼是護身符——它把「地獄模式」(NP-hard、陷入局部最小)
+        變成「人類可解」。理解凸性,是理解整個現代最佳化理論的鑰匙。
+      </p>
+
+      <h3>凸集(convex set)</h3>
+      <p>
+        集合 $\mathcal{C} \subseteq \mathbb{R}^n$ 是<strong>凸集</strong>,當且僅當對任意
+        $\mathbf{x}, \mathbf{y} \in \mathcal{C}$ 及 $\theta \in [0,1]$,
+        兩點之間的<em>線段</em>都在集合內:
+        $$\theta \mathbf{x} + (1-\theta)\mathbf{y} \in \mathcal{C}$$
+        直觀地說:凸集「沒有凹陷」,任意兩個可行點之間的直路都是可行的。
+        球、超平面、半空間、多面體(LP 的可行域)都是凸集。
+      </p>
+
+      <h3>凸函數(convex function)</h3>
+      <p>
+        函數 $f: \mathbb{R}^n \to \mathbb{R}$ 是<strong>凸函數</strong>,當且僅當對任意
+        $\mathbf{x}, \mathbf{y}$ 及 $\theta \in [0,1]$,割線(chord)始終在函數圖形的上方:
+        $$f(\theta \mathbf{x} + (1-\theta)\mathbf{y}) \leq \theta f(\mathbf{x}) + (1-\theta)f(\mathbf{y})$$
+        這就是著名的 <strong>Jensen 不等式</strong>的一元版本。
+        若不等號嚴格成立(即 $&lt;$,且 $\mathbf{x} \neq \mathbf{y}$,$\theta \in (0,1)$),
+        則 $f$ 是<strong>嚴格凸函數(strictly convex)</strong>。
+      </p>
+
+      <h3>如何辨識凸函數</h3>
+      <p>
+        一維情況:$f$ 是凸函數 $\iff$ $f''(x) \geq 0$（二階導數非負,函數「開口朝上」）。<br>
+        多維情況:$f$ 是凸函數 $\iff$ Hessian 矩陣 $H_f(\mathbf{x})$ 在所有點都是<strong>半正定(positive semi-definite, PSD)</strong>(Hessian 矩陣與半正定的線性代數基礎見<a href="54-linear-algebra.html">第 54 章</a>)。
+      </p>
+      <p>常用凸函數舉例:</p>
+      <ul>
+        <li>$f(\mathbf{x}) = \mathbf{c}^T\mathbf{x}$:線性函數(同時是凸也是凹)</li>
+        <li>$f(x) = x^2$、$f(\mathbf{x}) = \|\mathbf{x}\|_2^2$:二次凸函數</li>
+        <li>$f(\mathbf{x}) = \|\mathbf{x}\|_p$($p \geq 1$):$\ell^p$ 範數</li>
+        <li>$f(x) = e^{ax}$:指數函數</li>
+        <li>$f(x) = -\log x$($x &gt; 0$):對數的負數</li>
+        <li>$f(\mathbf{x}) = \log \sum_i e^{x_i}$:log-sum-exp(在 ML 的 softmax 裡天天見)</li>
+      </ul>
+      <p>
+        <strong>凸函數的運算保持凸性</strong>:非負線性組合、逐點最大值、仿射複合 $f(A\mathbf{x}+\mathbf{b})$
+        (若 $f$ 凸)都還是凸函數——這讓我們能像搭積木一樣構造複雜的凸目標函數。
+      </p>
+
+      <!-- SVG 2: 凸 vs 非凸 -->
+      <div class="diagram">
+        <svg viewBox="0 0 520 230" width="520" height="230" font-family="Inter, 'Noto Sans TC', sans-serif" font-size="12">
+          <rect width="520" height="230" fill="#fafafa" rx="6"/>
+
+          <!-- ── 左側:凸函數 ── -->
+          <text x="110" y="20" text-anchor="middle" fill="#2f6f6a" font-weight="bold" font-size="13">凸函數</text>
+          <!-- 座標軸 -->
+          <line x1="20" y1="195" x2="210" y2="195" stroke="#333" stroke-width="1.5"/>
+          <line x1="110" y1="200" x2="110" y2="20" stroke="#333" stroke-width="1.5"/>
+          <!-- 拋物線 y=x² 的折線近似,以 x∈[-2,2],svg_x=110+x*45,svg_y=185-y*38 -->
+          <polyline points="20,33 43,104 65,147 88,171 110,185 132,171 155,147 177,104 200,33"
+                    fill="none" stroke="#2f6f6a" stroke-width="2.5" stroke-linejoin="round"/>
+          <!-- 最小點 -->
+          <circle cx="110" cy="185" r="5" fill="#2f6f6a"/>
+          <text x="110" y="210" text-anchor="middle" fill="#2f6f6a" font-size="11">全域唯一最小值</text>
+          <!-- Jensen 直線示意 -->
+          <line x1="43" y1="104" x2="177" y2="104" stroke="#8a929b" stroke-width="1" stroke-dasharray="4,3"/>
+          <text x="26" y="108" fill="#8a929b" font-size="10">弦在曲線上方</text>
+          <!-- 標記 -->
+          <rect x="20" y="215" width="185" height="14" rx="3" fill="#e3efed"/>
+          <text x="112" y="226" text-anchor="middle" fill="#2f6f6a" font-size="11">局部最小 = 全域最小 ✓</text>
+
+          <!-- 分隔線 -->
+          <line x1="255" y1="10" x2="255" y2="220" stroke="#dde" stroke-width="1.5" stroke-dasharray="4,4"/>
+
+          <!-- ── 右側:非凸函數 ── -->
+          <text x="390" y="20" text-anchor="middle" fill="#b4541f" font-weight="bold" font-size="13">非凸函數</text>
+          <!-- 座標軸 -->
+          <line x1="270" y1="195" x2="510" y2="195" stroke="#333" stroke-width="1.5"/>
+          <line x1="390" y1="200" x2="390" y2="20" stroke="#333" stroke-width="1.5"/>
+          <!-- 雙谷函數 (x²-1)²:x∈[-1.7,1.7],svg_x=390+x*70,svg_y=185-y*90 -->
+          <!-- (x²-1)² at key points: x=-1.7:0.98; x=-1:0; x=-0.5:0.5625; x=0:1; x=0.5:0.5625; x=1:0; x=1.7:0.98 -->
+          <!-- svg_y = 185 - f*90 -->
+          <polyline points="271,97 290,185 317,135 390,95 463,135 490,185 509,97"
+                    fill="none" stroke="#b4541f" stroke-width="2.5" stroke-linejoin="round"/>
+          <!-- 兩個局部(= 全域)最小點 -->
+          <circle cx="290" cy="185" r="5" fill="#b4541f"/>
+          <circle cx="490" cy="185" r="5" fill="#b4541f"/>
+          <!-- 局部最大 -->
+          <circle cx="390" cy="95" r="5" fill="#8a929b"/>
+          <!-- 標籤 -->
+          <text x="280" y="210" text-anchor="middle" fill="#b4541f" font-size="11">min₁</text>
+          <text x="500" y="210" text-anchor="middle" fill="#b4541f" font-size="11">min₂</text>
+          <text x="390" y="88" text-anchor="middle" fill="#8a929b" font-size="11">局部最大</text>
+          <text x="340" y="170" fill="#8a929b" font-size="10">←梯度下降</text>
+          <text x="340" y="183" fill="#8a929b" font-size="10">  可能困在此</text>
+
+          <!-- 標記 -->
+          <rect x="270" y="215" width="235" height="14" rx="3" fill="#fde8dc"/>
+          <text x="387" y="226" text-anchor="middle" fill="#b4541f" font-size="11">多個局部最小,初始點決定收斂位置</text>
+        </svg>
+        <figcaption>圖 103-2:凸函數(左)只有一個全域最小,局部最小即全域最小,梯度下降保證找到它。非凸函數(右,這裡是 $(x^2-1)^2$)可能有多個局部最小,梯度下降最後落在哪取決於初始點。</figcaption>
+      </div>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">凸優化的核心定理</span>
+          <p>若問題是<strong>凸優化問題</strong>(凸目標函數 + 凸可行域),則<strong>任何局部最優解都是全域最優解</strong>。
+          這使得梯度下降等局部搜索演算法在凸問題上保證找到全域最優。LP 是凸優化的特例。</p>
+        </div>
+      </div>
+
+      <!-- ===== h2 ⑤ 無約束最佳化 ===== -->
+      <h2>無約束最佳化:梯度下降與牛頓法</h2>
+
+      <p>
+        暫時把約束放一邊,先考慮最純粹的問題:$\min_{\mathbf{x}} f(\mathbf{x})$,沒有任何限制。
+        這是機器學習訓練最常見的形式——損失函數對參數無約束地最小化。
+      </p>
+
+      <h3>梯度下降(Gradient Descent)</h3>
+      <p>
+        梯度(gradient) $\nabla f(\mathbf{x})$ 指向函數值<em>最快上升</em>的方向,因此
+        $-\nabla f(\mathbf{x})$ 是「最速下降(steepest descent)」方向。
+        梯度下降的更新規則極為簡單:
+        $$\mathbf{x}_{k+1} = \mathbf{x}_k - \alpha \nabla f(\mathbf{x}_k)$$
+        其中 $\alpha &gt; 0$ 是<strong>學習率(learning rate / step size)</strong>。
+      </p>
+      <p>
+        學習率的選擇是最大的實務挑戰:
+      </p>
+      <ul>
+        <li>$\alpha$ 太小:每步移動距離極短,收斂慢到懷疑人生。</li>
+        <li>$\alpha$ 太大:每步「跨過」最小值到對面的山坡,可能發散。</li>
+        <li>理論上的最優步長需要知道 Hessian 的 Lipschitz 常數,實務上常用線搜索(line search)或固定小值。</li>
+      </ul>
+
+      <p>對凸函數,梯度下降的收斂速度是 $O(1/k)$(迭代次數的倒數)。下面是一個手刻範例:</p>
+
+      <pre><code class="language-python">import numpy as np
+
+def f(x):
+    """目標函數: f(x1,x2) = x1^2 + 4*x2^2  (橢圓形碗)"""
+    return x[0]**2 + 4*x[1]**2
+
+def grad_f(x):
+    """梯度: [2*x1, 8*x2]"""
+    return np.array([2*x[0], 8*x[1]])
+
+# 梯度下降
+x = np.array([3.0, 2.0])   # 初始點
+alpha = 0.1                  # 學習率
+for k in range(30):
+    g = grad_f(x)
+    x = x - alpha * g
+    if k % 5 == 0:
+        print(f"iter {k:2d}: x={x}, f={f(x):.6f}")
+
+# iter  0: x=[ 2.4   0.4], f=6.400000
+# iter  5: x=[ 0.786  0.001], f=0.617828
+# iter 25: x=[0.008  0.000], f=0.000065
+</code></pre>
+
+      <h3>收斂條件</h3>
+      <p>
+        判斷梯度下降何時停止,最常用的準則是梯度範數夠小:$\|\nabla f(\mathbf{x}_k)\| &lt; \varepsilon$。
+        對於嚴格凸函數,當梯度為零時恰好是唯一最小值點。
+      </p>
+
+      <h3>牛頓法(Newton's Method)</h3>
+      <p>
+        梯度下降只用了一階資訊。牛頓法進一步利用<strong>二階資訊</strong>——Hessian 矩陣
+        $H_f(\mathbf{x}) = \nabla^2 f(\mathbf{x})$:
+        $$\mathbf{x}_{k+1} = \mathbf{x}_k - \left[H_f(\mathbf{x}_k)\right]^{-1} \nabla f(\mathbf{x}_k)$$
+        Hessian 告訴函數在各方向的「彎曲程度」,牛頓法因此能動態調整每個方向的步長。
+        它的收斂速度是<strong>二次(quadratic)</strong>的:接近最優點後,每次迭代誤差大約平方縮小。
+        而梯度下降只有線性收斂。
+      </p>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">牛頓法的代價</span>
+          <p>牛頓法每步需要計算並求逆 $n \times n$ Hessian 矩陣,代價是 $O(n^3)$。
+          對神經網路來說 $n$ 可能是幾十億——完全無法直接使用。
+          這是為什麼大規模 ML 只用梯度資訊,而非精確的二階方法。</p>
+        </div>
+      </div>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">與第 55 章的連結</span>
+          <p><a href="55-numerical-methods.html">第 55 章</a>從數值分析的角度介紹了梯度法與牛頓法(用於求根)。
+          本章從最佳化的角度看待同一工具:梯度下降 = 把一階泰勒展開最小化;
+          牛頓法 = 把二階泰勒展開(二次近似)最小化。兩章互補,建議對照閱讀。</p>
+        </div>
+      </div>
+
+      <!-- ===== h2 ⑥ 有約束:KKT ===== -->
+      <h2>有約束最佳化:拉格朗日乘子、KKT 條件與對偶</h2>
+
+      <p>
+        現實中多數最佳化問題都有約束。這一節是本章最數學密集的部分,
+        但背後的直覺其實相當優美——值得慢慢品味。
+      </p>
+
+      <h3>等式約束:拉格朗日乘子</h3>
+      <p>
+        先看純等式約束問題:
+        $$\min_{\mathbf{x}} f(\mathbf{x}) \quad \text{s.t.} \quad h_j(\mathbf{x}) = 0, \; j=1,\ldots,p$$
+      </p>
+      <p>
+        幾何直覺:在最優點 $\mathbf{x}^*$,目標函數的等值面必須與約束曲面<em>相切</em>——
+        否則你還能沿著約束面移動去改善目標值。
+        「相切」的數學表達是:$\nabla f(\mathbf{x}^*)$ 可以用
+        $\nabla h_j(\mathbf{x}^*)$ 的線性組合表示:
+        $$\nabla f(\mathbf{x}^*) + \sum_{j=1}^p \nu_j^* \nabla h_j(\mathbf{x}^*) = \mathbf{0}$$
+        係數 $\nu_j^*$ 就是<strong>拉格朗日乘子(Lagrange multiplier)</strong>。
+        構造<strong>拉格朗日函數(Lagrangian)</strong>
+        $L(\mathbf{x}, \boldsymbol{\nu}) = f(\mathbf{x}) + \sum_j \nu_j h_j(\mathbf{x})$,
+        則最優點恰好使 $\nabla_{\mathbf{x}} L = 0$ 且 $\nabla_{\boldsymbol{\nu}} L = 0$($= h_j = 0$)同時成立。
+      </p>
+
+      <h3>推廣到不等式約束:KKT 條件</h3>
+      <p>
+        對含不等式約束的一般問題:
+        $$\min_{\mathbf{x}} f(\mathbf{x}) \quad \text{s.t.} \quad g_i(\mathbf{x}) \leq 0, \; i=1,\ldots,m, \quad h_j(\mathbf{x}) = 0, \; j=1,\ldots,p$$
+      </p>
+      <p>定義<strong>廣義拉格朗日函數</strong>:</p>
+      $$L(\mathbf{x}, \boldsymbol{\lambda}, \boldsymbol{\nu}) = f(\mathbf{x}) + \sum_{i=1}^m \lambda_i g_i(\mathbf{x}) + \sum_{j=1}^p \nu_j h_j(\mathbf{x})$$
+      <p>
+        在技術性假設(約束規格化條件,最常用的是 Slater 條件:存在嚴格可行點)下,
+        最優點 $\mathbf{x}^*$ 必須滿足以下四組 <strong>KKT 條件</strong>(Karush-Kuhn-Tucker conditions):
+      </p>
+      <ol>
+        <li>
+          <strong>駐點性(Stationarity)</strong>:
+          $$\nabla_{\mathbf{x}} L(\mathbf{x}^*, \boldsymbol{\lambda}^*, \boldsymbol{\nu}^*) = \nabla f(\mathbf{x}^*) + \sum_i \lambda_i^* \nabla g_i(\mathbf{x}^*) + \sum_j \nu_j^* \nabla h_j(\mathbf{x}^*) = \mathbf{0}$$
+        </li>
+        <li>
+          <strong>原始可行性(Primal feasibility)</strong>:
+          $$g_i(\mathbf{x}^*) \leq 0, \quad h_j(\mathbf{x}^*) = 0$$
+        </li>
+        <li>
+          <strong>對偶可行性(Dual feasibility)</strong>:
+          $$\lambda_i^* \geq 0 \quad \forall i$$
+        </li>
+        <li>
+          <strong>互補鬆弛(Complementary slackness)</strong>:
+          $$\lambda_i^* \cdot g_i(\mathbf{x}^*) = 0 \quad \forall i$$
+        </li>
+      </ol>
+      <p>
+        條件 4 有個優雅的意思:對每個不等式約束 $i$,要麼 $\lambda_i^* = 0$(這個約束「不緊繃」,不影響最優解),
+        要麼 $g_i(\mathbf{x}^*) = 0$(這個約束「緊繃」,在邊界上,影響最優解)——兩者不能同時為非零。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">KKT 是必要條件,也可以是充分條件</span>
+          <p>KKT 條件<strong>對所有(光滑)最優化問題都是必要條件</strong>(在適當的約束規格化條件下)。
+          對<strong>凸優化問題</strong>,KKT 條件同時也是<strong>充分條件</strong>:
+          滿足 KKT 的點就是全域最優解。這使得對凸問題,只需解一個 KKT 方程組。</p>
+        </div>
+      </div>
+
+      <h3>對偶問題(Dual Problem)與對偶理論</h3>
+      <p>
+        從 Lagrangian 可以定義<strong>拉格朗日對偶函數(Lagrange dual function)</strong>:
+        $$g(\boldsymbol{\lambda}, \boldsymbol{\nu}) = \inf_{\mathbf{x} \in \mathcal{D}} L(\mathbf{x}, \boldsymbol{\lambda}, \boldsymbol{\nu})$$
+        對 $\mathbf{x}$ 取下確界,消去原始變數。$g$ 是凹函數(即使原始問題不是凸的!)。
+      </p>
+      <p>
+        <strong>對偶問題(dual problem)</strong>是最大化對偶函數:
+        $$\max_{\boldsymbol{\lambda} \geq \mathbf{0}, \boldsymbol{\nu}} \; g(\boldsymbol{\lambda}, \boldsymbol{\nu})$$
+        設原始問題最優值為 $p^*$,對偶問題最優值為 $d^*$。
+      </p>
+      <p>
+        <strong>弱對偶(Weak Duality)</strong>:對任意對偶可行的 $(\boldsymbol{\lambda}, \boldsymbol{\nu})$,
+        有 $g(\boldsymbol{\lambda}, \boldsymbol{\nu}) \leq p^*$。等價地,$d^* \leq p^*$。
+        這對任何問題都成立,不需要凸性。差距 $p^* - d^*$ 稱為<strong>對偶間距(duality gap)</strong>。
+      </p>
+      <p>
+        <strong>強對偶(Strong Duality)</strong>:當 $d^* = p^*$(對偶間距為零)時稱為強對偶。
+        對凸優化問題,在 <strong>Slater 條件</strong>下強對偶成立:
+        只要存在一個嚴格可行點(strict interior point)使得所有不等式約束嚴格成立,即 $g_i(\mathbf{x}_0) &lt; 0$。
+        LP 永遠滿足 Slater 條件(如果可行的話),因此 LP 的強對偶永遠成立——這就是 LP 對偶理論的基礎。
+      </p>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">對偶的實際用途</span>
+          <p>對偶問題有時比原始問題更好解。支持向量機(SVM)的核心技巧就是把原始 QP 轉化為對偶形式,
+          讓核函數能以 $O(n^2)$ 而非 $O(d)$ 的複雜度出現($n$ 是樣本數,$d$ 是原始特徵維度)。
+          拉格朗日乘子 $\lambda_i$ 在 SVM 中正是支持向量的「重要性係數」——
+          非支持向量對應的 $\lambda_i = 0$(互補鬆弛!)。</p>
+        </div>
+      </div>
+
+      <!-- ===== h2 ⑦ 實務工具 ===== -->
+      <h2>實務:凸優化求解器與大規模 ML</h2>
+
+      <h3>cvxpy:規範凸程式設計</h3>
+      <p>
+        手寫 KKT 方程組或呼叫底層 LP 求解器,對大多數工程問題而言太繁瑣。
+        <strong>cvxpy</strong>(Python 函式庫)採用「<strong>規範凸程式設計(Disciplined Convex Programming, DCP)</strong>」的設計哲學:
+        它內建一套凸性推斷引擎(基於組合規則),讓你用接近數學符號的方式寫出問題,
+        系統自動驗證凸性並選擇合適的後端求解器(OSQP、SCS、ECOS 等)。
+      </p>
+      <pre><code class="language-python">import cvxpy as cp
+
+# 同樣的 LP:最大化 5x1 + 4x2
+x = cp.Variable(2, nonneg=True)          # x1, x2 &gt;= 0
+
+objective   = cp.Maximize(5*x[0] + 4*x[1])
+constraints = [
+    x[0] + x[1] &lt;= 5,
+    2*x[0] + x[1] &lt;= 8,
+]
+
+prob = cp.Problem(objective, constraints)
+prob.solve()
+
+print(f"最優值: {prob.value:.2f}")        # 23.00
+print(f"最優解: x={x.value}")            # [3. 2.]
+
+# 取對偶乘子(影子價格)
+for c in constraints:
+    print(f"對偶乘子: {c.dual_value:.4f}")
+</code></pre>
+
+      <p>
+        cvxpy 返回的<strong>對偶乘子(dual value)</strong>就是 KKT 中的 $\lambda^*$,
+        在 LP 中也叫<strong>影子價格(shadow price)</strong>:它告訴你放鬆某個約束一個單位,
+        目標值能改善多少——一個對資源配置決策極有價值的資訊。
+      </p>
+
+      <h3>大規模 ML 的現實:SGD、動量與 Adam</h3>
+      <p>
+        深度學習的參數可能達幾十億,每步精確計算梯度就需要掃過整個訓練集。
+        這兩個限制迫使我們用<strong>隨機梯度下降(Stochastic Gradient Descent, SGD)</strong>:
+        每步只用一個小批次(mini-batch)估計梯度,用雜訊換取計算速度。
+      </p>
+      <p>
+        SGD 的收斂比精確梯度下降慢,但在超大規模問題上往往是唯一可行的選擇。
+        工程上有幾個重要改良:
+      </p>
+      <ul>
+        <li>
+          <strong>動量(Momentum)</strong>:加入過去梯度的指數平均,讓更新方向更平滑,加速穿越「峽谷」地形:
+          $$\mathbf{v}_{k+1} = \beta \mathbf{v}_k + (1-\beta)\nabla f(\mathbf{x}_k), \quad \mathbf{x}_{k+1} = \mathbf{x}_k - \alpha \mathbf{v}_{k+1}$$
+        </li>
+        <li>
+          <strong>Adam(Adaptive Moment Estimation)</strong>:同時維護梯度的一階矩(均值)和二階矩(方差),
+          給每個參數分量自適應地調整學習率。Adam 是目前深度學習訓練的預設選擇。
+        </li>
+      </ul>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">為何深度學習仍能找到好解?</span>
+          <p>神經網路的損失函數是非凸的——理論上 SGD 不保證找到全域最優。
+          但實踐發現,充分超參數化(overparameterized)的大型神經網路的「壞」局部最小點其實很少,
+          訓練過程中 SGD 幾乎都能找到泛化能力良好的解。
+          這背後的理論(例如隨機矩陣理論、隱式正則化)仍是活躍的研究前沿。</p>
+        </div>
+      </div>
+
+      <!-- ===== h2 ⑧ 離散橋 ===== -->
+      <h2>與離散最佳化的橋:鬆弛連回 §31 與 §32</h2>
+
+      <p>
+        到目前為止我們都在連續世界——決策變數可以取任意實數值。
+        但現實問題常常要求整數答案:工廠不能生產 2.7 個零件,航班不能排 0.5 架飛機。
+        這就進入了<strong>整數規劃(Integer Programming, IP)</strong>的領域,
+        它在最壞情況下是 NP-hard,不再有凸優化的美麗保證。
+      </p>
+
+      <h3>LP 鬆弛(LP Relaxation)</h3>
+      <p>
+        整數規劃的一個重要技巧是<strong>鬆弛(relaxation)</strong>:
+        把整數約束 $x_i \in \mathbb{Z}$ 放鬆為實數 $x_i \in \mathbb{R}$,
+        得到一個 LP。LP 鬆弛的最優值提供原問題的<em>上界</em>(最大化問題),
+        然後可以用<strong>分支定界(Branch and Bound)</strong>逐步收緊到整數解。
+      </p>
+      <p>
+        有些特殊的 IP 有神奇的性質——LP 鬆弛的最優解自動是整數:
+        最短路、最小生成樹、最大流/最小割……這些問題背後的約束矩陣是<strong>全單模矩陣(totally unimodular)</strong>,
+        保證 LP 頂點都是整數頂點。這就是為什麼 Dijkstra 和 Kruskal 可以直接給出整數解。
+      </p>
+
+      <h3>貪婪與 DP:特殊結構的離散最佳化</h3>
+      <p>
+        <a href="31-greedy.html">第 31 章</a>的貪婪演算法成立,正是因為問題具有
+        <strong>貪婪選擇性質(greedy choice property)</strong>——每一步的局部最優選擇都與全域最優相容。
+        用最佳化的語言說,是問題結構讓 LP 鬆弛的最優解恰好落在整數頂點。
+        霍夫曼編碼、最小生成樹,骨子裡都是在某個組合結構的「凸包頂點」找最優。
+      </p>
+      <p>
+        <a href="32-dynamic-programming.html">第 32 章</a>的動態規劃則對應<strong>最優子結構</strong>:
+        大問題的最優解可以由子問題的最優解組合而成。
+        這與連續最佳化裡 Bellman 方程式的結構相同——事實上,
+        DP 本來就源自 Richard Bellman 的最佳化研究,「Bellman-Ford」裡的 Bellman 就是同一個人。
+      </p>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">最佳化的三個武器庫</span>
+          <p>面對一個最佳化問題,先問三個問題:
+          ① 它是凸的嗎?若是,用 LP/QP/凸規劃求解器,保證全域最優。
+          ② 它有最優子結構嗎?若是,考慮 DP 或 LP 鬆弛 + 分支定界。
+          ③ 它有貪婪選擇性質嗎?若是,用貪婪演算法,時間最快。
+          三者互補,而非替代關係。</p>
+        </div>
+      </div>
+
+      <!-- ===== h2 ⑨ 練習 ===== -->
+      <h2>練習</h2>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 103.1 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>
+            某工廠生產兩種產品 X 和 Y。每個 X 需要 3 小時機器時間和 1 小時人工,
+            利潤為 6 元;每個 Y 需要 1 小時機器時間和 2 小時人工,利潤為 4 元。
+            每天機器時間上限 12 小時,人工上限 8 小時,且產量不得為負。
+            請將此問題寫成 LP 標準式(最大化目標,含所有約束),並指出決策變數是什麼。
+          </p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>決策變數</strong>:$x_1$ = 每天生產 X 的數量,$x_2$ = 每天生產 Y 的數量。</p>
+              <p><strong>LP 標準式</strong>:</p>
+              $$\max_{x_1, x_2} \; 6x_1 + 4x_2$$
+              $$\text{subject to} \quad 3x_1 + x_2 \leq 12 \quad (\text{機器時間})$$
+              $$x_1 + 2x_2 \leq 8 \quad (\text{人工時間})$$
+              $$x_1 \geq 0, \quad x_2 \geq 0$$
+              <p>
+                用 Python/scipy 或圖解法:可行域的頂點為 $(0,0)$、$(4,0)$、$(16/5, 12/5)$、$(0,4)$。
+                其中 $3x_1+x_2=12$ 與 $x_1+2x_2=8$ 的交點:
+                $5x_1 = 16 \Rightarrow x_1=16/5=3.2$,$x_2=(8-3.2)/2=2.4$,
+                目標值 $= 6(3.2)+4(2.4) = 19.2+9.6 = 28.8$。
+                $(4,0)$ 時目標值 $=24$;$(0,4)$ 時 $=16$。
+                <strong>最優解:$x_1=3.2$,$x_2=2.4$,最大利潤 $28.8$ 元</strong>。
+              </p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 103.2 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>
+            判斷以下函數是否為凸函數。請說明判斷依據(可用二階導數或定義)。
+          </p>
+          <ol type="a">
+            <li>$f(x) = 3x^2 - 2x + 5$</li>
+            <li>$f(x) = -x^2 + 4x$</li>
+            <li>$f(x) = |x|$</li>
+            <li>$f(x,y) = x^2 + xy + y^2$</li>
+            <li>$f(x) = \log(1 + e^x)$（softplus 函數,深度學習常見）</li>
+          </ol>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>(a) $f(x) = 3x^2 - 2x + 5$</strong>:<br>
+              $f''(x) = 6 &gt; 0$,恆正。<strong>凸函數</strong>。</p>
+
+              <p><strong>(b) $f(x) = -x^2 + 4x$</strong>:<br>
+              $f''(x) = -2 &lt; 0$,恆負。<strong>凹函數(concave)</strong>,不是凸函數。</p>
+
+              <p><strong>(c) $f(x) = |x|$</strong>:<br>
+              絕對值函數在 $x=0$ 不可微,無法直接用 $f''$。改用定義:
+              $|\theta x + (1-\theta)y| \leq |\theta x| + |(1-\theta)y| = \theta|x| + (1-\theta)|y|$
+              (三角不等式)。<strong>凸函數</strong>(且是 $\ell^1$ 範數,所有範數都是凸函數)。</p>
+
+              <p><strong>(d) $f(x,y) = x^2 + xy + y^2$</strong>:<br>
+              Hessian:$H = \begin{pmatrix} 2 & 1 \\ 1 & 2 \end{pmatrix}$。
+              特徵值:$\lambda = 2 \pm 1$,即 $3$ 和 $1$,均為正。Hessian 正定,<strong>嚴格凸函數</strong>。</p>
+
+              <p><strong>(e) $f(x) = \log(1+e^x)$</strong>:<br>
+              $f'(x) = \frac{e^x}{1+e^x} = \sigma(x)$(sigmoid)。
+              $f''(x) = \sigma(x)(1-\sigma(x)) \geq 0$(因為 $\sigma \in (0,1)$)。<strong>凸函數</strong>。
+              事實上 softplus 是 $\max(0,x)$(ReLU)的光滑近似,兩者都是凸函數。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 103.3 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>
+            對函數 $f(x_1, x_2) = (x_1 - 3)^2 + 2(x_2 + 1)^2$,
+            手刻梯度下降從初始點 $(0, 0)$ 出發,學習率 $\alpha = 0.1$,迭代 50 次。
+            (a) 先推導梯度解析式;(b) 寫 Python 程式執行;(c) 說明最優解應該是多少。
+          </p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>(a) 梯度</strong>:</p>
+              $$\nabla f = \begin{pmatrix} 2(x_1 - 3) \\ 4(x_2 + 1) \end{pmatrix}$$
+              <p><strong>(b) Python 實作</strong>:</p>
+              <pre><code class="language-python">import numpy as np
+
+def f(x):
+    return (x[0]-3)**2 + 2*(x[1]+1)**2
+
+def grad_f(x):
+    return np.array([2*(x[0]-3), 4*(x[1]+1)])
+
+x = np.array([0.0, 0.0])
+alpha = 0.1
+
+for k in range(50):
+    x = x - alpha * grad_f(x)
+
+print(f"最優解近似: x={x}")
+print(f"目標值: f={f(x):.8f}")
+# 最優解近似: x=[ 3.000 -1.000]
+# 目標值: f=0.00000000
+</code></pre>
+              <p><strong>(c) 理論最優解</strong>:$(x_1^*, x_2^*) = (3, -1)$,此時 $f^* = 0$。
+              函數是嚴格凸的(Hessian $= \mathrm{diag}(2, 4) \succ 0$),
+              梯度在 $(3,-1)$ 處為零,即為唯一全域最小值點。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 103.4 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>
+            考慮帶等式約束的問題:最小化 $f(x_1, x_2) = x_1^2 + x_2^2$,
+            約束為 $x_1 + 2x_2 = 5$。
+            (a) 寫出 Lagrangian;(b) 列出 KKT 駐點條件並求解 $x^*$ 和 $\nu^*$;
+            (c) 說明為何此解是全域最小值。
+          </p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>(a) Lagrangian</strong>:</p>
+              $$L(x_1, x_2, \nu) = x_1^2 + x_2^2 + \nu(x_1 + 2x_2 - 5)$$
+
+              <p><strong>(b) 駐點條件</strong> $\nabla_{\mathbf{x}} L = 0$ 給出:</p>
+              $$\frac{\partial L}{\partial x_1} = 2x_1 + \nu = 0 \Rightarrow x_1 = -\nu/2$$
+              $$\frac{\partial L}{\partial x_2} = 2x_2 + 2\nu = 0 \Rightarrow x_2 = -\nu$$
+              <p>代入等式約束 $x_1 + 2x_2 = 5$:</p>
+              $$-\nu/2 + 2(-\nu) = 5 \Rightarrow -5\nu/2 = 5 \Rightarrow \nu^* = -2$$
+              $$x_1^* = 1, \quad x_2^* = 2, \quad f^* = 1 + 4 = 5$$
+
+              <p><strong>(c) 全域最小的理由</strong>:目標函數 $f = x_1^2 + x_2^2$ 是嚴格凸函數,
+              約束集 $\{x_1+2x_2=5\}$ 是仿射集(也是凸集)。
+              等式約束的凸優化問題,KKT 駐點條件既是必要也是充分的,
+              因此 $(1, 2)$ 是在約束 $x_1+2x_2=5$ 上離原點最近的點,也是唯一全域最小值。
+              幾何上,它是從原點做 $x_1+2x_2=5$ 這條直線的垂線的垂足。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ===== h2 ⑨ 串起來 ===== -->
+      <h2>把這一章串起來</h2>
+
+      <p>
+        我們從「最佳化問題的三要素(決策變數、目標函數、約束)」出發,
+        沿著一條清晰的概念階梯走完了連續最佳化的主要脈絡:
+      </p>
+
+      <ul>
+        <li>
+          <strong>線性規劃(LP)</strong>:目標與約束全部線性,可行域是凸多面體,最優解在頂點取到。
+          單純形法沿著邊移動頂點;LP 對偶提供「影子價格」與強對偶保證。
+        </li>
+        <li>
+          <strong>凸函數與凸集</strong>:凸性是「局部最優 = 全域最優」的關鍵前提。
+          LP 是凸優化的特例;許多機器學習損失函數(邏輯回歸、SVM、線性回歸)也是凸的。
+        </li>
+        <li>
+          <strong>無約束最佳化</strong>:梯度下降以 $O(1/k)$ 線性收斂;牛頓法以二次速度收斂但成本高。
+          大規模 ML 因維度限制只能用 SGD 及其變體(動量、Adam)。
+        </li>
+        <li>
+          <strong>有約束最佳化</strong>:拉格朗日乘子把約束「融入」目標;
+          KKT 四條件(駐點性、原始可行性、對偶可行性、互補鬆弛)是最優性的完整刻畫;
+          對偶理論提供弱對偶下界,凸問題在 Slater 條件下強對偶成立。
+        </li>
+        <li>
+          <strong>與離散最佳化的橋</strong>:LP 鬆弛 + 分支定界是整數規劃的主力框架;
+          全單模矩陣保證 LP 鬆弛直接給整數解;貪婪與 DP 是特殊組合結構的高效特例。
+        </li>
+      </ul>
+
+      <p>
+        這些工具不只是理論:每一個都在真實系統中跑著。
+        CVXPY 讓幾十行 Python 就能優化資源配置;
+        Adam 的每次反向傳播都在執行凸近似;
+        SVM 的 KKT 條件直接給出哪些樣本是「重要的支持向量」。
+        最佳化是演算法、統計、運籌與工程的共同語言,讀懂它,你讀論文的眼睛會突然「通了」。
+      </p>
+
+      <div class="callout history">
+        <div class="ico">📜</div>
+        <div class="body">
+          <span class="c-title">歷史小注</span>
+          <p>
+            線性規劃與單純形法由 George Dantzig 在 1947 年發明,最初用於美國空軍後勤規劃。
+            Harold Kuhn 與 Albert Tucker 在 1951 年正式發表 KKT 條件(Karush 更早在 1939 年的碩士論文中獨立得到相同結果,但長期被忽視)。
+            Stephen Boyd 與 Lieven Vandenberghe 的《Convex Optimization》(2004,免費下載)是本領域最權威的教科書,
+            也是學習凸優化理論的最佳入口。
+          </p>
+        </div>
+      </div>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">延伸學習</span>
+          <p>
+            • Boyd &amp; Vandenberghe,<em>Convex Optimization</em>(史丹佛,免費 PDF):理論最完整的教材,前五章是本章內容的展開。<br>
+            • Stanford EE364a:Boyd 本人的課程,影片公開。<br>
+            • cvxpy 官方文件與範例(cvxpy.org):幾十個實際領域(金融、控制、ML)的凸優化範例。<br>
+            • <a href="55-numerical-methods.html">第 55 章(數值方法)</a>:浮點數、收斂分析、梯度法的數值穩定性。<br>
+            • <a href="31-greedy.html">第 31 章</a>/<a href="32-dynamic-programming.html">第 32 章</a>:離散最佳化的另一條路。
+          </p>
+        </div>
+      </div>

@@ -1,0 +1,1076 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>狀態、環境模型與串流 · CS 自學聖經</title>
+<meta name="description" content="從 set! 到環境模型、從 delay/force 到無限串流——跟著 SICP 第三章,理解賦值帶來的代價,以及串流如何讓「無限」變得可計算。">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;700&family=Noto+Sans+TC:wght@400;700&family=Lora:ital,wght@0,400;0,600;0,700;1,400&family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <main class="main">
+    <article class="content">
+
+      <div class="eyebrow">第十九部 · SICP:抽象的建構</div>
+      <h1>狀態、環境模型與串流</h1>
+      <p class="subtitle">為什麼閉包能「記住」狀態？為什麼無限序列可以計算？——一旦你看清環境模型的框架鏈,所有魔法都豁然開朗。</p>
+      <div class="byline">
+        <span class="tag">第 76 章</span>
+        <span>閱讀時間 ≈ 75 分鐘</span>
+        <span>難度:★★★★☆</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li><strong>賦值(assignment)</strong>:用 <code>set!</code> 賦予程序「記憶」,建造帶有區域狀態的物件</li>
+          <li><strong>引入賦值的代價</strong>:參照透明性(referential transparency)破滅,替換模型失效</li>
+          <li><strong>環境模型</strong>:框架(frame)、綁定(binding)、程序求值的兩條規則——這是「閉包為什麼記得狀態」的根本答案</li>
+          <li><strong>可變資料</strong>:<code>set-car!</code>/<code>set-cdr!</code> 如何讓序對成為可變資料結構(佇列、表格)</li>
+          <li><strong>並行的本質</strong>:時間順序造成的不確定性,以及 serializer 如何保護共用狀態</li>
+          <li><strong>串流(stream)</strong>:<code>delay</code>/<code>force</code> 的延遲求值,以及 <code>cons-stream</code> 如何構造惰性串列</li>
+          <li><strong>無限串流</strong>:整數流、Eratosthenes 篩法質數流、費氏數流、近似 π 的串流</li>
+          <li><strong>串流 vs 物件</strong>:兩種對抗複雜度的策略——時間即變化 vs 時間即歷史</li>
+          <li>Python 的 <code>generator</code>/<code>yield</code> 是串流的現代化身；閉包計數器是區域狀態的 Python 版本</li>
+        </ul>
+      </div>
+
+      <!-- ==================== h2 ① ==================== -->
+      <h2>賦值與區域狀態:讓程序「有記憶」</h2>
+      <p>
+        想像一個銀行帳戶。你存入一百元,提出五十元,帳戶剩五十元。
+        再提一次,帳戶還記得它現在只有五十元——而不是從頭重算。
+        這種「帶著過去歷史的行為」,就是<strong>狀態(state)</strong>。
+      </p>
+      <p>
+        前兩章的 Scheme 是純函數式的:同樣的輸入永遠產生同樣的輸出,沒有狀態,沒有歷史。
+        現在 SICP 第三章要打破這個平靜,引入<strong>賦值(assignment)</strong>特殊形式 <code>set!</code>,
+        讓程序能改變變數的值:
+      </p>
+      <pre><code class="language-scheme">; set! 語法:(set! 變數名 新值)
+; 效果:把環境中該變數的綁定改為新值
+
+(define balance 100)
+
+(define (withdraw amount)
+  (if (&gt;= balance amount)
+      (begin
+        (set! balance (- balance amount))
+        balance)
+      "Insufficient funds"))
+
+(withdraw 25)   ; → 75
+(withdraw 25)   ; → 50   ← 同一個呼叫,不同結果！
+(withdraw 60)   ; → "Insufficient funds"
+(withdraw 15)   ; → 35</code></pre>
+
+      <p>
+        注意:<code>(withdraw 25)</code> 被呼叫兩次,卻產生不同的結果——75 和 50。
+        這是純函數式世界裡不可能出現的行為。引入 <code>set!</code> 之後,
+        程序不再只是「計算函數」,它還有<strong>副作用(side effect)</strong>:改變外部狀態。
+      </p>
+      <p>
+        但上面的 <code>balance</code> 是全域變數,任何程序都能讀寫它。
+        更好的做法是把 <code>balance</code> <strong>封裝在程序裡</strong>——
+        用閉包讓狀態成為私有的:
+      </p>
+      <pre><code class="language-scheme">; make-withdraw:把狀態封裝在閉包內
+(define (make-withdraw balance)
+  (lambda (amount)
+    (if (&gt;= balance amount)
+        (begin (set! balance (- balance amount))
+               balance)
+        "Insufficient funds")))
+
+; 建立兩個互相獨立的帳戶物件
+(define W1 (make-withdraw 100))
+(define W2 (make-withdraw 100))
+
+(W1 50)   ; → 50
+(W2 70)   ; → 30   W2 與 W1 無關
+(W2 40)   ; → "Insufficient funds"
+(W1 40)   ; → 10   W1 自己的餘額</code></pre>
+
+      <p>
+        <code>W1</code> 和 <code>W2</code> 是兩個獨立的物件,各自有自己的 <code>balance</code>。
+        改變 W1 的餘額不影響 W2。這就是物件導向的基本模型——只是用閉包而非 class 實作的。
+      </p>
+      <p>
+        SICP 進一步建造完整的「銀行帳戶物件」<code>make-account</code>,同時支援存款和取款,
+        以<strong>訊息傳遞(message passing)</strong>風格實作:
+      </p>
+      <pre><code class="language-scheme">; make-account:完整的銀行帳戶(訊息傳遞風格)
+(define (make-account balance)
+  (define (withdraw amount)
+    (if (&gt;= balance amount)
+        (begin (set! balance (- balance amount))
+               balance)
+        "Insufficient funds"))
+  (define (deposit amount)
+    (set! balance (+ balance amount))
+    balance)
+  (define (dispatch m)
+    (cond ((eq? m 'withdraw) withdraw)
+          ((eq? m 'deposit)  deposit)
+          (else (error "Unknown request: MAKE-ACCOUNT" m))))
+  dispatch)
+
+; 使用:
+(define acc (make-account 100))
+((acc 'withdraw) 50)   ; → 50
+((acc 'withdraw) 60)   ; → "Insufficient funds"
+((acc 'deposit)  40)   ; → 90
+((acc 'withdraw) 60)   ; → 30</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">物件 = 閉包 + 狀態 + 訊息分派</span>
+          <p>
+            <code>make-account</code> 展示了 SICP 的核心洞見:物件不需要語言內建的類別系統,
+            只需要<strong>閉包 + <code>set!</code> + <code>dispatch</code></strong> 就能實現。
+            外部傳一條訊息(如 <code>'withdraw</code>),<code>dispatch</code> 回傳對應的程序,
+            再把引數傳給它。這就是訊息傳遞風格的物件導向。
+          </p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ② ==================== -->
+      <h2>引入賦值的代價:同一性、變動與參照透明性</h2>
+      <p>
+        賦值帶來了方便,但也帶來了深層的概念問題。考慮這個對比:
+      </p>
+      <pre><code class="language-scheme">; make-decrementer:純函數,不用 set!
+(define (make-decrementer balance)
+  (lambda (amount) (- balance amount)))
+
+(define D1 (make-decrementer 25))
+(define D2 (make-decrementer 25))
+; D1 和 D2 完全相同——任何計算裡都可以互換
+(D1 20)   ; → 5
+(D2 20)   ; → 5
+
+; --- 對比 ---
+
+; make-simplified-withdraw:有 set!
+(define (make-simplified-withdraw balance)
+  (lambda (amount)
+    (set! balance (- balance amount))
+    balance))
+
+(define W1 (make-simplified-withdraw 25))
+(define W2 (make-simplified-withdraw 25))
+; W1 和 W2 雖由同一表達式創建,卻是不同物件
+(W1 20)   ; → 5
+(W1 20)   ; → -15  ← W1 改變了！
+(W2 20)   ; → 5    ← W2 是獨立的</code></pre>
+
+      <p>
+        <code>make-decrementer</code> 沒有 <code>set!</code>,所以 D1 和 D2 永遠相同——
+        用 D1 代替 D2 不影響任何計算。這個性質叫做
+        <strong>參照透明性(referential transparency)</strong>:等值的東西可以互相替換。
+      </p>
+      <p>
+        一旦引入 <code>set!</code>,參照透明性就破滅了。W1 和 W2 雖然起自相同的表達式,
+        卻是有獨立歷史的不同個體——你不能把 W1 代替 W2。
+      </p>
+      <p>
+        更深的問題:<strong>替換模型(substitution model)失靈了</strong>。
+        用替換法求值 <code>((make-simplified-withdraw 25) 20)</code>,
+        把 <code>balance</code> 替換為 25,會得到
+        <code>(set! 25 (- 25 20)) 25</code>——結果是 25 而不是 5,錯了。
+        原因是 <code>set!</code> 裡的 <code>balance</code> 指的不是<strong>值</strong>,
+        而是一個<strong>地點(place)</strong>——存儲值的容器。
+        我們需要一個新的求值模型:<strong>環境模型(environment model)</strong>。
+      </p>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">命令式程式設計的順序陷阱</span>
+          <p>
+            一旦使用 <code>set!</code>,賦值的<strong>順序</strong>就至關重要。
+            以命令式方式寫階乘:先 <code>set! product</code> 再 <code>set! counter</code>,
+            與顛倒順序,結果可能完全不同。這是命令式程式設計固有的複雜性——
+            純函數式程式設計不存在這個問題,因為每個定義只有一個值。
+          </p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ③ ==================== -->
+      <h2>環境模型 ★:框架、綁定與求值規則</h2>
+      <p>
+        替換模型把變數視為「名字」,而 <code>set!</code> 要求把變數視為「地點」。
+        <strong>環境模型(environment model)</strong> 把「地點」明確化:
+        每個變數都住在某個<strong>框架(frame)</strong>裡,框架是一張把變數名映射到值的表格。
+        <strong>環境(environment)</strong>是框架的鏈條,從當前框架一路追溯到
+        <strong>全域環境(global environment)</strong>。
+      </p>
+
+      <h3>兩條核心規則</h3>
+      <ul>
+        <li>
+          <strong>創建程序</strong>:對 <code>lambda</code> 表達式求值時,產生一個
+          <strong>程序物件(procedure object)</strong>,它是一對:「lambda 的程式碼」+「創建時所在的環境指標」。
+        </li>
+        <li>
+          <strong>套用程序</strong>:把形參綁定到引數值,創建一個新框架。
+          這個新框架的<strong>外層環境(enclosing environment)</strong>就是程序物件裡記錄的環境指標。
+          然後在這個新環境裡對程序體求值。
+        </li>
+      </ul>
+      <p>
+        這兩條規則解釋了閉包的所有魔法。讓我們用 <code>make-account</code> 為例,
+        一步步追蹤環境結構:
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 700 440" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif" font-size="12">
+  <defs>
+    <marker id="ea" markerWidth="8" markerHeight="7" refX="7" refY="3.5" orient="auto">
+      <path d="M0,0 L7,3.5 L0,7 Z" fill="#2f6f6a"/>
+    </marker>
+    <marker id="eb" markerWidth="8" markerHeight="7" refX="7" refY="3.5" orient="auto">
+      <path d="M0,0 L7,3.5 L0,7 Z" fill="#b4541f"/>
+    </marker>
+    <marker id="ec" markerWidth="8" markerHeight="7" refX="7" refY="3.5" orient="auto">
+      <path d="M0,0 L7,3.5 L0,7 Z" fill="#8b5cf6"/>
+    </marker>
+  </defs>
+
+  <!-- 全域環境 -->
+  <rect x="400" y="12" width="288" height="100" rx="6" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="544" y="34" text-anchor="middle" font-size="13" font-weight="700" fill="#2f6f6a">全域環境 (Global Env)</text>
+  <line x1="410" y1="44" x2="682" y2="44" stroke="#2f6f6a" stroke-width="1"/>
+  <text x="416" y="66" font-size="11" fill="#1f2328">make-account :</text>
+  <circle cx="560" cy="63" r="5" fill="#2f6f6a"/>
+  <text x="416" y="96" font-size="11" fill="#1f2328">acc :</text>
+  <circle cx="460" cy="93" r="5" fill="#b4541f"/>
+
+  <!-- make-account 程序物件 -->
+  <rect x="420" y="142" width="255" height="46" rx="4" fill="#ede9fe" stroke="#8b5cf6" stroke-width="1.5"/>
+  <text x="547" y="161" text-anchor="middle" font-size="11" font-weight="700" fill="#8b5cf6">make-account 程序物件</text>
+  <text x="547" y="180" text-anchor="middle" font-size="10" fill="#4a5159">參數: balance | 環境 → 全域</text>
+  <!-- global make-account → proc obj -->
+  <line x1="565" y1="63" x2="547" y2="142" stroke="#2f6f6a" stroke-width="1.5" marker-end="url(#ea)"/>
+
+  <!-- E1 框架 -->
+  <rect x="8" y="130" width="385" height="215" rx="6" fill="#fff8f4" stroke="#b4541f" stroke-width="2"/>
+  <text x="200" y="155" text-anchor="middle" font-size="12" font-weight="700" fill="#b4541f">E1  (呼叫 make-account 100 時建立)</text>
+  <line x1="18" y1="163" x2="387" y2="163" stroke="#b4541f" stroke-width="1"/>
+  <text x="22" y="186" font-size="11" fill="#1f2328">balance: 100  ← set! 在這裡修改</text>
+  <text x="22" y="212" font-size="11" fill="#1f2328">withdraw :</text>
+  <text x="22" y="240" font-size="11" fill="#1f2328">deposit  :</text>
+  <text x="22" y="268" font-size="11" fill="#1f2328">dispatch :</text>
+
+  <!-- Lambda 程序物件 (在 E1 裡建立,env → E1) -->
+  <rect x="130" y="200" width="240" height="28" rx="3" fill="#ede9fe" stroke="#8b5cf6" stroke-width="1"/>
+  <text x="250" y="218" text-anchor="middle" font-size="9" fill="#4a5159">withdraw lambda | env → E1</text>
+  <circle cx="95" cy="210" r="4" fill="#8b5cf6"/>
+  <line x1="99" y1="210" x2="130" y2="214" stroke="#8b5cf6" stroke-width="1.2" marker-end="url(#ec)"/>
+
+  <rect x="130" y="234" width="240" height="28" rx="3" fill="#ede9fe" stroke="#8b5cf6" stroke-width="1"/>
+  <text x="250" y="252" text-anchor="middle" font-size="9" fill="#4a5159">deposit lambda | env → E1</text>
+  <circle cx="95" cy="238" r="4" fill="#8b5cf6"/>
+  <line x1="99" y1="238" x2="130" y2="248" stroke="#8b5cf6" stroke-width="1.2" marker-end="url(#ec)"/>
+
+  <rect x="130" y="268" width="240" height="28" rx="3" fill="#ede9fe" stroke="#8b5cf6" stroke-width="1"/>
+  <text x="250" y="286" text-anchor="middle" font-size="9" fill="#4a5159">dispatch lambda | env → E1</text>
+  <circle cx="95" cy="266" r="4" fill="#8b5cf6"/>
+  <line x1="99" y1="266" x2="130" y2="282" stroke="#8b5cf6" stroke-width="1.2" marker-end="url(#ec)"/>
+
+  <!-- acc → dispatch (從全域 acc 點 → E1.dispatch) -->
+  <line x1="460" y1="93" x2="460" y2="115" stroke="#b4541f" stroke-width="1.5"/>
+  <line x1="460" y1="115" x2="370" y2="282" stroke="#b4541f" stroke-width="1.5" marker-end="url(#eb)"/>
+
+  <!-- E1 外層環境 → 全域 -->
+  <line x1="200" y1="130" x2="460" y2="112" stroke="#2f6f6a" stroke-width="1.5" stroke-dasharray="6,3" marker-end="url(#ea)"/>
+  <text x="328" y="116" font-size="9" fill="#8a929b">外層環境指標</text>
+
+  <!-- E2 框架(呼叫 acc 時) -->
+  <rect x="8" y="368" width="320" height="65" rx="6" fill="#f0f8f0" stroke="#2f6f6a" stroke-width="1.5"/>
+  <text x="168" y="390" text-anchor="middle" font-size="11" font-weight="700" fill="#2f6f6a">E2 (呼叫 dispatch 時的臨時框架)</text>
+  <line x1="18" y1="396" x2="322" y2="396" stroke="#2f6f6a" stroke-width="1"/>
+  <text x="22" y="414" font-size="11" fill="#1f2328">m: 'withdraw</text>
+  <text x="22" y="430" font-size="10" fill="#8a929b">外層環境 → E1(因 dispatch 的 env 指標是 E1)</text>
+  <!-- E2 → E1 -->
+  <line x1="168" y1="368" x2="168" y2="345" stroke="#2f6f6a" stroke-width="1.5" stroke-dasharray="4,2" marker-end="url(#ea)"/>
+</svg>
+        <figcaption>圖 76-1:環境模型框架鏈。<code>(define acc (make-account 100))</code> 呼叫 make-account,建立框架 E1,其中 balance 綁定為 100。withdraw、deposit、dispatch 三個 lambda 都在 E1 裡被創建,環境指標全部指向 E1。acc 在全域環境中指向 dispatch 程序物件。每次呼叫 acc 都建立臨時框架 E2,外層環境是 E1——因此 dispatch 可以讀寫 E1 的 balance。</figcaption>
+      </div>
+
+      <p>
+        現在你可以用這張圖回答「閉包為什麼記得狀態」:
+        <code>acc</code> 指向 <code>dispatch</code> 程序物件,dispatch 的環境指標指向 E1 框架。
+        只要 <code>acc</code> 存在,E1 就不會被垃圾回收。
+        每次 <code>(acc 'withdraw)</code> 呼叫,創建的臨時框架 E2 外層環境是 E1,
+        因此能找到 <code>balance</code>。<code>set!</code> 修改的正是 E1 裡的那個綁定。
+        呼叫結束後,E2 消失,但 E1 還在——<strong>狀態就保存在 E1 框架中。</strong>
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">環境模型兩條規則(精簡)</span>
+          <p>
+            <strong>① 創建程序</strong>:對 <code>lambda</code> 求值 → 產生一對 (code, env-pointer),env-pointer 指向當前環境。<br>
+            <strong>② 套用程序</strong>:把形參綁到引數 → 創建新框架,外層環境 = 程序的 env-pointer → 在新環境裡求值程序體。<br><br>
+            <code>define</code> 在當前框架新增綁定；<code>set!</code> 沿鏈往上找第一個有該名字的框架並修改其值。
+          </p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ④ ==================== -->
+      <h2>可變資料:<code>set-car!</code>、<code>set-cdr!</code>、佇列與表格</h2>
+      <p>
+        <code>set!</code> 讓我們能改變<strong>變數的綁定</strong>。
+        SICP 第三章還引入了改變<strong>資料結構本身</strong>的能力:
+        <code>set-car!</code> 和 <code>set-cdr!</code>——直接修改序對的 car 或 cdr:
+      </p>
+      <pre><code class="language-scheme">; set-car! 修改序對的第一個元素
+; set-cdr! 修改序對的第二個元素
+
+(define x (list 'a 'b 'c))
+(set-car! x 'z)
+x   ; → (z b c)   car 被改了
+
+(define y (list 1 2 3))
+(set-cdr! y (list 99 100))
+y   ; → (1 99 100)   cdr 被改了
+
+; 重要:mutation 可以創造「共享結構」
+(define x (list 'a 'b))
+(define z1 (cons x x))      ; car 和 cdr 指向同一個 x
+(set-car! (car z1) 'wow)    ; 修改 x 的 car
+z1  ; → ((wow b) wow b)   兩邊都變了！
+; (eq? (car z1) (cdr z1)) → #t   它們是同一個物件</code></pre>
+
+      <h3>佇列(Queue):O(1) 的先進先出</h3>
+      <p>
+        有了可變序對,我們能建造純 <code>cons</code>/<code>car</code>/<code>cdr</code> 無法有效實現的結構。
+        <strong>佇列(queue)</strong>是 FIFO 容器,普通串列插入需要掃到結尾,O(n)。
+        SICP 用 front-ptr 和 rear-ptr 兩個指標把插入壓到 O(1):
+      </p>
+      <pre><code class="language-scheme">; 佇列:以 (front-ptr . rear-ptr) 表示
+(define (make-queue) (cons '() '()))
+(define (front-ptr queue) (car queue))
+(define (rear-ptr  queue) (cdr queue))
+(define (set-front-ptr! q item) (set-car! q item))
+(define (set-rear-ptr!  q item) (set-cdr! q item))
+(define (empty-queue? queue) (null? (front-ptr queue)))
+
+(define (insert-queue! queue item)
+  (let ((new-pair (cons item '())))
+    (cond ((empty-queue? queue)
+           (set-front-ptr! queue new-pair)
+           (set-rear-ptr!  queue new-pair)
+           queue)
+          (else
+           (set-cdr! (rear-ptr queue) new-pair)
+           (set-rear-ptr! queue new-pair)
+           queue))))
+
+(define (delete-queue! queue)
+  (if (empty-queue? queue)
+      (error "DELETE! called with an empty queue")
+      (begin (set-front-ptr! queue (cdr (front-ptr queue)))
+             queue)))
+
+; 測試:
+(define q (make-queue))
+(insert-queue! q 'a)   ; q: a
+(insert-queue! q 'b)   ; q: a b
+(insert-queue! q 'c)   ; q: a b c
+(delete-queue! q)      ; q: b c(a 被移除)</code></pre>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">表格(Table):可變資料的另一個應用</span>
+          <p>
+            SICP 3.3.3 用 <code>set-cdr!</code> 建造了<strong>查找表格(table)</strong>——
+            以鍵值對構成的串列,可動態新增鍵。這正是第 75 章 <code>put</code>/<code>get</code>
+            操作表格的底層實作:每次 <code>put</code> 都用 <code>set-cdr!</code>
+            把新鍵值對插進表頭,實現 O(1) 插入。
+          </p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑤ ==================== -->
+      <h2>並行:時間即本質</h2>
+      <p>
+        引入賦值後,最危險的場景是<strong>並行(concurrency)</strong>。
+        假設 Peter 和 Paul 共用一個帳戶(餘額 100 元),同時提款:
+        Peter 要提 10 元,Paul 要提 25 元。如果依序執行,最後是 65 元。
+        但如果兩個程序交錯執行:
+      </p>
+      <blockquote>
+        Peter 讀到餘額 100 → Paul 讀到餘額 100 → Peter 算出 90 並寫入 →
+        Paul 算出 75 並寫入 → 最終餘額 75 元。Peter 的操作消失了！
+      </blockquote>
+      <p>
+        這類錯誤叫做<strong>競態條件(race condition)</strong>。根本原因是「讀—計算—寫」三步不是原子的。
+        SICP 3.4 節的解法是<strong>序列化(serialization)</strong>:
+        用 <code>make-serializer</code> 確保同一時間只有一個程序能執行特定操作:
+      </p>
+      <pre><code class="language-scheme">; make-serializer 的概念實作
+(define (make-serializer)
+  (let ((mutex (make-mutex)))
+    (lambda (p)
+      (define (serialized-p . args)
+        (mutex 'acquire)              ; 加鎖:其他程序等待
+        (let ((val (apply p args)))
+          (mutex 'release)            ; 解鎖
+          val))
+      serialized-p)))
+
+; 帶序列化器的帳戶
+(define (make-account-safe balance)
+  (let ((protected (make-serializer)))
+    (define (withdraw amount)
+      (if (&gt;= balance amount)
+          (begin (set! balance (- balance amount)) balance)
+          "Insufficient funds"))
+    (define (deposit amount)
+      (set! balance (+ balance amount))
+      balance)
+    (define (dispatch m)
+      (cond ((eq? m 'withdraw) (protected withdraw))
+            ((eq? m 'deposit)  (protected deposit))
+            ((eq? m 'balance)  balance)
+            (else (error "Unknown request" m))))
+    dispatch))</code></pre>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">深入並行:連結第 43 章</span>
+          <p>
+            並行的難題遠不止於此——還有<strong>死鎖(deadlock)</strong>(兩個程序互相等待對方釋放鎖)、
+            活鎖、信號量(semaphore)等。SICP 3.4 結尾甚至問:在分散式系統裡,
+            「同時」究竟是什麼意思？
+            本書<a href="43-parallel.html">第 43 章「並行計算」</a>深入討論了這些議題,
+            涵蓋 mutex、condition variable 與現代語言的並行原語。
+          </p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑥ ==================== -->
+      <h2>串流:讓「無限」成為可計算的——延遲求值</h2>
+      <p>
+        前幾節用「物件 + 賦值」建立模型。現在 SICP 第三章後半提出完全不同的思路——
+        不是讓物件隨時間變化,而是把整個時間歷史表示成一個<strong>串流(stream)</strong>。
+      </p>
+      <p>
+        先看一個效率問題。找出 10,000 到 1,000,000 之間的第二個質數:
+      </p>
+      <pre><code class="language-scheme">; 用普通串列:會先建立近百萬元素的中間串列,再篩選！
+(car (cdr (filter prime?
+                   (enumerate-interval 10000 1000000))))
+; → 極其浪費:幾乎整個區間都被具現化了</code></pre>
+      <p>
+        串流的想法是:不一次建完整個序列,而是「需要多少才建多少」——
+        <strong>延遲求值(delayed evaluation)</strong>。
+      </p>
+      <p>SICP 引入三個核心原語:</p>
+      <ul>
+        <li><code>delay</code>:把表達式打包成「承諾(promise)」,不立刻求值</li>
+        <li><code>force</code>:兌現承諾,求出值(備忘化:只算一次)</li>
+        <li><code>cons-stream</code>:car 立刻求值,cdr 延遲求值</li>
+      </ul>
+      <pre><code class="language-scheme">; delay 和 force 的實作原理
+; (delay exp)  ≡  (memo-proc (lambda () exp))
+; (force obj)  ≡  (obj)   但只算一次,結果備忘
+
+; memo-proc:備忘化版 delay
+(define (memo-proc proc)
+  (let ((already-run? false) (result false))
+    (lambda ()
+      (if (not already-run?)
+          (begin (set! result (proc))
+                 (set! already-run? true)
+                 result)
+          result))))
+
+; cons-stream 是特殊形式:
+; (cons-stream a b)  ≡  (cons a (delay b))
+(define (stream-car stream) (car stream))
+(define (stream-cdr stream) (force (cdr stream)))
+
+; 串流版 enumerate-interval
+(define (stream-enumerate-interval low high)
+  (if (&gt; low high)
+      the-empty-stream
+      (cons-stream
+        low
+        (stream-enumerate-interval (+ low 1) high))))
+
+; 串流版 filter
+(define (stream-filter pred stream)
+  (cond ((stream-null? stream) the-empty-stream)
+        ((pred (stream-car stream))
+         (cons-stream (stream-car stream)
+                      (stream-filter pred (stream-cdr stream))))
+        (else
+         (stream-filter pred (stream-cdr stream)))))
+
+; 現在找第二個質數:只需計算到 10009 就停止！
+(stream-car
+  (stream-cdr
+    (stream-filter prime?
+                   (stream-enumerate-interval 10000 1000000))))
+; → 10009   只測試了極少數整數</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">串流的關鍵洞見:按需計算</span>
+          <p>
+            串流讓我們「好像」對整個序列做操作,實際上只做<strong>剛好夠用的計算</strong>。
+            <code>(stream-cdr stream)</code> 被呼叫之前,「下一個元素」根本不存在。
+            備忘化保證每個元素最多只計算一次——即使被多次 force。
+          </p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑦ ==================== -->
+      <h2>無限串流:整數、質數、費氏數與 π 的近似</h2>
+      <p>
+        有了延遲求值,我們可以定義<strong>無限長的串流</strong>——普通串列絕對做不到。
+      </p>
+      <pre><code class="language-scheme">; 無限整數串流
+(define (integers-starting-from n)
+  (cons-stream n (integers-starting-from (+ n 1))))
+
+(define integers (integers-starting-from 1))
+; integers = 1, 2, 3, 4, 5, ... (無限)
+
+(stream-ref integers 0)   ; → 1
+(stream-ref integers 4)   ; → 5
+; stream-ref 只計算到需要的那個元素</code></pre>
+
+      <h3>Eratosthenes 篩法:無限質數流</h3>
+      <p>
+        最令人驚豔的是:用串流實作古希臘的<strong>埃拉托斯特尼篩法</strong>,
+        得到一個真正無限的質數流:
+      </p>
+      <pre><code class="language-scheme">(define (divisible? x y) (= (remainder x y) 0))
+
+; sieve:第一個元素是質數 p,過濾掉 p 的倍數,遞迴篩其餘
+(define (sieve stream)
+  (cons-stream
+    (stream-car stream)
+    (sieve
+      (stream-filter
+        (lambda (x)
+          (not (divisible? x (stream-car stream))))
+        (stream-cdr stream)))))
+
+(define primes (sieve (integers-starting-from 2)))
+
+(stream-ref primes 0)    ; → 2
+(stream-ref primes 1)    ; → 3
+(stream-ref primes 50)   ; → 233  (第 51 個質數)</code></pre>
+
+      <h3>費氏數:顯式與隱式定義</h3>
+      <pre><code class="language-scheme">; 顯式定義:用遞迴 generator
+(define (fibgen a b)
+  (cons-stream a (fibgen b (+ a b))))
+(define fibs-explicit (fibgen 0 1))
+
+; 廣義 stream-map:接受多個串流,逐元素套用 proc(SICP 習題 3.50)
+; (前面的單引數版只能 map 一個串流；add-streams 需要同時走訪兩個串流)
+(define (stream-map proc . argstreams)
+  (if (stream-null? (car argstreams))
+      the-empty-stream
+      (cons-stream
+        (apply proc (map stream-car argstreams))
+        (apply stream-map (cons proc (map stream-cdr argstreams))))))
+
+; 更優雅的隱式(自指)定義
+(define (add-streams s1 s2)
+  (stream-map + s1 s2))
+
+(define fibs
+  (cons-stream 0
+    (cons-stream 1
+      (add-streams (stream-cdr fibs) fibs))))
+; fibs 本身等於 (stream-cdr fibs) 與 fibs 的元素和
+; 0, 1, 1, 2, 3, 5, 8, 13, 21, 34, ...
+
+(stream-ref fibs 10)   ; → 55</code></pre>
+
+      <h3>近似 π</h3>
+      <pre><code class="language-scheme">; π/4 = 1 - 1/3 + 1/5 - 1/7 + ...(Leibniz 公式)
+(define (pi-summands n)
+  (cons-stream (/ 1.0 n)
+               (stream-map - (pi-summands (+ n 2)))))
+
+(define (scale-stream stream factor)
+  (stream-map (lambda (x) (* x factor)) stream))
+
+; partial-sums:把 S0, S1, S2, ... 轉成 S0, S0+S1, S0+S1+S2, ...(SICP 習題 3.55)
+(define (partial-sums s)
+  (cons-stream (stream-car s)
+               (add-streams (stream-cdr s) (partial-sums s))))
+
+; 完整 pi-stream:對部分和乘以 4
+(define pi-stream
+  (scale-stream (partial-sums (pi-summands 1)) 4))
+
+; pi-stream 的前幾個值:
+; 4.0, 2.667, 3.467, 2.895, 3.340, 2.976, 3.284, 3.017, ...
+; 慢慢收斂到 π ≈ 3.14159...
+(stream-ref pi-stream 0)   ; → 4.0
+(stream-ref pi-stream 7)   ; → 3.017071817071818</code></pre>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 230" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="sa" markerWidth="8" markerHeight="7" refX="7" refY="3.5" orient="auto">
+      <path d="M0,0 L7,3.5 L0,7 Z" fill="#2f6f6a"/>
+    </marker>
+  </defs>
+
+  <text x="360" y="22" text-anchor="middle" font-size="13" font-weight="700" fill="#1f2328">串流篩法管線:primes 的按需生成</text>
+
+  <!-- Stage 0 -->
+  <rect x="8" y="45" width="148" height="55" rx="6" fill="#e3efed" stroke="#2f6f6a" stroke-width="1.5"/>
+  <text x="82" y="68" text-anchor="middle" font-size="10" font-weight="700" fill="#2f6f6a">integers-starting-from 2</text>
+  <text x="82" y="88" text-anchor="middle" font-size="10" fill="#4a5159">2, 3, 4, 5, 6, 7 ...</text>
+  <line x1="156" y1="72" x2="188" y2="72" stroke="#2f6f6a" stroke-width="2" marker-end="url(#sa)"/>
+
+  <!-- Stage 1 -->
+  <rect x="190" y="35" width="148" height="75" rx="6" fill="#f6e7dd" stroke="#b4541f" stroke-width="1.5"/>
+  <text x="264" y="57" text-anchor="middle" font-size="10" font-weight="700" fill="#b4541f">sieve(取出 2)</text>
+  <text x="264" y="75" text-anchor="middle" font-size="9" fill="#4a5159">篩掉 2 的倍數</text>
+  <text x="264" y="92" text-anchor="middle" font-size="9" fill="#4a5159">3, 5, 7, 9, 11 ...</text>
+  <text x="82" y="140" text-anchor="middle" font-size="12" font-weight="700" fill="#b4541f">質數 2 ←</text>
+  <line x1="338" y1="72" x2="370" y2="72" stroke="#2f6f6a" stroke-width="2" marker-end="url(#sa)"/>
+
+  <!-- Stage 2 -->
+  <rect x="372" y="35" width="148" height="75" rx="6" fill="#f6e7dd" stroke="#b4541f" stroke-width="1.5"/>
+  <text x="446" y="57" text-anchor="middle" font-size="10" font-weight="700" fill="#b4541f">sieve(取出 3)</text>
+  <text x="446" y="75" text-anchor="middle" font-size="9" fill="#4a5159">篩掉 3 的倍數</text>
+  <text x="446" y="92" text-anchor="middle" font-size="9" fill="#4a5159">5, 7, 11, 13 ...</text>
+  <text x="264" y="140" text-anchor="middle" font-size="12" font-weight="700" fill="#b4541f">質數 3 ←</text>
+  <line x1="520" y1="72" x2="552" y2="72" stroke="#2f6f6a" stroke-width="2" marker-end="url(#sa)"/>
+
+  <!-- Stage 3 -->
+  <rect x="554" y="35" width="148" height="75" rx="6" fill="#f6e7dd" stroke="#b4541f" stroke-width="1.5"/>
+  <text x="628" y="57" text-anchor="middle" font-size="10" font-weight="700" fill="#b4541f">sieve(取出 5)</text>
+  <text x="628" y="75" text-anchor="middle" font-size="9" fill="#4a5159">篩掉 5 的倍數</text>
+  <text x="628" y="92" text-anchor="middle" font-size="9" fill="#4a5159">7, 11, 13 ...</text>
+  <text x="446" y="140" text-anchor="middle" font-size="12" font-weight="700" fill="#b4541f">質數 5 ←</text>
+  <text x="628" y="140" text-anchor="middle" font-size="11" fill="#8a929b">... 繼續展開</text>
+
+  <text x="360" y="175" text-anchor="middle" font-size="11" fill="#4a5159">每個 sieve 框只在「被詢問下一個質數時」才展開(延遲求值)</text>
+  <text x="360" y="197" text-anchor="middle" font-size="10" fill="#8a929b">cons-stream 的 cdr 部分是 (delay ...),被 stream-cdr force 時才計算</text>
+  <text x="360" y="217" text-anchor="middle" font-size="10" fill="#8a929b">整個無限篩從未完整存在,卻能正確回答任何有限查詢</text>
+</svg>
+        <figcaption>圖 76-2:串流篩法管線。第一個質數 2 立刻可得；下一個質數只在 stream-cdr 被呼叫時才展開一層 sieve。備忘化確保每個元素只計算一次。整個「無限篩」以按需展開的方式運作,空間消耗始終有限。</figcaption>
+      </div>
+
+      <!-- ==================== h2 ⑧ ==================== -->
+      <h2>串流 vs 物件:兩種對抗複雜度的策略</h2>
+      <p>
+        SICP 第三章以一個深刻的問題結尾:
+        「物件 + 賦值」和「串流 + 延遲求值」,哪個更好？
+      </p>
+      <p>
+        <strong>物件方式</strong>把系統分解成帶有局部狀態的物件,每個物件在時間中演化。
+        這個方式直觀,貼近現實世界的直覺。但代價是:引入賦值破壞參照透明性,
+        並行時需要同步原語,競態條件難以除錯。
+      </p>
+      <p>
+        <strong>串流方式</strong>把物件的整個歷史表示成一個串流:
+        帳戶的「餘額」不是一個會改變的數字,而是整個餘額歷史序列
+        <code>(100 50 40 10 ...)</code>。程序是純函數——輸入串流,輸出串流,沒有副作用。
+        這在數學上更簡潔,更容易推理,天然支援並行。但代價是:
+        循環依賴(如帳戶之間的轉帳互相影響)在純串流裡難以表達。
+      </p>
+      <p>SICP 承認:兩者各有所長,取決於建模的系統性質。兩種思想都在現代語言中延續:</p>
+      <ul>
+        <li>物件方式 → Python class、Java、C++ 的物件導向</li>
+        <li>串流方式 → Haskell 的惰性串列、React/RxJS 的響應式串流、Apache Spark 的 RDD</li>
+      </ul>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">Haskell:把串流發揮到極致</span>
+          <p>
+            Haskell 把「延遲求值」作為預設語義——所有串列都是潛在無限的,
+            所有求值都按需進行。本書<a href="44-haskell.html">第 44 章「Haskell 與惰性求值」</a>
+            從型別系統和惰性求值的角度深入探索了這個方向。
+            SICP 第三章的串流可以看作 Haskell 思維的先聲。
+          </p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑨ ==================== -->
+      <h2>Python 對照:generator 就是串流,閉包就是物件</h2>
+      <p>
+        SICP 的這些想法,在 Python 裡都有直接的對應。你不需要重新發明——
+        只需要認出它們的現代面貌。
+      </p>
+
+      <h3>閉包計數器 ≈ make-withdraw</h3>
+      <pre><code class="language-python"># Python 閉包 + 可變狀態 = SICP 的 make-withdraw / make-account
+def make_account(initial_balance):
+    """回傳一個帳戶物件(用閉包 + 訊息分派模擬)。"""
+    balance = [initial_balance]  # 用 list 讓內部函式可以修改
+
+    def withdraw(amount):
+        if balance[0] &gt;= amount:
+            balance[0] -= amount
+            return balance[0]
+        return "Insufficient funds"
+
+    def deposit(amount):
+        balance[0] += amount
+        return balance[0]
+
+    def dispatch(msg, amount=0):
+        if msg == 'withdraw':
+            return withdraw(amount)
+        elif msg == 'deposit':
+            return deposit(amount)
+        elif msg == 'balance':
+            return balance[0]
+        else:
+            raise ValueError(f"Unknown message: {msg}")
+
+    return dispatch
+
+# 兩個獨立的帳戶物件
+acc1 = make_account(100)
+acc2 = make_account(100)
+
+acc1('withdraw', 50)   # → 50
+acc2('deposit',  30)   # → 130  acc2 不受 acc1 影響
+acc1('balance')        # → 50
+
+# Python 3 更簡潔版:nonlocal
+def make_withdraw_v2(balance):
+    def withdraw(amount):
+        nonlocal balance
+        if balance &gt;= amount:
+            balance -= amount
+            return balance
+        return "Insufficient funds"
+    return withdraw</code></pre>
+
+      <h3>Generator ≈ 串流</h3>
+      <pre><code class="language-python">import itertools
+
+# Python generator = SICP 串流的現代版
+# yield 就是 cons-stream:產出一個值,然後「暫停」等 next()
+
+def integers_from(n):
+    """無限整數流:對應 integers-starting-from"""
+    while True:
+        yield n
+        n += 1
+
+def sieve(stream):
+    """Eratosthenes 篩法:遞迴 generator"""
+    p = next(stream)      # 取出第一個(必為質數)
+    yield p
+    # 過濾掉 p 的倍數,再遞迴篩
+    yield from sieve(x for x in stream if x % p != 0)
+
+# 取前 10 個質數
+gen = sieve(integers_from(2))
+print(list(itertools.islice(gen, 10)))
+# → [2, 3, 5, 7, 11, 13, 17, 19, 23, 29]
+
+# 費氏數 generator
+def fibs():
+    """無限費氏數流"""
+    a, b = 0, 1
+    while True:
+        yield a
+        a, b = b, a + b
+
+print(list(itertools.islice(fibs(), 10)))
+# → [0, 1, 1, 2, 3, 5, 8, 13, 21, 34]</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">generator 與串流的對應關係</span>
+          <p>
+            Python <code>yield</code> 對應 SICP 的 <code>cons-stream</code>:兩者都「產出一個值,然後暫停」。<br>
+            <code>next(gen)</code> 對應 <code>force</code>:強制求下一個值。<br>
+            <code>itertools.islice</code>、生成器運算式,對應 <code>stream-filter</code>/<code>stream-map</code>。<br>
+            Python 的 <code>nonlocal</code>/<code>list</code> 技巧,對應 SICP 的 <code>set!</code> 閉包狀態。
+          </p>
+        </div>
+      </div>
+
+      <!-- ==================== Exercises ==================== -->
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 76.1 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>
+            用環境模型解釋以下程式。畫出 <code>(define W1 (make-withdraw 100))</code>
+            之後的環境結構,並說明 <code>(W1 50)</code> 如何找到並修改 <code>balance</code>:
+          </p>
+          <pre><code class="language-scheme">(define (make-withdraw balance)
+  (lambda (amount)
+    (if (&gt;= balance amount)
+        (begin (set! balance (- balance amount))
+               balance)
+        "Insufficient funds")))
+
+(define W1 (make-withdraw 100))
+(W1 50)
+(W1 30)</code></pre>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>環境結構說明:</strong></p>
+              <ol>
+                <li>
+                  <code>(define W1 (make-withdraw 100))</code>:
+                  呼叫 make-withdraw,創建框架 E1,其中 balance = 100,外層環境 = 全域。
+                  在 E1 裡對 lambda 求值,得程序物件 P1(env → E1)。
+                  全域環境中 W1 綁定到 P1。
+                </li>
+                <li>
+                  <code>(W1 50)</code>:套用 P1 到 50,創建框架 E2:amount = 50,外層環境 = E1。
+                  程序體在 E2 裡求值:查 balance 時 E2 沒有,沿鏈找到 E1.balance = 100,條件成立。
+                  <code>set!</code> 修改 E1.balance = 50。回傳 50。E2 消失,E1 仍存在(W1 持有對它的引用)。
+                </li>
+                <li>
+                  <code>(W1 30)</code>:E1.balance 現在是 50,50 &gt;= 30 成立,修改為 20,回傳 20。
+                </li>
+              </ol>
+              <p>
+                關鍵:W1 「記住」 balance,因為 P1 的環境指標讓 E1 始終存活,
+                balance 就存在 E1 裡。這就是閉包保存狀態的根本機制。
+              </p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 76.2 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>
+            修改 <code>make-account</code>,使其支援密碼保護(對應 SICP 習題 3.3)。
+            密碼正確才執行操作,否則回傳 <code>"Incorrect password"</code>:
+          </p>
+          <pre><code class="language-scheme">(define acc (make-account 100 'secret-password))
+((acc 'secret-password 'withdraw) 40)   ; → 60
+((acc 'wrong-password  'deposit)  50)   ; → "Incorrect password"</code></pre>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-scheme">(define (make-account balance password)
+  (define (withdraw amount)
+    (if (&gt;= balance amount)
+        (begin (set! balance (- balance amount)) balance)
+        "Insufficient funds"))
+  (define (deposit amount)
+    (set! balance (+ balance amount))
+    balance)
+  (define (dispatch pwd m)
+    (if (not (eq? pwd password))
+        (lambda (x) "Incorrect password")   ; 密碼錯,忽略操作
+        (cond ((eq? m 'withdraw) withdraw)
+              ((eq? m 'deposit)  deposit)
+              (else (error "Unknown request" m)))))
+  dispatch)
+
+; 測試:
+(define acc (make-account 100 'secret-password))
+((acc 'secret-password 'withdraw) 40)   ; → 60
+((acc 'secret-password 'deposit)  10)   ; → 70
+((acc 'wrong-password  'withdraw)  5)   ; → "Incorrect password"</code></pre>
+              <p>
+                關鍵:<code>dispatch</code> 現在接受兩個引數(密碼和操作名),
+                先驗證密碼再分派。密碼存在 <code>make-account</code> 的框架裡(閉包),外部不可見。
+              </p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 76.3 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>
+            實作 <code>stream-take</code>,把串流的前 n 個元素收集成普通串列,
+            並用 <code>integers-starting-from</code> 驗證:
+          </p>
+          <pre><code class="language-scheme">(stream-take (integers-starting-from 1) 5)
+; → (1 2 3 4 5)
+(stream-take (stream-filter odd? (integers-starting-from 1)) 6)
+; → (1 3 5 7 9 11)</code></pre>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-scheme">; stream-take:取前 n 個元素轉成普通串列
+(define (stream-take s n)
+  (if (or (= n 0) (stream-null? s))
+      '()
+      (cons (stream-car s)
+            (stream-take (stream-cdr s) (- n 1)))))
+
+; integers-starting-from 已在正文定義
+(stream-take (integers-starting-from 1) 5)
+; → (1 2 3 4 5)
+
+; 奇數串流
+(define odds (stream-filter odd? (integers-starting-from 1)))
+(stream-take odds 6)
+; → (1 3 5 7 9 11)
+
+; 取第 100 個整數:
+(stream-ref (integers-starting-from 1) 99)
+; → 100  (只計算了 100 個元素)</code></pre>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 76.4 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>
+            以下是費氏數的<strong>隱式自指串流</strong>定義(正文所示):
+          </p>
+          <pre><code class="language-scheme">(define fibs
+  (cons-stream 0
+    (cons-stream 1
+      (add-streams (stream-cdr fibs) fibs))))
+
+(stream-ref fibs 10)   ; → ?</code></pre>
+          <p>計算結果是什麼？請用環境模型(延遲求值)解釋為什麼這個定義不會造成無限迴圈。</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p><code>(stream-ref fibs 10)</code> → <strong>55</strong>(費氏數列第 10 項,從 0 起算)</p>
+              <p><strong>為什麼不無限迴圈？</strong></p>
+              <p>
+                <code>cons-stream</code> 只立刻求值 car(第一個元素 0),
+                cdr 是 <code>(delay (cons-stream 1 ...))</code>——被延遲了。
+                定義 <code>fibs</code> 時,只建立了「0 以及一個承諾」,
+                並不需要立刻知道 fibs 的其他元素。
+              </p>
+              <p>
+                求第 n 個元素時,每次展開只需要前面的元素——而前面的元素已被備忘化,不重算。
+                具體展開:
+              </p>
+              <ul>
+                <li>fibs[0] = 0(立刻可得)</li>
+                <li>fibs[1] = 1(力用承諾,得到第二個 cons-stream 的 car)</li>
+                <li>fibs[2] = fibs[0] + fibs[1] = 0 + 1 = 1</li>
+                <li>fibs[3] = fibs[1] + fibs[2] = 1 + 1 = 2</li>
+                <li>…以此類推…</li>
+                <li>fibs[10] = 55</li>
+              </ul>
+              <p>延遲求值 + 備忘化讓自指定義成立:每次展開依賴已算好的前幾項,而非整個無限流。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 76.5 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>
+            用 Python generator 分別實作:(a) 無限費氏數流；(b) Eratosthenes 篩法質數流。
+            各取前 15 個數驗證正確性。
+          </p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">import itertools
+
+# (a) 費氏數流
+def fibs():
+    a, b = 0, 1
+    while True:
+        yield a
+        a, b = b, a + b
+
+result_a = list(itertools.islice(fibs(), 15))
+print(result_a)
+# → [0, 1, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 377]
+
+# (b) Eratosthenes 篩法
+def integers_from(n):
+    while True:
+        yield n
+        n += 1
+
+def sieve(stream):
+    p = next(stream)
+    yield p
+    yield from sieve(x for x in stream if x % p != 0)
+
+result_b = list(itertools.islice(sieve(integers_from(2)), 15))
+print(result_b)
+# → [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47]</code></pre>
+              <p>
+                注意:遞迴版的篩法在取很多質數時(數百個)會遇到 Python 遞迴棧深度限制。
+                生產環境中通常使用迭代版的 <code>sympy.primerange</code> 或 NumPy 篩法。
+                這裡的版本是 SICP 串流思想的忠實對應。
+              </p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑩ ==================== -->
+      <h2>把這一章串起來</h2>
+      <p>
+        SICP 第三章是整本書最具哲學深度的一章,在兩個層面上展開:
+      </p>
+      <p>
+        <strong>第一層:賦值帶來的複雜性。</strong>
+        <code>set!</code> 讓程序有了「記憶」——這是建模現實世界的強大工具,
+        但代價是參照透明性的消失、替換模型的失效、並行競態條件的引入。
+        環境模型(框架鏈)精確解釋了「閉包為什麼記得狀態」:
+        狀態存在程序物件所指向的框架裡,只要程序物件存在,框架就不消失,
+        <code>set!</code> 直接修改那個框架裡的綁定。
+      </p>
+      <p>
+        <strong>第二層:串流作為替代。</strong>
+        延遲求值讓我們用純函數的方式表達「無限序列」和「時間歷史」,
+        避免了賦值的種種陷阱。整數流、質數流、費氏流、π 的近似——
+        都在「按需計算」的框架下優雅完成。Python 的 <code>generator</code>/<code>yield</code>
+        正是這個思想的現代實現,<code>itertools</code> 則是串流操作庫。
+      </p>
+      <p>
+        這一章告訴我們:沒有哪種模型是完美的。
+        物件 + 賦值直觀但複雜；串流 + 延遲純淨但有侷限。
+        真實系統往往同時需要兩者——而理解它們的底層原理,
+        是你在設計系統時做出明智選擇的基礎。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">📚</div>
+        <div class="body">
+          <span class="c-title">想更深入？延伸資源</span>
+          <p>
+            本章對應 <em>Structure and Interpretation of Computer Programs</em>(Abelson &amp; Sussman)
+            第三章「模組化、物件與狀態」。特別推薦 3.2 節「環境模型」與 3.5 節「串流」。
+            MIT OCW 6.001 的完整影片和習題可免費獲取。
+            SICP 全書可在 <a href="https://mitpress.mit.edu/sicp">mitpress.mit.edu/sicp</a> 免費閱讀。
+            本書<a href="44-haskell.html">第 44 章「Haskell 與惰性求值」</a>進一步探索串流思維在現代語言中的延伸。
+          </p>
+        </div>
+      </div>
+
+    </article>
+  </main>
+</div>
+<script src="../assets/book.js"></script>
+</body>
+</html>

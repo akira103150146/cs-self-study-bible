@@ -1,0 +1,1088 @@
+<!--meta
+title: 手刻你的 LLM client
+description: 手刻一個中立的 LLMClient 介面,預設打本地 Ollama、可切換 Anthropic Claude;定義 chat 與 complete 兩個方法、結構化輸出、系統提示與 few-shot,讓後續 agent 章節直接 import 使用。
+-->
+
+      <div class="eyebrow">第二二部 · 動手打造 LLM Agent</div>
+      <h1>手刻你的 LLM client</h1>
+      <p class="subtitle">在你寫 agent 的路上,最先需要的不是框架——是一個能讓你「用程式呼叫 LLM」的乾淨介面。這一章,我們從零手刻它。</p>
+      <div class="byline">
+        <span class="tag">第 94 章</span>
+        <span>閱讀時間 ≈ 50 分鐘</span>
+        <span>難度:★★★☆☆</span>
+      </div>
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>如何用 <code>requests</code> 直接呼叫 <strong>Ollama</strong> 本地 API(<code>/api/chat</code>)與 <strong>Anthropic Claude</strong> API(<code>/v1/messages</code>),不依賴任何第三方 AI SDK</li>
+          <li><code>LLMClient.chat(messages: list[dict]) -&gt; str</code> 與 <code>LLMClient.complete(prompt: str) -&gt; str</code> 這兩個方法的精確定義——後續章節(第 95–100 章)都會 import 這個介面</li>
+          <li>如何抽象出「後端無關」的共用介面,並用工廠函式依環境自動選擇後端</li>
+          <li>如何讓 LLM 穩定回傳合法 JSON(結構化輸出),並在解析失敗時自動重試</li>
+          <li>系統提示(system prompt)與 few-shot 範例的正確用法——agent 工程最重要的提示工程技巧</li>
+        </ul>
+      </div>
+
+      <h2>開場:把 LLM 當成一個函式</h2>
+      <p>
+        想像你正在寫一個能幫你查資料、整理筆記的 AI agent。你心裡浮現的第一行程式碼大概是:
+      </p>
+      <pre><code class="language-python">answer = llm.chat([{"role": "user", "content": "台灣的首都是哪裡?"}])
+print(answer)   # "台灣的首都是台北。"</code></pre>
+      <p>
+        就這樣——給它一段文字,它回你一段文字。這個「<code>llm.chat()</code>」,是整個 agent 宇宙的起點。
+        所有的工具呼叫、記憶、多輪對話、RAG 檢索……最終都要靠這一個呼叫完成。
+      </p>
+      <p>
+        問題是:這個 <code>llm</code> 物件從哪裡來?你當然可以直接用 Anthropic 官方 SDK、或 LangChain,
+        一行 <code>import</code> 解決。但這一章我們不這麼做——我們要<strong>親手刻出這個介面</strong>。
+        為什麼?因為當你看清楚「在網路上丟一個 JSON、收一個 JSON」這件事有多簡單,
+        你會對整個 LLM API 生態系少了幾分神秘感、多了幾分掌控感。
+        而且你會得到一個<strong>後續章節共用的介面</strong>——第 95 章的工具呼叫、第 96 章的 RAG、一直到第 100 章的生產部署,全都 import 它。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">這一章的核心產物</span>
+          <p>一個可執行的 <strong><code>llm_client.py</code></strong>——預設打本地 Ollama,
+          設了 <code>ANTHROPIC_API_KEY</code> 環境變數就自動切到 Claude。
+          它暴露兩個方法:<code>chat(messages)</code> 與 <code>complete(prompt)</code>,後續章節直接 import 使用。</p>
+        </div>
+      </div>
+
+      <h2>半章複習:你需要知道的最小集合</h2>
+      <p>
+        這一章的任務是「呼叫 LLM」,不是「搞懂 LLM 內部」。所以我們只需要幾個概念,
+        就能愉快地繼續。如果你已讀過<a href="99-gpt-from-scratch.html">第 93 章《從零打造 GPT》</a>,這段可以快速掃過;
+        如果你選擇跳過那章(完全沒問題),這幾段就是你的地基。
+      </p>
+
+      <h3>Token 與計費</h3>
+      <p>
+        LLM 看到的不是字,而是 <strong>token</strong>——文字被切成的碎片(通常比單字還短)。英文大約每 0.75 個單字一個 token;
+        中文一個常用字約一個 token。你呼叫 API 時<strong>按 token 計費</strong>:輸入 token + 輸出 token 分開算。
+        一次呼叫中你能放的總 token 數(包含上下文歷史)叫<strong>上下文窗口(context window)</strong>,
+        超過就會被截斷或報錯。現代主流模型窗口通常從 8K 到 200K token 不等。
+      </p>
+
+      <h3>Temperature:隨機性旋鈕</h3>
+      <p>
+        API 通常接受一個 <code>temperature</code> 參數,控制輸出的<strong>隨機程度</strong>。
+        <code>temperature=0</code> 讓模型每次幾乎回傳相同的確定性答案;
+        <code>temperature=1</code> 讓它更有創意、更多樣、也更可能犯錯。
+        對於「需要穩定格式輸出」的工作(例如讓它回 JSON),通常設 <code>temperature=0</code> 或接近 0。
+      </p>
+
+      <h3>Messages 格式:對話的記憶體</h3>
+      <p>
+        LLM API 的「多輪對話」是靠你<strong>每次把完整歷史一起送過去</strong>來實現的——模型本身沒有記憶體。
+        業界通用的格式,是一個 JSON 陣列,每個元素是一個「訊息物件」:
+      </p>
+      <pre><code class="language-python">messages = [
+    {"role": "system",    "content": "你是一個有幫助的助理。"},      # 角色設定
+    {"role": "user",      "content": "台灣最高的山是哪座?"},         # 使用者問題
+    {"role": "assistant", "content": "台灣最高的山是玉山(3,952 m)。"}, # 模型上一輪回答
+    {"role": "user",      "content": "它在哪個縣?"},                 # 繼續追問
+]</code></pre>
+      <p>
+        <code>role</code> 有三種:<code>system</code>(設定全域規則,非必須)、
+        <code>user</code>(你的問題)、<code>assistant</code>(模型的歷史回答)。
+        這個 <code>messages</code> 串列,就是 <code>LLMClient.chat()</code> 的唯一輸入——
+        整個 agent 的對話狀態管理,本質上就是維護好這個串列。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">訓練機制在第 38 章</span>
+          <p>這些模型是怎麼被「煉」出來的?梯度下降、反向傳播、預訓練與指令微調——
+          這些在<a href="38-machine-learning.html">第 38 章《機器學習》</a>與第 93 章都有完整說明。
+          這一章我們把 LLM 當成一個「給字進去、給字出來」的服務來用,不需要碰訓練細節。</p>
+        </div>
+      </div>
+
+      <h3>Embedding:向量化的語意(預告)</h3>
+      <p>
+        除了「生成文字」,LLM 還能把一段文字壓成一個高維數字向量——叫<strong>embedding(嵌入向量)</strong>。
+        語意相近的文字,向量也相近。這個能力在第 96 章的 RAG(檢索增強)裡會重度使用。
+        這一章先略過。
+      </p>
+
+      <h2>為何要「中立 client」:好工程的第一步</h2>
+      <p>
+        你可能會問:為何不直接用 <code>anthropic</code> 或 <code>openai</code> 官方 SDK?
+        理由有三。
+      </p>
+      <p>
+        <strong>一、離線開發。</strong>Ollama 讓你在本機跑一個開源模型(Llama 3.2、Phi-3……),不需要網路、不花 API 費用、
+        沒有速率限制。寫 agent 的前期實驗,本地跑最省心。
+      </p>
+      <p>
+        <strong>二、彈性切換。</strong>你的 agent 邏輯應該跟「哪家 LLM」無關。今天 Ollama 夠用就用 Ollama;
+        需要更強的推理能力就換 Claude;客戶要求用另一家——你只換後端,不動 agent 邏輯。
+        這正是<strong>依賴反轉(dependency inversion)</strong>原則:依賴抽象介面,不依賴具體實作。
+      </p>
+      <p>
+        <strong>三、理解底層。</strong>一旦你親手打過一次原始 HTTP 請求、看過 JSON 長什麼樣,
+        你就再也不怕「SDK 在背後做了什麼黑魔法」——因為你知道那只是一個 POST 請求。
+      </p>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">「中立 client」模式在業界很常見</span>
+          <p>LangChain 的 <code>BaseChatModel</code>、LlamaIndex 的 <code>LLM</code>、Google 的 Vertex AI SDK 都在做同一件事:
+          用一個統一介面包住不同後端。我們這一章是「手刻教學版」——跑通後,你就能看懂任何框架在做什麼。</p>
+        </div>
+      </div>
+
+      <h2>本地後端:認識 Ollama</h2>
+      <p>
+        <strong>Ollama</strong> 是一個讓你在本機一鍵跑開源 LLM 的工具,支援 Mac、Linux 與 Windows。
+        它對外暴露一個本地 HTTP API,讓你用幾乎和呼叫雲端 API 一樣的方式使用本地模型。
+      </p>
+
+      <h3>安裝與下載模型</h3>
+      <pre><code class="language-bash"># 1. 下載並安裝 Ollama(依你的 OS 選擇安裝方式,詳見 https://ollama.ai)
+#    macOS:
+brew install ollama
+
+# 2. 啟動 Ollama 服務(安裝後通常會自動啟動;或手動執行)
+ollama serve
+
+# 3. 下載一個輕量模型(約 2 GB,首次需要等一下)
+ollama pull llama3.2
+
+# 4. 確認模型已下載
+ollama list</code></pre>
+      <p>
+        Ollama 啟動後會在本機監聽 <code>http://localhost:11434</code>。
+        你可以在瀏覽器打開這個網址看到 <code>Ollama is running</code> 的確認訊息。
+      </p>
+
+      <h3>Ollama 的 <code>/api/chat</code> HTTP 介面</h3>
+      <p>
+        和 Ollama 溝通用的是 HTTP POST 請求。端點是 <code>/api/chat</code>,格式如下:
+      </p>
+      <pre><code class="language-bash"># 用 curl 測試一下(先確認 ollama serve 已在執行)
+curl http://localhost:11434/api/chat \
+  -d '{
+    "model": "llama3.2",
+    "messages": [{"role": "user", "content": "你好!"}],
+    "stream": false
+  }'</code></pre>
+      <p>
+        <strong>請求 body</strong>(JSON):
+      </p>
+      <ul>
+        <li><code>"model"</code>:你 <code>ollama pull</code> 的模型名稱</li>
+        <li><code>"messages"</code>:messages 陣列(和前面說的格式完全一樣)</li>
+        <li><code>"stream": false</code>:關閉串流,讓 API 等回答完整再一次回傳(比較好解析)</li>
+      </ul>
+      <p>
+        <strong>回應 body</strong>(JSON),長這樣:
+      </p>
+      <pre><code class="language-text">{
+  "model": "llama3.2",
+  "message": {
+    "role": "assistant",
+    "content": "你好!有什麼我可以幫你的嗎?"
+  },
+  "done": true,
+  "total_duration": 1234567890,
+  ...
+}</code></pre>
+      <p>
+        關鍵欄位:<strong><code>response["message"]["content"]</code></strong>——這就是模型的回覆文字。
+        其他欄位(duration、token 統計等)是選讀資訊。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">Ollama 回應結構</span>
+          <p>Ollama <code>/api/chat</code> 回應的頂層有一個 <code>"message"</code> 物件,
+          其下的 <code>"content"</code> 欄位才是模型回覆文字。
+          記住這個路徑:<code>response["message"]["content"]</code>。</p>
+        </div>
+      </div>
+
+      <h2>手刻 OllamaClient</h2>
+      <p>
+        理解了 HTTP 介面之後,用 Python 包一層就很直觀。
+        我們先寫 <code>OllamaClient</code>,之後再抽象成共用介面。
+      </p>
+      <pre><code class="language-python">import requests
+
+class OllamaClient:
+    """打本地 Ollama 服務的 LLM 客戶端。
+    前提:ollama serve 已在執行,且已 ollama pull 對應模型。
+    """
+
+    def __init__(self, model: str = "llama3.2",
+                 base_url: str = "http://localhost:11434"):
+        self.model = model
+        self.base_url = base_url
+
+    def chat(self, messages: list[dict]) -&gt; str:
+        """多輪對話:送入 messages 陣列,回傳 assistant 的回覆文字。
+        messages 格式:[{"role": "user"/"assistant"/"system", "content": "..."}]
+        """
+        resp = requests.post(
+            f"{self.base_url}/api/chat",
+            json={
+                "model":    self.model,
+                "messages": messages,
+                "stream":   False,   # 不串流,等完整回應
+            },
+            timeout=120,   # 本地模型推論可能較慢,給足時間
+        )
+        resp.raise_for_status()   # HTTP 4xx/5xx 時拋出例外
+        return resp.json()["message"]["content"]
+
+    def complete(self, prompt: str) -&gt; str:
+        """單輪便利方法:把 prompt 包成 user 訊息後呼叫 chat()。"""
+        return self.chat([{"role": "user", "content": prompt}])
+
+
+# --- 測試一下 ---
+if __name__ == "__main__":
+    client = OllamaClient()
+    reply = client.complete("用一句話解釋什麼是遞迴。")
+    print(reply)</code></pre>
+
+      <p>
+        試跑這段程式碼前,請先確認 <code>ollama serve</code> 在背景執行,
+        且已 <code>ollama pull llama3.2</code>。第一次呼叫可能需要等幾秒讓模型載入記憶體。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">小模型誠實聲明</span>
+          <p>本地 Llama 3.2(預設 3B 參數版)比雲端大模型小很多。它能流暢溝通、做簡單推理,
+          但複雜的多步驟推理或需要豐富知識的問題,品質可能不如 Claude 或 GPT-4。
+          開發與測試用本地模型很好;需要高品質輸出時再換雲端後端。</p>
+        </div>
+      </div>
+
+      <h2>雲端後端:Anthropic Messages API</h2>
+      <p>
+        Anthropic 的 Claude 模型透過 <strong>Messages API</strong> 對外服務。
+        端點是 <code>https://api.anthropic.com/v1/messages</code>,需要一把 API 金鑰才能呼叫。
+      </p>
+
+      <h3>取得金鑰</h3>
+      <p>
+        前往 <a href="https://console.anthropic.com">console.anthropic.com</a> 建立帳號,
+        在「API Keys」頁面產生一把金鑰。然後把它設成環境變數——<strong>不要直接寫進程式碼</strong>:
+      </p>
+      <pre><code class="language-bash"># macOS / Linux:在 ~/.zshrc 或 ~/.bashrc 加這行
+export ANTHROPIC_API_KEY="sk-ant-api03-..."
+
+# Windows PowerShell:
+$env:ANTHROPIC_API_KEY = "sk-ant-api03-..."</code></pre>
+
+      <div class="callout danger">
+        <div class="ico">⛔</div>
+        <div class="body">
+          <span class="c-title">絕對不要把金鑰寫進程式碼或提交到 git</span>
+          <p>API 金鑰一旦外洩,任何人都能用你的帳號消費。務必從環境變數讀取(<code>os.environ["ANTHROPIC_API_KEY"]</code>),
+          並把 <code>.env</code> 加進 <code>.gitignore</code>。GitHub 會掃描 commit 裡的金鑰並警告你——但損失已經可能發生了。</p>
+        </div>
+      </div>
+
+      <h3>Anthropic Messages API 的請求格式</h3>
+      <pre><code class="language-bash"># 用 curl 測試
+curl https://api.anthropic.com/v1/messages \
+  -H "x-api-key: $ANTHROPIC_API_KEY" \
+  -H "anthropic-version: 2023-06-01" \
+  -H "content-type: application/json" \
+  -d '{
+    "model": "claude-3-5-haiku-20241022",
+    "max_tokens": 1024,
+    "messages": [{"role": "user", "content": "你好!"}]
+  }'</code></pre>
+      <p>必要請求標頭:</p>
+      <ul>
+        <li><code>x-api-key</code>:你的 Anthropic API 金鑰</li>
+        <li><code>anthropic-version: 2023-06-01</code>:API 版本號(必填,固定寫這個)</li>
+        <li><code>content-type: application/json</code></li>
+      </ul>
+      <p>請求 body 欄位:</p>
+      <ul>
+        <li><code>"model"</code>:模型名稱,例如 <code>"claude-3-5-haiku-20241022"</code>(輕量快速)或 <code>"claude-opus-4-5"</code>(高能力)</li>
+        <li><code>"max_tokens"</code>:允許模型輸出的最大 token 數(必填;Anthropic API 不設預設值)</li>
+        <li><code>"messages"</code>:messages 陣列,只含 <code>user</code> 與 <code>assistant</code> 角色</li>
+        <li><code>"system"</code>(選填):系統提示字串,放在頂層而<strong>不是</strong> messages 陣列裡</li>
+      </ul>
+
+      <h3>Anthropic 回應結構</h3>
+      <pre><code class="language-text">{
+  "id": "msg_01XFDUDYJgAACzvnptvVoYEL",
+  "type": "message",
+  "role": "assistant",
+  "content": [
+    {
+      "type": "text",
+      "text": "你好!有什麼我可以幫你的嗎?"
+    }
+  ],
+  "model": "claude-3-5-haiku-20241022",
+  "stop_reason": "end_turn",
+  "usage": {"input_tokens": 10, "output_tokens": 20}
+}</code></pre>
+      <p>
+        注意:<code>content</code> 是一個<strong>陣列</strong>(因為 Claude 支援多種輸出類型,例如 text、tool_use)。
+        取回覆文字的路徑是 <strong><code>response["content"][0]["text"]</code></strong>。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">Anthropic 回應結構</span>
+          <p>Anthropic <code>/v1/messages</code> 的 <code>"content"</code> 是一個陣列,
+          第一個元素是 <code>{"type": "text", "text": "..."}</code>。
+          取回覆文字的路徑:<code>response["content"][0]["text"]</code>。
+          別和 Ollama 的 <code>response["message"]["content"]</code> 搞混了。</p>
+        </div>
+      </div>
+
+      <pre><code class="language-python">import os
+import requests
+
+class ClaudeClient:
+    """Anthropic Claude 後端。需要環境變數 ANTHROPIC_API_KEY。"""
+
+    API_URL = "https://api.anthropic.com/v1/messages"
+    API_VERSION = "2023-06-01"
+
+    def __init__(self, model: str = "claude-3-5-haiku-20241022",
+                 max_tokens: int = 1024):
+        self.model = model
+        self.max_tokens = max_tokens
+        # 從環境變數讀取金鑰——絕不硬寫
+        self.api_key = os.environ["ANTHROPIC_API_KEY"]
+
+    def chat(self, messages: list[dict]) -&gt; str:
+        """多輪對話介面。messages 裡的 system 角色會被提取到頂層 system 欄位。"""
+        # Anthropic API:system 提示放在頂層,不放 messages 陣列裡
+        system_content = next(
+            (m["content"] for m in messages if m["role"] == "system"),
+            None,
+        )
+        user_msgs = [m for m in messages if m["role"] != "system"]
+
+        payload = {
+            "model":      self.model,
+            "max_tokens": self.max_tokens,
+            "messages":   user_msgs,
+        }
+        if system_content:
+            payload["system"] = system_content
+
+        headers = {
+            "x-api-key":         self.api_key,
+            "anthropic-version": self.API_VERSION,
+            "content-type":      "application/json",
+        }
+
+        resp = requests.post(self.API_URL, headers=headers, json=payload, timeout=60)
+        resp.raise_for_status()
+        return resp.json()["content"][0]["text"]
+
+    def complete(self, prompt: str) -&gt; str:
+        """單輪便利方法。"""
+        return self.chat([{"role": "user", "content": prompt}])</code></pre>
+
+      <h2>抽象出共用介面 LLMClient</h2>
+      <p>
+        現在我們有 <code>OllamaClient</code> 與 <code>ClaudeClient</code>,兩者都有相同的
+        <code>chat()</code> 與 <code>complete()</code> 方法。
+        Python 裡表達「共用介面」最乾淨的方式,是用<strong>抽象基底類別(abstract base class)</strong>。
+        後面的工廠函式依環境變數自動選後端:有金鑰就用 Claude,否則用本地 Ollama。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 700 360" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="arr" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/>
+    </marker>
+    <marker id="arr2" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#2f6f6a"/>
+    </marker>
+  </defs>
+
+  <!-- 你的 agent 程式碼 -->
+  <rect x="230" y="20" width="240" height="50" rx="10" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="350" y="42" text-anchor="middle" font-size="13" font-weight="700" fill="#1f2328">你的 agent 程式碼</text>
+  <text x="350" y="60" text-anchor="middle" font-size="11" fill="#4a5159">client.chat(messages) / client.complete(p)</text>
+
+  <!-- 往下箭頭到介面 -->
+  <line x1="350" y1="70" x2="350" y2="108" stroke="#8a929b" stroke-width="2" marker-end="url(#arr)"/>
+  <text x="370" y="95" font-size="10" fill="#8a929b">呼叫</text>
+
+  <!-- LLMClient 抽象介面 -->
+  <rect x="190" y="110" width="320" height="70" rx="10" fill="#ede4fb" stroke="#8b5cf6" stroke-width="2"/>
+  <text x="350" y="133" text-anchor="middle" font-size="14" font-weight="800" fill="#6d28d9">LLMClient(抽象介面)</text>
+  <text x="350" y="152" text-anchor="middle" font-size="12" fill="#4a5159">chat(messages: list[dict]) -&gt; str</text>
+  <text x="350" y="170" text-anchor="middle" font-size="12" fill="#4a5159">complete(prompt: str) -&gt; str</text>
+
+  <!-- 往左下箭頭 -->
+  <line x1="270" y1="180" x2="160" y2="240" stroke="#2f6f6a" stroke-width="2" marker-end="url(#arr2)"/>
+  <text x="170" y="218" font-size="10" fill="#2f6f6a">繼承</text>
+
+  <!-- 往右下箭頭 -->
+  <line x1="430" y1="180" x2="540" y2="240" stroke="#2f6f6a" stroke-width="2" marker-end="url(#arr2)"/>
+  <text x="475" y="218" font-size="10" fill="#2f6f6a">繼承</text>
+
+  <!-- OllamaClient -->
+  <rect x="30" y="242" width="240" height="80" rx="10" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="150" y="265" text-anchor="middle" font-size="13" font-weight="700" fill="#1f2328">OllamaClient</text>
+  <text x="150" y="284" text-anchor="middle" font-size="11" fill="#4a5159">POST /api/chat</text>
+  <text x="150" y="300" text-anchor="middle" font-size="11" fill="#4a5159">→ response["message"]["content"]</text>
+  <text x="150" y="316" text-anchor="middle" font-size="11" fill="#2f6f6a">http://localhost:11434</text>
+
+  <!-- ClaudeClient -->
+  <rect x="430" y="242" width="240" height="80" rx="10" fill="#f6e7dd" stroke="#b4541f" stroke-width="2"/>
+  <text x="550" y="265" text-anchor="middle" font-size="13" font-weight="700" fill="#1f2328">ClaudeClient</text>
+  <text x="550" y="284" text-anchor="middle" font-size="11" fill="#4a5159">POST /v1/messages</text>
+  <text x="550" y="300" text-anchor="middle" font-size="11" fill="#4a5159">→ response["content"][0]["text"]</text>
+  <text x="550" y="316" text-anchor="middle" font-size="11" fill="#b4541f">api.anthropic.com</text>
+</svg>
+        <figcaption>圖 94-1:LLMClient 抽象介面與兩個後端。你的 agent 程式碼只認識 <code>LLMClient</code> 介面;工廠函式在執行時決定用哪個後端——agent 邏輯完全不需改動。</figcaption>
+      </div>
+
+      <pre><code class="language-python">import os
+import requests
+from abc import ABC, abstractmethod
+
+
+# ─── 抽象介面 ─────────────────────────────────────────────────────────────────
+
+class LLMClient(ABC):
+    """中立的 LLM 客戶端介面。後續章節都 import 這個基底類別。"""
+
+    @abstractmethod
+    def chat(self, messages: list[dict]) -&gt; str:
+        """多輪對話。
+        messages: [{"role": "system"/"user"/"assistant", "content": "..."}]
+        回傳 assistant 的回覆文字(字串)。
+        """
+
+    def complete(self, prompt: str) -&gt; str:
+        """單輪便利方法:把 prompt 包成 user 訊息後呼叫 chat()。
+        子類別通常不需要覆寫這個方法。
+        """
+        return self.chat([{"role": "user", "content": prompt}])
+
+
+# ─── Ollama 後端 ──────────────────────────────────────────────────────────────
+
+class OllamaClient(LLMClient):
+    """本地 Ollama 後端。需先 `ollama serve` 與 `ollama pull &lt;model&gt;`。"""
+
+    def __init__(self, model: str = "llama3.2",
+                 base_url: str = "http://localhost:11434"):
+        self.model = model
+        self.base_url = base_url
+
+    def chat(self, messages: list[dict]) -&gt; str:
+        resp = requests.post(
+            f"{self.base_url}/api/chat",
+            json={"model": self.model, "messages": messages, "stream": False},
+            timeout=120,
+        )
+        resp.raise_for_status()
+        return resp.json()["message"]["content"]
+
+
+# ─── Anthropic Claude 後端 ────────────────────────────────────────────────────
+
+class ClaudeClient(LLMClient):
+    """Anthropic Claude 後端。需環境變數 ANTHROPIC_API_KEY。"""
+
+    API_URL     = "https://api.anthropic.com/v1/messages"
+    API_VERSION = "2023-06-01"
+
+    def __init__(self, model: str = "claude-3-5-haiku-20241022",
+                 max_tokens: int = 1024):
+        self.model      = model
+        self.max_tokens = max_tokens
+        self.api_key    = os.environ["ANTHROPIC_API_KEY"]
+
+    def chat(self, messages: list[dict]) -&gt; str:
+        system  = next((m["content"] for m in messages if m["role"] == "system"), None)
+        msgs    = [m for m in messages if m["role"] != "system"]
+        payload = {"model": self.model, "max_tokens": self.max_tokens, "messages": msgs}
+        if system:
+            payload["system"] = system
+        headers = {
+            "x-api-key":         self.api_key,
+            "anthropic-version": self.API_VERSION,
+            "content-type":      "application/json",
+        }
+        resp = requests.post(self.API_URL, headers=headers, json=payload, timeout=60)
+        resp.raise_for_status()
+        return resp.json()["content"][0]["text"]
+
+
+# ─── 工廠函式 ─────────────────────────────────────────────────────────────────
+
+def get_client() -&gt; LLMClient:
+    """工廠函式:有 ANTHROPIC_API_KEY 就用 Claude,否則用本地 Ollama。
+    後續章節統一呼叫這個函式取得 client,不直接 import 具體類別。
+    """
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        return ClaudeClient()
+    return OllamaClient()
+
+
+# ─── 快速驗收 ─────────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    client = get_client()
+    print(type(client).__name__, "→", client.complete("用一句話說明 context window 是什麼。"))</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">介面契約(後續章節依賴此定義)</span>
+          <p><code>LLMClient.chat(messages: list[dict]) -&gt; str</code>:輸入一個 messages 串列
+          (每個元素有 <code>"role"</code> 與 <code>"content"</code> 兩個鍵),回傳模型的回覆文字(純字串)。<br>
+          <code>LLMClient.complete(prompt: str) -&gt; str</code>:單輪便利包裝,內部轉成 <code>chat([{"role":"user","content":prompt}])</code>。<br>
+          後續第 95–100 章的所有程式碼都假設 <code>client</code> 是一個符合此介面的 <code>LLMClient</code> 物件。</p>
+        </div>
+      </div>
+
+      <h2>結構化輸出:讓 LLM 回 JSON</h2>
+      <p>
+        agent 最常見的痛點之一:你問 LLM「請回傳 JSON 格式的結果」,它有時給你一個漂亮的 JSON,
+        有時給你夾在 markdown code block 裡的 JSON,有時給你一段散文。
+        這一節講兩個讓輸出更穩定的技巧。
+      </p>
+
+      <h3>提示工程:把格式要求說清楚</h3>
+      <p>
+        最直接的方法:在提示裡<strong>明確寫出你要的格式</strong>,並加上「<strong>只回傳 JSON,不要任何說明文字</strong>」。
+      </p>
+      <pre><code class="language-python">def extract_entities(client: LLMClient, text: str) -&gt; dict:
+    """從文字中擷取人名與地名,要求模型回傳 JSON。"""
+    prompt = f"""從以下文字中擷取所有人名和地名。
+只回傳 JSON 物件,不要任何說明文字或 markdown。
+格式:
+{{"people": ["人名1", "人名2"], "places": ["地名1", "地名2"]}}
+
+文字:
+{text}"""
+    return prompt   # 先看提示長什麼樣;下面再接解析</code></pre>
+
+      <h3>解析 + 容錯重試</h3>
+      <p>
+        即使提示寫得很清楚,偶爾 LLM 還是會在 JSON 前後加上 <code>```json</code> 或說明文字。
+        健壯的做法是:嘗試解析,失敗就清理後重試,再失敗就回傳預設值。
+      </p>
+      <pre><code class="language-python">import json
+import re
+
+def ask_json(client: LLMClient, prompt: str, retries: int = 2) -&gt; dict | None:
+    """呼叫 LLM 並嘗試把回應解析成 dict。失敗最多重試 retries 次。"""
+    for attempt in range(retries + 1):
+        raw = client.complete(prompt)
+
+        # 先嘗試直接解析
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            pass
+
+        # 嘗試從 markdown code block 裡取出 JSON
+        match = re.search(r"```(?:json)?\s*([\s\S]*?)```", raw)
+        if match:
+            try:
+                return json.loads(match.group(1).strip())
+            except json.JSONDecodeError:
+                pass
+
+        # 嘗試取第一個 { ... } 區塊
+        match = re.search(r"\{[\s\S]*\}", raw)
+        if match:
+            try:
+                return json.loads(match.group(0))
+            except json.JSONDecodeError:
+                pass
+
+        if attempt &lt; retries:
+            # 加強提示後重試
+            prompt = prompt + "\n\n重要:只回傳合法的 JSON 物件,不要任何其他文字。"
+
+    return None   # 全部嘗試都失敗
+
+
+# 使用範例
+client = get_client()
+result = ask_json(client,
+    '從以下文字擷取人名和地名,只回傳 JSON: {"people":[...], "places":[...]}\n'
+    "文字:馬英九去了台北和台中,李遠哲在新竹。"
+)
+print(result)  # {'people': ['馬英九', '李遠哲'], 'places': ['台北', '台中', '新竹']}</code></pre>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">永遠要驗證解析結果</span>
+          <p>即使解析成功、拿到了 dict,也要驗證它有沒有你需要的鍵、型別是否正確——
+          LLM 偶爾會自作主張改欄位名稱或結構。
+          <code>result.get("people", [])</code> 比 <code>result["people"]</code> 安全。
+          重要的 agent 流程請考慮用 Pydantic 做型別驗證。</p>
+        </div>
+      </div>
+
+      <h3>溫度設低,輸出更穩定</h3>
+      <p>
+        需要結構化輸出時,把 temperature 設為 0 能顯著提高一致性。
+        <code>OllamaClient</code> 可以在 chat 請求的 <code>options</code> 欄位傳入;
+        <code>ClaudeClient</code> 可在 payload 加 <code>"temperature": 0</code>。
+        你可以在子類別裡加一個 <code>temperature</code> 建構參數來支援這個設定:
+      </p>
+      <pre><code class="language-python"># OllamaClient 加 temperature 支援
+class OllamaClientT(OllamaClient):
+    def __init__(self, model: str = "llama3.2", temperature: float = 0.7, **kw):
+        super().__init__(model, **kw)
+        self.temperature = temperature
+
+    def chat(self, messages: list[dict]) -&gt; str:
+        resp = requests.post(
+            f"{self.base_url}/api/chat",
+            json={
+                "model":    self.model,
+                "messages": messages,
+                "stream":   False,
+                "options":  {"temperature": self.temperature},
+            },
+            timeout=120,
+        )
+        resp.raise_for_status()
+        return resp.json()["message"]["content"]</code></pre>
+
+      <h2>系統提示與 few-shot:讓模型「入戲」</h2>
+      <p>
+        系統提示(system prompt)是 agent 工程裡最重要的槓桿之一。
+        它在對話一開始就告訴模型「你是誰、你的任務是什麼、你應該怎麼回應」——
+        在整個對話過程中持續生效。Few-shot(少量範例)是另一個強力工具:
+        與其告訴模型「要怎麼做」,不如直接給幾個「正確範例」讓它看。
+      </p>
+
+      <h3>系統提示:設定角色與規則</h3>
+      <pre><code class="language-python">def make_code_reviewer(client: LLMClient) -&gt; LLMClient:
+    """把 client 包成一個「只做程式碼審查」的特化助理。
+    注意:這裡用閉包模擬,不是真的子類別——展示系統提示的威力。
+    """
+    system = """你是一個嚴格但友善的程式碼審查者,專精 Python。
+規則:
+1. 只評論程式碼品質問題,不回答程式碼以外的問題。
+2. 每個問題必須給出具體的改善建議,不只說「這樣不好」。
+3. 用繁體中文回答。
+4. 以 JSON 格式回傳:{"issues": [{"line": N, "problem": "...", "suggestion": "..."}]}"""
+
+    # 用 Python 閉包覆寫 complete 方法
+    original_chat = client.chat
+
+    def chat_with_system(messages: list[dict]) -&gt; str:
+        full = [{"role": "system", "content": system}] + messages
+        return original_chat(full)
+
+    client.chat = chat_with_system   # type: ignore
+    return client</code></pre>
+
+      <h3>Few-shot:給幾個範例比給說明更有效</h3>
+      <pre><code class="language-python">def sentiment_classifier(client: LLMClient, text: str) -&gt; str:
+    """情感分析:正面/負面/中性。用 few-shot 示範期望格式。"""
+    messages = [
+        {"role": "system",    "content": "你是情感分析工具,只回傳:正面、負面、或中性。"},
+        # --- few-shot 範例開始 ---
+        {"role": "user",      "content": "這家店的食物真的太好吃了,下次還要來!"},
+        {"role": "assistant", "content": "正面"},
+        {"role": "user",      "content": "等了一個小時才送到,完全冷掉了。"},
+        {"role": "assistant", "content": "負面"},
+        {"role": "user",      "content": "今天天氣 25 度。"},
+        {"role": "assistant", "content": "中性"},
+        # --- few-shot 範例結束,接真正的問題 ---
+        {"role": "user",      "content": text},
+    ]
+    return client.chat(messages)
+
+client = get_client()
+print(sentiment_classifier(client, "這個 API 文件寫得一清二楚,省了我好多時間。"))
+# 預期輸出:正面</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">Few-shot 的原理</span>
+          <p>Few-shot 之所以有效,本質是在利用模型的<strong>上下文學習(in-context learning)</strong>能力——
+          給幾個「輸入 → 輸出」的範例,模型會從這些範例中推斷任務規律,並套用到新輸入上。
+          這不涉及任何參數更新,是純粹在「調整條件機率的條件」(呼應第 93 章的核心觀念)。
+          一般而言,2–5 個範例就足夠;範例要代表各種情況,尤其是邊界條件。</p>
+        </div>
+      </div>
+
+      <h3>提示工程的誠實邊界</h3>
+      <p>
+        系統提示與 few-shot 能大幅改善輸出品質,但不是萬能的。模型有<strong>知識截止日</strong>:
+        它不知道你昨天才發生的事。它會<strong>幻覺</strong>:在不確定時仍然自信地輸出(這正是第 93 章講的
+        「預測下一個最像樣的 token」的副作用)。它對提示中的矛盾指令可能表現不一致。
+        好的 agent 工程必須設計防線——例如在輸出端驗證、加結構化解析、在需要事實準確性的地方使用 RAG(第 96 章)。
+      </p>
+
+      <h2>把完整的 llm_client.py 組起來</h2>
+      <p>
+        把本章所有零件合在一個可直接使用的檔案裡。你在後面的章節裡只需要:
+        <code>from llm_client import get_client</code>。
+      </p>
+      <pre><code class="language-python">#!/usr/bin/env python3
+"""llm_client.py — 中立的 LLM 客戶端
+後續章節統一 import:from llm_client import LLMClient, get_client
+"""
+import json
+import os
+import re
+import requests
+from abc import ABC, abstractmethod
+
+
+class LLMClient(ABC):
+    """抽象基底:定義後續章節共用的 LLM 客戶端介面。"""
+
+    @abstractmethod
+    def chat(self, messages: list[dict]) -&gt; str:
+        """多輪對話。messages 格式:[{"role": "...", "content": "..."}]"""
+
+    def complete(self, prompt: str) -&gt; str:
+        """單輪便利方法:把 prompt 包成 user 訊息呼叫 chat()。"""
+        return self.chat([{"role": "user", "content": prompt}])
+
+    def ask_json(self, prompt: str, retries: int = 2) -&gt; dict | None:
+        """呼叫模型並把回應解析成 dict,失敗時最多重試 retries 次。"""
+        for attempt in range(retries + 1):
+            raw = self.complete(prompt)
+            # 嘗試三種形式:直接 JSON、markdown code block、第一個 {...}
+            for extractor in (
+                lambda s: s,
+                lambda s: (re.search(r"```(?:json)?\s*([\s\S]*?)```", s) or type("", (), {"group": lambda *a: None})()).group(1),
+                lambda s: (re.search(r"\{[\s\S]*\}", s) or type("", (), {"group": lambda *a: None})()).group(0),
+            ):
+                candidate = extractor(raw)
+                if candidate:
+                    try:
+                        return json.loads(candidate.strip())
+                    except (json.JSONDecodeError, AttributeError):
+                        pass
+            if attempt &lt; retries:
+                prompt += "\n\n重要:只回傳合法的 JSON 物件,不要任何其他文字。"
+        return None
+
+
+class OllamaClient(LLMClient):
+    """本地 Ollama 後端(http://localhost:11434)。
+    前提:`ollama serve` 執行中且已 `ollama pull &lt;model&gt;`。
+    """
+
+    def __init__(self, model: str = "llama3.2",
+                 base_url: str = "http://localhost:11434",
+                 temperature: float = 0.7):
+        self.model       = model
+        self.base_url    = base_url
+        self.temperature = temperature
+
+    def chat(self, messages: list[dict]) -&gt; str:
+        resp = requests.post(
+            f"{self.base_url}/api/chat",
+            json={
+                "model":    self.model,
+                "messages": messages,
+                "stream":   False,
+                "options":  {"temperature": self.temperature},
+            },
+            timeout=120,
+        )
+        resp.raise_for_status()
+        return resp.json()["message"]["content"]   # Ollama 回應路徑
+
+
+class ClaudeClient(LLMClient):
+    """Anthropic Claude 後端(https://api.anthropic.com/v1/messages)。
+    前提:環境變數 ANTHROPIC_API_KEY 已設定。
+    """
+
+    API_URL     = "https://api.anthropic.com/v1/messages"
+    API_VERSION = "2023-06-01"
+
+    def __init__(self, model: str = "claude-3-5-haiku-20241022",
+                 max_tokens: int = 1024,
+                 temperature: float = 0.7):
+        self.model       = model
+        self.max_tokens  = max_tokens
+        self.temperature = temperature
+        self.api_key     = os.environ["ANTHROPIC_API_KEY"]  # 不要硬寫!
+
+    def chat(self, messages: list[dict]) -&gt; str:
+        system  = next((m["content"] for m in messages if m["role"] == "system"), None)
+        msgs    = [m for m in messages if m["role"] != "system"]
+        payload = {
+            "model":       self.model,
+            "max_tokens":  self.max_tokens,
+            "messages":    msgs,
+            "temperature": self.temperature,
+        }
+        if system:
+            payload["system"] = system
+        headers = {
+            "x-api-key":         self.api_key,
+            "anthropic-version": self.API_VERSION,
+            "content-type":      "application/json",
+        }
+        resp = requests.post(self.API_URL, headers=headers, json=payload, timeout=60)
+        resp.raise_for_status()
+        return resp.json()["content"][0]["text"]   # Anthropic 回應路徑
+
+
+def get_client(temperature: float = 0.7) -&gt; LLMClient:
+    """工廠函式:有 ANTHROPIC_API_KEY 就回傳 ClaudeClient,否則 OllamaClient。"""
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        return ClaudeClient(temperature=temperature)
+    return OllamaClient(temperature=temperature)
+
+
+if __name__ == "__main__":
+    c = get_client()
+    print(f"使用後端:{type(c).__name__}")
+    print(c.complete("用一句話解釋什麼是 LLM client。"))</code></pre>
+
+      <h2>練習</h2>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 94.1 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>
+            為 <code>LLMClient</code> 加入第三個後端:<strong>OpenAI 相容 API</strong>。
+            OpenAI 的 Chat Completions API 端點是 <code>https://api.openai.com/v1/chat/completions</code>,
+            請求 body 含 <code>"model"</code>、<code>"messages"</code>、<code>"max_tokens"</code>;
+            回應結構是 <code>response["choices"][0]["message"]["content"]</code>。
+            寫一個 <code>OpenAIClient(LLMClient)</code> 繼承 <code>LLMClient</code>、實作 <code>chat()</code>,
+            並更新 <code>get_client()</code>:有 <code>OPENAI_API_KEY</code> 就用 OpenAI、有 <code>ANTHROPIC_API_KEY</code> 就用 Claude、都沒有就用 Ollama。
+          </p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">class OpenAIClient(LLMClient):
+    API_URL = "https://api.openai.com/v1/chat/completions"
+
+    def __init__(self, model: str = "gpt-4o-mini", max_tokens: int = 1024):
+        self.model      = model
+        self.max_tokens = max_tokens
+        self.api_key    = os.environ["OPENAI_API_KEY"]
+
+    def chat(self, messages: list[dict]) -&gt; str:
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type":  "application/json",
+        }
+        payload = {
+            "model":      self.model,
+            "max_tokens": self.max_tokens,
+            "messages":   messages,
+        }
+        resp = requests.post(self.API_URL, headers=headers, json=payload, timeout=60)
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]["content"]
+
+
+def get_client(temperature: float = 0.7) -&gt; LLMClient:
+    if os.environ.get("OPENAI_API_KEY"):
+        return OpenAIClient()
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        return ClaudeClient(temperature=temperature)
+    return OllamaClient(temperature=temperature)</code></pre>
+              <p>關鍵觀察:三個後端的 <code>chat()</code> 都只是「送 POST、拿回應、挖欄位」——
+              欄位路徑不同,其他邏輯完全一樣。這正是「中立介面」的優點:新增後端只需填這幾行差異。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 94.2 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>
+            實作一個 <code>ask_json_strict(client, schema: dict, prompt: str) -&gt; dict</code> 函式,
+            讓 LLM 只能回傳符合指定結構的 JSON。
+            做法:把 <code>schema</code>(鍵名 → 型別說明的 dict,例如 <code>{"name": "str", "age": "int"}</code>)
+            轉成提示字串說明,並在解析成功後用 Python 驗證所有鍵都存在。
+            若驗證失敗,在提示裡指出缺失的鍵後重試,最多 3 次。
+          </p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">def ask_json_strict(client: LLMClient, schema: dict, prompt: str,
+                    retries: int = 3) -&gt; dict | None:
+    """要求 LLM 回傳必須包含 schema 所有鍵的 JSON。"""
+    schema_desc = ", ".join(f'"{k}": {v}' for k, v in schema.items())
+    base_prompt = (
+        f"{prompt}\n\n"
+        f"請只回傳 JSON 物件,格式必須包含這些鍵: {{{schema_desc}}}"
+    )
+    current_prompt = base_prompt
+
+    for attempt in range(retries):
+        result = client.ask_json(current_prompt, retries=1)
+        if result is None:
+            current_prompt = base_prompt + "\n只回傳 JSON,不要任何說明。"
+            continue
+
+        missing = [k for k in schema if k not in result]
+        if not missing:
+            return result   # 所有鍵都在,成功
+
+        # 告訴模型缺了哪些鍵
+        current_prompt = (
+            base_prompt
+            + f"\n上一次回傳缺少這些鍵:{missing},請補上。"
+        )
+
+    return None</code></pre>
+              <p>這個模式的核心思路:不只「解析失敗就重試」,而是把「哪裡不對」反饋進提示,
+              讓模型有機會自我修正。這是 agent 自我修復的基本套路——第 98 章的「自我改進 agent」會把它系統化。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 94.3 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>
+            用你的 <code>OllamaClient</code>(或 <code>ClaudeClient</code>),對同一個提示「寫一首關於台灣的四行詩」,
+            分別用 <code>temperature=0</code>、<code>temperature=0.7</code>、<code>temperature=1.5</code> 各呼叫 3 次。
+            (a) 描述輸出的差異——多樣性?重複率?語法正確性?
+            (b) 為什麼 temperature 極高(例如 2.0)會讓輸出出現亂碼或無意義文字?
+          </p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>(a) 觀察規律:</strong></p>
+              <ul>
+                <li><code>temperature=0</code>:三次幾乎完全相同(確定性輸出),四行詩工整但缺乏驚喜。</li>
+                <li><code>temperature=0.7</code>:每次有細微變化,用詞多樣,品質通常最穩定。</li>
+                <li><code>temperature=1.5</code>:每次差異很大,有時非常有創意,有時押韻失控或語法怪異。</li>
+              </ul>
+              <p><strong>(b) 為什麼極高 temperature 會產生亂碼?</strong></p>
+              <p>回憶第 93 章:temperature 在 softmax 之前把 logits 除以一個溫度值。
+              <code>temperature → ∞</code> 時,所有 logit 趨向同一個值,機率分佈趨近<strong>均勻分佈</strong>——
+              也就是說,模型對每個 token 的機率幾乎相等,完全靠抽籤。
+              自然語言裡大多數 token 組合都是不合文法的;在均勻分佈下每次生成都幾乎是亂抽,
+              輸出就會是一串沒有意義的 token 拼湊。
+              <code>temperature=2.0</code> 雖然沒有到無窮大,但已經讓低機率 token 的抽中率大幅提升,
+              導致語法正確性崩潰。這也解釋了為什麼結構化輸出要設 <code>temperature=0</code>——
+              讓模型盡量走「最確定的路」。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 94.4 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>
+            寫一個 <code>CachedClient</code> 包裝類別,繼承 <code>LLMClient</code>、內包一個真實 client。
+            它在第一次呼叫 <code>chat(messages)</code> 時把結果存到一個本機 JSON 檔案(<code>cache.json</code>),
+            key 是 <code>messages</code> 的 hash;下次相同 messages 直接從檔案回傳,不打 API。
+            說明:這個快取對 agent 開發期「反覆測試同一流程」有多少節省成本的效果?它有什麼局限?
+          </p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">import hashlib
+import json
+from pathlib import Path
+
+class CachedClient(LLMClient):
+    """在本地 JSON 快取 LLM 呼叫結果,避免開發期重複計費。"""
+
+    def __init__(self, inner: LLMClient, cache_path: str = "cache.json"):
+        self.inner      = inner
+        self.cache_path = Path(cache_path)
+        # 載入已有快取
+        if self.cache_path.exists():
+            self._cache = json.loads(self.cache_path.read_text(encoding="utf-8"))
+        else:
+            self._cache = {}
+
+    def _key(self, messages: list[dict]) -&gt; str:
+        """用 messages 的 JSON 字串算 MD5 當快取鍵。"""
+        raw = json.dumps(messages, ensure_ascii=False, sort_keys=True)
+        return hashlib.md5(raw.encode()).hexdigest()
+
+    def chat(self, messages: list[dict]) -&gt; str:
+        k = self._key(messages)
+        if k in self._cache:
+            return self._cache[k]
+        result = self.inner.chat(messages)
+        self._cache[k] = result
+        self.cache_path.write_text(
+            json.dumps(self._cache, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        return result
+
+# 使用範例
+real_client   = get_client()
+cached_client = CachedClient(real_client)</code></pre>
+              <p><strong>節省效果:</strong>對「反覆跑同一個測試場景」的開發週期,快取能省下幾乎 100% 的 API 費用與等待時間。
+              特別是在寫 agent 邏輯時,你可能跑同一個對話幾十次——快取能讓你快速迭代。</p>
+              <p><strong>局限:</strong>(1) 快取不會過期,模型更新後回應可能已和快取不同;
+              (2) 對非確定性任務(如生成多樣詩歌),快取讓你永遠看到同一個回應;
+              (3) cache.json 可能洩漏敏感的 prompt 內容,要加進 <code>.gitignore</code>。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>把這一章串起來</h2>
+      <p>
+        這一章我們做了一件看起來簡單、卻是後面所有 agent 章節的地基的事:
+        <strong>手刻一個中立的 LLM client</strong>。回顧幾個關鍵決定:
+      </p>
+      <ul>
+        <li><strong>介面契約</strong>:兩個方法——<code>chat(messages: list[dict]) -&gt; str</code>(多輪)
+        與 <code>complete(prompt: str) -&gt; str</code>(單輪便利包裝)。後面所有章節的程式碼都依賴這個介面,不依賴具體後端。</li>
+        <li><strong>Ollama 後端</strong>:POST <code>http://localhost:11434/api/chat</code>,
+        回應取 <code>response["message"]["content"]</code>。本地跑、不計費、適合開發期。</li>
+        <li><strong>Claude 後端</strong>:POST <code>https://api.anthropic.com/v1/messages</code>,
+        需要 <code>ANTHROPIC_API_KEY</code> 標頭,
+        回應取 <code>response["content"][0]["text"]</code>。雲端、較強、需要金鑰。</li>
+        <li><strong>工廠函式</strong>:<code>get_client()</code> 依環境變數自動選後端——切換後端不改 agent 邏輯。</li>
+        <li><strong>結構化輸出</strong>:提示裡說清楚格式 + 解析時容錯重試 + 驗證結果。</li>
+        <li><strong>系統提示 &amp; few-shot</strong>:最直接的提示工程槓桿——用 messages 陣列的 <code>system</code> 角色設規則,用幾個「輸入 → 輸出」範例示範期望行為。</li>
+      </ul>
+      <p>
+        有了 <code>llm_client.py</code>,你已經有了 agent 的核心:一個能「用程式呼叫 LLM」的乾淨介面。
+        接下來的第 95 章《工具呼叫與 ReAct》,我們就要讓這個 client「動起來」——
+        教它在對話過程中判斷何時該「呼叫工具」(搜尋網路、執行程式碼、查資料庫),
+        而不只是「回文字」。agent 的靈魂就藏在那個「動手」的迴圈裡。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">📚</div>
+        <div class="body">
+          <span class="c-title">延伸資源</span>
+          <p><strong>Ollama</strong>:官方文件與支援模型清單見 <a href="https://ollama.ai">ollama.ai</a>;
+          API 完整欄位說明在 <a href="https://github.com/ollama/ollama/blob/main/docs/api.md">github.com/ollama/ollama/blob/main/docs/api.md</a>。</p>
+          <p><strong>Anthropic Claude</strong>:Messages API 完整參考在 <a href="https://docs.anthropic.com/en/api/messages">docs.anthropic.com/en/api/messages</a>;
+          Prompt Engineering 指南在 <a href="https://docs.anthropic.com/en/docs/build-with-claude/prompt-engineering/overview">docs.anthropic.com/en/docs/build-with-claude/prompt-engineering</a>。</p>
+          <p><strong>AI Engineering Book</strong>(aie-book):Chip Huyen 的《AI Engineering》對 LLM API 呼叫、結構化輸出與 agent 工程有業界視角的深度討論。</p>
+          <p>這一章的 LLM 原理基礎在<a href="99-gpt-from-scratch.html">第 93 章《從零打造 GPT》</a>
+          (選修);訓練機制與梯度下降在<a href="38-machine-learning.html">第 38 章《機器學習》</a>。</p>
+        </div>
+      </div>

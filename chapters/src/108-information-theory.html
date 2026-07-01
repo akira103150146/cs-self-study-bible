@@ -1,0 +1,883 @@
+<!--meta
+title: 資訊理論與資料壓縮
+description: 從夏農熵到源編碼定理、從 Huffman 到 LZ77、從 Hamming 碼到糾錯原理——理解壓縮的理論極限，以及如何在雜訊中可靠傳遞資訊。
+-->
+
+      <div class="eyebrow">第二三部 · 進階補充:位元、資訊與最佳化</div>
+      <h1>資訊理論與資料壓縮</h1>
+      <p class="subtitle">每一個位元的背後，都有一個問題的答案——而資訊理論告訴你，最少需要幾個位元。</p>
+      <div class="byline">
+        <span class="tag">第 102 章</span>
+        <span>閱讀時間 ≈ 80 分鐘</span>
+        <span>難度:★★★★☆</span>
+      </div>
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章，你會知道</div>
+        <ul>
+          <li>「資訊量」的精確定義：驚奇度(surprisal)與位元之間的關係</li>
+          <li>夏農熵(Shannon entropy) $H = -\sum p_i \log_2 p_i$ 的直覺、極值與壓縮含義</li>
+          <li>源編碼定理(source coding theorem)：無損壓縮的理論下限就是熵；前綴碼與 Kraft 不等式</li>
+          <li>熵編碼：Huffman（連回第 31 章）與算術編碼(arithmetic coding)如何逼近熵</li>
+          <li>字典式壓縮：LZ77、LZ78、LZW 的滑動視窗與字典原理，以及 DEFLATE 如何組合兩者</li>
+          <li>有損壓縮的核心思路：量化與感知編碼（JPEG/MP3）</li>
+          <li>通道容量與糾錯碼：同位檢查、Hamming(7,4) 碼距與糾一位原理、Reed-Solomon 概念</li>
+          <li>互資訊(mutual information)、KL 散度與交叉熵損失——資訊理論在機器學習的身影</li>
+        </ul>
+      </div>
+
+      <!-- ==================== §1 ==================== -->
+      <h2>一則訊息值多少資訊？驚奇度與位元</h2>
+
+      <p>
+        假設你同時收到兩條新聞推播：
+      </p>
+      <blockquote>「太陽今天從東方升起。」</blockquote>
+      <blockquote>「台北101昨夜無預警倒塌。」</blockquote>
+      <p>
+        兩條都是「訊息」，但直覺告訴你第二條遠比第一條「有資訊量」。為什麼？
+        因為第一條幾乎是確定的，它幾乎沒有告訴你任何新東西；
+        第二條極度出乎意料，收到的那一刻你的世界觀就被更新了一大塊。
+      </p>
+      <p>
+        1948 年，貝爾實驗室的 Claude Shannon 把這個直覺數學化。他定義一個事件 $x$ 的
+        <strong>驚奇度(surprisal)</strong>，又稱自資訊(self-information)，為：
+      </p>
+      $$I(x) = \log_2 \frac{1}{P(x)} = -\log_2 P(x) \quad \text{(位元)}$$
+      <p>這個公式有三個美麗的性質：</p>
+      <ul>
+        <li>$P(x) = 1$（確定事件）$\Rightarrow I(x) = 0$：確定的事沒有資訊量。</li>
+        <li>$P(x)$ 越小，$I(x)$ 越大：越罕見的事件，攜帶越多資訊。</li>
+        <li>兩個<em>獨立</em>事件的驚奇度可<em>相加</em>：$I(x_1 x_2) = I(x_1) + I(x_2)$（源自對數的加法性質）。</li>
+      </ul>
+      <p>
+        為什麼用 $\log_2$？因為我們用「位元(bit)」計量——需要幾個是/否問題才能確定這件事。
+        一枚公平硬幣落正面的機率是 $1/2$，驚奇度 $= \log_2 2 = 1$ 位元；
+        擲一顆公平六面骰出現 6 點的機率是 $1/6$，驚奇度 $= \log_2 6 \approx 2.58$ 位元。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">資訊量 = 驚奇度 = 需要幾個位元才能「傳達這件事」</span>
+          <p>$I(x) = -\log_2 P(x)$ 位元。確定的事 0 位元；機率 $1/2$ 的事 1 位元；機率 $1/1{,}000{,}000$ 的事約 20 位元。</p>
+        </div>
+      </div>
+
+      <!-- ==================== §2 ==================== -->
+      <h2>夏農熵：衡量平均不確定性的量尺</h2>
+
+      <p>
+        單一事件的驚奇度很有用，但在壓縮或通訊裡，我們更在乎的是：
+        <em>平均而言</em>，從一個來源(source)取出一個符號，需要幾個位元？
+        這就是<strong>夏農熵(Shannon entropy)</strong> $H(X)$ 的出發點。
+      </p>
+      <p>
+        如果來源 $X$ 有 $n$ 個符號，對應機率 $\{p_1, \dots, p_n\}$，
+        則驚奇度的期望值是：
+      </p>
+      $$H(X) = \mathbb{E}[I(X)] = -\sum_{i=1}^{n} p_i \log_2 p_i \quad \text{(位元/符號)}$$
+      <p>
+        慣例：$0 \cdot \log_2 0 \stackrel{\text{def}}{=} 0$（取極限 $p \to 0^+$ 可驗證）。
+      </p>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">熵的極值</span>
+          <p>
+            <strong>最大值</strong>：所有 $n$ 個符號等機率 $p_i = 1/n$ 時，$H = \log_2 n$ 位元——完全均勻、最不可預測。<br>
+            <strong>最小值 0</strong>：只有一個符號的機率為 1，其餘為 0——完全確定，不需要任何位元。
+          </p>
+        </div>
+      </div>
+
+      <p>
+        最能感受熵的場景是<strong>二元來源(binary source)</strong>：只有 0 和 1，
+        出現 1 的機率是 $p$，出現 0 的機率是 $1-p$。
+        此時熵就是<strong>二元熵函數(binary entropy function)</strong>：
+      </p>
+      $$H(p) = -p\log_2 p - (1-p)\log_2(1-p)$$
+
+      <div class="diagram">
+<svg viewBox="0 0 500 280" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <rect x="0" y="0" width="500" height="280" fill="#f8fafb" rx="8"/>
+  <!-- grid lines -->
+  <g stroke="#dee3e7" stroke-width="1">
+    <line x1="60" y1="240" x2="460" y2="240"/>
+    <line x1="60" y1="30" x2="460" y2="30"/>
+    <line x1="60" y1="135" x2="460" y2="135"/>
+    <line x1="60" y1="30" x2="60" y2="240"/>
+    <line x1="260" y1="30" x2="260" y2="240" stroke-dasharray="4 3"/>
+    <line x1="460" y1="30" x2="460" y2="240"/>
+  </g>
+  <!-- fill under curve -->
+  <polygon
+    points="60,240 80,180 100,142 120,112 140,88 160,70 180,55 200,44 220,36 240,32 260,30 280,32 300,36 320,44 340,55 360,70 380,88 400,112 420,142 440,180 460,240"
+    fill="#e3efed" opacity="0.55"/>
+  <!-- entropy curve -->
+  <polyline
+    points="60,240 80,180 100,142 120,112 140,88 160,70 180,55 200,44 220,36 240,32 260,30 280,32 300,36 320,44 340,55 360,70 380,88 400,112 420,142 440,180 460,240"
+    fill="none" stroke="#2f6f6a" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+  <!-- peak dot and annotation -->
+  <circle cx="260" cy="30" r="5" fill="#b4541f"/>
+  <text x="268" y="44" font-size="12" fill="#b4541f" font-weight="700">H(0.5) = 1 位元</text>
+  <text x="268" y="58" font-size="11" fill="#b4541f">（最大熵，完全不確定）</text>
+  <!-- endpoints annotation -->
+  <circle cx="60" cy="240" r="5" fill="#8a929b"/>
+  <circle cx="460" cy="240" r="5" fill="#8a929b"/>
+  <text x="60" y="258" font-size="11" fill="#8a929b" text-anchor="middle">H(0)=0</text>
+  <text x="460" y="258" font-size="11" fill="#8a929b" text-anchor="middle">H(1)=0</text>
+  <!-- x-axis labels -->
+  <text x="160" y="255" font-size="12" fill="#555" text-anchor="middle">0.25</text>
+  <text x="260" y="255" font-size="12" fill="#555" text-anchor="middle">0.5</text>
+  <text x="360" y="255" font-size="12" fill="#555" text-anchor="middle">0.75</text>
+  <!-- y-axis labels -->
+  <text x="52" y="244" font-size="12" fill="#555" text-anchor="end">0</text>
+  <text x="52" y="139" font-size="12" fill="#555" text-anchor="end">0.5</text>
+  <text x="52" y="34" font-size="12" fill="#555" text-anchor="end">1</text>
+  <!-- axis titles -->
+  <text x="260" y="274" font-size="13" fill="#333" text-anchor="middle">p（出現 1 的機率）</text>
+  <text x="18" y="137" font-size="13" fill="#333" text-anchor="middle" transform="rotate(-90,18,137)">H(p) 位元</text>
+  <text x="260" y="18" font-size="13" font-weight="700" fill="#1f2328" text-anchor="middle">二元熵函數 H(p)</text>
+</svg>
+        <figcaption>圖 102-1：二元熵函數 $H(p)$。$p=0.5$ 時熵最大（完全不確定），$p \to 0$ 或 $p \to 1$ 時熵趨近 0（結果幾乎確定）。曲線的面積代表「可以被壓縮掉的空間」。</figcaption>
+      </div>
+
+      <p>
+        來感受一下熵的含義。英文文本的 26 個字母有不同頻率（'e' 約 12.7%，'z' 約 0.07%……），
+        代入熵公式得到約 <strong>4.1 位元/字母</strong>。
+        然而 ASCII 用 8 位元存每個字母——表示英文文本至少有一半是「多餘的」，可以壓掉！
+      </p>
+
+      <pre><code class="language-python">import math
+
+def entropy(probs):
+    """計算離散分佈的夏農熵（位元/符號）。"""
+    return -sum(p * math.log2(p) for p in probs if p &gt; 0)
+
+# 公平硬幣：熵最大
+print(f"公平硬幣熵    = {entropy([0.5, 0.5]):.4f} bits")    # 1.0000
+
+# 偏硬幣（正面 90%）：熵低
+print(f"偏硬幣熵      = {entropy([0.9, 0.1]):.4f} bits")    # 0.4690
+
+# 四個等機率符號
+print(f"四符號均勻熵  = {entropy([0.25]*4):.4f} bits")      # 2.0000
+
+# 不均勻四符號（注意可壓縮性）
+probs = [0.5, 0.25, 0.125, 0.125]
+print(f"不均勻四符號熵= {entropy(probs):.4f} bits")         # 1.7500</code></pre>
+
+      <p>
+        最後那個例子很有啟發性：四個符號理論上需要 $\log_2 4 = 2$ 位元，
+        但因為分佈不均，實際熵只有 1.75 位元——這 0.25 位元的差距就是「可以壓縮的空間」。
+      </p>
+
+      <!-- ==================== §3 ==================== -->
+      <h2>源編碼定理：壓縮的理論下限</h2>
+
+      <p>
+        熵不只是一個數字，它告訴你一個根本事實。Shannon 在 1948 年的論文中證明了：
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">夏農源編碼定理(Source Coding Theorem)</span>
+          <p>設來源 $X$ 的熵為 $H(X)$ 位元/符號。則：<br>
+          (1) 存在一個無損壓縮碼，使平均每符號的碼長任意接近 $H(X)$。<br>
+          (2) 任何無損壓縮碼的平均碼長都<strong>不能低於</strong> $H(X)$。</p>
+        </div>
+      </div>
+
+      <p>
+        這是一個「存在性 + 下界」定理：它告訴你壓縮的理論極限在哪，但不告訴你怎麼建出最好的碼。
+        建出最好的碼，是 Huffman、算術編碼等演算法在做的事。
+      </p>
+      <p>
+        為什麼說「任意接近」而非「等於」？原因很微妙：
+        如果每個符號必須對應<em>整數個</em>位元，就沒辦法剛好達到熵（除非熵本身是整數）。
+        算術編碼突破這個限制，做到「非整數碼長」，從而真正逼近熵。
+      </p>
+
+      <!-- ==================== §4 ==================== -->
+      <h2>前綴碼與 Kraft 不等式</h2>
+
+      <p>
+        壓縮需要把每個符號對應到一個位元串，讓接收端能無歧義地還原原始序列。
+        最自然的方法是<strong>前綴碼(prefix-free code)</strong>，又稱即時碼(instantaneous code)：
+        沒有任何碼字是另一個碼字的前綴。
+      </p>
+      <p>
+        為什麼前綴碼能無歧義解碼？因為你從頭讀位元流，一旦讀到的位元串等於某個碼字，
+        就可以立刻輸出那個符號——不需要「等待」未來的位元確認邊界。
+        這就是「即時(instantaneous)」的含義，也是 Huffman 樹上「從根走到葉就確定符號」的原因。
+      </p>
+      <p>
+        前綴碼的存在有一個優雅的充要條件——<strong>Kraft 不等式(Kraft inequality)</strong>：
+        設 $n$ 個符號的碼長分別為 $\ell_1, \dots, \ell_n$（位元），則
+      </p>
+      $$\sum_{i=1}^{n} 2^{-\ell_i} \leq 1$$
+      <p>
+        等式成立時，稱為<strong>完整碼(complete code)</strong>——二元樹的每一片葉子都被用到，
+        沒有任何「浪費的分支」。最佳無損碼恰好滿足 Kraft 等式。
+      </p>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">Kraft 不等式的幾何直覺</span>
+          <p>想像一棵完全二元樹，根節點的「份額」是 1。每往下一層，左右各拿父節點一半份額。
+          一個碼長為 $\ell$ 的符號佔了 $2^{-\ell}$ 份額。Kraft 不等式說：
+          所有葉子佔的份額加起來不超過 1——你不能讓碼字互相搶佔空間。</p>
+        </div>
+      </div>
+
+      <p>以分佈 $\{0.5, 0.25, 0.125, 0.125\}$ 驗證：</p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>符號</th><th>機率</th><th>碼字</th><th>碼長 $\ell_i$</th><th>$2^{-\ell_i}$</th></tr></thead>
+        <tbody>
+          <tr><td>A</td><td>0.500</td><td><code>0</code></td><td>1</td><td>0.500</td></tr>
+          <tr><td>B</td><td>0.250</td><td><code>10</code></td><td>2</td><td>0.250</td></tr>
+          <tr><td>C</td><td>0.125</td><td><code>110</code></td><td>3</td><td>0.125</td></tr>
+          <tr><td>D</td><td>0.125</td><td><code>111</code></td><td>3</td><td>0.125</td></tr>
+          <tr><td colspan="4"><strong>總和</strong></td><td><strong>1.000</strong> ✓</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>
+        Kraft 等於 1，是完整前綴碼。平均碼長 $L = 0.5\times1 + 0.25\times2 + 0.125\times3 + 0.125\times3 = 1.75$ 位元，
+        恰好等於熵 1.75 位元——這正是 Huffman 演算法對此分佈產生的最佳碼。
+      </p>
+
+      <!-- ==================== §5 ==================== -->
+      <h2>熵編碼：從 Huffman 到算術編碼</h2>
+
+      <h3>Huffman 編碼（連回第 31 章）</h3>
+      <p>
+        在<a href="31-greedy.html">第 31 章（貪婪演算法）</a>，我們詳細介紹了霍夫曼(Huffman)編碼的建樹演算法、
+        貪婪選擇性質與正確性證明。這裡只快速回顧結論：
+      </p>
+      <ul>
+        <li>Huffman 演算法每次從優先佇列取出兩個最小頻率的節點合併，$O(n \log n)$ 建出最佳前綴碼樹。</li>
+        <li>在「每符號必須整數個位元」的前提下，保證平均碼長最小。</li>
+        <li>Huffman 的平均碼長 $L$ 滿足 $H(X) \leq L &lt; H(X) + 1$ 位元/符號。</li>
+      </ul>
+      <p>
+        那最多差 1 位元的「缺口」，是每符號必須取整數位元所帶來的代價。
+        對 $k$ 個符號組成的「區塊」一次編碼，差距縮小到 $1/k$ 位元/符號；
+        但 $k$ 變大時需要 $n^k$ 個碼字，實用上代價極高——於是有了算術編碼。
+      </p>
+
+      <h3>算術編碼(Arithmetic Coding)</h3>
+      <p>
+        算術編碼的核心想法是：與其為每個符號分配整數長度的碼字，
+        不如把整個<em>訊息序列</em>對應到 $[0, 1)$ 區間上的一個實數——
+        而表示這個實數需要的位元數，就恰好逼近整個序列的熵。
+      </p>
+      <p>
+        以分佈 $P(\text{A})=0.5,\ P(\text{B})=0.25,\ P(\text{C})=0.25$ 為例，編碼序列 "ABA"：
+      </p>
+      <ol>
+        <li>初始：整個 $[0,1)$ 是「目前的可能範圍」。</li>
+        <li>讀到 A（佔前 50%）：範圍縮到 $[0,\ 0.5)$。</li>
+        <li>讀到 B（在 $[0,0.5)$ 裡，B 佔 50%～75% 這一段）：縮到 $[0.25,\ 0.375)$。</li>
+        <li>讀到 A（在 $[0.25,0.375)$ 裡，A 佔前 50%）：縮到 $[0.25,\ 0.3125)$。</li>
+        <li>輸出區間內任何點的二進位表示，例如 $0.25 = 0.01_2$，至少需要 2 個位元（實際需加入序列終止符或長度資訊才能唯一解碼）。</li>
+      </ol>
+      <p>
+        區間越小，需要越多位元精確表示——這正對應「序列的熵」。
+        算術編碼可以達到任意接近熵的壓縮率，是理論最優的無損編碼族。
+        現代高效壓縮工具（zstd 的 ANS、HEVC/AV1 的 CABAC）都屬於算術編碼的變體。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">ANS：現代算術編碼的繼承者</span>
+          <p>Asymmetric Numeral Systems（ANS）是 2009 年 Jarek Duda 提出的算術編碼變體，
+          用位移和查表取代乘除法，速度比傳統算術編碼快 10 倍以上。
+          你平常的 <code>.zst</code> 檔案（zstd）和 Apple 的 LZFSE 背後都有 ANS。</p>
+        </div>
+      </div>
+
+      <!-- ==================== §6 ==================== -->
+      <h2>字典式壓縮：LZ77、LZ78 與 LZW</h2>
+
+      <p>
+        熵編碼的前提是「已知符號機率」——你需要事先統計或傳遞頻率表。
+        但如果資料是動態的，或重複出現的不是符號而是<em>字串</em>，該怎麼辦？
+      </p>
+      <p>
+        1977—1978 年，Abraham Lempel 和 Jacob Ziv 提出了<strong>字典式壓縮(dictionary compression)</strong>：
+        與其分析符號頻率，不如直接記錄「這一段字串，在前面什麼地方出現過」。
+      </p>
+
+      <h3>LZ77：滑動視窗</h3>
+      <p>
+        LZ77 維護一個<strong>滑動視窗(sliding window)</strong>：分成「歷史緩衝區」（已編碼的資料）
+        和「預視緩衝區」（待編碼的資料）。對每個位置，輸出一個三元組
+        $(\text{offset},\ \text{length},\ \text{next\_char})$：
+      </p>
+      <ul>
+        <li><strong>offset</strong>：在歷史緩衝區往回多遠找到匹配</li>
+        <li><strong>length</strong>：匹配了多長</li>
+        <li><strong>next_char</strong>：匹配結束後的第一個新字元</li>
+      </ul>
+
+      <div class="diagram">
+<svg viewBox="0 0 560 220" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <rect x="0" y="0" width="560" height="220" fill="#f8fafb" rx="8"/>
+  <text x="280" y="22" font-size="13" font-weight="700" fill="#1f2328" text-anchor="middle">LZ77 滑動視窗（輸入：abracadabra…）</text>
+  <!-- History buffer label -->
+  <text x="160" y="40" font-size="12" fill="#2f6f6a" font-weight="700" text-anchor="middle">歷史緩衝區（已編碼）</text>
+  <!-- History cells -->
+  <g text-anchor="middle">
+    <rect x="24" y="46" width="34" height="34" rx="5" fill="#c5e0da" stroke="#2f6f6a" stroke-width="1.5"/>
+    <text x="41" y="69" font-size="16" font-weight="800" fill="#2f6f6a">a</text>
+    <rect x="60" y="46" width="34" height="34" rx="5" fill="#c5e0da" stroke="#2f6f6a" stroke-width="1.5"/>
+    <text x="77" y="69" font-size="16" font-weight="800" fill="#2f6f6a">b</text>
+    <rect x="96" y="46" width="34" height="34" rx="5" fill="#c5e0da" stroke="#2f6f6a" stroke-width="1.5"/>
+    <text x="113" y="69" font-size="16" font-weight="800" fill="#2f6f6a">r</text>
+    <rect x="132" y="46" width="34" height="34" rx="5" fill="#c5e0da" stroke="#2f6f6a" stroke-width="1.5"/>
+    <text x="149" y="69" font-size="16" font-weight="800" fill="#2f6f6a">a</text>
+    <rect x="168" y="46" width="34" height="34" rx="5" fill="#c5e0da" stroke="#2f6f6a" stroke-width="1.5"/>
+    <text x="185" y="69" font-size="16" font-weight="800" fill="#2f6f6a">c</text>
+    <rect x="204" y="46" width="34" height="34" rx="5" fill="#c5e0da" stroke="#2f6f6a" stroke-width="1.5"/>
+    <text x="221" y="69" font-size="16" font-weight="800" fill="#2f6f6a">a</text>
+    <rect x="240" y="46" width="34" height="34" rx="5" fill="#c5e0da" stroke="#2f6f6a" stroke-width="1.5"/>
+    <text x="257" y="69" font-size="16" font-weight="800" fill="#2f6f6a">d</text>
+  </g>
+  <!-- offset labels below history -->
+  <g font-size="10" fill="#8a929b" text-anchor="middle">
+    <text x="41" y="92">-7</text><text x="77" y="92">-6</text><text x="113" y="92">-5</text>
+    <text x="149" y="92">-4</text><text x="185" y="92">-3</text><text x="221" y="92">-2</text>
+    <text x="257" y="92">-1</text>
+  </g>
+  <!-- divider -->
+  <line x1="300" y1="40" x2="300" y2="95" stroke="#8a929b" stroke-width="1.5" stroke-dasharray="4 3"/>
+  <!-- Lookahead buffer label -->
+  <text x="408" y="40" font-size="12" fill="#b4541f" font-weight="700" text-anchor="middle">預視緩衝區</text>
+  <!-- Lookahead cells -->
+  <g text-anchor="middle">
+    <rect x="310" y="46" width="34" height="34" rx="5" fill="#f0c9b0" stroke="#b4541f" stroke-width="2"/>
+    <text x="327" y="69" font-size="16" font-weight="800" fill="#b4541f">a</text>
+    <rect x="346" y="46" width="34" height="34" rx="5" fill="#f0c9b0" stroke="#b4541f" stroke-width="1.5"/>
+    <text x="363" y="69" font-size="16" font-weight="800" fill="#b4541f">b</text>
+    <rect x="382" y="46" width="34" height="34" rx="5" fill="#f0c9b0" stroke="#b4541f" stroke-width="1.5"/>
+    <text x="399" y="69" font-size="16" font-weight="800" fill="#b4541f">r</text>
+    <rect x="418" y="46" width="34" height="34" rx="5" fill="#f0c9b0" stroke="#b4541f" stroke-width="1.5"/>
+    <text x="435" y="69" font-size="16" font-weight="800" fill="#b4541f">a</text>
+    <rect x="454" y="46" width="34" height="34" rx="5" fill="#eee" stroke="#aaa" stroke-width="1"/>
+    <text x="471" y="69" font-size="16" fill="#aaa">c</text>
+  </g>
+  <!-- match annotation arrow -->
+  <defs>
+    <marker id="arrowhead" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L6,3 L0,6 Z" fill="#8b5cf6"/>
+    </marker>
+  </defs>
+  <path d="M 327 82 Q 260 115 149 82" stroke="#8b5cf6" stroke-width="2.5" fill="none" stroke-dasharray="5 3" marker-end="url(#arrowhead)"/>
+  <text x="238" y="125" font-size="12" fill="#8b5cf6" font-weight="700" text-anchor="middle">匹配 "abra"（offset=7, length=4）</text>
+  <!-- output -->
+  <rect x="50" y="140" width="460" height="42" rx="8" fill="#fff" stroke="#8b5cf6" stroke-width="1.8"/>
+  <text x="280" y="157" font-size="12" fill="#8b5cf6" font-weight="700" text-anchor="middle">輸出三元組</text>
+  <text x="280" y="175" font-size="15" font-weight="800" fill="#1f2328" text-anchor="middle">( offset = 7, length = 4, next = 'c' )</text>
+  <text x="280" y="210" font-size="12" fill="#2f6f6a" text-anchor="middle">一個三元組代替了 5 個字元的原始資料</text>
+</svg>
+        <figcaption>圖 102-2：LZ77 滑動視窗。歷史緩衝區裡的 "abra"（位置 -7 到 -4）與預視緩衝區開頭的 "abra" 完全吻合。輸出三元組 <code>(7, 4, 'c')</code>，用遠少於 5 個字元的資料表達了相同的內容。</figcaption>
+      </div>
+
+      <h3>LZ78 與 LZW：顯式字典</h3>
+      <p>
+        LZ78 不維護滑動視窗，而是動態建造一本<strong>字典(dictionary)</strong>：
+        每次讀到字典裡沒有的字串，就把它加入字典並輸出其索引加上新字元。
+      </p>
+      <p>
+        LZW（Lempel-Ziv-Welch，1984）是 LZ78 的改進版：預先填入所有單字元進字典（256 個 ASCII），
+        編碼時只輸出索引、完全不需要傳遞「下一個字元」——使壓縮流更緊湊。
+        LZW 曾是 GIF 格式的壓縮演算法（因此引發著名的版權糾紛），也用於早期 Unix <code>compress</code> 與 TIFF。
+      </p>
+
+      <pre><code class="language-python">def lz77_encode(data, window=8, lookahead=4):
+    """LZ77 簡易實作。回傳 (offset, length, next_char) 三元組列表。"""
+    output = []
+    i = 0
+    while i &lt; len(data):
+        best_off, best_len = 0, 0
+        start = max(0, i - window)
+        for j in range(start, i):
+            length = 0
+            while (length &lt; lookahead and
+                   i + length &lt; len(data) and
+                   data[j + length] == data[i + length]):
+                length += 1
+            if length &gt; best_len:
+                best_len = length
+                best_off = i - j
+        next_c = data[i + best_len] if i + best_len &lt; len(data) else ''
+        output.append((best_off, best_len, next_c))
+        i += best_len + 1
+    return output
+
+tokens = lz77_encode("abracadabra", window=8, lookahead=4)
+for tok in tokens:
+    print(tok)
+# (0, 0, 'a')  →「沒匹配，直接輸出 a」
+# (0, 0, 'b')
+# (0, 0, 'r')
+# (3, 1, 'c')  →「往回 3 位找到 'a'，複製 1 字元，接 c」
+# (5, 1, 'd')  →「往回 5 位(到 data[0])找到 'a'，複製 1 字元，接 d」
+# (7, 4, '')   →「往回 7 位找到 'abra'，複製 4 字元」</code></pre>
+
+      <!-- ==================== §7 ==================== -->
+      <h2>兩個世界的結合：DEFLATE 與現代壓縮</h2>
+
+      <p>
+        字典式壓縮（LZ77）和熵編碼（Huffman）各有強項：
+        LZ77 把重複字串壓成短小的三元組；Huffman 再把三元組裡的符號頻率進一步壓縮。
+        把兩者串起來，就是廣泛使用的 <strong>DEFLATE</strong> 演算法，也是 <code>gzip</code>、<code>zlib</code>
+        和 <code>PNG</code> 的壓縮核心。
+      </p>
+      <p>現代壓縮工具沿這條軸線不斷演進：</p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>格式 / 工具</th><th>字典部分</th><th>熵編碼部分</th><th>特點</th></tr></thead>
+        <tbody>
+          <tr><td><code>gzip / zlib</code></td><td>LZ77（32 KB 視窗）</td><td>Huffman</td><td>DEFLATE，最通用</td></tr>
+          <tr><td><code>bzip2</code></td><td>BWT + MTF</td><td>Huffman</td><td>壓縮率較高，速度較慢</td></tr>
+          <tr><td><code>zstd</code></td><td>LZ77（可變大小）</td><td>ANS (FSE)</td><td>速度快且壓縮率好；Meta 開發</td></tr>
+          <tr><td><code>brotli</code></td><td>LZ77 + 靜態字典</td><td>ANS</td><td>Web 傳輸優化；Google 開發</td></tr>
+          <tr><td><code>7z / LZMA</code></td><td>LZ77（大視窗）</td><td>Range coder</td><td>壓縮率最高，速度慢</td></tr>
+        </tbody>
+      </table>
+      </div>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">壓縮率的本質：兩階段增益相乘</span>
+          <p>壓縮效果取決於 (1) 能找到多長的重複字串（字典式）和 (2) 剩下「新」符號能壓多緊（熵編碼）。
+          兩個階段的增益<em>相乘</em>而非相加——這就是為什麼 LZ + Huffman 的組合遠勝單獨使用任何一個。</p>
+        </div>
+      </div>
+
+      <!-- ==================== §8 ==================== -->
+      <h2>有損壓縮一瞥：量化與感知編碼</h2>
+
+      <p>
+        前面談的都是<strong>無損壓縮(lossless compression)</strong>——解壓後和原始資料完全一樣。
+        但許多情況下你不需要完美還原：人眼對高頻細節不敏感、人耳對特定頻段有遮蔽效應，
+        讓<strong>有損壓縮(lossy compression)</strong>得以大幅縮小檔案而幾乎察覺不到差異。
+      </p>
+
+      <h3>量化(Quantization)</h3>
+      <p>
+        最直接的有損壓縮：把連續值「取整」。例如把 $[0, 255]$ 的像素值捨去最低 2 個位元，
+        位元數從 8 降到 6，代價是稍微模糊的色彩。
+        這種「以精度換空間」的操作就叫量化，它是所有有損壓縮的核心操作之一。
+      </p>
+
+      <h3>JPEG：頻域量化</h3>
+      <p>JPEG 比「直接量化像素」聰明得多，其管線為：</p>
+      <ol>
+        <li><strong>色彩空間轉換</strong>：RGB → YCbCr（亮度 Y + 色差 Cb, Cr）。人眼對亮度敏感、對色差不太敏感，所以色差可先降採樣。</li>
+        <li><strong>分塊 DCT</strong>（離散餘弦轉換）：把 8×8 像素塊轉換到<em>頻域</em>，得到 64 個頻率係數。低頻係數（整體明暗）重要，高頻係數（細節紋理）不重要。</li>
+        <li><strong>量化</strong>：用量化矩陣把每個係數除以步長並取整。高頻係數的步長較大，很多係數直接變成 0。</li>
+        <li><strong>熵編碼</strong>：用 Huffman（或 JPEG 2000 的算術碼）壓縮量化後的稀疏係數。</li>
+      </ol>
+      <p>
+        JPEG 的「品質」旋鈕直接控制量化步長：步長大 → 更多係數歸零 → 更小的檔案，但也更多「方塊感」。
+      </p>
+
+      <h3>MP3：感知遮蔽</h3>
+      <p>
+        MP3 的核心是<strong>感知編碼(perceptual coding)</strong>，利用聽覺心理學的現象：
+        一個強音調會「遮住」附近頻率的弱聲音。
+        MP3 用 MDCT 把音訊轉到頻域，根據感知遮蔽模型決定每個頻帶的量化精度，
+        再用 Huffman 壓縮——聽覺上幾乎無損，但檔案縮到 CD 原始大小的十分之一。
+      </p>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">重複有損壓縮會累積失真</span>
+          <p>每次 JPEG 重新存檔，量化誤差就累積一次。若需要反覆編輯圖片，
+          請以 PNG（無損）存中間檔，最後輸出才轉 JPEG。MP3 反覆重新編碼同理。</p>
+        </div>
+      </div>
+
+      <!-- ==================== §9 ==================== -->
+      <h2>雜訊通道與糾錯碼</h2>
+
+      <p>
+        資訊不只要「壓縮」，還要「可靠地傳遞」。現實中的通道（無線電、光纖、硬碟磁面）都有雜訊，
+        傳出去的位元可能在途中被翻轉。資訊理論給了我們兩件利器：
+        <strong>通道容量</strong>告訴你通道最快能傳多少資訊；
+        <strong>糾錯碼</strong>告訴你如何在雜訊中恢復原始資料。
+      </p>
+
+      <h3>通道容量</h3>
+      <p>
+        Shannon 的<strong>通道編碼定理(channel coding theorem)</strong>指出：
+        每個通道都有一個最大資訊傳輸率 $C$（位元/使用），稱為<strong>通道容量(channel capacity)</strong>。
+        只要傳輸率低於 $C$，就存在一種編碼方案讓錯誤率任意小；超過 $C$ 則必然有無法消除的錯誤。
+      </p>
+      <p>
+        對<strong>加性高斯白雜訊(AWGN)通道</strong>，著名的<strong>夏農–哈特利定理</strong>給出：
+      </p>
+      $$C = W \log_2\!\left(1 + \frac{S}{N}\right) \quad \text{(位元/秒)}$$
+      <p>
+        其中 $W$ 是頻寬(Hz)，$S/N$ 是訊噪比。即使通道有雜訊，只要訊噪比夠大，
+        依然可以可靠地傳遞資訊——代價是用更複雜的編碼。
+      </p>
+
+      <h3>碼距與糾錯能力</h3>
+      <p>
+        糾錯的核心是<strong>漢明距離(Hamming distance)</strong>：兩個等長位元串之間不同位元的個數。
+        例如 <code>1011101</code> 和 <code>1001001</code> 在第 3、5 位不同，漢明距離 = 2。
+      </p>
+      <p>一個糾錯碼的<strong>最小碼距(minimum distance) $d$</strong> 決定其糾錯能力：</p>
+      <ul>
+        <li>能<strong>偵測</strong> $d - 1$ 個錯誤</li>
+        <li>能<strong>糾正</strong> $\lfloor (d-1)/2 \rfloor$ 個錯誤</li>
+      </ul>
+
+      <h3>同位檢查(Parity Check)</h3>
+      <p>
+        最簡單的糾錯碼：在 $k$ 個資料位元後加一個<strong>同位位元(parity bit)</strong>，
+        使 1 的個數保持偶數（偶同位）。最小碼距 $d=2$，
+        能偵測 1 個錯誤，但<em>不能糾正</em>——知道出錯了，不知道哪一位。
+      </p>
+
+      <h3>Hamming(7,4) 碼：糾一位</h3>
+      <p>
+        1950 年，Richard Hamming 在貝爾實驗室發明了能<em>糾正</em>一個位元錯誤的碼，
+        現稱 <strong>Hamming(7,4)</strong>：4 個資料位元 + 3 個同位位元 = 共 7 位元，最小碼距 $d=3$。
+      </p>
+      <p>
+        7 個位元位置編號 1–7：位置 <strong>1, 2, 4</strong>（2 的冪次）是同位位元 $p_1, p_2, p_4$；
+        位置 <strong>3, 5, 6, 7</strong> 是資料位元 $d_1, d_2, d_3, d_4$。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 560 195" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <rect x="0" y="0" width="560" height="195" fill="#f8fafb" rx="8"/>
+  <text x="280" y="22" font-size="13" font-weight="700" fill="#1f2328" text-anchor="middle">Hamming(7,4) 碼位元配置</text>
+  <!-- 7 boxes -->
+  <g text-anchor="middle">
+    <!-- pos 1: p1 parity -->
+    <rect x="28" y="36" width="66" height="64" rx="8" fill="#ede9fe" stroke="#8b5cf6" stroke-width="2.5"/>
+    <text x="61" y="62" font-size="22" font-weight="800" fill="#8b5cf6">p₁</text>
+    <text x="61" y="82" font-size="11" fill="#8b5cf6">同位位元</text>
+    <text x="61" y="115" font-size="12" font-weight="700" fill="#8b5cf6">位置 1</text>
+    <!-- pos 2: p2 parity -->
+    <rect x="103" y="36" width="66" height="64" rx="8" fill="#ede9fe" stroke="#8b5cf6" stroke-width="2.5"/>
+    <text x="136" y="62" font-size="22" font-weight="800" fill="#8b5cf6">p₂</text>
+    <text x="136" y="82" font-size="11" fill="#8b5cf6">同位位元</text>
+    <text x="136" y="115" font-size="12" font-weight="700" fill="#8b5cf6">位置 2</text>
+    <!-- pos 3: d1 data -->
+    <rect x="178" y="36" width="66" height="64" rx="8" fill="#e3efed" stroke="#2f6f6a" stroke-width="2.5"/>
+    <text x="211" y="62" font-size="22" font-weight="800" fill="#2f6f6a">d₁</text>
+    <text x="211" y="82" font-size="11" fill="#2f6f6a">資料位元</text>
+    <text x="211" y="115" font-size="12" font-weight="700" fill="#2f6f6a">位置 3</text>
+    <!-- pos 4: p4 parity -->
+    <rect x="253" y="36" width="66" height="64" rx="8" fill="#ede9fe" stroke="#8b5cf6" stroke-width="2.5"/>
+    <text x="286" y="62" font-size="22" font-weight="800" fill="#8b5cf6">p₄</text>
+    <text x="286" y="82" font-size="11" fill="#8b5cf6">同位位元</text>
+    <text x="286" y="115" font-size="12" font-weight="700" fill="#8b5cf6">位置 4</text>
+    <!-- pos 5: d2 data -->
+    <rect x="328" y="36" width="66" height="64" rx="8" fill="#e3efed" stroke="#2f6f6a" stroke-width="2.5"/>
+    <text x="361" y="62" font-size="22" font-weight="800" fill="#2f6f6a">d₂</text>
+    <text x="361" y="82" font-size="11" fill="#2f6f6a">資料位元</text>
+    <text x="361" y="115" font-size="12" font-weight="700" fill="#2f6f6a">位置 5</text>
+    <!-- pos 6: d3 data -->
+    <rect x="403" y="36" width="66" height="64" rx="8" fill="#e3efed" stroke="#2f6f6a" stroke-width="2.5"/>
+    <text x="436" y="62" font-size="22" font-weight="800" fill="#2f6f6a">d₃</text>
+    <text x="436" y="82" font-size="11" fill="#2f6f6a">資料位元</text>
+    <text x="436" y="115" font-size="12" font-weight="700" fill="#2f6f6a">位置 6</text>
+    <!-- pos 7: d4 data -->
+    <rect x="478" y="36" width="66" height="64" rx="8" fill="#e3efed" stroke="#2f6f6a" stroke-width="2.5"/>
+    <text x="511" y="62" font-size="22" font-weight="800" fill="#2f6f6a">d₄</text>
+    <text x="511" y="82" font-size="11" fill="#2f6f6a">資料位元</text>
+    <text x="511" y="115" font-size="12" font-weight="700" fill="#2f6f6a">位置 7</text>
+  </g>
+  <!-- parity group annotations -->
+  <text x="280" y="142" font-size="12" fill="#555" font-weight="700" text-anchor="middle">同位群組（偶同位 XOR）：</text>
+  <text x="61" y="160" font-size="11" fill="#8b5cf6" text-anchor="middle">p₁ 覆蓋</text>
+  <text x="61" y="175" font-size="11" fill="#8b5cf6" text-anchor="middle">1,3,5,7</text>
+  <text x="136" y="160" font-size="11" fill="#8b5cf6" text-anchor="middle">p₂ 覆蓋</text>
+  <text x="136" y="175" font-size="11" fill="#8b5cf6" text-anchor="middle">2,3,6,7</text>
+  <text x="286" y="160" font-size="11" fill="#8b5cf6" text-anchor="middle">p₄ 覆蓋</text>
+  <text x="286" y="175" font-size="11" fill="#8b5cf6" text-anchor="middle">4,5,6,7</text>
+  <text x="430" y="160" font-size="11" fill="#2f6f6a" text-anchor="middle">症候碼 = (s₄s₂s₁)₂</text>
+  <text x="430" y="175" font-size="11" fill="#2f6f6a" text-anchor="middle">直接指出出錯位置</text>
+</svg>
+        <figcaption>圖 102-3：Hamming(7,4) 的 7 個位元中，位置 1、2、4（紫色）為同位位元，位置 3、5、6、7（綠色）為資料位元。每個同位位元覆蓋位置編號的二進位對應位為 1 的那些位置（如 $p_1$ 覆蓋二進位末位為 1 的 1,3,5,7）。接收到的症候碼直接以二進位指出出錯位置。</figcaption>
+      </div>
+
+      <p>三個同位位元的計算規則（偶同位，以 XOR $\oplus$ 表示）：</p>
+      $$p_1 = d_1 \oplus d_2 \oplus d_4 \quad p_2 = d_1 \oplus d_3 \oplus d_4 \quad p_4 = d_2 \oplus d_3 \oplus d_4$$
+      <p>
+        接收端重新計算三個群組，得到症候碼 $(s_4, s_2, s_1)$：
+        若全為 0，無錯；否則以二進位讀出的數值直接是出錯的位置，翻轉它即可糾正。
+      </p>
+
+      <pre><code class="language-python">def hamming74_encode(d):
+    """輸入 4 個資料位元 [d1,d2,d3,d4]，輸出 7 位元碼字。"""
+    d1, d2, d3, d4 = d
+    p1 = d1 ^ d2 ^ d4          # 覆蓋位置 1,3,5,7
+    p2 = d1 ^ d3 ^ d4          # 覆蓋位置 2,3,6,7
+    p4 = d2 ^ d3 ^ d4          # 覆蓋位置 4,5,6,7
+    return [p1, p2, d1, p4, d2, d3, d4]   # 位置 1..7
+
+def hamming74_decode(b):
+    """輸入 7 位元碼字，自動糾正至多 1 位元錯誤，回傳 4 個資料位元。"""
+    s1 = b[0] ^ b[2] ^ b[4] ^ b[6]
+    s2 = b[1] ^ b[2] ^ b[5] ^ b[6]
+    s4 = b[3] ^ b[4] ^ b[5] ^ b[6]
+    syndrome = s4 * 4 + s2 * 2 + s1
+    if syndrome:
+        print(f"  偵測到錯誤，位置 {syndrome}，自動糾正")
+        b = b[:]
+        b[syndrome - 1] ^= 1
+    return [b[2], b[4], b[5], b[6]]   # d1, d2, d3, d4
+
+cw = hamming74_encode([1, 0, 1, 1])
+print(f"原始碼字: {cw}")             # [0, 1, 1, 0, 0, 1, 1]
+
+cw_err = cw[:]
+cw_err[4] ^= 1                        # 翻轉位元 5
+print(f"出錯碼字: {cw_err}")
+recovered = hamming74_decode(cw_err)
+print(f"還原資料: {recovered}")       # [1, 0, 1, 1] ✓</code></pre>
+
+      <h3>Reed-Solomon 碼與 CRC</h3>
+      <p>
+        <strong>Reed-Solomon 碼（1960 年）</strong>在有限域上操作，能糾正<em>多個連續錯誤(burst error)</em>，
+        廣泛用於光碟(CD/DVD/Blu-ray)的刮傷修復、QR Code 的容錯掃描，以及太空探測器的通訊。
+      </p>
+      <p>
+        <strong>CRC（Cyclic Redundancy Check，迴圈冗餘檢查）</strong>嚴格說是「偵錯」而非「糾錯」：
+        它附加多項式除法的餘數，接收端重新計算後若不符就丟棄封包。
+        在<a href="25-networking.html">第 25 章（計算機網路）</a>中，你見過以太網路幀、USB 和硬碟存取都使用 CRC。
+      </p>
+
+      <!-- ==================== §10 ==================== -->
+      <h2>互資訊、KL 散度與機器學習</h2>
+
+      <p>
+        資訊理論的語言在機器學習裡無所不在。理解三個核心概念，
+        你就能看懂大多數損失函數和模型評估方法的深層意義。
+      </p>
+
+      <h3>互資訊(Mutual Information)</h3>
+      <p>
+        <strong>互資訊 $I(X; Y)$</strong> 衡量兩個隨機變數之間「共享了多少資訊」：
+      </p>
+      $$I(X; Y) = H(X) - H(X \mid Y) = H(Y) - H(Y \mid X)$$
+      <p>
+        直覺：$H(X)$ 是「知道 $Y$ 之前對 $X$ 的不確定性」，$H(X \mid Y)$ 是「知道 $Y$ 之後對 $X$ 的不確定性」，
+        差值就是 $Y$ 帶給你多少關於 $X$ 的資訊。$I(X; Y) = 0$ 表示 $X$ 和 $Y$ 完全獨立。
+      </p>
+
+      <h3>KL 散度(Kullback-Leibler Divergence)</h3>
+      <p>
+        <strong>KL 散度</strong>衡量「用分佈 $Q$ 來近似真實分佈 $P$ 要付出多少代價」：
+      </p>
+      $$D_{\mathrm{KL}}(P \| Q) = \sum_i p_i \log_2 \frac{p_i}{q_i} \geq 0$$
+      <p>
+        注意它<em>不對稱</em>：$D_{\mathrm{KL}}(P \| Q) \neq D_{\mathrm{KL}}(Q \| P)$，
+        因此嚴格說不是「距離」。$D_{\mathrm{KL}} = 0$ 當且僅當 $P = Q$。
+      </p>
+      <p>
+        壓縮含義：如果真實分佈是 $P$，但你用 $Q$ 設計了碼本，
+        平均每符號比最優多花 $D_{\mathrm{KL}}(P \| Q)$ 個位元。
+      </p>
+
+      <h3>交叉熵損失(Cross-Entropy Loss)</h3>
+      <p>
+        <strong>交叉熵(cross-entropy)</strong> 定義為：
+      </p>
+      $$H(P, Q) = -\sum_i p_i \log_2 q_i = H(P) + D_{\mathrm{KL}}(P \| Q)$$
+      <p>
+        在分類任務裡，$P$ 是真實標籤（one-hot 分佈），$Q$ 是模型輸出的 softmax 機率。
+        此時 $H(P) = 0$（真實標籤是確定的），所以：
+      </p>
+      $$\mathcal{L}_{\text{CE}} = H(P, Q) = D_{\mathrm{KL}}(P \| Q) = -\log_2 q_{y}$$
+      <p>
+        其中 $y$ 是正確類別。最小化交叉熵損失，等價於最小化模型預測分佈與真實分佈之間的 KL 散度，
+        也等價於最大化對數似然——三個視角說的是同一件事！
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">交叉熵損失的資訊理論意義</span>
+          <p>訓練分類器時最小化交叉熵，本質上是讓模型預測分佈 $Q$ 盡量「靠近」真實分佈 $P$——
+          以資訊理論的角度看，就是縮短「用模型來描述真實標籤所需的平均位元數」。
+          這也是為什麼分類任務不用 MSE：MSE 沒有這個清晰的資訊理論根基。</p>
+        </div>
+      </div>
+
+      <p>
+        更多資訊理論在深度學習中的應用（VAE 的 ELBO、InfoNCE 對比學習、互資訊最大化等）
+        將在第 105 章（深度學習的數學）深入展開。
+      </p>
+
+      <!-- ==================== 練習 ==================== -->
+      <h2>練習</h2>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 102.1 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>
+            考慮一個來源，有四個符號 A, B, C, D，機率分別為 $0.4, 0.3, 0.2, 0.1$。
+          </p>
+          <ol type="a">
+            <li>計算這個來源的夏農熵 $H$（保留 4 位小數）。</li>
+            <li>為四個符號設計一個前綴碼，驗證 Kraft 不等式成立。</li>
+            <li>計算你設計的碼的平均碼長 $L$，並確認 $L \geq H$。</li>
+          </ol>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>(a) 計算熵：</strong></p>
+              $$H = -(0.4\log_2 0.4 + 0.3\log_2 0.3 + 0.2\log_2 0.2 + 0.1\log_2 0.1)$$
+              <p>
+                逐項：$0.4\times(-1.3219)=-0.5288$；$0.3\times(-1.7370)=-0.5211$；
+                $0.2\times(-2.3219)=-0.4644$；$0.1\times(-3.3219)=-0.3322$。
+              </p>
+              $$H = 0.5288+0.5211+0.4644+0.3322 = \mathbf{1.8464} \text{ 位元}$$
+              <p><strong>(b) 一個合理的前綴碼：</strong></p>
+              <p>A → <code>0</code>（長度 1），B → <code>10</code>（長度 2），C → <code>110</code>（長度 3），D → <code>111</code>（長度 3）。</p>
+              <p>Kraft：$2^{-1}+2^{-2}+2^{-3}+2^{-3} = 0.5+0.25+0.125+0.125 = 1.0 \leq 1$ ✓（完整碼）</p>
+              <p><strong>(c) 平均碼長：</strong></p>
+              $$L = 0.4\times1+0.3\times2+0.2\times3+0.1\times3 = 0.4+0.6+0.6+0.3 = \mathbf{1.9} \text{ 位元}$$
+              <p>$L = 1.9 \geq H = 1.8464$ ✓，差距 0.054 位元來自取整代價。</p>
+              <pre><code class="language-python">import math
+probs = [0.4, 0.3, 0.2, 0.1]
+H = -sum(p * math.log2(p) for p in probs)
+print(f"H = {H:.4f}")   # 1.8464
+lens = [1, 2, 3, 3]
+L = sum(p * l for p, l in zip(probs, lens))
+print(f"L = {L:.4f}")   # 1.9000</code></pre>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 102.2 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>
+            用本章的 <code>lz77_encode</code> 函式對字串 <code>"abababababab"</code>（12 個字元）進行編碼，
+            視窗大小設為 8，預視大小設為 4。
+          </p>
+          <ol type="a">
+            <li>列出輸出的每個三元組 <code>(offset, length, next_char)</code>。</li>
+            <li>假設每個三元組需要 $3+2+8=13$ 位元（offset 3 位、length 2 位、char 8 位），
+                壓縮後共幾個位元？相較原始 ASCII（每字元 8 位元，共 96 位元），壓縮率為何？</li>
+          </ol>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>(a) 三元組輸出：</strong></p>
+              <pre><code class="language-python">tokens = lz77_encode("abababababab", window=8, lookahead=4)
+# (0, 0, 'a')   i=0: 無歷史，直接輸出 a
+# (0, 0, 'b')   i=1: 無匹配 b，直接輸出 b
+# (2, 4, 'a')   i=2: 往回 2 找到 "abab"（4 字元），接 a
+# (6, 4, 'b')    i=7: 往回 6 找到 "abab"（4 字元），接 b</code></pre>
+              <p><strong>(b) 位元計算：</strong>4 個三元組 × 13 位元 = <strong>52 位元</strong>。</p>
+              <p>原始 96 位元，壓縮後 52 位元，壓縮率 $52/96 \approx 54\%$（縮小了 46%）。
+              這個字串高度重複，對 LZ77 極度友善；真實文件通常壓縮率在 30–70% 之間。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 102.3 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>
+            用 Hamming(7,4) 對資料位元 $[1, 1, 0, 1]$（$d_1=1, d_2=1, d_3=0, d_4=1$）進行編碼，
+            然後模擬位元 2（$p_2$ 的位置）發生翻轉，執行糾錯並驗證還原正確。
+          </p>
+          <ol type="a">
+            <li>手算求出 $p_1, p_2, p_4$ 的值，寫出 7 位元碼字。</li>
+            <li>翻轉位元 2 後，計算症候碼(syndrome)，指出出錯位置。</li>
+            <li>用 Python 程式驗算。</li>
+          </ol>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>(a) 編碼：</strong> $d_1=1, d_2=1, d_3=0, d_4=1$</p>
+              <p>
+                $p_1 = d_1 \oplus d_2 \oplus d_4 = 1 \oplus 1 \oplus 1 = 1$<br>
+                $p_2 = d_1 \oplus d_3 \oplus d_4 = 1 \oplus 0 \oplus 1 = 0$<br>
+                $p_4 = d_2 \oplus d_3 \oplus d_4 = 1 \oplus 0 \oplus 1 = 0$
+              </p>
+              <p>碼字（位置 1–7：$p_1, p_2, d_1, p_4, d_2, d_3, d_4$）$= [1, 0, 1, 0, 1, 0, 1]$</p>
+              <p><strong>(b) 翻轉位元 2（$p_2$ 從 0 變 1）：</strong> 收到 $[1, 1, 1, 0, 1, 0, 1]$</p>
+              <p>
+                $s_1 = b_1 \oplus b_3 \oplus b_5 \oplus b_7 = 1\oplus1\oplus1\oplus1 = 0$<br>
+                $s_2 = b_2 \oplus b_3 \oplus b_6 \oplus b_7 = 1\oplus1\oplus0\oplus1 = 1$<br>
+                $s_4 = b_4 \oplus b_5 \oplus b_6 \oplus b_7 = 0\oplus1\oplus0\oplus1 = 0$<br>
+                症候碼 $= (s_4,s_2,s_1)_2 = (0,1,0)_2 = \mathbf{2}$，指出位置 2 出錯。
+              </p>
+              <p>翻轉位置 2 後恢復 $[1,0,1,0,1,0,1]$，取出資料位元（位置 3,5,6,7）$=[1,1,0,1]$ ✓</p>
+              <pre><code class="language-python">cw = hamming74_encode([1, 1, 0, 1])
+print(f"碼字: {cw}")              # [1, 0, 1, 0, 1, 0, 1]
+
+cw_err = cw[:]
+cw_err[1] ^= 1                    # 翻轉 index 1（位置 2）
+print(f"出錯: {cw_err}")          # [1, 1, 1, 0, 1, 0, 1]
+
+recovered = hamming74_decode(cw_err)
+# 輸出: 偵測到錯誤，位置 2，自動糾正
+print(f"還原: {recovered}")       # [1, 1, 0, 1] ✓</code></pre>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ==================== 串起來 ==================== -->
+      <h2>把這一章串起來</h2>
+
+      <p>
+        我們從「一則訊息值多少資訊」這個問題出發，走過了資訊理論的核心疆域：
+      </p>
+      <ul>
+        <li><strong>驚奇度 $I(x) = -\log_2 P(x)$</strong>：稀有事件攜帶更多資訊，位元是衡量單位。</li>
+        <li><strong>夏農熵 $H = -\sum p_i \log_2 p_i$</strong>：來源的「平均不確定性」，也是壓縮的理論下限。均勻分佈時最大；確定分佈時為 0。</li>
+        <li><strong>源編碼定理</strong>：無損壓縮不可能突破熵，但可以任意逼近它。</li>
+        <li><strong>Kraft 不等式 $\sum 2^{-\ell_i} \leq 1$</strong>：前綴碼存在的充要條件；等號成立為完整碼。</li>
+        <li><strong>Huffman</strong>（整數碼長最優，見<a href="31-greedy.html">第 31 章</a>）、<strong>算術編碼 / ANS</strong>（突破整數限制，真正逼近熵）。</li>
+        <li><strong>LZ77 / LZW + Huffman = DEFLATE</strong>：字典式壓縮找重複，熵編碼去冗餘，兩個階段的增益相乘。</li>
+        <li><strong>有損壓縮</strong>：JPEG 用 DCT 頻域量化，MP3 用感知遮蔽，犧牲人眼 / 人耳察覺不到的精度換取極高壓縮率。</li>
+        <li><strong>通道編碼定理 $C = W\log_2(1+S/N)$</strong>：雜訊通道的資訊傳輸極限。</li>
+        <li><strong>Hamming(7,4)</strong>：3 個同位位元 + 4 個資料位元，症候碼直接指出 1 位元的出錯位置。</li>
+        <li><strong>交叉熵損失 = KL 散度</strong>（真實熵為 0 時）：深度學習分類任務的損失函數，有清晰的資訊理論根基。</li>
+      </ul>
+
+      <div class="callout history">
+        <div class="ico">📜</div>
+        <div class="body">
+          <span class="c-title">Shannon 1948：資訊時代的原點</span>
+          <p>Claude Shannon 在 1948 年發表的 <em>A Mathematical Theory of Communication</em>（Bell System Technical Journal）
+          是計算機科學史上最重要的論文之一。他在一篇論文裡同時定義了「位元(bit)」這個詞、建立了熵的理論、
+          證明了源編碼定理與通道編碼定理——幾乎憑一己之力奠定了整個資訊理論的基礎。
+          這篇論文距今超過 75 年，每一段推導至今仍然成立。</p>
+        </div>
+      </div>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">延伸學習</span>
+          <p>
+            <strong>教材</strong>：Cover &amp; Thomas 的《Elements of Information Theory》（Wiley，第 2 版）是資訊理論的標準教科書，嚴謹且全面，適合深入學習。<br>
+            <strong>免費課程</strong>：MIT 6.441（Information Theory）的課程講義可在 MIT OpenCourseWare 取得。<br>
+            <strong>壓縮工具原始碼</strong>：<a href="https://github.com/facebook/zstd" target="_blank">zstd 原始碼</a>（C 語言，可讀性高）是理解 LZ77 + ANS 的絕佳實踐。<br>
+            <strong>下一章</strong>：第 103 章將進入最佳化理論（線性規劃、梯度下降與凸優化），本章的 KL 散度與熵在那裡也會再現身。
+          </p>
+        </div>
+      </div>

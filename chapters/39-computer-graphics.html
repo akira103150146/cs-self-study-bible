@@ -1,0 +1,1297 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>計算機圖學 · CS 自學聖經</title>
+<meta name="description" content="計算機圖學:從像素、向量、矩陣變換、齊次座標,到完整的 3D 繪圖管線、光柵化、Phong 光照,並親手寫一個能跑的極簡光線追蹤器。把 3D 世界算成 2D 像素的數學魔法,一層層拆解。">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;700&family=Noto+Sans+TC:wght@400;700&family=Lora:ital,wght@0,400;0,600;0,700;1,400&family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <main class="main">
+    <article class="content">
+
+      <div class="eyebrow">第八部 · 應用</div>
+      <h1>計算機圖學</h1>
+      <p class="subtitle">從一個遊戲畫面到一部皮克斯電影,螢幕上每一個亮起的像素,背後都是線性代數與幾何在飛速運算。這一章,我們把「把 3D 世界變成 2D 影像」這件魔法,一層一層拆給你看——而且最後你會親手寫出一個能渲染出一顆發亮球體的光線追蹤器。</p>
+      <div class="byline">
+        <span class="tag">第 39 章</span>
+        <span>閱讀時間 ≈ 55 分鐘</span>
+        <span>難度:★★★★☆</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>圖學的兩大路線:即時<strong>光柵化(rasterization)</strong>(遊戲)vs <strong>光線追蹤(ray tracing)</strong>(電影),以及它們各自的取捨</li>
+          <li>影像到底是什麼:像素、解析度、RGB 色彩、色深、alpha 與<strong>影格緩衝(framebuffer)</strong></li>
+          <li>向量與矩陣如何描述點、方向與<strong>幾何變換</strong>(平移、縮放、旋轉)</li>
+          <li>為什麼需要<strong>齊次座標(homogeneous coordinates)</strong>,才能用「一個矩陣乘法」統一所有變換</li>
+          <li>完整的 <strong>3D 繪圖管線(graphics pipeline)</strong>:從模型座標一路到螢幕像素</li>
+          <li>深度緩衝(z-buffer)、Phong 光照模型與<strong>著色器(shader)</strong>的運作原理</li>
+          <li>親手寫一個能跑的<strong>極簡光線追蹤器</strong>,渲染出一顆有光照的球</li>
+          <li>紋理貼圖、抗鋸齒、GPU,以及即時 vs 離線渲染的取捨</li>
+        </ul>
+      </div>
+
+      <h2>一切都是把 3D 算成 2D</h2>
+      <p>
+        你正盯著的這塊螢幕,本質上是一面由幾百萬顆小燈組成的網格。它本身完全不知道什麼叫「3D 世界」、什麼叫「一隻在森林裡奔跑的龍」。
+        它只會做一件事:聽從指令,讓每一顆小燈亮成某個顏色。所以,當你在遊戲裡轉動視角、看見遠山近樹隨之移動、
+        陽光在水面閃爍——這一切的「立體感」,其實是一場精心計算的<strong>錯覺</strong>:
+        程式在每一個瞬間,把一個用數字描述的三維場景,<em>算</em>成一張二維的顏色網格,送去點亮那些小燈。
+      </p>
+      <p>
+        <strong>計算機圖學(computer graphics)</strong>研究的,正是這場錯覺背後的數學與演算法:
+        如何用向量描述空間中的點、用矩陣搬動與旋轉它們、用幾何決定哪個物體擋住哪個物體、
+        用光照模型算出表面該有多亮——最後,把這一切壓扁成一張圖。一句話:
+        <strong>圖學就是「把幾何與光,轉換成像素」的科學。</strong>
+      </p>
+      <p>
+        要完成這個轉換,業界長期演化出兩條主要路線,它們的世界觀幾乎完全相反,值得你一開始就分清楚。
+      </p>
+
+      <h3>兩大路線:光柵化 vs 光線追蹤</h3>
+      <p>
+        <strong>光柵化(rasterization)</strong>的思路是「<em>從幾何出發</em>」:我手上有一堆三角形(構成龍的身體),
+        我把每個三角形投影到螢幕上,算出它蓋住了哪些像素,再幫那些像素塗上顏色。它的提問是:
+        「<em>這個三角形,落在哪些像素裡?</em>」這條路<strong>極快</strong>,而且現代 GPU 為它量身打造,
+        所以它是所有<strong>即時(real-time)</strong>應用——尤其是遊戲——的主力。
+      </p>
+      <p>
+        <strong>光線追蹤(ray tracing)</strong>的思路剛好倒過來,是「<em>從眼睛出發</em>」:對螢幕上的<em>每一個像素</em>,
+        我從攝影機射出一條光線,問:「<em>這條光線,飛出去會打到場景裡的什麼東西?</em>」打到什麼,那個像素就顯示什麼顏色。
+        因為它模擬的是光真實的傳播,反射、折射、陰影、柔和的間接光都能<strong>自然</strong>地浮現,畫面逼真到能以假亂真。
+        代價是<strong>慢</strong>——所以它長年是<strong>離線(offline)</strong>渲染(電影特效、動畫)的王者,
+        直到近年 GPU 硬體加速,才開始走進即時領域。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 320" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="g-fwd" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#2f6f6a"/></marker>
+    <marker id="g-ray" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#b4541f"/></marker>
+  </defs>
+  <line x1="360" y1="30" x2="360" y2="300" stroke="#d8dde2" stroke-width="1.5" stroke-dasharray="4 4"/>
+
+  <!-- 左:光柵化 -->
+  <text x="30" y="34" font-size="14" font-weight="800" fill="#2f6f6a">① 光柵化(rasterization)· 遊戲</text>
+  <text x="30" y="54" font-size="11.5" fill="#4a5159">從幾何出發:三角形 → 投影 → 找出覆蓋的像素</text>
+  <!-- 三角形(幾何) -->
+  <polygon points="55,210 120,90 150,215" fill="#e3efed" stroke="#2f6f6a" stroke-width="1.8"/>
+  <polygon points="95,250 175,140 200,255" fill="#cfe6e2" stroke="#2f6f6a" stroke-width="1.6"/>
+  <text x="78" y="285" font-size="11" fill="#4a5159">3D 三角形</text>
+  <!-- 箭頭 -->
+  <line x1="210" y1="175" x2="258" y2="175" stroke="#2f6f6a" stroke-width="2" marker-end="url(#g-fwd)"/>
+  <text x="214" y="166" font-size="10.5" fill="#2f6f6a">投影+填色</text>
+  <!-- 像素網格 -->
+  <g stroke="#bcc4cc" stroke-width="0.8">
+    <rect x="272" y="110" width="66" height="120" fill="#fff"/>
+    <line x1="272" y1="134" x2="338" y2="134"/><line x1="272" y1="158" x2="338" y2="158"/>
+    <line x1="272" y1="182" x2="338" y2="182"/><line x1="272" y1="206" x2="338" y2="206"/>
+    <line x1="294" y1="110" x2="294" y2="230"/><line x1="316" y1="110" x2="316" y2="230"/>
+  </g>
+  <g fill="#2f6f6a" fill-opacity="0.85">
+    <rect x="294" y="134" width="22" height="24"/>
+    <rect x="294" y="158" width="44" height="24"/>
+    <rect x="272" y="182" width="66" height="24"/>
+  </g>
+  <text x="276" y="248" font-size="11" fill="#4a5159">被點亮的像素</text>
+
+  <!-- 右:光線追蹤 -->
+  <text x="386" y="34" font-size="14" font-weight="800" fill="#b4541f">② 光線追蹤(ray tracing)· 電影</text>
+  <text x="386" y="54" font-size="11.5" fill="#4a5159">從眼睛出發:每個像素射一條光線,看它打到什麼</text>
+  <!-- 眼睛 -->
+  <circle cx="408" cy="175" r="7" fill="#1f2328"/>
+  <text x="388" y="205" font-size="11" fill="#4a5159">攝影機</text>
+  <!-- 影像平面 -->
+  <g stroke="#bcc4cc" stroke-width="0.9">
+    <rect x="455" y="120" width="20" height="110" fill="#fff"/>
+    <line x1="455" y1="142" x2="475" y2="142"/><line x1="455" y1="164" x2="475" y2="164"/>
+    <line x1="455" y1="186" x2="475" y2="186"/><line x1="455" y1="208" x2="475" y2="208"/>
+  </g>
+  <text x="442" y="248" font-size="10.5" fill="#4a5159">影像平面(像素)</text>
+  <!-- 球 -->
+  <circle cx="630" cy="160" r="42" fill="#f6e7dd" stroke="#b4541f" stroke-width="1.8"/>
+  <!-- 光源 -->
+  <circle cx="640" cy="60" r="9" fill="#facc15" stroke="#b4541f" stroke-width="1"/>
+  <text x="612" y="48" font-size="10.5" fill="#b4541f">光源</text>
+  <!-- 光線 -->
+  <line x1="408" y1="175" x2="600" y2="140" stroke="#b4541f" stroke-width="1.6" marker-end="url(#g-ray)"/>
+  <line x1="408" y1="175" x2="465" y2="186" stroke="#b4541f" stroke-width="1.6"/>
+  <line x1="408" y1="175" x2="612" y2="190" stroke="#b4541f" stroke-width="1.6" marker-end="url(#g-ray)"/>
+  <!-- 陰影光線 -->
+  <line x1="598" y1="138" x2="636" y2="70" stroke="#facc15" stroke-width="1.4" stroke-dasharray="4 3"/>
+</svg>
+        <figcaption>圖 39-1:圖學的兩大路線。<strong>光柵化</strong>(左)把每個三角形「畫」到像素網格上,快但對反射、陰影需要額外技巧;<strong>光線追蹤</strong>(右)從攝影機對每個像素射出光線,反向追問它打到什麼,慢但反射、陰影、折射都自然湧現。本章兩者都會講,並親手實作後者。</figcaption>
+      </div>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">一句話分清兩條路</span>
+          <p><strong>光柵化問的是「三角形落在哪些像素」(物體 → 像素),光線追蹤問的是「這個像素看到什麼」(像素 → 物體)。</strong>
+          前者快、適合即時互動(遊戲);後者真實、適合離線追求畫質(電影)。
+          這個「正向投影 vs 反向追光」的對立,是理解整個圖學版圖最重要的一條分界線。</p>
+        </div>
+      </div>
+
+      <h2>影像是什麼?像素、色彩與影格緩衝</h2>
+      <p>
+        在談 3D 之前,我們得先弄懂最終產物——<strong>影像</strong>本身。一張數位影像,說穿了就是一個<strong>二維的顏色網格</strong>。
+        網格裡的每一個小格子,叫<strong>像素(pixel,picture element 的縮寫)</strong>。
+        所謂<strong>解析度(resolution)</strong>,就是這個網格有多少行、多少列:1920 × 1080(俗稱 1080p)
+        代表寬 1920 顆、高 1080 顆像素,總共約 200 萬顆。4K 螢幕則有約 830 萬顆。
+        圖學的最終任務,就是替這幾百萬顆像素,各自決定一個顏色。
+      </p>
+
+      <h3>色彩:用三個數字描述一道光</h3>
+      <p>
+        那「顏色」又怎麼用數字表示?最常見的是 <strong>RGB</strong>:用<strong>紅(Red)、綠(Green)、藍(Blue)</strong>
+        三道光的強度去混合出任何顏色——這是模仿人眼視網膜裡三種錐狀細胞的設計。
+        每個分量通常用 8 個位元(一個 byte)表示,範圍 0–255。所以一個像素 = 三個 0–255 的數字:
+        <code>(255, 0, 0)</code> 是純紅、<code>(255, 255, 255)</code> 是白、<code>(0, 0, 0)</code> 是黑、
+        <code>(255, 200, 0)</code> 是橘黃。每分量 8 位元、共 24 位元,叫 <strong>24-bit 色深(color depth)</strong>,
+        能表現 $2^{24}\approx 1670$ 萬種顏色——這就是「全彩」的由來。
+      </p>
+      <p>
+        有時還會加上第四個分量 <strong>alpha</strong>,表示<strong>不透明度</strong>:alpha = 255 完全不透明,alpha = 0 完全透明。
+        它讓我們能把多張圖層「疊」起來(例如把半透明的玻璃、煙霧、UI 疊在場景上),
+        這個疊合過程叫 <strong>alpha 混合(alpha blending)</strong>:$C = \alpha\,C_{\text{前}} + (1-\alpha)\,C_{\text{後}}$。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 660 300" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="px-ar" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/></marker>
+  </defs>
+  <!-- 像素網格(放大) -->
+  <text x="40" y="34" font-size="13" font-weight="700" fill="#1f2328">影像 = 二維像素網格</text>
+  <g>
+    <rect x="40" y="50" width="180" height="135" fill="#fff" stroke="#8a929b" stroke-width="1"/>
+    <!-- 一些彩色像素,模擬漸層 -->
+    <g stroke="#fff" stroke-width="0.5">
+      <rect x="40"  y="50"  width="30" height="27" fill="#2f6f6a"/><rect x="70" y="50" width="30" height="27" fill="#3f7f76"/><rect x="100" y="50" width="30" height="27" fill="#6aa39a"/><rect x="130" y="50" width="30" height="27" fill="#9cc4bd"/><rect x="160" y="50" width="30" height="27" fill="#c9e0db"/><rect x="190" y="50" width="30" height="27" fill="#e3efed"/>
+      <rect x="40" y="77" width="30" height="27" fill="#3f7f76"/><rect x="70" y="77" width="30" height="27" fill="#6aa39a"/><rect x="100" y="77" width="30" height="27" fill="#9cc4bd"/><rect x="130" y="77" width="30" height="27" fill="#c9e0db"/><rect x="160" y="77" width="30" height="27" fill="#f2d9c8"/><rect x="190" y="77" width="30" height="27" fill="#e9b894"/>
+      <rect x="40" y="104" width="30" height="27" fill="#6aa39a"/><rect x="70" y="104" width="30" height="27" fill="#9cc4bd"/><rect x="100" y="104" width="30" height="27" fill="#f2d9c8"/><rect x="130" y="104" width="30" height="27" fill="#e9b894"/><rect x="160" y="104" width="30" height="27" fill="#d98a5c"/><rect x="190" y="104" width="30" height="27" fill="#b4541f"/>
+      <rect x="40" y="131" width="30" height="27" fill="#9cc4bd"/><rect x="70" y="131" width="30" height="27" fill="#c9e0db"/><rect x="100" y="131" width="30" height="27" fill="#e9b894"/><rect x="130" y="131" width="30" height="27" fill="#d98a5c"/><rect x="160" y="131" width="30" height="27" fill="#b4541f"/><rect x="190" y="131" width="30" height="27" fill="#8b5cf6"/>
+      <rect x="40" y="158" width="30" height="27" fill="#c9e0db"/><rect x="70" y="158" width="30" height="27" fill="#e9b894"/><rect x="100" y="158" width="30" height="27" fill="#d98a5c"/><rect x="130" y="158" width="30" height="27" fill="#b4541f"/><rect x="160" y="158" width="30" height="27" fill="#8b5cf6"/><rect x="190" y="158" width="30" height="27" fill="#6d3fc0"/>
+    </g>
+    <rect x="160" y="104" width="30" height="27" fill="none" stroke="#1f2328" stroke-width="2.5"/>
+  </g>
+  <text x="44" y="202" font-size="10.5" fill="#4a5159">每一格 = 一個像素</text>
+
+  <!-- 放大一個像素 -->
+  <line x1="222" y1="118" x2="282" y2="118" stroke="#8a929b" stroke-width="1.5" marker-end="url(#px-ar)"/>
+  <rect x="290" y="70" width="110" height="110" fill="#d98a5c" stroke="#1f2328" stroke-width="2"/>
+  <text x="345" y="58" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">一個像素的顏色</text>
+  <rect x="304" y="92" width="20" height="66" fill="#e23b3b"/><text x="314" y="173" text-anchor="middle" font-size="11" fill="#fff" font-weight="700">R</text>
+  <rect x="334" y="120" width="20" height="38" fill="#22a35a"/><text x="344" y="173" text-anchor="middle" font-size="11" fill="#fff" font-weight="700">G</text>
+  <rect x="364" y="138" width="20" height="20" fill="#2b6fe0"/><text x="374" y="152" text-anchor="middle" font-size="10" fill="#fff" font-weight="700">B</text>
+  <text x="345" y="196" text-anchor="middle" font-size="11" fill="#4a5159">(R, G, B) = (217, 138, 92)</text>
+
+  <!-- framebuffer 記憶體 -->
+  <line x1="408" y1="125" x2="448" y2="125" stroke="#8a929b" stroke-width="1.5" marker-end="url(#px-ar)"/>
+  <text x="555" y="58" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">影格緩衝(framebuffer)</text>
+  <text x="555" y="75" text-anchor="middle" font-size="10.5" fill="#4a5159">記憶體裡一長串數字</text>
+  <g font-size="9" fill="#1f2328">
+    <rect x="458" y="90" width="194" height="22" fill="#f3f5f7" stroke="#bcc4cc"/>
+    <text x="465" y="105">217 138 92 │ 180 120 80 │ 150 ...</text>
+    <rect x="458" y="112" width="194" height="22" fill="#fff" stroke="#bcc4cc"/>
+    <text x="465" y="127">200 130 88 │ 217 138 92 │ 160 ...</text>
+    <rect x="458" y="134" width="194" height="22" fill="#f3f5f7" stroke="#bcc4cc"/>
+    <text x="465" y="149">... 一個像素接著一個像素 ...</text>
+  </g>
+  <text x="458" y="174" font-size="10" fill="#4a5159">螢幕每秒從這塊記憶體讀取 60+ 次</text>
+</svg>
+        <figcaption>圖 39-2:從像素到影格緩衝。整張影像被存成記憶體裡一長串 RGB 數字,這塊記憶體就叫<strong>影格緩衝(framebuffer)</strong>。顯示器每秒幾十次(更新率,如 60 Hz)從中讀取,點亮對應的小燈。圖學程式的工作,就是在每一影格把正確的數字寫進這塊緩衝。</figcaption>
+      </div>
+
+      <h3>動手:產生你的第一張圖</h3>
+      <p>
+        說了這麼多,不如親手生一張圖。最樸素的圖檔格式之一是 <strong>PPM</strong>,它幾乎沒有任何壓縮或花俏結構——
+        就是一個文字檔,開頭寫尺寸,接著把每個像素的 R G B 一個個列出來。
+        因為它太簡單,所以是學圖學時「親手寫出一張圖」的最佳起點。我們來畫一張橫紅、縱綠的漸層:
+      </p>
+      <pre><code class="language-python"># 用純 Python 產生一張 PPM 漸層圖,不需任何函式庫
+W, H = 256, 256
+with open("gradient.ppm", "w") as f:
+    f.write(f"P3\n{W} {H}\n255\n")   # P3 = 純文字 RGB;接著寬高;最大值 255
+    for y in range(H):
+        for x in range(W):
+            r = x          # 左到右:紅 0 → 255
+            g = y          # 上到下:綠 0 → 255
+            b = 64         # 藍固定一個低值
+            f.write(f"{r} {g} {b}\n")
+# 用任何看圖軟體(或線上 PPM viewer)打開 gradient.ppm,就能看到一片彩色漸層</code></pre>
+      <p>
+        如果你裝了 <code>Pillow</code>(PIL),可以更方便地產生 PNG,並逐像素設定顏色。
+        注意內層那兩個 <code>for</code> 迴圈——它正是<strong>「對每個像素決定一個顏色」</strong>這個圖學核心動作最赤裸的樣子:
+      </p>
+      <pre><code class="language-python">from PIL import Image
+
+img = Image.new("RGB", (256, 256))
+px = img.load()
+for y in range(256):
+    for x in range(256):
+        px[x, y] = (x, y, 64)        # 同樣的漸層
+img.save("gradient.png")</code></pre>
+      <p>
+        恭喜——你已經寫了一個最迷你的「渲染器」。本章最後那個光線追蹤器,結構其實和這兩個迴圈一模一樣,
+        只是「決定顏色」那一行,會從「<code>(x, y, 64)</code>」升級成「射一條光線、求交、算光照」。
+      </p>
+
+      <h2>2D 圖形與座標:向量是基本語言</h2>
+      <p>
+        要描述「空間裡的東西在哪、往哪」,圖學用的語言是<strong>向量(vector)</strong>。
+        這是整個第 54 章<strong>線性代數(linear algebra)</strong>的主角,這裡我們先建立夠用的幾何直覺
+        (之後讀第 54 章會更紮實)。一個<strong>點(point)</strong>就是空間裡的一個位置,例如 2D 平面上的 $(3, 2)$;
+        一個<strong>向量</strong>則是一個「位移」——一個有大小、有方向的箭頭,例如「往右 3、往上 2」,寫成 $\mathbf{v} = (3, 2)$。
+        點與向量數值長得一樣,但意義不同:點是「位置」,向量是「從哪到哪的箭頭」。
+      </p>
+
+      <h3>向量的四個基本操作</h3>
+      <p>圖學裡幾乎所有計算,都建立在四個基本向量操作上。我們逐一用幾何直覺理解:</p>
+      <ul>
+        <li><strong>加法 / 減法</strong>:$\mathbf{a} + \mathbf{b}$ 是把兩個箭頭「首尾相接」走完的總位移;
+            $\mathbf{b} - \mathbf{a}$ 則是「從 $\mathbf{a}$ 指向 $\mathbf{b}$」的箭頭(終點減起點)。</li>
+        <li><strong>長度(length / magnitude)</strong>:$\lVert\mathbf{a}\rVert = \sqrt{a_x^2 + a_y^2}$,就是畢氏定理量箭頭多長。</li>
+        <li><strong>正規化(normalize)</strong>:把向量除以自己的長度,$\hat{\mathbf{a}} = \mathbf{a} / \lVert\mathbf{a}\rVert$,
+            得到一個長度為 1、只保留方向的<strong>單位向量(unit vector)</strong>。「方向」在圖學裡無所不在(光的方向、表面朝向),通常都要先正規化。</li>
+        <li><strong>內積(dot product)</strong>:$\mathbf{a}\cdot\mathbf{b} = a_x b_x + a_y b_y = \lVert\mathbf{a}\rVert\,\lVert\mathbf{b}\rVert\cos\theta$。
+            它把兩個向量「吃進去、吐出一個數字」,這個數字告訴你它們<strong>方向有多一致</strong>。</li>
+      </ul>
+      <p>
+        內積是這四者裡最該細品的一個,因為它是<strong>光照計算的心臟</strong>。從公式
+        $\mathbf{a}\cdot\mathbf{b} = \lVert\mathbf{a}\rVert\lVert\mathbf{b}\rVert\cos\theta$ 看,當兩個都是單位向量時,
+        內積就直接等於 $\cos\theta$:方向完全相同 → 內積 = 1;互相垂直 → 內積 = 0;完全相反 → 內積 = $-1$。
+        等一下你會看到,「一個表面被照得多亮」幾乎就等於「表面朝向」與「光源方向」這兩個向量的內積。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 660 290" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="v-teal" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#2f6f6a"/></marker>
+    <marker id="v-pur" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#8b5cf6"/></marker>
+    <marker id="v-brick" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#b4541f"/></marker>
+  </defs>
+  <!-- 左:加法 -->
+  <text x="40" y="30" font-size="13" font-weight="700" fill="#1f2328">向量加法:首尾相接</text>
+  <!-- 平行四邊形虛線 -->
+  <line x1="210" y1="190" x2="270" y2="80" stroke="#8a929b" stroke-width="1.2" stroke-dasharray="5 4"/>
+  <line x1="130" y1="120" x2="270" y2="80" stroke="#8a929b" stroke-width="1.2" stroke-dasharray="5 4"/>
+  <!-- a -->
+  <line x1="70" y1="230" x2="210" y2="190" stroke="#2f6f6a" stroke-width="2.4" marker-end="url(#v-teal)"/>
+  <text x="135" y="225" font-size="13" font-weight="700" fill="#2f6f6a">a</text>
+  <!-- b -->
+  <line x1="70" y1="230" x2="130" y2="120" stroke="#8b5cf6" stroke-width="2.4" marker-end="url(#v-pur)"/>
+  <text x="86" y="170" font-size="13" font-weight="700" fill="#8b5cf6">b</text>
+  <!-- a+b -->
+  <line x1="70" y1="230" x2="270" y2="80" stroke="#b4541f" stroke-width="2.6" marker-end="url(#v-brick)"/>
+  <text x="180" y="135" font-size="13" font-weight="700" fill="#b4541f">a + b</text>
+  <circle cx="70" cy="230" r="3.5" fill="#1f2328"/>
+
+  <!-- 右:內積/投影 -->
+  <text x="380" y="30" font-size="13" font-weight="700" fill="#1f2328">內積:方向有多一致</text>
+  <circle cx="400" cy="220" r="3.5" fill="#1f2328"/>
+  <!-- a 水平 -->
+  <line x1="400" y1="220" x2="600" y2="220" stroke="#2f6f6a" stroke-width="2.4" marker-end="url(#v-teal)"/>
+  <text x="560" y="240" font-size="13" font-weight="700" fill="#2f6f6a">a</text>
+  <!-- b 斜 -->
+  <line x1="400" y1="220" x2="520" y2="110" stroke="#8b5cf6" stroke-width="2.4" marker-end="url(#v-pur)"/>
+  <text x="500" y="120" font-size="13" font-weight="700" fill="#8b5cf6">b</text>
+  <!-- 投影 -->
+  <line x1="520" y1="110" x2="520" y2="220" stroke="#8a929b" stroke-width="1.2" stroke-dasharray="4 3"/>
+  <line x1="400" y1="220" x2="520" y2="220" stroke="#b4541f" stroke-width="3.4"/>
+  <text x="430" y="214" font-size="11" fill="#b4541f">|b| cos θ</text>
+  <!-- 角 θ -->
+  <path d="M 432 220 A 32 32 0 0 0 423 197" fill="none" stroke="#1f2328" stroke-width="1.3"/>
+  <text x="437" y="206" font-size="12" fill="#1f2328">θ</text>
+  <text x="380" y="270" font-size="11.5" fill="#4a5159">a · b = |a||b|cos θ = |a| × (b 在 a 上的投影長)</text>
+</svg>
+        <figcaption>圖 39-3:向量加法(左)就是把箭頭首尾相接,等於平行四邊形的對角線。內積(右)等於「$\mathbf{b}$ 投影到 $\mathbf{a}$ 上的長度」乘以 $\lVert\mathbf{a}\rVert$,因此它衡量兩向量方向的一致程度——這正是計算表面亮度的關鍵。</figcaption>
+      </div>
+
+      <h2>幾何變換:用矩陣搬動世界</h2>
+      <p>
+        場景裡的物體需要被<strong>搬動、放大、旋轉</strong>:角色要走路(平移)、寶箱要由小變大出現(縮放)、
+        星球要自轉(旋轉)。這些操作統稱<strong>幾何變換(geometric transformation)</strong>。
+        我們先看每一種怎麼用數學表達,再看一個漂亮的統一觀點。
+      </p>
+      <ul>
+        <li><strong>平移(translation)</strong>:把每個點都加上同一個位移向量。$(x, y) \to (x + t_x,\ y + t_y)$。</li>
+        <li><strong>縮放(scaling)</strong>:把座標各乘上一個倍率。$(x, y) \to (s_x\,x,\ s_y\,y)$。</li>
+        <li><strong>旋轉(rotation)</strong>:繞原點轉 $\theta$ 角。$(x, y) \to (x\cos\theta - y\sin\theta,\ x\sin\theta + y\cos\theta)$。</li>
+      </ul>
+
+      <h3>為什麼用矩陣?</h3>
+      <p>
+        縮放與旋轉,都可以寫成一個 <strong>2 × 2 矩陣</strong>乘上一個點(把點看成欄向量)。例如旋轉:
+      </p>
+      <p>$$\begin{bmatrix} x' \\ y' \end{bmatrix} = \begin{bmatrix} \cos\theta & -\sin\theta \\ \sin\theta & \cos\theta \end{bmatrix} \begin{bmatrix} x \\ y \end{bmatrix} = \begin{bmatrix} x\cos\theta - y\sin\theta \\ x\sin\theta + y\cos\theta \end{bmatrix}$$</p>
+      <p>
+        用矩陣有兩個巨大的好處。第一,<strong>形式統一</strong>:不管是縮放、旋轉、推移(shear),都是「一個矩陣乘一個點」,
+        硬體可以用同一套電路處理。第二——也是更深刻的——<strong>變換可以「組合」成一個</strong>:
+        如果你想「先旋轉、再縮放」,只要把兩個矩陣<em>相乘</em>成一個矩陣 $M = S \cdot R$,
+        之後對成千上萬個頂點,每個都只要做<em>一次</em>矩陣乘法,而不是兩次。場景裡幾百萬個頂點時,這個省下來的量很可觀。
+      </p>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">矩陣乘法不可交換,順序很重要</span>
+          <p>$A \cdot B \neq B \cdot A$!「先旋轉再平移」和「先平移再旋轉」會得到<em>完全不同</em>的結果
+          (你可以想像:先把人轉個身再往前走,跟先往前走再轉身,落點當然不一樣)。
+          組合變換時,作用在點上的順序是<strong>從右到左</strong>讀:$M = T \cdot R$ 套到點 $\mathbf{p}$ 上是
+          $T(R(\mathbf{p}))$——<em>先</em>旋轉,<em>後</em>平移。這是初學者最常踩的坑。</p>
+        </div>
+      </div>
+
+      <h3>齊次座標:讓平移也能塞進矩陣</h3>
+      <p>
+        但這裡有個惱人的不對稱:縮放和旋轉都能寫成 2 × 2 矩陣乘法,<strong>唯獨平移不行</strong>——
+        平移是「加上一個向量」,而矩陣乘法只會做「乘加的線性組合」,沒辦法憑空生出一個常數加項。
+        這意味著一連串變換裡只要夾了平移,就沒法全部融成一個矩陣,前面說的好處就破功了。
+      </p>
+      <p>
+        圖學界的解法優雅得近乎魔法:<strong>升一個維度</strong>。把 2D 的點 $(x, y)$ 寫成 3 個數字 $(x, y, 1)$,
+        多補一個固定為 1 的分量;對應地,變換矩陣升成 3 × 3。這套座標系統就叫<strong>齊次座標(homogeneous coordinates)</strong>。
+        奇蹟發生在:平移現在可以寫成矩陣乘法了——因為那個固定的 1,乘上矩陣最後一欄的 $t_x, t_y$,
+        剛好就把平移量「加」了進來:
+      </p>
+      <p>$$\begin{bmatrix} x' \\ y' \\ 1 \end{bmatrix} = \begin{bmatrix} 1 & 0 & t_x \\ 0 & 1 & t_y \\ 0 & 0 & 1 \end{bmatrix} \begin{bmatrix} x \\ y \\ 1 \end{bmatrix} = \begin{bmatrix} x + t_x \\ y + t_y \\ 1 \end{bmatrix}$$</p>
+      <p>
+        看出來了嗎?第一列算出來是 $1\cdot x + 0\cdot y + t_x \cdot 1 = x + t_x$——平移量被那個「1」帶了進來。
+        於是<strong>平移、旋轉、縮放現在全都是 3 × 3 矩陣乘法</strong>,可以自由相乘、組合成單一矩陣。
+        這就是為什麼你在圖學 API 裡看到的變換矩陣,在 2D 是 3 × 3、在 3D 是 4 × 4——
+        那「多出來的一維」,正是為了收編平移。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">齊次座標解決了什麼</span>
+          <p>用矩陣表達變換的好處是「能組合成一個」;但平移天生不是線性的,塞不進普通矩陣乘法。
+          <strong>齊次座標把點多補一維(設為 1),讓平移也能用矩陣乘法表示</strong>,於是所有變換統一成矩陣相乘——
+          這是現代 GPU 管線能把一長串變換「壓成一個矩陣、餵給每個頂點」的根本前提。(它還有個額外紅利:能優雅地表達<em>透視投影</em>,稍後會見到。)</p>
+        </div>
+      </div>
+
+      <h3>動手:用 numpy 旋轉一組點</h3>
+      <p>來把理論寫成程式。我們用 <code>numpy</code> 對一個正方形的四個頂點做旋轉,並驗證矩陣組合的威力:</p>
+      <pre><code class="language-python">import numpy as np
+
+def rotation(theta):
+    """繞原點旋轉 theta 弧度的 2x2 矩陣"""
+    c, s = np.cos(theta), np.sin(theta)
+    return np.array([[c, -s],
+                     [s,  c]])
+
+# 正方形的四個頂點(每一「列」是一個點)
+square = np.array([[0, 0],
+                   [1, 0],
+                   [1, 1],
+                   [0, 1]], dtype=float)
+
+R = rotation(np.pi / 4)          # 旋轉 45 度
+# 點是列向量,所以右乘 R 的轉置;等價於對每個點做 R @ p
+rotated = square @ R.T
+print(rotated.round(3))
+# [[ 0.     0.   ]
+#  [ 0.707  0.707]
+#  [ 0.     1.414]
+#  [-0.707  0.707]]   ← 整個正方形被轉了 45 度</code></pre>
+      <p>下面是齊次座標版本,展示「先旋轉、再平移」如何組合成單一 3 × 3 矩陣:</p>
+      <pre><code class="language-python">import numpy as np
+
+def translation(tx, ty):
+    return np.array([[1, 0, tx],
+                     [0, 1, ty],
+                     [0, 0, 1]], dtype=float)
+
+def rotation_h(theta):
+    c, s = np.cos(theta), np.sin(theta)
+    return np.array([[c, -s, 0],
+                     [s,  c, 0],
+                     [0,  0, 1]], dtype=float)
+
+p = np.array([1, 0, 1])                  # 點 (1, 0),補上齊次分量 1
+M = translation(3, 2) @ rotation_h(np.pi / 2)   # 先旋轉 90°,再平移 (3,2)
+print((M @ p).round(3))                   # [3. 3. 1.] -&gt; 點 (3, 3)
+# 驗證:(1,0) 轉 90° -&gt; (0,1),再 +(3,2) -&gt; (3,3)。順序「從右到左」!</code></pre>
+
+      <div class="diagram">
+<svg viewBox="0 0 560 300" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="rot-ar" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#b4541f"/></marker>
+  </defs>
+  <!-- 座標軸 -->
+  <line x1="60" y1="250" x2="500" y2="250" stroke="#cfd6dc" stroke-width="1.2"/>
+  <line x1="160" y1="280" x2="160" y2="40" stroke="#cfd6dc" stroke-width="1.2"/>
+  <text x="490" y="268" font-size="11" fill="#8a929b">x</text>
+  <text x="142" y="50" font-size="11" fill="#8a929b">y</text>
+  <circle cx="160" cy="250" r="3" fill="#1f2328"/>
+  <text x="138" y="268" font-size="10.5" fill="#4a5159">原點</text>
+  <!-- 原始正方形 (邊長 90) -->
+  <polygon points="160,250 250,250 250,160 160,160" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="186" y="210" font-size="11.5" font-weight="700" fill="#2f6f6a">原始</text>
+  <!-- 旋轉 30 度後的正方形 -->
+  <!-- (0,0)->(160,250); (1,0)->(160+90*.866,250-90*.5)=(238,205); (1,1)->(238-90*.5,205-90*.866)=(193,127); (0,1)->(160-90*.5,250-90*.866)=(115,172) -->
+  <polygon points="160,250 238,205 193,127 115,172" fill="#f6e7dd" stroke="#b4541f" stroke-width="2"/>
+  <text x="150" y="160" font-size="11.5" font-weight="700" fill="#b4541f">旋轉後</text>
+  <!-- 旋轉弧線 -->
+  <path d="M 270 250 A 110 110 0 0 0 250 192" fill="none" stroke="#b4541f" stroke-width="1.6" marker-end="url(#rot-ar)"/>
+  <text x="278" y="220" font-size="11" fill="#b4541f">θ = 30°</text>
+</svg>
+        <figcaption>圖 39-4:一個正方形繞原點旋轉。每個頂點都乘上同一個旋轉矩陣 $R(\theta)$,整體就轉了 $\theta$ 角。平移與縮放同理——只是換一個矩陣。把多個變換矩陣相乘,就能一次完成複合動作。</figcaption>
+      </div>
+
+      <h2>3D 繪圖管線:從模型到像素的流水線</h2>
+      <p>
+        現在把場景升到 3D。一個 3D 物體(比如一隻茶壺)要變成螢幕上的像素,得經過一條固定的<strong>流水線</strong>,
+        叫<strong>繪圖管線(graphics pipeline)</strong>。它和你在第 11 章看過的<strong>管線(pipeline)架構</strong>是同一種思想:
+        把一個複雜任務拆成一連串階段,資料像在輸送帶上一站站被加工。每個頂點依序經過:
+      </p>
+      <div class="diagram">
+<svg viewBox="0 0 760 210" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="pl-ar" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#8a929b"/></marker>
+  </defs>
+  <text x="14" y="40" font-size="12.5" font-weight="800" fill="#2f6f6a">── 3D 幾何階段(矩陣變換) ──</text>
+  <text x="540" y="40" font-size="12.5" font-weight="800" fill="#b4541f">── 2D 像素階段 ──</text>
+  <!-- 7 boxes -->
+  <g font-size="11">
+    <rect x="12"  y="60" width="88" height="58" rx="9" fill="#e3efed" stroke="#2f6f6a"/>
+    <text x="56" y="84" text-anchor="middle" font-weight="700" fill="#1f2328">模型座標</text>
+    <text x="56" y="102" text-anchor="middle" font-size="9.5" fill="#4a5159">Model</text>
+
+    <rect x="116" y="60" width="88" height="58" rx="9" fill="#e3efed" stroke="#2f6f6a"/>
+    <text x="160" y="84" text-anchor="middle" font-weight="700" fill="#1f2328">世界座標</text>
+    <text x="160" y="102" text-anchor="middle" font-size="9.5" fill="#4a5159">World</text>
+
+    <rect x="220" y="60" width="88" height="58" rx="9" fill="#e3efed" stroke="#2f6f6a"/>
+    <text x="264" y="84" text-anchor="middle" font-weight="700" fill="#1f2328">視圖座標</text>
+    <text x="264" y="102" text-anchor="middle" font-size="9.5" fill="#4a5159">View / 攝影機</text>
+
+    <rect x="324" y="60" width="88" height="58" rx="9" fill="#ede7fb" stroke="#8b5cf6"/>
+    <text x="368" y="84" text-anchor="middle" font-weight="700" fill="#1f2328">投影</text>
+    <text x="368" y="102" text-anchor="middle" font-size="9.5" fill="#4a5159">Projection</text>
+
+    <rect x="428" y="60" width="88" height="58" rx="9" fill="#ede7fb" stroke="#8b5cf6"/>
+    <text x="472" y="84" text-anchor="middle" font-weight="700" fill="#1f2328">裁剪</text>
+    <text x="472" y="102" text-anchor="middle" font-size="9.5" fill="#4a5159">Clipping</text>
+
+    <rect x="532" y="60" width="88" height="58" rx="9" fill="#f6e7dd" stroke="#b4541f"/>
+    <text x="576" y="84" text-anchor="middle" font-weight="700" fill="#1f2328">光柵化</text>
+    <text x="576" y="102" text-anchor="middle" font-size="9.5" fill="#4a5159">Rasterize</text>
+
+    <rect x="636" y="60" width="88" height="58" rx="9" fill="#f6e7dd" stroke="#b4541f"/>
+    <text x="680" y="84" text-anchor="middle" font-weight="700" fill="#1f2328">像素/著色</text>
+    <text x="680" y="102" text-anchor="middle" font-size="9.5" fill="#4a5159">Pixel/Shade</text>
+  </g>
+  <g stroke="#8a929b" stroke-width="1.6">
+    <line x1="100" y1="89" x2="114" y2="89" marker-end="url(#pl-ar)"/>
+    <line x1="204" y1="89" x2="218" y2="89" marker-end="url(#pl-ar)"/>
+    <line x1="308" y1="89" x2="322" y2="89" marker-end="url(#pl-ar)"/>
+    <line x1="412" y1="89" x2="426" y2="89" marker-end="url(#pl-ar)"/>
+    <line x1="516" y1="89" x2="530" y2="89" marker-end="url(#pl-ar)"/>
+    <line x1="620" y1="89" x2="634" y2="89" marker-end="url(#pl-ar)"/>
+  </g>
+  <text x="56"  y="148" text-anchor="middle" font-size="9.5" fill="#8a929b">物體自身座標</text>
+  <text x="160" y="148" text-anchor="middle" font-size="9.5" fill="#8a929b">擺進場景</text>
+  <text x="264" y="148" text-anchor="middle" font-size="9.5" fill="#8a929b">移到攝影機視角</text>
+  <text x="368" y="162" text-anchor="middle" font-size="9.5" fill="#8a929b">壓成 2D</text>
+  <text x="472" y="148" text-anchor="middle" font-size="9.5" fill="#8a929b">丟棄畫面外</text>
+  <text x="576" y="162" text-anchor="middle" font-size="9.5" fill="#8a929b">變成片元</text>
+  <text x="680" y="148" text-anchor="middle" font-size="9.5" fill="#8a929b">算最終顏色</text>
+</svg>
+        <figcaption>圖 39-5:繪圖管線。每個頂點先經過一連串<strong>矩陣變換</strong>(模型 → 世界 → 視圖 → 投影),從物體自身的座標一路換算到攝影機看出去的 2D 平面;裁剪掉畫面外的部分後,進入光柵化把三角形變成像素,最後著色決定每個像素的顏色。前半是幾何、後半是像素——這就是 GPU 的工作流程。</figcaption>
+      </div>
+      <p>
+        每一次「換座標系」,本質上就是乘上一個 4 × 4 齊次矩陣。物體誕生在自己的<strong>模型座標</strong>(以茶壺中心為原點);
+        擺進場景變成<strong>世界座標</strong>;再用「攝影機在哪、朝哪看」把整個世界轉成從鏡頭看出去的<strong>視圖座標</strong>;
+        然後最關鍵的一步——<strong>投影(projection)</strong>,把 3D 壓扁成 2D。
+      </p>
+
+      <h3>透視投影:為什麼遠的東西看起來小</h3>
+      <p>
+        你一定注意過:鐵軌往遠方延伸會「收斂」,同樣大的人站遠了看起來就小。這個現象叫<strong>透視(perspective)</strong>,
+        是我們的眼睛和相機共有的特性。它的數學原理意外地簡單:<strong>把座標除以深度</strong>。
+        想像攝影機在原點,眼前有一面影像平面(螢幕)。一個在深度 $z$ 處、高度為 $y$ 的點,
+        投影到平面上的高度是 $y' = \dfrac{y}{-z}$(取負號是因為攝影機看向 $-z$ 方向)。
+        $z$ 越大(越遠),分母越大,$y'$ 就越小——這就是「遠則小」的全部祕密。
+      </p>
+      <p>
+        有趣的是,這個「除以深度」的動作,正好能用齊次座標漂亮地表達:投影矩陣會把深度資訊塞進那個原本固定為 1 的齊次分量 $w$,
+        最後再讓所有座標除以 $w$(這步叫<strong>透視除法</strong>)。這也是齊次座標除了收編平移之外的第二個大紅利。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 560 320" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- 眼睛 -->
+  <circle cx="60" cy="180" r="7" fill="#1f2328"/>
+  <text x="36" y="208" font-size="11" fill="#4a5159">攝影機</text>
+  <!-- 影像平面 -->
+  <line x1="180" y1="55" x2="180" y2="305" stroke="#8b5cf6" stroke-width="2"/>
+  <text x="150" y="48" font-size="11" font-weight="700" fill="#8b5cf6">影像平面(螢幕)</text>
+  <!-- 近物 -->
+  <line x1="300" y1="110" x2="300" y2="250" stroke="#2f6f6a" stroke-width="5"/>
+  <text x="284" y="272" font-size="11" font-weight="700" fill="#2f6f6a">近物</text>
+  <!-- 遠物(等高) -->
+  <line x1="460" y1="110" x2="460" y2="250" stroke="#b4541f" stroke-width="5"/>
+  <text x="430" y="272" font-size="11" font-weight="700" fill="#b4541f">遠物(同高)</text>
+  <!-- 投影線(到近物) -->
+  <line x1="60" y1="180" x2="300" y2="110" stroke="#8a929b" stroke-width="1" stroke-dasharray="5 4"/>
+  <line x1="60" y1="180" x2="300" y2="250" stroke="#8a929b" stroke-width="1" stroke-dasharray="5 4"/>
+  <!-- 投影線(到遠物) -->
+  <line x1="60" y1="180" x2="460" y2="110" stroke="#8a929b" stroke-width="1" stroke-dasharray="2 3"/>
+  <line x1="60" y1="180" x2="460" y2="250" stroke="#8a929b" stroke-width="1" stroke-dasharray="2 3"/>
+  <!-- 近物投影(較大) y 145..215 -->
+  <line x1="180" y1="145" x2="180" y2="215" stroke="#2f6f6a" stroke-width="6"/>
+  <!-- 遠物投影(較小) y 159..201 -->
+  <line x1="186" y1="159" x2="186" y2="201" stroke="#b4541f" stroke-width="6"/>
+  <text x="110" y="135" font-size="10.5" fill="#2f6f6a">近物投影較大</text>
+  <text x="196" y="180" font-size="10.5" fill="#b4541f">遠物投影較小</text>
+</svg>
+        <figcaption>圖 39-6:透視投影。攝影機與兩個<strong>等高</strong>的物體連線,交在影像平面上的線段長度,就是它們投影後的大小。離攝影機近的物體張開的視角大,投影較長(看起來大);遠的張角小,投影較短(看起來小)。數學上,這等於把高度除以深度 $y' = y/(-z)$。</figcaption>
+      </div>
+
+      <h2>光柵化:把三角形變成像素</h2>
+      <p>
+        頂點被投影成 2D 後,接力棒交給<strong>光柵化</strong>:把每個三角形「填」成一格格像素。
+        你可能會問:為什麼基本圖元是<strong>三角形(triangle)</strong>,而不是正方形或圓?幾個務實的理由:
+        三角形是「最簡單能圍出一塊面」的多邊形(三個點一定共面、一定是平的,不會像四邊形那樣翹曲);
+        任何複雜曲面都能用一堆小三角形拼出來(這叫<strong>網格 mesh</strong>);而且三角形的內部判定與插值在數學上特別乾淨。
+        所以無論是恐龍、車子還是人臉,在 GPU 眼裡都是<strong>幾百萬個三角形</strong>。
+      </p>
+
+      <h3>哪些像素在三角形內?重心座標</h3>
+      <p>
+        光柵化的核心問題是:「一個像素的中心,落在三角形<em>裡</em>還是<em>外</em>?」
+        判斷方法有好幾種,圖學最愛用的是<strong>重心座標(barycentric coordinates)</strong>:
+        把三角形內任一點 $\mathbf{p}$ 表示成三個頂點的加權平均 $\mathbf{p} = \alpha A + \beta B + \gamma C$,
+        其中權重 $\alpha + \beta + \gamma = 1$。<strong>當且僅當三個權重都 ≥ 0 時,點在三角形內。</strong>
+        這套權重還有個附加超能力:它能把頂點上的屬性(顏色、深度、紋理座標)<strong>平滑地內插</strong>到三角形內部每個像素——
+        後面的著色幾乎都靠它。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 560 320" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- 像素網格 -->
+  <g stroke="#dfe4e9" stroke-width="1">
+    <rect x="40" y="30" width="420" height="252" fill="#fff"/>
+    <line x1="40"  y1="72"  x2="460" y2="72"/><line x1="40" y1="114" x2="460" y2="114"/>
+    <line x1="40"  y1="156" x2="460" y2="156"/><line x1="40" y1="198" x2="460" y2="198"/>
+    <line x1="40"  y1="240" x2="460" y2="240"/>
+    <line x1="82"  y1="30" x2="82"  y2="282"/><line x1="124" y1="30" x2="124" y2="282"/>
+    <line x1="166" y1="30" x2="166" y2="282"/><line x1="208" y1="30" x2="208" y2="282"/>
+    <line x1="250" y1="30" x2="250" y2="282"/><line x1="292" y1="30" x2="292" y2="282"/>
+    <line x1="334" y1="30" x2="334" y2="282"/><line x1="376" y1="30" x2="376" y2="282"/>
+    <line x1="418" y1="30" x2="418" y2="282"/>
+  </g>
+  <!-- 被覆蓋的像素(概略) -->
+  <g fill="#2f6f6a" fill-opacity="0.18">
+    <rect x="124" y="72" width="42" height="42"/>
+    <rect x="124" y="114" width="84" height="42"/>
+    <rect x="124" y="156" width="126" height="42"/>
+    <rect x="166" y="198" width="126" height="42"/>
+  </g>
+  <!-- 三角形 -->
+  <polygon points="130,110 300,80 290,235" fill="none" stroke="#b4541f" stroke-width="2.4"/>
+  <circle cx="130" cy="110" r="4.5" fill="#b4541f"/><text x="108" y="106" font-size="12" font-weight="700" fill="#b4541f">A</text>
+  <circle cx="300" cy="80"  r="4.5" fill="#b4541f"/><text x="306" y="78" font-size="12" font-weight="700" fill="#b4541f">B</text>
+  <circle cx="290" cy="235" r="4.5" fill="#b4541f"/><text x="296" y="248" font-size="12" font-weight="700" fill="#b4541f">C</text>
+  <!-- 內部點 -->
+  <circle cx="235" cy="140" r="4" fill="#8b5cf6"/>
+  <text x="244" y="136" font-size="11" fill="#7c3aed">P = αA + βB + γC</text>
+  <!-- 內外的像素中心示意 -->
+  <circle cx="145" cy="135" r="3" fill="#2f6f6a"/>
+  <circle cx="60" cy="51" r="3" fill="#8a929b"/>
+  <text x="40" y="305" font-size="11" fill="#2f6f6a">● 中心在內 → 上色</text>
+  <text x="250" y="305" font-size="11" fill="#8a929b">● 中心在外 → 跳過</text>
+</svg>
+        <figcaption>圖 39-7(示意):光柵化逐一檢查每個像素中心是否在三角形內(用重心座標 $\alpha,\beta,\gamma\ge 0$ 判定),在內的就上色。同一組權重還能把三個頂點的顏色/深度平滑內插到中間每一個像素。實務上會用「掃描線(scanline)」逐列高效處理,而非真的測試每一格。</figcaption>
+      </div>
+
+      <h3>深度緩衝:誰擋住誰?</h3>
+      <p>
+        場景裡的三角形會互相<strong>遮擋</strong>:近的擋住遠的。光柵化一個個畫三角形時,怎麼確保「後面的不會蓋掉前面的」?
+        最笨的辦法是「先排序,從遠畫到近」(畫家演算法),但遇到互相穿插的三角形就會出錯。
+        現代做法簡單又穩健:<strong>深度緩衝(z-buffer,又叫 depth buffer)</strong>。
+      </p>
+      <p>
+        它的點子是:除了存顏色的影格緩衝,再額外開一塊一樣大的緩衝,專門記錄每個像素「目前畫上去的東西有多近」(深度 $z$)。
+        每當要在某像素畫一個新片元,就比一下它的深度:<strong>比現有的更近,才覆蓋顏色並更新深度;否則丟棄。</strong>
+        這樣不管三角形以什麼順序送進來,最後留在每個像素的,永遠是最靠近攝影機的那個。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 600 270" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- 左:結果 -->
+  <text x="30" y="34" font-size="12.5" font-weight="700" fill="#1f2328">結果:近的蓋住遠的</text>
+  <polygon points="60,80 200,60 130,210" fill="#b4541f" fill-opacity="0.55" stroke="#b4541f" stroke-width="1.5"/>
+  <polygon points="120,110 260,90 230,230" fill="#2f6f6a" fill-opacity="0.85" stroke="#2f6f6a" stroke-width="1.5"/>
+  <text x="70" y="120" font-size="11" fill="#b4541f">遠(z 大)</text>
+  <text x="200" y="150" font-size="11" fill="#fff" font-weight="700">近(z 小)</text>
+
+  <!-- 右:每像素存深度 -->
+  <text x="330" y="34" font-size="12.5" font-weight="700" fill="#1f2328">深度緩衝:每像素多存一個 z</text>
+  <g font-size="11" text-anchor="middle">
+    <rect x="330" y="55" width="50" height="34" fill="#f6e7dd" stroke="#b4541f"/><text x="355" y="77">9</text>
+    <rect x="380" y="55" width="50" height="34" fill="#f6e7dd" stroke="#b4541f"/><text x="405" y="77">8</text>
+    <rect x="430" y="55" width="50" height="34" fill="#e3efed" stroke="#2f6f6a"/><text x="455" y="77">3</text>
+    <rect x="480" y="55" width="50" height="34" fill="#e3efed" stroke="#2f6f6a"/><text x="505" y="77">2</text>
+
+    <rect x="330" y="89" width="50" height="34" fill="#f6e7dd" stroke="#b4541f"/><text x="355" y="111">9</text>
+    <rect x="380" y="89" width="50" height="34" fill="#e3efed" stroke="#2f6f6a"/><text x="405" y="111">3</text>
+    <rect x="430" y="89" width="50" height="34" fill="#e3efed" stroke="#2f6f6a"/><text x="455" y="111">2</text>
+    <rect x="480" y="89" width="50" height="34" fill="#e3efed" stroke="#2f6f6a"/><text x="505" y="111">2</text>
+  </g>
+  <text x="330" y="150" font-size="11" fill="#4a5159">新片元 z 更小(更近)→ 覆蓋並更新</text>
+  <text x="330" y="170" font-size="11" fill="#4a5159">新片元 z 更大(更遠)→ 直接丟棄</text>
+  <text x="330" y="205" font-size="10.5" fill="#8a929b">(此處 z 越小代表越近;數字僅為示意)</text>
+</svg>
+        <figcaption>圖 39-8:深度緩衝(z-buffer)。除了顏色,每個像素再存一個深度值。畫新片元時先比深度,只有更近的才覆蓋。如此一來,三角形的繪製順序就無關緊要——這是即時繪圖解決遮擋問題的標準做法。</figcaption>
+      </div>
+
+      <h2>著色與光照:讓表面看起來有立體感</h2>
+      <p>
+        到目前為止,我們只會把三角形填成「一塊顏色」,看起來扁平死板。要有立體感,得模擬<strong>光</strong>怎麼打在表面上。
+        這需要一個關鍵資訊:<strong>法向量(normal)</strong>——每個表面點「朝外」的方向,一個垂直於該表面的單位向量,記作 $\mathbf{N}$。
+        法向量就像皮膚上的細毛指向外面,它決定了表面「面對」著哪個方向,也就決定了它能接到多少光。
+      </p>
+
+      <h3>Phong 光照模型:三種光的疊加</h3>
+      <p>
+        最經典、直覺也最好的近似,是 1975 年提出的 <strong>Phong 光照模型(Phong reflection model)</strong>。
+        它把一個點看到的光,拆成三個成分相加:
+      </p>
+      <ul>
+        <li><strong>環境光(ambient)</strong>:模擬「四面八方亂反射、無所不在」的微弱底光,讓背光面不至於全黑。它是一個常數 $k_a I_a$,跟方向無關。</li>
+        <li><strong>漫反射(diffuse)</strong>:粗糙表面(如石膏、紙)把光均勻散開,亮度只取決於「表面有多正對光源」。
+            這正是<strong>內積</strong>登場的地方:亮度 $\propto \max(0,\ \mathbf{N}\cdot\mathbf{L})$,其中 $\mathbf{L}$ 是指向光源的單位向量。
+            正對光($\mathbf{N}\cdot\mathbf{L}=1$)最亮,側對($=0$)就暗,背對($&lt;0$,取 0)全暗。這條規則叫 <strong>Lambert 餘弦定律</strong>。</li>
+        <li><strong>鏡面反射(specular)</strong>:光滑表面(如金屬、塑膠、濕潤的眼睛)會在特定角度反射出一個刺眼的<strong>高光點(highlight)</strong>。
+            它取決於「反射光方向 $\mathbf{R}$ 與視線方向 $\mathbf{V}$ 有多接近」:$\propto (\max(0,\ \mathbf{R}\cdot\mathbf{V}))^{\alpha}$,
+            那個指數 $\alpha$(光澤度 shininess)越大,高光越小越銳利。</li>
+      </ul>
+      <p>把三者加起來,就是 Phong 模型完整的式子:</p>
+      <p>$$I = \underbrace{k_a I_a}_{\text{環境}} + \underbrace{k_d (\mathbf{N}\cdot\mathbf{L})\, I_d}_{\text{漫反射}} + \underbrace{k_s (\mathbf{R}\cdot\mathbf{V})^{\alpha}\, I_s}_{\text{鏡面}}$$</p>
+
+      <div class="diagram">
+<svg viewBox="0 0 660 300" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="ph-N" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#2f6f6a"/></marker>
+    <marker id="ph-L" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#facc15"/></marker>
+    <marker id="ph-V" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#8b5cf6"/></marker>
+    <marker id="ph-R" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#b4541f"/></marker>
+    <radialGradient id="sph-d" cx="38%" cy="35%" r="70%"><stop offset="0%" stop-color="#bfe0da"/><stop offset="100%" stop-color="#1f4f4a"/></radialGradient>
+    <radialGradient id="sph-s" cx="62%" cy="30%" r="60%"><stop offset="0%" stop-color="#ffffff"/><stop offset="22%" stop-color="#8aa6a1"/><stop offset="100%" stop-color="#24302e"/></radialGradient>
+  </defs>
+  <!-- 左:幾何 -->
+  <text x="20" y="30" font-size="12.5" font-weight="700" fill="#1f2328">一個表面點的光照幾何</text>
+  <line x1="40" y1="240" x2="320" y2="240" stroke="#4a5159" stroke-width="2.5"/>
+  <text x="44" y="258" font-size="10.5" fill="#4a5159">表面</text>
+  <circle cx="180" cy="240" r="4" fill="#1f2328"/>
+  <!-- N -->
+  <line x1="180" y1="240" x2="180" y2="120" stroke="#2f6f6a" stroke-width="2.4" marker-end="url(#ph-N)"/>
+  <text x="186" y="130" font-size="12" font-weight="700" fill="#2f6f6a">N 法向量</text>
+  <!-- L 光源 -->
+  <line x1="180" y1="240" x2="80" y2="120" stroke="#facc15" stroke-width="2.4" marker-end="url(#ph-L)"/>
+  <text x="40" y="118" font-size="12" font-weight="700" fill="#caa000">L 指向光源</text>
+  <!-- R 反射 -->
+  <line x1="180" y1="240" x2="280" y2="120" stroke="#b4541f" stroke-width="2.4" marker-end="url(#ph-R)"/>
+  <text x="262" y="116" font-size="12" font-weight="700" fill="#b4541f">R 反射</text>
+  <!-- V 視線 -->
+  <line x1="180" y1="240" x2="310" y2="158" stroke="#8b5cf6" stroke-width="2.4" marker-end="url(#ph-V)"/>
+  <text x="300" y="178" font-size="12" font-weight="700" fill="#7c3aed">V 視線</text>
+
+  <!-- 右:三成分疊加 -->
+  <text x="370" y="30" font-size="12.5" font-weight="700" fill="#1f2328">環境 + 漫反射 + 鏡面 = Phong</text>
+  <circle cx="410" cy="100" r="30" fill="#3a534f"/><text x="410" y="152" text-anchor="middle" font-size="10.5" fill="#4a5159">環境</text>
+  <text x="452" y="105" font-size="16" fill="#8a929b">+</text>
+  <circle cx="500" cy="100" r="30" fill="url(#sph-d)"/><text x="500" y="152" text-anchor="middle" font-size="10.5" fill="#4a5159">漫反射</text>
+  <text x="542" y="105" font-size="16" fill="#8a929b">+</text>
+  <circle cx="590" cy="100" r="30" fill="url(#sph-s)"/><text x="590" y="152" text-anchor="middle" font-size="10.5" fill="#4a5159">鏡面(高光)</text>
+  <line x1="380" y1="200" x2="620" y2="200" stroke="#dfe4e9" stroke-width="1"/>
+  <text x="500" y="225" text-anchor="middle" font-size="13" font-weight="700" fill="#1f2328">=</text>
+  <circle cx="500" cy="255" r="32" fill="url(#sph-s)"/>
+  <text x="500" y="300" text-anchor="middle" font-size="10.5" fill="#4a5159">最終看到的球</text>
+</svg>
+        <figcaption>圖 39-9:Phong 光照模型。在表面點上有四個關鍵向量:法向量 $\mathbf{N}$、指向光源 $\mathbf{L}$、反射方向 $\mathbf{R}$、視線 $\mathbf{V}$。漫反射亮度由 $\mathbf{N}\cdot\mathbf{L}$ 決定(多正對光),鏡面高光由 $\mathbf{R}\cdot\mathbf{V}$ 決定(視線多接近反射方向)。三種成分相加,扁平的圓就變成了有體積感的球。</figcaption>
+      </div>
+
+      <h3>著色器:在 GPU 上跑的小程式</h3>
+      <p>
+        上面這套光照計算,在現代 GPU 上不是寫死的,而是由你提供的一段小程式來做——這段程式就叫<strong>著色器(shader)</strong>。
+        最常見的兩種:<strong>頂點著色器(vertex shader)</strong>對每個頂點跑一次(負責那些矩陣變換),
+        <strong>片元著色器(fragment / pixel shader)</strong>對每個像素跑一次(負責算最終顏色,例如上面的 Phong 公式)。
+        GPU 會<strong>平行地</strong>對幾百萬個頂點、像素同時跑同一段著色器——這是它快的祕密,稍後再談。
+      </p>
+      <p>
+        順帶一提兩種容易混淆的「著色」:<strong>Gouraud shading</strong> 只在三角形的<em>三個頂點</em>算光照,
+        再把顏色內插到內部(快,但高光容易糊掉);<strong>Phong shading</strong> 則把<em>法向量</em>內插到每個像素、
+        在每個像素各算一次光照(慢一點,但高光漂亮銳利)。注意「Phong 光照模型」和「Phong shading」是兩件不同的事:
+        前者是<em>算什麼</em>(那條公式),後者是<em>在哪算</em>(逐像素)。
+      </p>
+
+      <h2>光線追蹤:反向追光,真實感的王道</h2>
+      <p>
+        現在進入本章最迷人的部分。光柵化是「把三角形畫到螢幕」,而<strong>光線追蹤</strong>反其道而行——
+        它模擬光真實的物理:對螢幕上每個像素,從攝影機射出一條<strong>光線(ray)</strong>,
+        問它「飛出去第一個撞到什麼物體」,然後在撞擊點計算顏色。一條光線用一個起點 $\mathbf{o}$ 與方向 $\mathbf{d}$ 描述,
+        線上的點就是 $\mathbf{p}(t) = \mathbf{o} + t\,\mathbf{d}$($t > 0$ 是沿著方向走的距離)。
+      </p>
+      <p>
+        光線追蹤之所以能產生那麼逼真的畫面,是因為一旦你會「射一條光線、找最近交點」,
+        所有真實光學現象都能<strong>自然地、用同一招</strong>長出來:
+      </p>
+      <ul>
+        <li><strong>陰影(shadow)</strong>:在撞擊點,朝光源再射一條「陰影光線」。如果它<em>在抵達光源前</em>就撞到別的物體,代表被擋住了——這個點在陰影裡。</li>
+        <li><strong>反射(reflection)</strong>:在鏡面撞擊點,算出反射方向,<em>再射一條光線</em>出去,看它撞到什麼,把那個顏色帶回來。鏡子、金屬、水面的倒影就是這樣來的。</li>
+        <li><strong>折射(refraction)</strong>:對玻璃、水這類透明物,光線會穿透並轉彎(依司乃耳定律),再射一條折射光線追下去。</li>
+      </ul>
+      <p>
+        注意「反射光線又射出一條光線、再撞到鏡子又再反射……」這個結構——它是天然的<strong>遞迴(recursion)</strong>
+        (還記得第 3 章嗎?)。一條主光線會「生出」反射與折射的子光線,子光線又可能生出孫光線,
+        直到打到非反射表面、或達到設定的遞迴深度上限才停。這就是它名字裡「追蹤(tracing)」的由來:追著光一路彈下去。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 640 330" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="rt-prim" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#b4541f"/></marker>
+    <marker id="rt-sh" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#caa000"/></marker>
+    <marker id="rt-ref" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8b5cf6"/></marker>
+  </defs>
+  <!-- 攝影機 -->
+  <circle cx="55" cy="175" r="7" fill="#1f2328"/>
+  <text x="32" y="202" font-size="11" fill="#4a5159">攝影機</text>
+  <!-- 影像平面 -->
+  <g stroke="#bcc4cc" stroke-width="0.9">
+    <rect x="120" y="120" width="22" height="110" fill="#fff"/>
+    <line x1="120" y1="142" x2="142" y2="142"/><line x1="120" y1="164" x2="142" y2="164"/>
+    <line x1="120" y1="186" x2="142" y2="186"/><line x1="120" y1="208" x2="142" y2="208"/>
+  </g>
+  <text x="104" y="248" font-size="10.5" fill="#4a5159">像素平面</text>
+  <!-- 球 -->
+  <circle cx="380" cy="180" r="55" fill="#f6e7dd" stroke="#b4541f" stroke-width="1.8"/>
+  <!-- 地板 -->
+  <line x1="200" y1="290" x2="620" y2="290" stroke="#4a5159" stroke-width="2"/>
+  <!-- 光源 -->
+  <circle cx="540" cy="60" r="11" fill="#facc15" stroke="#b4541f" stroke-width="1"/>
+  <text x="556" y="56" font-size="11" font-weight="700" fill="#caa000">光源</text>
+  <!-- 主光線 eye -> 命中點 H≈(332,150) -->
+  <line x1="55" y1="175" x2="330" y2="151" stroke="#b4541f" stroke-width="1.8" marker-end="url(#rt-prim)"/>
+  <text x="180" y="150" font-size="11" font-weight="700" fill="#b4541f">主光線</text>
+  <circle cx="332" cy="151" r="4" fill="#1f2328"/>
+  <!-- 法向量(從球心 380,180 經 H 向外) dir (-48,-29) -->
+  <line x1="332" y1="151" x2="300" y2="132" stroke="#2f6f6a" stroke-width="1.6"/>
+  <text x="270" y="128" font-size="10.5" fill="#2f6f6a">N</text>
+  <!-- 陰影光線 H -> 光源 -->
+  <line x1="332" y1="151" x2="528" y2="68" stroke="#caa000" stroke-width="1.6" stroke-dasharray="5 3" marker-end="url(#rt-sh)"/>
+  <text x="410" y="96" font-size="11" fill="#caa000">陰影光線 → 光源</text>
+  <!-- 反射光線 -->
+  <line x1="332" y1="151" x2="220" y2="95" stroke="#8b5cf6" stroke-width="1.6" marker-end="url(#rt-ref)"/>
+  <text x="190" y="86" font-size="11" fill="#7c3aed">反射光線(遞迴)</text>
+</svg>
+        <figcaption>圖 39-10:光線追蹤的原理。從攝影機穿過某個像素射出<strong>主光線</strong>,找到最近交點;在交點上,朝光源射<strong>陰影光線</strong>判斷是否被遮擋,並沿反射方向遞迴射出<strong>反射光線</strong>把倒影帶回來。光的所有把戲,都從「射線 + 求最近交點」這一招長出來。</figcaption>
+      </div>
+
+      <h3>核心數學:光線與球的交點</h3>
+      <p>
+        光線追蹤的引擎,就是「光線與物體求交」。我們以最簡單的物體——<strong>球</strong>為例,因為它的交點有漂亮的封閉解。
+        球面上的點 $\mathbf{p}$ 滿足「到球心 $\mathbf{c}$ 的距離等於半徑 $r$」,即 $\lVert\mathbf{p} - \mathbf{c}\rVert^2 = r^2$。
+        把光線 $\mathbf{p}(t) = \mathbf{o} + t\mathbf{d}$ 代進去,展開後會得到一個對 $t$ 的<strong>一元二次方程式</strong>:
+      </p>
+      <p>$$\underbrace{(\mathbf{d}\cdot\mathbf{d})}_{a}\,t^2 + \underbrace{2\,\mathbf{d}\cdot(\mathbf{o}-\mathbf{c})}_{b}\,t + \underbrace{(\mathbf{o}-\mathbf{c})\cdot(\mathbf{o}-\mathbf{c}) - r^2}_{c} = 0$$</p>
+      <p>
+        剩下的就是國中數學:看<strong>判別式</strong> $\Delta = b^2 - 4ac$。$\Delta &lt; 0$:無實根,光線沒打中球;
+        $\Delta \ge 0$:有交點,取較近的那個正根 $t = \dfrac{-b - \sqrt{\Delta}}{2a}$ 作為命中距離。一切就這麼簡單。
+      </p>
+
+      <h3>動手:寫一個能跑的極簡光線追蹤器</h3>
+      <p>
+        把上面的東西串起來,我們就能寫出一個<strong>真正能跑、會輸出影像</strong>的迷你光線追蹤器。
+        它對每個像素射一條光線、和一顆球求交、在命中點用漫反射(Lambert)上色,最後輸出一張 PPM 圖。
+        程式刻意只用標準函式庫,讓你看清每一步的數學:
+      </p>
+      <pre><code class="language-python">import math
+
+# ---------- 一點點向量工具(用 tuple 表示 3D 向量)----------
+def sub(a, b): return (a[0]-b[0], a[1]-b[1], a[2]-b[2])
+def add(a, b): return (a[0]+b[0], a[1]+b[1], a[2]+b[2])
+def mul(a, s): return (a[0]*s, a[1]*s, a[2]*s)
+def dot(a, b): return a[0]*b[0] + a[1]*b[1] + a[2]*b[2]
+def normalize(a):
+    L = math.sqrt(dot(a, a))
+    return (a[0]/L, a[1]/L, a[2]/L)
+
+# ---------- 光線與球求交,回傳最近的正交點距離 t(沒中回傳 None)----------
+def ray_sphere(o, d, center, r):
+    oc = sub(o, center)
+    a = dot(d, d)
+    b = 2 * dot(oc, d)
+    c = dot(oc, oc) - r*r
+    disc = b*b - 4*a*c              # 判別式
+    if disc &lt; 0:
+        return None                # 無實根 → 沒打中
+    t = (-b - math.sqrt(disc)) / (2*a)   # 取較近的交點
+    return t if t &gt; 0 else None
+
+# ---------- 場景設定 ----------
+W, H = 240, 180                    # 影像解析度
+eye      = (0.0, 0.0, 0.0)         # 攝影機在原點
+sphere_c = (0.0, 0.0, -5.0)        # 球心在前方 5 單位
+sphere_r = 1.5
+light    = (5.0, 5.0, 0.0)         # 點光源位置
+aspect   = W / H
+
+# ---------- 主迴圈:對每個像素射一條光線 ----------
+pixels = []
+for j in range(H):
+    for i in range(W):
+        # 把像素 (i, j) 映射到 z = -1 的影像平面上,範圍約 [-1, 1]
+        x = (2*(i + 0.5)/W - 1) * aspect
+        y = 1 - 2*(j + 0.5)/H
+        d = normalize((x, y, -1.0))         # 這條光線的方向
+        t = ray_sphere(eye, d, sphere_c, sphere_r)
+        if t is None:
+            pixels.append((25, 28, 40))     # 背景:深藍灰
+        else:
+            p = add(eye, mul(d, t))         # 命中點
+            n = normalize(sub(p, sphere_c)) # 球面法向量
+            l = normalize(sub(light, p))    # 指向光源
+            diff = max(0.0, dot(n, l))      # 漫反射強度 = max(0, N·L)
+            shade = 0.1 + 0.9 * diff        # 環境光 0.1 + 漫反射
+            pixels.append((int(230*shade), int(80*shade), int(70*shade)))
+
+# ---------- 輸出 PPM ----------
+with open("sphere.ppm", "w") as f:
+    f.write(f"P3\n{W} {H}\n255\n")
+    for (r, g, b) in pixels:
+        f.write(f"{r} {g} {b}\n")
+print("已輸出 sphere.ppm —— 打開它,你會看到一顆有光照的紅球!")</code></pre>
+      <p>
+        打開 <code>sphere.ppm</code>,你會看到一顆紅球:正對光源的左上方明亮、邊緣與背光處漸暗——
+        那個從亮到暗的漸層,完全來自那一行 <code>max(0.0, dot(n, l))</code>,也就是 Lambert 餘弦定律。
+        這短短幾十行,已經包含了光線追蹤的全部骨架:<strong>射線 → 求交 → 法向量 → 光照</strong>。
+        本章末的挑戰題,會帶你把它擴充成多球、加陰影,甚至遞迴反射。
+      </p>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">為什麼這個迴圈「天生平行」</span>
+          <p>注意上面那個雙重迴圈:每個像素的計算<strong>彼此完全獨立</strong>——算第 (3, 7) 個像素時,根本不需要知道別的像素算出什麼。
+          這種「大量互不相干的相同計算」正是 GPU 的拿手好戲,也是為什麼真實世界的光線追蹤器會丟到 GPU 上跑、快上千百倍。
+          這個「資料平行」的主題,我們會在第十部平行程式設計裡深入。</p>
+        </div>
+      </div>
+
+      <h2>紋理貼圖與抗鋸齒</h2>
+      <h3>紋理貼圖:把照片貼到表面上</h3>
+      <p>
+        如果每個三角形只能是單一顏色或平滑漸層,牆磚、木紋、人臉的細節就得用天文數字般多的三角形才畫得出來,太不划算。
+        聰明的做法是<strong>紋理貼圖(texture mapping)</strong>:準備一張 2D 圖片(紋理),
+        在三角形的每個頂點標上它對應到紋理上的座標(稱為 <strong>UV 座標</strong>,範圍通常是 0 到 1),
+        再用前面說的重心座標,把 UV 平滑內插到三角形內每個像素,於是每個像素都能去紋理圖上「取樣」對應的顏色。
+        一張磚牆照片,就這樣被「糊」到一個簡單的四方形上,瞬間有了豐富細節——而幾何依然只是兩個三角形。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 600 270" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="tx-ar" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/></marker>
+  </defs>
+  <!-- 紋理(棋盤) -->
+  <text x="40" y="34" font-size="12.5" font-weight="700" fill="#1f2328">紋理圖(UV 空間)</text>
+  <g>
+    <rect x="40" y="50" width="160" height="160" fill="#e3efed" stroke="#2f6f6a" stroke-width="1.5"/>
+    <g fill="#2f6f6a" fill-opacity="0.35">
+      <rect x="40" y="50" width="40" height="40"/><rect x="120" y="50" width="40" height="40"/>
+      <rect x="80" y="90" width="40" height="40"/><rect x="160" y="90" width="40" height="40"/>
+      <rect x="40" y="130" width="40" height="40"/><rect x="120" y="130" width="40" height="40"/>
+      <rect x="80" y="170" width="40" height="40"/><rect x="160" y="170" width="40" height="40"/>
+    </g>
+  </g>
+  <text x="34" y="228" font-size="10.5" fill="#4a5159">(0,0)</text>
+  <text x="178" y="228" font-size="10.5" fill="#4a5159">(1,0)</text>
+  <text x="34" y="48" font-size="10.5" fill="#4a5159">(0,1)</text>
+  <!-- 箭頭 -->
+  <line x1="215" y1="130" x2="280" y2="130" stroke="#8a929b" stroke-width="1.6" marker-end="url(#tx-ar)"/>
+  <text x="218" y="120" font-size="10.5" fill="#8a929b">依 UV 取樣</text>
+  <!-- 三角形(3D 表面) -->
+  <text x="370" y="34" font-size="12.5" font-weight="700" fill="#1f2328">貼到三角形表面</text>
+  <polygon points="320,210 540,190 470,60" fill="#e3efed" stroke="#b4541f" stroke-width="1.8"/>
+  <g fill="#b4541f" fill-opacity="0.30" stroke="#b4541f" stroke-width="0.4">
+    <polygon points="320,210 430,200 405,150 360,165"/>
+    <polygon points="470,60 500,140 455,150 460,105"/>
+  </g>
+  <circle cx="320" cy="210" r="4" fill="#b4541f"/><text x="300" y="228" font-size="10" fill="#b4541f">uv=(0,0)</text>
+  <circle cx="540" cy="190" r="4" fill="#b4541f"/><text x="520" y="208" font-size="10" fill="#b4541f">uv=(1,0)</text>
+  <circle cx="470" cy="60"  r="4" fill="#b4541f"/><text x="478" y="58" font-size="10" fill="#b4541f">uv=(0.5,1)</text>
+</svg>
+        <figcaption>圖 39-11:紋理貼圖。三角形的每個頂點帶一組 UV 座標,指向紋理圖上的位置;內部像素用重心座標把 UV 內插出來,再去紋理上取對應顏色。如此一來,複雜的表面細節由「一張圖」提供,而幾何依舊很簡單。</figcaption>
+      </div>
+
+      <h3>抗鋸齒:撫平階梯狀的邊緣</h3>
+      <p>
+        因為像素是方格,斜線與曲線邊緣會呈現難看的「階梯狀」鋸齒(aliasing)——這是把連續的幾何硬塞進離散網格的必然代價。
+        <strong>抗鋸齒(anti-aliasing)</strong>的核心想法是:邊緣上的像素,不要非黑即白地硬切,而是依它「被圖形蓋住多少比例」
+        塗上一個<strong>中間的灰階</strong>。常見做法是<strong>超取樣(supersampling)</strong>:在每個像素內取多個樣本點、算完再平均,
+        讓邊緣由「硬切」變成「柔和過渡」,人眼看起來就平滑多了。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 600 230" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- 左:鋸齒 -->
+  <text x="40" y="34" font-size="12.5" font-weight="700" fill="#1f2328">鋸齒(非黑即白)</text>
+  <g stroke="#dfe4e9" stroke-width="0.8">
+    <rect x="40" y="50" width="200" height="150" fill="#fff"/>
+  </g>
+  <g fill="#2f6f6a">
+    <rect x="40" y="170" width="40" height="30"/>
+    <rect x="40" y="140" width="80" height="30"/>
+    <rect x="40" y="110" width="120" height="30"/>
+    <rect x="40" y="80" width="160" height="30"/>
+    <rect x="40" y="50" width="200" height="30"/>
+  </g>
+  <!-- 右:抗鋸齒 -->
+  <text x="340" y="34" font-size="12.5" font-weight="700" fill="#1f2328">抗鋸齒(邊緣用灰階)</text>
+  <g stroke="#dfe4e9" stroke-width="0.8">
+    <rect x="340" y="50" width="200" height="150" fill="#fff"/>
+  </g>
+  <g fill="#2f6f6a">
+    <rect x="340" y="170" width="40" height="30"/>
+    <rect x="340" y="140" width="80" height="30"/>
+    <rect x="340" y="110" width="120" height="30"/>
+    <rect x="340" y="80" width="160" height="30"/>
+    <rect x="340" y="50" width="200" height="30"/>
+  </g>
+  <!-- 邊緣灰階補丁 -->
+  <g fill="#2f6f6a" fill-opacity="0.45">
+    <rect x="380" y="170" width="40" height="30"/>
+    <rect x="420" y="140" width="40" height="30"/>
+    <rect x="460" y="110" width="40" height="30"/>
+    <rect x="500" y="80" width="40" height="30"/>
+  </g>
+  <text x="340" y="222" font-size="10.5" fill="#4a5159">邊緣像素依覆蓋比例上半透明色 → 看起來更平滑</text>
+</svg>
+        <figcaption>圖 39-12:抗鋸齒。左邊的斜線邊緣只能是「全綠或全白」,於是出現階梯狀鋸齒;右邊在邊緣像素填入依覆蓋比例決定的灰階,過渡變柔和,人眼看起來邊緣就「平」了。</figcaption>
+      </div>
+
+      <h2>OpenGL、GPU,與即時 vs 離線的取捨</h2>
+      <p>
+        你不必每次都從頭手刻管線。<strong>OpenGL</strong>(以及 Direct3D、Vulkan、Metal、WebGPU 等)是業界的<strong>繪圖 API</strong>:
+        它把「設定矩陣、送頂點、跑著色器、寫進影格緩衝」這套流程,標準化成一組函式,讓你直接驅動 GPU。
+      </p>
+      <p>
+        為什麼非 GPU 不可?回想本章所有的核心動作:對<em>幾百萬個頂點</em>各乘一次矩陣、對<em>幾百萬個像素</em>各跑一次著色器、
+        對<em>每個像素</em>各射一條光線——這些都是「大量、互不相干、做著相同運算」的工作。
+        CPU 有幾個強大但數量少的核心,適合複雜的循序邏輯;<strong>GPU 則有成千上萬個簡單核心,專為這種大規模資料平行而生</strong>。
+        把同一段著色器同時餵給上千個像素並行計算,正是即時 3D 得以流暢的根本原因(這個平行運算的主題,留待第十部詳談)。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">⚖️</div>
+        <div class="body">
+          <span class="c-title">即時 vs 離線:同一個權衡的兩端</span>
+          <p><strong>即時渲染(real-time)</strong>(遊戲、VR)必須在 16 毫秒內畫完一張(才有 60 FPS),
+          所以選用快的光柵化,並用各種「夠像就好」的近似(陰影貼圖、環境光遮蔽、螢幕空間反射)來偽造真實感。
+          <strong>離線渲染(offline)</strong>(電影、動畫)一張圖可以算上好幾小時,於是放心用光線追蹤(及更進階的路徑追蹤)
+          去逼近真正的物理光學,換取以假亂真的畫質。近年硬體光線追蹤與 AI 降噪,正在快速模糊這條界線——
+          遊戲已開始用上即時光線追蹤了。</p>
+        </div>
+      </div>
+
+      <h2>圖學能拿來做什麼?</h2>
+      <p>計算機圖學早已滲透進你生活的每個角落,遠不只是遊戲:</p>
+      <ul>
+        <li><strong>電玩遊戲</strong>:即時光柵化的主戰場,追求在毫秒內畫出可互動的世界。</li>
+        <li><strong>電影與動畫</strong>:Pixar、工業光魔等用離線光線/路徑追蹤,渲染出真假難辨的特效與全 CG 電影。</li>
+        <li><strong>CAD 與工程</strong>:建築、機械、晶片設計都靠 3D 建模與精確的幾何渲染來設計與審視。</li>
+        <li><strong>科學與資料視覺化(visualization)</strong>:把醫學斷層掃描、流體模擬、分子結構、龐大資料變成看得懂的圖像。</li>
+        <li><strong>VR / AR</strong>:虛擬實境與擴增實境需要極低延遲、雙眼立體的即時渲染,把圖學的即時性逼到極限。</li>
+      </ul>
+
+      <h2>動手做:練習題</h2>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 39.1 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>給兩個 2D 向量 $\mathbf{a} = (3, 4)$ 與 $\mathbf{b} = (4, 3)$,手算它們的<strong>內積</strong>與<strong>夾角</strong>,
+          再用 <code>numpy</code> 驗證。(提示:$\cos\theta = \dfrac{\mathbf{a}\cdot\mathbf{b}}{\lVert\mathbf{a}\rVert\,\lVert\mathbf{b}\rVert}$。)</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>內積 $\mathbf{a}\cdot\mathbf{b} = 3\times 4 + 4\times 3 = 24$。兩者長度都是 $\sqrt{3^2+4^2}=5$。
+              所以 $\cos\theta = \dfrac{24}{5\times 5} = \dfrac{24}{25} = 0.96$,夾角 $\theta = \arccos(0.96) \approx 16.26°$。</p>
+              <pre><code class="language-python">import numpy as np
+
+a = np.array([3, 4])
+b = np.array([4, 3])
+
+d = np.dot(a, b)                                  # 24
+cos_t = d / (np.linalg.norm(a) * np.linalg.norm(b))   # 0.96
+angle = np.degrees(np.arccos(cos_t))             # 16.26 度
+print(f"內積 = {d},  夾角 ≈ {angle:.2f}°")
+# 內積 = 24,  夾角 ≈ 16.26°</code></pre>
+              <p>這正是漫反射光照的計算核心:把 $\mathbf{a}$、$\mathbf{b}$ 換成「法向量」與「指向光源的向量」,
+              它們的(正規化後)內積就直接是表面亮度。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 39.2 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>用旋轉矩陣把點 $(1, 0)$ 繞原點旋轉 $90°$,手算預測結果,再用 <code>numpy</code> 驗證。
+          接著想想:旋轉 $180°$ 會得到什麼點?</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>$90°$ 時 $\cos 90° = 0,\ \sin 90° = 1$,旋轉矩陣是 $\begin{bmatrix}0 & -1\\ 1 & 0\end{bmatrix}$。
+              套到 $(1,0)$:$x' = 0\cdot 1 - 1\cdot 0 = 0$,$y' = 1\cdot 1 + 0\cdot 0 = 1$,得到 $(0, 1)$——
+              原本指向右的點轉到了正上方,合理。旋轉 $180°$ 則得到 $(-1, 0)$(轉到正左方)。</p>
+              <pre><code class="language-python">import numpy as np
+
+def rotate(p, deg):
+    t = np.radians(deg)
+    R = np.array([[np.cos(t), -np.sin(t)],
+                  [np.sin(t),  np.cos(t)]])
+    return R @ p
+
+print(rotate(np.array([1, 0]), 90).round(3))    # [0. 1.]
+print(rotate(np.array([1, 0]), 180).round(3))   # [-1.  0.]</code></pre>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 39.3 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>用你自己的話解釋:為什麼普通的 2 × 2 矩陣<strong>無法</strong>表示平移,而<strong>齊次座標</strong>(把點寫成 $(x, y, 1)$、矩陣升成 3 × 3)就可以?
+          動手把平移矩陣乘上 $(x, y, 1)$,看看那個「1」在裡面扮演什麼角色。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>2 × 2 矩陣乘向量,算出來的每個分量都是 $x$、$y$ 的<strong>線性組合</strong>(形如 $ax + by$),
+              永遠沒有「不乘任何座標的常數項」。但平移 $(x, y)\to(x+t_x,\ y+t_y)$ 需要的正是這種常數加項,所以辦不到。</p>
+              <p>齊次座標的巧妙在於:多補的那個固定為 1 的分量,讓矩陣可以「乘到一個必定是 1 的東西」,於是常數項就有了著力點:</p>
+              <p>$$\begin{bmatrix} 1 & 0 & t_x \\ 0 & 1 & t_y \\ 0 & 0 & 1 \end{bmatrix}\begin{bmatrix} x \\ y \\ 1 \end{bmatrix} = \begin{bmatrix} 1\cdot x + 0\cdot y + t_x\cdot 1 \\ 0\cdot x + 1\cdot y + t_y\cdot 1 \\ 1 \end{bmatrix} = \begin{bmatrix} x + t_x \\ y + t_y \\ 1 \end{bmatrix}$$</p>
+              <p>關鍵就是第三欄的 $t_x, t_y$ 乘上那個 1。因為平移現在也是矩陣乘法,就能和旋轉、縮放自由相乘、合成單一矩陣——
+              這是 GPU 把一長串變換壓成「一個矩陣餵給每個頂點」的前提。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 39.4 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>實作光線與球的交點函式 <code>ray_sphere(o, d, center, r)</code>,回傳最近的正交點距離 $t$(沒打中回傳 <code>None</code>)。
+          用它測試:從原點往 $-z$ 方向射出的光線,是否打中球心在 $(0,0,-5)$、半徑 2 的球?交點在哪?</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>把光線代入球面方程式,整理成 $at^2+bt+c=0$,其中 $a=\mathbf{d}\cdot\mathbf{d}$、$b=2\mathbf{d}\cdot(\mathbf{o}-\mathbf{c})$、
+              $c=(\mathbf{o}-\mathbf{c})\cdot(\mathbf{o}-\mathbf{c})-r^2$,再看判別式:</p>
+              <pre><code class="language-python">import math
+
+def dot(a, b): return a[0]*b[0] + a[1]*b[1] + a[2]*b[2]
+def sub(a, b): return (a[0]-b[0], a[1]-b[1], a[2]-b[2])
+
+def ray_sphere(o, d, center, r):
+    oc = sub(o, center)
+    a = dot(d, d)
+    b = 2 * dot(oc, d)
+    c = dot(oc, oc) - r*r
+    disc = b*b - 4*a*c
+    if disc &lt; 0:
+        return None                    # 沒打中
+    t = (-b - math.sqrt(disc)) / (2*a) # 較近的根
+    return t if t &gt; 0 else None
+
+o = (0, 0, 0)
+d = (0, 0, -1)                         # 往 -z 射
+t = ray_sphere(o, d, (0, 0, -5), 2)
+print("t =", t)                        # t = 3.0
+if t:
+    hit = (o[0]+t*d[0], o[1]+t*d[1], o[2]+t*d[2])
+    print("交點 =", hit)               # 交點 = (0, 0, -3)</code></pre>
+              <p>球心在 $z=-5$、半徑 2,所以最近的表面在 $z=-3$,光線飛了 $t=3$ 個單位打中它——和直覺完全吻合。
+              這個函式就是上面那個完整光線追蹤器的引擎。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 39.5 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>實作 <strong>重心座標 / 邊測試</strong>來判斷一個點是否在三角形內:寫 <code>in_triangle(p, a, b, c)</code>。
+          (提示:用「邊的符號」——點對三角形每條邊算一個叉積符號,若三個符號一致,點就在內部。)
+          測試點 $(0.3, 0.3)$ 是否在頂點為 $(0,0)$、$(1,0)$、$(0,1)$ 的三角形內。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>對每條有向邊,用 2D 叉積算出待測點落在邊的哪一側(正/負)。若點在三角形內,它對三條邊會落在同一側,三個符號同號:</p>
+              <pre><code class="language-python">def edge_sign(p, a, b):
+    # 2D 叉積:(b-a) x (p-a),正負代表 p 在有向邊 a-&gt;b 的哪一側
+    return (b[0]-a[0])*(p[1]-a[1]) - (b[1]-a[1])*(p[0]-a[0])
+
+def in_triangle(p, a, b, c):
+    d1 = edge_sign(p, a, b)
+    d2 = edge_sign(p, b, c)
+    d3 = edge_sign(p, c, a)
+    has_neg = (d1 &lt; 0) or (d2 &lt; 0) or (d3 &lt; 0)
+    has_pos = (d1 &gt; 0) or (d2 &gt; 0) or (d3 &gt; 0)
+    return not (has_neg and has_pos)    # 沒有同時出現正負 → 同側 → 在內部
+
+A, B, C = (0, 0), (1, 0), (0, 1)
+print(in_triangle((0.3, 0.3), A, B, C))   # True(在內部)
+print(in_triangle((0.8, 0.8), A, B, C))   # False(在斜邊外)</code></pre>
+              <p>$(0.3, 0.3)$ 的座標和 $0.3+0.3=0.6 &lt; 1$,在斜邊內側,結果 <code>True</code>;
+              $(0.8, 0.8)$ 的和 $1.6 &gt; 1$,跑到斜邊外,結果 <code>False</code>。這正是光柵化「逐像素判斷是否在三角形內」的核心。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 39.6 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>擴充本章的極簡光線追蹤器,任選(或全做)以下強化:
+          (a) 在場景裡<strong>再加一顆球</strong>(不同位置/顏色),正確處理「取最近交點」;
+          (b) 加上<strong>陰影</strong>:命中點朝光源射一條陰影光線,若被任何球擋住就只留環境光。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>關鍵改動有兩處:用一個「球清單」並對每條光線找<em>所有</em>球裡最近的命中;以及在著色前,從命中點朝光源射一條陰影光線做遮擋測試。
+              注意陰影光線要從命中點稍微「往外推一點點」(沿法向量加一個小 epsilon),否則會因浮點誤差打到自己而產生黑斑(self-shadowing):</p>
+              <pre><code class="language-python">import math
+
+def sub(a,b): return (a[0]-b[0], a[1]-b[1], a[2]-b[2])
+def add(a,b): return (a[0]+b[0], a[1]+b[1], a[2]+b[2])
+def mul(a,s): return (a[0]*s, a[1]*s, a[2]*s)
+def dot(a,b): return a[0]*b[0]+a[1]*b[1]+a[2]*b[2]
+def normalize(a):
+    L = math.sqrt(dot(a,a)); return (a[0]/L, a[1]/L, a[2]/L)
+
+def ray_sphere(o, d, c, r):
+    oc = sub(o, c); a = dot(d,d); b = 2*dot(oc,d); cc = dot(oc,oc)-r*r
+    disc = b*b - 4*a*cc
+    if disc &lt; 0: return None
+    t = (-b - math.sqrt(disc)) / (2*a)
+    return t if t &gt; 1e-4 else None
+
+# 場景:多顆球,每顆有顏色
+spheres = [
+    {"c": (-1.1, 0.0, -5.0), "r": 1.0, "color": (230, 80, 70)},   # 紅
+    {"c": ( 1.3, -0.3, -6.0), "r": 1.3, "color": (70, 130, 230)}, # 藍
+]
+light = (5.0, 5.0, 0.0)
+
+def nearest_hit(o, d):
+    best_t, best = None, None
+    for s in spheres:
+        t = ray_sphere(o, d, s["c"], s["r"])
+        if t is not None and (best_t is None or t &lt; best_t):
+            best_t, best = t, s
+    return best_t, best
+
+def in_shadow(p, n):
+    o = add(p, mul(n, 1e-3))          # 沿法向量推開,避免自我陰影
+    l = normalize(sub(light, p))
+    t, hit = nearest_hit(o, l)
+    return hit is not None             # 路上撞到任何球 → 在陰影中
+
+W, H = 240, 180; eye = (0,0,0); aspect = W/H
+pixels = []
+for j in range(H):
+    for i in range(W):
+        x = (2*(i+0.5)/W - 1)*aspect
+        y = 1 - 2*(j+0.5)/H
+        d = normalize((x, y, -1.0))
+        t, s = nearest_hit(eye, d)
+        if s is None:
+            pixels.append((25, 28, 40))
+        else:
+            p = add(eye, mul(d, t))
+            n = normalize(sub(p, s["c"]))
+            if in_shadow(p, n):
+                shade = 0.1                       # 只剩環境光
+            else:
+                l = normalize(sub(light, p))
+                shade = 0.1 + 0.9*max(0.0, dot(n, l))
+            pixels.append(tuple(int(ch*shade) for ch in s["color"]))
+
+with open("scene.ppm", "w") as f:
+    f.write(f"P3\n{W} {H}\n255\n")
+    for (r,g,b) in pixels: f.write(f"{r} {g} {b}\n")
+print("已輸出 scene.ppm:兩顆球 + 陰影!")</code></pre>
+              <p>跑完打開 <code>scene.ppm</code>,你會看到一紅一藍兩顆球,而且某顆球可能在另一顆上投下陰影。
+              想再進一步?把「陰影」那段邏輯改成<em>遞迴</em>地沿反射方向再射一條光線、把回傳顏色混進來,你就做出了<strong>鏡面反射</strong>——
+              那正是光線追蹤遞迴本質(第 3 章)的展現。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>把這一章串起來</h2>
+      <p>我們從「螢幕只是一面會發光的網格」出發,一路走到能親手渲染一顆發亮的球。回顧這趟旅程的路標:</p>
+      <ul>
+        <li><strong>兩大路線</strong>:光柵化(物體→像素,快,遊戲)與光線追蹤(像素→物體,真實,電影),是理解整個圖學版圖的主軸。</li>
+        <li><strong>影像基礎</strong>:像素、解析度、RGB 色深、alpha,最終都寫進<strong>影格緩衝</strong>那一長串數字。</li>
+        <li><strong>向量</strong>是空間的語言;<strong>內積</strong>衡量方向一致程度,是光照的心臟。</li>
+        <li><strong>矩陣</strong>統一表達變換並能組合;<strong>齊次座標</strong>把平移也收編進矩陣乘法,還順手搞定透視。</li>
+        <li><strong>繪圖管線</strong>:模型→世界→視圖→投影→裁剪→光柵化→像素,前半幾何、後半像素;<strong>透視</strong>就是「除以深度」。</li>
+        <li><strong>光柵化</strong>用重心座標判斷像素歸屬,用 <strong>z-buffer</strong> 解決遮擋。</li>
+        <li><strong>Phong 光照</strong>把光拆成環境+漫反射+鏡面;<strong>著色器</strong>是 GPU 上平行跑的小程式。</li>
+        <li><strong>光線追蹤</strong>射線求交、遞迴追光,讓陰影、反射、折射自然湧現——你已親手寫出它的骨架。</li>
+        <li><strong>紋理</strong>提供細節、<strong>抗鋸齒</strong>撫平邊緣、<strong>GPU</strong> 用大規模平行讓這一切跑得即時。</li>
+      </ul>
+      <p>
+        最重要的體悟也許是:那些令人屏息的畫面,並不是什麼遙不可及的魔法,而是一層層樸實的數學疊出來的——
+        向量描述方向、矩陣搬動世界、內積決定明暗、二次方程式找出交點。你手上那幾十行光線追蹤器,
+        和好萊塢的渲染農場,差別只在規模與精緻,核心思想是同一套。下一章我們轉向<strong>軟體工程</strong>,
+        談的不再是「怎麼算出漂亮的圖」,而是「怎麼讓一群人把龐大的軟體又快又穩地造出來」。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">📚</div>
+        <div class="body">
+          <span class="c-title">想更深入?延伸資源</span>
+          <p>本章對應 OSSU 應用課程中的
+          <a href="https://www.edx.org/learn/computer-graphics/the-university-of-california-san-diego-computer-graphics">UC San Diego「Computer Graphics」(CSE 167x,edX)</a>——
+          由 Ravi Ramamoorthi 主講,從變換、管線、光照一路講到光線追蹤,並有大量程式作業。
+          本章用到的向量與矩陣,在<strong>第 54 章「線性代數」</strong>會被完整建立;若你想先補幾何直覺,
+          3Blue1Brown 的 <a href="https://www.youtube.com/playlist?list=PLZHQObOWTQDPD3MizzM2xVFitgF8hE_ab">Essence of Linear Algebra</a> 是絕佳的暖身。
+          想動手做出更完整的光線追蹤器,經典免費小書
+          <a href="https://raytracing.github.io/">《Ray Tracing in One Weekend》</a>
+          會帶你從本章的骨架,一步步加上材質、反射、景深,渲染出令人驚豔的畫面——強烈推薦當作本章的下一步。</p>
+        </div>
+      </div>
+
+          <div class="callout tip">
+        <div class="ico">🧭</div>
+        <div class="body">
+          <span class="c-title">延伸：專修軌道</span>
+          <p>想動手實作影像與 3D/AR?<a href="65-cv-basics-processing.html">第 65 章</a>講影像處理,<a href="68-cv-graphics-ar.html">第 68 章</a>用程式實作渲染管線、光柵器與擴增實境。</p>
+        </div>
+      </div>
+
+</article>
+  </main>
+</div>
+<script src="../assets/book.js"></script>
+</body>
+</html>

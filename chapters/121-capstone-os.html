@@ -1,0 +1,872 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>實戰:手寫教學作業系統 · CS 自學聖經</title>
+<meta name="description" content="從 bootloader 到 shell，整合布林邏輯、ALU、CPU、組譯、VM 與 OS 理論，親手打造一個能開機、能跑行程、能接受鍵盤輸入的教學用作業系統。">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;700&family=Noto+Sans+TC:wght@400;700&family=Lora:ital,wght@0,400;0,600;0,700;1,400&family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <main class="main">
+    <article class="content">
+      <div class="eyebrow">第二七部 · 動手實戰專案</div>
+      <h1>實戰:手寫教學作業系統</h1>
+      <p class="subtitle">理論是地圖,但你還沒去過那個地方——現在讓我們真正出發,從第一個位元組開始,打造一個能開機、能排程、能接受鍵盤輸入的作業系統。</p>
+      <div class="byline">
+        <span class="tag">第 115 章</span>
+        <span>閱讀時間 ≈ 90 分鐘</span>
+        <span>難度:★★★★★</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會</div>
+        <ul>
+          <li>理解從按下電源到 shell 提示符出現的整條啟動鏈(boot chain)</li>
+          <li>寫出能被 QEMU 啟動的 bootloader,從實模式切入保護模式/長模式</li>
+          <li>設定 GDT / IDT,正確處理計時器與鍵盤中斷</li>
+          <li>實作 bitmap 式實體記憶體分配器與四層分頁虛擬記憶體</li>
+          <li>以行程控制塊(PCB)與 context switch 組合語言實作 round-robin 排程</li>
+          <li>透過 ring 0→3 切換與 syscall 介面完成極簡使用者模式 shell</li>
+          <li>對照本書 §19–24 / §47–48,感受理論在真實硬體上如何落地</li>
+        </ul>
+      </div>
+
+      <!-- ===== §1 ===== -->
+      <h2>為什麼要自己寫一個 OS？</h2>
+
+      <p>
+        你已經讀過了布林邏輯(<a href="19-boolean-logic.html">第 19 章</a>)、
+        ALU 與組合邏輯(<a href="20-combinational-sequential.html">第 20 章</a>)、CPU 與機器語言(<a href="21-cpu-machine-language.html">第 21 章</a>)、
+        組譯器(<a href="22-assembler.html">第 22 章</a>)、VM 與編譯器(<a href="23-vm-compiler.html">第 23 章</a>),
+        還有作業系統的核心概念(<a href="24-operating-system.html">第 24 章</a>)。
+        你也深入過數位電路(<a href="47-digital-circuits.html">第 47 章</a>)與電腦架構(<a href="48-computer-architecture.html">第 48 章</a>)。
+      </p>
+      <p>但知道和做到之間,有一條很深的溝。</p>
+      <p>
+        這一章的任務就是填平那條溝。我們要從一個 512-byte 的開機磁區開始,
+        一層一層往上疊,最後產出一個真正能開機、能處理中斷、能管理記憶體、
+        能切換行程、能跑極簡 shell 的教學型作業系統(OS)——在你的電腦上的 QEMU 虛擬機裡執行。
+      </p>
+      <p>
+        <strong>最終成品長什麼樣？</strong>按下 QEMU 啟動,螢幕上出現 <code>EduOS v0.1</code>,
+        接著每隔約 55 ms 自動印出 <code>Timer tick: N</code>。
+        你按下鍵盤,字母出現在螢幕上。最後,兩個行程輪流印出自己的名字,切換由計時器中斷驅動。
+        這就是本章的目標——一台真正會「做事」的裸機。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">這個專案整合了什麼</span>
+          <p>
+            (1) <strong>硬體驅動</strong>:bootloader、GDT/IDT、I/O port 直接操作。<br>
+            (2) <strong>資源管理</strong>:實體記憶體分頁、行程排程。<br>
+            (3) <strong>隔離機制</strong>:ring 0/3 特權切換、syscall 介面。<br>
+            這三件事,正是任何作業系統教科書的核心三章在真實硬體上的具現。
+          </p>
+        </div>
+      </div>
+
+      <!-- ===== §2 ===== -->
+      <h2>環境與工具鏈</h2>
+
+      <h3>你需要安裝什麼</h3>
+      <ul>
+        <li><strong>QEMU</strong>:開源硬體模擬器(emulator)。<code>qemu-system-x86_64</code> 模擬完整 x86-64 PC,不需碰真實硬體。</li>
+        <li><strong>交叉編譯器(cross-compiler)</strong>:<code>x86_64-elf-gcc</code> 在你的宿主機上為裸機(bare-metal)目標產生程式碼,不帶作業系統的 C 執行庫。</li>
+        <li><strong>NASM</strong>:Netwide Assembler,處理 x86 組合語言,語法比 GAS 更直觀。</li>
+        <li><strong>GNU ld / binutils</strong>:以 linker script 精確控制記憶體佈局。</li>
+      </ul>
+      <p>Linux 一行安裝:<code>sudo apt install qemu-system-x86 nasm gcc-x86-64-linux-gnu binutils-x86-64-linux-gnu</code>。macOS 用 Homebrew;<br>Windows 建議使用 WSL2 或 Docker。</p>
+
+      <h3>啟動流程全貌</h3>
+
+      <div class="diagram">
+<svg viewBox="0 0 760 180" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="arr1" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/>
+    </marker>
+  </defs>
+  <rect x="10"  y="60" width="110" height="60" rx="8" fill="#e3efed" stroke="#2f6f6a" stroke-width="1.5"/>
+  <text x="65"  y="86"  text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">BIOS/UEFI</text>
+  <text x="65"  y="106" text-anchor="middle" font-size="10" fill="#4a5159">POST + 載入 MBR</text>
+  <rect x="150" y="60" width="120" height="60" rx="8" fill="#e3efed" stroke="#2f6f6a" stroke-width="1.5"/>
+  <text x="210" y="86"  text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">Bootloader</text>
+  <text x="210" y="104" text-anchor="middle" font-size="10" fill="#4a5159">0x7C00,實模式</text>
+  <text x="210" y="116" text-anchor="middle" font-size="10" fill="#4a5159">512 bytes</text>
+  <rect x="300" y="60" width="130" height="60" rx="8" fill="#2f6f6a"/>
+  <text x="365" y="84"  text-anchor="middle" font-size="12" font-weight="700" fill="#fff">保護/長模式</text>
+  <text x="365" y="100" text-anchor="middle" font-size="10" fill="#cfe6e2">GDT → CR0.PE=1</text>
+  <text x="365" y="114" text-anchor="middle" font-size="10" fill="#cfe6e2">PAE → EFER.LME → PG</text>
+  <rect x="460" y="60" width="130" height="60" rx="8" fill="#2f6f6a"/>
+  <text x="525" y="86"  text-anchor="middle" font-size="12" font-weight="700" fill="#fff">Kernel Main</text>
+  <text x="525" y="104" text-anchor="middle" font-size="10" fill="#cfe6e2">IDT / PMM / 排程</text>
+  <text x="525" y="116" text-anchor="middle" font-size="10" fill="#cfe6e2">ring 0</text>
+  <rect x="620" y="60" width="120" height="60" rx="8" fill="#b4541f"/>
+  <text x="680" y="86"  text-anchor="middle" font-size="12" font-weight="700" fill="#fff">Shell</text>
+  <text x="680" y="104" text-anchor="middle" font-size="10" fill="#f6e7dd">使用者模式</text>
+  <text x="680" y="116" text-anchor="middle" font-size="10" fill="#f6e7dd">ring 3</text>
+  <!-- arrows -->
+  <line x1="120" y1="90" x2="148" y2="90" stroke="#8a929b" stroke-width="1.5" marker-end="url(#arr1)"/>
+  <line x1="270" y1="90" x2="298" y2="90" stroke="#8a929b" stroke-width="1.5" marker-end="url(#arr1)"/>
+  <line x1="430" y1="90" x2="458" y2="90" stroke="#8a929b" stroke-width="1.5" marker-end="url(#arr1)"/>
+  <line x1="590" y1="90" x2="618" y2="90" stroke="#8a929b" stroke-width="1.5" marker-end="url(#arr1)"/>
+  <!-- labels below -->
+  <text x="65"  y="145" text-anchor="middle" font-size="10" fill="#8a929b">韌體</text>
+  <text x="210" y="145" text-anchor="middle" font-size="10" fill="#8a929b">里程碑 1a</text>
+  <text x="365" y="145" text-anchor="middle" font-size="10" fill="#8a929b">里程碑 1b</text>
+  <text x="525" y="145" text-anchor="middle" font-size="10" fill="#8a929b">里程碑 2–5</text>
+  <text x="680" y="145" text-anchor="middle" font-size="10" fill="#8a929b">里程碑 6</text>
+</svg>
+        <figcaption>圖 115-1:從按下電源到 shell 提示符的整條啟動鏈。每個方框對應本章一或多個里程碑。</figcaption>
+      </div>
+
+      <h3>實模式、保護模式與長模式</h3>
+      <p>
+        x86 CPU 開機時進入 <strong>實模式(real mode)</strong>:16-bit 暫存器、最多 1 MiB 定址、無記憶體保護。
+        現代 OS kernel 需要的 64-bit 環境叫 <strong>長模式(long mode)</strong>。
+        切換路線是:<em>實模式 → 保護模式(設 CR0.PE=1)→ 啟用 PAE(CR4.PAE=1)→ 設 EFER.LME=1 → 開啟分頁(CR0.PG=1)→ 長模式</em>。
+        每一步都必須在前一步完成後才能進行;GDT 必須在切入保護模式前就載入。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">語言選擇</span>
+          <p>本章以 <strong>C + x86-64 NASM 組合語言</strong>為主。如果你偏好 Rust,Phil Oppermann 的
+          <a href="https://os.phil-opp.com/" target="_blank" rel="noopener">Writing an OS in Rust(blog_os)</a>
+          走同樣路線,文件極詳盡且持續更新,是最佳 Rust 版本替代方案。</p>
+        </div>
+      </div>
+
+      <!-- ===== §3 ===== -->
+      <h2>里程碑 1 — 開機與輸出:Hello, kernel</h2>
+
+      <h3>Bootloader(512 bytes)</h3>
+      <p>
+        BIOS 把磁碟第一個磁區(512 bytes,MBR)載到實體記憶體 <code>0x7C00</code>,
+        確認最後兩個 byte 是 <code>0x55 0xAA</code>(boot magic),然後跳入執行。
+        以下是一個最小的 bootloader 骨架:
+      </p>
+
+<pre><code class="language-text">; bootloader.asm  — NASM,16-bit 實模式
+bits 16
+org  0x7C00
+
+start:
+    xor  ax, ax          ; ax = 0
+    mov  ds, ax          ; 清除段暫存器
+    mov  es, ax
+    mov  ss, ax
+    mov  sp, 0x7C00      ; 堆疊往下長,放在 bootloader 上方
+
+    ; BIOS INT 10h AH=0Eh:Teletype 輸出一個字元
+    mov  ah, 0x0E
+    mov  al, 'H'
+    int  0x10
+
+    cli                  ; 關中斷
+    hlt                  ; 停機
+
+times 510 - ($ - $$) db 0   ; 填充到 510 bytes
+dw   0xAA55                  ; boot magic (小端序:0x55 0xAA)
+</code></pre>
+
+      <p>
+        真實的 bootloader 還需要:從磁碟載入 kernel 映像(INT 13h 或 UEFI LoadFile)、
+        切換到長模式(見上節)、然後跳入 kernel 的 C 進入點。
+        為了省去這些細節,可以先用 <strong>GRUB 2</strong> 做 bootloader(讓 GRUB 處理啟動細節),
+        kernel 只需提供 Multiboot2 標頭。初學者也可直接用
+        <a href="https://github.com/limine-bootloader/limine" target="_blank" rel="noopener">Limine</a> 這類現代 bootloader。
+      </p>
+
+      <h3>VGA 文字緩衝區</h3>
+      <p>
+        進入長模式後,最簡單的輸出是直接寫 <strong>VGA 文字緩衝區(VGA text buffer)</strong>,
+        映射到實體記憶體 <code>0xB8000</code>。每個字元佔 2 bytes:
+        低 byte 是 ASCII 碼,高 byte 是顏色屬性(前景色|背景色)。
+      </p>
+
+<pre><code class="language-c">/* vga.h / vga.c — VGA 文字模式輸出 */
+#include &lt;stdint.h&gt;
+
+#define VGA_BUF  ((volatile uint16_t *)0xB8000)
+#define VGA_W    80
+#define VGA_H    25
+/* 前景色 15=白,背景色 0=黑 */
+#define VGA_ATTR ((uint16_t)(0 &lt;&lt; 12 | 15 &lt;&lt; 8))
+
+static int vga_row = 0, vga_col = 0;
+
+void vga_putc(char c) {
+    if (c == '\n') { vga_row++; vga_col = 0; return; }
+    VGA_BUF[vga_row * VGA_W + vga_col] = VGA_ATTR | (uint8_t)c;
+    if (++vga_col &gt;= VGA_W) { vga_col = 0; vga_row++; }
+}
+
+void vga_puts(const char *s) {
+    while (*s) vga_putc(*s++);
+}
+</code></pre>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 里程碑 1 驗收 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>
+            <strong>目標</strong>:用 QEMU 啟動你的 kernel,VGA 螢幕黑底白字顯示 <code>EduOS v0.1</code>。
+          </p>
+          <p><strong>建置與啟動指令</strong>:</p>
+<pre><code class="language-bash"># 假設你用 GRUB2 + Multiboot2,或自製 bootloader
+nasm -f elf64 boot_entry.asm -o boot_entry.o
+x86_64-elf-gcc -ffreestanding -mno-red-zone -c kernel.c -o kernel.o
+x86_64-elf-ld -T linker.ld boot_entry.o kernel.o -o kernel.elf
+# 若用 QEMU 直接啟動 ELF:
+qemu-system-x86_64 -kernel kernel.elf -serial stdio</code></pre>
+          <p><strong>驗收標準</strong>:QEMU 視窗出現白色文字 <code>EduOS v0.1</code>,既不黑屏也不重啟循環。</p>
+          <details class="solution">
+            <summary>常見錯誤與排查</summary>
+            <div class="sol-body">
+              <ul>
+                <li><strong>黑屏</strong>:確認 linker script 把 kernel 放在正確位置,以及 VGA buffer 地址 <code>0xB8000</code> 在你的分頁對映中是可寫入的。</li>
+                <li><strong>亂碼</strong>:確認顏色屬性放在高 byte、ASCII 放在低 byte。</li>
+                <li><strong>跳入 kernel 失敗</strong>:在 bootloader 加 serial 輸出(outb 到 0x3F8)做除錯;也可用 <code>qemu … -d int,cpu_reset</code> 觀察 CPU 中斷事件。</li>
+                <li>linker script 範例:把 <code>.text</code> 放在 <code>1M</code>(<code>0x100000</code>)以上可避開 BIOS 保留區。</li>
+              </ul>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ===== §4 ===== -->
+      <h2>里程碑 2 — 中斷:GDT / IDT / PIC</h2>
+
+      <h3>GDT:全域描述符表</h3>
+      <p>
+        <strong>GDT(Global Descriptor Table,全域描述符表)</strong> 是保護模式/長模式必備結構,
+        描述記憶體段(segment)的基底、長度與特權環(ring)。
+        在 64-bit 長模式中,分段幾乎退場——所有段 base=0、limit=全範圍——
+        但 GDT 仍必須存在,且 selector 的 DPL 欄位決定使用者/核心模式。
+      </p>
+
+<pre><code class="language-c">/* gdt.c — 64-bit 長模式 GDT 骨架 */
+#include &lt;stdint.h&gt;
+
+typedef struct __attribute__((packed)) {
+    uint16_t limit_low;
+    uint16_t base_low;
+    uint8_t  base_mid;
+    uint8_t  access;      /* P(7),DPL(6-5),S(4),Type(3-0) */
+    uint8_t  gran;        /* G(7),D(6),L(5),AVL(4),Limit(3-0) */
+    uint8_t  base_high;
+} GDTEntry;
+
+typedef struct __attribute__((packed)) {
+    uint16_t limit;
+    uint64_t base;
+} GDTPtr;
+
+/* null / kernel code / kernel data / user code / user data */
+static GDTEntry gdt[5];
+static GDTPtr   gdtp;
+
+void gdt_init(void) {
+    gdt[0] = (GDTEntry){0};                      /* null */
+    gdt[1] = (GDTEntry){0xFFFF,0,0,0x9A,0x20,0}; /* kernel code ring0,L=1 */
+    gdt[2] = (GDTEntry){0xFFFF,0,0,0x92,0x00,0}; /* kernel data ring0 */
+    gdt[3] = (GDTEntry){0xFFFF,0,0,0xFA,0x20,0}; /* user   code ring3 */
+    gdt[4] = (GDTEntry){0xFFFF,0,0,0xF2,0x00,0}; /* user   data ring3 */
+    gdtp.limit = (uint16_t)(sizeof(gdt) - 1);
+    gdtp.base  = (uint64_t)(uintptr_t)gdt;
+    __asm__ volatile("lgdt %0" : : "m"(gdtp) : "memory");
+}
+</code></pre>
+
+      <h3>IDT:中斷描述符表</h3>
+      <p>
+        <strong>IDT(Interrupt Descriptor Table,中斷描述符表)</strong> 把中斷向量號 0–255 各別指向一個處理器(handler)。
+        x86-64 的每個 IDT 條目佔 16 bytes:
+      </p>
+
+<pre><code class="language-c">/* idt.c */
+#include &lt;stdint.h&gt;
+
+typedef struct __attribute__((packed)) {
+    uint16_t offset_low;
+    uint16_t selector;   /* 核心程式碼段,通常 0x08 */
+    uint8_t  ist;        /* Interrupt Stack Table offset,填 0 */
+    uint8_t  type_attr;  /* 0x8E = Present,ring0,64-bit interrupt gate */
+    uint16_t offset_mid;
+    uint32_t offset_high;
+    uint32_t reserved;
+} IDTEntry;
+
+static IDTEntry idt[256];
+
+static void idt_set(int n, void (*handler)(void)) {
+    uint64_t addr = (uint64_t)(uintptr_t)handler;
+    idt[n].offset_low  = (uint16_t)(addr        &amp; 0xFFFF);
+    idt[n].selector    = 0x08;
+    idt[n].ist         = 0;
+    idt[n].type_attr   = 0x8E;
+    idt[n].offset_mid  = (uint16_t)((addr &gt;&gt; 16) &amp; 0xFFFF);
+    idt[n].offset_high = (uint32_t)((addr &gt;&gt; 32) &amp; 0xFFFFFFFF);
+    idt[n].reserved    = 0;
+}
+
+void idt_load(void) {
+    struct __attribute__((packed)) { uint16_t limit; uint64_t base; } idtp;
+    idtp.limit = (uint16_t)(sizeof(idt) - 1);
+    idtp.base  = (uint64_t)(uintptr_t)idt;
+    __asm__ volatile("lidt %0" : : "m"(idtp) : "memory");
+}
+</code></pre>
+
+      <h3>PIC 重映射與計時器中斷</h3>
+      <p>
+        x86 的傳統 <strong>PIC(Programmable Interrupt Controller,可程式中斷控制器)</strong> 8259A
+        預設把 IRQ 0–7 映射到中斷向量 <code>0x08–0x0F</code>——偏偏這段範圍被 CPU 保留給例外處理
+        (double fault = 0x08),會衝突。必須把主 PIC 重映射到 <code>0x20–0x27</code>,
+        副 PIC 到 <code>0x28–0x2F</code>:
+      </p>
+
+<pre><code class="language-c">/* pic.c — 8259A PIC 重映射 */
+static inline void outb(uint16_t port, uint8_t val) {
+    __asm__ volatile("outb %0,%1" : : "a"(val),"Nd"(port));
+}
+static inline uint8_t inb(uint16_t port) {
+    uint8_t v;
+    __asm__ volatile("inb %1,%0" : "=a"(v) : "Nd"(port));
+    return v;
+}
+static inline void io_wait(void) { outb(0x80, 0); } /* dummy write */
+
+void pic_remap(void) {
+    uint8_t m1 = inb(0x21), m2 = inb(0xA1);  /* 儲存遮罩 */
+    outb(0x20, 0x11); io_wait(); outb(0xA0, 0x11); io_wait();
+    outb(0x21, 0x20); io_wait(); outb(0xA1, 0x28); io_wait();
+    outb(0x21, 0x04); io_wait(); outb(0xA1, 0x02); io_wait();
+    outb(0x21, 0x01); io_wait(); outb(0xA1, 0x01); io_wait();
+    outb(0x21, m1);              outb(0xA1, m2);    /* 還原遮罩 */
+}
+
+/* IRQ 0 = PIT 計時器中斷 handler(從 ASM stub 呼叫) */
+static uint64_t tick_count = 0;
+void timer_handler(void) {
+    tick_count++;
+    /* TODO: 列印 tick 或觸發排程 */
+    outb(0x20, 0x20);  /* EOI (End Of Interrupt) 送主 PIC */
+}
+</code></pre>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">IDT handler 必須以 iretq 結束</span>
+          <p>
+            中斷處理器不能用普通的 <code>ret</code> 返回——它必須用 <code>iretq</code>(64-bit 中斷返回),
+            才能正確還原被中斷時的 RIP、CS、RFLAGS、RSP、SS。
+            通常用一個短小的組合語言「stub」儲存暫存器、呼叫 C handler、再還原暫存器後 <code>iretq</code>。
+          </p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 里程碑 2 驗收 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>
+            <strong>目標</strong>:啟動後螢幕每隔約 55 ms(PIT 預設頻率 ≈ 18.2 Hz)自動出現一行
+            <code>Tick: N</code>,N 單調遞增。
+          </p>
+          <details class="solution">
+            <summary>驗收要點與常見錯誤</summary>
+            <div class="sol-body">
+              <ul>
+                <li>計時器 IRQ 是 <strong>IRQ 0</strong>,重映射後 = 中斷向量 <code>0x20</code>。確認 <code>idt_set(0x20, timer_stub)</code>。</li>
+                <li>必須在設好 IDT 後呼叫 <code>__asm__ volatile("sti")</code> 開啟中斷。</li>
+                <li>IRQ 0 預設是 unmask(mask bit=0);若 tick 不出現,讀 <code>inb(0x21)</code> 確認 bit 0 = 0。</li>
+                <li>handler 的 ASM stub 進入時要 <code>push</code> 所有呼叫方儲存暫存器,離開時 <code>pop</code>,最後 <code>iretq</code>。</li>
+                <li>若要更精確的頻率,可重新程式化 PIT(I/O port 0x40–0x43)設定任意除頻值。</li>
+              </ul>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ===== §5 ===== -->
+      <h2>里程碑 3 — 記憶體管理:Frame Allocator 與分頁</h2>
+
+      <h3>實體記憶體佈局</h3>
+      <p>
+        開機時,通過 BIOS INT 0x15 / E820(或 Multiboot2 記憶體地圖)可以拿到完整的實體記憶體地圖,
+        標明哪些區段可用、哪些是裝置映射(如 VGA、APIC)。
+        典型佈局如下圖所示。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 500 320" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="arr2" markerWidth="6" markerHeight="6" refX="5" refY="2.5" orient="auto">
+      <path d="M0,0 L6,2.5 L0,5 Z" fill="#8a929b"/>
+    </marker>
+  </defs>
+  <!-- vertical memory bar -->
+  <text x="88" y="18" text-anchor="middle" font-size="11" fill="#8a929b">實體位址</text>
+  <rect x="30" y="22" width="116" height="24" rx="3" fill="#8a929b"/>
+  <text x="88" y="39" text-anchor="middle" font-size="10" fill="#fff">0x00000 IVT/BDA</text>
+  <rect x="30" y="46" width="116" height="22" rx="0" fill="#b4541f"/>
+  <text x="88" y="61" text-anchor="middle" font-size="10" fill="#fff">0x07C00 Bootloader</text>
+  <rect x="30" y="68" width="116" height="28" rx="0" fill="#2f6f6a"/>
+  <text x="88" y="87" text-anchor="middle" font-size="10" fill="#fff">0x10000+ Kernel</text>
+  <rect x="30" y="96" width="116" height="82" rx="0" fill="#e3efed" stroke="#2f6f6a" stroke-width="1"/>
+  <text x="88" y="138" text-anchor="middle" font-size="11" fill="#1f2328">Free Frames</text>
+  <text x="88" y="155" text-anchor="middle" font-size="10" fill="#4a5159">(bitmap 管理)</text>
+  <rect x="30" y="178" width="116" height="26" rx="0" fill="#8b5cf6"/>
+  <text x="88" y="195" text-anchor="middle" font-size="10" fill="#fff">0xA0000 VGA / ROM</text>
+  <rect x="30" y="204" width="116" height="26" rx="0" fill="#4a5159"/>
+  <text x="88" y="221" text-anchor="middle" font-size="10" fill="#fff">0xC0000 BIOS ROM</text>
+  <rect x="30" y="230" width="116" height="44" rx="0" fill="#2f6f6a"/>
+  <text x="88" y="250" text-anchor="middle" font-size="10" fill="#fff">0x100000+</text>
+  <text x="88" y="264" text-anchor="middle" font-size="10" fill="#cfe6e2">Extended RAM</text>
+  <rect x="30" y="274" width="116" height="28" rx="3" fill="#4a5159"/>
+  <text x="88" y="292" text-anchor="middle" font-size="10" fill="#fff">MMIO / ACPI...</text>
+  <!-- axis -->
+  <line x1="22" y1="22" x2="22" y2="302" stroke="#8a929b" stroke-width="1"/>
+  <text x="18" y="26" text-anchor="end" font-size="9" fill="#8a929b">Low</text>
+  <text x="18" y="298" text-anchor="end" font-size="9" fill="#8a929b">High</text>
+  <!-- legend -->
+  <rect x="200" y="40" width="12" height="12" fill="#b4541f" rx="2"/>
+  <text x="218" y="51" font-size="11" fill="#1f2328">Bootloader (512 B)</text>
+  <rect x="200" y="62" width="12" height="12" fill="#2f6f6a" rx="2"/>
+  <text x="218" y="73" font-size="11" fill="#1f2328">Kernel image</text>
+  <rect x="200" y="84" width="12" height="12" fill="#e3efed" stroke="#2f6f6a" rx="2"/>
+  <text x="218" y="95" font-size="11" fill="#1f2328">Free frames (PMM 管理)</text>
+  <rect x="200" y="106" width="12" height="12" fill="#8b5cf6" rx="2"/>
+  <text x="218" y="117" font-size="11" fill="#1f2328">VGA / ROM 保留</text>
+  <rect x="200" y="128" width="12" height="12" fill="#4a5159" rx="2"/>
+  <text x="218" y="139" font-size="11" fill="#1f2328">BIOS/MMIO 保留</text>
+  <rect x="200" y="150" width="12" height="12" fill="#2f6f6a" rx="2"/>
+  <text x="218" y="161" font-size="11" fill="#1f2328">Extended RAM (≥ 1 MiB)</text>
+</svg>
+        <figcaption>圖 115-2:典型 x86 PC 的實體記憶體佈局。PMM 只管理「Free Frames」區段;保留區段不可分配。</figcaption>
+      </div>
+
+      <h3>Bitmap Frame Allocator(實體記憶體管理器)</h3>
+      <p>
+        最簡單的 <strong>PMM(Physical Memory Manager)</strong> 用一個 bitmap:
+        每個 bit 對應一個 4 KiB 頁框(frame),1 = 空閒,0 = 已分配。
+      </p>
+
+<pre><code class="language-c">/* pmm.c — 實體記憶體管理 */
+#include &lt;stdint.h&gt;
+#include &lt;stddef.h&gt;
+
+#define PAGE_SIZE  4096UL
+#define MAX_FRAMES (256 * 1024)      /* 256K 個 frame = 1 GiB */
+
+static uint8_t pmm_bitmap[MAX_FRAMES / 8]; /* 32 KiB */
+
+/* 標記一個 frame 為空閒 */
+void pmm_free_frame(uint64_t addr) {
+    uint32_t frame = (uint32_t)(addr / PAGE_SIZE);
+    pmm_bitmap[frame / 8] |= (uint8_t)(1 &lt;&lt; (frame % 8));
+}
+
+/* 分配一個空閒 frame,回傳實體地址;OOM 傳回 0 */
+uint64_t pmm_alloc_frame(void) {
+    for (int i = 0; i &lt; (int)sizeof(pmm_bitmap); i++) {
+        uint8_t byte = pmm_bitmap[i];
+        if (!byte) continue;
+        int bit = __builtin_ctz(byte);          /* 最低有效 1-bit */
+        pmm_bitmap[i] &amp;= (uint8_t)~(1 &lt;&lt; bit); /* 標記為已用 */
+        return (uint64_t)(i * 8 + bit) * PAGE_SIZE;
+    }
+    return 0; /* Out of Memory */
+}
+</code></pre>
+
+      <h3>四層分頁(4-Level Paging)與虛擬記憶體</h3>
+      <p>
+        x86-64 把 48-bit 虛擬地址拆成 4 個 9-bit 索引 + 12-bit 頁內偏移,
+        對應 PML4 → PDPT → PD → PT 四層頁表,每層 512 個 8-byte 條目。
+        這直接對應 <a href="24-operating-system.html">第 24 章</a>與 <a href="48-computer-architecture.html">第 48 章</a>討論的虛擬定址與分頁架構。
+        Kernel 啟動時最簡單的做法是先做 <strong>恆等映射(identity mapping)</strong>:
+        用 2 MiB 大頁(PD 的 PS bit=1)把低端 4 GiB 的虛擬地址對映到相同實體地址,
+        讓 kernel 程式碼本身繼續可執行。進 kernel 後再按需求建立精細的 4 KiB 映射。
+      </p>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">先用大頁(huge page)快速起步</span>
+          <p>2 MiB 大頁只需 PML4→PDPT→PD 三層,省去 PT 那層;每個 PD entry 設 PS bit(bit 7)=1 即可。
+          對教學 OS 而言,先用大頁把 kernel 跑起來,之後換成 4 KiB 精細映射再處理記憶體保護。</p>
+        </div>
+      </div>
+
+      <!-- ===== §6 ===== -->
+      <h2>里程碑 4 — 鍵盤與驅動模型</h2>
+
+      <p>
+        鍵盤透過 <strong>IRQ 1</strong>(重映射後 = 中斷向量 <code>0x21</code>)通知 CPU。
+        按下/放開每個鍵,鍵盤控制器透過 I/O port <code>0x60</code> 送出一個 <strong>掃描碼(scancode)</strong>。
+        掃描碼 bit 7=0 表示按下(make),bit 7=1 表示放開(break)。
+      </p>
+
+<pre><code class="language-c">/* keyboard.c */
+#include &lt;stdint.h&gt;
+extern uint8_t inb(uint16_t port);
+extern void outb(uint16_t port, uint8_t val);
+extern void vga_putc(char c);
+
+/* PS/2 Set-1 掃描碼表(只列前 58 個) */
+static const char sc_map[128] = {
+    0,   0,  '1','2','3','4','5','6','7','8','9','0','-','=','\b',
+    '\t','q','w','e','r','t','y','u','i','o','p','[',']','\n',
+    0,   'a','s','d','f','g','h','j','k','l',';','\'','`',
+    0,   '\\','z','x','c','v','b','n','m',',','.','/',0,0,0,' '
+};
+
+void keyboard_handler(void) {
+    uint8_t sc = inb(0x60);         /* 讀掃描碼 */
+    if (sc &amp; 0x80) {                /* release event,忽略 */
+        outb(0x20, 0x20); return;
+    }
+    char c = (sc &lt; 128) ? sc_map[sc] : 0;
+    if (c) vga_putc(c);
+    outb(0x20, 0x20);               /* EOI */
+}
+</code></pre>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">驅動模型的核心思想</span>
+          <p>
+            驅動程式(driver)是核心中「認識某種硬體協議」的模組。鍵盤驅動的本質是:
+            <strong>中斷觸發 → 從固定 I/O port 讀原始資料 → 轉譯為高層事件 → 放入核心佇列</strong>。
+            這個模式在網卡、磁碟控制器、USB HID 上完全相同——只是 port 地址與協議細節不同。
+            掌握鍵盤驅動,你就掌握了所有驅動的骨架。
+          </p>
+        </div>
+      </div>
+
+      <!-- ===== §7 ===== -->
+      <h2>里程碑 5 — 行程與排程:PCB 與 Round-Robin</h2>
+
+      <h3>行程控制塊(PCB)</h3>
+      <p>
+        <strong>行程(process)</strong> 在 OS 裡的資料結構叫 <strong>PCB(Process Control Block,行程控制塊)</strong>。
+        它記錄了排程器需要「暫停」和「恢復」一個行程所需的一切:
+        儲存的堆疊指標(RSP)、行程 ID、優先級、狀態,以及指向頁表根(PML4)的指標。
+      </p>
+
+<pre><code class="language-c">/* process.h */
+#include &lt;stdint.h&gt;
+
+typedef enum { PROC_RUNNABLE, PROC_BLOCKED, PROC_ZOMBIE } ProcState;
+
+typedef struct Process {
+    uint64_t   rsp;       /* 儲存的堆疊指標,上下文切換核心欄位 */
+    uint64_t  *pml4;      /* 頁表根,每個行程獨立虛擬空間 */
+    uint32_t   pid;
+    ProcState  state;
+    char       name[32];
+} Process;
+
+#define MAX_PROCS 16
+extern Process procs[MAX_PROCS];
+extern int     current_proc;
+</code></pre>
+
+      <h3>上下文切換(Context Switch)</h3>
+      <p>
+        上下文切換(context switch)的核心動作:把目前行程的「硬體狀態」存進 PCB,
+        載入下一個行程的「硬體狀態」,讓 CPU 從那個行程的視角繼續執行。
+        在 x86-64 上,最關鍵的是 <strong>換堆疊(switch RSP)</strong>——
+        因為所有 callee-saved 暫存器都已依照 ABI 推入各自的堆疊:
+      </p>
+
+<pre><code class="language-text">; context_switch.asm  — x86-64 System V ABI
+; void context_switch(uint64_t **old_rsp_ptr, uint64_t *new_rsp)
+; rdi = &amp;old_proc.rsp, rsi = new_proc.rsp
+global context_switch
+context_switch:
+    ; 儲存目前行程的 callee-saved 暫存器到堆疊
+    push  rbp
+    push  rbx
+    push  r12
+    push  r13
+    push  r14
+    push  r15
+    ; 儲存舊堆疊指標
+    mov   [rdi], rsp     ; *old_rsp_ptr = rsp
+    ; 切換到新行程堆疊
+    mov   rsp, rsi       ; rsp = new_rsp
+    ; 還原新行程的 callee-saved 暫存器
+    pop   r15
+    pop   r14
+    pop   r13
+    pop   r12
+    pop   rbx
+    pop   rbp
+    ret                  ; 跳入新行程的 rip(原先 call 留在堆疊上)
+</code></pre>
+
+      <h3>Round-Robin 排程器</h3>
+      <p>
+        <strong>Round-Robin</strong> 是最簡單的搶占式排程(preemptive scheduling):
+        每個 runnable 行程輪流執行固定時間片(time slice),由計時器中斷驅動切換。
+      </p>
+
+<pre><code class="language-c">/* scheduler.c */
+#include "process.h"
+
+Process procs[MAX_PROCS];
+int     current_proc = 0;
+int     proc_count   = 0;
+
+/* 在計時器中斷 handler 結尾呼叫 */
+void schedule(void) {
+    int next = current_proc;
+    /* 找下一個 RUNNABLE 行程 */
+    for (int i = 1; i &lt;= proc_count; i++) {
+        int idx = (current_proc + i) % proc_count;
+        if (procs[idx].state == PROC_RUNNABLE) {
+            next = idx; break;
+        }
+    }
+    if (next == current_proc) return;  /* 沒別人可跑 */
+    int old = current_proc;
+    current_proc = next;
+    /* 切換頁表根(若有獨立虛擬空間) */
+    /* __asm__ volatile("mov %0, %%cr3" : : "r"(procs[next].pml4)); */
+    context_switch(&amp;procs[old].rsp, procs[next].rsp);
+}
+</code></pre>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 里程碑 5 驗收 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>
+            <strong>目標</strong>:建立兩個核心行程 A、B,各自在無限迴圈中印出自己的名字並暫停(用 <code>hlt</code> 或空迴圈)。
+            計時器中斷每次觸發時呼叫 <code>schedule()</code>,觀察螢幕交替出現 <code>Process A</code> / <code>Process B</code>。
+          </p>
+          <details class="solution">
+            <summary>驗收要點與骨架</summary>
+            <div class="sol-body">
+              <p><strong>建立行程</strong>:為每個行程分配一個堆疊(在 kernel heap 或靜態陣列),
+              把行程的進入函式位址壓到那個堆疊上模擬「剛被呼叫的狀態」——
+              包含 callee-saved 暫存器的初始值(一般填 0)。</p>
+<pre><code class="language-c">void proc_create(void (*entry)(void), const char *name) {
+    int id = proc_count++;
+    static uint8_t stacks[MAX_PROCS][4096];
+    uint64_t *sp = (uint64_t *)(stacks[id] + 4096);
+    /* 模擬 context_switch 的 ret 會跳入 entry */
+    *--sp = (uint64_t)(uintptr_t)entry; /* RIP:ret 會跳到這 */
+    *--sp = 0; /* rbp */ *--sp = 0; /* rbx */
+    *--sp = 0; /* r12 */ *--sp = 0; /* r13 */
+    *--sp = 0; /* r14 */ *--sp = 0; /* r15  ← rsp 指向此(最先被 pop) */
+    procs[id].rsp   = (uint64_t)(uintptr_t)sp;
+    procs[id].state = PROC_RUNNABLE;
+    procs[id].pid   = (uint32_t)id;
+    /* strncpy(procs[id].name, name, 31); */
+}
+</code></pre>
+              <ul>
+                <li>確認計時器 handler 在送 EOI 前(或後)呼叫 <code>schedule()</code>。</li>
+                <li>若行程一直跑同一個,檢查 <code>proc_count</code> 是否正確初始化。</li>
+                <li>若發生 triple fault:堆疊可能沒對齊 16 bytes(System V ABI 要求進入函式前 RSP % 16 == 8)。</li>
+              </ul>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ===== §8 ===== -->
+      <h2>里程碑 6 — 系統呼叫與使用者模式</h2>
+
+      <h3>Ring 0 vs Ring 3</h3>
+      <p>
+        x86-64 有四個特權環(privilege ring),實際只用兩個:
+        <strong>ring 0(核心模式)</strong> 可執行特權指令(I/O、設 CR 暫存器、載入 GDT/IDT)、
+        <strong>ring 3(使用者模式)</strong> 則受限。
+        兩個模式使用不同的 CS selector——GDT 的 DPL 欄位決定哪個 selector 屬於哪個環。
+      </p>
+      <p>
+        要讓使用者程式「跳出」核心,最常見的做法是用 <code>iretq</code> 返回:
+        在堆疊上放好使用者模式的 SS、RSP、RFLAGS、CS(ring-3 selector)、RIP,
+        然後執行 <code>iretq</code>,CPU 就會降權到 ring 3 並跳到使用者程式。
+      </p>
+
+      <h3>Syscall 介面</h3>
+      <p>
+        x86-64 提供 <code>SYSCALL</code> / <code>SYSRET</code> 指令對作為快速系統呼叫機制。
+        使用者程式把 <strong>syscall 號碼</strong>放入 <code>RAX</code>,參數放入 <code>RDI, RSI, RDX, R10, R8, R9</code>(Linux 慣例),
+        然後執行 <code>syscall</code> 指令。CPU 自動跳到 MSR <code>IA32_LSTAR</code>(0xC0000082)指向的 handler:
+      </p>
+
+<pre><code class="language-text">; syscall_entry.asm
+; 由 kernel 初始化時寫入 IA32_LSTAR MSR
+global syscall_entry
+extern syscall_dispatch
+
+syscall_entry:
+    swapgs                  ; 切換到 kernel GS(含 kernel stack 指標)
+    ; 此時 rcx=user RIP, r11=user RFLAGS (SYSCALL 自動存入)
+    push  rcx               ; 儲存 user RIP
+    push  r11               ; 儲存 user RFLAGS
+    push  rbp
+    ; 依 rax 呼叫 C dispatcher
+    call  syscall_dispatch  ; 傳回值在 rax
+    pop   rbp
+    pop   r11
+    pop   rcx
+    swapgs
+    sysretq                 ; 回 ring 3,RIP=rcx, RFLAGS=r11
+</code></pre>
+
+<pre><code class="language-c">/* syscall.c — 系統呼叫分發器 */
+#include &lt;stdint.h&gt;
+extern void vga_puts(const char *s);
+
+#define SYS_WRITE  1
+#define SYS_EXIT   60
+
+uint64_t syscall_dispatch(uint64_t num, uint64_t arg0,
+                           uint64_t arg1, uint64_t arg2) {
+    switch (num) {
+    case SYS_WRITE:
+        /* arg0=fd(忽略), arg1=buf(使用者指標), arg2=len */
+        vga_puts((const char *)(uintptr_t)arg1);
+        return arg2;
+    case SYS_EXIT:
+        /* 標記目前行程為 ZOMBIE 並切換 */
+        /* procs[current_proc].state = PROC_ZOMBIE; schedule(); */
+        return 0;
+    default:
+        return (uint64_t)-1; /* ENOSYS */
+    }
+}
+</code></pre>
+
+      <h3>極簡 Shell</h3>
+      <p>
+        有了 <code>SYS_WRITE</code> 與鍵盤中斷,就可以寫一個跑在 ring 3 的極簡 shell:
+        顯示提示符、讀鍵盤輸入、辨識指令、呼叫 <code>syscall</code>。
+        這個 shell 是本章所有里程碑的最終整合點——
+        它必須在使用者模式執行,透過 syscall 與核心溝通,而核心則繼續處理計時器與鍵盤中斷。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">使用者/核心邊界是 OS 安全的根本</span>
+          <p>
+            使用者程式無法直接存取 VGA buffer(<code>0xB8000</code>)——
+            那個實體地址沒有映射進它的頁表。它只能透過 <code>syscall</code> 請求核心代勞。
+            這就是 ring 隔離的意義:一個崩潰的使用者程式不會拉垮整個系統,
+            因為它根本無法存取核心的記憶體。
+          </p>
+        </div>
+      </div>
+
+      <!-- ===== §9 ===== -->
+      <h2>驗收總覽與延伸方向</h2>
+
+      <h3>六個里程碑的驗收清單</h3>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>里程碑</th><th>驗收標準</th><th>關鍵對應章節</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>M1 — 開機與輸出</td><td>QEMU 顯示 <code>EduOS v0.1</code></td><td>§21 CPU, §22 組譯</td></tr>
+            <tr><td>M2 — 中斷</td><td>螢幕自動輸出 <code>Tick: N</code></td><td>§24 OS, §48 CPU 架構</td></tr>
+            <tr><td>M3 — 記憶體管理</td><td><code>pmm_alloc/free</code> 單元測試通過;kernel 虛擬映射正確</td><td>§47 虛擬記憶體</td></tr>
+            <tr><td>M4 — 鍵盤</td><td>按鍵後字母即時出現在螢幕</td><td>§24 驅動模型</td></tr>
+            <tr><td>M5 — 排程</td><td>兩行程交替印出名字</td><td>§24 並行, §48</td></tr>
+            <tr><td>M6 — Syscall/Shell</td><td>Shell 提示符出現,輸入 <code>hello</code> 有回應</td><td>§24 系統呼叫</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>延伸方向</h3>
+      <ul>
+        <li><strong>檔案系統</strong>:實作最小 FAT16 或自定義 inode 結構,加上 <code>SYS_OPEN</code>/<code>SYS_READ</code>/<code>SYS_WRITE</code>。</li>
+        <li><strong>多核(SMP)</strong>:用 APIC 喚醒 AP(Application Processor),加上 spinlock 保護共享資料結構。</li>
+        <li><strong>Rust 重寫</strong>:用 Phil Oppermann 的 blog_os 架構替換 C 層,體驗所有權系統如何消滅 kernel use-after-free。</li>
+        <li><strong>網路協議棧</strong>:實作 Ethernet/IP/UDP 最小協議棧,配合 QEMU <code>-net user,model=e1000</code>。</li>
+      </ul>
+
+      <h3>延伸閱讀與資源</h3>
+      <ul>
+        <li><strong>xv6</strong>:MIT 6.828 課程的教學 OS,以類 Unix 結構且精簡易讀著稱(<a href="https://github.com/mit-pdos/xv6-riscv" target="_blank" rel="noopener">xv6-riscv</a> 是 RISC-V 版本)。</li>
+        <li><strong>Writing an OS in Rust</strong>:Phil Oppermann 著,<a href="https://os.phil-opp.com/" target="_blank" rel="noopener">os.phil-opp.com</a>,與本章路線最接近,Rust 版本詳盡。</li>
+        <li><strong>OSDev Wiki</strong>:<a href="https://wiki.osdev.org/" target="_blank" rel="noopener">wiki.osdev.org</a>,x86 硬體細節的百科全書。</li>
+        <li><strong>nand2tetris</strong>:本書 §19–24 的靈感來源,從 NAND 閘到 OS 的完整系統建構課(<a href="https://www.nand2tetris.org/" target="_blank" rel="noopener">nand2tetris.org</a>)。</li>
+        <li><strong>Intel SDM</strong>:Intel 64 and IA-32 Architectures Software Developer's Manual——GDT/IDT/分頁的權威參考。</li>
+      </ul>
+
+      <!-- ===== §10 ===== -->
+      <h2>把這一章串起來</h2>
+
+      <p>
+        讓我們往後退一步,看看你剛剛做了什麼。
+      </p>
+      <p>
+        你從一個 512-byte 的裸 bootloader 開始——
+        不依賴任何函式庫、不依賴任何作業系統——
+        用組合語言把 CPU 從 16-bit 實模式帶進 64-bit 長模式;
+        用 C 結構體描述 GDT 和 IDT,讓 CPU 學會如何處理例外和硬體中斷;
+        用 bitmap 管理每一個 4 KiB 的記憶體頁框,用四層分頁表建立虛擬記憶體空間;
+        用一個約 30 bytes 的組合語言函式完成行程上下文切換;
+        最後用 ring 隔離和 syscall 把使用者空間與核心空間分開。
+      </p>
+      <p>
+        這就是前 24 章的理論在真實矽晶片上的具現:
+        布林邏輯(第 19 章)→ ALU(第 20 章)→ CPU(第 21 章)→ 組譯(第 22 章)→
+        VM/編譯器(第 23 章)→ OS(第 24 章)→ 虛擬記憶體(第 47 章)→ CPU 架構(第 48 章),
+        這整條線在你的 QEMU 視窗裡活了起來。
+      </p>
+
+      <blockquote>
+        「告訴我,我會忘記;讓我去做,我才能理解。」——改編自孔子
+      </blockquote>
+
+      <p>
+        你現在擁有了一個可以繼續打磨的基礎:加入檔案系統、加入網路、加入多核支援,
+        或者用 Rust 重寫整個 kernel——
+        每一個方向都是一個新的大專案,但出發點都是你剛剛親手打造的這個 bootloader。
+        那是你的了。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">📚</div>
+        <div class="body">
+          <span class="c-title">對應 OSSU 課程與延伸</span>
+          <p>
+            本章整合了 OSSU 的
+            <a href="https://github.com/ossu/computer-science#core-systems" target="_blank" rel="noopener">Core Systems</a>
+            多門課程的實作精神,特別是 nand2tetris 第二部分(第 7–12 章)與
+            <a href="https://pdos.csail.mit.edu/6.828/" target="_blank" rel="noopener">MIT 6.828 OS Engineering</a>。
+            若你想看完整、能實際執行的教學 OS 源碼,推薦先讀 xv6 的
+            <a href="https://github.com/mit-pdos/xv6-riscv/blob/riscv/kernel/proc.c" target="_blank" rel="noopener">proc.c</a>
+            (行程管理)與
+            <a href="https://github.com/mit-pdos/xv6-riscv/blob/riscv/kernel/vm.c" target="_blank" rel="noopener">vm.c</a>
+            (虛擬記憶體),對照本章的骨架,你會驚訝它們有多像。
+          </p>
+        </div>
+      </div>
+</article>
+  </main>
+</div>
+<script src="../assets/book.js"></script>
+</body>
+</html>

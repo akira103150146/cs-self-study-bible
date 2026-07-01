@@ -1,0 +1,977 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>所有權、借用與生命週期 · CS 自學聖經</title>
+<meta name="description" content="從 C 的記憶體之痛出發,理解 Rust 所有權三規則、move 語意、借用與可變借用,以及 borrow checker 如何在編譯期消除記憶體錯誤。">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;700&family=Noto+Sans+TC:wght@400;700&family=Lora:ital,wght@0,400;0,600;0,700;1,400&family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <main class="main">
+    <article class="content">
+
+      <div class="eyebrow">第二十部 · Rust 系統程式設計</div>
+      <h1>所有權、借用與生命週期</h1>
+      <p class="subtitle">如果你的程式碼能通過編譯,它就不會崩潰——Rust 把這句承諾刻進了型別系統。</p>
+      <div class="byline">
+        <span class="tag">第 79 章</span>
+        <span>閱讀時間 ≈ 60 分鐘</span>
+        <span>難度:★★★☆☆</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>C 手動記憶體管理的三大地雷:懸空指標、double free、記憶體洩漏</li>
+          <li>Rust 所有權三規則與 move 語意——值「搬走」後為何不能再用</li>
+          <li>借用(<code>&amp;T</code>)與可變借用(<code>&amp;mut T</code>)的別名 XOR 可變規則</li>
+          <li>生命週期(lifetime)標注的動機與基本用法</li>
+          <li>borrow checker 在編譯期擋掉哪些 bug,以及如何讀懂錯誤訊息並修正</li>
+          <li>何時應該 clone、何時應該借用</li>
+        </ul>
+      </div>
+
+      <!-- ==================== h2 ① ==================== -->
+      <h2>C 的記憶體之痛</h2>
+
+      <p>
+        讓我們從一段看起來無害的 C 程式開始。它做的事很簡單:在函式裡建立一個字串,
+        然後把它回傳給呼叫者。
+      </p>
+
+      <pre><code class="language-c">/* dangling_ptr.c — 懸空指標示範 */
+#include &lt;stdio.h&gt;
+#include &lt;string.h&gt;
+
+char *make_greeting(const char *name) {
+    char buf[64];
+    snprintf(buf, sizeof(buf), "Hello, %s!", name);
+    return buf;   /* ⚠️ 錯誤:回傳局部變數的位址 */
+}
+
+int main(void) {
+    char *msg = make_greeting("Alice");
+    printf("%s\n", msg);   /* 未定義行為:buf 已在函式返回時消失 */
+    return 0;
+}</code></pre>
+
+      <p>
+        這段程式在某些編譯器上能印出看起來「正確」的字串,在另一些環境下
+        卻印出亂碼,甚至直接崩潰。問題在哪裡?<code>buf</code> 是
+        <code>make_greeting</code> 函式的<strong>局部陣列</strong>,住在 stack 上。
+        函式返回的瞬間,<code>buf</code> 所佔用的 stack 空間就被系統收回——
+        可能下一個函式呼叫就覆蓋掉它。我們把這種「指向已無效記憶體的指標」
+        叫做<strong>懸空指標(dangling pointer)</strong>。
+      </p>
+
+      <p>
+        這還只是開胃菜。接下來看 <strong>double free(重複釋放)</strong>:
+      </p>
+
+      <pre><code class="language-c">/* double_free.c — double free 示範 */
+#include &lt;stdio.h&gt;
+#include &lt;stdlib.h&gt;
+#include &lt;string.h&gt;
+
+int main(void) {
+    char *p = (char *)malloc(32);
+    if (!p) return 1;
+
+    strcpy(p, "hello");
+    free(p);   /* 第一次釋放 */
+
+    /* ... 程式邏輯龐大,某處忘了 p 已被 free ... */
+    free(p);   /* ⚠️ 第二次釋放:未定義行為,可能崩潰或成安全漏洞 */
+    return 0;
+}</code></pre>
+
+      <p>
+        <code>malloc</code> / <code>free</code> 的原則是「誰配置、誰釋放、只釋放一次」。
+        但在複雜程式中,一塊記憶體可能被多個指標「共享」地指著,
+        其中一個把它釋放了,其他指標就變成懸空指標;若再次釋放,就是 double free。
+        結果輕則程式崩潰,重則被攻擊者利用成安全漏洞——CVE 資料庫裡每年都有上百個這樣的案例。
+      </p>
+
+      <p>
+        第三個地雷是<strong>記憶體洩漏(memory leak)</strong>:
+      </p>
+
+      <pre><code class="language-c">/* leak.c — 記憶體洩漏示範 */
+#include &lt;stdlib.h&gt;
+
+char *load_data(void) {
+    char *buf = (char *)malloc(1024);
+    if (!buf) return NULL;
+    /* 填入資料 ... */
+    return buf;   /* 呼叫者必須記得 free,但常常忘 */
+}
+
+int main(void) {
+    for (int i = 0; i &lt; 100000; i++) {
+        char *data = load_data();
+        /* 使用 data ... */
+        /* ⚠️ 忘了 free(data):每次迴圈洩漏 1024 bytes */
+    }
+    return 0;
+}</code></pre>
+
+      <p>
+        以上三種 bug 有一個共同根源:<strong>記憶體的「誰負責、何時釋放」
+        完全靠程式設計師的大腦追蹤</strong>。C 語言假設你能做到完美——
+        而人類做不到。
+      </p>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">「加個 GC 不就解決了?」</span>
+          <p>Java、Python、Go 等語言用<strong>垃圾回收(garbage collection, GC)</strong>解決了記憶體安全問題,
+          但代價是:執行時的額外開銷、不可預測的 GC pause、以及更高的記憶體用量。
+          對需要和 OS 爭奪微秒級延遲的系統程式(驅動程式、遊戲引擎、嵌入式韌體)而言,
+          GC 是不可接受的奢侈品。我們需要一個第三條路。</p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ② ==================== -->
+      <h2>為什麼是 Rust:無 GC 卻保證記憶體安全</h2>
+
+      <p>
+        2006 年,Mozilla 工程師 Graydon Hoare 開始業餘時間設計一門新語言,
+        目標是「比 C++ 更安全,但一樣快」。Mozilla 從 2009 年正式贊助這個專案,
+        2015 年 Rust 1.0 正式釋出。如今,Rust 連續多年蟬聯
+        Stack Overflow「最受開發者喜愛的程式語言」第一名,
+        Linux 核心、Windows 核心、Android、Chromium 已陸續引入 Rust 撰寫安全關鍵模組。
+      </p>
+
+      <p>
+        Rust 的核心承諾是:<strong>在編譯期消除記憶體錯誤,不需要 GC,
+        執行時幾乎零額外成本(zero-cost abstractions)</strong>。
+        它靠的不是魔法,而是一套精心設計的型別系統——
+        <strong>所有權系統(ownership system)</strong>。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">Rust 的三把鑰匙</span>
+          <p>
+            <strong>所有權(ownership)</strong>:每一塊記憶體都有且只有一個「主人」,主人離開作用域時記憶體自動釋放。<br>
+            <strong>借用(borrowing)</strong>:暫時取用別人的資料,但規則嚴格——不能在借用期間讓主人消失。<br>
+            <strong>生命週期(lifetime)</strong>:編譯器追蹤每個參考(reference)的「有效期」,確保參考不會活得比它指向的資料更久。
+          </p>
+        </div>
+      </div>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">連結:型別系統與編譯器</span>
+          <p>Rust 的所有權系統是第 <a href="09-types.html">9 章</a>討論的靜態型別系統的延伸——
+          它不只追蹤「這個值是整數還是字串」,還追蹤「這個值現在歸誰所有、能不能被修改」。
+          第 <a href="42-compilers.html">42 章</a>介紹的編譯器在語意分析階段做型別檢查,
+          Rust 的 borrow checker 就是這個型別檢查的一部分。</p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ③ ==================== -->
+      <h2>cargo 與你的第一支 Rust 程式</h2>
+
+      <p>
+        Rust 的生態系圍繞著官方工具鏈 <strong>rustup</strong>(管理版本)與
+        <strong>cargo</strong>(建置、測試、套件管理)展開。
+        安裝方式(Linux/macOS/WSL):
+      </p>
+
+      <pre><code class="language-bash">curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh</code></pre>
+
+      <p>安裝完成後,建立第一個 Rust 專案:</p>
+
+      <pre><code class="language-bash">cargo new hello_rust    # 建立新專案目錄
+cd hello_rust
+cargo run               # 編譯並執行</code></pre>
+
+      <p><code>cargo new</code> 會生成以下結構:</p>
+
+      <pre><code class="language-text">hello_rust/
+├── Cargo.toml          # 套件設定(相當於 package.json)
+└── src/
+    └── main.rs         # 程式進入點</code></pre>
+
+      <p><code>src/main.rs</code> 的初始內容:</p>
+
+      <pre><code class="language-rust">fn main() {
+    println!("Hello, world!");    // println! 是巨集(macro),不是函式
+}</code></pre>
+
+      <p>
+        稍微豐富一下,感受 Rust 的基本語法與借用:
+      </p>
+
+      <pre><code class="language-rust">fn main() {
+    let name = String::from("Alice");    // 在 heap 上配置字串
+    let greeting = greet(&amp;name);         // &amp;name:借用 name,不轉移所有權
+    println!("{}", greeting);
+    // name 在這裡依然有效——因為只是借用
+    println!("name 還活著: {}", name);
+}
+
+fn greet(s: &amp;String) -&gt; String {         // &amp;String:接受借用
+    format!("Hello, {}!", s)             // format! 回傳一個全新的 String
+}</code></pre>
+
+      <p>
+        這段程式能跑,但有個值得注意的細節:我們把 <code>&amp;name</code> 傳給
+        <code>greet</code>,而不是 <code>name</code>——這就是「借用」。
+        接下來幾節,我們要把這個直覺變成精確的規則。
+      </p>
+
+      <!-- ==================== h2 ④ ==================== -->
+      <h2>所有權三規則與 move 語意</h2>
+
+      <p>
+        Rust 所有權系統的核心只有三條規則。乍看很簡單,
+        但後果可以讓第一次學習的人抓狂好幾天——
+        因為你從 Python/Java 帶來的直覺在這裡幾乎都是錯的。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">所有權三規則</span>
+          <p>
+            1. Rust 中每個值都有一個<strong>擁有者(owner)</strong>。<br>
+            2. 同一時間只能有<strong>一個擁有者</strong>。<br>
+            3. 當擁有者<strong>離開作用域(scope)</strong>,該值立即被丟棄(dropped)。
+          </p>
+        </div>
+      </div>
+
+      <p>規則三用程式碼最直觀:</p>
+
+      <pre><code class="language-rust">fn main() {
+    {
+        let s = String::from("hello");   // s 成為這個 String 的擁有者
+        // 可以使用 s ...
+    }  // ← 作用域結束,s 被 drop:heap 記憶體在此自動釋放
+    // println!("{}", s);  // ✗ s 已不存在
+}</code></pre>
+
+      <p>
+        這就是 Rust 的<strong>確定性解構(deterministic destruction)</strong>——
+        不是 GC 在某個不確定的時間點回收,而是在作用域結束的<em>瞬間</em>立即釋放。
+        C++ 也有類似的 RAII(Resource Acquisition Is Initialization)慣用法,
+        Rust 把它提升為語言的基礎機制。
+      </p>
+
+      <h3>String 在記憶體裡長什麼樣</h3>
+
+      <p>
+        要理解 move 語意,必須先知道 <code>String</code> 在記憶體裡的結構。
+        下圖展示 <code>let s1 = String::from("hello");</code> 之後的配置:
+      </p>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">Stack 與 Heap 複習</span>
+          <p>第 <a href="24-operating-system.html">24 章</a>介紹了作業系統的記憶體管理:
+          stack 隨函式呼叫自動成長縮短,heap 由程式動態配置與釋放。
+          Rust 的所有權系統正是建立在此之上——它讓 heap 記憶體的釋放也能像 stack 一樣「自動且確定」。</p>
+        </div>
+      </div>
+
+      <div class="diagram">
+<svg viewBox="0 0 700 320" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <rect width="700" height="320" fill="#f8fafb" rx="10"/>
+
+  <!-- Stack 標題 -->
+  <text x="110" y="26" text-anchor="middle" font-size="13" font-weight="bold" fill="#2f6f6a">Stack(堆疊)</text>
+
+  <!-- s1 的 Stack 欄位框 -->
+  <rect x="20" y="36" width="180" height="120" rx="6" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="110" y="56" text-anchor="middle" font-size="11" fill="#2f6f6a" font-weight="bold">s1</text>
+
+  <rect x="32" y="62" width="156" height="28" rx="4" fill="#ffffff" stroke="#2f6f6a" stroke-width="1"/>
+  <text x="75" y="81" font-size="12" fill="#1f2328">ptr</text>
+  <text x="155" y="81" text-anchor="end" font-size="11" fill="#8a929b">→ heap</text>
+
+  <rect x="32" y="94" width="156" height="28" rx="4" fill="#ffffff" stroke="#2f6f6a" stroke-width="1"/>
+  <text x="75" y="113" font-size="12" fill="#1f2328">len</text>
+  <text x="155" y="113" text-anchor="end" font-size="12" fill="#1f2328">5</text>
+
+  <rect x="32" y="126" width="156" height="28" rx="4" fill="#ffffff" stroke="#2f6f6a" stroke-width="1"/>
+  <text x="75" y="145" font-size="12" fill="#1f2328">cap</text>
+  <text x="155" y="145" text-anchor="end" font-size="12" fill="#1f2328">5</text>
+
+  <!-- Heap 標題 -->
+  <text x="530" y="26" text-anchor="middle" font-size="13" font-weight="bold" fill="#b4541f">Heap(堆積)</text>
+
+  <!-- Heap 字元方格 -->
+  <rect x="420" y="36" width="220" height="50" rx="6" fill="#fef3ec" stroke="#b4541f" stroke-width="2"/>
+  <rect x="432" y="48" width="36" height="26" rx="3" fill="#b4541f" fill-opacity="0.15"/>
+  <text x="450" y="66" text-anchor="middle" font-size="14" fill="#b4541f">h</text>
+  <rect x="472" y="48" width="36" height="26" rx="3" fill="#b4541f" fill-opacity="0.15"/>
+  <text x="490" y="66" text-anchor="middle" font-size="14" fill="#b4541f">e</text>
+  <rect x="512" y="48" width="36" height="26" rx="3" fill="#b4541f" fill-opacity="0.15"/>
+  <text x="530" y="66" text-anchor="middle" font-size="14" fill="#b4541f">l</text>
+  <rect x="552" y="48" width="36" height="26" rx="3" fill="#b4541f" fill-opacity="0.15"/>
+  <text x="570" y="66" text-anchor="middle" font-size="14" fill="#b4541f">l</text>
+  <rect x="592" y="48" width="36" height="26" rx="3" fill="#b4541f" fill-opacity="0.15"/>
+  <text x="610" y="66" text-anchor="middle" font-size="14" fill="#b4541f">o</text>
+
+  <!-- ptr → heap 箭頭 -->
+  <line x1="188" y1="76" x2="418" y2="62" stroke="#8a929b" stroke-width="2" marker-end="url(#ch85-ah)"/>
+  <defs>
+    <marker id="ch85-ah" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/>
+    </marker>
+    <marker id="ch85-ag" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 Z" fill="#2f6f6a"/>
+    </marker>
+    <marker id="ch85-ar" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 Z" fill="#b4541f"/>
+    </marker>
+    <marker id="ch85-ap" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 Z" fill="#8b5cf6"/>
+    </marker>
+  </defs>
+
+  <!-- 說明文字 -->
+  <text x="350" y="185" text-anchor="middle" font-size="13" fill="#333" font-weight="bold">let s2 = s1;  // move 發生!</text>
+
+  <!-- s1 失效 (左下) -->
+  <rect x="20" y="210" width="180" height="80" rx="6" fill="#f5f5f5" stroke="#ccc" stroke-width="1.5" stroke-dasharray="5,3"/>
+  <text x="110" y="240" text-anchor="middle" font-size="12" fill="#aaa" font-weight="bold">s1 (已失效)</text>
+  <text x="110" y="260" text-anchor="middle" font-size="11" fill="#aaa">move 後不可使用</text>
+  <text x="110" y="278" text-anchor="middle" font-size="20" fill="#ccc">✗</text>
+
+  <!-- s2 的 Stack 欄位 (中下) -->
+  <rect x="215" y="210" width="180" height="80" rx="6" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="305" y="235" text-anchor="middle" font-size="12" fill="#2f6f6a" font-weight="bold">s2 (現在的擁有者)</text>
+  <text x="305" y="258" text-anchor="middle" font-size="11" fill="#1f2328">ptr / len=5 / cap=5</text>
+  <text x="305" y="278" text-anchor="middle" font-size="11" fill="#2f6f6a">作用域結束時呼叫 drop</text>
+
+  <!-- s2 → heap 箭頭 -->
+  <path d="M395 250 Q440 200 530 90" fill="none" stroke="#2f6f6a" stroke-width="1.8" stroke-dasharray="5,3" marker-end="url(#ch85-ag)"/>
+</svg>
+        <figcaption>圖 79-1:<code>String</code> 的記憶體佈局與 move 語意。<code>String</code> 在 stack 上存放三個欄位(指標 ptr、長度 len、容量 cap),實際字元資料在 heap。<code>let s2 = s1</code> 後,所有權從 s1 轉移給 s2,s1 立即失效——Rust 因此能在作用域結束時安全地只呼叫一次 drop,永遠不會 double free。</figcaption>
+      </div>
+
+      <h3>move 語意的程式碼</h3>
+
+      <pre><code class="language-rust">fn main() {
+    let s1 = String::from("hello");
+    let s2 = s1;              // s1 的所有權「移交」給 s2(move)
+    // println!("{}", s1);   // ✗ 編譯錯誤:s1 的值已被 move
+    println!("{}", s2);      // ✓ s2 是現在的擁有者
+}  // s2 離開作用域 → drop 被呼叫 → heap 記憶體釋放(一次且僅一次)</code></pre>
+
+      <p>
+        這和 Python/Java 的語意完全不同:在那些語言,<code>s2 = s1</code>
+        只是讓兩個變數指向同一個物件。在 Rust,這個動作<em>轉移了所有權</em>——s1 不再有效。
+        為什麼?因為如果兩個變數都認為自己是那塊 heap 記憶體的主人,
+        作用域結束時兩者都會嘗試 free——這就是 double free。
+        Rust 從根本上杜絕了這個可能性。
+      </p>
+
+      <h3>Copy 型別:住在 stack 上的例外</h3>
+
+      <p>
+        整數、浮點數、布林、<code>char</code>、以及只由這些型別組成的元組(tuple),
+        都實作了 <code>Copy</code> trait——它們住在 stack 上,複製成本極低,
+        Rust 對它們執行<strong>複製(copy)</strong>而非 move:
+      </p>
+
+      <pre><code class="language-rust">fn main() {
+    let x = 5;
+    let y = x;                          // x 被複製到 y(不是 move)
+    println!("x = {}, y = {}", x, y);  // ✓ 兩者都有效
+}</code></pre>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 79.1 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>下面這段 Rust 程式為什麼無法編譯?請解釋原因,並說明哪條所有權規則被違反了:</p>
+          <pre><code class="language-rust">fn main() {
+    let s1 = String::from("hello");
+    let s2 = s1;
+    println!("{}", s1);   // 這一行錯在哪裡?
+}</code></pre>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><code>let s2 = s1;</code> 把 <code>s1</code> 的所有權<strong>移交(move)</strong>給了 <code>s2</code>,
+              此後 <code>s1</code> 不再有效。<code>println!("{}", s1)</code> 試圖使用已被 move 的值,
+              違反所有權規則二:同一時間只能有一個擁有者。</p>
+              <p>編譯器回報:</p>
+              <pre><code class="language-text">error[E0382]: borrow of moved value: `s1`
+ --&gt; src/main.rs:4:20
+  |
+2 |     let s1 = String::from("hello");
+  |         -- move occurs because `s1` has type `String`
+3 |     let s2 = s1;
+  |              -- value moved here
+4 |     println!("{}", s1);
+  |                    ^^ value borrowed here after move</code></pre>
+              <p>修正方式:若要兩者都使用,改為 <code>let s2 = s1.clone();</code>;
+              若只要讀取,傳 <code>&amp;s1</code> 參考即可。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑤ ==================== -->
+      <h2>借用 &amp; 與可變借用 &amp;mut</h2>
+
+      <p>
+        如果每次把值傳進函式都要放棄所有權,那程式設計將是一場噩夢——
+        你永遠拿不回自己的東西。這就是<strong>借用(borrowing)</strong>的用途。
+        借用讓你能暫時使用某個值,卻不取得它的所有權。
+      </p>
+
+      <pre><code class="language-rust">fn main() {
+    let s = String::from("hello");
+    let len = calculate_length(&amp;s);      // &amp;s:建立指向 s 的參考,不轉移所有權
+    println!("'{}' 的長度是 {}", s, len); // s 依然有效!
+}
+
+fn calculate_length(s: &amp;String) -&gt; usize { // 接受 String 的參考
+    s.len()
+}   // s 在這裡離開作用域,但因為只是借用,不會 drop 原始資料</code></pre>
+
+      <p>
+        <code>&amp;s</code> 建立一個指向 <code>s</code> 的<strong>共享參考(shared reference)</strong>。
+        你可以讀取值,但不能修改它——就像你借了朋友的書,只能看、不能塗鴉。
+      </p>
+
+      <h3>可變借用:&amp;mut T</h3>
+
+      <p>想修改借來的值?需要<strong>可變參考(mutable reference)</strong>:</p>
+
+      <pre><code class="language-rust">fn main() {
+    let mut s = String::from("hello");  // 先讓 s 本身是可變的(mut)
+    change(&amp;mut s);                     // 傳可變參考
+    println!("{}", s);                  // 印出 "hello, world"
+}
+
+fn change(s: &amp;mut String) {            // 接受可變參考
+    s.push_str(", world");              // 可以修改!
+}</code></pre>
+
+      <h3>別名 XOR 可變:最重要的規則</h3>
+
+      <p>
+        Rust 對參考有一條嚴格的規則,這條規則消除了一整類的資料競爭 bug:
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">別名 XOR 可變(Aliasing XOR Mutability)</span>
+          <p>在同一個作用域裡,你可以有:<br>
+          <strong>任意多個</strong>共享參考 <code>&amp;T</code>(多個讀取者),<br>
+          <strong>或者</strong>恰好<strong>一個</strong>可變參考 <code>&amp;mut T</code>(一個修改者),<br>
+          但<strong>不能同時</strong>擁有兩者。</p>
+        </div>
+      </div>
+
+      <div class="diagram">
+<svg viewBox="0 0 700 280" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <rect width="700" height="280" fill="#f8fafb" rx="10"/>
+
+  <!-- 左側:合法 — 多個 &T -->
+  <text x="160" y="26" text-anchor="middle" font-size="13" font-weight="bold" fill="#2f6f6a">✓ 合法:多個共享參考</text>
+  <rect x="18" y="38" width="284" height="210" rx="8" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+
+  <!-- 資料節點 -->
+  <rect x="114" y="110" width="100" height="44" rx="8" fill="#2f6f6a"/>
+  <text x="164" y="136" text-anchor="middle" font-size="14" font-weight="bold" fill="#fff">data</text>
+
+  <!-- 三個 &T 讀取者 -->
+  <rect x="32" y="70" width="70" height="28" rx="5" fill="#fff" stroke="#2f6f6a" stroke-width="1.5"/>
+  <text x="67" y="89" text-anchor="middle" font-size="12" fill="#2f6f6a">&amp;data</text>
+  <line x1="102" y1="84" x2="128" y2="118" stroke="#2f6f6a" stroke-width="1.5" marker-end="url(#ch85-ag)"/>
+
+  <rect x="32" y="112" width="70" height="28" rx="5" fill="#fff" stroke="#2f6f6a" stroke-width="1.5"/>
+  <text x="67" y="131" text-anchor="middle" font-size="12" fill="#2f6f6a">&amp;data</text>
+  <line x1="102" y1="126" x2="114" y2="131" stroke="#2f6f6a" stroke-width="1.5" marker-end="url(#ch85-ag)"/>
+
+  <rect x="32" y="154" width="70" height="28" rx="5" fill="#fff" stroke="#2f6f6a" stroke-width="1.5"/>
+  <text x="67" y="173" text-anchor="middle" font-size="12" fill="#2f6f6a">&amp;data</text>
+  <line x1="102" y1="168" x2="128" y2="148" stroke="#2f6f6a" stroke-width="1.5" marker-end="url(#ch85-ag)"/>
+
+  <text x="164" y="214" text-anchor="middle" font-size="11" fill="#2f6f6a">多個讀取者,資料不可變</text>
+  <text x="164" y="234" text-anchor="middle" font-size="11" fill="#2f6f6a">完全安全 ✓</text>
+
+  <!-- 中間:合法 — 一個 &mut T -->
+  <text x="420" y="26" text-anchor="middle" font-size="13" font-weight="bold" fill="#b4541f">✓ 合法:一個可變參考</text>
+  <rect x="328" y="38" width="184" height="210" rx="8" fill="#fef3ec" stroke="#b4541f" stroke-width="2"/>
+
+  <rect x="388" y="110" width="100" height="44" rx="8" fill="#b4541f"/>
+  <text x="438" y="136" text-anchor="middle" font-size="14" font-weight="bold" fill="#fff">data</text>
+
+  <rect x="344" y="112" width="80" height="28" rx="5" fill="#fff" stroke="#b4541f" stroke-width="1.5"/>
+  <text x="384" y="131" text-anchor="middle" font-size="11" fill="#b4541f">&amp;mut data</text>
+  <line x1="424" y1="126" x2="388" y2="130" stroke="#b4541f" stroke-width="1.5" marker-end="url(#ch85-ar)"/>
+
+  <text x="420" y="214" text-anchor="middle" font-size="11" fill="#b4541f">一個寫入者,獨佔存取</text>
+  <text x="420" y="234" text-anchor="middle" font-size="11" fill="#b4541f">完全安全 ✓</text>
+
+  <!-- 右側:非法 -->
+  <text x="620" y="26" text-anchor="middle" font-size="13" font-weight="bold" fill="#8b5cf6">✗ 非法:同時存在</text>
+  <rect x="532" y="38" width="150" height="210" rx="8" fill="#f0f0ff" stroke="#8b5cf6" stroke-width="2" stroke-dasharray="6,3"/>
+  <text x="607" y="130" text-anchor="middle" font-size="48" fill="#8b5cf6">⊗</text>
+  <text x="607" y="185" text-anchor="middle" font-size="11" fill="#8b5cf6">&amp;T 與 &amp;mut T</text>
+  <text x="607" y="203" text-anchor="middle" font-size="11" fill="#8b5cf6">不能同時存在</text>
+  <text x="607" y="222" text-anchor="middle" font-size="11" fill="#8b5cf6">編譯器擋掉</text>
+</svg>
+        <figcaption>圖 79-2:別名 XOR 可變規則。左側:多個 <code>&amp;T</code> 同時存在——合法,因為沒有人修改資料。中間:一個 <code>&amp;mut T</code>——合法,獨佔修改者。右側:<code>&amp;T</code> 與 <code>&amp;mut T</code> 同時存在——Rust 在編譯時直接拒絕,防止資料競爭。</figcaption>
+      </div>
+
+      <p>
+        為什麼這條規則能消除資料競爭?考慮多執行緒環境:
+        如果一個執行緒在讀取(<code>&amp;T</code>),另一個在修改(<code>&amp;mut T</code>),就是經典的資料競爭。
+        Rust 的規則在單執行緒時就已嚴格禁止這種「同時存在」的可能性——
+        多執行緒時,<code>Send</code> 和 <code>Sync</code> trait 繼續保衛這道防線。
+      </p>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">常見新手陷阱</span>
+          <p>新手常在迴圈裡試圖同時以不可變方式讀取一個集合,又試圖修改它。Rust 一律拒絕。
+          解決辦法通常是:先把需要的資訊複製出來,再統一修改;或者改用 index 存取而非參考。</p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 79.2 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>下面這段程式有 borrow checker 錯誤。找出錯誤原因,說明為何這樣不安全,並修正它:</p>
+          <pre><code class="language-rust">fn main() {
+    let mut s = String::from("hello");
+    let r1 = &amp;s;
+    let r2 = &amp;s;
+    s.push_str(", world");    // 這行造成什麼問題?
+    println!("{} {}", r1, r2);
+}</code></pre>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><code>r1</code> 和 <code>r2</code> 是 <code>s</code> 的共享參考(不可變借用)。
+              <code>s.push_str()</code> 需要對 <code>s</code> 進行可變借用。
+              根據別名 XOR 可變規則,當 <code>r1</code>、<code>r2</code> 還活著時,不能同時有可變借用。
+              此外,String 的內部緩衝區(一個 <code>Vec&lt;u8&gt;</code>)可能因 <code>push_str</code> 而重新配置記憶體,
+              使 <code>r1</code>、<code>r2</code> 成為懸空指標——這正是 Rust 要防止的。</p>
+              <p>修正:先用完不可變借用,再修改。自 Rust 2018 edition 起引入 Non-Lexical Lifetimes(NLL,非詞法生命週期),其實只需把最後一次使用 <code>r1</code>、<code>r2</code> 的 <code>println!</code> 移到 <code>push_str</code> 之前,就能解除衝突,<strong>不需</strong>額外的 block;下方的 block 只是更顯式的寫法:</p>
+              <pre><code class="language-rust">fn main() {
+    let mut s = String::from("hello");
+    {
+        let r1 = &amp;s;
+        let r2 = &amp;s;
+        println!("{} {}", r1, r2);   // 借用在這裡結束
+    }
+    s.push_str(", world");           // ✓ 借用已結束,可以修改
+    println!("{}", s);
+}</code></pre>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑥ ==================== -->
+      <h2>生命週期初步</h2>
+
+      <p>
+        生命週期(lifetime)是 Rust 最讓新手頭痛的特性。
+        但它解決的問題很真實:<strong>如何確保參考不會活得比它指向的資料更久?</strong>
+      </p>
+
+      <p>先看一個在 C 裡會靜默出錯、在 Rust 裡會被擋下的情境:</p>
+
+      <pre><code class="language-rust">fn main() {
+    let r;
+    {
+        let x = 5;
+        r = &amp;x;         // r 借用 x
+    }                   // x 在這裡被 drop!
+    println!("{}", r);  // ✗ r 現在是懸空參考
+}</code></pre>
+
+      <p>Rust 編譯器直接拒絕,並清楚指出問題所在:</p>
+
+      <pre><code class="language-text">error[E0597]: `x` does not live long enough
+ --&gt; src/main.rs:5:13
+  |
+5 |         r = &amp;x;
+  |             ^^ borrowed value does not live long enough
+6 |     }
+  |     - `x` dropped here while still borrowed
+7 |     println!("{}", r);
+  |                    - borrow later used here</code></pre>
+
+      <p>
+        這正是我們在 C 裡被懸空指標燒到的那類 bug——
+        現在被 Rust 在<strong>編譯時</strong>完全消滅了。
+      </p>
+
+      <h3>生命週期標注:告訴編譯器「誰活得更久」</h3>
+
+      <p>
+        大多數情況,Rust 能自動推斷生命週期(lifetime elision 規則),
+        你不用手動標注。但當函式回傳參考,且參考可能來自多個輸入時,
+        編譯器需要你明確說明參考之間的關係:
+      </p>
+
+      <pre><code class="language-rust">// 接受兩個字串 slice,回傳較長的那個
+// 'a 是生命週期參數:確保輸出的生命週期不超過兩個輸入中較短的那個
+fn longest&lt;'a&gt;(x: &amp;'a str, y: &amp;'a str) -&gt; &amp;'a str {
+    if x.len() &gt; y.len() {
+        x
+    } else {
+        y
+    }
+}
+
+fn main() {
+    let s1 = String::from("long string is long");
+    let result;
+    {
+        let s2 = String::from("xyz");
+        result = longest(s1.as_str(), s2.as_str());
+        println!("較長的字串是: {}", result);  // ✓ 在 s2 的作用域內使用
+    }
+    // println!("{}", result);  // ✗ s2 已 drop,result 可能指向它
+}</code></pre>
+
+      <p>
+        <code>'a</code> 不是一個固定的時間長度——它是個<strong>佔位符</strong>,
+        代表「無論 x 和 y 的生命週期是多長,我保證輸出不會活得比其中較短的那個更久」。
+        編譯器用它來驗算所有使用這個函式的呼叫點是否安全。
+      </p>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">生命週期標注的直覺</span>
+          <p>你不是在告訴 Rust「這個參考能活多久」——你是在描述不同參考之間的<strong>相對關係</strong>。
+          當 Rust 說「需要生命週期標注」,通常意味著它無法靠推斷確認回傳的參考一定比某個輸入活得短。
+          你的標注給了它這個資訊。大多數日常程式碼遇不到這種情況。</p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑦ ==================== -->
+      <h2>borrow checker 實戰:讀懂錯誤,修正程式</h2>
+
+      <p>
+        理論說夠了。最好的學習方式是故意寫出會被 borrow checker 擋下的程式,
+        然後學會讀懂錯誤訊息並修正它。
+      </p>
+
+      <h3>場景一:借用後修改導致懸空指標</h3>
+
+      <pre><code class="language-rust">fn main() {
+    let mut v = vec![1, 2, 3];
+    let first = &amp;v[0];    // 不可變借用 v
+    v.push(4);             // ✗ 可變借用 v,但 first 還活著!
+    println!("{}", first);
+}</code></pre>
+
+      <p>編譯器的錯誤訊息(精簡版):</p>
+
+      <pre><code class="language-text">error[E0502]: cannot borrow `v` as mutable because it is also borrowed as immutable
+ --&gt; src/main.rs:4:5
+  |
+3 |     let first = &amp;v[0];
+  |                  - immutable borrow occurs here
+4 |     v.push(4);
+  |     ^^^^^^^^^ mutable borrow occurs here
+5 |     println!("{}", first);
+  |                    ----- immutable borrow later used here</code></pre>
+
+      <p>
+        為什麼這很危險?<code>Vec</code> 在 <code>push</code> 時可能需要重新配置更大的 heap 記憶體,
+        把所有元素搬到新位置——<code>first</code> 指向的舊位置就成了懸空指標!
+        Rust 阻止了這個問題。
+      </p>
+
+      <p><strong>修正方式一</strong>:複製值出來,不借用:</p>
+
+      <pre><code class="language-rust">fn main() {
+    let mut v = vec![1, 2, 3];
+    let first_val = v[0];    // 複製 i32(Copy 型別),不是借用
+    v.push(4);               // ✓ 現在可以修改
+    println!("第一個元素: {}", first_val);
+    println!("現在的 v: {:?}", v);
+}</code></pre>
+
+      <h3>場景二:C 懸空指標問題在 Rust 的對應情境</h3>
+
+      <p>回到本章開頭的 C 懸空指標。如果用 Rust 重寫,borrow checker 直接擋下來:</p>
+
+      <pre><code class="language-rust">fn make_greeting(name: &amp;str) -&gt; &amp;str {
+    let greeting = format!("Hello, {}!", name);   // 在函式內建立新 String
+    &amp;greeting   // ✗ 回傳局部變數的參考
+}               // greeting 在這裡被 drop,參考立即失效</code></pre>
+
+      <p>編譯器錯誤:</p>
+
+      <pre><code class="language-text">error[E0515]: cannot return reference to local variable `greeting`
+ --&gt; src/main.rs:3:5
+  |
+3 |     &amp;greeting
+  |     ^^^^^^^^^ returns a reference to data owned by the current function</code></pre>
+
+      <p><strong>正確修法</strong>:回傳 <code>String</code>(轉移所有權),不回傳參考:</p>
+
+      <pre><code class="language-rust">fn make_greeting(name: &amp;str) -&gt; String {
+    format!("Hello, {}!", name)   // 把所有權移交給呼叫者
+}
+
+fn main() {
+    let msg = make_greeting("Alice");   // msg 成為 String 的新擁有者
+    println!("{}", msg);
+}</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">Rust 編譯器的錯誤訊息很友善</span>
+          <p>Rust 的編譯器(rustc)以「錯誤訊息清楚有用」聞名。每個錯誤都有 <code>E0XXX</code> 編號和詳細說明,
+          通常還附上修正建議。遇到 borrow checker 報錯,先讀懂「哪裡借用、哪裡衝突」,
+          八成問題就解了。不要跳過錯誤訊息——它是你最好的老師。</p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 79.3 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>把這個 C 函式改寫成 Rust 慣用版本。C 版本有潛在的 buffer overflow(當 <code>n</code> 為 0 時)問題,Rust 版本應該安全且慣用:</p>
+          <pre><code class="language-c">/* 找出陣列中的最大值 */
+int find_max(int *arr, int n) {
+    int max = arr[0];
+    for (int i = 1; i &lt; n; i++) {
+        if (arr[i] &gt; max) max = arr[i];
+    }
+    return max;
+}</code></pre>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>Rust 慣用版本使用切片(<code>&amp;[i32]</code>)取代指標+長度,以 <code>Option</code> 處理空陣列:</p>
+              <pre><code class="language-rust">// 方法一:手動迴圈
+fn find_max(arr: &amp;[i32]) -&gt; Option&lt;i32&gt; {
+    if arr.is_empty() { return None; }  // 明確處理空陣列
+    let mut max = arr[0];
+    for &amp;val in &amp;arr[1..] {             // &amp;arr[1..] 是從第二個元素開始的借用切片
+        if val &gt; max { max = val; }
+    }
+    Some(max)
+}
+
+// 方法二:使用標準庫迭代器(更 Rust 慣用)
+fn find_max_iter(arr: &amp;[i32]) -&gt; Option&lt;&amp;i32&gt; {
+    arr.iter().max()   // 標準庫已有 max()
+}
+
+fn main() {
+    let data = vec![3, 9, 2, 7, 5];
+    println!("{:?}", find_max(&amp;data));       // Some(9)
+    println!("{:?}", find_max_iter(&amp;data));  // Some(9)
+    println!("{:?}", find_max(&amp;[]));         // None,空切片安全處理
+}</code></pre>
+              <p>與 C 版本的差異:① 輸入是 <code>&amp;[i32]</code>(借用的切片),不需要額外傳長度參數;
+              ② 空陣列的情況以 <code>Option</code> 明確表達,不會有未定義行為;
+              ③ 索引存取時 Rust 自動做邊界檢查,不可能越界讀取。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑧ ==================== -->
+      <h2>何時 clone、何時借用</h2>
+
+      <p>
+        學了借用之後,新手常陷入另一個極端:到處加 <code>.clone()</code> 讓程式能編譯,
+        卻不理解這樣做的代價。<code>.clone()</code> 會<strong>複製整塊 heap 資料</strong>——
+        對大型字串或容器而言,代價可觀。
+      </p>
+
+      <pre><code class="language-rust">// ✗ 反模式:不必要的所有權轉移與 clone
+fn print_length(s: String) -&gt; usize {   // 吞掉所有權(不必要!)
+    s.len()
+}
+
+fn main() {
+    let name = String::from("Alice");
+    println!("{}", print_length(name.clone()));  // clone 了但根本不需要
+    println!("{}", name);
+}</code></pre>
+
+      <pre><code class="language-rust">// ✓ 正確做法:借用
+fn print_length(s: &amp;str) -&gt; usize {    // &amp;str:最通用的字串借用形式
+    s.len()
+}
+
+fn main() {
+    let name = String::from("Alice");
+    println!("{}", print_length(&amp;name));  // 借用,不轉移所有權
+    println!("{}", name);                 // name 依然有效
+}</code></pre>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">實用的決策流程</span>
+          <p>
+            1. 函式只需要<strong>讀取</strong>資料?→ 用 <code>&amp;T</code>(借用)。<br>
+            2. 函式需要<strong>修改</strong>資料?→ 用 <code>&amp;mut T</code>(可變借用)。<br>
+            3. 函式需要<strong>取得所有權</strong>(例如把它存進 struct 或傳給執行緒)?→ 用 <code>T</code>(move)。<br>
+            4. 需要所有權,但又要保留原始資料?→ <code>.clone()</code>(有成本,謹慎使用)。
+          </p>
+        </div>
+      </div>
+
+      <h3>&amp;str vs String:最常見的型別混淆</h3>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>型別</th>
+              <th>儲存位置</th>
+              <th>擁有資料</th>
+              <th>可否修改</th>
+              <th>常見用途</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>&amp;str</code></td>
+              <td>借用的 slice(可指向任何地方)</td>
+              <td>否</td>
+              <td>否</td>
+              <td>函式參數、字串常數</td>
+            </tr>
+            <tr>
+              <td><code>String</code></td>
+              <td>heap 上的可成長緩衝區</td>
+              <td>是</td>
+              <td>是(若 mut)</td>
+              <td>動態建立字串、需要所有權</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>
+        經驗法則:<strong>函式參數優先用 <code>&amp;str</code></strong>——
+        它比 <code>&amp;String</code> 更通用(可以接受字串常數和 <code>String</code> 的借用);
+        <strong>回傳值如果是新建立的字串,用 <code>String</code></strong>。
+      </p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 79.4 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>下面這段程式嘗試把 <code>String</code> 中的單詞順序反轉。它有兩個問題:一個是 borrow checker 問題,一個是邏輯問題。找出這兩個問題並修正:</p>
+          <pre><code class="language-rust">fn reverse_words(s: &amp;mut String) {
+    let words: Vec&lt;&amp;str&gt; = s.split_whitespace().collect();
+    s.clear();                              // 問題在這裡?
+    for word in words.iter().rev() {
+        s.push_str(word);
+        s.push(' ');                        // 邏輯問題在哪裡?
+    }
+}
+
+fn main() {
+    let mut sentence = String::from("hello world foo");
+    reverse_words(&amp;mut sentence);
+    println!("{}", sentence);
+}</code></pre>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>Borrow checker 問題</strong>:<code>words</code> 中每個 <code>&amp;str</code> 都借用了 <code>s</code> 的記憶體。
+              <code>s.clear()</code> 試圖可變借用並修改 <code>s</code>,但 <code>words</code> 的不可變借用還活著。
+              根據別名 XOR 可變規則,這被編譯器拒絕。</p>
+              <p><strong>邏輯問題</strong>:最後一個單詞後面會多一個多餘的空格。</p>
+              <p><strong>修正方式</strong>:先把單詞<em>複製</em>成獨立的 <code>String</code>,打破對 <code>s</code> 的借用:</p>
+              <pre><code class="language-rust">fn reverse_words(s: &amp;mut String) {
+    // 先把單詞複製成獨立的 String,解除對 s 的借用
+    let words: Vec&lt;String&gt; = s.split_whitespace()
+                               .map(|w| w.to_string())
+                               .collect();
+    // words 是獨立所有者,不再借用 s,現在可以安全修改 s
+    *s = words.iter()
+              .rev()
+              .cloned()
+              .collect::&lt;Vec&lt;String&gt;&gt;()
+              .join(" ");   // join 不產生尾隨空格
+}
+
+fn main() {
+    let mut sentence = String::from("hello world foo");
+    reverse_words(&amp;mut sentence);
+    println!("{}", sentence);   // "foo world hello"
+}</code></pre>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑨ ==================== -->
+      <h2>把這一章串起來</h2>
+
+      <p>
+        從 C 的記憶體地雷,到 Rust 的所有權系統,我們走過了一段令人驚嘆的旅程。
+        回顧這趟旅程的幾個路標:
+      </p>
+
+      <ul>
+        <li><strong>C 的問題根源</strong>:懸空指標、double free、記憶體洩漏——全都源自「記憶體的責任由人腦追蹤」。</li>
+        <li><strong>Rust 的解法</strong>:不靠 GC,靠<strong>所有權三規則</strong>在編譯期強制正確性。每個值有唯一擁有者;擁有者離開作用域,值立即且確定地釋放。</li>
+        <li><strong>Move 語意</strong>:<code>let s2 = s1</code> 是所有權轉移,不是複製;實作了 <code>Copy</code> trait 的 stack-only 型別(整數等)是唯一例外。</li>
+        <li><strong>別名 XOR 可變</strong>:可以有多個 <code>&amp;T</code>,或一個 <code>&amp;mut T</code>,但不能同時有兩者——這條規則是零成本並行安全的基礎。</li>
+        <li><strong>生命週期</strong>:確保參考不會活得比它指向的資料更久。大多數時候 Rust 自動推斷,偶爾需要 <code>'a</code> 標注。</li>
+        <li><strong>實戰策略</strong>:優先借用(<code>&amp;str</code>/<code>&amp;T</code>),需要修改用 <code>&amp;mut T</code>,需要所有權才 move,最後手段才 <code>.clone()</code>。</li>
+      </ul>
+
+      <p>
+        所有權系統起初讓人痛苦——「為什麼這段在 Python 完全沒問題的程式,Rust 不讓我這樣寫?」
+        但當你過了這道坎,你會發現:borrow checker 其實是你最嚴格也最友善的程式碼審查者,
+        它把你過去在 GDB 或 Valgrind 裡苦苦追查的那些 bug,全都提前到編譯時報告給你。
+        <strong>能通過編譯的 Rust 程式,記憶體安全這件事可以幾乎打勾。</strong>
+      </p>
+
+      <p>
+        下一章,我們會繼續深入 Rust 的型別系統:trait、列舉 <code>enum</code>、模式比對(pattern matching),
+        以及 Rust 優雅的錯誤處理——<code>Option&lt;T&gt;</code> 和 <code>Result&lt;T, E&gt;</code>。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">📚</div>
+        <div class="body">
+          <span class="c-title">延伸資源</span>
+          <p>
+            <strong><a href="https://doc.rust-lang.org/book/" target="_blank">The Rust Programming Language</a></strong>
+            (官方書「The Book」):第 4 章完整講解所有權,第 10.3 節講生命週期,是最權威的入門資源,完全免費線上閱讀。<br><br>
+            <strong><a href="https://course.rs" target="_blank">Rust 語言聖經(rust-course)</a></strong>:
+            中文社群維護的 Rust 教材,對所有權和借用有深入的中文解說與大量範例,對繁中讀者極為友善。<br><br>
+            <strong><a href="https://rustlings.cool" target="_blank">Rustlings</a></strong>:
+            小型互動練習集——修復一個個有錯誤的 Rust 小程式,與本章「故意寫錯再修正」的學習方式完全一致。建議在讀完本章後立即嘗試。
+          </p>
+        </div>
+      </div>
+
+</article>
+  </main>
+</div>
+<script src="../assets/book.js"></script>
+</body>
+</html>

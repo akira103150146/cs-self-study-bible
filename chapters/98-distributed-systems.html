@@ -1,0 +1,1014 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>分散式系統與高可用架構 · CS 自學聖經</title>
+<meta name="description" content="從單機到叢集再到多台機器協作——理解分散式系統的根本難題：部分失效、複製、一致性模型、CAP 定理、Raft 共識、分片，與高可用架構實務。">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;700&family=Noto+Sans+TC:wght@400;700&family=Lora:ital,wght@0,400;0,600;0,700;1,400&family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <main class="main">
+    <article class="content">
+      <div class="eyebrow">第二一部 · 容器、虛擬化與雲原生底層</div>
+      <h1>分散式系統與高可用架構</h1>
+      <p class="subtitle">一台機器不夠用了——當服務需要橫跨多台機器，你面對的不只是「更多資源」，而是一整套在不可靠環境中達成可靠性的藝術。</p>
+      <div class="byline">
+        <span class="tag">第 92 章</span>
+        <span>閱讀時間 ≈ 75 分鐘</span>
+        <span>難度:★★★★☆</span>
+      </div>
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>分散式系統的「八個謬誤」與根本難題:部分失效(partial failure)、網路不可靠、沒有全域時鐘</li>
+          <li>複製(replication)的目的與代價:主從架構、多主、複製延遲</li>
+          <li>一致性模型:強一致(strong consistency)、線性化(linearizability)與最終一致(eventual consistency)的差異與取捨</li>
+          <li>CAP 定理的正確解讀:分區時 CP vs AP 的取捨,以及平時 C 與 A 可以兼得的誠實說明</li>
+          <li>共識(consensus)的必要性,以及 Raft 的 leader 選舉、log replication、term 機制</li>
+          <li>分片(sharding)的水平擴展策略、分片鍵選擇與熱點問題</li>
+          <li>高可用架構實務:消除單點故障(SPOF)、健康檢查、故障轉移、可觀測性三支柱</li>
+        </ul>
+      </div>
+
+      <!-- ==================== h2 ① ==================== -->
+      <h2>一台機器不夠用了:分散式系統的誕生</h2>
+
+      <p>
+        在<a href="96-kubernetes.html">第 90 章</a>，你看到 Kubernetes 如何把多台機器組成一個叢集、
+        編排容器的生命週期。但今天要問的問題更根本：<em>當服務必須跑在多台機器上，究竟會遇到什麼新難題？</em>
+      </p>
+
+      <p>
+        答案遠比「更多 CPU 和記憶體」複雜。一台機器的世界很美好：
+        記憶體存取有明確的延遲、操作有全域的順序、「這件事有沒有發生」有精確的答案。
+        多台機器的世界則截然不同——機器會掛、網路會斷、訊息會延遲，
+        而且你永遠無法確定「那台機器是死了、還是只是暫時沒回應」。
+      </p>
+
+      <p>
+        1994 年，Sun Microsystems 的 Peter Deutsch 與同事列出了「分散式計算的八個謬誤
+        (Eight Fallacies of Distributed Computing)」——這些是初學者最容易犯下、但卻貽害無窮的錯誤假設：
+      </p>
+
+      <ol>
+        <li>網路是可靠的(The network is reliable)</li>
+        <li>延遲是零(Latency is zero)</li>
+        <li>頻寬是無限的(Bandwidth is infinite)</li>
+        <li>網路是安全的(The network is secure)</li>
+        <li>網路拓撲不會改變(Topology doesn't change)</li>
+        <li>只有一個管理員(There is one administrator)</li>
+        <li>傳輸成本是零(Transport cost is zero)</li>
+        <li>網路是同質的(The network is homogeneous)</li>
+      </ol>
+
+      <p>
+        每一條假設都是「聽起來很合理，但在生產環境裡遲早會被打臉」的陷阱。
+        網路封包會遺失、機器會斷電、路由器會重開機——分散式系統的設計，
+        就是要在這些謬誤成真的時候，仍然給使用者一個可靠的服務。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">為何需要分散式系統</span>
+          <p>
+            分散式系統通常因為三個理由而存在：<strong>容量超過單機上限</strong>（資料量或計算量）、
+            <strong>高可用性</strong>（單台機器掛掉服務不中斷）、
+            <strong>地理分布</strong>（把服務放近使用者以降低延遲）。
+            這些好處是真實的——但代價是複雜度呈非線性增長。
+          </p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ② ==================== -->
+      <h2>為何分散式難:部分失效、時鐘、與不可靠網路</h2>
+
+      <h3>部分失效(Partial Failure)</h3>
+
+      <p>
+        單機系統的失效通常是全有或全無：機器跑起來就跑，當機了就全部壞掉。
+        <strong>部分失效</strong>是分散式系統獨有的惡夢：叢集裡某些節點正常，
+        某些慢、某些已經宕機，但你從外部根本看不出來——還是能連上，
+        但某些請求會莫名其妙地超時或返回錯誤。
+      </p>
+
+      <p>
+        更糟的是，你無法區分「那台機器死了」與「網路暫時斷了」——
+        它們對你的觀測來說完全一樣：就是沒有回應。
+        你發出請求，超時後你唯一能確定的是「我不知道請求有沒有到達、有沒有被執行」。
+      </p>
+
+      <h3>沒有全域時鐘</h3>
+
+      <p>
+        你可能認為，只要所有機器都用 NTP 同步時鐘，就能確定事件的順序。
+        但這個想法有致命缺陷：NTP 同步有誤差（通常幾毫秒，壞的情況幾百毫秒甚至幾秒），
+        而且時鐘漂移是持續發生的。這意味著：
+      </p>
+
+      <ul>
+        <li>機器 A 在 10:00:00.001 記錄的事件，在機器 B 上「看起來」可能發生在 09:59:59.998——
+            即使 A 的事件實際上更晚。</li>
+        <li>用時間戳記排序分散式事件是<em>不可靠</em>的。</li>
+      </ul>
+
+      <p>
+        正確的解法是<strong>邏輯時鐘(logical clock)</strong>，如 Lamport 時間戳記或向量時鐘——
+        用「因果關係」而非「牆鐘時間」來定義事件順序。
+        這是<a href="25-networking.html">第 25 章計算機網路</a>中「協定設計」概念的延伸：
+        你不能假設節點之間有共享的時間基準。
+      </p>
+
+      <h3>網路不可靠與冪等性</h3>
+
+      <p>
+        在<a href="25-networking.html">第 25 章</a>，TCP 提供了「資料流的可靠傳輸」——
+        但分散式系統要面對的問題是：即使 TCP 連線正常，<em>應用層的請求仍然可能失敗</em>：
+        伺服器可能在處理請求途中當機（請求執行了一半）、
+        回應可能在網路中遺失（你不知道對方有沒有完成操作）。
+        這就是為什麼「<strong>至多一次(at-most-once)</strong>」、
+        「<strong>至少一次(at-least-once)</strong>」、「<strong>恰好一次(exactly-once)</strong>」
+        語義在分散式系統裡如此重要。
+      </p>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">超時不是答案，只是開始</span>
+          <p>
+            當你對另一台機器發出請求然後逾時，你面臨三種可能：
+            (1) 請求根本沒到達對方；
+            (2) 請求到達了、對方正在處理、只是回應很慢；
+            (3) 請求到達了、對方執行完了、但回應在路上丟失了。
+            如果你因此重送請求，可能導致操作被執行兩次。
+            設計好的系統需要<strong>冪等性(idempotency)</strong>——同一操作執行多次與執行一次的結果相同。
+          </p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ③ ==================== -->
+      <h2>複製(Replication):容錯與讀取擴展</h2>
+
+      <p>
+        面對部分失效最直觀的對策是：把資料儲存在<em>多台機器</em>上。
+        <strong>複製(replication)</strong>是讓多個節點保存相同資料的技術，
+        目的有兩個：其一是<strong>容錯</strong>——一台機器掛了，另一台還有資料；
+        其二是<strong>讀取擴展</strong>——多台機器都可以服務讀取請求，分散負載。
+      </p>
+
+      <h3>主從複製(Leader-Follower / Primary-Replica)</h3>
+
+      <p>
+        最常見的複製架構是<strong>主從複製</strong>：一台主節點(leader/primary)接受所有寫入，
+        並把變更記錄以<strong>複製日誌(replication log)</strong>的形式推播給跟隨者節點(followers/replicas)。
+        讀取請求可以由任一跟隨者服務，達到讀取的水平擴展。
+        常見資料庫如 PostgreSQL、MySQL、MongoDB 都提供主從複製。
+      </p>
+
+      <h3>複製延遲(Replication Lag)</h3>
+
+      <p>
+        複製可以是同步或非同步的。<strong>同步複製</strong>要求主節點等到至少一個跟隨者確認收到才回應用戶端——
+        強一致，但寫入延遲高。<strong>非同步複製</strong>主節點寫完就立刻回應——低延遲，
+        但如果主節點在跟隨者接收變更前就宕機，那些尚未複製的資料就永遠消失了。
+      </p>
+
+      <p>
+        更麻煩的是<strong>複製延遲(replication lag)</strong>帶來的一致性問題：
+        用戶 A 剛寫入了一條資料，用戶 B 的讀取請求被路由到一個跟隨者——
+        但那個跟隨者還沒同步到最新寫入，所以用戶 B 讀不到剛才的資料。
+        這種現象叫做<strong>讀你所寫(read-your-writes)</strong>問題。
+      </p>
+
+      <h3>多主複製與無主複製</h3>
+
+      <p>
+        <strong>多主複製(multi-leader replication)</strong>允許多個節點接受寫入——
+        常用於多資料中心場景，每個資料中心有自己的主節點，本地寫入延遲低。
+        代價是：當兩個資料中心同時接受對同一筆資料的衝突寫入時，必須有<strong>衝突解決(conflict resolution)</strong>機制。
+      </p>
+
+      <p>
+        <strong>無主複製(leaderless replication)</strong>（如 Amazon Dynamo 論文的設計、Cassandra）
+        完全不設主節點——客戶端把寫入請求發給多個節點，讀取時也同時向多個節點查詢，
+        用 Quorum 投票決定哪個值是「最新的」。後面的 Quorum 數學一節會詳細解釋。
+      </p>
+
+      <!-- ==================== h2 ④ ==================== -->
+      <h2>一致性模型(Consistency):你在保證什麼？</h2>
+
+      <p>
+        「一致性(consistency)」在資料庫和分散式系統領域有<em>非常不同</em>的含義：
+        資料庫 ACID 的 C 是「資料符合商業邏輯約束條件」，
+        而分散式系統的一致性模型指的是「多個節點看到相同資料的程度保證」。這裡我們討論後者。
+      </p>
+
+      <h3>線性化(Linearizability)——最強的一致性保證</h3>
+
+      <p>
+        <strong>線性化(linearizability)</strong>，又稱強一致性(strong consistency)，是最強的保證：
+        <em>系統的行為就像只有一台機器、一份資料的副本</em>。
+        一旦一個寫入完成，任何後續讀取（不管打到哪個節點）都必須返回該寫入的值或更新的值。
+        使用者看不到「時光倒流」——不會讀到比剛才更舊的資料。
+      </p>
+
+      <p>
+        線性化直覺、對開發者友善，但代價昂貴：
+        每次寫入都必須等到多數節點確認，延遲不可避免地增加。
+        etcd、ZooKeeper 都提供線性化保證。
+      </p>
+
+      <h3>最終一致性(Eventual Consistency)</h3>
+
+      <p>
+        在另一個極端，<strong>最終一致性(eventual consistency)</strong> 只保證：
+        <em>如果系統停止接受新的寫入，最終所有節點都會收斂到相同的值</em>。
+        在此之前，不同節點可能返回不同版本的資料。
+        這對於讀取延遲敏感、可接受短暫不一致的場景（如社群媒體的按讚數、購物網站的庫存顯示）很適合。
+      </p>
+
+      <p>
+        介於中間的還有許多模型，例如：
+        <strong>因果一致性(causal consistency)</strong>（有因果關係的操作保證順序）、
+        <strong>單調讀(monotonic read)</strong>（同一個用戶不會看到時光倒流）、
+        <strong>讀你所寫(read-your-writes)</strong>（你自己的寫入立刻可讀到）。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">一致性不是二元選擇</span>
+          <p>
+            一致性是一個<strong>光譜</strong>，從線性化一路降到最終一致。
+            你選擇在光譜哪個位置，取決於你的業務需求：
+            銀行餘額需要線性化（不能讀到過時的餘額），社群媒體的追蹤數可以最終一致。
+            了解你的業務對「陳舊讀取(stale read)」的容忍度，才能選對模型。
+          </p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑤ ==================== -->
+      <h2>CAP 定理:分區時的根本取捨</h2>
+
+      <p>
+        2000 年，Eric Brewer 在 PODC 演講中提出了一個著名的猜想，
+        後來由 Gilbert 和 Lynch 在 2002 年形式化證明，稱為 <strong>CAP 定理</strong>：
+        一個分散式系統在發生網路分區時，不可能同時完全保證下列三個屬性：
+      </p>
+
+      <ul>
+        <li><strong>C（Consistency / 一致性）</strong>：這裡指線性化——每次讀取都返回最新寫入的值</li>
+        <li><strong>A（Availability / 可用性）</strong>：每個請求最終都會收到回應（不是超時），即使某些節點故障</li>
+        <li><strong>P（Partition tolerance / 分區容忍）</strong>：即使網路分區（節點之間無法通訊），系統仍能繼續運作</li>
+      </ul>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">CAP 最常見的誤解：「永遠三選二」</span>
+          <p>
+            「CAP 三選二」這個說法流傳很廣，但它誤導了很多人。正確理解是：
+            <strong>P（分區容忍）幾乎不是選項</strong>——在真實的網路上，分區<em>遲早</em>會發生；
+            說「我不要分區容忍」，等於說「分區發生時我接受系統完全停止服務」。
+            因此，真正的取捨是：<strong>當網路分區發生時</strong>，你要優先保 C 還是 A？
+          </p>
+          <p>
+            <strong>平時（沒有分區）：C 與 A 可以同時兼得</strong>——這是絕大多數時間的狀態。
+            CAP 描述的是<em>異常情況下的取捨</em>，而非常態。
+            Martin Kleppmann 在《Designing Data-Intensive Applications》中對此有非常清晰的批判性分析。
+          </p>
+        </div>
+      </div>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 400" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <rect width="720" height="400" fill="#f8fafb" rx="12"/>
+  <text x="360" y="28" text-anchor="middle" font-size="14" font-weight="700" fill="#1f2328">CAP 定理：分區發生時的取捨</text>
+
+  <!-- Left: Normal operation -->
+  <rect x="20" y="44" width="300" height="170" rx="10" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="170" y="66" text-anchor="middle" font-size="12" font-weight="700" fill="#2f6f6a">平時（無網路分區）</text>
+  <text x="170" y="84" text-anchor="middle" font-size="10" fill="#4a5159">C 與 A 可以同時兼得</text>
+
+  <circle cx="80"  cy="140" r="30" fill="#2f6f6a"/>
+  <text x="80"  y="136" text-anchor="middle" font-size="10" font-weight="700" fill="#fff">節點 A</text>
+  <text x="80"  y="150" text-anchor="middle" font-size="9"  fill="#b8ddd9">v=5</text>
+
+  <circle cx="170" cy="140" r="30" fill="#2f6f6a"/>
+  <text x="170" y="136" text-anchor="middle" font-size="10" font-weight="700" fill="#fff">節點 B</text>
+  <text x="170" y="150" text-anchor="middle" font-size="9"  fill="#b8ddd9">v=5</text>
+
+  <circle cx="260" cy="140" r="30" fill="#2f6f6a"/>
+  <text x="260" y="136" text-anchor="middle" font-size="10" font-weight="700" fill="#fff">節點 C</text>
+  <text x="260" y="150" text-anchor="middle" font-size="9"  fill="#b8ddd9">v=5</text>
+
+  <line x1="110" y1="140" x2="140" y2="140" stroke="#2f6f6a" stroke-width="2"/>
+  <line x1="200" y1="140" x2="230" y2="140" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="170" y="196" text-anchor="middle" font-size="9" fill="#2f6f6a">所有節點同步，讀寫皆正常</text>
+
+  <!-- normal note -->
+  <rect x="20" y="228" width="300" height="54" rx="8" fill="#fff" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="170" y="248" text-anchor="middle" font-size="10" font-weight="700" fill="#1f2328">重要提醒</text>
+  <text x="170" y="264" text-anchor="middle" font-size="9" fill="#4a5159">網路分區是偶發事件，不是常態。</text>
+  <text x="170" y="278" text-anchor="middle" font-size="9" fill="#4a5159">絕大多數時間 C 與 A 都可兼得。</text>
+
+  <!-- Right: Partition -->
+  <rect x="340" y="44" width="360" height="340" rx="10" fill="#fef2f2" stroke="#b4541f" stroke-width="2"/>
+  <text x="520" y="66" text-anchor="middle" font-size="12" font-weight="700" fill="#b4541f">網路分區發生</text>
+  <text x="520" y="84" text-anchor="middle" font-size="10" fill="#4a5159">節點 A 與 B、C 之間的網路中斷</text>
+
+  <circle cx="400" cy="140" r="28" fill="#b4541f"/>
+  <text x="400" y="136" text-anchor="middle" font-size="9" font-weight="700" fill="#fff">節點 A</text>
+  <text x="400" y="150" text-anchor="middle" font-size="8" fill="#fde8dd">v=6(新)</text>
+
+  <line x1="430" y1="110" x2="430" y2="172" stroke="#8a929b" stroke-width="2" stroke-dasharray="5,3"/>
+  <text x="435" y="144" font-size="9" fill="#8a929b">✗</text>
+
+  <circle cx="530" cy="130" r="26" fill="#8a929b"/>
+  <text x="530" y="126" text-anchor="middle" font-size="9" font-weight="700" fill="#fff">節點 B</text>
+  <text x="530" y="140" text-anchor="middle" font-size="8" fill="#e2e8f0">v=5(舊)</text>
+
+  <circle cx="640" cy="130" r="26" fill="#8a929b"/>
+  <text x="640" y="126" text-anchor="middle" font-size="9" font-weight="700" fill="#fff">節點 C</text>
+  <text x="640" y="140" text-anchor="middle" font-size="8" fill="#e2e8f0">v=5(舊)</text>
+  <line x1="556" y1="130" x2="614" y2="130" stroke="#8a929b" stroke-width="1.5"/>
+
+  <!-- CP -->
+  <rect x="348" y="186" width="155" height="88" rx="8" fill="#e3efed" stroke="#2f6f6a" stroke-width="1.5"/>
+  <text x="425" y="205" text-anchor="middle" font-size="11" font-weight="700" fill="#2f6f6a">CP 系統</text>
+  <text x="425" y="221" text-anchor="middle" font-size="9" fill="#4a5159">保一致性</text>
+  <text x="425" y="236" text-anchor="middle" font-size="9" fill="#4a5159">B、C 無法確認同步：</text>
+  <text x="425" y="250" text-anchor="middle" font-size="9" fill="#b4541f">拒絕服務請求</text>
+  <text x="425" y="264" text-anchor="middle" font-size="9" fill="#4a5159">（返回錯誤/超時）</text>
+
+  <!-- AP -->
+  <rect x="528" y="186" width="155" height="88" rx="8" fill="#fff7ed" stroke="#b4541f" stroke-width="1.5"/>
+  <text x="605" y="205" text-anchor="middle" font-size="11" font-weight="700" fill="#b4541f">AP 系統</text>
+  <text x="605" y="221" text-anchor="middle" font-size="9" fill="#4a5159">保可用性</text>
+  <text x="605" y="236" text-anchor="middle" font-size="9" fill="#4a5159">B、C 繼續服務：</text>
+  <text x="605" y="250" text-anchor="middle" font-size="9" fill="#2f6f6a">接受讀寫請求</text>
+  <text x="605" y="264" text-anchor="middle" font-size="9" fill="#4a5159">（可能返回舊值 v=5）</text>
+
+  <!-- Examples -->
+  <rect x="348" y="290" width="335" height="84" rx="8" fill="#f8fafb" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="515" y="308" text-anchor="middle" font-size="10" font-weight="700" fill="#1f2328">實際系統例子</text>
+  <text x="356" y="324" font-size="9" fill="#2f6f6a">● CP：etcd、ZooKeeper、HBase、MongoDB(預設寫入語義)</text>
+  <text x="356" y="340" font-size="9" fill="#b4541f">● AP：Cassandra、CouchDB、DynamoDB(預設)</text>
+  <text x="356" y="356" font-size="9" fill="#4a5159">● 多數 SQL 資料庫：單機時不涉及 P；多資料中心</text>
+  <text x="356" y="368" font-size="9" fill="#4a5159">   同步複製→CP，非同步複製→AP</text>
+</svg>
+        <figcaption>圖 92-1：CAP 定理的正確理解——平時 C 與 A 可兼得；只有網路分區發生時才面臨 CP vs AP 的取捨。CP 系統選擇拒絕服務以保證一致性；AP 系統選擇繼續服務但可能返回陳舊資料。</figcaption>
+      </div>
+
+      <h3>CP 系統 vs AP 系統</h3>
+
+      <p>
+        分區發生時，<strong>CP 系統</strong>（Consistency + Partition tolerance）選擇保一致性：
+        分區另一側的節點如果無法確認資料已同步，就拒絕回應請求（返回錯誤或超時），
+        而不是返回可能過時的資料。etcd 就是典型的 CP 系統——Kubernetes 的控制平面資料儲存在 etcd 裡，
+        如果多數 etcd 節點無法互通，etcd 就不回應，以防止叢集狀態不一致。
+      </p>
+
+      <p>
+        <strong>AP 系統</strong>（Availability + Partition tolerance）選擇保可用性：
+        分區時仍繼續服務請求，接受返回的資料可能是陳舊版本。
+        Cassandra 是著名的 AP 系統——即使節點之間失去聯繫，各節點仍接受讀寫，
+        分區恢復後再用<strong>反熵(anti-entropy)</strong>機制把各節點同步到最終一致。
+      </p>
+
+      <!-- ==================== h2 ⑥ ==================== -->
+      <h2>共識(Consensus):讓多節點對「順序」達成一致</h2>
+
+      <p>
+        想像三個節點都可以接受寫入請求。用戶 A 寫了 <code>x=1</code>，用戶 B 幾乎同時寫了 <code>x=2</code>。
+        這兩個請求可能先到達不同的節點。如果沒有協調機制，三個節點最後可能各自記錄不同的「最終值」——
+        系統進入不一致狀態。
+      </p>
+
+      <p>
+        <strong>共識(consensus)</strong>算法解決這個問題：讓多個節點對「哪個值、哪個順序」達成一致的決定，
+        即使部分節點故障或網路分區。共識是分散式系統中最難、最核心的問題之一。
+      </p>
+
+      <p>
+        著名的共識算法有 Paxos（1989 年由 Leslie Lamport 提出，學術上嚴謹但難以實作）
+        和 <strong>Raft</strong>（2014 年 Diego Ongaro 與 John Ousterhout 提出，設計目標就是「更易理解」）。
+        etcd、CockroachDB、TiKV 都使用 Raft。
+      </p>
+
+      <h3>Raft 的三個核心機制</h3>
+
+      <p><strong>1. Leader 選舉(Leader Election)</strong></p>
+
+      <p>
+        Raft 叢集裡每個節點在任何時刻都是三種角色之一：
+        <strong>Leader（領導者）</strong>、<strong>Follower（跟隨者）</strong>、
+        或 <strong>Candidate（候選者）</strong>。
+      </p>
+
+      <p>
+        正常情況下，只有一個 Leader，它接受所有的寫入請求；Followers 被動接受 Leader 的心跳和日誌條目。
+        Leader 每隔一小段時間會發送<strong>心跳(heartbeat)</strong>給所有 Followers 以維持權威。
+      </p>
+
+      <p>
+        每個 Raft 節點有個<strong>任期號(term)</strong>——一個單調遞增的整數，代表「第幾屆選舉週期」。
+        如果一個 Follower 在<strong>選舉超時(election timeout)</strong>時間內（通常 150–300 ms，
+        每個節點<em>隨機化</em>）沒收到心跳，它會認為 Leader 已故障，
+        把自己的 term +1，轉換為 Candidate，然後發起選舉：
+      </p>
+
+      <ul>
+        <li>向所有其他節點發送 <strong>RequestVote</strong> RPC，帶上自己的 term 和日誌狀態</li>
+        <li>其他節點如果自己的 term 比 Candidate 的 term 小、且尚未投給別人、
+            且對方的日誌至少跟自己一樣新，就投票給它</li>
+        <li>Candidate 若收到<strong>多數派(majority)</strong>的票（超過半數節點），就成為新 Leader</li>
+        <li>若多個 Candidate 同時競選造成分票(split vote)，大家等一個隨機的選舉超時後重新選舉</li>
+      </ul>
+
+      <p>
+        <strong>隨機化的超時</strong>是防止分票的關鍵：概率上，每次只有一個節點最先超時並發起選舉，
+        搶先獲得多數票。
+      </p>
+
+      <p><strong>2. 日誌複製(Log Replication)</strong></p>
+
+      <p>Leader 選出後，所有的寫入都透過 Leader 的<strong>日誌(log)</strong>進行：</p>
+
+      <ol>
+        <li>Client 把寫入請求發給 Leader</li>
+        <li>Leader 把這個命令作為新條目<strong>追加到自己的日誌</strong>（此時尚未提交）</li>
+        <li>Leader 發送 <strong>AppendEntries</strong> RPC 給所有 Followers，請它們也追加這個條目</li>
+        <li>Followers 追加後回覆成功</li>
+        <li>一旦<strong>多數節點</strong>（含 Leader 自己）都成功追加，Leader 把條目標記為<strong>已提交(committed)</strong></li>
+        <li>Leader 把結果回應給 Client，並在下一次 AppendEntries 中通知 Followers 該條目已提交</li>
+      </ol>
+
+      <p>
+        如果一個 Follower 短暫掉線再重連，Leader 會把它缺少的日誌條目補發給它，
+        確保所有節點最終有相同的日誌。
+      </p>
+
+      <p><strong>3. 安全性(Safety)——防止兩個 Leader</strong></p>
+
+      <p>Raft 的選舉規則確保了<strong>任何時刻最多只有一個合法 Leader</strong>：</p>
+      <ul>
+        <li>每個 term 每個節點只投一票，且持久化到磁碟（重啟後也不忘）</li>
+        <li>多數制確保在同一個 term 裡不可能有兩個 Candidate 各自得到多數票（多數集合必有交集）</li>
+        <li>Candidate 只有在自己的日誌「至少跟多數節點一樣新」時才能被選上，確保新 Leader 包含所有已提交的條目</li>
+      </ul>
+
+      <div class="diagram">
+<svg viewBox="0 0 760 470" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <rect width="760" height="470" fill="#f8fafb" rx="12"/>
+  <text x="380" y="28" text-anchor="middle" font-size="14" font-weight="700" fill="#1f2328">Raft 共識算法：Leader 選舉與日誌複製</text>
+
+  <!-- ===== PART 1: Leader election ===== -->
+  <text x="20" y="54" font-size="11" font-weight="700" fill="#8b5cf6">① Leader 選舉</text>
+
+  <circle cx="90" cy="118" r="34" fill="#8b5cf6"/>
+  <text x="90" y="113" text-anchor="middle" font-size="10" font-weight="700" fill="#fff">節點 1</text>
+  <text x="90" y="126" text-anchor="middle" font-size="9"  fill="#ddd6fe">Candidate</text>
+  <text x="90" y="138" text-anchor="middle" font-size="8"  fill="#ddd6fe">term=3</text>
+
+  <circle cx="240" cy="92" r="28" fill="#2f6f6a"/>
+  <text x="240" y="88" text-anchor="middle" font-size="10" font-weight="700" fill="#fff">節點 2</text>
+  <text x="240" y="101" text-anchor="middle" font-size="9"  fill="#b8ddd9">Follower</text>
+  <text x="240" y="112" text-anchor="middle" font-size="8"  fill="#b8ddd9">term=2</text>
+
+  <circle cx="240" cy="160" r="28" fill="#2f6f6a"/>
+  <text x="240" y="156" text-anchor="middle" font-size="10" font-weight="700" fill="#fff">節點 3</text>
+  <text x="240" y="169" text-anchor="middle" font-size="9"  fill="#b8ddd9">Follower</text>
+  <text x="240" y="180" text-anchor="middle" font-size="8"  fill="#b8ddd9">term=2</text>
+
+  <line x1="124" y1="104" x2="212" y2="90" stroke="#8b5cf6" stroke-width="1.5" marker-end="url(#arrR)"/>
+  <text x="168" y="88" text-anchor="middle" font-size="8" fill="#8b5cf6">RequestVote</text>
+  <line x1="124" y1="130" x2="212" y2="154" stroke="#8b5cf6" stroke-width="1.5" marker-end="url(#arrR)"/>
+
+  <line x1="212" y1="96"  x2="128" y2="108" stroke="#2f6f6a" stroke-width="1.5" stroke-dasharray="4,2" marker-end="url(#arrR)"/>
+  <text x="170" y="107" text-anchor="middle" font-size="8" fill="#2f6f6a">VoteGranted</text>
+  <line x1="212" y1="158" x2="128" y2="132" stroke="#2f6f6a" stroke-width="1.5" stroke-dasharray="4,2" marker-end="url(#arrR)"/>
+
+  <text x="90" y="168" text-anchor="middle" font-size="9" fill="#8b5cf6">2/3 票 → 當選！</text>
+
+  <circle cx="90" cy="208" r="34" fill="#b4541f"/>
+  <text x="90" y="203" text-anchor="middle" font-size="10" font-weight="700" fill="#fff">節點 1</text>
+  <text x="90" y="216" text-anchor="middle" font-size="9"  fill="#fde8dd">Leader</text>
+  <text x="90" y="228" text-anchor="middle" font-size="8"  fill="#fde8dd">term=3</text>
+  <text x="18"  y="208" font-size="8" fill="#b4541f">→ 成為 Leader</text>
+
+  <!-- ===== PART 2: Log Replication ===== -->
+  <line x1="340" y1="38" x2="340" y2="460" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="380" y="54" font-size="11" font-weight="700" fill="#b4541f">② Log Replication</text>
+
+  <rect x="358" y="68" width="60" height="30" rx="6" fill="#8b5cf6"/>
+  <text x="388" y="87" text-anchor="middle" font-size="9" font-weight="700" fill="#fff">Client</text>
+
+  <rect x="456" y="64" width="90" height="54" rx="8" fill="#b4541f"/>
+  <text x="501" y="84"  text-anchor="middle" font-size="10" font-weight="700" fill="#fff">Leader</text>
+  <text x="501" y="98"  text-anchor="middle" font-size="8"  fill="#fde8dd">日誌: [1,2,3,4]</text>
+  <text x="501" y="110" text-anchor="middle" font-size="8"  fill="#fde8dd">新條目 5 等待提交</text>
+
+  <line x1="418" y1="83" x2="456" y2="83" stroke="#8b5cf6" stroke-width="1.5" marker-end="url(#arrR)"/>
+  <text x="437" y="77" text-anchor="middle" font-size="8" fill="#8b5cf6">x=5 寫入</text>
+
+  <rect x="456" y="154" width="88" height="46" rx="8" fill="#2f6f6a"/>
+  <text x="500" y="173" text-anchor="middle" font-size="10" font-weight="700" fill="#fff">Follower A</text>
+  <text x="500" y="188" text-anchor="middle" font-size="8"  fill="#b8ddd9">日誌: [1,2,3,4]</text>
+
+  <rect x="564" y="154" width="88" height="46" rx="8" fill="#2f6f6a"/>
+  <text x="608" y="173" text-anchor="middle" font-size="10" font-weight="700" fill="#fff">Follower B</text>
+  <text x="608" y="188" text-anchor="middle" font-size="8"  fill="#b8ddd9">日誌: [1,2,3,4]</text>
+
+  <rect x="664" y="154" width="80" height="46" rx="8" fill="#8a929b"/>
+  <text x="704" y="173" text-anchor="middle" font-size="9"  font-weight="700" fill="#fff">Follower C</text>
+  <text x="704" y="188" text-anchor="middle" font-size="8"  fill="#e2e8f0">掉線中</text>
+
+  <line x1="500" y1="118" x2="500" y2="154" stroke="#b4541f" stroke-width="1.5" marker-end="url(#arrR)"/>
+  <text x="516" y="138" font-size="8" fill="#b4541f">AppendEntries</text>
+  <line x1="546" y1="104" x2="600" y2="154" stroke="#b4541f" stroke-width="1.5" marker-end="url(#arrR)"/>
+
+  <text x="356" y="224" font-size="9" fill="#1f2328">A、B 確認 → 多數達成 → 提交條目 5</text>
+  <text x="356" y="240" font-size="9" fill="#1f2328">C 掉線不影響進度（多數決，3 節點只需 2 確認）</text>
+
+  <rect x="356" y="256" width="388" height="52" rx="8" fill="#e3efed" stroke="#2f6f6a" stroke-width="1.5"/>
+  <text x="550" y="274" text-anchor="middle" font-size="10" font-weight="700" fill="#2f6f6a">已提交(committed)狀態</text>
+  <text x="364" y="292" font-size="9" fill="#2f6f6a">Leader: [1‥4,5✓]   Follower A: [1‥4,5✓]   Follower B: [1‥4,5✓]</text>
+  <text x="364" y="306" font-size="8" fill="#8a929b">Follower C 重連後 Leader 補發條目 5，最終達到一致</text>
+
+  <!-- Term table -->
+  <rect x="20" y="308" width="300" height="112" rx="8" fill="#fff" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="170" y="326" text-anchor="middle" font-size="10" font-weight="700" fill="#1f2328">任期(Term)的作用</text>
+  <text x="28" y="344" font-size="9" fill="#4a5159">● 每次選舉 term 遞增 1（單調遞增）</text>
+  <text x="28" y="360" font-size="9" fill="#4a5159">● 收到更高 term 的訊息 → 立刻轉為 Follower</text>
+  <text x="28" y="376" font-size="9" fill="#4a5159">● 收到舊 term 的訊息 → 忽略（過時 Leader 的指令）</text>
+  <text x="28" y="392" font-size="9" fill="#4a5159">● Term 是 Raft 的邏輯時鐘，防止殭屍 Leader 干擾</text>
+  <text x="28" y="408" font-size="9" fill="#4a5159">● 每個節點每個 term 只投一票（持久化於磁碟）</text>
+
+  <!-- Quorum math -->
+  <rect x="356" y="326" width="388" height="108" rx="8" fill="#fff7ed" stroke="#b4541f" stroke-width="1"/>
+  <text x="550" y="344" text-anchor="middle" font-size="10" font-weight="700" fill="#b4541f">多數派(Majority/Quorum)的數學</text>
+  <text x="364" y="362" font-size="9" fill="#4a5159">N 個節點，多數 = ⌊N/2⌋ + 1（才能避免平票）</text>
+  <text x="364" y="378" font-size="9" fill="#4a5159">N=3 → 多數=2，可容忍 1 個故障</text>
+  <text x="364" y="394" font-size="9" fill="#4a5159">N=5 → 多數=3，可容忍 2 個故障</text>
+  <text x="364" y="410" font-size="9" fill="#4a5159">任意兩個多數集合必有共同節點 → 同一 term 不可能</text>
+  <text x="364" y="424" font-size="9" fill="#4a5159">有兩個 Candidate 各自得到多數票（腦裂不可能發生）</text>
+
+  <defs>
+    <marker id="arrR" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#2f6f6a"/>
+    </marker>
+  </defs>
+</svg>
+        <figcaption>圖 92-2：Raft 算法。左側：節點 1 選舉超時後升為 Candidate，term+1 並發出 RequestVote，取得多數票後成為 Leader。右側：Leader 把新日誌條目透過 AppendEntries 複製到 Follower，多數確認後提交；掉線的節點重連後補回缺失條目。</figcaption>
+      </div>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">Raft 的核心保證</span>
+          <p>
+            一個條目只有在多數節點都複製了它之後，Leader 才會提交——
+            這確保了即使 Leader 之後故障，新選出的 Leader 也一定包含這個條目。
+            任何時刻最多只有一個 Leader 在一個 term 內有效。
+            隨機化超時讓分票情況快速自行消解，不需要人工介入。
+          </p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑦ ==================== -->
+      <h2>Quorum 讀寫:W + R &gt; N</h2>
+
+      <p>
+        在無主複製（如 Cassandra、DynamoDB）或需要靈活調整一致性層級的場景中，
+        <strong>Quorum 讀寫</strong>是一個關鍵機制。設系統有 N 個複本：
+      </p>
+
+      <ul>
+        <li><strong>W（寫入 Quorum）</strong>：一次寫入操作需要至少 W 個節點確認才算成功</li>
+        <li><strong>R（讀取 Quorum）</strong>：一次讀取操作需要向至少 R 個節點查詢，取最新版本</li>
+      </ul>
+
+      <p>
+        當 <strong>W + R &gt; N</strong> 時，寫入集合與讀取集合必然有重疊（至少 1 個共同節點）——
+        這個共同節點既確認了最新寫入，又參與了讀取，所以讀取一定能拿到最新值（假設無並發衝突）。
+      </p>
+
+      <p>以 N=3 為例，常見設定：</p>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>W</th><th>R</th><th>W+R</th><th>特性</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>3</td><td>1</td><td>4 &gt; 3</td>
+              <td>寫入強一致（所有節點確認），讀取最快（任一節點）</td>
+            </tr>
+            <tr>
+              <td>2</td><td>2</td><td>4 &gt; 3</td>
+              <td>平衡：容忍 1 個節點故障，讀寫都要多數確認</td>
+            </tr>
+            <tr>
+              <td>1</td><td>3</td><td>4 &gt; 3</td>
+              <td>寫入最快（任一節點），讀取強一致（所有節點確認）</td>
+            </tr>
+            <tr>
+              <td>1</td><td>1</td><td>2 ≤ 3</td>
+              <td>最高效能，最終一致——讀可能拿到舊值</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <pre><code class="language-python"># 簡化示範：Quorum 讀寫的直覺（虛擬碼）
+# N=3 個複本，設定 W=2，R=2
+
+def quorum_write(key, value, replicas, W):
+    """向所有複本發送寫入，等待 W 個確認"""
+    acks = 0
+    version = get_next_version()  # 單調遞增的版本號
+    for replica in replicas:
+        if replica.write(key, value, version):
+            acks += 1
+        if acks &gt;= W:
+            return True   # Quorum 達成，寫入成功
+    return False          # 確認數不足 W，寫入失敗
+
+def quorum_read(key, replicas, R):
+    """向所有複本發送讀取，取版本號最大的值"""
+    responses = []
+    for replica in replicas:
+        v = replica.read(key)
+        if v is not None:
+            responses.append(v)
+        if len(responses) &gt;= R:
+            break
+    if len(responses) &lt; R:
+        raise Exception("讀取 Quorum 不足")
+    # 取版本號最新的回應（向量時鐘或單調版本）
+    return max(responses, key=lambda r: r.version).value</code></pre>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">Quorum 與線性化的差距</span>
+          <p>
+            W+R &gt; N 的 Quorum 讀寫<em>接近</em>強一致，但在某些邊角情況（如寫入進行中、
+            sloppy quorum、並發寫入衝突）仍可能讀到陳舊值。
+            真正的線性化需要額外的「讀取修復(read repair)」或更嚴格的協議。
+            Cassandra 的 QUORUM 一致性層級提供的是高可靠的最終一致，而非嚴格線性化。
+          </p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑧ ==================== -->
+      <h2>分片(Sharding / Partitioning):水平擴展寫入</h2>
+
+      <p>
+        複製解決了讀取擴展與容錯，但寫入仍然是瓶頸：所有寫入都要經過 Leader。
+        當資料量超過單台機器的存儲容量、或寫入吞吐量超過單台機器的處理能力，
+        就需要<strong>分片(sharding / partitioning)</strong>：把資料分散到多台機器上，
+        每台機器只負責資料的一個子集。
+      </p>
+
+      <h3>分片策略</h3>
+
+      <p><strong>範圍分片(Range Partitioning)</strong>：按照鍵的範圍分片。例如使用者 ID 1–1000 在分片 1，
+        1001–2000 在分片 2，以此類推。好處是範圍查詢高效（同一個範圍的資料在同一台機器上）；
+        缺點是可能產生<strong>熱點(hot spot)</strong>——如果所有請求都集中在某個範圍，
+        對應分片就會過載。
+      </p>
+
+      <p><strong>雜湊分片(Hash Partitioning)</strong>：把鍵先經過雜湊函數，再對分片數取模，
+        決定存放在哪個分片。好處是均勻分散負載；缺點是範圍查詢很慢（需要查所有分片）。
+      </p>
+
+      <h3>分片鍵的選擇</h3>
+
+      <p>分片鍵(shard key / partition key)的選擇至關重要：</p>
+
+      <ul>
+        <li><strong>高基數(high cardinality)</strong>：分片鍵的不同值要夠多，才能讓資料均勻分散</li>
+        <li><strong>避免熱點</strong>：不要用時間戳記作為分片鍵（所有最新寫入集中在同一分片），
+            也不要用單調遞增的計數器（所有寫入打到同一末尾分片）</li>
+        <li><strong>查詢相關性</strong>：常見查詢涉及的欄位適合做分片鍵，以減少跨分片查詢</li>
+      </ul>
+
+      <h3>再平衡與跨分片操作</h3>
+
+      <p>
+        當叢集加入新節點或節點故障時，資料需要<strong>再平衡(rebalancing)</strong>——
+        把部分分片遷移到新節點。再平衡期間，系統要繼續正常服務，
+        需要細心設計遷移流程（先複製再切換路由，再刪除舊複本）。
+      </p>
+
+      <p>
+        跨分片的操作（如跨兩個帳戶的轉帳）在分散式系統中是非常困難的問題——
+        需要<strong>分散式交易(distributed transactions)</strong>，如兩階段提交(2PC)或 Saga 模式。
+        設計分片策略時應盡量讓常見操作在單一分片內完成，減少跨分片協調。
+      </p>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">熱點問題的現實案例</span>
+          <p>
+            想像一個社群媒體平台用使用者 ID 作為分片鍵。當某位名人（百萬粉絲）發文，
+            所有讀取請求（按讚、轉推、查看）都打到同一個分片——這台機器瞬間過載，
+            而其他分片閒著。解法包括：在名人的鍵前面加隨機前綴（讀取時查多個前綴再合并）、
+            針對熱門資料做額外的快取層（如 Redis），或在應用層特判高流量帳號。
+          </p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑨ ==================== -->
+      <h2>高可用架構實務:消除單點故障與可觀測性</h2>
+
+      <p>
+        理論學完了，來看實際系統設計中的高可用(High Availability, HA)原則。
+        目標是讓系統在部分故障的情況下仍能正常服務——達到 99.9%（每年停機 &lt; 9 小時）、
+        99.99%（每年停機 &lt; 53 分鐘）乃至更高的可用性。
+      </p>
+
+      <h3>消除單點故障(Single Point of Failure, SPOF)</h3>
+
+      <p>
+        <strong>單點故障</strong>是指系統中若某個元件故障，整個服務就停止的元件。
+        高可用設計的首要原則是消除 SPOF：讓每個關鍵元件都有冗餘副本。
+      </p>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>潛在 SPOF</th><th>高可用方案</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>單一資料庫主節點</td>
+              <td>主從複製 + 自動故障轉移(auto-failover)；或使用 Raft 共識叢集</td>
+            </tr>
+            <tr>
+              <td>單一負載均衡器</td>
+              <td>主備 LB + VIP(虛擬 IP)漂移；雲端的 ALB/NLB 本身已冗餘</td>
+            </tr>
+            <tr>
+              <td>單一資料中心</td>
+              <td>多資料中心部署(multi-region)；DNS 地理路由</td>
+            </tr>
+            <tr>
+              <td>單一 k8s 節點</td>
+              <td>Deployment 多副本 + 反親和性(anti-affinity)分散到不同節點</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>健康檢查與故障轉移</h3>
+
+      <p>
+        冗餘副本只有在系統能<em>偵測到故障</em>並<em>自動切換</em>的情況下才真正有用。
+        在<a href="96-kubernetes.html">第 90 章</a>中，你看到 k8s 的 liveness / readiness probe——
+        這是應用層健康檢查的範例。高可用架構中的健康檢查需要多層：
+      </p>
+
+      <ul>
+        <li><strong>應用層 health endpoint</strong>：<code>/health</code> 或 <code>/ready</code> HTTP 端點，
+            回應服務是否能正常處理請求（含依賴的資料庫、快取連線狀態）</li>
+        <li><strong>基礎設施層心跳</strong>：Load balancer 定期 TCP/HTTP 探測後端節點，
+            失敗時從 upstream pool 移除</li>
+        <li><strong>叢集層</strong>：Raft/Paxos leader 的心跳機制，超時後觸發選舉</li>
+      </ul>
+
+      <p>
+        <strong>故障轉移(failover)</strong>分為手動和自動。手動故障轉移需要人工介入，
+        恢復時間(RTO)可能達小時；自動故障轉移在幾秒到幾十秒內完成，是現代高可用系統的標準。
+      </p>
+
+      <h3>可觀測性三支柱(Three Pillars of Observability)</h3>
+
+      <p>
+        分散式系統出問題時，最大的挑戰是「<em>你怎麼知道哪裡出問題了？</em>」。
+        可觀測性(observability)讓你能從外部輸出推斷系統內部狀態：
+      </p>
+
+      <ul>
+        <li>
+          <strong>指標(Metrics)</strong>：數值型時序資料——請求每秒數(QPS)、錯誤率、延遲百分位數(p50/p99)、
+          CPU/記憶體使用率。Prometheus + Grafana 是常見開源方案。指標適合<em>趨勢分析與告警</em>。
+        </li>
+        <li>
+          <strong>日誌(Logs)</strong>：結構化或非結構化的事件記錄——每個請求的詳細資訊、錯誤訊息、
+          應用輸出。ELK Stack（Elasticsearch + Logstash + Kibana）或雲端的 CloudWatch Logs。
+          日誌適合<em>事後除錯</em>，但資料量大，需要索引才能快速查詢。
+        </li>
+        <li>
+          <strong>追蹤(Traces)</strong>：一個請求橫跨多個服務的完整路徑——每個服務間呼叫的延遲、
+          錯誤位置。OpenTelemetry 是業界標準的追蹤格式；Jaeger、Zipkin 是常見後端。
+          追蹤是分散式系統除錯的「X 光片」——一眼看出請求在哪個服務上慢下來。
+        </li>
+      </ul>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">告警要對症下藥</span>
+          <p>
+            好的告警基於<strong>症狀</strong>（使用者體驗），而非原因（系統指標）。
+            「錯誤率 &gt; 5%」是好告警（使用者受影響了）；
+            「CPU &gt; 80%」通常是差告警（CPU 高不一定影響用戶）。
+            SRE 實踐中的 SLO(Service Level Objective)與 Error Budget 就是把這個原則系統化。
+          </p>
+        </div>
+      </div>
+
+      <h3>服務網格(Service Mesh)概觀</h3>
+
+      <p>
+        在<a href="96-kubernetes.html">第 90 章</a> sidecar 模式中你已看到 Envoy proxy 的影子。
+        <strong>服務網格(service mesh)</strong>（如 Istio、Linkerd）把所有服務間通訊的橫切面關注點——
+        mTLS 加密、熔斷(circuit breaking)、重試(retry)、限流(rate limiting)、追蹤——
+        從應用程式碼中移出，由 sidecar proxy 統一處理。
+        這讓微服務架構的可靠性功能可以在<em>不修改應用程式碼</em>的情況下集中配置。
+        服務網格的代價是額外的延遲（每個請求多了兩個代理跳躍）和運維複雜度——
+        不是所有系統都需要，先從簡單的 k8s NetworkPolicy + 應用層重試開始，按需再引入。
+      </p>
+
+      <!-- ==================== 練習 ==================== -->
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 92.1 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>
+            解釋 W + R &gt; N 的 Quorum 為何能確保讀到最新值。
+            以 N=5、W=3、R=3 為例，說明：
+            (a) 一次寫入確認後，「已確認的節點集合」有幾個節點？
+            (b) 一次讀取查詢了幾個節點？
+            (c) 為什麼這兩個集合一定有交集？
+            (d) 若 W=2、R=2（W+R=4 ≤ 5），是否還能保證？
+          </p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>
+                (a) W=3：至少 3 個節點確認了最新值 v_new。
+              </p>
+              <p>
+                (b) R=3：讀取時向 5 個節點中的至少 3 個查詢。
+              </p>
+              <p>
+                (c) 鴿巢原理：5 個節點中，已寫入集合 |W|=3，讀取集合 |R|=3。
+                |W| + |R| = 6 &gt; 5 = N，
+                因此 |W ∩ R| ≥ 1——兩個集合至少有一個共同節點。
+                這個共同節點既確認了 v_new，又參與了讀取，讀取時能看到 v_new。
+                取所有回應中版本號最大的值，即是最新值。
+              </p>
+              <p>
+                (d) W=2、R=2，W+R=4 ≤ 5，不能保證。
+                反例：節點 1、2 確認了 v_new，讀取查詢了節點 3、4——
+                完全沒有交集，兩個節點都只有舊值 v_old。
+                讀取返回 v_old，即使 v_new 已被成功寫入。
+              </p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 92.2 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>
+            你在使用一個 CP 系統（如 etcd）。服務運行時，資料中心 A 與資料中心 B 之間的網路發生了分區，
+            資料中心 B 的節點無法與 A 聯繫。
+            (a) CP 系統此時會怎麼處理對資料中心 B 節點發出的讀寫請求？
+            (b) 為什麼 CP 系統選擇這樣做？從一致性的角度解釋。
+            (c) 相較之下，AP 系統（如 Cassandra）會如何處理？代價是什麼？
+          </p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>
+                (a) CP 系統：資料中心 B 的節點如果無法組成多數派（假設叢集多數在 A），
+                就會<strong>拒絕服務</strong>所有寫入請求，並可能也拒絕讀取（以防止讀到過時資料）。
+                用戶端會收到錯誤或超時，而非過時的資料。
+              </p>
+              <p>
+                (b) 原因：若 B 在分區期間接受了寫入，而 A 也接受了衝突的寫入，
+                分區恢復後兩邊資料就衝突了——系統進入不一致狀態，很難自動解決。
+                CP 系統寧可在分區期間<em>犧牲可用性</em>（拒絕服務），也要防止資料不一致。
+              </p>
+              <p>
+                (c) AP 系統（如 Cassandra）：分區期間，B 節點仍繼續接受讀寫，對用戶完全可用。
+                代價是：B 可能讀到分區前的舊值，或接受與 A 衝突的寫入。
+                分區恢復後系統用反熵機制協調衝突，最終達到一致——
+                但「最終」之前兩邊可能看到不同的資料。適合能容忍短暫不一致、但不能接受服務中斷的場景。
+              </p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 92.3 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>
+            在 Raft 共識算法中，如何防止出現兩個 Leader（「腦裂 / split brain」問題）？
+            請從以下三個角度解釋：
+            (a) 每個 term 的投票機制；
+            (b) 多數派(majority)的數學保證；
+            (c) 若一個舊 Leader 在網路恢復後發現自己的 term 已過時，會發生什麼？
+          </p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>
+                (a) 每個節點在同一個 term 內只能投票給<strong>一個</strong> Candidate。
+                Raft 節點把投票記錄持久化到磁碟，即使重啟也不丟失。
+                因此，在同一個 term 中，不可能有兩個 Candidate 各自收到同一個節點的票。
+              </p>
+              <p>
+                (b) 多數派保證：N 個節點中，多數 = ⌊N/2⌋ + 1。
+                假設有兩個 Candidate X 和 Y 同時在 term T 競選：
+                X 需要 ≥ ⌊N/2⌋ + 1 張票，Y 也需要 ≥ ⌊N/2⌋ + 1 張票。
+                兩者所需票數之和 &gt; N，但總票數只有 N 張且每個節點只投一票——
+                所以 X 和 Y 不可能同時得到多數票。多數派天然互斥。
+              </p>
+              <p>
+                (c) 網路恢復後，舊 Leader 收到其他節點的訊息，發現訊息中的 term 比自己高。
+                Raft 規則：收到更高 term 的訊息，立刻轉換為 Follower，並更新自己的 term。
+                舊 Leader 放棄 Leader 身份，開始同步新 Leader 的日誌。
+                分區期間它所接受但未在多數節點上複製的條目最終會被新 Leader 的日誌覆蓋。
+              </p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑩ 把這一章串起來 ==================== -->
+      <h2>把這一章串起來</h2>
+
+      <p>
+        這一章是第二一部的壓軸，也是本書「從 NAND 到作業系統到容器到叢集到分散式」大旅程的終點。
+        讓我們把脈絡梳理清楚：
+      </p>
+
+      <ul>
+        <li><strong>為何分散式難</strong>：部分失效讓「機器是否活著」成為不可知問題；
+            無全域時鐘讓事件順序無法用牆鐘確定；網路的不可靠性讓「恰好一次」語義極難實現。
+            Peter Deutsch 的「八個謬誤」是每個分散式系統工程師的第一課。</li>
+        <li><strong>複製</strong>帶來容錯與讀取擴展，但也帶來複製延遲與一致性挑戰——
+            同步複製強一致但延遲高，非同步複製延遲低但可能丟資料。</li>
+        <li><strong>一致性模型</strong>是一個光譜：線性化最強但最昂貴，最終一致性最快但讀可能陳舊。
+            選什麼取決於業務需求，沒有萬能選項。</li>
+        <li><strong>CAP 定理</strong>的正確理解：<em>不是永遠三選二</em>——
+            分區是偶發的，平時 C 與 A 可兼得；分區發生時，CP 系統保一致性（拒服務），
+            AP 系統保可用性（接受陳舊值）。這是設計選擇，沒有對錯，只有取捨。</li>
+        <li><strong>Raft 共識</strong>：隨機超時的 Leader 選舉（多數投票、任期機制）確保任何時刻最多一個 Leader；
+            多數確認的 Log Replication 確保已提交條目永不丟失。
+            這就是 etcd——<a href="96-kubernetes.html">Kubernetes</a> 大腦的記憶體——底層的原理。</li>
+        <li><strong>分片</strong>讓寫入也能水平擴展，代價是跨分片操作複雜、分片鍵選錯會有熱點。</li>
+        <li><strong>高可用實務</strong>：消除 SPOF、多層健康檢查與自動故障轉移、可觀測性三支柱（指標/日誌/追蹤）——
+            這些是讓紙上架構變成真正能撐 99.99% 的工程紀律。</li>
+      </ul>
+
+      <p>
+        分散式系統是電腦科學裡最需要「知道自己不知道什麼」的領域。
+        每個設計決策都是取捨，每個「簡化」都可能在邊緣情況下出現意外。
+        <a href="11-software-architecture.html">§11 軟體架構</a>中說的「讓系統能被推理」，
+        在分散式系統裡需要更深的謙遜——永遠假設事情會出錯，然後設計讓出錯的代價可控。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">延伸閱讀</span>
+          <p>
+            <strong>《Designing Data-Intensive Applications》</strong>（Martin Kleppmann，O'Reilly，2017）：
+            業界公認的分散式系統聖經，深入淺出地覆蓋複製、分片、交易、共識；
+            對 CAP 的批判性分析尤其精彩。
+          </p>
+          <p>
+            <strong>theByteBook《深入超高可用架構原理與實踐》</strong>：
+            中文社群的高品質開源書，覆蓋網路協定到 Raft、服務網格的完整路徑，
+            適合中文讀者深入理解基礎設施原理。
+            線上版：<a href="https://www.thebyte.com.cn/" target="_blank" rel="noopener">thebyte.com.cn</a>
+          </p>
+          <p>
+            <strong>Raft 視覺化</strong>：<a href="https://raft.github.io/" target="_blank" rel="noopener">raft.github.io</a>
+            有互動式動畫，能直觀地觀察 Leader 選舉與 Log Replication 的過程，
+            強烈推薦在讀完本章後搭配操作。
+          </p>
+        </div>
+      </div>
+</article>
+  </main>
+</div>
+<script src="../assets/book.js"></script>
+</body>
+</html>

@@ -1,0 +1,1064 @@
+<!--meta
+title: GPU 著色器實作(GLSL)
+description: 從 GLSL 型別、頂點/片段/compute shader 到 MVP 變換、Phong/PBR 光照、紋理、shadow mapping 與延遲著色——動手在 GPU 上寫出能跑的著色器程式。
+-->
+
+      <div class="eyebrow">第二五部 · 進階電腦圖學</div>
+      <h1>GPU 著色器實作(GLSL)</h1>
+      <p class="subtitle">同一時刻，GPU 在幾千個核心上同時為每一個像素執行你寫的函式——這不是科幻小說，而是你在遊戲裡看到光影閃爍的底層真相。這一章，我們從 GLSL 語法出發，一路寫到能貼進瀏覽器的即時光照著色器。</p>
+      <div class="byline">
+        <span class="tag">第 111 章</span>
+        <span>閱讀時間 ≈ 65 分鐘</span>
+        <span>難度:★★★★☆</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>為什麼 GPU 能同時畫百萬像素:SIMT 平行模型與可程式化管線的誕生</li>
+          <li>GLSL 的型別系統(<code>vec2/vec3/vec4</code>、<code>mat4</code>、<code>sampler2D</code>)與限定詞(<code>in</code>/<code>out</code>/<code>uniform</code>)</li>
+          <li>頂點著色器如何在 GPU 上完成 MVP 矩陣變換,並把資料傳遞到片段著色器</li>
+          <li>片段著色器如何逐像素實作 Phong 光照與 PBR(基於物理的渲染)的核心思路</li>
+          <li>紋理採樣、UV 座標與 mipmap 的工作方式</li>
+          <li>shadow mapping 的兩趟渲染、延遲著色(deferred shading)與後處理(post-processing)的架構</li>
+          <li>compute shader 是什麼,以及 WebGL 2 / WebGPU 在瀏覽器端的生態</li>
+          <li>一個能直接貼進瀏覽器的完整 WebGL GLSL 光照範例</li>
+        </ul>
+      </div>
+
+      <!-- ===== h2 ① ===== -->
+      <h2>CPU 畫一像素 vs GPU 同時畫百萬像素</h2>
+
+      <p>
+        想像你被要求把一張 1920×1080 的畫面填上顏色,每個像素都要執行一段光照計算——大約兩百萬次。
+        如果用 CPU,你的 8 核處理器一次只能跑 8 個執行緒;就算每個執行緒每奈秒完成一次計算,
+        填完一幀也要數十毫秒,遠遠達不到遊戲要求的每秒 60 幀(每幀 16.7 ms)。
+      </p>
+      <p>
+        GPU 用一個截然不同的思路解決這個問題。一塊現代 GPU 可能有 3000–20000 個<strong>著色器核心(shader core)</strong>,
+        每個核心都能獨立執行一小段程式。當你渲染 1080p 畫面時,GPU 把這兩百萬個像素
+        分配給幾千個核心<strong>同時</strong>處理——每個核心負責幾百個像素,並行執行同一段著色器程式碼,
+        只有輸入資料(像素座標、插值後的頂點屬性)不同。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">SIMT 模型</span>
+          <p>GPU 採用 <strong>SIMT(Single Instruction, Multiple Threads)</strong> 架構:所有執行緒執行<em>同一段程式</em>,
+          但對<em>不同的資料</em>操作。你寫的著色器函式就是那段「每個執行緒都跑一遍」的程式——GPU 負責決定有多少執行緒同時跑它。</p>
+        </div>
+      </div>
+
+      <p>
+        早期 GPU 的管線是<strong>固定功能(fixed-function)</strong>的:你能設定參數(光源位置、材質顏色),
+        但光照計算的邏輯是寫死在硬體裡的。2001 年前後,GPU 開始支援<strong>可程式化著色器(programmable shader)</strong>,
+        讓開發者自己決定每個頂點和每個像素「該怎麼計算」。這扇門一打開,整個即時繪圖的世界就爆炸了:
+        卡通渲染、水彩效果、物理正確的光照、程序生成的地形——全都變成可能。
+      </p>
+
+      <div class="callout history">
+        <div class="ico">📜</div>
+        <div class="body">
+          <span class="c-title">著色器語言的演進</span>
+          <p>2001 年 NVIDIA 推出 GeForce 3,首次支援可程式化頂點著色器。2004 年 OpenGL 2.0 引入 GLSL(OpenGL Shading Language),
+          把著色器語言標準化為類 C 語法。同期 DirectX 9 引入 HLSL,Cg(NVIDIA)也短暫流行。
+          今天 WebGL 使用 GLSL ES(嵌入式版本),WebGPU 則改用 WGSL 這套新語言。</p>
+        </div>
+      </div>
+
+      <!-- ===== h2 ② ===== -->
+      <h2>圖形管線全貌回顧:哪些階段可程式化?</h2>
+
+      <p>
+        在<a href="39-computer-graphics.html">第 39 章</a>我們學過圖形管線的原理——從 3D 座標到螢幕像素的整個流程。
+        這裡快速重溫一遍,重點標出哪些階段是「你可以用 GLSL 控制的」,哪些是 GPU 硬體自動完成的。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 740 200" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="arr" markerWidth="9" markerHeight="9" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/>
+    </marker>
+  </defs>
+  <!-- Stage boxes -->
+  <!-- 1 vertex shader -->
+  <rect x="10" y="60" width="110" height="60" rx="8" fill="#2f6f6a"/>
+  <text x="65" y="84" font-size="12" font-weight="700" fill="#fff" text-anchor="middle">頂點著色器</text>
+  <text x="65" y="100" font-size="10" fill="#cfe6e2" text-anchor="middle">Vertex Shader</text>
+  <text x="65" y="114" font-size="9" fill="#a5d4ce" text-anchor="middle">🖊 可程式化</text>
+
+  <!-- arrow -->
+  <line x1="120" y1="90" x2="155" y2="90" stroke="#8a929b" stroke-width="1.8" marker-end="url(#arr)"/>
+
+  <!-- 2 primitive assembly -->
+  <rect x="157" y="60" width="110" height="60" rx="8" fill="#8a929b"/>
+  <text x="212" y="84" font-size="11" font-weight="700" fill="#fff" text-anchor="middle">圖元組裝</text>
+  <text x="212" y="100" font-size="10" fill="#dde2e7" text-anchor="middle">Primitive Asm</text>
+  <text x="212" y="114" font-size="9" fill="#bfc5cc" text-anchor="middle">硬體固定</text>
+
+  <!-- arrow -->
+  <line x1="267" y1="90" x2="302" y2="90" stroke="#8a929b" stroke-width="1.8" marker-end="url(#arr)"/>
+
+  <!-- 3 rasterization -->
+  <rect x="304" y="60" width="110" height="60" rx="8" fill="#8a929b"/>
+  <text x="359" y="84" font-size="11" font-weight="700" fill="#fff" text-anchor="middle">光柵化</text>
+  <text x="359" y="100" font-size="10" fill="#dde2e7" text-anchor="middle">Rasterization</text>
+  <text x="359" y="114" font-size="9" fill="#bfc5cc" text-anchor="middle">硬體固定</text>
+
+  <!-- arrow -->
+  <line x1="414" y1="90" x2="449" y2="90" stroke="#8a929b" stroke-width="1.8" marker-end="url(#arr)"/>
+
+  <!-- 4 fragment shader -->
+  <rect x="451" y="60" width="110" height="60" rx="8" fill="#b4541f"/>
+  <text x="506" y="84" font-size="12" font-weight="700" fill="#fff" text-anchor="middle">片段著色器</text>
+  <text x="506" y="100" font-size="10" fill="#f6e7dd" text-anchor="middle">Fragment Shader</text>
+  <text x="506" y="114" font-size="9" fill="#f0cebb" text-anchor="middle">🖊 可程式化</text>
+
+  <!-- arrow -->
+  <line x1="561" y1="90" x2="596" y2="90" stroke="#8a929b" stroke-width="1.8" marker-end="url(#arr)"/>
+
+  <!-- 5 output merger -->
+  <rect x="598" y="60" width="120" height="60" rx="8" fill="#8a929b"/>
+  <text x="658" y="84" font-size="11" font-weight="700" fill="#fff" text-anchor="middle">輸出合併</text>
+  <text x="658" y="100" font-size="10" fill="#dde2e7" text-anchor="middle">Output Merge</text>
+  <text x="658" y="114" font-size="9" fill="#bfc5cc" text-anchor="middle">深度/混色</text>
+
+  <!-- top labels -->
+  <text x="65" y="50" font-size="10" fill="#2f6f6a" text-anchor="middle" font-weight="600">① 頂點</text>
+  <text x="212" y="50" font-size="10" fill="#8a929b" text-anchor="middle">② 圖元</text>
+  <text x="359" y="50" font-size="10" fill="#8a929b" text-anchor="middle">③ 光柵化</text>
+  <text x="506" y="50" font-size="10" fill="#b4541f" text-anchor="middle" font-weight="600">④ 片段</text>
+  <text x="658" y="50" font-size="10" fill="#8a929b" text-anchor="middle">⑤ 輸出</text>
+
+  <!-- bottom data flow -->
+  <text x="370" y="165" font-size="11" fill="#4a5159" text-anchor="middle">CPU 提供:頂點緩衝(VBO)、uniform 變數、紋理</text>
+  <text x="370" y="182" font-size="10" fill="#8a929b" text-anchor="middle">GPU 輸出:framebuffer(顯示到螢幕)</text>
+</svg>
+        <figcaption>圖 111-1:OpenGL/WebGL 圖形管線。綠色(頂點著色器)與磚紅(片段著色器)是可用 GLSL 程式化的階段;灰色階段由 GPU 硬體自動執行。</figcaption>
+      </div>
+
+      <p>
+        用一句話描述這條管線:CPU 把頂點資料塞給 GPU;
+        <strong>頂點著色器</strong>把每個頂點從 3D 模型空間變換到螢幕空間;
+        <strong>光柵化</strong>把三角形填成像素格子;
+        <strong>片段著色器</strong>為每個像素決定顏色;
+        最後<strong>輸出合併</strong>做深度測試(z-buffer)與透明度混合,把結果寫入 framebuffer。
+      </p>
+
+      <p>
+        在現代 OpenGL(3.3+)與 WebGL 2 中,頂點著色器和片段著色器是<strong>必填</strong>的;
+        幾何著色器(geometry shader)與曲面細分著色器(tessellation shader)是選填的進階功能;
+        compute shader 則完全脫離這條管線、作為獨立的 GPGPU 計算單元——我們後面會單獨討論。
+      </p>
+
+      <!-- ===== h2 ③ ===== -->
+      <h2>GLSL 基礎:著色器的語言</h2>
+
+      <p>
+        GLSL(OpenGL Shading Language)的語法很像 C,但它沒有指標、沒有動態記憶體分配、
+        不能遞迴——因為 GPU 執行模型要求每個執行緒獨立、固定大小地執行。
+        它的核心是一套為<strong>向量/矩陣</strong>量身打造的型別系統。
+      </p>
+
+      <h3>型別系統</h3>
+
+      <pre><code class="language-glsl">// ── 純量 ──
+float f = 0.5;
+int   i = 3;
+bool  b = true;
+
+// ── 向量(最常用!) ──
+vec2  uv   = vec2(0.5, 0.5);       // UV 座標、2D 位置
+vec3  pos  = vec3(1.0, 0.0, 0.0);  // 3D 位置、顏色(RGB)
+vec4  clip = vec4(pos, 1.0);       // 齊次座標、RGBA
+
+// 向量分量可用 .xyzw 或 .rgba 或 .stpq 存取(語意相同)
+vec3 col = vec3(1.0, 0.5, 0.0);
+float r   = col.r;          // == col.x == col.s
+vec2  rg  = col.rg;         // swizzle:取前兩個分量
+vec3  bgr = col.bgr;        // swizzle 可換順序
+
+// ── 矩陣 ──
+mat4 mvp;                   // 4×4 矩陣(column-major)
+mat3 normalMat;             // 3×3,用於法向量變換
+
+// ── 取樣器(紋理) ──
+uniform sampler2D tex;       // 2D 紋理
+uniform samplerCube cubemap; // 立方體貼圖</code></pre>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">float 字面值必須帶小數點</span>
+          <p>GLSL 嚴格區分 <code>float</code> 與 <code>int</code>。寫 <code>vec3(1, 0, 0)</code> 在 WebGL ES 2.0
+          裡會報錯;正確寫法是 <code>vec3(1.0, 0.0, 0.0)</code>。這是初學者最常踩的第一個雷。</p>
+        </div>
+      </div>
+
+      <h3>限定詞(Qualifiers)</h3>
+
+      <p>GLSL 靠<strong>限定詞</strong>區分不同「來源」的資料:</p>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>限定詞</th><th>使用位置</th><th>意義</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>attribute</code> (ES 2.0) / <code>in</code> (ES 3.0+)</td><td>頂點著色器輸入</td><td>每個頂點不同:位置、法向量、UV</td></tr>
+            <tr><td><code>varying</code> (ES 2.0) / <code>out</code>/<code>in</code> (ES 3.0+)</td><td>頂點→片段傳遞</td><td>由 GPU 在三角形面上做插值</td></tr>
+            <tr><td><code>uniform</code></td><td>兩種著色器均可</td><td>整個 draw call 期間固定:矩陣、光源位置、時間</td></tr>
+            <tr><td><code>out</code></td><td>片段著色器輸出</td><td>這個片段的顏色(寫入 framebuffer)</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>內建變數與函式</h3>
+
+      <pre><code class="language-glsl">// ── 頂點著色器內建 ──
+gl_Position  // vec4:必須賦值,裁剪空間座標
+gl_PointSize // float:點的大小(以像素為單位)
+
+// ── 片段著色器內建(ES 2.0) ──
+gl_FragCoord    // vec4:片段在螢幕上的座標(唯讀)
+gl_FragColor    // vec4:輸出顏色(ES 2.0 舊式寫法)
+gl_FrontFacing  // bool:是否為正面多邊形
+
+// ── 常用內建函式 ──
+dot(a, b)         // 點積
+cross(a, b)       // 叉積(vec3)
+normalize(v)      // 單位向量
+length(v)         // 向量長度
+reflect(I, N)     // 反射向量
+clamp(x, 0.0, 1.0)  // 夾值
+mix(a, b, t)      // 線性插值: a*(1-t)+b*t
+smoothstep(e0, e1, x) // 平滑步階函式
+texture(sampler, uv)  // 紋理採樣(ES 3.0)</code></pre>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">WebGL ES 2.0 vs 3.0</span>
+          <p>WebGL 1 對應 GLSL ES 1.00(用 <code>attribute</code>/<code>varying</code>/<code>gl_FragColor</code>);
+          WebGL 2 對應 GLSL ES 3.00(用 <code>in</code>/<code>out</code>,加上 <code>#version 300 es</code> 宣告)。
+          本章範例以 WebGL 2 / GLSL ES 3.00 為主,並在需要時標注差異。</p>
+        </div>
+      </div>
+
+      <!-- ===== h2 ④ ===== -->
+      <h2>頂點著色器:把幾何搬到螢幕上</h2>
+
+      <p>
+        頂點著色器的職責只有一件事:把每個頂點從<strong>模型空間(model space)</strong>
+        變換到<strong>裁剪空間(clip space)</strong>,寫入 <code>gl_Position</code>。
+        其餘的(法向量、UV、顏色)則打包傳給片段著色器做後續計算。
+      </p>
+
+      <h3>MVP 矩陣變換</h3>
+
+      <p>
+        在<a href="39-computer-graphics.html">第 39 章</a>我們推導過 MVP 矩陣:
+        <strong>Model</strong>(把物體放到世界)→ <strong>View</strong>(把世界移到相機前)→
+        <strong>Projection</strong>(把 3D 投影到 2D 裁剪立方體)。
+        在 GPU 上,這三個矩陣通常合併成一個 mat4 傳入著色器:
+      </p>
+
+      <pre><code class="language-glsl">#version 300 es
+// ── 頂點著色器 ──
+layout(location = 0) in vec3 aPosition;  // 模型空間頂點座標
+layout(location = 1) in vec3 aNormal;    // 法向量
+layout(location = 2) in vec2 aTexCoord;  // UV 座標
+
+uniform mat4 uMVP;        // Model * View * Projection
+uniform mat4 uModel;      // 僅 Model 矩陣(用於世界空間法向量)
+uniform mat3 uNormalMat;  // transpose(inverse(mat3(uModel)))
+
+out vec3 vWorldPos;   // 傳給片段著色器:世界空間位置
+out vec3 vNormal;     // 傳給片段著色器:世界空間法向量
+out vec2 vTexCoord;   // 傳給片段著色器:UV
+
+void main() {
+    // 齊次座標:把 vec3 變成 vec4(w=1 表示「點」)
+    vec4 worldPos4 = uModel * vec4(aPosition, 1.0);
+    vWorldPos  = worldPos4.xyz;
+
+    // 法向量需用法線矩陣變換(不能直接乘 Model,否則非均勻縮放會出錯)
+    vNormal    = normalize(uNormalMat * aNormal);
+
+    vTexCoord  = aTexCoord;
+
+    // 最終裁剪空間座標
+    gl_Position = uMVP * vec4(aPosition, 1.0);
+}</code></pre>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">為什麼法向量需要特殊矩陣?</span>
+          <p>如果物體被<em>不均勻縮放</em>(x 方向拉長兩倍、y 方向不變),直接用 Model 矩陣乘法向量會讓法向量偏斜,
+          破壞光照計算。正確做法是用 <strong>法線矩陣(normal matrix)</strong>=
+          <code>transpose(inverse(mat3(Model)))</code>。這個矩陣在 CPU 端計算好再當 uniform 傳進來,
+          避免在著色器裡做昂貴的逆矩陣計算。</p>
+        </div>
+      </div>
+
+      <h3>Varying 插值</h3>
+
+      <p>
+        頂點著色器輸出的 <code>out</code> 變數(<code>vWorldPos</code>、<code>vNormal</code>、<code>vTexCoord</code>)
+        不是直接傳給片段著色器的——GPU 會在光柵化階段對三角形的三個頂點值做<strong>重心插值(barycentric interpolation)</strong>:
+        三角形內部每個像素,都會拿到這三個頂點值依距離加權的插值結果。
+        這就是為什麼你給三個頂點各塗一個顏色,整個三角形就會自動出現漸層。
+      </p>
+
+      <!-- ===== h2 ⑤ ===== -->
+      <h2>片段著色器:逐像素實作光照</h2>
+
+      <p>
+        片段著色器是整個圖學最「有趣」的地方——因為你在這裡決定每個像素的顏色,
+        可以實作任何你想要的視覺效果。我們從最經典的 Phong 光照開始。
+      </p>
+
+      <h3>Phong 光照模型</h3>
+
+      <p>
+        Phong 把物體表面的反射分成三個分量的疊加:
+      </p>
+      <ul>
+        <li><strong>環境光(ambient)</strong>:模擬漫反射的全域底色——沒有這個,背陰面會全黑。</li>
+        <li><strong>漫反射(diffuse)</strong>:符合 Lambert 餘弦定律——光線越正面照,越亮;斜射則暗。</li>
+        <li><strong>鏡面反射(specular)</strong>:高光點——光線的反射方向接近視線方向時,出現亮斑。</li>
+      </ul>
+
+      <div class="diagram">
+<svg viewBox="0 0 680 230" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="a2" markerWidth="9" markerHeight="9" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#2f6f6a"/>
+    </marker>
+    <marker id="a3" markerWidth="9" markerHeight="9" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#b4541f"/>
+    </marker>
+    <marker id="a4" markerWidth="9" markerHeight="9" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#8b5cf6"/>
+    </marker>
+  </defs>
+  <!-- Surface -->
+  <line x1="60" y1="155" x2="340" y2="155" stroke="#4a5159" stroke-width="2"/>
+  <text x="200" y="175" font-size="11" fill="#8a929b" text-anchor="middle">表面(surface)</text>
+
+  <!-- Hit point -->
+  <circle cx="200" cy="155" r="5" fill="#2f6f6a"/>
+  <text x="205" y="168" font-size="10" fill="#2f6f6a">P</text>
+
+  <!-- Normal N -->
+  <line x1="200" y1="155" x2="200" y2="60" stroke="#8a929b" stroke-width="1.5" stroke-dasharray="4 3"/>
+  <text x="207" y="75" font-size="11" fill="#8a929b">N</text>
+
+  <!-- Light direction L -->
+  <line x1="200" y1="155" x2="100" y2="65" stroke="#2f6f6a" stroke-width="2" marker-end="url(#a2)"/>
+  <text x="90" y="58" font-size="11" fill="#2f6f6a" font-weight="600">L(光源方向)</text>
+
+  <!-- Reflect R -->
+  <line x1="200" y1="155" x2="300" y2="65" stroke="#b4541f" stroke-width="2" marker-end="url(#a3)"/>
+  <text x="295" y="58" font-size="11" fill="#b4541f" font-weight="600">R(反射方向)</text>
+
+  <!-- View V -->
+  <line x1="200" y1="155" x2="320" y2="90" stroke="#8b5cf6" stroke-width="2" marker-end="url(#a4)"/>
+  <text x="322" y="88" font-size="11" fill="#8b5cf6" font-weight="600">V(視線方向)</text>
+
+  <!-- angle θ for diffuse -->
+  <path d="M 200 120 A 35 35 0 0 0 174 108" fill="none" stroke="#2f6f6a" stroke-width="1.2"/>
+  <text x="162" y="122" font-size="10" fill="#2f6f6a">θ</text>
+  <text x="98" y="135" font-size="10.5" fill="#2f6f6a">diffuse ∝ max(dot(N,L),0)</text>
+
+  <!-- angle α for specular -->
+  <path d="M 200 120 A 30 30 0 0 1 228 108" fill="none" stroke="#b4541f" stroke-width="1.2"/>
+  <text x="214" y="116" font-size="9" fill="#b4541f">α</text>
+
+  <!-- Legend -->
+  <rect x="400" y="50" width="260" height="140" rx="8" fill="#f6f7f8" stroke="#d8dde2" stroke-width="1"/>
+  <text x="420" y="74" font-size="12" fill="#2f6f6a" font-weight="700">Phong 光照三分量</text>
+  <rect x="415" y="85" width="12" height="12" rx="3" fill="#e3efed"/>
+  <text x="433" y="96" font-size="11" fill="#4a5159">環境光 (ambient) — 常數底色</text>
+  <rect x="415" y="105" width="12" height="12" rx="3" fill="#2f6f6a"/>
+  <text x="433" y="116" font-size="11" fill="#4a5159">漫反射 (diffuse) — dot(N,L)</text>
+  <rect x="415" y="125" width="12" height="12" rx="3" fill="#b4541f"/>
+  <text x="433" y="136" font-size="11" fill="#4a5159">鏡面 (specular) — dot(R,V)^n</text>
+  <text x="420" y="165" font-size="10.5" fill="#8a929b">最終顏色 = ambient</text>
+  <text x="420" y="180" font-size="10.5" fill="#8a929b">         + diffuse + specular</text>
+</svg>
+        <figcaption>圖 111-2:Phong 光照模型的幾何。N 為法向量,L 為指向光源方向,R 為 L 關於 N 的鏡面反射方向,V 為視線方向。漫反射強度取決於 N·L 的角度;鏡面強度取決於 R·V 的角度與光澤度指數 n。</figcaption>
+      </div>
+
+      <pre><code class="language-glsl">#version 300 es
+precision mediump float;
+
+// 從頂點著色器插值傳來
+in vec3 vWorldPos;
+in vec3 vNormal;
+in vec2 vTexCoord;
+
+// uniform:每個 draw call 固定
+uniform vec3  uLightPos;    // 光源世界座標
+uniform vec3  uViewPos;     // 相機世界座標
+uniform vec3  uLightColor;  // 光源顏色
+uniform vec3  uObjectColor; // 物體基底色
+
+out vec4 fragColor;
+
+void main() {
+    // --- 準備向量(全部單位化) ---
+    vec3 N = normalize(vNormal);
+    vec3 L = normalize(uLightPos - vWorldPos);   // 指向光源
+    vec3 V = normalize(uViewPos  - vWorldPos);   // 指向相機
+    vec3 R = reflect(-L, N);                     // L 對 N 的反射
+
+    // --- 三分量 ---
+    // 1. 環境光:常數比例
+    float ka = 0.15;
+    vec3 ambient = ka * uLightColor;
+
+    // 2. 漫反射:Lambert 餘弦定律
+    float kd = max(dot(N, L), 0.0);
+    vec3 diffuse = kd * uLightColor;
+
+    // 3. 鏡面反射:Blinn-Phong 用 half vector 更自然
+    vec3 H = normalize(L + V);          // 半程向量(Blinn-Phong)
+    float shininess = 64.0;             // 光澤度:越大越銳利
+    float ks = pow(max(dot(N, H), 0.0), shininess);
+    vec3 specular = ks * uLightColor;
+
+    // --- 合併 ---
+    vec3 result = (ambient + diffuse + specular) * uObjectColor;
+    fragColor = vec4(result, 1.0);
+}</code></pre>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">Blinn-Phong vs 原版 Phong</span>
+          <p>原版 Phong 用 <code>dot(R, V)</code>(反射向量對視線);Blinn-Phong 改用
+          <code>dot(N, H)</code>(法向量對半程向量 H=(L+V)/|L+V|)。
+          Blinn-Phong 效果更接近真實高光,且在光線從背後來時不會出現數值問題,
+          因此成為工業標準。大多數你看到的「Phong 著色器」其實是 Blinn-Phong。</p>
+        </div>
+      </div>
+
+      <h3>PBR:基於物理的渲染核心公式</h3>
+
+      <p>
+        Phong 是近似值;PBR(Physically Based Rendering,基於物理的渲染)試圖更精確地模擬光與材質的交互。
+        (本書第 110 章 PBR 詳細推導將在進階電腦圖學部分呈現。)PBR 的反射率方程核心:
+      </p>
+
+      <p>
+        $$L_o(p, \omega_o) = \int_\Omega (k_d \frac{c}{\pi} + k_s \frac{DFG}{4(\omega_o \cdot n)(\omega_i \cdot n)}) L_i(p, \omega_i)(\omega_i \cdot n)\, d\omega_i$$
+      </p>
+
+      <p>
+        實作上,PBR 片段著色器用<strong>金屬度(metallic)</strong>和<strong>粗糙度(roughness)</strong>兩個參數,
+        搭配 Cook-Torrance BRDF(雙向反射率分佈函式)的三個項目:
+      </p>
+
+      <pre><code class="language-glsl">// PBR 片段著色器的核心計算(簡化版,完整實作見 LearnOpenGL PBR 章節)
+// D:法線分佈函式(GGX/Trowbridge-Reitz)
+float D_GGX(float NdotH, float roughness) {
+    float a  = roughness * roughness;
+    float a2 = a * a;
+    float denom = (NdotH * NdotH * (a2 - 1.0) + 1.0);
+    return a2 / (3.14159265 * denom * denom);
+}
+
+// F:Fresnel 項(Schlick 近似)
+vec3 F_Schlick(float cosTheta, vec3 F0) {
+    return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+}
+
+// G:幾何遮蔽函式(Smith-GGX)
+float G_Smith(float NdotV, float NdotL, float roughness) {
+    float r  = roughness + 1.0;
+    float k  = (r * r) / 8.0;
+    float gv = NdotV / (NdotV * (1.0 - k) + k);
+    float gl = NdotL / (NdotL * (1.0 - k) + k);
+    return gv * gl;
+}</code></pre>
+
+      <!-- ===== h2 ⑥ ===== -->
+      <h2>紋理與取樣</h2>
+
+      <p>
+        光用顏色 uniform 無法表達磚牆或木紋的細節——這時候需要<strong>紋理貼圖(texture mapping)</strong>:
+        把一張圖的顏色「貼」到 3D 物體表面。
+      </p>
+
+      <h3>UV 座標與 texture() 函式</h3>
+
+      <p>
+        每個頂點都帶有一對 <strong>UV 座標</strong>(又稱紋理座標,範圍通常是 [0,1]×[0,1]):
+        告訴 GPU 這個頂點對應到紋理的哪個位置。光柵化插值之後,片段著色器就能用插值後的 UV 採樣紋理:
+      </p>
+
+      <pre><code class="language-glsl">#version 300 es
+precision mediump float;
+
+in vec2 vTexCoord;        // 插值後的 UV
+uniform sampler2D uTex;   // 2D 紋理物件
+
+out vec4 fragColor;
+
+void main() {
+    // texture() 函式:傳入採樣器 + UV,回傳 vec4 RGBA
+    vec4 texColor = texture(uTex, vTexCoord);
+    fragColor = texColor;
+}</code></pre>
+
+      <h3>Mipmap 與過濾</h3>
+
+      <p>
+        當紋理在螢幕上顯示得很小(遠處的地板磚)時,GPU 從一張高解析度紋理只採樣一個像素,
+        可能造成閃爍的<strong>摩爾紋(aliasing)</strong>。<strong>Mipmap</strong> 是預先計算的紋理金字塔:
+        原始尺寸 → 1/2 → 1/4 → ...,GPU 根據物體在螢幕上的大小自動挑選合適的層級。
+        搭配<strong>三線性過濾(trilinear filtering)</strong>,可在層級之間平滑插值,消除閃爍。
+      </p>
+
+      <pre><code class="language-javascript">// WebGL 2 設定 mipmap 與三線性過濾
+const tex = gl.createTexture();
+gl.bindTexture(gl.TEXTURE_2D, tex);
+gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
+gl.generateMipmap(gl.TEXTURE_2D);  // 自動產生 mipmap 金字塔
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR); // 三線性
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR); // 放大用雙線性</code></pre>
+
+      <h3>法線貼圖(Normal Mapping)</h3>
+
+      <p>
+        法線貼圖是一種不增加幾何細節、卻能讓光照「感覺」有細節的技巧:
+        把每個像素的法向量偏移量存進一張 RGB 紋理(R→X, G→Y, B→Z),
+        片段著色器讀取後替換掉插值法向量再做光照計算。
+        遠遠看去,平坦的牆面就好像凹凸不平一樣——但三角形數量一個都沒增加。
+      </p>
+
+      <pre><code class="language-glsl">// 法線貼圖採樣(切線空間 → 世界空間,需要 TBN 矩陣)
+uniform sampler2D uNormalMap;
+
+// 從法線貼圖讀取並解碼到 [-1, 1]
+vec3 normalMapSample = texture(uNormalMap, vTexCoord).rgb;
+vec3 tangentNormal   = normalMapSample * 2.0 - 1.0; // [0,1] → [-1,1]
+
+// 用 TBN 矩陣把切線空間轉到世界空間
+// (TBN 由頂點的 Tangent/Bitangent/Normal 組成,需從頂點著色器傳入)
+vec3 N = normalize(vTBN * tangentNormal);</code></pre>
+
+      <!-- ===== h2 ⑦ ===== -->
+      <h2>即時技術:陰影、延遲著色與後處理</h2>
+
+      <h3>Shadow Mapping:兩趟渲染</h3>
+
+      <p>
+        <strong>陰影貼圖(shadow mapping)</strong>是即時渲染中最廣泛使用的陰影技術,核心思路只有一句話:
+        <em>從光源的視角先渲染一次場景,把每個點的深度存下來;第二次從相機視角渲染時,
+        檢查每個像素「光源是否看得到它」——如果看不到,它就在陰影裡。</em>
+      </p>
+
+      <p><strong>第一趟(深度貼圖生成)</strong>:</p>
+      <ul>
+        <li>把相機改到光源位置,用光源的投影矩陣(方向光用正投影,點光用透視投影)渲染整個場景。</li>
+        <li>只需要深度值,不需要顏色——輸出寫到一個深度紋理(<code>DEPTH_COMPONENT</code> 格式)。</li>
+      </ul>
+
+      <p><strong>第二趟(場景渲染 + 陰影判斷)</strong>:</p>
+      <pre><code class="language-glsl">// 片段著色器:shadow mapping 陰影判斷
+uniform sampler2D uShadowMap;  // 第一趟渲染出的深度紋理
+uniform mat4 uLightSpaceMat;   // 光源的 View*Projection 矩陣
+
+float shadowTest(vec3 worldPos) {
+    // 把世界座標變換到光源裁剪空間
+    vec4 lightSpacePos = uLightSpaceMat * vec4(worldPos, 1.0);
+    // 透視除法,轉到 NDC [-1,1]
+    vec3 projCoords = lightSpacePos.xyz / lightSpacePos.w;
+    // 從 [-1,1] 轉到 [0,1](UV 空間)
+    projCoords = projCoords * 0.5 + 0.5;
+
+    // 讀取光源深度貼圖中記錄的最近深度
+    float closestDepth = texture(uShadowMap, projCoords.xy).r;
+    // 當前片段在光源空間的深度
+    float currentDepth = projCoords.z;
+
+    // 稍微偏移以避免自遮擋(shadow acne)
+    float bias = 0.005;
+    return currentDepth - bias &gt; closestDepth ? 1.0 : 0.0; // 1=在陰影中
+}
+
+void main() {
+    float shadow = shadowTest(vWorldPos);
+    // 在陰影中只保留環境光,其餘光照乘以 (1-shadow)
+    vec3 lighting = ambient + (1.0 - shadow) * (diffuse + specular);
+    fragColor = vec4(lighting * uObjectColor, 1.0);
+}</code></pre>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">Shadow Acne 與 Peter Panning</span>
+          <p>不加 bias(偏移),自遮擋問題(<strong>shadow acne</strong>)會讓物體表面出現條紋雜訊。
+          bias 加太大則會造成物體「浮空」(<strong>peter panning</strong>)。
+          進階解法是<strong>PCF(Percentage Closer Filtering)</strong>:對周圍多個紋素採樣並平均,
+          既能消除 acne 又能軟化陰影邊緣。</p>
+        </div>
+      </div>
+
+      <h3>延遲著色(Deferred Shading)</h3>
+
+      <p>
+        傳統的前向渲染(forward rendering)對每個幾何體執行一次完整的光照片段著色器——若場景有 200 個光源、
+        10000 個三角形,每個三角形都要對 200 個光源各計算一次,大量浪費。
+      </p>
+      <p>
+        <strong>延遲著色</strong>把渲染分成兩趟:
+      </p>
+      <ol>
+        <li><strong>幾何趟(Geometry Pass / G-Buffer)</strong>:把每個像素的
+        位置(position)、法向量(normal)、漫反射顏色(albedo)、材質參數等
+        寫入多張離屏紋理——這組紋理合稱 <strong>G-Buffer(幾何緩衝)</strong>。</li>
+        <li><strong>光照趟(Lighting Pass)</strong>:畫一個全螢幕的四邊形,
+        片段著色器從 G-Buffer 讀取每個像素的資料,對所有光源各計算一次光照並累加。
+        由於此時每個「像素」的幾何已確定(沒有被遮擋的問題),計算量大幅減少。</li>
+      </ol>
+
+      <h3>後處理(Post-Processing)</h3>
+
+      <p>
+        後處理是在主場景渲染完成後,對整張 framebuffer 再做一次全螢幕的片段著色器處理:
+        Bloom(亮部光暈)、景深(Depth of Field)、色調映射(Tone Mapping from HDR)、SSAO(環境遮蔽)等。
+        實作方式:把主渲染的輸出寫到一個紋理,再畫一個全螢幕四邊形並對該紋理做效果處理。
+      </p>
+
+      <!-- ===== h2 ⑧ ===== -->
+      <h2>Compute Shader 與 WebGL / WebGPU 生態</h2>
+
+      <h3>Compute Shader:脫離圖形管線的 GPGPU</h3>
+
+      <p>
+        Compute shader 不屬於頂點→片段的渲染管線——它是一個獨立的 GPU 計算單元,
+        讓你直接在 GPU 上做任意並行計算:布料模擬、粒子系統、影像後處理、機器學習推論。
+        與第 118 章介紹的 CUDA 最大的差別在於:compute shader 在圖形 API(OpenGL/WebGPU)內執行,
+        能直接存取已綁定的紋理與緩衝,無需跨 API 拷貝資料。
+      </p>
+
+      <pre><code class="language-glsl">// OpenGL Compute Shader 範例:反轉圖像顏色
+#version 430
+layout(local_size_x = 16, local_size_y = 16) in; // 工作群組大小
+
+layout(rgba8, binding = 0) uniform image2D uImage;
+
+void main() {
+    ivec2 texCoord = ivec2(gl_GlobalInvocationID.xy);
+    vec4 color = imageLoad(uImage, texCoord);
+    imageStore(uImage, texCoord, vec4(1.0 - color.rgb, color.a)); // 反色
+}</code></pre>
+
+      <p>
+        <code>gl_GlobalInvocationID</code> 是 compute shader 的「自我定位」變數——類似 CUDA 的 <code>threadIdx + blockIdx</code>。
+        <code>local_size_x/y</code> 定義每個工作群組的大小(通常取 16×16=256 個執行緒)。
+      </p>
+
+      <h3>WebGL 與 WebGPU</h3>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>API</th><th>GLSL 版本</th><th>Compute Shader</th><th>狀態</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>WebGL 1</td><td>GLSL ES 1.00</td><td>不支援</td><td>廣泛支援(包含舊瀏覽器)</td></tr>
+            <tr><td>WebGL 2</td><td>GLSL ES 3.00</td><td>不支援</td><td>現代瀏覽器全支援</td></tr>
+            <tr><td>WebGPU</td><td>WGSL</td><td>支援</td><td>Chrome/Edge 穩定,Safari 實驗性</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>
+        WebGL 2 是目前瀏覽器端圖學的主力:Three.js、Babylon.js 都架在它之上。
+        WebGPU 是下一代 API,設計更接近 Vulkan/Metal,底層控制更精細,
+        也支援 compute shader——未來幾年將逐漸成為主流。
+        本章範例使用 WebGL 2 + GLSL ES 3.00,能在所有現代瀏覽器直接執行。
+      </p>
+
+      <!-- ===== h2 ⑨ ===== -->
+      <h2>動手實作:能跑的 WebGL 光照範例</h2>
+
+      <p>
+        以下是一個完整的自包含 HTML 檔案,可以直接貼進任何文字編輯器存成 <code>.html</code>,
+        用瀏覽器打開就能看到一個受 Phong 光照的旋轉彩色三角形。
+        這個範例涵蓋了完整的 WebGL 樣板:建立 context、編譯著色器、上傳頂點資料、渲染迴圈。
+      </p>
+
+      <pre><code class="language-html">&lt;!DOCTYPE html&gt;
+&lt;html lang="zh-TW"&gt;
+&lt;head&gt;&lt;meta charset="UTF-8"&gt;&lt;title&gt;WebGL GLSL 光照範例&lt;/title&gt;&lt;/head&gt;
+&lt;body style="margin:0;background:#111"&gt;
+&lt;canvas id="c" width="600" height="600"&gt;&lt;/canvas&gt;
+&lt;script&gt;
+// ─── 著色器原始碼 ───────────────────────────────────────────
+const VS = `#version 300 es
+layout(location=0) in vec3 aPos;
+layout(location=1) in vec3 aColor;
+uniform float uTime;
+out vec3 vColor;
+out vec3 vNorm;
+out vec3 vPos;
+void main(){
+  // 繞 Y 軸旋轉
+  float c = cos(uTime), s = sin(uTime);
+  mat3 rot = mat3(c,0,-s, 0,1,0, s,0,c);
+  vec3 p = rot * aPos;
+  vPos   = p;
+  vNorm  = rot * vec3(0.0, 0.0, 1.0); // 假設三角形面向 Z
+  vColor = aColor;
+  gl_Position = vec4(p * 0.8, 1.0);
+}`;
+
+const FS = `#version 300 es
+precision mediump float;
+in vec3 vColor;
+in vec3 vNorm;
+in vec3 vPos;
+out vec4 fragColor;
+void main(){
+  vec3 lightDir = normalize(vec3(1.0, 2.0, 3.0));
+  vec3 N = normalize(vNorm);
+  // 漫反射
+  float diff = max(dot(N, lightDir), 0.0);
+  // 鏡面(Blinn-Phong)
+  vec3 H = normalize(lightDir + vec3(0.0, 0.0, 1.0)); // 假設相機在 +Z
+  float spec = pow(max(dot(N, H), 0.0), 32.0);
+  vec3 col = (0.1 + 0.7 * diff) * vColor + 0.4 * spec * vec3(1.0);
+  fragColor = vec4(col, 1.0);
+}`;
+
+// ─── WebGL 樣板函式 ─────────────────────────────────────────
+const gl = document.getElementById('c').getContext('webgl2');
+if (!gl) { alert('WebGL 2 不支援'); }
+
+function compileShader(type, src) {
+  const sh = gl.createShader(type);
+  gl.shaderSource(sh, src);
+  gl.compileShader(sh);
+  if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS))
+    throw new Error(gl.getShaderInfoLog(sh));
+  return sh;
+}
+
+const prog = gl.createProgram();
+gl.attachShader(prog, compileShader(gl.VERTEX_SHADER,   VS));
+gl.attachShader(prog, compileShader(gl.FRAGMENT_SHADER, FS));
+gl.linkProgram(prog);
+if (!gl.getProgramParameter(prog, gl.LINK_STATUS))
+  throw new Error(gl.getProgramInfoLog(prog));
+gl.useProgram(prog);
+
+// ─── 頂點資料:位置(xyz) + 顏色(rgb) ─────────────────────
+// prettier-ignore
+const verts = new Float32Array([
+//  x      y     z       R     G     B
+   0.0,  0.7,  0.0,   1.0,  0.3,  0.3,  // 頂點(紅)
+  -0.6, -0.5,  0.0,   0.3,  1.0,  0.3,  // 左下(綠)
+   0.6, -0.5,  0.0,   0.3,  0.3,  1.0,  // 右下(藍)
+]);
+const STRIDE = 6 * 4; // 6 個 float,每個 4 bytes
+
+const vbo = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+gl.bufferData(gl.ARRAY_BUFFER, verts, gl.STATIC_DRAW);
+
+// location=0 → aPos (xyz)
+gl.enableVertexAttribArray(0);
+gl.vertexAttribPointer(0, 3, gl.FLOAT, false, STRIDE, 0);
+// location=1 → aColor (rgb)
+gl.enableVertexAttribArray(1);
+gl.vertexAttribPointer(1, 3, gl.FLOAT, false, STRIDE, 3 * 4);
+
+const uTime = gl.getUniformLocation(prog, 'uTime');
+
+// ─── 渲染迴圈 ──────────────────────────────────────────────
+gl.clearColor(0.07, 0.07, 0.1, 1.0);
+function frame(t) {
+  gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.uniform1f(uTime, t * 0.001); // 毫秒 → 秒
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+&lt;/script&gt;
+&lt;/body&gt;
+&lt;/html&gt;</code></pre>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">Shadertoy 相容的片段著色器</span>
+          <p>如果你想快速實驗片段著色器,可以到 <a href="https://www.shadertoy.com" target="_blank">shadertoy.com</a>。
+          Shadertoy 只需要你寫 <code>mainImage(out vec4 fragColor, in vec2 fragCoord)</code> 函式,
+          會自動提供 <code>iTime</code>(時間)、<code>iResolution</code>(畫布大小)等 uniform。
+          例如畫一個圓:
+          <code>void mainImage(out vec4 o, in vec2 uv){ uv=(uv-iResolution.xy*.5)/iResolution.y;
+          o=vec4(step(length(uv),.3)); }</code></p>
+        </div>
+      </div>
+
+      <h3>關鍵 WebGL API 一覽</h3>
+
+      <pre><code class="language-javascript">// ── 著色器管線 ──
+gl.createShader(type)          // gl.VERTEX_SHADER 或 gl.FRAGMENT_SHADER
+gl.shaderSource(shader, src)   // 傳入 GLSL 原始碼字串
+gl.compileShader(shader)       // 編譯
+gl.createProgram()             // 建立著色器程式
+gl.attachShader(prog, shader)  // 附加著色器
+gl.linkProgram(prog)           // 連結
+gl.useProgram(prog)            // 啟用
+
+// ── 緩衝物件(VBO) ──
+gl.createBuffer()
+gl.bindBuffer(gl.ARRAY_BUFFER, buf)
+gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW)
+
+// ── 頂點屬性 ──
+gl.enableVertexAttribArray(loc)
+gl.vertexAttribPointer(loc, size, type, normalized, stride, offset)
+
+// ── Uniform ──
+gl.getUniformLocation(prog, 'uName')
+gl.uniform1f(loc, val)          // float
+gl.uniformMatrix4fv(loc, false, mat4array) // mat4
+
+// ── 紋理 ──
+gl.createTexture()
+gl.bindTexture(gl.TEXTURE_2D, tex)
+gl.texImage2D(...)
+gl.activeTexture(gl.TEXTURE0)
+gl.uniform1i(samplerLoc, 0)     // 綁定紋理單元 0
+
+// ── 渲染 ──
+gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+gl.drawArrays(gl.TRIANGLES, 0, count)
+gl.drawElements(gl.TRIANGLES, count, gl.UNSIGNED_SHORT, 0) // 用 EBO</code></pre>
+
+      <!-- ===== h2 ⑩ ===== -->
+      <h2>練習:自己動手寫著色器</h2>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 111.1 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>
+            在 <a href="https://www.shadertoy.com" target="_blank">Shadertoy</a> 新建一個 shader,
+            只修改 <code>mainImage</code> 函式,實現以下效果:
+          </p>
+          <ol>
+            <li>畫面顯示一個從左(紅)到右(藍)的橫向漸層背景。</li>
+            <li>在畫面正中央額外疊加一個半徑 0.3(以畫面高度為 1)的白色實心圓。</li>
+          </ol>
+          <p>提示:Shadertoy 的 <code>fragCoord</code> 原點在左下,<code>iResolution.y</code> 是畫面高度。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+<pre><code class="language-glsl">void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    // 歸一化 UV:x 在 [0,1],y 在 [0,aspect]
+    vec2 uv = fragCoord / iResolution.xy;
+
+    // 1. 漸層:用 uv.x 插值紅→藍
+    vec3 col = mix(vec3(1.0, 0.0, 0.0), vec3(0.0, 0.0, 1.0), uv.x);
+
+    // 2. 圓形判斷:以畫面高度為單位,計算到中心的距離
+    vec2 center = vec2(0.5, 0.5);          // 歸一化中心
+    float dist = length(uv - center);      // 到中心距離
+    if (dist &lt; 0.3) col = vec3(1.0);      // 圓內塗白
+
+    fragColor = vec4(col, 1.0);
+}</code></pre>
+              <p>
+                關鍵概念:
+                <code>mix(a, b, t)</code> 是 GLSL 的線性插值函式(<code>a*(1-t)+b*t</code>);
+                <code>length()</code> 計算向量長度,是判斷是否在圓內的最直觀方式。
+                注意 <code>if (dist &lt; 0.3)</code> 在程式碼中要把 <code>&lt;</code> 寫成 <code>&amp;lt;</code>,
+                但在著色器字串本身(非 HTML)中直接寫 <code>&lt;</code> 即可。
+              </p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 111.2 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>
+            在本章「動手實作」的 WebGL 範例基礎上,修改片段著色器,把 Blinn-Phong 鏡面反射的
+            <code>shininess</code> 從 32.0 改為 256.0,並加入第二個固定光源(方向 <code>(-1, 1, 2)</code>,顏色偏藍)。
+            觀察高光形狀與顏色的變化。
+          </p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>在片段著色器中新增第二光源計算,然後將兩者相加:</p>
+<pre><code class="language-glsl">void main(){
+  vec3 N = normalize(vNorm);
+
+  // 光源 1(暖白)
+  vec3 L1 = normalize(vec3(1.0, 2.0, 3.0));
+  float diff1 = max(dot(N, L1), 0.0);
+  vec3 H1 = normalize(L1 + vec3(0.0, 0.0, 1.0));
+  float spec1 = pow(max(dot(N, H1), 0.0), 256.0); // 高 shininess → 小而銳的高光
+
+  // 光源 2(冷藍)
+  vec3 L2 = normalize(vec3(-1.0, 1.0, 2.0));
+  float diff2 = max(dot(N, L2), 0.0);
+  vec3 H2 = normalize(L2 + vec3(0.0, 0.0, 1.0));
+  float spec2 = pow(max(dot(N, H2), 0.0), 256.0);
+
+  vec3 lightCol1 = vec3(1.0, 0.95, 0.8);  // 暖白
+  vec3 lightCol2 = vec3(0.4, 0.6, 1.0);   // 冷藍
+
+  vec3 col = 0.05 * vColor
+           + (0.6 * diff1 * lightCol1 + 0.3 * spec1 * lightCol1) * vColor
+           + (0.4 * diff2 * lightCol2 + 0.2 * spec2 * lightCol2) * vColor;
+  fragColor = vec4(col, 1.0);
+}</code></pre>
+              <p>
+                <strong>觀察重點</strong>:shininess=256 時高光點極小且銳利(像拋光金屬);
+                32 時高光範圍大而柔和(像橡膠或亞光塑料)。
+                兩個光源相加時,注意要確保總亮度不超過 1.0,否則顏色會溢出(clamp 到白色)。
+              </p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 111.3 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>
+            用自己的話解釋 shadow mapping 的「兩趟渲染」:
+          </p>
+          <ol>
+            <li>第一趟渲染了什麼?從哪個視角渲染?輸出是什麼格式?</li>
+            <li>第二趟如何用第一趟的輸出判斷某個片段是否在陰影中?</li>
+            <li>為什麼需要 bias(深度偏移)?若 bias 設得太大會出現什麼問題?</li>
+          </ol>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>1. 第一趟</strong>:從<em>光源的視角</em>渲染整個場景,只記錄每個像素的深度值(不計算顏色)。
+              輸出是一張<strong>深度貼圖(depth map / shadow map)</strong>,格式通常是 <code>DEPTH_COMPONENT</code>——
+              每個紋素存一個 float,代表「從光源看去,這個方向上最近的物體有多遠」。</p>
+              <p><strong>2. 第二趟</strong>:對每個要著色的片段,先把它的世界座標用<strong>光源的 VP 矩陣</strong>
+              變換到光源裁剪空間,換算成 UV 後查詢深度貼圖,得到光源看到的最近深度 <code>closestDepth</code>。
+              再計算當前片段在光源方向上的深度 <code>currentDepth</code>。
+              若 <code>currentDepth &gt; closestDepth</code>(當前片段比最近物體更遠),
+              代表有東西擋在中間→該片段在陰影裡。</p>
+              <p><strong>3. Bias 的必要性</strong>:深度貼圖的解析度有限(例如 1024×1024),
+              一個紋素對應場景中的一個區域。物體的「自身深度」在計算精度上略大於深度貼圖中存的值,
+              會誤判自己遮蔽自己→表面出現條紋(<strong>shadow acne</strong>)。
+              加一個小偏移 bias(如 0.005)讓比較有一點寬容。
+              但 bias 過大會讓物體看起來「浮在空中」(<strong>peter panning</strong>),
+              陰影脫離物體底部。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 111.4 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>
+            試在 Shadertoy 實作一個 2D ray marching SDF(有號距離場)場景:在片段著色器裡定義一個
+            圓(<code>length(uv) - 0.3</code>)和一個矩形的 SDF,用 <code>min()</code> 合併兩個形狀,
+            並依距離場的梯度估算法向量,套用簡單的漫反射光照。
+          </p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+<pre><code class="language-glsl">// 2D SDF ray marching 示範(Shadertoy)
+float sdCircle(vec2 p, float r) { return length(p) - r; }
+float sdBox(vec2 p, vec2 b) {
+    vec2 d = abs(p) - b;
+    return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0);
+}
+float scene(vec2 p) {
+    float c = sdCircle(p - vec2(-0.2, 0.0), 0.25);
+    float b = sdBox(p - vec2(0.3, 0.0), vec2(0.15, 0.2));
+    return min(c, b); // union
+}
+// 數值梯度估算法向量
+vec2 calcNorm(vec2 p) {
+    float e = 0.001;
+    return normalize(vec2(
+        scene(p + vec2(e,0.0)) - scene(p - vec2(e,0.0)),
+        scene(p + vec2(0.0,e)) - scene(p - vec2(0.0,e))
+    ));
+}
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord - iResolution.xy * 0.5) / iResolution.y;
+    float d = scene(uv);
+    vec3 col = vec3(0.05); // 背景
+    if (d &lt; 0.0) {         // 在形狀內
+        vec2 N = calcNorm(uv);
+        vec2 L = normalize(vec2(1.0, 1.5));
+        float diff = max(dot(N, L), 0.0);
+        col = vec3(0.2 + 0.8 * diff);
+    }
+    // 邊緣柔化
+    col *= 1.0 - smoothstep(0.0, 0.005, d);
+    fragColor = vec4(col, 1.0);
+}</code></pre>
+              <p>SDF(有號距離場)讓複雜形狀的布林運算變得極為簡單:
+              <code>min()</code> = 聯集,<code>max()</code> = 交集,<code>-</code> = 差集。
+              3D 延伸後就是 ray marching 渲染的基礎,shadertoy 上大量精彩效果都用這個技術。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ===== h2 ⑪ ===== -->
+      <h2>把這一章串起來</h2>
+
+      <p>
+        從 CPU 的序列思維跳到 GPU 的 SIMT 平行模型,是學習著色器最重要的第一步:
+        你寫的不是「一個程式跑一次」,而是「一個函式同時被幾千個執行緒套用到不同的資料上」。
+      </p>
+
+      <p>本章的知識脈絡:</p>
+      <ul>
+        <li><strong><a href="39-computer-graphics.html">第 39 章</a></strong>講了圖形管線的數學原理(齊次座標、MVP、Phong 模型、光柵化);本章把那些原理「實作」進 GLSL 著色器,讓你真的能在 GPU 上跑起來。</li>
+        <li><strong>GLSL 語言</strong>:型別系統(<code>vec/mat/sampler</code>)、限定詞(<code>in/out/uniform</code>)、內建函式(<code>normalize/dot/reflect/texture</code>)是寫所有著色器的基礎詞彙。</li>
+        <li><strong>頂點著色器</strong>負責把幾何搬到螢幕上(MVP 矩陣),並把插值資料(法向量、UV)傳給片段著色器。</li>
+        <li><strong>片段著色器</strong>是視覺效果的核心:Phong/Blinn-Phong 光照、PBR、紋理採樣、法線貼圖都在這裡實作。</li>
+        <li><strong>即時技術</strong>:shadow mapping(兩趟渲染+深度比較)、deferred shading(G-Buffer 解耦幾何與光照)、後處理(全螢幕 quad + 效果 shader)是現代遊戲引擎的標配。</li>
+        <li><strong>Compute shader</strong> 讓 GPU 脫離圖形管線做通用並行計算,與第 118 章 GPU/CUDA 的差別在於它在圖形 API 內原生運作,共享紋理資源。</li>
+      </ul>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">著色器的本質</span>
+          <p>著色器就是一個純函式:輸入是幾何資料(位置、法向量、UV),輸出是位置或顏色。
+          GPU 把這個函式並行套用到每個頂點或每個像素上。
+          理解這個心智模型之後,你能寫的效果就只受限於你的數學想像力。</p>
+        </div>
+      </div>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">延伸資源</span>
+          <p>
+            <strong>The Book of Shaders</strong>(<a href="https://thebookofshaders.com" target="_blank">thebookofshaders.com</a>)
+            是學習 GLSL 片段著色器最好的互動教材,從漸層、形狀、噪聲一路講到程序紋理,每個概念都能即時在瀏覽器修改執行。
+            <strong>LearnOpenGL</strong>(<a href="https://learnopengl.com" target="_blank">learnopengl.com</a>)
+            則提供完整的 OpenGL + GLSL 課程,涵蓋本章的每個主題(光照、紋理、陰影、PBR)都有 C++ 實作範例。
+            <strong>Shadertoy</strong>(<a href="https://www.shadertoy.com" target="_blank">shadertoy.com</a>)
+            是練習片段著色器最快的沙盒,不需要任何 WebGL 樣板,直接寫 GLSL 就能看到結果。
+          </p>
+        </div>
+      </div>

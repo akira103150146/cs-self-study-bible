@@ -1,0 +1,1165 @@
+<!--meta
+title: 版本控制 Git
+description: 從 final_v2_真的final.docx 的惡夢出發,徹底搞懂 Git 的心智模型(快照、三區、DAG),學會 commit、branch、merge、rebase、遠端協作與 GitHub PR 流程,以及 stash、reflog 等救命錦囊。
+-->
+
+
+      <div class="eyebrow">第四部 · CS 工具</div>
+      <h1>版本控制 Git</h1>
+      <p class="subtitle">你電腦裡有沒有一個叫 <code>報告_final_v2_真的final_這次真的.docx</code> 的檔案?如果有,這一章就是來拯救你的。Git 是每個工程師每天都在用、卻很少有人真正「懂」的工具——我們這次要把它的心臟掀開來看。</p>
+      <div class="byline">
+        <span class="tag">第 18 章</span>
+        <span>閱讀時間 ≈ 45 分鐘</span>
+        <span>難度:★★★☆☆</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>為什麼「複製貼上一個新資料夾」不是版本控制,以及 Git 真正解決了什麼問題</li>
+          <li>Git 最核心的心智模型:它存的是<strong>快照</strong>不是差異,以及三個區域與 commit 的 DAG 結構</li>
+          <li>日常工作流:<code>init</code>、<code>add</code>、<code>commit</code>、<code>status</code>、<code>diff</code>、<code>log</code>,以及怎麼寫好的 commit 訊息</li>
+          <li>復原的三種武器:<code>restore</code>、<code>reset</code>(三種模式)、<code>revert</code>,以及它們的關鍵差別</li>
+          <li>分支(branch)為什麼是 Git 的殺手鐧,以及 <code>merge</code> 與 <code>rebase</code> 的對比與取捨</li>
+          <li>遠端協作:<code>clone</code>、<code>fetch</code>/<code>pull</code>、<code>push</code>,以及 GitHub 的 Fork + Pull Request 流程</li>
+          <li>救命錦囊:<code>stash</code>、<code>reflog</code>、<code>cherry-pick</code>、<code>--amend</code>——把弄丟的 commit 撈回來</li>
+        </ul>
+      </div>
+
+      <h2>沒有版本控制的世界:一場惡夢</h2>
+      <p>
+        先講個你大概親身經歷過的故事。你在寫一份重要文件(或一段程式),為了「保險」,你開始這樣存檔:
+      </p>
+      <pre><code class="language-text">報告.docx
+報告_修改版.docx
+報告_修改版2.docx
+報告_老闆改過.docx
+報告_final.docx
+報告_final_v2.docx
+報告_final_v2_真的final.docx
+報告_final_v2_真的final_這次真的.docx</code></pre>
+      <p>
+        於是惡夢開始了。三天後你完全不記得 <code>真的final</code> 跟 <code>這次真的</code> 差在哪;你想把某一版的第三段、跟另一版的結論合在一起,只能兩個檔開著肉眼比對、手動複製;
+        同事傳來他改的版本,你打開一看——他是改在 <code>v2</code> 上還是 <code>老闆改過</code> 上?沒人知道。
+        最後你硬著頭皮全選貼上,蓋掉了某段其實很重要的內容,而且<strong>再也回不去了</strong>。
+      </p>
+      <p>
+        這就是「土法煉鋼版本控制」的下場。它有四個根本問題:你<strong>看不出</strong>兩個版本差在哪、你<strong>無法安全地回到</strong>過去任一版、你<strong>沒辦法把不同人的修改乾淨地合併</strong>、而且<strong>沒有任何紀錄</strong>告訴你「這一行為什麼會變成這樣、是誰、什麼時候、為了什麼改的」。
+      </p>
+      <p>
+        <strong>版本控制系統(version control system, VCS)</strong>就是專門來終結這場惡夢的工具。它幫你做到四件事:
+      </p>
+      <ul>
+        <li><strong>時光機</strong>:完整記錄每一次變更,你能隨時回到任何一個歷史版本,毫髮無傷。</li>
+        <li><strong>協作</strong>:多人能同時改同一個專案,系統幫你把大家的修改安全地合併起來。</li>
+        <li><strong>實驗分支</strong>:想試一個大膽的點子?開一條「平行宇宙」去搞,失敗就丟掉,完全不影響主線。</li>
+        <li><strong>責任追蹤</strong>:每一行程式都查得到「最後是哪一次提交、由誰、何時、為什麼改的」(這叫 <code>git blame</code>,雖然名字聽起來很兇)。</li>
+      </ul>
+
+      <div class="callout history">
+        <div class="ico">📜</div>
+        <div class="body">
+          <span class="c-title">Git 的身世:一場分手催生的工具</span>
+          <p>Git 是 Linux 之父 <strong>Linus Torvalds</strong> 在 2005 年寫出來的。當時 Linux 核心開發團隊用的商業工具 BitKeeper 撤回了免費授權,
+          Linus 一氣之下,花了大約十天親手刻出一個全新的版本控制系統,目標是<em>快、分散式、而且資料絕對不會壞</em>。
+          至於名字,他半開玩笑地說 git 是英式英語裡「討厭的傢伙」的意思——「我寫的所有東西都以我自己命名,先是 Linux,現在是 git。」如今它幾乎統治了整個軟體世界。</p>
+        </div>
+      </div>
+
+      <h2>Git 的心智模型(這一節最重要)</h2>
+      <p>
+        絕大多數人學 Git 卡關,不是因為指令難背,而是因為<strong>腦中沒有正確的模型</strong>。
+        他們把 <code>add</code>、<code>commit</code>、<code>push</code> 當成三句沒道理的咒語死記,結果一遇到非典型狀況就完全不知道自己在幹嘛。
+        所以我們先不碰任何指令,花點時間把 Git 的世界觀建立起來。建好了,後面的指令會像呼吸一樣自然。
+      </p>
+
+      <h3>關鍵一:Git 存的是「快照」,不是「差異」</h3>
+      <p>
+        很多其他版本控制工具(例如老一輩的 SVN)是這樣運作的:它記錄「每個檔案隨時間累積了哪些<strong>差異(diff)</strong>」。
+        要還原某個版本,它得從最初的檔案開始,把一筆筆差異疊加回去。
+      </p>
+      <p>
+        Git 的想法<strong>根本不同</strong>。每當你提交(commit)一次,Git 做的事情比較像<strong>幫你整個專案的當下狀態拍一張照片</strong>——一張<strong>快照(snapshot)</strong>。
+        它記住「在這個時間點,所有檔案分別長什麼樣子」。如果某個檔案這次沒改,Git 不會重存一份,它聰明地用一個指標指向上一版那份一模一樣的內容(這就是為什麼 Git 又快又省空間)。
+        但你<strong>心智上</strong>應該把每個 commit 想成一張完整的快照,而不是一堆差異的疊加。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">commit = 一張快照</span>
+          <p>每一次 <code>commit</code>,都是替整個專案在那個瞬間拍下的一張完整照片,並蓋上一個獨一無二的指紋(一串叫 <strong>hash</strong> 的英數字,例如 <code>a3f9c2e</code>)。
+          「回到過去」對 Git 來說,只是「把工作目錄換成某張舊照片的內容」——既快又安全。記住這句話,Git 的一切行為都會變得合理。</p>
+        </div>
+      </div>
+
+      <h3>關鍵二:三個區域</h3>
+      <p>
+        Git 把你的專案分成<strong>三個區域</strong>,你下的每一個指令,本質上都是在「把東西從一個區域搬到另一個區域」。搞懂這張圖,你就懂了一大半的 Git:
+      </p>
+      <ul>
+        <li><strong>工作目錄(working directory)</strong>:你眼睛看得到、編輯器正在改的那些檔案。這是你的「工作桌面」。</li>
+        <li><strong>暫存區(staging area,又叫 index)</strong>:一個「下次要拍進快照的草稿」。你用 <code>git add</code> 把改好的東西放進來,等於跟 Git 說「這些我準備好了,下次提交算它一份」。</li>
+        <li><strong>儲存庫(repository)</strong>:藏在 <code>.git</code> 資料夾裡的歷史檔案庫,存放所有已經提交的快照。一旦 <code>commit</code>,東西就被永久收進這裡。</li>
+      </ul>
+
+      <div class="diagram">
+<svg viewBox="0 0 780 340" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="g-fwd" markerWidth="11" markerHeight="11" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#2f6f6a"/></marker>
+    <marker id="g-back" markerWidth="11" markerHeight="11" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#b4541f"/></marker>
+  </defs>
+  <!-- three boxes -->
+  <rect x="30"  y="120" width="190" height="110" rx="12" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="125" y="152" text-anchor="middle" font-size="15" font-weight="800" fill="#1f2328">工作目錄</text>
+  <text x="125" y="172" text-anchor="middle" font-size="12" fill="#4a5159">Working Directory</text>
+  <text x="125" y="200" text-anchor="middle" font-size="11" fill="#8a929b">你正在編輯的檔案</text>
+  <text x="125" y="216" text-anchor="middle" font-size="11" fill="#8a929b">(你的工作桌面)</text>
+
+  <rect x="295" y="120" width="190" height="110" rx="12" fill="#f6e7dd" stroke="#b4541f" stroke-width="2"/>
+  <text x="390" y="152" text-anchor="middle" font-size="15" font-weight="800" fill="#1f2328">暫存區</text>
+  <text x="390" y="172" text-anchor="middle" font-size="12" fill="#4a5159">Staging Area / Index</text>
+  <text x="390" y="200" text-anchor="middle" font-size="11" fill="#8a929b">下次快照的「草稿」</text>
+  <text x="390" y="216" text-anchor="middle" font-size="11" fill="#8a929b">挑選哪些改動要提交</text>
+
+  <rect x="560" y="120" width="190" height="110" rx="12" fill="#ede7fb" stroke="#8b5cf6" stroke-width="2"/>
+  <text x="655" y="152" text-anchor="middle" font-size="15" font-weight="800" fill="#1f2328">儲存庫</text>
+  <text x="655" y="172" text-anchor="middle" font-size="12" fill="#4a5159">Repository (.git)</text>
+  <text x="655" y="200" text-anchor="middle" font-size="11" fill="#8a929b">永久保存的快照歷史</text>
+  <text x="655" y="216" text-anchor="middle" font-size="11" fill="#8a929b">一張張提交過的照片</text>
+
+  <!-- forward arrows (top) -->
+  <line x1="220" y1="145" x2="293" y2="145" stroke="#2f6f6a" stroke-width="2.5" marker-end="url(#g-fwd)"/>
+  <text x="256" y="135" text-anchor="middle" font-size="12" font-weight="700" fill="#2f6f6a">git add</text>
+  <line x1="485" y1="145" x2="558" y2="145" stroke="#2f6f6a" stroke-width="2.5" marker-end="url(#g-fwd)"/>
+  <text x="521" y="135" text-anchor="middle" font-size="12" font-weight="700" fill="#2f6f6a">git commit</text>
+
+  <!-- backward arrows (bottom) -->
+  <line x1="293" y1="208" x2="222" y2="208" stroke="#b4541f" stroke-width="2.5" marker-end="url(#g-back)"/>
+  <text x="256" y="248" text-anchor="middle" font-size="11" font-weight="700" fill="#b4541f">git restore --staged</text>
+  <path d="M558 222 C 400 300, 250 300, 125 232" stroke="#b4541f" stroke-width="2.5" fill="none" marker-end="url(#g-back)"/>
+  <text x="390" y="296" text-anchor="middle" font-size="11" font-weight="700" fill="#b4541f">git restore &lt;file&gt; / git checkout(把舊快照拉回工作目錄)</text>
+
+  <text x="390" y="40" text-anchor="middle" font-size="15" font-weight="800" fill="#1f2328">Git 的三個區域</text>
+  <text x="390" y="62" text-anchor="middle" font-size="12" fill="#8a929b">每個指令,都是在這三個區域之間搬移你的修改</text>
+</svg>
+        <figcaption>圖 18-1:Git 的三區模型。<code>add</code> 把工作目錄的改動放進暫存區,<code>commit</code> 把暫存區的內容拍成一張快照存進儲存庫。綠色箭頭往右(提交方向),磚紅箭頭往左(復原方向)。</figcaption>
+      </div>
+
+      <p>
+        為什麼要有「暫存區」這個中間站,不能改完直接提交就好?因為它讓你能<strong>精挑細選</strong>:
+        假設你這次同時修了一個 bug、又順手改了排版。你可以只 <code>add</code> 修 bug 的檔案、提交成一個 commit(訊息寫「修正登入崩潰」),
+        再 <code>add</code> 排版的改動、提交成另一個(訊息寫「調整首頁間距」)。歷史因此乾淨、每個 commit 只做一件事。暫存區就是你「組裝下一張快照」的工作台。
+      </p>
+
+      <h3>關鍵三:commit 是 DAG 上的節點</h3>
+      <p>
+        現在把每張快照(commit)串起來看。每個 commit 除了存著快照,還記著一個關鍵資訊:<strong>它的父節點(parent)是誰</strong>——也就是「我是從哪張快照接著做下來的」。
+        於是所有 commit 連成一條鏈,每個節點指向它的前一個:
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 760 200" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="g-parent" markerWidth="11" markerHeight="11" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/></marker>
+  </defs>
+  <!-- commits -->
+  <g>
+    <circle cx="110" cy="110" r="34" fill="#2f6f6a"/><text x="110" y="106" text-anchor="middle" font-size="13" font-weight="800" fill="#fff">C1</text><text x="110" y="124" text-anchor="middle" font-size="10" fill="#cfe6e2">a3f9c2e</text>
+    <circle cx="290" cy="110" r="34" fill="#2f6f6a"/><text x="290" y="106" text-anchor="middle" font-size="13" font-weight="800" fill="#fff">C2</text><text x="290" y="124" text-anchor="middle" font-size="10" fill="#cfe6e2">7b1e0d4</text>
+    <circle cx="470" cy="110" r="34" fill="#2f6f6a"/><text x="470" y="106" text-anchor="middle" font-size="13" font-weight="800" fill="#fff">C3</text><text x="470" y="124" text-anchor="middle" font-size="10" fill="#cfe6e2">f02ab57</text>
+    <circle cx="650" cy="110" r="34" fill="#2f6f6a"/><text x="650" y="106" text-anchor="middle" font-size="13" font-weight="800" fill="#fff">C4</text><text x="650" y="124" text-anchor="middle" font-size="10" fill="#cfe6e2">c91d8af</text>
+  </g>
+  <!-- parent pointers: child -> parent (point left) -->
+  <g stroke="#8a929b" stroke-width="2.5" marker-end="url(#g-parent)" fill="none">
+    <line x1="256" y1="110" x2="148" y2="110"/>
+    <line x1="436" y1="110" x2="328" y2="110"/>
+    <line x1="616" y1="110" x2="508" y2="110"/>
+  </g>
+  <text x="380" y="158" text-anchor="middle" font-size="11" fill="#8a929b">箭頭代表「父節點」:每個 commit 都記得自己是從哪一張快照長出來的</text>
+  <!-- branch + HEAD pointers -->
+  <rect x="606" y="36" width="88" height="26" rx="6" fill="#b4541f"/><text x="650" y="54" text-anchor="middle" font-size="12" font-weight="700" fill="#fff">main</text>
+  <line x1="650" y1="62" x2="650" y2="74" stroke="#b4541f" stroke-width="2"/>
+  <rect x="606" y="2" width="88" height="26" rx="6" fill="#8b5cf6"/><text x="650" y="20" text-anchor="middle" font-size="12" font-weight="700" fill="#fff">HEAD</text>
+  <line x1="650" y1="28" x2="650" y2="36" stroke="#8b5cf6" stroke-width="2"/>
+</svg>
+        <figcaption>圖 18-2:commit 形成一條鏈。每個 commit 指向它的父節點。<code>main</code> 這個分支只是一個指向「最新 commit」的標籤,而 <code>HEAD</code> 通常指向你目前所在的分支。</figcaption>
+      </div>
+
+      <p>
+        當有了分支,這條鏈會分岔、再合流,變成一張<strong>有向無環圖(Directed Acyclic Graph, DAG)</strong>:「有向」是因為每條邊都指向父節點;「無環」是因為你不可能成為自己的祖先(時間不會倒流)。
+        Git 的整個歷史,本質上就是這張 DAG。<strong>幾乎所有進階操作(分支、合併、rebase、reset),都只是在這張圖上移動指標、或新增節點而已。</strong>
+        當你心裡能畫出這張圖,Git 就再也不神秘了。
+      </p>
+
+      <h2>起步:第一個 repo,前三個 commit</h2>
+      <p>
+        理論講夠了,動手。所有指令都在終端機裡輸入(如果你還不熟終端機,可以先翻翻 Shell 那一章)。
+      </p>
+
+      <h3>一次性的全域設定</h3>
+      <p>
+        裝好 Git 後,先告訴它你是誰——這樣每個 commit 才知道作者署名。<code>--global</code> 代表「對這台機器上所有 repo 都生效」,只需設定一次:
+      </p>
+      <pre><code class="language-bash"># 設定你的署名(會記在每個 commit 上)
+git config --global user.name "Lin Xiaoming"
+git config --global user.email "you@example.com"
+
+# 讓 Git 輸出有顏色,好讀很多
+git config --global color.ui auto
+
+# 把預設分支名設成 main(現代慣例,取代舊的 master)
+git config --global init.defaultBranch main
+
+# 檢查設定
+git config --list</code></pre>
+
+      <h3>建立 repo 並查看狀態</h3>
+      <p>
+        進到你的專案資料夾,用 <code>git init</code> 把它變成一個 Git 倉庫——這會偷偷建立一個 <code>.git</code> 隱藏資料夾,你的整段歷史都會住在那裡:
+      </p>
+      <pre><code class="language-bash">mkdir my-site &amp;&amp; cd my-site     # 建立並進入專案資料夾
+git init                          # 初始化 repo,出現 .git/
+git status                        # 隨時都該下的指令:現在是什麼狀況?</code></pre>
+      <p>
+        <code>git status</code> 是你最該養成反射動作的指令——隨時不確定就打它。剛 init 完它會說:
+      </p>
+      <pre><code class="language-text">On branch main
+
+No commits yet
+
+nothing to commit (create/copy files to get started)</code></pre>
+      <p>現在來建立第一個檔案,再看一次狀態:</p>
+      <pre><code class="language-bash">echo "# 我的個人網站" &gt; README.md
+git status</code></pre>
+      <pre><code class="language-text">On branch main
+
+No commits yet
+
+Untracked files:
+  (use "git add &lt;file&gt;..." to include in what will be committed)
+        README.md
+
+nothing added to commit but untracked files present</code></pre>
+      <p>
+        Git 看到了 <code>README.md</code>,但說它是「<strong>未追蹤(untracked)</strong>」——意思是「這檔案我注意到了,但你還沒叫我管它」。
+        對照圖 18-1:它現在在工作目錄,還沒進暫存區。
+      </p>
+
+      <h3>add 與 commit</h3>
+      <pre><code class="language-bash">git add README.md          # 放進暫存區(也可用 git add . 加入全部)
+git status                 # 現在 README.md 變成「Changes to be committed」(綠色)
+git commit -m "Add project README"   # 拍成快照,存進儲存庫</code></pre>
+      <p>
+        恭喜,你的第一張快照誕生了!<code>-m</code> 後面是<strong>commit 訊息</strong>,用來說明這次改了什麼。我們繼續做第二、第三個 commit:
+      </p>
+      <pre><code class="language-bash"># 第二個 commit
+echo "&lt;h1&gt;Hello&lt;/h1&gt;" &gt; index.html
+git add index.html
+git commit -m "Add home page"
+
+# 第三個 commit
+echo "body { font-family: sans-serif; }" &gt; style.css
+git add style.css
+git commit -m "Add basic stylesheet"</code></pre>
+
+      <h3>用 log 回顧歷史</h3>
+      <p><code>git log</code> 列出所有 commit。加上幾個旗標會好讀非常多:</p>
+      <pre><code class="language-bash">git log                      # 完整資訊(hash、作者、日期、訊息)
+git log --oneline            # 每個 commit 濃縮成一行
+git log --oneline --graph    # 再畫出分支的圖形,協作時超好用</code></pre>
+      <pre><code class="language-text">$ git log --oneline
+c91d8af (HEAD -&gt; main) Add basic stylesheet
+f02ab57 Add home page
+a3f9c2e Add project README</code></pre>
+      <p>
+        看到 <code>(HEAD -&gt; main)</code> 了嗎?這正是圖 18-2 在現實中的樣子:<code>main</code> 指向最新的 commit,<code>HEAD</code> 指向 <code>main</code>。
+        左邊那串 <code>c91d8af</code> 就是每個 commit 的<strong>短 hash 指紋</strong>,之後很多指令都會用它來指名某個 commit。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">寫好 commit 訊息:給未來的自己一封信</span>
+          <p>commit 訊息不是給 Git 看的,是給<strong>三個月後完全忘記這段在幹嘛的你自己</strong>、以及你的隊友看的。業界通行的慣例:</p>
+          <ul>
+            <li><strong>標題用祈使句、現在式</strong>:寫「<code>Fix login crash</code>」(修正登入崩潰),不要寫「fixed」或「修了一些東西」。一個訣竅:它應該能接在「If applied, this commit will ___」後面通順。</li>
+            <li><strong>標題簡短(約 50 字內)</strong>,需要細節就空一行,在下面寫正文,解釋<strong>「為什麼」</strong>而不只是「做了什麼」。</li>
+            <li><strong>一個 commit 只做一件事</strong>。不要把「修 bug + 改排版 + 升級套件」塞進同一個 commit。</li>
+          </ul>
+          <p>壞訊息長這樣:<code>update</code>、<code>asdf</code>、<code>改好了</code>、<code>fix bug</code>。好訊息長這樣:<code>Fix crash when shopping cart is empty</code>。</p>
+        </div>
+      </div>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">Conventional Commits:給訊息加個前綴</span>
+          <p>很多團隊採用一種叫 <strong>Conventional Commits</strong> 的格式,在標題前加上類型前綴,讓歷史一眼可分類、甚至能自動產生更新日誌:
+          <code>feat:</code>(新功能)、<code>fix:</code>(修 bug)、<code>docs:</code>(文件)、<code>refactor:</code>(重構)、<code>test:</code>(測試)、<code>chore:</code>(雜務)。
+          例如 <code>feat: add dark mode toggle</code>。不強制,但是個好習慣。</p>
+        </div>
+      </div>
+
+      <h2>看變化:diff 與 show</h2>
+      <p>
+        版本控制最基本的價值,就是「看出到底哪裡變了」。Git 用 <code>git diff</code> 回答這件事,但你得先搞清楚它在比較<strong>哪兩個區域</strong>——這又回到三區模型了。
+      </p>
+      <pre><code class="language-bash">git diff              # 工作目錄 vs 暫存區:我改了、但還沒 add 的部分
+git diff --staged     # 暫存區 vs 上次 commit:我已 add、即將提交的部分
+                      #   (--staged 與 --cached 同義)
+git diff HEAD         # 工作目錄 vs 上次 commit:全部尚未提交的改動</code></pre>
+      <p>假設我們把 <code>README.md</code> 改了一行還沒 add,<code>git diff</code> 會輸出:</p>
+      <pre><code class="language-text">diff --git a/README.md b/README.md
+index 1f3a2b0..9c4e1d7 100644
+--- a/README.md
++++ b/README.md
+@@ -1 +1,2 @@
+ # 我的個人網站
++一個用來練習 Git 的小專案。</code></pre>
+      <p>
+        讀法很直覺:<code>-</code> 開頭的紅行是<strong>移除</strong>的內容(這裡沒有),<code>+</code> 開頭的綠行是<strong>新增</strong>的內容。
+        <code>@@ -1 +1,2 @@</code> 是「位置座標」,告訴你改動發生在第幾行附近。
+      </p>
+      <p>
+        想看某個<strong>已經提交</strong>的 commit 到底改了什麼,用 <code>git show</code>:
+      </p>
+      <pre><code class="language-bash">git show              # 顯示 HEAD(最新 commit)的完整內容與 diff
+git show f02ab57      # 用 hash 指名,顯示某個特定 commit
+git show HEAD~1       # HEAD~1 = 上一個 commit;HEAD~2 = 再上一個</code></pre>
+      <p>
+        這裡出現一個超好用的記號:<code>HEAD~n</code> 代表「從 HEAD 往回數 n 個父節點」。<code>HEAD~1</code> 是上一個 commit,<code>HEAD~2</code> 是上上個。
+        它讓你能在 DAG 上輕鬆地「往回指」,後面復原時會不斷用到。
+      </p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 18.1 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>從零開始:建立一個新資料夾並初始化 Git,設定好你的姓名與信箱,然後製造出<strong>前三個 commit</strong>。最後用一行指令印出乾淨的歷史,確認真的有三個。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-bash">mkdir git-practice &amp;&amp; cd git-practice
+git init
+
+# (如果還沒設定過全域身分)
+git config user.name "Your Name"
+git config user.email "you@example.com"
+
+# commit 1
+echo "# Git 練習" &gt; README.md
+git add README.md
+git commit -m "Add README"
+
+# commit 2
+echo "print('hello')" &gt; main.py
+git add main.py
+git commit -m "Add hello script"
+
+# commit 3:修改既有檔案也算一次變更
+echo "print('world')" &gt;&gt; main.py
+git add main.py
+git commit -m "Print world too"
+
+git log --oneline</code></pre>
+              <p>你會看到三行,每行一個 commit。注意第三個 commit 改的是「既有檔案」——版本控制不只追蹤新檔,也追蹤每一次內容變動。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>復原:三種後悔藥,別吃錯</h2>
+      <p>
+        「啊我改壞了」「這個 commit 根本不該做」——這是日常。Git 提供好幾種復原手段,但它們<strong>後果差很多</strong>,吃錯藥會出事。我們一個一個來。
+      </p>
+
+      <h3>git restore:丟掉還沒提交的改動</h3>
+      <p>
+        最常見的情境:你把某個檔案改爛了,還沒 commit,只想<strong>回到上次提交時的樣子</strong>。
+      </p>
+      <pre><code class="language-bash"># 丟棄工作目錄裡對某檔案的修改(回到上次 commit 的內容)
+git restore index.html
+
+# 把已經 add 進暫存區的檔案「退回」工作目錄(取消 add,改動還在)
+git restore --staged index.html</code></pre>
+      <p>
+        對照圖 18-1:<code>git restore --staged</code> 是那條從暫存區退回工作目錄的箭頭(取消 add);<code>git restore &lt;file&gt;</code> 則是把上次快照的內容覆蓋回工作目錄(丟棄修改)。
+        (你可能也看過用 <code>git checkout -- &lt;file&gt;</code> 做同樣的事——那是舊寫法,<code>restore</code> 是 Git 2.23 後分出來、語意更清楚的新指令。)
+      </p>
+
+      <h3>git reset:移動分支指標(三種力道)</h3>
+      <p>
+        <code>git reset</code> 是把<strong>分支指標往回搬</strong>——讓「目前的 commit」退回到某個較早的 commit。它有三種模式,差別在於「對暫存區和工作目錄下手多重」。這是 Git 最容易搞混、卻最該搞懂的一組指令:
+      </p>
+
+      <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>指令</th><th>分支指標</th><th>暫存區</th><th>工作目錄</th><th>白話</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>reset --soft</code></td><td>後退</td><td>不動</td><td>不動</td><td>「取消提交,但改動全留在暫存區,準備重新 commit」</td></tr>
+          <tr><td><code>reset --mixed</code>(預設)</td><td>後退</td><td>跟著重設</td><td>不動</td><td>「取消提交、也取消 add,但檔案內容保留」</td></tr>
+          <tr><td><code>reset --hard</code></td><td>後退</td><td>跟著重設</td><td>跟著重設</td><td>「全部抹掉,當作那些 commit 與改動從沒發生過」⚠️</td></tr>
+        </tbody>
+      </table>
+      </div>
+
+      <div class="diagram">
+<svg viewBox="0 0 760 280" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="r-arr" markerWidth="11" markerHeight="11" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/></marker>
+  </defs>
+  <text x="380" y="26" text-anchor="middle" font-size="14" font-weight="800" fill="#1f2328">git reset HEAD~1 的三種力道(把指標從 C3 退回 C2)</text>
+  <!-- commit line -->
+  <g>
+    <circle cx="150" cy="80" r="26" fill="#2f6f6a"/><text x="150" y="85" text-anchor="middle" font-size="12" font-weight="800" fill="#fff">C1</text>
+    <circle cx="330" cy="80" r="26" fill="#2f6f6a"/><text x="330" y="85" text-anchor="middle" font-size="12" font-weight="800" fill="#fff">C2</text>
+    <circle cx="510" cy="80" r="26" fill="#b4541f"/><text x="510" y="85" text-anchor="middle" font-size="12" font-weight="800" fill="#fff">C3</text>
+  </g>
+  <g stroke="#8a929b" stroke-width="2.5" marker-end="url(#r-arr)" fill="none">
+    <line x1="304" y1="80" x2="180" y2="80"/>
+    <line x1="484" y1="80" x2="360" y2="80"/>
+  </g>
+  <!-- HEAD before -->
+  <text x="510" y="40" text-anchor="middle" font-size="11" fill="#b4541f" font-weight="700">原本 HEAD 在這</text>
+  <!-- reset target -->
+  <path d="M505 110 C 460 150, 380 130, 332 108" stroke="#b4541f" stroke-width="2.5" stroke-dasharray="5 4" fill="none" marker-end="url(#r-arr)"/>
+  <text x="330" y="138" text-anchor="middle" font-size="11" fill="#b4541f" font-weight="700">reset 後 HEAD 移到 C2</text>
+
+  <!-- three outcomes -->
+  <g font-size="11">
+    <rect x="40"  y="175" width="220" height="80" rx="10" fill="#e3efed" stroke="#2f6f6a"/>
+    <text x="150" y="196" text-anchor="middle" font-size="12" font-weight="800" fill="#1f2328">--soft</text>
+    <text x="150" y="216" text-anchor="middle" fill="#4a5159">C3 的改動 → 留在「暫存區」</text>
+    <text x="150" y="234" text-anchor="middle" fill="#16a34a">隨時可以重新 commit</text>
+
+    <rect x="270" y="175" width="220" height="80" rx="10" fill="#f6e7dd" stroke="#b4541f"/>
+    <text x="380" y="196" text-anchor="middle" font-size="12" font-weight="800" fill="#1f2328">--mixed(預設)</text>
+    <text x="380" y="216" text-anchor="middle" fill="#4a5159">C3 的改動 → 留在「工作目錄」</text>
+    <text x="380" y="234" text-anchor="middle" fill="#16a34a">需要時得重新 add</text>
+
+    <rect x="500" y="175" width="220" height="80" rx="10" fill="#fbe3e3" stroke="#c0392b"/>
+    <text x="610" y="196" text-anchor="middle" font-size="12" font-weight="800" fill="#1f2328">--hard</text>
+    <text x="610" y="216" text-anchor="middle" fill="#4a5159">C3 的改動 → 直接消失</text>
+    <text x="610" y="234" text-anchor="middle" fill="#c0392b" font-weight="700">⚠️ 工作目錄被覆蓋</text>
+  </g>
+</svg>
+        <figcaption>圖 18-3:<code>git reset HEAD~1</code> 把分支指標退回上一個 commit。三種模式的差別,在於它對「暫存區」與「工作目錄」下手的力道。<code>--soft</code> 最溫柔(改動全留著),<code>--hard</code> 最暴力(改動全清光)。</figcaption>
+      </div>
+
+      <div class="callout danger">
+        <div class="ico">⛔</div>
+        <div class="body">
+          <span class="c-title">git reset --hard 會真的刪掉你的工作</span>
+          <p><code>git reset --hard</code> 會用目標 commit 的內容<strong>覆蓋掉你工作目錄裡尚未提交的所有改動</strong>,而且不會問你「確定嗎」。
+          那些還沒 commit 的修改一旦被它沖掉,基本上<strong>救不回來</strong>(沒 commit 過的東西連 reflog 都救不了)。
+          下這個指令前,先停一秒問自己:「我工作目錄裡有沒有還沒提交、又不想丟的東西?」如果有,先 <code>commit</code> 或 <code>stash</code> 起來。</p>
+        </div>
+      </div>
+
+      <h3>git revert:用「反向 commit」安全地撤銷</h3>
+      <p>
+        <code>reset</code> 是「改寫歷史、假裝那些 commit 沒發生過」。但如果那個爛 commit <strong>已經推送給別人了</strong>呢?你一改寫歷史,別人的歷史就跟你對不上,天下大亂。
+        這時要用 <code>git revert</code>:它不刪除任何歷史,而是<strong>產生一個新的 commit,內容剛好是把某個舊 commit 的改動「反過來做一遍」</strong>。
+      </p>
+      <pre><code class="language-bash">git revert HEAD          # 新增一個 commit,抵銷掉最新那個 commit 的改動
+git revert f02ab57       # 抵銷掉指定的某個 commit</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">reset vs revert:私有 vs 公開的分水嶺</span>
+          <p><strong>reset</strong>:把指標往回搬、<em>改寫</em>歷史。乾淨俐落,但只適合用在<strong>還沒分享出去</strong>的本地 commit。<br>
+          <strong>revert</strong>:新增一個反向 commit、<em>保留</em>所有歷史。雖然多一筆紀錄,卻是撤銷<strong>已經推送、別人也有</strong>的 commit 的唯一安全做法。<br>
+          一句口訣:<strong>「歷史還是我自己的,用 reset;歷史已經是大家的,用 revert。」</strong></p>
+        </div>
+      </div>
+
+      <h3>.gitignore:有些東西就是不該被追蹤</h3>
+      <p>
+        不是所有檔案都該進版本控制。編譯產物、相依套件資料夾、log 檔、還有<strong>絕對不能外流的密碼與金鑰</strong>,都應該被忽略。
+        在專案根目錄建一個 <code>.gitignore</code> 檔,把要忽略的模式寫進去,Git 就會對它們視而不見:
+      </p>
+      <pre><code class="language-bash"># .gitignore 範例
+__pycache__/        # Python 編譯快取
+*.pyc               # 所有 .pyc 檔
+node_modules/       # 龐大的相依套件,該由 npm install 重建,不該入庫
+.env                # 環境變數檔(裡面常有密碼/API key!)
+*.log               # 各種 log
+.DS_Store           # macOS 自動產生的垃圾檔
+dist/               # 打包輸出</code></pre>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">.gitignore 只擋「還沒被追蹤」的檔案</span>
+          <p>如果一個檔案<strong>已經被 commit 過了</strong>,事後才把它加進 <code>.gitignore</code> 是<em>沒用</em>的——Git 已經在追蹤它了。
+          你得先用 <code>git rm --cached &lt;file&gt;</code> 把它從追蹤名單移除(但保留本機檔案),再 commit。
+          這對「不小心把密碼提交進去」特別重要——不過要注意,光這樣做,那個密碼<strong>還留在歷史紀錄裡</strong>,真正外洩過的金鑰一定要當作已洩漏、立刻更換。這部分第七部「資訊安全」會深入談。</p>
+        </div>
+      </div>
+
+      <h2>分支:Git 的殺手鐧</h2>
+      <p>
+        終於來到 Git 最強大、也最讓它與眾不同的功能:<strong>分支(branch)</strong>。
+        分支讓你能開一條「平行宇宙」去開發新功能或試驗瘋狂點子,完全不干擾主線;成功了就合併回來,失敗了就整條丟掉,主線毫髮無傷。
+      </p>
+      <p>
+        而 Git 的分支之所以快到幾乎免費(其他系統開分支可能要複製整個專案),關鍵在於一個極簡的真相:
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">分支只是一個指標</span>
+          <p>一個分支,<strong>本質上只是一個指向某個 commit 的標籤(指標)</strong>,小到只是一個存著 40 字 hash 的檔案。
+          建立分支不會複製任何檔案,只是新增一個指標。所以在 Git 開分支、切分支,幾乎是瞬間完成的。
+          而 <strong>HEAD</strong> 是一個特殊指標,它指向「你目前所在的分支」——也就是「你現在站在哪裡」。</p>
+        </div>
+      </div>
+
+      <pre><code class="language-bash">git branch                 # 列出所有分支,* 標記你目前在哪條
+git branch feature-login   # 建立一條叫 feature-login 的新分支(但還沒切過去)
+git switch feature-login   # 切換到該分支(HEAD 移過去)
+git switch -c feature-login   # 一步到位:建立並立刻切換(-c = create)
+
+# 你也會常看到舊寫法(checkout 身兼切換與其他功能):
+git checkout feature-login
+git checkout -b feature-login</code></pre>
+      <p>
+        切到新分支後,你做的每個 commit 都會長在這條分支上,主分支 <code>main</code> 完全不受影響。來看一張分岔的圖:
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 760 250" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="b-arr" markerWidth="11" markerHeight="11" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/></marker>
+  </defs>
+  <!-- main line -->
+  <g>
+    <circle cx="120" cy="170" r="26" fill="#2f6f6a"/><text x="120" y="175" text-anchor="middle" font-size="12" font-weight="800" fill="#fff">C1</text>
+    <circle cx="280" cy="170" r="26" fill="#2f6f6a"/><text x="280" y="175" text-anchor="middle" font-size="12" font-weight="800" fill="#fff">C2</text>
+    <circle cx="440" cy="170" r="26" fill="#2f6f6a"/><text x="440" y="175" text-anchor="middle" font-size="12" font-weight="800" fill="#fff">C3</text>
+  </g>
+  <g stroke="#8a929b" stroke-width="2.5" marker-end="url(#b-arr)" fill="none">
+    <line x1="254" y1="170" x2="146" y2="170"/>
+    <line x1="414" y1="170" x2="306" y2="170"/>
+  </g>
+  <!-- feature branch up from C2 -->
+  <g>
+    <circle cx="440" cy="80" r="26" fill="#8b5cf6"/><text x="440" y="85" text-anchor="middle" font-size="12" font-weight="800" fill="#fff">F1</text>
+    <circle cx="600" cy="80" r="26" fill="#8b5cf6"/><text x="600" y="85" text-anchor="middle" font-size="12" font-weight="800" fill="#fff">F2</text>
+  </g>
+  <g stroke="#8a929b" stroke-width="2.5" marker-end="url(#b-arr)" fill="none">
+    <path d="M418 64 C 340 30, 300 120, 286 146"/>
+    <line x1="574" y1="80" x2="466" y2="80"/>
+  </g>
+  <!-- pointers -->
+  <rect x="396" y="206" width="88" height="26" rx="6" fill="#2f6f6a"/><text x="440" y="224" text-anchor="middle" font-size="12" font-weight="700" fill="#fff">main</text>
+  <line x1="440" y1="196" x2="440" y2="206" stroke="#2f6f6a" stroke-width="2"/>
+  <rect x="544" y="22" width="112" height="26" rx="6" fill="#8b5cf6"/><text x="600" y="40" text-anchor="middle" font-size="12" font-weight="700" fill="#fff">feature-login</text>
+  <line x1="600" y1="48" x2="600" y2="54" stroke="#8b5cf6" stroke-width="2"/>
+  <rect x="544" y="-6" width="112" height="0" />
+  <rect x="660" y="64" width="78" height="26" rx="6" fill="#b4541f"/><text x="699" y="82" text-anchor="middle" font-size="12" font-weight="700" fill="#fff">HEAD</text>
+  <line x1="660" y1="78" x2="626" y2="80" stroke="#b4541f" stroke-width="2"/>
+</svg>
+        <figcaption>圖 18-4:從 C2 開出 <code>feature-login</code> 分支後,在上面做了 F1、F2 兩個 commit。<code>main</code> 還停在 C3,兩條線各走各的。<code>HEAD</code> 指向你目前所在的 <code>feature-login</code>。</figcaption>
+      </div>
+
+      <p>
+        這就是「平行宇宙」:<code>main</code> 上的 C3 跟 feature 上的 F1、F2 互不影響。你可以在這條 feature 上盡情實驗,隨時用 <code>git switch main</code> 跳回主線——你工作目錄裡的檔案會瞬間變回 C3 的樣子,像沒事一樣。
+      </p>
+
+      <h2>合併:把分岔的故事線匯流</h2>
+      <p>
+        功能在分支上開發完了,該把它<strong>合併(merge)</strong>回主線。<code>git merge</code> 有兩種典型情況,值得分清楚。
+      </p>
+
+      <h3>情況一:快轉合併(fast-forward)</h3>
+      <p>
+        如果你開分支之後,<code>main</code> <strong>完全沒有新的 commit</strong>(它還停在你當初分岔的那一點),那合併就簡單到不行:Git 只要把 <code>main</code> 這個指標<strong>往前滑</strong>到 feature 的最新 commit 就好,根本不用真的「合」。這叫<strong>快轉(fast-forward)</strong>。
+      </p>
+
+      <h3>情況二:三方合併(three-way merge)</h3>
+      <p>
+        但更常見的是:你在 feature 上忙的時候,<code>main</code> 也有別人(或你自己)推進了新 commit。兩條線<strong>都各自往前走了</strong>。
+        這時無法單純快轉,Git 會找出兩條分支的<strong>共同祖先</strong>,把「祖先→main」與「祖先→feature」兩邊的改動<strong>湊在一起</strong>,產生一個特殊的<strong>合併提交(merge commit)</strong>——它有<em>兩個</em>父節點,正是兩條故事線匯流的證明。因為牽涉三個點(共同祖先 + 兩個分支頂端),所以叫「三方合併」。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 760 360" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="m-arr" markerWidth="11" markerHeight="11" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/></marker>
+  </defs>
+  <!-- TOP: fast-forward -->
+  <text x="30" y="30" font-size="13" font-weight="800" fill="#1f2328">快轉合併:main 沒有新進度,只要把指標往前滑</text>
+  <g>
+    <circle cx="90"  cy="80" r="22" fill="#2f6f6a"/><text x="90"  y="85" text-anchor="middle" font-size="11" font-weight="800" fill="#fff">C1</text>
+    <circle cx="230" cy="80" r="22" fill="#2f6f6a"/><text x="230" y="85" text-anchor="middle" font-size="11" font-weight="800" fill="#fff">C2</text>
+    <circle cx="370" cy="80" r="22" fill="#8b5cf6"/><text x="370" y="85" text-anchor="middle" font-size="11" font-weight="800" fill="#fff">F1</text>
+    <circle cx="510" cy="80" r="22" fill="#8b5cf6"/><text x="510" y="85" text-anchor="middle" font-size="11" font-weight="800" fill="#fff">F2</text>
+  </g>
+  <g stroke="#8a929b" stroke-width="2.5" marker-end="url(#m-arr)" fill="none">
+    <line x1="208" y1="80" x2="112" y2="80"/>
+    <line x1="348" y1="80" x2="252" y2="80"/>
+    <line x1="488" y1="80" x2="392" y2="80"/>
+  </g>
+  <rect x="466" y="112" width="120" height="24" rx="6" fill="#2f6f6a"/><text x="526" y="129" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">main(往前滑到此)</text>
+  <line x1="510" y1="102" x2="510" y2="112" stroke="#2f6f6a" stroke-width="2"/>
+
+  <!-- divider -->
+  <line x1="30" y1="165" x2="730" y2="165" stroke="#e3e6ea" stroke-width="1.5"/>
+
+  <!-- BOTTOM: three-way -->
+  <text x="30" y="195" font-size="13" font-weight="800" fill="#1f2328">三方合併:兩邊都有進度,產生一個有兩個父節點的合併提交 M</text>
+  <!-- main line bottom -->
+  <g>
+    <circle cx="90"  cy="290" r="22" fill="#2f6f6a"/><text x="90"  y="295" text-anchor="middle" font-size="11" font-weight="800" fill="#fff">C1</text>
+    <circle cx="230" cy="290" r="22" fill="#2f6f6a"/><text x="230" y="295" text-anchor="middle" font-size="11" font-weight="800" fill="#fff">C2</text>
+    <circle cx="370" cy="290" r="22" fill="#2f6f6a"/><text x="370" y="295" text-anchor="middle" font-size="11" font-weight="800" fill="#fff">C3</text>
+  </g>
+  <!-- feature up -->
+  <g>
+    <circle cx="370" cy="215" r="22" fill="#8b5cf6"/><text x="370" y="220" text-anchor="middle" font-size="11" font-weight="800" fill="#fff">F1</text>
+    <circle cx="510" cy="215" r="22" fill="#8b5cf6"/><text x="510" y="220" text-anchor="middle" font-size="11" font-weight="800" fill="#fff">F2</text>
+  </g>
+  <!-- merge commit -->
+  <circle cx="630" cy="290" r="24" fill="#b4541f"/><text x="630" y="295" text-anchor="middle" font-size="12" font-weight="800" fill="#fff">M</text>
+  <g stroke="#8a929b" stroke-width="2.5" marker-end="url(#m-arr)" fill="none">
+    <line x1="208" y1="290" x2="112" y2="290"/>
+    <line x1="348" y1="290" x2="252" y2="290"/>
+    <path d="M350 227 C 290 250, 252 270, 232 280"/>
+    <line x1="488" y1="215" x2="392" y2="215"/>
+    <!-- M -> C3 and M -> F2 (two parents) -->
+    <path d="M607 290 L 394 290"/>
+    <path d="M612 277 C 560 250, 540 235, 528 228"/>
+  </g>
+  <rect x="582" y="322" width="96" height="24" rx="6" fill="#b4541f"/><text x="630" y="339" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">main(指向 M)</text>
+  <line x1="630" y1="314" x2="630" y2="322" stroke="#b4541f" stroke-width="2"/>
+</svg>
+        <figcaption>圖 18-5:兩種合併。上半:<code>main</code> 沒進度時,合併只是把指標快轉到分支頂端。下半:兩邊都有 commit 時,Git 建立一個合併提交 M,它同時指向 C3 與 F2 兩個父節點。</figcaption>
+      </div>
+
+      <p>實際操作很簡單:先切回要被合併進去的分支(通常是 <code>main</code>),再 merge 對方:</p>
+      <pre><code class="language-bash">git switch main                 # 先站到主線上
+git merge feature-login         # 把 feature-login 合併進來
+
+# 合併完、確認沒問題後,順手刪掉用完的分支
+git branch -d feature-login</code></pre>
+
+      <h3>合併衝突(merge conflict):兩個人改了同一行</h3>
+      <p>
+        如果兩條分支<strong>改到了同一個檔案的同一段</strong>,Git 沒辦法自作主張決定該採用誰的——這就是<strong>合併衝突</strong>。
+        別怕,它不是錯誤,只是 Git 在說「這裡我不敢替你決定,你來」。它會在衝突的檔案裡插入特殊標記:
+      </p>
+      <pre><code class="language-text">&lt;&lt;&lt;&lt;&lt;&lt;&lt; HEAD
+&lt;h1&gt;歡迎來到我的首頁&lt;/h1&gt;
+=======
+&lt;h1&gt;Welcome to my homepage&lt;/h1&gt;
+&gt;&gt;&gt;&gt;&gt;&gt;&gt; feature-login</code></pre>
+      <p>讀法:</p>
+      <ul>
+        <li><code>&lt;&lt;&lt;&lt;&lt;&lt;&lt; HEAD</code> 到 <code>=======</code> 之間,是<strong>你目前分支</strong>(HEAD,這裡是 main)的版本。</li>
+        <li><code>=======</code> 到 <code>&gt;&gt;&gt;&gt;&gt;&gt;&gt; feature-login</code> 之間,是<strong>要合併進來那條分支</strong>的版本。</li>
+      </ul>
+      <p>
+        你的任務:<strong>手動編輯這個檔案</strong>,把它改成你<em>真正想要</em>的最終樣子,並且<strong>把那三行標記(<code>&lt;&lt;&lt;</code>、<code>===</code>、<code>&gt;&gt;&gt;</code>)全部刪掉</strong>。
+        可能是留 A、留 B、留兩者、或寫出全新的第三版。改好後:
+      </p>
+      <pre><code class="language-bash">git status              # Git 會列出哪些檔案還在衝突中(Unmerged paths)
+# ... 用編輯器手動解決每個衝突檔,刪掉標記 ...
+git add index.html      # 解完一個檔就 add,等於告訴 Git「這個我搞定了」
+git commit              # 全部解完後提交,完成這次合併
+                        # (合併衝突的 commit 通常直接用 Git 給的預設訊息即可)</code></pre>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">解衝突不可怕,但要「真的讀懂」兩邊</span>
+          <p>新手最常犯的錯,是慌張地隨便留一邊、或忘了刪標記,結果把別人的修改默默弄丟、或讓 <code>&lt;&lt;&lt;&lt;&lt;&lt;&lt;</code> 跑進正式程式碼裡。
+          冷靜下來,逐個衝突問自己:「這兩個版本各自想做什麼?最終正確的樣子是什麼?」現代編輯器(如 VS Code)會把衝突高亮、附上「採用目前/採用傳入/兩者都留」的按鈕,善用它。
+          真的解到一半想放棄?<code>git merge --abort</code> 能讓你回到合併前的乾淨狀態,重新來過。</p>
+        </div>
+      </div>
+
+      <h3>rebase:另一種匯流的姿勢</h3>
+      <p>
+        除了 merge,還有第二種把分支整合進來的方式:<strong>rebase(變基)</strong>。它的想法很不一樣。
+        merge 是「把兩條線匯流成一個合併提交」;rebase 則是<strong>把你分支上的那串 commit「拔起來」,重新接到目標分支的最新 commit 後面,假裝你是從那裡才開始開發的</strong>。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 760 380" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="rb-arr" markerWidth="11" markerHeight="11" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/></marker>
+  </defs>
+  <!-- starting state -->
+  <text x="30" y="28" font-size="13" font-weight="800" fill="#1f2328">起點:feature 從 C2 分出,之後 main 又前進到 C4</text>
+  <g>
+    <circle cx="90"  cy="78" r="20" fill="#2f6f6a"/><text x="90"  y="83" text-anchor="middle" font-size="10" font-weight="800" fill="#fff">C1</text>
+    <circle cx="210" cy="78" r="20" fill="#2f6f6a"/><text x="210" y="83" text-anchor="middle" font-size="10" font-weight="800" fill="#fff">C2</text>
+    <circle cx="330" cy="78" r="20" fill="#2f6f6a"/><text x="330" y="83" text-anchor="middle" font-size="10" font-weight="800" fill="#fff">C3</text>
+    <circle cx="450" cy="78" r="20" fill="#2f6f6a"/><text x="450" y="83" text-anchor="middle" font-size="10" font-weight="800" fill="#fff">C4</text>
+    <circle cx="330" cy="20" r="20" fill="#8b5cf6"/><text x="330" y="25" text-anchor="middle" font-size="10" font-weight="800" fill="#fff">F1</text>
+  </g>
+  <g stroke="#8a929b" stroke-width="2" marker-end="url(#rb-arr)" fill="none">
+    <line x1="190" y1="78" x2="110" y2="78"/>
+    <line x1="310" y1="78" x2="230" y2="78"/>
+    <line x1="430" y1="78" x2="350" y2="78"/>
+    <path d="M312 26 C 250 40, 230 60, 224 64"/>
+  </g>
+
+  <line x1="30" y1="118" x2="730" y2="118" stroke="#e3e6ea" stroke-width="1.5"/>
+
+  <!-- merge result -->
+  <text x="30" y="148" font-size="13" font-weight="800" fill="#b4541f">用 merge:多一個合併提交 M,歷史保留分岔的真實形狀</text>
+  <g>
+    <circle cx="90"  cy="200" r="20" fill="#2f6f6a"/><text x="90"  y="205" text-anchor="middle" font-size="10" font-weight="800" fill="#fff">C1</text>
+    <circle cx="200" cy="200" r="20" fill="#2f6f6a"/><text x="200" y="205" text-anchor="middle" font-size="10" font-weight="800" fill="#fff">C2</text>
+    <circle cx="310" cy="200" r="20" fill="#2f6f6a"/><text x="310" y="205" text-anchor="middle" font-size="10" font-weight="800" fill="#fff">C3</text>
+    <circle cx="420" cy="200" r="20" fill="#2f6f6a"/><text x="420" y="205" text-anchor="middle" font-size="10" font-weight="800" fill="#fff">C4</text>
+    <circle cx="310" cy="148" r="18" fill="#8b5cf6"/><text x="310" y="152" text-anchor="middle" font-size="9" font-weight="800" fill="#fff">F1</text>
+    <circle cx="540" cy="200" r="22" fill="#b4541f"/><text x="540" y="205" text-anchor="middle" font-size="11" font-weight="800" fill="#fff">M</text>
+  </g>
+  <g stroke="#8a929b" stroke-width="2" marker-end="url(#rb-arr)" fill="none">
+    <line x1="180" y1="200" x2="110" y2="200"/>
+    <line x1="290" y1="200" x2="220" y2="200"/>
+    <line x1="400" y1="200" x2="330" y2="200"/>
+    <path d="M294 152 C 240 165, 222 180, 218 186"/>
+    <line x1="518" y1="200" x2="440" y2="200"/>
+    <path d="M524 188 C 420 150, 360 150, 326 158"/>
+  </g>
+
+  <line x1="30" y1="250" x2="730" y2="250" stroke="#e3e6ea" stroke-width="1.5"/>
+
+  <!-- rebase result -->
+  <text x="30" y="280" font-size="13" font-weight="800" fill="#8b5cf6">用 rebase:F1 被「重做」成 F1′,接到 C4 後面,歷史變成一條直線</text>
+  <g>
+    <circle cx="90"  cy="330" r="20" fill="#2f6f6a"/><text x="90"  y="335" text-anchor="middle" font-size="10" font-weight="800" fill="#fff">C1</text>
+    <circle cx="220" cy="330" r="20" fill="#2f6f6a"/><text x="220" y="335" text-anchor="middle" font-size="10" font-weight="800" fill="#fff">C2</text>
+    <circle cx="350" cy="330" r="20" fill="#2f6f6a"/><text x="350" y="335" text-anchor="middle" font-size="10" font-weight="800" fill="#fff">C3</text>
+    <circle cx="480" cy="330" r="20" fill="#2f6f6a"/><text x="480" y="335" text-anchor="middle" font-size="10" font-weight="800" fill="#fff">C4</text>
+    <circle cx="610" cy="330" r="20" fill="#8b5cf6"/><text x="610" y="335" text-anchor="middle" font-size="10" font-weight="800" fill="#fff">F1′</text>
+  </g>
+  <g stroke="#8a929b" stroke-width="2" marker-end="url(#rb-arr)" fill="none">
+    <line x1="200" y1="330" x2="110" y2="330"/>
+    <line x1="330" y1="330" x2="240" y2="330"/>
+    <line x1="460" y1="330" x2="370" y2="330"/>
+    <line x1="590" y1="330" x2="500" y2="330"/>
+  </g>
+</svg>
+        <figcaption>圖 18-6:merge vs rebase。同樣的起點,merge 保留分岔、多一個合併提交 M(歷史更「真實」但有岔路);rebase 把 F1 重演成 F1′ 接到 C4 後面,歷史變成一條乾淨直線(但 F1 的 hash 變了,等於改寫了歷史)。</figcaption>
+      </div>
+
+      <pre><code class="language-bash"># 站在 feature 分支上,把它重新接到最新的 main 後面
+git switch feature-login
+git rebase main</code></pre>
+      <p>
+        rebase 的好處是<strong>歷史乾淨</strong>——沒有一堆合併提交,看起來像每個人都乖乖地一條線接著做。缺點是它<strong>改寫了歷史</strong>:F1 變成了一個全新的 commit F1′(hash 不同),原本的 F1 被丟棄了。這個「改寫」的特性,帶來一條鐵律:
+      </p>
+
+      <div class="callout danger">
+        <div class="ico">⛔</div>
+        <div class="body">
+          <span class="c-title">黃金法則:絕不 rebase 已經推送的公開歷史</span>
+          <p>rebase 會用「新 commit」取代「舊 commit」。如果那些 commit <strong>已經 push 出去、別人也已經基於它們在工作</strong>,你一 rebase,大家的歷史就跟你對不上,
+          別人 pull 下來會看到一團混亂、甚至重複的 commit,合併地獄就此展開。<br>
+          口訣:<strong>「只 rebase 還躺在你自己電腦裡、沒分享給任何人的 commit。」</strong>
+          想整理已推送的歷史?改用 merge,或先跟團隊講好。</p>
+        </div>
+      </div>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">那到底該用 merge 還是 rebase?</span>
+          <p>沒有絕對答案,是團隊風格之爭。常見的折衷做法:在<strong>自己的功能分支</strong>上,用 rebase 把主線的最新進度同步過來、保持歷史整齊;
+          真正<strong>併回主線</strong>時則用 merge(或平台的 PR 合併),留下一個清楚的整合點。記住那條黃金法則,你怎麼選都不會出大錯。</p>
+        </div>
+      </div>
+
+      <h2>遠端協作:把 repo 放到雲端</h2>
+      <p>
+        到目前為止,一切都發生在你自己的電腦裡。要跟別人協作、或單純想備份,你需要一個<strong>遠端(remote)</strong>——通常是放在 GitHub、GitLab 之類平台上的一份 repo 副本。
+      </p>
+      <p>
+        最常見的起手式是<strong>複製(clone)</strong>一個現成的遠端 repo 到本機:
+      </p>
+      <pre><code class="language-bash">git clone https://github.com/someone/cool-project.git
+cd cool-project
+git remote -v       # 看看連到了哪些遠端</code></pre>
+      <pre><code class="language-text">origin  https://github.com/someone/cool-project.git (fetch)
+origin  https://github.com/someone/cool-project.git (push)</code></pre>
+      <p>
+        注意那個 <strong><code>origin</code></strong>:它只是這個遠端的<strong>預設暱稱</strong>(你 clone 來的那個來源)。你大可叫它別的名字,但全世界的慣例就是叫 origin,看到它別緊張。
+      </p>
+      <p>如果是把<strong>本機既有的 repo</strong>連上一個空的遠端,則是:</p>
+      <pre><code class="language-bash">git remote add origin https://github.com/you/my-site.git
+git push -u origin main    # 第一次推送,-u 把本地 main 與遠端 main「綁定」</code></pre>
+
+      <h3>fetch、pull、push 的分工</h3>
+      <p>
+        這三個指令是協作的核心,務必分清楚<strong>誰把東西搬去哪</strong>:
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>指令</th><th>方向</th><th>它做什麼</th></tr></thead>
+        <tbody>
+          <tr><td><code>git fetch</code></td><td>遠端 → 本機(只下載)</td><td>把遠端的新 commit 抓下來,但<strong>不</strong>動你的工作目錄。讓你先「看看別人做了什麼」</td></tr>
+          <tr><td><code>git pull</code></td><td>遠端 → 本機(下載 + 合併)</td><td>等於 <code>fetch</code> + <code>merge</code>:抓下來並立刻合併進你目前的分支</td></tr>
+          <tr><td><code>git push</code></td><td>本機 → 遠端</td><td>把你本機的 commit 上傳到遠端,分享給大家</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>
+        關鍵差別在 <strong>fetch vs pull</strong>:<code>fetch</code> 是「只把信收進信箱,還沒拆」——安全,讓你能先 <code>git log origin/main</code> 看看遠端有什麼變化,再決定要不要合。
+        <code>pull</code> 則是「收信而且立刻把內容套用到你身上」——方便,但偶爾會在你毫無心理準備時跳出合併衝突。新手可以先養成「<code>fetch</code> 看一下,再 <code>merge</code>」的習慣,比較不會嚇到。
+      </p>
+      <pre><code class="language-bash"># 典型的每日協作循環
+git pull                       # 開工前先同步別人的進度
+# ... 寫程式、git add、git commit ...
+git push                       # 收工前把自己的成果推上去</code></pre>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">追蹤分支:本地 main 與 origin/main 的關係</span>
+          <p>當你 <code>push -u</code> 或 clone 時,本地的 <code>main</code> 會和遠端的 <code>origin/main</code> 建立<strong>追蹤(tracking)</strong>關係。
+          有了它,你之後只要打 <code>git push</code> / <code>git pull</code>,Git 就知道「要跟誰同步」,不必每次都寫一長串。
+          <code>git status</code> 也會貼心地告訴你「你比遠端領先 2 個 commit」或「落後 3 個 commit」。<code>origin/main</code> 是一個唯讀的「遠端追蹤分支」,代表「上次同步時,遠端 main 的樣子」。</p>
+        </div>
+      </div>
+
+      <h2>GitHub 與 Pull Request 工作流程</h2>
+      <p>
+        Git 是工具,GitHub 是把這個工具<strong>社交化</strong>的平台。它最重要的發明,是讓「貢獻程式碼」變成一套有禮貌、可審查的流程——核心就是 <strong>Pull Request(PR)</strong>。
+      </p>
+
+      <h3>Fork + Pull Request:對「別人的」專案做貢獻</h3>
+      <p>
+        假設你想替一個你沒有寫入權限的開源專案修個錯字,流程是這樣:
+      </p>
+      <ol>
+        <li><strong>Fork</strong>:在 GitHub 網頁上按「Fork」,把那個專案<strong>複製一份到你自己的帳號底下</strong>。現在你對<em>這份副本</em>有完整權限。</li>
+        <li><strong>Clone</strong>:把你 fork 出來的副本 clone 到本機。</li>
+        <li><strong>開分支改</strong>:<code>git switch -c fix-typo</code>,做修改、commit。</li>
+        <li><strong>Push</strong>:把這條分支 push 回<em>你自己</em>的 fork。</li>
+        <li><strong>開 Pull Request</strong>:在 GitHub 上發起一個 PR,等於正式跟原專案的維護者說:「我在我的分支上做了這些改動,請你<strong>拉(pull)</strong>過去看看,願不願意合併進你的專案?」</li>
+        <li><strong>Code Review</strong>:維護者會在 PR 頁面上逐行<strong>審查程式碼(code review)</strong>、留言、要求修改。你只要在同一條分支上繼續 commit、push,PR 會自動更新。</li>
+        <li><strong>Merge</strong>:雙方滿意後,維護者按下「Merge」,你的貢獻就正式進入原專案了。</li>
+      </ol>
+
+      <div class="diagram">
+<svg viewBox="0 0 760 260" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="pr-arr" markerWidth="11" markerHeight="11" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/></marker>
+  </defs>
+  <!-- nodes -->
+  <rect x="40"  y="40" width="180" height="64" rx="10" fill="#ede7fb" stroke="#8b5cf6" stroke-width="2"/>
+  <text x="130" y="66" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">原專案(upstream)</text>
+  <text x="130" y="88" text-anchor="middle" font-size="11" fill="#8a929b">你沒有寫入權限</text>
+
+  <rect x="540" y="40" width="180" height="64" rx="10" fill="#f6e7dd" stroke="#b4541f" stroke-width="2"/>
+  <text x="630" y="66" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">你的 Fork</text>
+  <text x="630" y="88" text-anchor="middle" font-size="11" fill="#8a929b">在你 GitHub 帳號下</text>
+
+  <rect x="540" y="170" width="180" height="64" rx="10" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="630" y="196" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">你的本機</text>
+  <text x="630" y="218" text-anchor="middle" font-size="11" fill="#8a929b">clone 下來改程式</text>
+
+  <!-- arrows -->
+  <line x1="220" y1="60" x2="536" y2="60" stroke="#8a929b" stroke-width="2.5" marker-end="url(#pr-arr)"/>
+  <text x="378" y="50" text-anchor="middle" font-size="12" font-weight="700" fill="#8a929b">① Fork(複製到你帳號)</text>
+
+  <line x1="630" y1="104" x2="630" y2="166" stroke="#8a929b" stroke-width="2.5" marker-end="url(#pr-arr)"/>
+  <text x="640" y="140" text-anchor="start" font-size="12" font-weight="700" fill="#8a929b">② clone</text>
+
+  <line x1="538" y1="190" x2="446" y2="190" stroke="#8a929b" stroke-width="2.5" marker-end="url(#pr-arr)"/>
+  <line x1="446" y1="190" x2="446" y2="110" stroke="#8a929b" stroke-width="2.5" marker-end="url(#pr-arr)"/>
+  <text x="430" y="150" text-anchor="end" font-size="12" font-weight="700" fill="#8a929b">③ commit</text>
+  <line x1="446" y1="150" x2="538" y2="100" stroke="#8a929b" stroke-width="2.5" stroke-dasharray="1 0" marker-end="url(#pr-arr)"/>
+  <text x="470" y="116" text-anchor="middle" font-size="12" font-weight="700" fill="#8a929b">+ push</text>
+
+  <!-- PR arrow from fork back to upstream -->
+  <path d="M540 80 C 430 150, 320 150, 222 86" stroke="#b4541f" stroke-width="2.5" fill="none" marker-end="url(#pr-arr)"/>
+  <text x="378" y="160" text-anchor="middle" font-size="12" font-weight="800" fill="#b4541f">④ 發 Pull Request → 審查 → 合併</text>
+</svg>
+        <figcaption>圖 18-7:Fork + Pull Request 流程。你無法直接改原專案,於是 fork 一份到自己名下、在本機修改後 push 回 fork,再透過 PR 請原專案維護者審查並合併。這是開源世界協作的標準姿勢。</figcaption>
+      </div>
+
+      <h3>Feature Branch Workflow:團隊內部的日常</h3>
+      <p>
+        如果你是團隊的一員、對主 repo 就有寫入權限,通常用更直接的<strong>功能分支工作流(feature branch workflow)</strong>:
+      </p>
+      <ol>
+        <li>絕不直接在 <code>main</code> 上開發。<code>main</code> 永遠保持「隨時可上線」的乾淨狀態。</li>
+        <li>每個新功能/修正,都從最新的 <code>main</code> 開一條描述性命名的分支,例如 <code>feat/search-bar</code>、<code>fix/login-redirect</code>。</li>
+        <li>在分支上開發、commit、push。</li>
+        <li>開 PR,請隊友 review,跑自動化測試(CI)。</li>
+        <li>通過後合併回 <code>main</code>,刪掉分支。</li>
+      </ol>
+      <p>
+        這套流程的精髓在於:<strong>每個改動進入主線前,都至少被另一雙眼睛看過、被測試驗證過</strong>。
+        這也是為什麼許多團隊會在 GitHub 上設定「<strong>保護分支(protected branch)</strong>」,規定 <code>main</code> 只能透過通過審查的 PR 合併,不准任何人直接 push。
+      </p>
+
+      <h2>救命錦囊:當事情出錯時</h2>
+      <p>
+        最後這節是你的「急救包」。先記住一句話安心:<strong>只要你曾經 commit 過,東西幾乎不可能真的不見</strong>。Git 對已提交的資料保護得非常好。下面是幾個關鍵時刻能救你一命的工具。
+      </p>
+
+      <h3>git stash:臨時把工作收進口袋</h3>
+      <p>
+        情境:你正改到一半(還沒 commit),老闆突然說「線上有 bug,馬上修!」你需要切到別的分支,但又不想把這團半成品 commit 進去。<code>git stash</code> 幫你把目前的改動<strong>暫時收起來</strong>,讓工作目錄回到乾淨狀態:
+      </p>
+      <pre><code class="language-bash">git stash            # 把目前未提交的改動收進「暫存堆疊」,工作目錄變乾淨
+# ... 切去別的分支救火、commit、切回來 ...
+git stash list       # 看看收了哪些(可以收很多份)
+git stash pop        # 把最近收起來的那份拿回來,並從堆疊移除
+git stash apply      # 拿回來但「不」移除(想套用到多個分支時好用)</code></pre>
+
+      <h3>git reflog:時光機的時光機</h3>
+      <p>
+        這是整章<strong>最該記住的救命指令</strong>。<code>reflog</code> 記錄了「<strong>你的 HEAD 曾經去過哪些地方</strong>」——每一次 commit、切換分支、merge、reset,都被偷偷記了一筆,即使是那些已經「不在任何分支上」、看似消失的 commit。
+      </p>
+      <p>
+        所以,當你手滑 <code>git reset --hard</code> 把幾個 commit「弄丟」時——別慌:
+      </p>
+      <pre><code class="language-bash">git reflog</code></pre>
+      <pre><code class="language-text">c91d8af (HEAD -&gt; main) HEAD@{0}: reset: moving to HEAD~2
+f02ab57 HEAD@{1}: commit: Add basic stylesheet
+7b1e0d4 HEAD@{2}: commit: Add home page
+a3f9c2e HEAD@{3}: commit: Add project README</code></pre>
+      <p>
+        看到沒?那個被你 reset 掉的 <code>f02ab57</code> 還好端端地記在 reflog 裡。只要把指標<em>搬回去</em>就救回來了:
+      </p>
+      <pre><code class="language-bash">git reset --hard f02ab57     # 回到那個 commit(用 hash)
+# 或者:
+git reset --hard HEAD@{1}    # 用 reflog 的編號指名</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">reflog 是你的安全網</span>
+          <p>幾乎任何「我把 commit 弄丟了!」的恐慌,答案都是 <code>git reflog</code>。它證明了那句話:<strong>只要 commit 過,東西就還在某個角落</strong>,只是暫時沒有分支指向它而已。
+          (唯一的例外是<strong>從沒 commit 過</strong>的工作目錄改動——那種被 <code>reset --hard</code> 沖掉的,reflog 也救不回。所以才說:常 commit,是你最好的保險。)</p>
+        </div>
+      </div>
+
+      <h3>git cherry-pick:單獨摘一個 commit 過來</h3>
+      <p>
+        有時你只想要<strong>某一條分支上的某一個 commit</strong>,而不是整條合併過來。例如某個 bug 修正在 feature 分支上,但你想立刻把它套到 main。<code>cherry-pick</code>(字面意思:精挑細選)就是「摘」那一個 commit 重做到目前分支:
+      </p>
+      <pre><code class="language-bash">git switch main
+git cherry-pick f02ab57    # 把 f02ab57 這個 commit 的改動,複製一份到 main</code></pre>
+
+      <h3>git commit --amend:修改最後一次 commit</h3>
+      <p>
+        剛 commit 完就發現訊息打錯字、或漏 add 了一個檔案?不必再多一個「修正上一個 commit」的 commit,直接<strong>修改最後那一次</strong>:
+      </p>
+      <pre><code class="language-bash">git commit --amend -m "Add home page (正確的訊息)"   # 只改訊息
+# 或:先把漏掉的檔案 add 進來,再 amend 把它併入上一個 commit
+git add forgotten.css
+git commit --amend --no-edit                          # 內容併入,訊息不變</code></pre>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">amend 也是改寫歷史:別碰已推送的</span>
+          <p><code>--amend</code> 不是「編輯」原 commit,而是<strong>用一個新 commit 取代它</strong>(hash 會變)。所以它跟 rebase 一樣,
+          <strong>只能用在還沒 push 出去的 commit</strong>。如果你 amend 了一個已經推送的 commit,再 push 時會被遠端擋下來,
+          硬推(<code>--force</code>)則會弄亂別人的歷史。原則同前:<strong>改寫歷史的操作,只對「還沒分享」的 commit 動手。</strong></p>
+        </div>
+      </div>
+
+      <h2>好習慣:讓 Git 替你加分而不是扣分</h2>
+      <p>
+        工具學會了,最後談「品味」。下面這幾條習慣,是區分「會用 Git」和「用得好」的關鍵:
+      </p>
+      <ul>
+        <li><strong>小而頻繁地 commit</strong>:每完成一個有意義的小步驟就 commit,而不是攢一整天才提交一坨。小 commit 容易理解、容易回溯、出事容易定位。它也是你的安全網(還記得嗎?沒 commit 的東西救不回)。</li>
+        <li><strong>每個 commit 只做一件事</strong>:善用暫存區挑選改動,別把不相干的修改混在一起。</li>
+        <li><strong>寫有意義的訊息</strong>:祈使句、講「為什麼」。未來的你會感激現在的你。</li>
+        <li><strong>分支命名要有描述性</strong>:<code>feat/user-profile</code>、<code>fix/payment-timeout</code>,而不是 <code>test</code>、<code>新分支</code>、<code>aaa</code>。</li>
+        <li><strong>main 永遠保持可運作</strong>:實驗都在分支上做,別把壞掉的東西推上主線。</li>
+        <li><strong>絕不提交祕密與大檔</strong>:密碼、API 金鑰、憑證一旦進了歷史就很難根除;<code>node_modules</code> 之類能重建的大東西也別入庫。善用 <code>.gitignore</code>。這點極其重要,第七部「資訊安全」會告訴你外洩一把金鑰的代價有多慘。</li>
+        <li><strong>push 前先 pull</strong>:養成「同步再上傳」的節奏,減少衝突。</li>
+      </ul>
+
+      <h2>練習</h2>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 18.2 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>建立一條分支做修改,再合併回主線。要求:在 <code>main</code> 上先有一個含 <code>app.txt</code> 的 commit;然後開一條 <code>feature</code> 分支,在上面對 <code>app.txt</code> 新增一行並 commit;最後切回 <code>main</code> 把 <code>feature</code> 合併進來,並刪除該分支。用 <code>git log --oneline --graph</code> 觀察結果。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-bash">git init merge-demo &amp;&amp; cd merge-demo
+echo "line 1" &gt; app.txt
+git add app.txt &amp;&amp; git commit -m "Add app.txt"
+
+git switch -c feature
+echo "line 2 (from feature)" &gt;&gt; app.txt
+git add app.txt &amp;&amp; git commit -m "Add line 2 on feature"
+
+git switch main
+git merge feature          # main 沒有新進度 → 這會是一次 fast-forward
+git branch -d feature      # 用完刪掉分支
+
+git log --oneline --graph</code></pre>
+              <p>因為 <code>main</code> 從分岔後沒有任何新 commit,這次是<strong>快轉合併</strong>:不會產生合併提交,<code>main</code> 直接滑到 feature 的頂端。想看到真正的「三方合併 + 合併提交」,可以在合併前先到 <code>main</code> 上額外做一個 commit,製造出兩邊都有進度的情況。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 18.3 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>故意製造、並解決一個<strong>合併衝突</strong>。讓 <code>main</code> 和一條分支<strong>改到同一行</strong>,合併時引發衝突,然後手動解決它、完成合併。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-bash">git init conflict-demo &amp;&amp; cd conflict-demo
+echo "title: 首頁" &gt; page.txt
+git add page.txt &amp;&amp; git commit -m "Add page title"
+
+# 在分支上改第一行
+git switch -c rename-title
+echo "title: 主頁" &gt; page.txt
+git add page.txt &amp;&amp; git commit -m "Rename title to 主頁"
+
+# 回 main,也改同一行(製造分歧)
+git switch main
+echo "title: 歡迎頁" &gt; page.txt
+git add page.txt &amp;&amp; git commit -m "Rename title to 歡迎頁"
+
+# 合併 → 衝突!
+git merge rename-title</code></pre>
+              <p>此時 <code>page.txt</code> 裡會出現衝突標記:</p>
+              <pre><code class="language-text">&lt;&lt;&lt;&lt;&lt;&lt;&lt; HEAD
+title: 歡迎頁
+=======
+title: 主頁
+&gt;&gt;&gt;&gt;&gt;&gt;&gt; rename-title</code></pre>
+              <p>用編輯器把它改成你要的最終版(並刪掉三行標記),例如決定就叫「歡迎頁」,於是檔案只留 <code>title: 歡迎頁</code>。然後:</p>
+              <pre><code class="language-bash">git add page.txt      # 告訴 Git:這個衝突我解決了
+git commit            # 完成合併(用預設訊息即可)
+git log --oneline --graph</code></pre>
+              <p>若中途想反悔,<code>git merge --abort</code> 會把一切回復到合併前。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 18.4 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>你做了一個錯誤的 commit。請分別示範用 <code>reset</code> 與 <code>revert</code> 復原它,並用一句話說明:什麼時候該用哪一個?</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>情況一:這個爛 commit 還沒 push(只在本機)→ 用 reset。</strong></p>
+              <pre><code class="language-bash">echo "oops 寫錯了" &gt; bug.txt
+git add bug.txt &amp;&amp; git commit -m "Bad commit"
+
+# 撤銷這個 commit,但把改動留在工作目錄讓你重改(預設 --mixed)
+git reset HEAD~1
+# 若連改動都不要了(確定沒有想保留的東西):
+git reset --hard HEAD~1</code></pre>
+              <p><strong>情況二:這個爛 commit 已經 push、別人也有了 → 用 revert。</strong></p>
+              <pre><code class="language-bash"># 產生一個「反向 commit」抵銷它,歷史完整保留
+git revert HEAD
+git push        # 安全地把撤銷也分享出去</code></pre>
+              <p>一句話:<strong>歷史還是我私有的,用 reset(直接抹掉);歷史已經公開分享,用 revert(新增反向 commit,不改寫過去)。</strong></p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 18.5 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>進階急救:用 <code>git reset --hard</code> 故意「弄丟」兩個 commit,然後用 <code>reflog</code> 把它們<strong>完整救回來</strong>。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-bash">git init rescue-demo &amp;&amp; cd rescue-demo
+echo a &gt; f.txt &amp;&amp; git add . &amp;&amp; git commit -m "C1"
+echo b &gt;&gt; f.txt &amp;&amp; git add . &amp;&amp; git commit -m "C2 (重要!)"
+echo c &gt;&gt; f.txt &amp;&amp; git add . &amp;&amp; git commit -m "C3 (也很重要!)"
+
+# 災難:手滑把 C2、C3 砍了
+git reset --hard HEAD~2
+git log --oneline          # 只剩 C1,C2/C3 看似消失……
+
+# 救援:看 HEAD 去過哪
+git reflog</code></pre>
+              <p>reflog 會列出類似:</p>
+              <pre><code class="language-text">a1b2c3d (HEAD -&gt; main) HEAD@{0}: reset: moving to HEAD~2
+9f8e7d6 HEAD@{1}: commit: C3 (也很重要!)
+4c5b6a7 HEAD@{2}: commit: C2 (重要!)
+a1b2c3d HEAD@{3}: commit: C1</code></pre>
+              <pre><code class="language-bash"># 把指標搬回 C3,兩個 commit 完整復活
+git reset --hard 9f8e7d6      # 或 git reset --hard HEAD@{1}
+git log --oneline             # C1、C2、C3 都回來了 ✅</code></pre>
+              <p>這就是為什麼老手對 <code>reset --hard</code> 不太害怕——只要 commit 過,reflog 幾乎都救得回。但別忘了那個唯一的例外:<strong>從沒 commit 過</strong>的工作目錄改動,被 <code>--hard</code> 沖掉就真的沒了。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 18.6 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>不用打指令,用你自己的話,完整描述一遍「替一個開源專案修錯字」的 <strong>Fork → PR</strong> 流程。要能講清楚:為什麼第一步要 fork?PR 到底是在「請求」什麼?code review 發生在哪個環節?</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>參考敘述:</p>
+              <ol>
+                <li>因為我對原專案<strong>沒有寫入權限</strong>,不能直接 push,所以先 <strong>fork</strong>——在 GitHub 上把它複製一份到我自己的帳號下,這份副本我有完整控制權。</li>
+                <li>把我的 fork <strong>clone</strong> 到本機,開一條描述性分支(如 <code>fix/typo-in-readme</code>),改掉錯字、<code>commit</code>。</li>
+                <li>把這條分支 <code>push</code> 回我自己的 fork。</li>
+                <li>在 GitHub 上對<strong>原專案</strong>發起一個 <strong>Pull Request</strong>。PR 的本質,是正式請求原專案維護者:「請<em>拉(pull)</em>我這條分支的改動過去,考慮合併進你的專案。」它附上完整的 diff 與說明。</li>
+                <li><strong>Code review</strong> 發生在 PR 頁面上:維護者(或其他貢獻者)逐行看我的改動、留言提問、要求修正。我只要在同一條分支繼續 commit、push,PR 會自動帶入新的提交。也常會自動跑 CI 測試。</li>
+                <li>雙方滿意、測試通過後,維護者按下 <strong>Merge</strong>,我的修正正式進入原專案。任務完成。</li>
+              </ol>
+              <p>關鍵心法:<strong>fork 解決「我沒權限」,branch 隔離「我的改動」,PR 把「合併」變成一個可討論、可審查、有禮貌的請求。</strong>這正是開源協作能夠規模化、又不失品質的祕密。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>把這一章串起來</h2>
+      <p>
+        我們從 <code>真的final.docx</code> 的惡夢出發,抵達了一套讓全世界軟體得以協作的精密工具。回顧這趟旅程最重要的幾個路標:
+      </p>
+      <ul>
+        <li>版本控制給你<strong>時光機、協作、實驗分支、責任追蹤</strong>——徹底取代「複製一個新資料夾」的土法煉鋼。</li>
+        <li>Git 的心智模型是一切的鑰匙:它存的是<strong>快照</strong>不是差異;有<strong>工作目錄、暫存區、儲存庫</strong>三個區域;commit 串成一張指向父節點的 <strong>DAG</strong>。指令都只是在這張圖上搬指標、加節點。</li>
+        <li>日常循環:<code>status</code> 看狀況 → <code>add</code> 進暫存 → <code>commit</code> 拍快照 → <code>diff</code>/<code>log</code> 檢視。寫好訊息是給未來的禮物。</li>
+        <li>復原三劍客:<code>restore</code>(丟未提交的改動)、<code>reset</code>(改寫私有歷史,<code>--hard</code> 要當心)、<code>revert</code>(安全撤銷公開歷史)。</li>
+        <li><strong>分支只是一個指標</strong>,所以開分支幾乎免費。<code>merge</code> 保留分岔的真實歷史;<code>rebase</code> 換來乾淨直線,但<strong>絕不能 rebase 已推送的公開歷史</strong>。</li>
+        <li>遠端協作靠 <code>clone</code>/<code>fetch</code>/<code>pull</code>/<code>push</code> 與 <code>origin</code>;GitHub 的 <strong>Fork + PR</strong> 與功能分支工作流,讓「每個改動都被審查」成為可能。</li>
+        <li>出事別慌:<code>stash</code> 收拾半成品、<code>reflog</code> 撈回弄丟的 commit、<code>cherry-pick</code> 單摘一筆、<code>--amend</code> 修補上一次提交。只要 commit 過,東西幾乎都還在。</li>
+      </ul>
+      <p>
+        Git 是那種「用一輩子、卻永遠有新東西可學」的工具。但你現在已經掌握了它的<strong>骨架與靈魂</strong>——
+        只要心裡能畫出那張三區圖與 DAG,任何沒見過的指令,你都能推理出它在做什麼。接下來最好的學法,就是<strong>真的拿一個專案來用它</strong>:今天就 <code>git init</code>,開始替你的下一段程式拍快照吧。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">📚</div>
+        <div class="body">
+          <span class="c-title">想更深入?延伸資源</span>
+          <p>本章對應 OSSU 推薦的 <a href="https://missing.csail.mit.edu/2020/version-control/">MIT 《The Missing Semester of Your CS Education》— Version Control (Git)</a> 那一講,
+          它用「由內而外、先講資料模型」的方式教 Git,和本章的精神一致,強烈建議搭配觀看。
+          想成為真正的 Git 高手,則務必讀那本免費的聖經 <a href="https://git-scm.com/book/zh-tw/v2"><em>Pro Git</em></a>(有完整繁體中文版),
+          它把分支、合併、reflog、內部物件模型講得淋漓盡致。讀完這兩份,你對 Git 的理解會遠超過絕大多數工程師。</p>
+        </div>
+      </div>
+
+    

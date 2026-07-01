@@ -1,0 +1,1256 @@
+<!--meta
+title: 影像即資料與影像處理
+description: 電腦視覺的第一課:影像就是一個 NumPy 陣列(H×W×C)。從像素、通道、色彩空間,到點運算、卷積濾波、邊緣偵測、形態學、幾何變換、頻域與去背——用 Python+OpenCV 由淺入深,先做出看得見的效果,再拆解背後的數學。並親手驗證『滑動的卷積核』就是 CNN 的根。
+-->
+
+
+      <div class="eyebrow">第十七部 · 電腦視覺與影像辨識</div>
+      <h1>影像即資料與影像處理</h1>
+      <p class="subtitle">在電腦眼裡,一張照片沒有「貓」、沒有「夕陽」,只有一個塞滿 0–255 的數字陣列。這一章,我們先建立一個改變一切的直覺——<strong>影像就是資料,濾鏡就是數學</strong>——然後一路把模糊、銳化、找邊緣、數物件、拉正歪斜文件、綠幕去背這些「看得見的魔法」,一個個拆回它們的矩陣運算。而你會發現:那個在影像上滑動的小方框,正是日後 CNN 的根。</p>
+      <div class="byline">
+        <span class="tag">第 65 章</span>
+        <span>閱讀時間 ≈ 70 分鐘</span>
+        <span>難度:★★★☆☆</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>電腦視覺的<strong>三主線</strong>:影像處理(IP)→ 視覺辨識(CV/DL)→ 電腦圖學(CG),以及本部的學習地圖</li>
+          <li>「<strong>影像 = NumPy 陣列 (H×W×C)</strong>」是什麼意思:像素、通道、<code>dtype</code>、BGR vs RGB、灰階與 HSV</li>
+          <li>用 OpenCV 讀寫顯示影像,並避開三個經典坑:<strong>BGR 順序、<code>waitKey</code>、中文路徑</strong></li>
+          <li><strong>點運算</strong>:亮度、對比、Gamma、查表 LUT、直方圖與均衡化、閾值與 Otsu 二值化</li>
+          <li><strong>空間濾波與卷積</strong>:模糊、銳化、去雜訊,以及為什麼這個「滑動核」就是<strong>卷積神經網路(CNN)的根</strong></li>
+          <li><strong>邊緣與梯度</strong>:影像的導數、Sobel、Canny 全流程(呼應微積分)</li>
+          <li><strong>形態學與二值分析</strong>:侵蝕/膨脹/開閉、連通元件標記與物件計數</li>
+          <li><strong>幾何變換</strong>:平移/旋轉/縮放/仿射/透視、齊次座標,以及「自動文件掃描器」的原理</li>
+          <li><strong>頻域處理</strong>與<strong>色彩去背</strong>:傅立葉直覺、去除週期性雜訊、HSV 遮罩與綠幕合成</li>
+        </ul>
+      </div>
+
+      <h2>先做出來,再拆開:電腦視覺的學習地圖</h2>
+      <p>
+        想像你打開直播軟體,點一下「虛擬背景」,身後雜亂的房間瞬間變成一片海灘;或者你用手機掃描 App 對著一張歪歪斜斜、放在桌上的合約拍一下,
+        它「啪」地一聲就被拉正、變白、裁切成一張乾乾淨淨的 A4 文件。這些功能看起來很「智慧」,彷彿電腦真的<em>看懂</em>了畫面。
+        但其實,它們背後絕大多數的工作,既不需要神經網路、也不需要 GPU,只需要一個關鍵的世界觀:
+      </p>
+      <blockquote>影像就是一個數字矩陣,而所有的影像效果,都是對這個矩陣做數學運算。</blockquote>
+      <p>
+        這一章,以及整個<strong>第十七部</strong>,採用一種叫<strong>成果驅動(project-based / outcome-driven)</strong>的學法:
+        我們<strong>先做出一個看得見的效果</strong>(負片、模糊、邊緣、去背……),讓你立刻有成就感、知道「這東西能幹嘛」,
+        <strong>再回過頭去拆解</strong>它背後的數學與演算法。這跟「先講三節課的數學定義、第四節才終於看到一張圖」的傳統路線剛好相反——
+        因為動機,是把一個陌生主題學下去最稀缺的燃料。
+      </p>
+
+      <h3>電腦視覺的三條主線</h3>
+      <p>
+        「電腦視覺」是一把很大的傘。在動手之前,先把它底下的三條主線分清楚,你才知道每一章在整張地圖的哪個位置:
+      </p>
+      <ul>
+        <li><strong>影像處理(Image Processing, IP)</strong>:輸入一張影像,輸出<em>另一張影像</em>。它不問「這是什麼」,只負責<em>加工</em>——變亮、去雜訊、找邊緣、拉正、去背。這是<strong>本章與第 66 章前半</strong>的主場,也是所有後續工作的<strong>前處理(preprocessing)</strong>地基。</li>
+        <li><strong>視覺辨識(Recognition, CV/DL)</strong>:輸入一張影像,輸出<em>一個判斷</em>——「這是貓」「這裡有三個人」「車牌是 ABC-1234」。它從傳統特徵(第 66 章)一路走到<strong>深度學習(第 67 章)</strong>的 CNN、YOLO、影像分割。</li>
+        <li><strong>電腦圖學(Computer Graphics, CG)</strong>:走相反方向——輸入一份<em>數字描述</em>(幾何、光、材質),<em>算出</em>一張影像。它是視覺的「逆問題」,在<a href="39-computer-graphics.html">第 39 章</a>已經登場過,第 68 章會接著講 3D 與 AR。</li>
+      </ul>
+
+      <div class="diagram">
+<svg viewBox="0 0 760 360" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="m-ar" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/></marker>
+  </defs>
+  <!-- 根 -->
+  <rect x="300" y="18" width="160" height="48" rx="10" fill="#1f2328"/>
+  <text x="380" y="40" text-anchor="middle" font-size="13" font-weight="800" fill="#fff">M0 影像即資料</text>
+  <text x="380" y="57" text-anchor="middle" font-size="10.5" fill="#cdd3da">影像 = NumPy 陣列(所有課的根)</text>
+  <!-- 三條分支線 -->
+  <g stroke="#8a929b" stroke-width="1.6" fill="none">
+    <path d="M340,66 C260,90 150,90 150,108" marker-end="url(#m-ar)"/>
+    <path d="M380,66 L380,108" marker-end="url(#m-ar)"/>
+    <path d="M420,66 C500,90 610,90 610,108" marker-end="url(#m-ar)"/>
+  </g>
+
+  <!-- 影像處理線(本章) -->
+  <rect x="22" y="110" width="256" height="222" rx="12" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="150" y="132" text-anchor="middle" font-size="13" font-weight="800" fill="#2f6f6a">① 影像處理 IP</text>
+  <text x="150" y="149" text-anchor="middle" font-size="10" fill="#3f6b66">影像 → 影像(加工 / 前處理)</text>
+  <g font-size="10.5" fill="#1f2328">
+    <rect x="40" y="160" width="220" height="20" rx="5" fill="#fff" stroke="#9cc4bd"/><text x="48" y="174">M1 點運算與直方圖</text>
+    <rect x="40" y="184" width="220" height="20" rx="5" fill="#fff" stroke="#9cc4bd"/><text x="48" y="198">M2 空間濾波與卷積 ★</text>
+    <rect x="40" y="208" width="220" height="20" rx="5" fill="#fff" stroke="#9cc4bd"/><text x="48" y="222">M3 邊緣與梯度</text>
+    <rect x="40" y="232" width="220" height="20" rx="5" fill="#fff" stroke="#9cc4bd"/><text x="48" y="246">M4 形態學與二值分析</text>
+    <rect x="40" y="256" width="220" height="20" rx="5" fill="#fff" stroke="#9cc4bd"/><text x="48" y="270">M5 幾何變換</text>
+    <rect x="40" y="280" width="220" height="20" rx="5" fill="#fff" stroke="#9cc4bd"/><text x="48" y="294">M6 頻域處理</text>
+    <rect x="40" y="304" width="220" height="20" rx="5" fill="#fff" stroke="#9cc4bd"/><text x="48" y="318">M7 色彩分割與去背</text>
+  </g>
+  <text x="150" y="349" text-anchor="middle" font-size="10" font-weight="700" fill="#2f6f6a">← 這一章(第 65 章)</text>
+
+  <!-- 視覺辨識線 -->
+  <rect x="290" y="110" width="190" height="150" rx="12" fill="#ede7fb" stroke="#8b5cf6" stroke-width="2"/>
+  <text x="385" y="132" text-anchor="middle" font-size="13" font-weight="800" fill="#7c3aed">② 視覺辨識 CV/DL</text>
+  <text x="385" y="149" text-anchor="middle" font-size="10" fill="#6d3fc0">影像 → 判斷(這是什麼?)</text>
+  <g font-size="10.5" fill="#1f2328">
+    <rect x="306" y="160" width="158" height="20" rx="5" fill="#fff" stroke="#c4b5fd"/><text x="314" y="174">特徵與傳統視覺(第 66 章)</text>
+    <rect x="306" y="184" width="158" height="20" rx="5" fill="#fff" stroke="#c4b5fd"/><text x="314" y="198">CNN / YOLO / 分割</text>
+    <rect x="306" y="208" width="158" height="20" rx="5" fill="#fff" stroke="#c4b5fd"/><text x="314" y="222">人臉 / 姿態 / OCR</text>
+  </g>
+  <text x="385" y="247" text-anchor="middle" font-size="10" fill="#7c3aed">(第 67 章 · 呼應第 38 章 CNN)</text>
+
+  <!-- 電腦圖學線 -->
+  <rect x="492" y="110" width="246" height="150" rx="12" fill="#f6e7dd" stroke="#b4541f" stroke-width="2"/>
+  <text x="615" y="132" text-anchor="middle" font-size="13" font-weight="800" fill="#b4541f">③ 電腦圖學 CG</text>
+  <text x="615" y="149" text-anchor="middle" font-size="10" fill="#9a4a1e">描述 → 影像(視覺的逆問題)</text>
+  <g font-size="10.5" fill="#1f2328">
+    <rect x="508" y="160" width="214" height="20" rx="5" fill="#fff" stroke="#e3b591"/><text x="516" y="174">2D / 3D 變換與渲染管線</text>
+    <rect x="508" y="184" width="214" height="20" rx="5" fill="#fff" stroke="#e3b591"/><text x="516" y="198">光柵化 / 著色器</text>
+    <rect x="508" y="208" width="214" height="20" rx="5" fill="#fff" stroke="#e3b591"/><text x="516" y="222">3D 重建 / 擴增實境 AR</text>
+  </g>
+  <text x="615" y="247" text-anchor="middle" font-size="10" fill="#b4541f">(第 68 章 · 已見於第 39 章)</text>
+</svg>
+        <figcaption>圖 65-1:電腦視覺的三主線都從同一個根「影像即資料」長出來。本章走完整條<strong>影像處理線(M0–M7)</strong>;它輸出的乾淨影像,正是辨識線(第 66–67 章)的前處理。三線會在專題裡交織:影像處理做前處理 → 深度學習做辨識 → 圖學做疊合呈現。</figcaption>
+      </div>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">本章的一句話</span>
+          <p>影像處理研究的是「<strong>影像進、影像出</strong>」的加工。它的全部威力,都建立在一個簡單事實上:
+          <strong>一張影像在電腦裡就是一個 NumPy 數字陣列,所有效果都是對這個陣列做數學運算。</strong>
+          把這個直覺釘死,後面每一節——卷積、梯度、形態學、傅立葉——都只是「對矩陣做不同的數學」而已。</p>
+        </div>
+      </div>
+
+      <h2>影像即資料:一個 H×W×C 的數字陣列</h2>
+      <p>
+        我們從最根本的問題開始:<strong>一張照片,在電腦裡到底是什麼?</strong>
+        答案乾淨得令人意外——它是一個<strong>三維的 NumPy 陣列(array)</strong>。
+        你可以把它想成一疊堆起來的試算表:有高、有寬,還有「厚度」。
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>影像種類</th><th>陣列形狀 <code>shape</code></th><th>說明</th></tr></thead>
+        <tbody>
+          <tr><td>灰階(grayscale)</td><td><code>(H, W)</code></td><td>每個元素是一個亮度值</td></tr>
+          <tr><td>彩色(color)</td><td><code>(H, W, 3)</code></td><td>第三維是<strong>通道</strong>,OpenCV 順序為 B, G, R</td></tr>
+          <tr><td>含透明(with alpha)</td><td><code>(H, W, 4)</code></td><td>多一個 alpha(不透明度)通道</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>
+        其中 <strong>H</strong> 是高(row 列數)、<strong>W</strong> 是寬(column 行數)、<strong>C</strong> 是<strong>通道(channel)</strong>數。
+        每個數字幾乎都是 <code>uint8</code> 型別——也就是 <strong>0 到 255 的整數</strong>:0 最暗、255 最亮。
+        這跟<a href="39-computer-graphics.html">第 39 章</a>講的「影格緩衝(framebuffer)裡一長串 RGB 數字」是同一件事,只是這裡我們用 NumPy 陣列的視角去操作它。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 320" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="px-ar2" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/></marker>
+  </defs>
+  <!-- 座標系說明 -->
+  <text x="20" y="28" font-size="12.5" font-weight="800" fill="#1f2328">影像 = 一個 (H, W, 3) 的數字陣列</text>
+  <text x="20" y="46" font-size="10.5" fill="#4a5159">座標是 img[y, x]:先列(y)後行(x),原點在左上,y 向下增加</text>
+
+  <!-- 像素網格 -->
+  <g>
+    <rect x="40" y="62" width="240" height="200" fill="#fff" stroke="#8a929b" stroke-width="1.2"/>
+    <g stroke="#dfe4e9" stroke-width="1">
+      <line x1="80" y1="62" x2="80" y2="262"/><line x1="120" y1="62" x2="120" y2="262"/><line x1="160" y1="62" x2="160" y2="262"/><line x1="200" y1="62" x2="200" y2="262"/><line x1="240" y1="62" x2="240" y2="262"/>
+      <line x1="40" y1="102" x2="280" y2="102"/><line x1="40" y1="142" x2="280" y2="142"/><line x1="40" y1="182" x2="280" y2="182"/><line x1="40" y1="222" x2="280" y2="222"/>
+    </g>
+    <!-- 幾個彩色像素 -->
+    <rect x="40" y="62" width="40" height="40" fill="#2f6f6a"/><rect x="80" y="62" width="40" height="40" fill="#6aa39a"/>
+    <rect x="200" y="142" width="40" height="40" fill="#b4541f"/><rect x="160" y="182" width="40" height="40" fill="#8b5cf6"/>
+    <!-- 高亮一個像素 -->
+    <rect x="120" y="142" width="40" height="40" fill="#e9b894" stroke="#1f2328" stroke-width="2.5"/>
+  </g>
+  <!-- 軸箭頭 -->
+  <line x1="40" y1="54" x2="290" y2="54" stroke="#8a929b" stroke-width="1.3" marker-end="url(#px-ar2)"/><text x="296" y="58" font-size="11" fill="#8a929b">x →</text>
+  <line x1="32" y1="62" x2="32" y2="270" stroke="#8a929b" stroke-width="1.3" marker-end="url(#px-ar2)"/><text x="14" y="280" font-size="11" fill="#8a929b">y ↓</text>
+  <text x="50" y="288" font-size="10.5" fill="#4a5159">每一格 = 一個像素(pixel)</text>
+
+  <!-- 放大那個像素 -> 三通道 -->
+  <line x1="160" y1="162" x2="356" y2="162" stroke="#8a929b" stroke-width="1.4" stroke-dasharray="4 3" marker-end="url(#px-ar2)"/>
+  <text x="370" y="86" font-size="12" font-weight="700" fill="#1f2328">一個彩色像素 = 3 個數字</text>
+  <!-- 三通道平面堆疊 -->
+  <g>
+    <rect x="372" y="100" width="120" height="80" fill="#2b6fe0" fill-opacity="0.18" stroke="#2b6fe0"/><text x="384" y="120" font-size="11" font-weight="700" fill="#2b6fe0">B 通道</text>
+    <rect x="392" y="120" width="120" height="80" fill="#22a35a" fill-opacity="0.18" stroke="#22a35a"/><text x="404" y="140" font-size="11" font-weight="700" fill="#1c8c4c">G 通道</text>
+    <rect x="412" y="140" width="120" height="80" fill="#e23b3b" fill-opacity="0.18" stroke="#e23b3b"/><text x="424" y="160" font-size="11" font-weight="700" fill="#c62f2f">R 通道</text>
+  </g>
+  <text x="372" y="236" font-size="11" fill="#4a5159">img[y, x] = [B, G, R] = (92, 138, 217)</text>
+  <text x="372" y="254" font-size="10.5" fill="#8a929b">每個通道是一張 (H, W) 的「亮度地圖」</text>
+
+  <!-- 值方塊 -->
+  <g font-size="11" text-anchor="middle">
+    <rect x="560" y="120" width="44" height="32" fill="#2b6fe0" fill-opacity="0.85"/><text x="582" y="141" fill="#fff" font-weight="700">92</text>
+    <rect x="604" y="120" width="44" height="32" fill="#22a35a" fill-opacity="0.85"/><text x="626" y="141" fill="#fff" font-weight="700">138</text>
+    <rect x="648" y="120" width="44" height="32" fill="#e23b3b" fill-opacity="0.9"/><text x="670" y="141" fill="#fff" font-weight="700">217</text>
+  </g>
+  <text x="626" y="172" text-anchor="middle" font-size="10" fill="#8a929b">B&#160;&#160;&#160;&#160;G&#160;&#160;&#160;&#160;R(uint8: 0–255)</text>
+</svg>
+        <figcaption>圖 65-2:影像的資料結構。整張彩色影像是一個 <code>(H, W, 3)</code> 的陣列;每個位置 <code>img[y, x]</code> 存著一個像素的三個通道值。⚠️ 注意座標是 <strong>(y, x)</strong>(先列後行),原點在左上、y 向下——這跟數學課的 (x, y)、y 向上剛好相反,是新手最常搞混的地方。</figcaption>
+      </div>
+
+      <h3>三個經典坑:BGR、waitKey、中文路徑</h3>
+      <p>
+        OpenCV(在 Python 裡叫 <code>cv2</code>)是影像處理的瑞士刀。但它有三個惡名昭彰的坑,第一次遇到都會卡很久,我們先一次釘死:
+      </p>
+      <ol>
+        <li><strong>它是 BGR,不是 RGB</strong>:<code>cv2.imread</code> 讀進來的通道順序是 <strong>藍、綠、紅(B, G, R)</strong>,不是直覺的 RGB。如果你把它直接丟給 <code>matplotlib</code>(它吃 RGB)顯示,紅藍會顛倒、人臉會發藍。給 <code>cv2.imshow</code> 則不用轉(OpenCV 自己吃 BGR)。</li>
+        <li><strong><code>imshow</code> 一定要配 <code>waitKey</code></strong>:沒有 <code>cv2.waitKey()</code>,視窗根本不會更新、甚至卡死。它不只是「等按鍵」,更是「讓視窗有機會把畫面畫出來」的關鍵。</li>
+        <li><strong>中文路徑會讓 <code>imread</code> 回傳 <code>None</code></strong>:在 Windows 上,<code>cv2.imread</code> 遇到中文或非 ASCII 路徑常常直接讀失敗、回傳 <code>None</code>(不是報錯,是悄悄地回 <code>None</code>)。</li>
+      </ol>
+      <p>
+        針對第三個坑,標準解法是「先用 NumPy 把檔案讀成位元組,再交給 OpenCV 解碼」——繞過 OpenCV 自己處理檔名的那段:
+      </p>
+      <pre><code class="language-python">import numpy as np
+import cv2
+
+def imread_unicode(path, flags=cv2.IMREAD_COLOR):
+    """支援中文路徑的 imread:先用 numpy 讀 bytes,再交給 OpenCV 解碼。"""
+    data = np.fromfile(path, dtype=np.uint8)   # 純 Python 檔案讀取,不經過 OpenCV
+    return cv2.imdecode(data, flags)           # 把位元組解碼還原成影像陣列
+
+def imwrite_unicode(path, img, ext=".png"):
+    """支援中文路徑的 imwrite。"""
+    ok, buf = cv2.imencode(ext, img)           # 先把影像編碼成位元組
+    if ok:
+        buf.tofile(path)                       # 再用純 Python 寫到磁碟
+    return ok</code></pre>
+      <p>讀取、顯示、儲存的標準骨架,把坑都避開:</p>
+      <pre><code class="language-python">img = imread_unicode("測試圖/sample.jpg")     # 避開中文路徑坑
+if img is None:
+    raise FileNotFoundError("讀不到圖,檢查路徑")
+
+cv2.imshow("image", img)        # 第一個參數是視窗標題,第二個才是影像
+cv2.waitKey(0)                  # 0 = 等使用者按任意鍵;沒有這行視窗會卡死(坑#2)
+cv2.destroyAllWindows()
+
+imwrite_unicode("output.png", img)</code></pre>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">uint8 會溢位「繞回」</span>
+          <p><code>np.uint8(250) + 20</code> 不會是 270,而是 <strong>14</strong>!因為 <code>uint8</code> 只能表示 0–255,超過 255 就從 0 重新繞回(270 − 256 = 14)。
+          所以想把一張很亮的圖「再變亮」,直接 <code>img + 50</code> 反而會在高光處冒出黑點。
+          正確做法是用 <strong>飽和運算(saturating)</strong>:<code>cv2.add(img, 50)</code>(最大停在 255,不繞回),或先轉成大一點的型別、運算完再 <code>np.clip(x, 0, 255)</code> 夾回來。這是影像處理最常見的 bug 來源之一。</p>
+        </div>
+      </div>
+
+      <h3>用 NumPy 切片存取像素與 ROI</h3>
+      <p>
+        因為影像就是 NumPy 陣列,所有陣列技巧都直接適用。最常用的是<strong>切片(slicing)</strong>:取出一塊矩形區域,
+        在影像處理裡叫 <strong>ROI(Region of Interest,感興趣區域)</strong>。
+      </p>
+      <pre><code class="language-python"># 取一塊 ROI:img[y1:y2, x1:x2](含頭不含尾)
+roi = img[50:150, 100:200].copy()       # .copy() 很重要,否則改它會改到原圖
+
+# 廣播(broadcasting):把整塊塗成紅色(BGR)
+img[50:150, 100:200] = (0, 0, 255)
+
+# 通道操作:只保留紅通道(把 B、G 歸零)
+red_only = img.copy()
+red_only[:, :, 0] = 0    # : 代表「整個範圍全選」;第 0 通道是 B
+red_only[:, :, 1] = 0    # 第 1 通道是 G
+
+# 色彩空間轉換:給 matplotlib 顯示前要轉 RGB(坑#1)
+rgb  = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)   # (H, W) 單通道,多數演算法的前處理
+hsv  = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)    # 依顏色分割時用</code></pre>
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">(y, x) vs (x, y):最容易踩的座標坑</span>
+          <p><strong>存取像素</strong>用 <code>img[y, x]</code>(先列後行);但 OpenCV 的<strong>繪圖函式</strong>(如 <code>cv2.rectangle</code>、<code>cv2.circle</code>)收的點卻是 <code>(x, y)</code>(先 x 後 y)。
+          兩套規則相反,每次混淆就回去看圖 65-2 那張座標圖。另外,切片「<strong>含頭不含尾</strong>」:<code>img[50:150]</code> 是第 50 到 149 列,不含第 150 列。</p>
+        </div>
+      </div>
+
+      <h3>灰階與 HSV:同一張圖的不同「座標表示」</h3>
+      <p>
+        一張影像可以用不同的<strong>色彩空間(color space)</strong>來表示,就像同一個地點可以用經緯度或地址來描述。三個最常用的:
+      </p>
+      <ul>
+        <li><strong>BGR / RGB</strong>:三個通道分別是紅綠藍的強度。用於<strong>顯示與儲存</strong>。</li>
+        <li><strong>Gray(灰階)</strong>:把彩色壓成單一亮度。公式是加權平均 $Y = 0.299R + 0.587G + 0.114B$(綠色權重最大,因為人眼對綠最敏感)。它是邊緣、特徵等<strong>多數演算法的標準前處理</strong>——少了兩個通道,計算量直接砍三分之二。</li>
+        <li><strong>HSV(色相 Hue / 飽和 Saturation / 明度 Value)</strong>:把「是什麼顏色」(H)和「多亮」(V)<em>分開</em>。這讓「依顏色找東西」變得遠比 RGB 穩定——因為光線一變,RGB 三個值會一起跳動,但 HSV 的 H 幾乎不動。第 66–68 章的去背、顏色追蹤都靠它。</li>
+      </ul>
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">為什麼 HSV 比 RGB 適合抓顏色</span>
+          <p>RGB 把「顏色」和「亮度」綁在一起:一顆紅蘋果在陽光下是 (240, 30, 30),在陰影裡可能變成 (120, 15, 15)——三個值全變了,你很難用一組固定範圍把它框住。
+          HSV 把<strong>色相 H 獨立出來</strong>:不管亮或暗,紅色的 H 都落在同一個小區間,你只要框住那段 H,再用 S、V 濾掉「太灰、太暗」的雜訊就行。
+          ⚠️ 一個常見地雷:<strong>OpenCV 的 H 範圍是 0–179</strong>(把一般的 0–360 度壓一半),不是 0–255。用 0–255 去設 H 永遠抓不到色。</p>
+        </div>
+      </div>
+
+      <h3>從一張圖到一段影片:即時迴圈的骨架</h3>
+      <p>
+        所謂「即時影像處理」,本質上只是一個無限迴圈:<strong>讀一張 → 處理 → 顯示 →(回到讀一張)</strong>。
+        攝影機串流就是把這個迴圈跑起來。本部之後所有的即時辨識、即時去背,都只是把中間那個「處理」換成更厲害的演算法而已:
+      </p>
+      <pre><code class="language-python">cap = cv2.VideoCapture(0)              # 0 = 預設攝影機
+if not cap.isOpened():
+    raise RuntimeError("打不開攝影機")
+
+while True:
+    ok, frame = cap.read()            # 一次抓一張
+    if not ok:
+        break
+
+    # ---- 這裡就是「處理」的位置,目前只有反轉(負片)----
+    frame = 255 - frame
+
+    cv2.imshow("camera", frame)
+    if cv2.waitKey(1) &amp; 0xFF == ord('q'):   # 即時迴圈用 waitKey(1),不是 0;按 q 離開
+        break
+
+cap.release()                         # 用完一定要釋放攝影機
+cv2.destroyAllWindows()</code></pre>
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">Notebook 不能用 imshow</span>
+          <p>在 Jupyter / Colab 裡呼叫 <code>cv2.imshow</code> 會卡死核心。Notebook 請改用 <code>matplotlib</code> 顯示(記得先 <code>BGR→RGB</code>),
+          只有獨立的 <code>.py</code> 腳本才用 <code>cv2.imshow</code>。另外即時迴圈一定要用 <code>waitKey(1)</code>;用 <code>waitKey(0)</code> 會卡住等按鍵、畫面不動。</p>
+        </div>
+      </div>
+
+      <h2>點運算與直方圖:逐像素的數學</h2>
+      <p>
+        我們的第一類處理是<strong>點運算(point operation)</strong>:輸出像素<em>只</em>由「同位置的輸入像素」決定,跟鄰居完全無關——
+        $g(x,y) = T\big(f(x,y)\big)$。換句話說,只要寫出一個「一個輸入值 → 一個輸出值」的函數 $T$,套到每個像素上就好。
+        亮度、對比、Gamma、負片,全都是這種逐像素的轉換。
+      </p>
+
+      <h3>亮度、對比與 Gamma</h3>
+      <p>最基本的是<strong>線性變換</strong>:$g = \alpha f + \beta$。其中 $\alpha$ 控制<strong>對比(contrast)</strong>(把亮度分佈拉開或壓縮)、$\beta$ 控制<strong>亮度(brightness)</strong>(整體平移)。OpenCV 提供自帶飽和的 <code>cv2.convertScaleAbs(img, alpha, beta)</code>,免去溢位煩惱。</p>
+      <p>
+        但人眼對暗部的變化遠比對亮部敏感,所以單純的線性變亮往往不自然。更好的工具是<strong>非線性</strong>的 <strong>Gamma 校正</strong>:
+      </p>
+      <p>$$g = 255 \left(\frac{f}{255}\right)^{\gamma}$$</p>
+      <p>
+        當 $\gamma &lt; 1$,暗部被大幅提亮(看清陰影裡的細節);當 $\gamma &gt; 1$,則壓暗、增加層次。它是修圖軟體「曝光/陰影」滑桿的數學核心。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 560 320" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="pc-ar" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#8a929b"/></marker>
+  </defs>
+  <!-- 軸 -->
+  <line x1="70" y1="270" x2="500" y2="270" stroke="#8a929b" stroke-width="1.4" marker-end="url(#pc-ar)"/>
+  <line x1="70" y1="270" x2="70" y2="40" stroke="#8a929b" stroke-width="1.4" marker-end="url(#pc-ar)"/>
+  <text x="495" y="290" font-size="11" fill="#4a5159">輸入值 f(0→255)</text>
+  <text x="20" y="50" font-size="11" fill="#4a5159">輸出 g</text>
+  <text x="58" y="275" font-size="10" fill="#8a929b">0</text>
+  <text x="440" y="285" font-size="10" fill="#8a929b">255</text>
+  <text x="46" y="60" font-size="10" fill="#8a929b">255</text>
+  <!-- 對角:identity -->
+  <line x1="70" y1="270" x2="430" y2="50" stroke="#8a929b" stroke-width="1.6" stroke-dasharray="5 4"/>
+  <text x="360" y="135" font-size="10.5" fill="#8a929b">原樣 γ=1</text>
+  <!-- gamma < 1 (提亮,凸向左上) -->
+  <path d="M70,270 Q120,90 430,50" fill="none" stroke="#2f6f6a" stroke-width="2.6"/>
+  <text x="120" y="120" font-size="11" font-weight="700" fill="#2f6f6a">γ=0.45(提亮暗部)</text>
+  <!-- gamma > 1 (壓暗,凹向右下) -->
+  <path d="M70,270 Q380,230 430,50" fill="none" stroke="#b4541f" stroke-width="2.6"/>
+  <text x="300" y="250" font-size="11" font-weight="700" fill="#b4541f">γ=2.2(壓暗)</text>
+  <!-- 負片:遞減線 -->
+  <line x1="70" y1="50" x2="430" y2="270" stroke="#8b5cf6" stroke-width="2.2"/>
+  <text x="150" y="225" font-size="11" font-weight="700" fill="#7c3aed">負片 g = 255 − f</text>
+</svg>
+        <figcaption>圖 65-3:點運算的「轉換曲線」。橫軸是輸入像素值、縱軸是輸出值,一條曲線就完整定義了一種點運算。對角線(γ=1)是原樣;往左上凸(γ&lt;1)整體變亮、暗部細節浮現;往右下凹(γ&gt;1)變暗;一條遞減的斜線就是負片。任何逐像素映射都能畫成這樣一條曲線。</figcaption>
+      </div>
+
+      <h3>LUT:用查表加速逐像素映射</h3>
+      <p>
+        這裡有個漂亮的優化。一張幾百萬像素的圖,如果對每個像素都重算一次 Gamma 公式,要算幾百萬次次方運算。
+        但灰階值<strong>只有 256 種可能</strong>!與其重算,不如<strong>先把 0–255 各自該變成什麼算好、存成一張對照表</strong>,
+        之後每個像素直接查表。這張表叫 <strong>LUT(Look-Up Table,查表)</strong>:
+      </p>
+      <pre><code class="language-python">import numpy as np, cv2
+
+def gamma_correct(img, g):
+    # 先建一張 256 格的對照表:第 i 格存「輸入 i 應該變成的輸出」
+    lut = np.array([((i / 255.0) ** g) * 255 for i in range(256)], dtype=np.uint8)
+    return cv2.LUT(img, lut)   # 拿影像每個像素去查表,一次完成
+
+bright = gamma_correct(img, 0.45)   # 提亮暗部
+dark   = gamma_correct(img, 2.2)    # 壓暗</code></pre>
+      <p>
+        原本要算幾百萬次的工作,變成只算 256 次(建表)加上幾百萬次「查表」(極快的記憶體存取)。
+        這個「離散值有限 → 預先建表」的招數,在影像處理裡無所不在。
+      </p>
+
+      <h3>直方圖:影像的「明暗指紋」</h3>
+      <p>
+        <strong>直方圖(histogram)</strong>統計每個亮度值出現的次數,是觀察影像明暗分佈最直接的工具:
+        分佈偏左代表偏暗、偏右代表偏亮、擠在窄窄一條代表<strong>低對比</strong>(灰濛濛、不通透)。
+      </p>
+      <pre><code class="language-python"># cv2.calcHist 的參數很反直覺,逐一說明:
+hist = cv2.calcHist(
+    [gray],   # 要統計的影像(規定要用 list 包起來)
+    [0],      # 算第 0 個通道(灰階只有一個)
+    None,     # 遮罩,None = 整張都算
+    [256],    # 分成 256 個桶子(bins)
+    [0, 256], # 統計範圍 0–255
+)   # 回傳長度 256 的陣列:第 i 格 = 亮度 i 出現幾次</code></pre>
+      <p>
+        當一張低對比的圖,亮度全擠在中間一小段時,我們可以用<strong>直方圖均衡化(histogram equalization)</strong>把分佈「攤平、拉開」,
+        讓暗的更暗、亮的更亮,對比瞬間提升:
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 270" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="hist-ar" markerWidth="11" markerHeight="11" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#2f6f6a"/></marker>
+  </defs>
+  <!-- 左:均衡前(集中) -->
+  <text x="40" y="28" font-size="12.5" font-weight="700" fill="#1f2328">均衡前:亮度擠在中間 → 低對比</text>
+  <line x1="40" y1="200" x2="300" y2="200" stroke="#8a929b" stroke-width="1.2"/>
+  <line x1="40" y1="200" x2="40" y2="55" stroke="#8a929b" stroke-width="1.2"/>
+  <g fill="#8a929b">
+    <rect x="120" y="170" width="12" height="30"/><rect x="134" y="150" width="12" height="50"/><rect x="148" y="120" width="12" height="80"/>
+    <rect x="162" y="100" width="12" height="100"/><rect x="176" y="108" width="12" height="92"/><rect x="190" y="135" width="12" height="65"/>
+    <rect x="204" y="165" width="12" height="35"/>
+  </g>
+  <text x="42" y="216" font-size="9.5" fill="#8a929b">0</text><text x="286" y="216" font-size="9.5" fill="#8a929b">255</text>
+  <text x="155" y="240" font-size="10" fill="#4a5159">分佈窄 = 灰濛濛</text>
+  <!-- 箭頭 -->
+  <line x1="320" y1="130" x2="392" y2="130" stroke="#2f6f6a" stroke-width="2.2" marker-end="url(#hist-ar)"/>
+  <text x="318" y="120" font-size="10.5" fill="#2f6f6a">equalizeHist</text>
+  <!-- 右:均衡後(攤平) -->
+  <text x="412" y="28" font-size="12.5" font-weight="700" fill="#1f2328">均衡後:攤平拉開 → 高對比</text>
+  <line x1="412" y1="200" x2="680" y2="200" stroke="#8a929b" stroke-width="1.2"/>
+  <line x1="412" y1="200" x2="412" y2="55" stroke="#8a929b" stroke-width="1.2"/>
+  <g fill="#2f6f6a">
+    <rect x="420" y="150" width="13" height="50"/><rect x="445" y="135" width="13" height="65"/><rect x="470" y="120" width="13" height="80"/>
+    <rect x="495" y="128" width="13" height="72"/><rect x="520" y="115" width="13" height="85"/><rect x="545" y="130" width="13" height="70"/>
+    <rect x="570" y="118" width="13" height="82"/><rect x="595" y="138" width="13" height="62"/><rect x="620" y="150" width="13" height="50"/><rect x="645" y="160" width="13" height="40"/>
+  </g>
+  <text x="414" y="216" font-size="9.5" fill="#8a929b">0</text><text x="666" y="216" font-size="9.5" fill="#8a929b">255</text>
+  <text x="520" y="240" font-size="10" fill="#4a5159">分佈攤滿整個範圍 = 通透</text>
+</svg>
+        <figcaption>圖 65-4:直方圖均衡化。左邊的圖亮度全擠在中段,看起來灰灰的;均衡化把分佈「攤平」到整個 0–255 範圍(右),暗的更暗、亮的更亮,對比立刻拉開。實務上更常用 <strong>CLAHE</strong>(限制對比的自適應均衡):分區做、限制放大幅度,對「一邊亮一邊暗」的照片更自然。</figcaption>
+      </div>
+
+      <pre><code class="language-python"># 全域均衡(只吃單通道灰階)
+eq = cv2.equalizeHist(gray)
+
+# CLAHE:分區均衡 + 限制放大,實務首選(抗局部光照不均)
+clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+out = clahe.apply(gray)</code></pre>
+
+      <h3>二值化:從灰階到非黑即白</h3>
+      <p>
+        很多任務(數物件、辨識文件文字)需要先把影像變成<strong>只有黑與白</strong>的<strong>二值圖(binary image)</strong>。
+        做法是設一條<strong>閾值(threshold)</strong>:比它亮的變白(255)、比它暗的變黑(0)。問題只剩:這條線怎麼定?
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>方法</th><th>怎麼定閾值</th><th>適用情境</th></tr></thead>
+        <tbody>
+          <tr><td>全域 <code>THRESH_BINARY</code></td><td>你手動指定一個固定值</td><td>光照均勻、背景單純</td></tr>
+          <tr><td><strong>Otsu</strong> <code>THRESH_OTSU</code></td><td><strong>自動</strong>找讓前景/背景分得最開的值</td><td>直方圖呈雙峰(物件 vs 背景)</td></tr>
+          <tr><td><strong>自適應</strong> <code>adaptiveThreshold</code></td><td>每個像素用<strong>自己周圍</strong>的平均當門檻</td><td><strong>光照不均</strong>(文件陰影、書本曲面)</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <pre><code class="language-python"># Otsu:自動找最佳全域門檻(第二個參數 0 會被忽略)
+thr, otsu = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+print("Otsu 自動算出的門檻:", thr)
+
+# 自適應:每個像素看周圍 31x31 的區域決定門檻,專治光照不均
+adp = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                            cv2.THRESH_BINARY, blockSize=31, C=10)</code></pre>
+      <div class="callout note">
+        <div class="ico">📜</div>
+        <div class="body">
+          <span class="c-title">Otsu 的巧思</span>
+          <p>日本學者大津展之(Nobuyuki Otsu)1979 年提出的方法:它窮舉每一個可能的門檻,計算「把像素分成兩組後,組間差異最大(或組內變異最小)」的那一個。
+          直覺上,如果直方圖有兩座山峰(物件一座、背景一座),最好的門檻就在<strong>兩峰之間的山谷</strong>——Otsu 自動幫你找到它,不必手調。</p>
+        </div>
+      </div>
+
+      <h2>空間濾波與卷積:會看鄰居的處理</h2>
+      <p>
+        到目前為止的點運算,每個像素都「各算各的」。但模糊、銳化、找邊緣這些更有趣的效果,需要讓一個像素<strong>參考它的鄰居</strong>。
+        這類「看鄰域」的處理叫<strong>空間濾波(spatial filtering)</strong>,而它的數學引擎,是整個影像領域——
+        甚至整個深度學習視覺——最重要的一個運算:<strong>卷積(convolution)</strong>。
+      </p>
+
+      <h3>卷積:一個會滑動的加權和</h3>
+      <p>
+        卷積的點子可以一句話說完:<strong>拿一個小方框(叫<em>核 kernel</em>,或濾波器 filter)在影像上一格一格地滑;每停一處,就把框內的像素值與核裡對應的數字相乘、加總,得到一個輸出像素。</strong>
+        核裡填什麼數字,決定了效果是模糊、銳化還是找邊。寫成數學,輸出影像 $g$ 在位置 $(x, y)$ 的值是:
+      </p>
+      <p>$$g(x, y) = \sum_{i=-k}^{k}\sum_{j=-k}^{k} K(i, j)\, \cdot\, f(x+i,\ y+j)$$</p>
+      <p>
+        其中 $K$ 是核、$f$ 是輸入影像、$(2k+1)$ 是核的邊長(常見 3、5、7,都是奇數,才有正中心)。
+        以一個 $3\times 3$ 的<strong>均值核</strong>(每格都是 $\frac{1}{9}$)為例,輸出就是 9 個鄰居的平均——這就是最簡單的模糊。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 740 350" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="cv-ar" markerWidth="11" markerHeight="11" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#b4541f"/></marker>
+  </defs>
+  <!-- 輸入影像格 -->
+  <text x="30" y="28" font-size="12.5" font-weight="700" fill="#1f2328">輸入影像(每格一個像素值)</text>
+  <g font-size="12" text-anchor="middle">
+    <!-- 6x5 grid -->
+    <g stroke="#cfd6dc" stroke-width="1" fill="#fff">
+      <rect x="30" y="42" width="42" height="42"/><rect x="72" y="42" width="42" height="42"/><rect x="114" y="42" width="42" height="42"/><rect x="156" y="42" width="42" height="42"/><rect x="198" y="42" width="42" height="42"/><rect x="240" y="42" width="42" height="42"/>
+      <rect x="30" y="84" width="42" height="42"/><rect x="72" y="84" width="42" height="42"/><rect x="114" y="84" width="42" height="42"/><rect x="156" y="84" width="42" height="42"/><rect x="198" y="84" width="42" height="42"/><rect x="240" y="84" width="42" height="42"/>
+      <rect x="30" y="126" width="42" height="42"/><rect x="72" y="126" width="42" height="42"/><rect x="114" y="126" width="42" height="42"/><rect x="156" y="126" width="42" height="42"/><rect x="198" y="126" width="42" height="42"/><rect x="240" y="126" width="42" height="42"/>
+      <rect x="30" y="168" width="42" height="42"/><rect x="72" y="168" width="42" height="42"/><rect x="114" y="168" width="42" height="42"/><rect x="156" y="168" width="42" height="42"/><rect x="198" y="168" width="42" height="42"/><rect x="240" y="168" width="42" height="42"/>
+      <rect x="30" y="210" width="42" height="42"/><rect x="72" y="210" width="42" height="42"/><rect x="114" y="210" width="42" height="42"/><rect x="156" y="210" width="42" height="42"/><rect x="198" y="210" width="42" height="42"/><rect x="240" y="210" width="42" height="42"/>
+    </g>
+    <!-- 被核覆蓋的 3x3 高亮 -->
+    <rect x="72" y="84" width="126" height="126" fill="#2f6f6a" fill-opacity="0.12" stroke="#2f6f6a" stroke-width="3"/>
+    <!-- 值 -->
+    <g fill="#4a5159">
+      <text x="93" y="111">120</text><text x="135" y="111">110</text><text x="177" y="111">100</text>
+      <text x="93" y="153">130</text><text x="135" y="153">125</text><text x="177" y="153">115</text>
+      <text x="93" y="195">128</text><text x="135" y="195">118</text><text x="177" y="195">108</text>
+    </g>
+  </g>
+  <!-- 核 -->
+  <text x="330" y="100" font-size="12.5" font-weight="700" fill="#2f6f6a">核 3×3</text>
+  <g font-size="11" text-anchor="middle" fill="#2f6f6a">
+    <g stroke="#2f6f6a" stroke-width="1.4" fill="#e3efed">
+      <rect x="330" y="110" width="36" height="36"/><rect x="366" y="110" width="36" height="36"/><rect x="402" y="110" width="36" height="36"/>
+      <rect x="330" y="146" width="36" height="36"/><rect x="366" y="146" width="36" height="36"/><rect x="402" y="146" width="36" height="36"/>
+      <rect x="330" y="182" width="36" height="36"/><rect x="366" y="182" width="36" height="36"/><rect x="402" y="182" width="36" height="36"/>
+    </g>
+    <g fill="#2f6f6a">
+      <text x="348" y="132">⅑</text><text x="384" y="132">⅑</text><text x="420" y="132">⅑</text>
+      <text x="348" y="168">⅑</text><text x="384" y="168">⅑</text><text x="420" y="168">⅑</text>
+      <text x="348" y="204">⅑</text><text x="384" y="204">⅑</text><text x="420" y="204">⅑</text>
+    </g>
+  </g>
+  <text x="384" y="238" text-anchor="middle" font-size="10.5" fill="#4a5159">均值核(每格 1/9)</text>
+  <!-- 運算 -->
+  <text x="500" y="140" font-size="13" fill="#1f2328">Σ(核 × 框內像素)</text>
+  <text x="500" y="162" font-size="12" fill="#4a5159">= (120+110+...+108) / 9</text>
+  <text x="500" y="182" font-size="12" fill="#4a5159">≈ 117</text>
+  <line x1="455" y1="195" x2="455" y2="240" stroke="#b4541f" stroke-width="1.6"/>
+  <line x1="455" y1="240" x2="600" y2="240" stroke="#b4541f" stroke-width="1.6" marker-end="url(#cv-ar)"/>
+  <!-- 輸出像素 -->
+  <rect x="610" y="218" width="48" height="48" fill="#b4541f" fill-opacity="0.18" stroke="#b4541f" stroke-width="2.5"/>
+  <text x="634" y="247" text-anchor="middle" font-size="13" font-weight="700" fill="#b4541f">117</text>
+  <text x="634" y="284" text-anchor="middle" font-size="10.5" fill="#4a5159">1 個輸出像素</text>
+  <!-- 滑動箭頭 -->
+  <text x="30" y="300" font-size="11" fill="#8a929b">核每往右/下滑一格,就產生一個新的輸出像素 → 滑遍全圖 = 一張濾波後的影像</text>
+  <line x1="156" y1="270" x2="220" y2="270" stroke="#8a929b" stroke-width="1.4" stroke-dasharray="4 3" marker-end="url(#cv-ar)"/>
+</svg>
+        <figcaption>圖 65-5:卷積——一個會滑動的加權和。核(中)在輸入影像(左)上一格一格滑動,每停一處就把框內像素與核相乘、加總,產生一個輸出像素(右)。核裡的數字決定一切:全是 1/9 就是「取平均」(模糊)。把核滑遍整張圖,就得到一張完整的濾波結果。</figcaption>
+      </div>
+
+      <pre><code class="language-python">import numpy as np, cv2
+
+kernel = np.ones((5, 5), np.float32) / 25   # 5x5 均值核(25 個 1 加起來 = 1)
+blurred = cv2.filter2D(img, -1, kernel)     # 用自訂核做卷積;-1 = 輸出型別同輸入
+
+# 常見的內建平滑,通常比手刻方便又快:
+mean_blur  = cv2.blur(img, (5, 5))                    # 均值模糊
+gauss_blur = cv2.GaussianBlur(img, (5, 5), sigmaX=1.5) # 高斯模糊(加權,較自然,最常用)
+median     = cv2.medianBlur(img, 5)                   # 中值濾波:去椒鹽雜訊神器</code></pre>
+      <p>
+        <strong>高斯模糊</strong>用的核不是平均,而是中央重、四周輕的鐘形權重(離中心越遠貢獻越小),因此比均值更自然,是最常用的平滑。它的核來自二維高斯函數:
+      </p>
+      <p>$$G(x, y) = \frac{1}{2\pi\sigma^2}\, e^{-\frac{x^2 + y^2}{2\sigma^2}}$$</p>
+      <p>
+        而<strong>中值濾波(median filter)</strong>則跳出「加權和」框架:它取鄰域的<em>中位數</em>而非平均。
+        因為「椒鹽雜訊」(隨機散落的黑白點)是極端值,而中位數天生不受極端值影響,所以中值濾波是去椒鹽的神器,且能保住邊緣。
+      </p>
+
+      <h4>邊界怎麼辦?</h4>
+      <p>
+        當核滑到影像最邊緣時,有一部分會「伸出去」、沒有像素可乘。這叫<strong>邊界問題(border handling)</strong>。
+        OpenCV 用 <code>borderType</code> 處理:<strong>反射(reflect)</strong>(把邊緣像鏡子一樣翻出去,最常用、最自然)、<strong>複製(replicate)</strong>(延伸最邊一排)、<strong>補零(constant)</strong>(外面當成黑色,會在邊緣產生暗框)。
+      </p>
+
+      <h3>銳化:把細節加回去</h3>
+      <p>
+        模糊的反面是<strong>銳化(sharpening)</strong>。一個優雅的做法叫 <strong>unsharp mask</strong>:既然「原圖 − 模糊 = 細節(高頻)」,那把細節按比例加回原圖,邊緣就被強化了:
+      </p>
+      <pre><code class="language-python">blur  = cv2.GaussianBlur(img, (0, 0), 3)          # (0,0) = 由 sigma 自動決定核大小
+sharp = cv2.addWeighted(img, 1.5, blur, -0.5, 0)  # 1.5*原圖 - 0.5*模糊 = 原圖 + 0.5*細節</code></pre>
+      <p>調 <code>1.5 / -0.5</code> 這組權重就能控制銳化強度;太強會在邊緣出現白色「光暈」。</p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">這個「滑動核」就是 CNN 的根</span>
+          <p>請記住圖 65-5 這張圖:一個小核在影像上滑動,做加權和。<strong>這正是<a href="38-machine-learning.html">第 38 章</a>所講、第 67 章將深入的卷積神經網路(CNN)的核心運算。</strong>
+          唯一的差別是:在這裡,核裡的數字是<em>我們(工程師)手動設計</em>的(均值、高斯、Sobel……);
+          而在 CNN 裡,核裡的數字是<strong>讓模型自己從資料中「學」出來</strong>的——透過梯度下降(那又是<a href="12-calculus.html">第 12 章</a>微積分的事了)。
+          所以你今天親手刻的卷積,不是玩具:它是現代視覺辨識整座大廈的地基。一個學會了「該凸顯什麼特徵」的核,就是一個訓練好的卷積層。</p>
+        </div>
+      </div>
+
+      <h2>邊緣與梯度:影像的導數</h2>
+      <p>
+        影像裡最有資訊量的地方,往往是<strong>邊緣(edge)</strong>——物體的輪廓、文字的筆畫、車道線。
+        邊緣的本質是什麼?是<strong>亮度發生劇烈變化的地方</strong>。而「變化的快慢」,正是<a href="12-calculus.html">第 12 章</a>微積分的主角:<strong>導數(梯度)</strong>。
+      </p>
+
+      <h3>梯度 = 亮度的變化率</h3>
+      <p>
+        把一行像素的亮度想像成一條地形剖面:平坦的地方亮度不變(導數≈0),陡坡的地方亮度急變(導數很大)。
+        一階導數的<strong>極大值</strong>,就對應邊緣的位置。在離散的影像上,「導數」用相鄰像素的差來近似:
+      </p>
+      <p>$$\frac{\partial f}{\partial x} \approx f(x+1, y) - f(x-1, y)$$</p>
+
+      <div class="diagram">
+<svg viewBox="0 0 680 300" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- 上:亮度剖面(一個階梯邊) -->
+  <text x="30" y="26" font-size="12" font-weight="700" fill="#1f2328">沿一行掃過去的「亮度」</text>
+  <line x1="40" y1="120" x2="330" y2="120" stroke="#8a929b" stroke-width="1.2"/>
+  <line x1="40" y1="120" x2="40" y2="40" stroke="#8a929b" stroke-width="1.2"/>
+  <polyline points="40,108 150,108 175,55 300,55" fill="none" stroke="#2f6f6a" stroke-width="2.6"/>
+  <text x="80" y="100" font-size="10" fill="#2f6f6a">暗區</text>
+  <text x="230" y="48" font-size="10" fill="#2f6f6a">亮區</text>
+  <text x="150" y="135" font-size="10" fill="#b4541f">邊緣(亮度突變)</text>
+  <line x1="162" y1="120" x2="162" y2="50" stroke="#b4541f" stroke-width="1" stroke-dasharray="3 3"/>
+
+  <!-- 下:導數(梯度) -->
+  <text x="30" y="180" font-size="12" font-weight="700" fill="#1f2328">它的導數(梯度)= 變化率</text>
+  <line x1="40" y1="265" x2="330" y2="265" stroke="#8a929b" stroke-width="1.2"/>
+  <line x1="40" y1="285" x2="40" y2="195" stroke="#8a929b" stroke-width="1.2"/>
+  <polyline points="40,258 150,258 162,205 175,258 300,258" fill="none" stroke="#b4541f" stroke-width="2.6"/>
+  <text x="170" y="205" font-size="10" fill="#b4541f">尖峰 = 邊緣位置</text>
+
+  <!-- 右:Sobel 核 -->
+  <text x="400" y="26" font-size="12" font-weight="700" fill="#1f2328">Sobel 核:用卷積算梯度</text>
+  <text x="400" y="60" font-size="11" fill="#2f6f6a" font-weight="700">Gx(找垂直邊)</text>
+  <g font-size="12" text-anchor="middle" stroke="#2f6f6a" stroke-width="1.2" fill="#e3efed">
+    <rect x="400" y="70" width="34" height="30"/><rect x="434" y="70" width="34" height="30"/><rect x="468" y="70" width="34" height="30"/>
+    <rect x="400" y="100" width="34" height="30"/><rect x="434" y="100" width="34" height="30"/><rect x="468" y="100" width="34" height="30"/>
+    <rect x="400" y="130" width="34" height="30"/><rect x="434" y="130" width="34" height="30"/><rect x="468" y="130" width="34" height="30"/>
+  </g>
+  <g font-size="12" text-anchor="middle" fill="#1f2328">
+    <text x="417" y="90">-1</text><text x="451" y="90">0</text><text x="485" y="90">+1</text>
+    <text x="417" y="120">-2</text><text x="451" y="120">0</text><text x="485" y="120">+2</text>
+    <text x="417" y="150">-1</text><text x="451" y="150">0</text><text x="485" y="150">+1</text>
+  </g>
+  <text x="400" y="190" font-size="11" fill="#b4541f" font-weight="700">Gy(找水平邊)</text>
+  <g font-size="12" text-anchor="middle" stroke="#b4541f" stroke-width="1.2" fill="#f6e7dd">
+    <rect x="400" y="200" width="34" height="30"/><rect x="434" y="200" width="34" height="30"/><rect x="468" y="200" width="34" height="30"/>
+    <rect x="400" y="230" width="34" height="30"/><rect x="434" y="230" width="34" height="30"/><rect x="468" y="230" width="34" height="30"/>
+    <rect x="400" y="260" width="34" height="30"/><rect x="434" y="260" width="34" height="30"/><rect x="468" y="260" width="34" height="30"/>
+  </g>
+  <g font-size="12" text-anchor="middle" fill="#1f2328">
+    <text x="417" y="220">-1</text><text x="451" y="220">-2</text><text x="485" y="220">-1</text>
+    <text x="417" y="250">0</text><text x="451" y="250">0</text><text x="485" y="250">0</text>
+    <text x="417" y="280">+1</text><text x="451" y="280">+2</text><text x="485" y="280">+1</text>
+  </g>
+  <text x="540" y="150" font-size="11" fill="#4a5159">梯度強度</text>
+  <text x="540" y="170" font-size="13" fill="#1f2328">√(Gx²+Gy²)</text>
+</svg>
+        <figcaption>圖 65-6:邊緣就是亮度的「陡坡」,對應導數(梯度)的尖峰。<strong>Sobel 核</strong>正是把「相鄰像素相減」做成一個卷積核:Gx 偵測垂直邊、Gy 偵測水平邊。注意 Sobel 核就是上一節那個「滑動核」——找邊緣,只是換一組核裡的數字而已。</figcaption>
+      </div>
+
+      <p>
+        實務上不用最樸素的相減,而用 <strong>Sobel 核</strong>:它在求導之餘還順手做了一點平滑,對雜訊較穩健。
+        把 x 方向梯度 $G_x$ 與 y 方向梯度 $G_y$ 合起來,就得到不分方向的<strong>梯度強度(magnitude)</strong>:
+      </p>
+      <p>$$\|\nabla f\| = \sqrt{G_x^2 + G_y^2}, \qquad \theta = \arctan\!\left(\frac{G_y}{G_x}\right)$$</p>
+      <pre><code class="language-python">gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+gx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)   # x 方向:1,0 → 抓垂直邊
+gy = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)   # y 方向:0,1 → 抓水平邊
+mag = cv2.magnitude(gx, gy)                        # √(gx²+gy²) 總邊緣強度
+mag = cv2.convertScaleAbs(mag)                     # 取絕對值轉回 0–255 顯示</code></pre>
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">為什麼一定要用 CV_64F</span>
+          <p>邊緣有「由亮到暗」也有「由暗到亮」,梯度會出現<strong>負值</strong>。如果用 <code>CV_8U</code>(0–255)來接,負數會被砍成 0,半邊邊緣就憑空消失。
+          所以 Sobel 輸出要用能容納負數與小數的 <code>CV_64F</code>,算完再 <code>convertScaleAbs</code> 取絕對值轉回顯示範圍。</p>
+        </div>
+      </div>
+
+      <h3>Canny:業界標準的邊緣偵測流程</h3>
+      <p>
+        單純算梯度得到的邊緣又粗又雜。<strong>Canny 邊緣偵測</strong>(John Canny, 1986)把找邊緣做成一條五步流水線,輸出<strong>又細、又連續、又乾淨</strong>的邊:
+      </p>
+      <div class="diagram">
+<svg viewBox="0 0 740 150" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="cn-ar" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#8a929b"/></marker>
+  </defs>
+  <g font-size="10.5" text-anchor="middle">
+    <rect x="14" y="45" width="120" height="58" rx="9" fill="#e3efed" stroke="#2f6f6a"/>
+    <text x="74" y="70" font-weight="700" fill="#1f2328">① 高斯去噪</text><text x="74" y="88" font-size="9" fill="#4a5159">先平滑掉雜訊</text>
+    <rect x="158" y="45" width="120" height="58" rx="9" fill="#e3efed" stroke="#2f6f6a"/>
+    <text x="218" y="70" font-weight="700" fill="#1f2328">② 算梯度</text><text x="218" y="88" font-size="9" fill="#4a5159">Sobel 強度+方向</text>
+    <rect x="302" y="45" width="124" height="58" rx="9" fill="#ede7fb" stroke="#8b5cf6"/>
+    <text x="364" y="68" font-weight="700" fill="#1f2328">③ 非極大值抑制</text><text x="364" y="86" font-size="9" fill="#4a5159">把粗邊細化成一條線</text>
+    <rect x="450" y="45" width="120" height="58" rx="9" fill="#ede7fb" stroke="#8b5cf6"/>
+    <text x="510" y="70" font-weight="700" fill="#1f2328">④ 雙閾值</text><text x="510" y="88" font-size="9" fill="#4a5159">分強邊/弱邊</text>
+    <rect x="594" y="45" width="132" height="58" rx="9" fill="#f6e7dd" stroke="#b4541f"/>
+    <text x="660" y="68" font-weight="700" fill="#1f2328">⑤ 滯後連結</text><text x="660" y="86" font-size="9" fill="#4a5159">弱邊牽到強邊才留</text>
+  </g>
+  <g stroke="#8a929b" stroke-width="1.5">
+    <line x1="134" y1="74" x2="156" y2="74" marker-end="url(#cn-ar)"/>
+    <line x1="278" y1="74" x2="300" y2="74" marker-end="url(#cn-ar)"/>
+    <line x1="426" y1="74" x2="448" y2="74" marker-end="url(#cn-ar)"/>
+    <line x1="570" y1="74" x2="592" y2="74" marker-end="url(#cn-ar)"/>
+  </g>
+  <text x="370" y="130" text-anchor="middle" font-size="10" fill="#8a929b">輸出:乾淨、連續、單像素寬的邊緣圖(邊=白 255,其餘黑)</text>
+</svg>
+        <figcaption>圖 65-7:Canny 的五步流程。先去噪、算梯度,再把粗邊「細化」成單像素寬,最後用雙閾值 + 滯後連結濾掉雜邊、補上斷線。雙閾值的精髓:高於高閾值的「鐵定是邊」、低於低閾值的「鐵定不是」,介於中間的「看它有沒有牽到一條鐵定的邊」——有就留。</figcaption>
+      </div>
+      <pre><code class="language-python">edges = cv2.Canny(gray, threshold1=80, threshold2=160)   # 一行跑完五步,經驗:高:低 ≈ 2:1
+
+# 自動閾值:依這張圖的中位亮度自動估,換光線也穩定
+import numpy as np
+v = np.median(gray)
+lo = int(max(0, 0.66 * v))
+hi = int(min(255, 1.33 * v))
+edges_auto = cv2.Canny(gray, lo, hi)</code></pre>
+      <p>有了乾淨的邊緣,卡通化濾鏡(平滑色塊 + 黑色描邊)、找紙張邊界(下一個幾何變換要用)、輪廓分析(第 66 章)就都水到渠成了。</p>
+
+      <h2>形態學與二值分析:整理與數數</h2>
+      <p>
+        二值化後的圖常常坑坑疤疤:該連的斷了、該實心的破了個洞、背景散落著零星雜點。
+        <strong>形態學(morphology)</strong>是一組專門「整理二值圖形狀」的運算,作用在二值圖上(慣例:<strong>白 = 前景物件</strong>)。
+        它也用一個叫<strong>結構元素(structuring element)</strong>的小核,但做的不是加權和,而是「看鄰域內有沒有前景」。
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>運算</th><th>效果</th><th>用途</th></tr></thead>
+        <tbody>
+          <tr><td>膨脹 dilate</td><td>白色區域<strong>變胖</strong></td><td>連接斷裂、填補小洞</td></tr>
+          <tr><td>侵蝕 erode</td><td>白色區域<strong>變瘦</strong></td><td>去除小白點、分離黏連</td></tr>
+          <tr><td><strong>開運算 open</strong></td><td>先侵蝕後膨脹</td><td><strong>去雜點</strong>而主體幾乎不變</td></tr>
+          <tr><td><strong>閉運算 close</strong></td><td>先膨脹後侵蝕</td><td><strong>補小洞</strong>、連縫隙</td></tr>
+        </tbody>
+      </table>
+      </div>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 230" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- 原圖:一個有洞和雜點的形狀 -->
+  <text x="70" y="28" font-size="11.5" font-weight="700" fill="#1f2328" text-anchor="middle">原二值圖</text>
+  <rect x="20" y="40" width="120" height="120" fill="#1f2328"/>
+  <rect x="45" y="65" width="70" height="70" fill="#fff"/>
+  <rect x="70" y="90" width="20" height="20" fill="#1f2328"/>  <!-- 洞 -->
+  <rect x="120" y="48" width="8" height="8" fill="#fff"/>      <!-- 雜點 -->
+  <rect x="26" y="140" width="7" height="7" fill="#fff"/>
+  <text x="80" y="178" font-size="9" fill="#4a5159" text-anchor="middle">白=前景,有洞+雜點</text>
+
+  <!-- 開運算 -->
+  <text x="245" y="28" font-size="11.5" font-weight="700" fill="#2f6f6a" text-anchor="middle">開運算 → 去雜點</text>
+  <rect x="195" y="40" width="120" height="120" fill="#1f2328"/>
+  <rect x="220" y="65" width="70" height="70" fill="#fff"/>
+  <rect x="245" y="90" width="20" height="20" fill="#1f2328"/>
+  <text x="255" y="178" font-size="9" fill="#4a5159" text-anchor="middle">外圍雜點消失,主體保留</text>
+
+  <!-- 閉運算 -->
+  <text x="420" y="28" font-size="11.5" font-weight="700" fill="#b4541f" text-anchor="middle">閉運算 → 補洞</text>
+  <rect x="370" y="40" width="120" height="120" fill="#1f2328"/>
+  <rect x="395" y="65" width="70" height="70" fill="#fff"/>
+  <rect x="495" y="48" width="8" height="8" fill="#fff"/>
+  <rect x="376" y="140" width="7" height="7" fill="#fff"/>
+  <text x="430" y="178" font-size="9" fill="#4a5159" text-anchor="middle">內部小洞被補滿</text>
+
+  <!-- 記法 -->
+  <g font-size="11" fill="#1f2328">
+    <text x="545" y="70" font-weight="700">記法:</text>
+    <text x="545" y="95" fill="#2f6f6a">開 = 去「外面」的點</text>
+    <text x="545" y="118" fill="#b4541f">閉 = 補「裡面」的洞</text>
+    <text x="545" y="146" fill="#8a929b" font-size="10">核越大效果越猛,</text>
+    <text x="545" y="162" fill="#8a929b" font-size="10">但會黏死相鄰物件</text>
+  </g>
+</svg>
+        <figcaption>圖 65-8:形態學的開/閉運算。開運算(先瘦後胖)能清掉背景的零星雜點而幾乎不動主體;閉運算(先胖後瘦)能補滿前景內部的小洞、接合裂縫。一句口訣:<strong>開去外面的點,閉補裡面的洞</strong>。</figcaption>
+      </div>
+
+      <pre><code class="language-python">import cv2, numpy as np
+k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))   # 5x5 橢圓結構元素
+opened = cv2.morphologyEx(bw, cv2.MORPH_OPEN,  k)          # 去雜點
+closed = cv2.morphologyEx(bw, cv2.MORPH_CLOSE, k)          # 補小洞</code></pre>
+
+      <h3>連通元件:自動數出物件</h3>
+      <p>
+        把二值圖整理乾淨後,就能做「物件層級」的分析了。<strong>連通元件標記(connected components)</strong>會把<em>彼此相連的白色像素</em>視為同一個物件,逐一編號,並回報每個物件的位置、大小、質心。
+        工廠數零件、顯微鏡數細胞、農業數種子——這類「數數量」的需求,常常一個連通元件分析就解決,根本不必動用深度學習。
+      </p>
+      <pre><code class="language-python">n, labels, stats, centroids = cv2.connectedComponentsWithStats(bw)
+# n        : 區塊數(含背景,所以物件數要 -1)
+# labels   : 同尺寸的標號圖,每個像素標它屬於第幾號
+# stats[i] : 第 i 個物件的 [x, y, w, h, area];i=0 是背景
+# centroids: 每個物件的質心座標
+
+# 只保留面積大於 200 的(濾掉小雜點),從 1 開始跳過背景
+objs = [i for i in range(1, n) if stats[i, cv2.CC_STAT_AREA] &gt; 200]
+print("物件數:", len(objs))</code></pre>
+
+      <div class="diagram">
+<svg viewBox="0 0 560 220" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <rect x="14" y="20" width="532" height="180" fill="#1f2328" rx="6"/>
+  <!-- 物件們(白),各自外接框+編號 -->
+  <circle cx="90" cy="80" r="34" fill="#fff"/><rect x="54" y="44" width="72" height="72" fill="none" stroke="#2f6f6a" stroke-width="2"/><text x="90" y="34" text-anchor="middle" font-size="13" font-weight="800" fill="#7fd0c6">1</text>
+  <circle cx="210" cy="120" r="40" fill="#fff"/><rect x="168" y="78" width="84" height="84" fill="none" stroke="#2f6f6a" stroke-width="2"/><text x="210" y="68" text-anchor="middle" font-size="13" font-weight="800" fill="#7fd0c6">2</text>
+  <rect x="300" y="55" width="70" height="60" fill="#fff"/><rect x="298" y="53" width="74" height="64" fill="none" stroke="#2f6f6a" stroke-width="2"/><text x="335" y="44" text-anchor="middle" font-size="13" font-weight="800" fill="#7fd0c6">3</text>
+  <circle cx="450" cy="110" r="46" fill="#fff"/><rect x="404" y="64" width="92" height="92" fill="none" stroke="#2f6f6a" stroke-width="2"/><text x="450" y="54" text-anchor="middle" font-size="13" font-weight="800" fill="#7fd0c6">4</text>
+  <!-- 質心 -->
+  <circle cx="90" cy="80" r="3" fill="#b4541f"/><circle cx="210" cy="120" r="3" fill="#b4541f"/><circle cx="335" cy="85" r="3" fill="#b4541f"/><circle cx="450" cy="110" r="3" fill="#b4541f"/>
+  <text x="280" y="192" text-anchor="middle" font-size="11" fill="#cdd3da">connectedComponentsWithStats → 數出 4 個物件,各有外接框與質心(紅點)</text>
+</svg>
+        <figcaption>圖 65-9:連通元件標記把每一團相連的白色像素編號成獨立物件,並算出它們的外接框(綠)與質心(紅點)。配合面積過濾,就是一個穩健的「物件計數器」。</figcaption>
+      </div>
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">相黏的物件怎麼分開數?</span>
+          <p>兩枚硬幣靠在一起,連通元件會把它們當成「一個」。解法是<strong>距離轉換 + 分水嶺(watershed)</strong>:用 <code>cv2.distanceTransform</code> 算每個白點「離最近黑點多遠」,物件中心離邊最遠、值最大,把這些「山頂」當種子,再用分水嶺從種子往外淹水,水匯流處就是物件之間的分界線。這樣相黏的也能正確切開、分別計數。</p>
+        </div>
+      </div>
+
+      <h2>幾何變換:搬動像素的位置</h2>
+      <p>
+        前面所有處理改的都是像素的「值」。<strong>幾何變換(geometric transformation)</strong>改的則是像素的「<strong>位置</strong>」——
+        平移、旋轉、縮放,以及更強的仿射與透視。這是掃描 App、車牌拉正、AR 疊合的共同基礎,也與<a href="39-computer-graphics.html">第 39 章</a>的圖學變換、<a href="54-linear-algebra.html">第 54 章</a>的線性代數一脈相承。
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>變換</th><th>自由度</th><th>會保持</th><th>矩陣</th></tr></thead>
+        <tbody>
+          <tr><td>平移 / 旋轉</td><td>3</td><td>距離、角度(剛體)</td><td>2×3</td></tr>
+          <tr><td>相似(+縮放)</td><td>4</td><td>角度、形狀比例</td><td>2×3</td></tr>
+          <tr><td>仿射 affine</td><td>6</td><td><strong>平行線仍平行</strong></td><td>2×3</td></tr>
+          <tr><td>透視 perspective</td><td>8</td><td>直線仍是直線(近大遠小)</td><td>3×3(單應性 H)</td></tr>
+        </tbody>
+      </table>
+      </div>
+
+      <h3>齊次座標:讓平移也能塞進矩陣</h3>
+      <p>
+        縮放和旋轉都能寫成「矩陣乘上座標」,<strong>唯獨平移不行</strong>——平移是「加一個向量」,普通矩陣乘法生不出常數加項。
+        解法和<a href="39-computer-graphics.html">第 39 章</a>一模一樣:<strong>齊次座標(homogeneous coordinates)</strong>——把 2D 點 $(x, y)$ 多補一維寫成 $(x, y, 1)$,變換矩陣升成 $3\times 3$。那個固定的「1」乘上矩陣最後一欄,剛好把平移量「加」了進來:
+      </p>
+      <p>$$\begin{bmatrix} x' \\ y' \\ 1 \end{bmatrix} = \begin{bmatrix} 1 & 0 & t_x \\ 0 & 1 & t_y \\ 0 & 0 & 1 \end{bmatrix} \begin{bmatrix} x \\ y \\ 1 \end{bmatrix} = \begin{bmatrix} x + t_x \\ y + t_y \\ 1 \end{bmatrix}$$</p>
+      <p>
+        於是平移、旋轉、縮放<strong>全都統一成矩陣乘法</strong>,可以相乘組合成單一矩陣;而 $3\times 3$ 的<strong>透視變換矩陣(單應性 homography, $H$)</strong>更進一步,能表達「近大遠小」的透視效果。這正是把歪斜文件「拉正」的數學引擎。
+      </p>
+      <pre><code class="language-python">import cv2, numpy as np
+
+# 旋轉:先算矩陣 M,再用 warp 套用(所有幾何變換都是這兩步)
+M = cv2.getRotationMatrix2D(center=(w/2, h/2), angle=30, scale=1.0)
+rot = cv2.warpAffine(img, M, (w, h))
+
+# 透視變換:從「原圖四角 → 目標矩形四角」反推單應性 H,再套用
+H = cv2.getPerspectiveTransform(src4, dst4)      # src4/dst4 必須是 float32
+warped = cv2.warpPerspective(img, H, (W_out, H_out))</code></pre>
+
+      <h3>旗艦專題的原理:自動文件掃描器</h3>
+      <p>
+        現在把學過的東西串起來,看看掃描 App「把桌上歪斜的文件拉正成乾淨 A4」是怎麼辦到的。整條管線正好複習了本章大半內容:
+      </p>
+      <ol>
+        <li><strong>找紙張邊界</strong>:灰階 → 高斯模糊 → <strong>Canny 邊緣</strong>(M3)。</li>
+        <li><strong>取四個角</strong>:在邊緣圖上找輪廓,取面積最大的<strong>四邊形</strong>,得到四個角點。</li>
+        <li><strong>角點排序</strong>:把亂序的四角排成「左上→右上→右下→左下」(用一個巧招:<em>x+y 最小的是左上、最大的是右下;y−x 最小的是右上、最大的是左下</em>)。</li>
+        <li><strong>透視校正</strong>:依紙張長寬比設定目標矩形 → <code>getPerspectiveTransform</code> → <code>warpPerspective</code> 拉正。</li>
+        <li><strong>輸出</strong>:<strong>自適應二值化</strong>(M1)→ 形態學去雜點(M4)→ 乾淨黑白頁。</li>
+      </ol>
+
+      <div class="diagram">
+<svg viewBox="0 0 640 250" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="doc-ar" markerWidth="11" markerHeight="11" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#2f6f6a"/></marker>
+  </defs>
+  <!-- 左:歪斜的文件(梯形) -->
+  <text x="120" y="28" font-size="11.5" font-weight="700" fill="#1f2328" text-anchor="middle">拍到的歪斜文件</text>
+  <rect x="20" y="40" width="220" height="190" fill="#3a4048" rx="6"/>
+  <polygon points="60,70 200,55 225,200 75,215" fill="#f3f1ea" stroke="#b4541f" stroke-width="2.5"/>
+  <!-- 四角點 -->
+  <circle cx="60" cy="70" r="6" fill="#2f6f6a"/><text x="44" y="66" font-size="9" fill="#7fd0c6">左上</text>
+  <circle cx="200" cy="55" r="6" fill="#2f6f6a"/><text x="206" y="52" font-size="9" fill="#7fd0c6">右上</text>
+  <circle cx="225" cy="200" r="6" fill="#2f6f6a"/><text x="226" y="214" font-size="9" fill="#7fd0c6">右下</text>
+  <circle cx="75" cy="215" r="6" fill="#2f6f6a"/><text x="48" y="228" font-size="9" fill="#7fd0c6">左下</text>
+  <g stroke="#8a929b" stroke-width="1" stroke-dasharray="3 3">
+    <line x1="90" y1="100" x2="180" y2="92"/><line x1="95" y1="130" x2="190" y2="124"/><line x1="98" y1="160" x2="198" y2="155"/>
+  </g>
+  <!-- 箭頭 -->
+  <line x1="255" y1="135" x2="345" y2="135" stroke="#2f6f6a" stroke-width="2.4" marker-end="url(#doc-ar)"/>
+  <text x="300" y="124" font-size="10.5" fill="#2f6f6a" text-anchor="middle">透視校正</text>
+  <text x="300" y="152" font-size="9" fill="#8a929b" text-anchor="middle">warpPerspective</text>
+  <!-- 右:拉正的 A4 -->
+  <text x="490" y="28" font-size="11.5" font-weight="700" fill="#1f2328" text-anchor="middle">拉正 + 二值化</text>
+  <rect x="400" y="40" width="180" height="190" fill="#fff" stroke="#2f6f6a" stroke-width="2.5"/>
+  <g stroke="#1f2328" stroke-width="2">
+    <line x1="420" y1="70" x2="560" y2="70"/><line x1="420" y1="95" x2="560" y2="95"/><line x1="420" y1="120" x2="540" y2="120"/>
+    <line x1="420" y1="150" x2="560" y2="150"/><line x1="420" y1="175" x2="560" y2="175"/><line x1="420" y1="200" x2="500" y2="200"/>
+  </g>
+</svg>
+        <figcaption>圖 65-10:自動文件掃描器的原理。先用 Canny 找出紙張的四個角(綠點),把它們對應到一個正矩形的四角,反推出單應性矩陣 H,再 <code>warpPerspective</code> 把整張圖拉正——連「近大遠小」的透視變形都一併校正。最後自適應二值化輸出乾淨的黑白頁。本章學到的 Canny、輪廓、透視、二值化在這一條管線裡全用上了。</figcaption>
+      </div>
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">幾何變換的常見坑</span>
+          <p>(1) <strong>四角順序必須一致</strong>(原圖與目標都用同一順序),否則拉正後會上下或左右顛倒;(2) 點座標<strong>必須是 <code>float32</code></strong>,給整數會報錯;(3) 旋轉後若用原本的 <code>(w, h)</code> 當輸出畫布,四個角會被切掉,需要重算畫布大小。</p>
+        </div>
+      </div>
+
+      <h2>頻域處理:把影像看成一堆波</h2>
+      <p>
+        到目前為止我們都在「空間域」工作——直接操作像素的位置與值。但有一個威力強大的替代視角:<strong>頻域(frequency domain)</strong>。
+        它的核心洞見來自<strong>傅立葉轉換(Fourier transform)</strong>:
+      </p>
+      <blockquote>任何影像,都可以拆解成許多不同頻率的「波」的疊加。</blockquote>
+      <p>
+        慢慢變化的大區塊(天空、牆面)是<strong>低頻</strong>;快速變化的細節、邊緣、雜訊是<strong>高頻</strong>。
+        二維離散傅立葉轉換把影像 $f(x,y)$ 換成「各頻率成分有多強」的頻譜 $F(u,v)$:
+      </p>
+      <p>$$F(u, v) = \sum_{x=0}^{M-1}\sum_{y=0}^{N-1} f(x, y)\, e^{-2\pi i\left(\frac{ux}{M} + \frac{vy}{N}\right)}$$</p>
+      <pre><code class="language-python">import numpy as np
+f = np.fft.fft2(gray)              # 2D 傅立葉轉換
+fshift = np.fft.fftshift(f)        # 把低頻搬到正中央(否則低頻在四角,不直觀)
+mag = 20 * np.log(np.abs(fshift) + 1)   # 頻譜:取 log 壓縮才看得到;+1 防 log(0)</code></pre>
+      <p>
+        頻域有個殺手級應用:<strong>去除週期性雜訊</strong>。掃描舊報紙、印刷品會出現規律的網點或<strong>摩爾紋(moiré)</strong>,
+        空間域濾波很難乾淨去除。但這種規律紋路在頻譜上會<strong>集中成幾顆對稱的亮點</strong>——你只要用一個小遮罩把那幾個亮點「塗黑」(這叫<strong>陷波濾波器 notch filter</strong>),再反轉回空間域,紋路就消失了,而主體幾乎不受影響。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 640 230" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="fq-ar" markerWidth="11" markerHeight="11" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8b5cf6"/></marker>
+  </defs>
+  <!-- 頻譜:中心亮(低頻) + 對稱亮點(週期雜訊) -->
+  <text x="110" y="26" font-size="11.5" font-weight="700" fill="#1f2328" text-anchor="middle">頻譜(中心=低頻)</text>
+  <rect x="30" y="38" width="160" height="160" fill="#10131a"/>
+  <circle cx="110" cy="118" r="26" fill="#e3efed" fill-opacity="0.9"/>
+  <circle cx="110" cy="118" r="14" fill="#fff"/>
+  <text x="110" y="122" text-anchor="middle" font-size="8" fill="#1f2328">低頻</text>
+  <!-- 對稱亮點(週期雜訊) -->
+  <circle cx="58" cy="70" r="6" fill="#facc15"/><circle cx="162" cy="166" r="6" fill="#facc15"/>
+  <circle cx="162" cy="70" r="6" fill="#facc15"/><circle cx="58" cy="166" r="6" fill="#facc15"/>
+  <text x="110" y="216" text-anchor="middle" font-size="9" fill="#4a5159">黃點 = 週期性雜訊</text>
+  <!-- 箭頭:陷波 -->
+  <line x1="205" y1="118" x2="285" y2="118" stroke="#8b5cf6" stroke-width="2.4" marker-end="url(#fq-ar)"/>
+  <text x="245" y="108" text-anchor="middle" font-size="10" fill="#7c3aed">陷波遮罩</text>
+  <text x="245" y="134" text-anchor="middle" font-size="9" fill="#8a929b">把黃點塗黑</text>
+  <!-- 處理後頻譜 -->
+  <text x="380" y="26" font-size="11.5" font-weight="700" fill="#1f2328" text-anchor="middle">遮掉亮點後</text>
+  <rect x="300" y="38" width="160" height="160" fill="#10131a"/>
+  <circle cx="380" cy="118" r="26" fill="#e3efed" fill-opacity="0.9"/>
+  <circle cx="380" cy="118" r="14" fill="#fff"/>
+  <rect x="322" y="62" width="16" height="16" fill="#10131a" stroke="#8b5cf6" stroke-width="1.5"/>
+  <rect x="422" y="62" width="16" height="16" fill="#10131a" stroke="#8b5cf6" stroke-width="1.5"/>
+  <rect x="322" y="158" width="16" height="16" fill="#10131a" stroke="#8b5cf6" stroke-width="1.5"/>
+  <rect x="422" y="158" width="16" height="16" fill="#10131a" stroke="#8b5cf6" stroke-width="1.5"/>
+  <!-- 箭頭:反轉 -->
+  <line x1="475" y1="118" x2="540" y2="118" stroke="#8b5cf6" stroke-width="2.4" marker-end="url(#fq-ar)"/>
+  <text x="508" y="108" text-anchor="middle" font-size="10" fill="#7c3aed">ifft2</text>
+  <!-- 結果:乾淨圖 -->
+  <rect x="556" y="68" width="70" height="100" fill="#fff" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="591" y="122" text-anchor="middle" font-size="9" fill="#4a5159">紋路消失</text>
+</svg>
+        <figcaption>圖 65-11:頻域去除週期性雜訊。規律的網紋在頻譜上會變成幾顆對稱的亮點(黃);用陷波遮罩把它們塗黑,再反傅立葉轉換回空間域,紋路就乾淨消失,而影像主體(集中在中心低頻)幾乎不受影響。頻域處理的通用套路就是:<strong>轉到頻域 → 乘一張遮罩 → 轉回空間域</strong>。</figcaption>
+      </div>
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">頻域與卷積的隱藏連結</span>
+          <p>有個美妙的定理(卷積定理):<strong>空間域的卷積,等於頻域的逐點相乘</strong>。所以「在空間域用核做模糊」和「在頻域用低通遮罩留下低頻」其實是同一件事的兩面——低通=保留低頻=模糊,高通=只留高頻=只剩邊緣。這也解釋了為什麼大尺寸卷積有時改用 FFT 加速會更快。</p>
+        </div>
+      </div>
+
+      <h2>色彩分割與去背:把想要的東西切出來</h2>
+      <p>
+        最後一站,我們把前面的工具組合起來做一件很實用的事:<strong>把目標從背景分離</strong>。
+        直播的虛擬背景、電商商品去背、影視綠幕合成,核心都是這個。最經典也最直接的方法,是利用<strong>顏色</strong>。
+      </p>
+      <p>
+        如前所述,抓顏色要用 <strong>HSV</strong> 而非 RGB(色相 H 抗光照變化)。用 <code>cv2.inRange</code> 框出目標顏色的 HSV 範圍,得到一張二值<strong>遮罩(mask)</strong>;再用形態學清理、高斯模糊<strong>羽化(feather)</strong>邊緣,最後用 <strong>alpha 合成</strong>把前景貼到新背景上。alpha 合成的公式很重要,去背、轉場、AR 都用它:
+      </p>
+      <p>$$C_{\text{out}} = \alpha\, C_{\text{前景}} + (1 - \alpha)\, C_{\text{背景}}$$</p>
+      <p>
+        其中 $\alpha$ 是「前景的不透明度」:1 = 完全前景、0 = 完全背景、中間值 = 半透明(這正是羽化邊緣自然過渡的關鍵)。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 680 220" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="cs-ar" markerWidth="11" markerHeight="11" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#2f6f6a"/></marker>
+  </defs>
+  <!-- 綠幕原圖 -->
+  <text x="80" y="24" font-size="11" font-weight="700" fill="#1f2328" text-anchor="middle">① 綠幕原圖</text>
+  <rect x="22" y="34" width="116" height="150" fill="#3cb043"/>
+  <circle cx="80" cy="86" r="24" fill="#e9b894"/>
+  <rect x="58" y="108" width="44" height="64" rx="8" fill="#2f6f6a"/>
+  <!-- 箭頭 -->
+  <line x1="146" y1="110" x2="178" y2="110" stroke="#2f6f6a" stroke-width="2" marker-end="url(#cs-ar)"/>
+  <!-- 遮罩 -->
+  <text x="245" y="24" font-size="11" font-weight="700" fill="#1f2328" text-anchor="middle">② HSV 遮罩(前景白)</text>
+  <rect x="187" y="34" width="116" height="150" fill="#1f2328"/>
+  <circle cx="245" cy="86" r="24" fill="#fff"/>
+  <rect x="223" y="108" width="44" height="64" rx="8" fill="#fff"/>
+  <text x="245" y="200" font-size="8.5" fill="#4a5159" text-anchor="middle">inRange + 開運算 + 羽化</text>
+  <line x1="311" y1="110" x2="343" y2="110" stroke="#2f6f6a" stroke-width="2" marker-end="url(#cs-ar)"/>
+  <!-- 新背景 -->
+  <text x="410" y="24" font-size="11" font-weight="700" fill="#1f2328" text-anchor="middle">③ 新背景</text>
+  <rect x="352" y="34" width="116" height="150" fill="#bcd9f0"/>
+  <circle cx="430" cy="60" r="14" fill="#facc15"/>
+  <rect x="352" y="150" width="116" height="34" fill="#6aa39a"/>
+  <line x1="476" y1="110" x2="508" y2="110" stroke="#2f6f6a" stroke-width="2" marker-end="url(#cs-ar)"/>
+  <!-- 合成 -->
+  <text x="575" y="24" font-size="11" font-weight="700" fill="#1f2328" text-anchor="middle">④ alpha 合成</text>
+  <rect x="517" y="34" width="116" height="150" fill="#bcd9f0"/>
+  <circle cx="595" cy="60" r="14" fill="#facc15"/>
+  <rect x="517" y="150" width="116" height="34" fill="#6aa39a"/>
+  <circle cx="575" cy="86" r="24" fill="#e9b894"/>
+  <rect x="553" y="108" width="44" height="64" rx="8" fill="#2f6f6a"/>
+  <text x="575" y="200" font-size="8.5" fill="#4a5159" text-anchor="middle">前景×α + 背景×(1−α)</text>
+</svg>
+        <figcaption>圖 65-12:綠幕去背的四步。① 對綠幕原圖在 HSV 裡用 <code>inRange</code> 框出綠色,② 反轉得到前景遮罩、清理並羽化邊緣,③ 準備新背景,④ 用 alpha 合成把人物貼上去。羽化讓 α 在邊緣呈現 0→1 的漸變,接縫才不會像剪貼般生硬。</figcaption>
+      </div>
+
+      <pre><code class="language-python">import cv2, numpy as np
+
+hsv  = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+mask = cv2.inRange(hsv, np.array([35, 80, 80]), np.array([85, 255, 255]))  # 框出綠色
+
+k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, k)   # 去雜點
+mask = cv2.GaussianBlur(mask, (7, 7), 0)           # 羽化邊緣
+
+alpha = (255 - mask).astype(float) / 255           # 前景 = 非綠;轉成 0~1 的不透明度
+alpha = alpha[..., None]                            # (H,W) → (H,W,1) 才能對 3 通道廣播
+out = (frame * alpha + bg * (1 - alpha)).astype(np.uint8)   # alpha 合成</code></pre>
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">背景不是純色怎麼辦?</span>
+          <p>當背景<strong>不是</strong>單一顏色(一般生活照),<code>inRange</code> 就切不出來了。這時改用半自動的 <strong>GrabCut</strong>:你只要框一個矩形圈住前景,演算法用迭代圖割自動把前景切出來。綠幕(全自動但需純色背景)與 GrabCut(需人給框但背景任意)正好互補。更強的「無綠幕去背」則要靠第 67 章的深度學習分割。</p>
+        </div>
+      </div>
+
+      <h2>動手練習</h2>
+      <p>
+        以下練習刻意設計成<strong>不依賴任何外部圖檔</strong>:我們先用 NumPy + OpenCV 畫一張合成測試圖(cvkit 風格),裡面有不同顏色的幾何圖形,正好能拿來練習所有題目。請先把這個 helper 準備好:
+      </p>
+      <pre><code class="language-python">import numpy as np
+import cv2
+
+def make_test_image(size=400):
+    """合成測試圖:深灰底 + 幾個彩色幾何圖形(BGR),不需任何外部圖檔。"""
+    img = np.full((size, size, 3), 60, np.uint8)             # 深灰背景
+    cv2.circle(img, (120, 120), 60, (60, 180, 75), -1)       # 綠色圓
+    cv2.circle(img, (290, 130), 45, (40, 40, 220), -1)       # 紅色圓
+    cv2.rectangle(img, (80, 250), (190, 360), (230, 160, 0), -1)   # 藍色方
+    cv2.rectangle(img, (240, 250), (350, 360), (0, 200, 230), -1)  # 黃色方
+    return img
+
+img = make_test_image()</code></pre>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 65.1 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>用 NumPy 對測試圖做兩件事:(a) <strong>反轉</strong>成負片;(b) <strong>調亮 60</strong>。並親手驗證「直接 <code>+ 60</code>」與「<code>cv2.add(img, 60)</code>」在接近 255 時的差異,解釋為什麼。</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p>負片就是 <code>255 - img</code>。調亮的關鍵是 <code>uint8</code> 溢位:直接相加會「繞回」,在亮處冒黑點;<code>cv2.add</code> 是飽和運算,最大停在 255。</p>
+              <pre><code class="language-python">inv = 255 - img                  # 負片(反轉)
+
+bright_bad  = img + 60            # 直接加:會溢位繞回(危險)
+bright_good = cv2.add(img, 60)    # 飽和加:超過 255 就停在 255(正確)
+
+# 驗證:取一個很亮的像素(黃色方塊 B 通道其實低,但黃方的 G=200,R=230)
+px = np.array([[[40, 200, 230]]], np.uint8)   # 一個亮像素
+print("直接加:", (px + 60)[0, 0])        # R: 230+60=290 → 繞回 34!出現黑點
+print("飽和加:", cv2.add(px, 60)[0, 0])   # R: 停在 255
+
+cv2.imshow("inv", inv); cv2.imshow("good", bright_good)
+cv2.waitKey(0); cv2.destroyAllWindows()</code></pre>
+              <p>原因:<code>uint8</code> 只能表示 0–255,<code>290 mod 256 = 34</code>,於是本來最亮的紅色分量反而變成很暗——這就是「變亮卻冒黑點」的元兇。所以調整亮度永遠用 <code>cv2.add</code> 或 <code>convertScaleAbs</code>。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 65.2 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p><strong>手刻一個 3×3 均值模糊卷積</strong>(用雙重 for 迴圈,自己做邊界處理),套到灰階測試圖上,並與 <code>cv2.blur</code> / <code>cv2.filter2D</code> 的結果<strong>對照</strong>,確認差異極小。這題的目的是讓你親手體會圖 65-5 的「滑動加權和」。</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p>核心就是:對每個像素,取出周圍 3×3 鄰域,與核逐元素相乘後加總。邊界用反射補邊(<code>np.pad(..., mode="reflect")</code>),才能和 OpenCV 預設行為對上。</p>
+              <pre><code class="language-python">def conv2d_gray(img, kernel):
+    """手刻 2D 卷積(其實是相關):img 單通道,kernel 為方形核。"""
+    kh, kw = kernel.shape
+    pad = kh // 2
+    padded = np.pad(img, pad, mode="reflect")          # 反射補邊,和 OpenCV 預設一致
+    out = np.zeros_like(img, dtype=np.float64)
+    for y in range(img.shape[0]):
+        for x in range(img.shape[1]):
+            region = padded[y:y+kh, x:x+kw]            # 取出 3x3 鄰域
+            out[y, x] = np.sum(region * kernel)        # 加權和(這就是卷積的一格)
+    return np.clip(out, 0, 255).astype(np.uint8)
+
+gray = cv2.cvtColor(make_test_image(), cv2.COLOR_BGR2GRAY)
+k = np.ones((3, 3), np.float32) / 9                    # 3x3 均值核
+
+mine = conv2d_gray(gray, k)
+ref1 = cv2.blur(gray, (3, 3))
+ref2 = cv2.filter2D(gray, -1, k)
+
+diff = np.abs(mine.astype(int) - ref1.astype(int))
+print("與 cv2.blur 的最大差異:", int(diff.max()))   # 通常 0~1(僅捨入差)</code></pre>
+              <p>差異只會差在捨入(rounding)的 1 以內。恭喜——你剛剛親手實作了 CNN 卷積層裡那個最核心的運算。把 <code>k</code> 換成 Sobel 核,這支函式就變成邊緣偵測器了。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 65.3 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>用 <strong>Sobel</strong> 算出測試圖的梯度強度圖,再用 <strong>Canny</strong> 找出乾淨的邊緣。要求 Canny 用<strong>自動閾值</strong>(依中位亮度估),這樣換不同的圖也穩定。</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">gray = cv2.cvtColor(make_test_image(), cv2.COLOR_BGR2GRAY)
+
+# Sobel 梯度強度(記得用 CV_64F 容納負值)
+gx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
+gy = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
+mag = cv2.convertScaleAbs(cv2.magnitude(gx, gy))
+
+# Canny 自動閾值
+v = np.median(gray)
+lo = int(max(0, 0.66 * v))
+hi = int(min(255, 1.33 * v))
+edges = cv2.Canny(gray, lo, hi)
+
+print("自動閾值:", lo, hi)
+cv2.imshow("sobel", mag); cv2.imshow("canny", edges)
+cv2.waitKey(0); cv2.destroyAllWindows()</code></pre>
+              <p>你會看到 Sobel 的邊較粗、有灰階深淺;Canny 的邊則是單像素寬、非黑即白、更乾淨——因為它多做了非極大值抑制與雙閾值連結(圖 65-7)。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 65.4 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>用<strong>閾值 + 連通元件</strong>數出測試圖裡有幾個物件(應該是 4 個:兩個圓、兩個方),並在每個物件上畫出外接框與編號。記得先用形態學去雜點、並用面積過濾。</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">img = make_test_image()
+gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+# 物件比背景(灰=60)亮 → Otsu 二值化即可把物件變白
+_, bw = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+# 形態學去雜點
+k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+bw = cv2.morphologyEx(bw, cv2.MORPH_OPEN, k)
+
+n, labels, stats, cent = cv2.connectedComponentsWithStats(bw)
+count = 0
+for i in range(1, n):                                   # 從 1 開始跳過背景
+    x, y, w, h, area = stats[i]
+    if area &lt; 200:                                      # 過濾小雜點
+        continue
+    count += 1
+    cv2.rectangle(img, (x, y), (x + w, y + h), (255, 255, 255), 2)
+    cv2.putText(img, str(count), (x, y - 6),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+
+print("物件數:", count)                                  # 4
+cv2.imshow("count", img); cv2.waitKey(0); cv2.destroyAllWindows()</code></pre>
+              <p>若把測試圖改成兩個相黏的圓,Otsu + 連通元件會數成 1 個;這時就需要距離轉換 + 分水嶺把它們切開(見前面的提示框)。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 65.5 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>用 <strong>HSV 遮罩</strong>把測試圖裡的<strong>綠色圓</strong>偵測出來,做成兩個成果:(a) 只保留綠色、其餘變黑;(b) 把綠色圓「去背」貼到一張新的純藍背景上(用 alpha 合成,邊緣記得羽化)。</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p>關鍵在 HSV 裡框出綠色的 H 範圍(約 35–85),其餘用 S、V 下限濾掉太灰太暗的部分。合成時把遮罩羽化、轉成 0~1 的 alpha 再套公式。</p>
+              <pre><code class="language-python">img = make_test_image()
+hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+
+# (a) 框出綠色 → 只留綠
+lower, upper = np.array([35, 80, 60]), np.array([85, 255, 255])
+mask = cv2.inRange(hsv, lower, upper)
+green_only = cv2.bitwise_and(img, img, mask=mask)
+
+# 清理 + 羽化
+k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, k)
+mask = cv2.GaussianBlur(mask, (7, 7), 0)
+
+# (b) alpha 合成到純藍背景
+bg = np.full_like(img, (200, 120, 0))          # 純藍背景(BGR)
+alpha = (mask.astype(float) / 255)[..., None]   # 綠色處 = 前景
+out = (img * alpha + bg * (1 - alpha)).astype(np.uint8)
+
+cv2.imshow("green_only", green_only)
+cv2.imshow("composite", out)
+cv2.waitKey(0); cv2.destroyAllWindows()</code></pre>
+              <p>把 <code>lower/upper</code> 的 H 改一改,就能改抓紅色(注意紅色跨 H 兩端,要分兩段做 <code>inRange</code> 再 <code>|</code> 合併)或藍色。這正是綠幕去背(圖 65-12)的最小可運作版本。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 65.6 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>本章說「這個滑動的卷積核就是 CNN 的根」。請用自己的話說清楚:手工設計的卷積核(如 Sobel、高斯)與 CNN 學到的卷積核,<strong>運算上有何相同、來源上有何不同</strong>?為什麼後者更強大?</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>相同</strong>:兩者的運算完全一樣——都是一個小核在影像上滑動、做加權和(圖 65-5),輸出一張特徵圖。</p>
+              <p><strong>不同(來源)</strong>:手工核裡的數字是工程師<em>根據數學設計</em>的(例如 Sobel 的 −1,0,+1 是為了近似一階導數),一個核只會偵測一種固定的特徵。CNN 的核裡的數字是<em>隨機初始化、再透過梯度下降從大量資料中自動學出來</em>的(用到<a href="12-calculus.html">第 12 章</a>的鏈鎖法則與<a href="38-machine-learning.html">第 38 章</a>的訓練流程)。</p>
+              <p><strong>為什麼更強</strong>:(1) 模型可以學到人類想不到、也說不清的特徵組合;(2) 一層有幾十上百個核,能同時偵測多種特徵;(3) 多層堆疊後,淺層學到的邊緣/紋理會被組合成深層的「眼睛」「輪子」等高階概念。換句話說,你今天手刻的卷積是「固定的一個濾鏡」,CNN 則是「會自己長出最適合任務的成千上萬個濾鏡」。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>把這一章串起來</h2>
+      <p>
+        這一章我們走完了整條<strong>影像處理線(M0–M7)</strong>,而貫穿全章的,始終是開頭那句話:<strong>影像就是 NumPy 陣列,所有效果都是對它做數學</strong>。我們依序看到:
+      </p>
+      <ul>
+        <li><strong>影像即資料</strong>:影像 = <code>(H, W, C)</code> 陣列;掌握像素、通道、<code>dtype</code>、BGR/灰階/HSV,以及 BGR、<code>waitKey</code>、中文路徑、uint8 溢位這幾個必踩的坑。</li>
+        <li><strong>點運算</strong>:逐像素的轉換曲線——亮度、對比、Gamma(+LUT 加速)、直方圖均衡、Otsu/自適應二值化。</li>
+        <li><strong>空間濾波與卷積</strong>:會滑動的加權和——模糊、銳化、去雜訊;而<strong>這個滑動核就是 CNN 的根</strong>。</li>
+        <li><strong>邊緣與梯度</strong>:邊緣 = 亮度的導數;Sobel 算梯度、Canny 給出乾淨連續的邊。</li>
+        <li><strong>形態學與二值分析</strong>:開閉運算整理形狀、連通元件數出物件。</li>
+        <li><strong>幾何變換</strong>:用齊次座標與單應性矩陣搬動像素,撐起「自動文件掃描器」。</li>
+        <li><strong>頻域與去背</strong>:把影像看成波,陷波去除週期雜訊;用 HSV 遮罩 + alpha 合成做綠幕去背。</li>
+      </ul>
+      <p>
+        這些「影像進、影像出」的技術,本身就能做出掃描器、計數器、濾鏡、去背等實用工具;更重要的是,
+        它們是後續一切的<strong>前處理地基</strong>。接下來,<strong>第 66 章</strong>會從邊緣與二值圖再往上走一層:用<strong>輪廓、特徵點與匹配</strong>做形狀分析、以圖找物、影像拼接;
+        <strong>第 67 章</strong>則讓那個「滑動的卷積核」不再由我們手調,而是讓模型自己學——正式進入 CNN、YOLO 與影像分割的深度學習視覺;
+        <strong>第 68 章</strong>則走向反方向的電腦圖學、3D 與 AR。準備好,你已經為整座電腦視覺大廈打好了第一層、也是最重要的一層地基。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">📚</div>
+        <div class="body">
+          <span class="c-title">想更深入?延伸資源</span>
+          <p>本章對應一門「成果驅動」的影像處理・影像辨識・電腦圖學課程的 M0–M7 模組(先做出看得見的效果,再拆解數學)。
+          官方文件首推 <strong>OpenCV-Python Tutorials</strong>(<a href="https://docs.opencv.org/4.x/d6/d00/tutorial_py_root.html">docs.opencv.org</a>),從讀寫顯示、點運算、卷積濾波、邊緣、形態學、幾何變換、傅立葉到分割都有對照範例;
+          想補影像處理的學理,經典教科書是 Gonzalez &amp; Woods《Digital Image Processing》。
+          本章用到的數學散見於<a href="12-calculus.html">第 12 章(微積分:梯度即導數)</a>、<a href="54-linear-algebra.html">第 54 章(線性代數:矩陣與齊次座標)</a>;
+          「滑動核」的下一站是<a href="38-machine-learning.html">第 38 章(機器學習)</a>與第 67 章的 CNN;反方向的影像生成則見<a href="39-computer-graphics.html">第 39 章(計算機圖學)</a>。</p>
+        </div>
+      </div>
+
+    

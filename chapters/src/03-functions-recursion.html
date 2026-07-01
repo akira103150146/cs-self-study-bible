@@ -1,0 +1,991 @@
+<!--meta
+title: 函式、抽象與遞迴
+description: 從 DRY 與抽象出發,徹底理解函式的解剖、作用域與呼叫堆疊,再用鏡子照鏡子的比喻掌握遞迴:base case、遞迴步驟、階乘、費氏數列、河內塔、輾轉相除,以及遞迴 vs 迭代的取捨與極限。
+-->
+
+
+      <div class="eyebrow">第一部 · 計算機科學入門</div>
+      <h1>函式、抽象與遞迴</h1>
+      <p class="subtitle">一個函式怎麼可以呼叫它自己,卻不會掉進無窮迴圈?學會函式與遞迴,你就握住了程式設計師對付複雜度最優雅的兩把刀。</p>
+      <div class="byline">
+        <span class="tag">第 3 章</span>
+        <span>閱讀時間 ≈ 32 分鐘</span>
+        <span>難度:★★☆☆☆</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>為什麼函式是程式設計的<strong>第一個抽象工具</strong>,以及 DRY 原則</li>
+          <li>函式的每個零件:參數 vs 引數、<code>return</code>、回傳 <code>None</code></li>
+          <li>作用域(scope)、LEGB 規則,以及為什麼要少碰全域變數</li>
+          <li><strong>呼叫堆疊(call stack)</strong>怎麼堆疊與彈出——這是理解遞迴的關鍵</li>
+          <li>預設參數、關鍵字引數、<code>*args</code>/<code>**kwargs</code> 與 docstring</li>
+          <li>純函式(pure function)與副作用(side effect)的差別</li>
+          <li>遞迴的思考方式:base case 與 recursive case,以及階乘、費氏數列、河內塔、最大公因數</li>
+          <li>遞迴的代價與極限:重複計算、堆疊溢位,以及何時該改用迭代</li>
+        </ul>
+      </div>
+
+      <h2>為什麼需要函式?</h2>
+      <p>
+        上一章我們說過,<strong>函式(function)是程式設計中最基本的抽象工具</strong>。這一章,我們要把這句話拆開、揉碎、徹底吃透。
+        但在談「函式是什麼」之前,先讓你親身體會一下「沒有函式」有多痛。
+      </p>
+      <p>
+        假設你在寫一個程式,需要在好幾個地方印出漂亮的標題橫幅:
+      </p>
+      <pre><code class="language-python"># 沒有函式:同樣的三行,一抄再抄
+print("=" * 20)
+print("  歡迎光臨  ")
+print("=" * 20)
+
+# ...程式中間隔了 50 行...
+
+print("=" * 20)
+print("  使用者登入  ")
+print("=" * 20)</code></pre>
+      <p>
+        看出問題了嗎?同一段邏輯被你抄了兩次。如果哪天你想把橫幅從 20 個等號改成 30 個,
+        你得記得<strong>每一處</strong>都改;漏掉一個,畫面就歪了。程式裡只要有「重複」,就有「不一致」的種子,
+        而不一致正是 bug 的溫床。軟體界對此有一句信條:
+      </p>
+      <blockquote>
+        DRY ── Don't Repeat Yourself(不要重複你自己)。
+      </blockquote>
+      <p>
+        函式就是實踐 DRY 的工具。把那段重複的邏輯<strong>命名、打包一次</strong>,以後就用名字呼叫它:
+      </p>
+      <pre><code class="language-python"># 有函式:寫一次,到處用
+def banner(text):
+    print("=" * 20)
+    print(f"  {text}  ")
+    print("=" * 20)
+
+banner("歡迎光臨")
+banner("使用者登入")</code></pre>
+      <p>
+        現在要把 20 改成 30?<strong>只改一個地方</strong>,所有橫幅同步更新。但 DRY 只是函式的好處之一,而且不是最深刻的那個。
+        函式真正的魔力,藏在另外兩件事裡:
+      </p>
+      <ul>
+        <li><strong>把複雜拆小</strong>:一個大問題,你很難一口氣想清楚。但你可以把它切成「先做 A、再做 B、最後做 C」,
+          每個小步驟寫成一個函式。這叫<strong>功能分解(decomposition)</strong>——人腦的工作記憶一次只裝得下幾件事,函式讓你一次只專注一件。</li>
+        <li><strong>命名即抽象</strong>:當你把那三行 <code>print</code> 命名為 <code>banner</code> 之後,
+          你就再也不用去想「裡面到底怎麼印的」。<code>banner("歡迎光臨")</code> 這個名字本身,就把細節藏了起來。
+          這正是上一章說的:<em>抽象 = 隱藏複雜細節、只露出簡單介面</em>。</li>
+      </ul>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">函式做三件事</span>
+          <p><strong>消除重複(DRY)</strong>、<strong>把大問題拆成小問題</strong>、
+          <strong>給一段邏輯一個名字(抽象)</strong>。其中最重要的是最後一個:每寫一個好函式,
+          你就為自己的「思考詞彙表」新增了一個單字。程式設計的進步,很大一部分就是不斷在更高的抽象層次上思考。</p>
+        </div>
+      </div>
+
+      <h2>函式的解剖</h2>
+      <p>
+        我們來把一個函式拆開,看看每個零件叫什麼、做什麼。請仔細看這支再簡單不過的程式:
+      </p>
+      <pre><code class="language-python">def greet(name):           # def 關鍵字;greet 是函式名;name 是「參數 parameter」
+    message = f"哈囉,{name}!"
+    return message         # return 把結果交回給呼叫者
+
+result = greet("世界")     # "世界" 是「引數 argument」;呼叫並接住回傳值
+print(result)              # 哈囉,世界!</code></pre>
+      <p>逐一認識這些零件:</p>
+      <ul>
+        <li><code>def</code>:Python 用來「定義(define)」一個函式的關鍵字。後面接函式名與一對小括號。</li>
+        <li><strong>參數(parameter)</strong>:寫在定義那行括號裡的 <code>name</code>,是一個「佔位的名字」,代表「將來別人會傳進來的東西」。</li>
+        <li><strong>引數(argument)</strong>:真正<em>呼叫</em>時放進括號的那個值 <code>"世界"</code>。</li>
+        <li><code>return</code>:把計算結果「交回去」給呼叫的人。執行到 <code>return</code>,函式就立刻結束。</li>
+      </ul>
+
+      <div class="callout note">
+        <div class="ico">🔍</div>
+        <div class="body">
+          <span class="c-title">參數 vs 引數,別再搞混</span>
+          <p>很多人(包括不少老手)把這兩個詞混用,但分清楚會讓你讀文件更順:<br>
+          <strong>參數(parameter)</strong>是函式<em>定義</em>時的「形式名字」——它是空格、是欄位。<br>
+          <strong>引數(argument)</strong>是函式<em>被呼叫</em>時填進去的「實際的值」。<br>
+          一句話記:<em>參數是收件欄,引數是你寄進去的包裹。</em></p>
+        </div>
+      </div>
+
+      <h3>沒有 return,會發生什麼?</h3>
+      <p>
+        函式不一定要 <code>return</code>。如果一個函式只是「做事」(例如印東西)而不「算出值交回去」,它沒有 <code>return</code> 也沒關係。
+        但這時它其實偷偷回傳了一個特別的值:<code>None</code>。
+      </p>
+      <pre><code class="language-python">def say_hi(name):
+    print(f"嗨,{name}")    # 只有印出,沒有 return
+
+x = say_hi("小華")          # 螢幕印出「嗨,小華」
+print(x)                    # None  ← 沒有 return,Python 自動回傳 None</code></pre>
+      <p>
+        <code>None</code> 是 Python 用來表示「沒有值/空」的特殊物件。記住這個區別非常重要:
+        <strong><code>print</code> 是把東西「顯示」在螢幕上給人看,<code>return</code> 是把值「交還」給程式繼續用</strong>。
+        初學者最常見的 bug 之一,就是寫了一個只 <code>print</code> 沒 <code>return</code> 的函式,然後納悶為什麼 <code>x = my_func()</code> 拿到的是 <code>None</code>。
+      </p>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title"><code>print</code> 不等於 <code>return</code></span>
+          <p>「螢幕上看得到」不代表「程式拿得到」。如果你想把函式的結果拿去做後續計算(存進變數、傳給別的函式),
+          就<strong>一定</strong>要 <code>return</code>。只 <code>print</code> 不 <code>return</code>,值一閃就消失了。</p>
+        </div>
+      </div>
+
+      <h2>作用域:變數住在哪裡?</h2>
+      <p>
+        當你在函式裡建立一個變數,它「活」在哪裡、誰看得到它?這個問題的答案,叫做<strong>作用域(scope)</strong>。
+      </p>
+      <p>
+        最重要的一條規則是:<strong>函式裡建立的變數,是「區域變數(local variable)」,只在那個函式內部存在</strong>。
+        函式一執行完,它們就煙消雲散,外面完全看不到:
+      </p>
+      <pre><code class="language-python">def compute():
+    secret = 42        # secret 是 compute 的區域變數
+    return secret * 2
+
+print(compute())       # 84,沒問題
+print(secret)          # ❌ NameError:外面根本不認識 secret</code></pre>
+      <p>
+        反過來,定義在所有函式之外的變數叫<strong>全域變數(global variable)</strong>,程式裡到處都讀得到它。
+        那麼當函式裡用到一個名字時,Python 到底去哪裡找這個名字?它遵循一套有順序的搜尋規則,
+        名字取四個範圍的字首,叫 <strong>LEGB</strong>:
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>字母</th><th>範圍</th><th>意思</th></tr></thead>
+        <tbody>
+          <tr><td><strong>L</strong></td><td>Local(區域)</td><td>當前函式內部定義的名字</td></tr>
+          <tr><td><strong>E</strong></td><td>Enclosing(外層函式)</td><td>包住它的外層函式的區域範圍</td></tr>
+          <tr><td><strong>G</strong></td><td>Global(全域)</td><td>整個檔案最外層定義的名字</td></tr>
+          <tr><td><strong>B</strong></td><td>Built-in(內建)</td><td>Python 內建的名字,如 <code>print</code>、<code>len</code></td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>
+        Python 由內往外找:先看 L,沒有就往 E 找,再往 G,最後 B。看一個三層巢狀的例子,體會這個「由內往外」:
+      </p>
+      <pre><code class="language-python">x = "我是全域 x"            # G
+
+def outer():
+    x = "我是 outer 的 x"    # E(對 inner 而言)
+    def inner():
+        print(x)             # inner 自己沒有 x,往外一層找到 outer 的 x
+    inner()
+
+outer()                      # 印出:我是 outer 的 x</code></pre>
+
+      <h3>為什麼要盡量避免全域變數?</h3>
+      <p>
+        新手常被一個錯誤搞得一頭霧水。直覺上,你以為函式裡可以隨手改全域變數:
+      </p>
+      <pre><code class="language-python">count = 0                  # 全域變數
+
+def bad_increment():
+    count = count + 1      # ❌ UnboundLocalError!
+
+bad_increment()</code></pre>
+      <p>
+        為什麼報錯?因為 Python 看到函式裡<strong>對 <code>count</code> 賦值</strong>,就一口咬定「<code>count</code> 是這個函式的區域變數」。
+        於是等號右邊那個 <code>count</code> 還沒被指定就被拿來用——當然出錯。
+        你可以用 <code>global count</code> 宣告來「強制」改全域,但<strong>請先別急著這麼做</strong>。
+        全域變數之所以危險,是因為它讓函式偷偷依賴、偷偷改動外界的狀態:
+      </p>
+      <ul>
+        <li>程式變得難以推理:你光看一個函式的輸入,無法預測它的行為,因為它還偷偷讀寫了某個全域變數。</li>
+        <li>除錯變成惡夢:一個 bug 可能來自十個函式中的任何一個,因為它們都能動同一個全域變數。</li>
+        <li>無法重複使用:這個函式跟它依賴的全域變數綁死了,搬到別的程式就不能用。</li>
+      </ul>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">好函式靠「參數進、return 出」溝通</span>
+          <p>一個乾淨的函式,應該<strong>透過參數拿到它需要的一切,透過 <code>return</code> 交出結果</strong>,
+          而不是伸手去摸外面的全域變數。把資料的進出都攤在函式簽名上,你的程式就會像水管一樣清楚:看得見資料從哪流進、往哪流出。
+          這個原則,會在我們談「純函式」時再次出現。</p>
+        </div>
+      </div>
+
+      <h2>呼叫堆疊:函式呼叫的記憶體舞台</h2>
+      <p>
+        現在來到本章<strong>最關鍵的一節</strong>。理解了呼叫堆疊,後面的遞迴你會覺得理所當然;不理解它,遞迴永遠像魔法。
+      </p>
+      <p>
+        每當一個函式被呼叫,電腦會在記憶體裡為它開一塊專屬空間,叫做<strong>堆疊框(stack frame)</strong>。
+        這塊空間存放這次呼叫的所有區域變數、參數,以及「算完後該回到哪裡繼續」的記號。
+        當函式 A 呼叫函式 B,B 的堆疊框就疊在 A 上面;B 執行完回傳,B 的框就被丟掉(彈出),電腦回到 A 沒做完的地方繼續。
+      </p>
+      <p>
+        因為「最後疊上去的,最先被拿掉」,這種結構叫<strong>堆疊(stack)</strong>——想像一疊餐盤,你只能從最上面拿、往最上面放。
+        我們以 <code>factorial(3)</code>(3 的階乘)為例,先看程式,再看堆疊怎麼長:
+      </p>
+      <pre><code class="language-python">def factorial(n):
+    if n &lt;= 1:                      # base case
+        return 1
+    return n * factorial(n - 1)     # 自己呼叫自己!(等一下解釋)
+
+print(factorial(3))                 # 6</code></pre>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 330" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="up" markerWidth="12" markerHeight="12" refX="5" refY="9" orient="auto"><path d="M0,9 L5,0 L10,9 Z" fill="#2f6f6a"/></marker>
+    <marker id="dn" markerWidth="12" markerHeight="12" refX="5" refY="1" orient="auto"><path d="M0,1 L5,10 L10,1 Z" fill="#b4541f"/></marker>
+  </defs>
+  <text x="360" y="26" text-anchor="middle" font-size="15" font-weight="800" fill="#1f2328">呼叫堆疊:執行 factorial(3) 的過程</text>
+
+  <rect x="250" y="46" width="220" height="46" rx="8" fill="#e3efed" stroke="#2f6f6a" stroke-width="2.5"/>
+  <text x="360" y="67" text-anchor="middle" font-size="13" font-weight="700" fill="#1f2328">factorial(1)</text>
+  <text x="360" y="84" text-anchor="middle" font-size="11" fill="#2f6f6a">n=1 → base case → 回傳 1</text>
+
+  <rect x="250" y="100" width="220" height="46" rx="8" fill="#eef3f1" stroke="#2f6f6a"/>
+  <text x="360" y="121" text-anchor="middle" font-size="13" font-weight="700" fill="#1f2328">factorial(2)</text>
+  <text x="360" y="138" text-anchor="middle" font-size="11" fill="#4a5159">n=2,等著 2 × factorial(1)</text>
+
+  <rect x="250" y="154" width="220" height="46" rx="8" fill="#eef3f1" stroke="#2f6f6a"/>
+  <text x="360" y="175" text-anchor="middle" font-size="13" font-weight="700" fill="#1f2328">factorial(3)</text>
+  <text x="360" y="192" text-anchor="middle" font-size="11" fill="#4a5159">n=3,等著 3 × factorial(2)</text>
+
+  <rect x="250" y="208" width="220" height="46" rx="8" fill="#f6e7dd" stroke="#b4541f"/>
+  <text x="360" y="229" text-anchor="middle" font-size="13" font-weight="700" fill="#1f2328">main()</text>
+  <text x="360" y="246" text-anchor="middle" font-size="11" fill="#4a5159">呼叫 factorial(3)</text>
+
+  <line x1="232" y1="262" x2="488" y2="262" stroke="#8a929b" stroke-width="2"/>
+  <text x="360" y="280" text-anchor="middle" font-size="11" fill="#8a929b">堆疊底部 ── main 在最下面,base case 在最上面</text>
+
+  <line x1="205" y1="252" x2="205" y2="56" stroke="#2f6f6a" stroke-width="2.5" marker-end="url(#up)"/>
+  <text x="150" y="155" text-anchor="middle" font-size="12" font-weight="700" fill="#2f6f6a" transform="rotate(-90 150 155)">每次呼叫 → push 新框</text>
+
+  <line x1="515" y1="56" x2="515" y2="252" stroke="#b4541f" stroke-width="2.5" marker-end="url(#dn)"/>
+  <text x="568" y="155" text-anchor="middle" font-size="12" font-weight="700" fill="#b4541f" transform="rotate(90 568 155)">回傳值 → pop 出框</text>
+</svg>
+        <figcaption>圖 3-1:每呼叫一次 <code>factorial</code>,就往上疊一個堆疊框;碰到 base case 後,再由上往下一層層回傳,框一個個彈出。注意:同一個函式,在堆疊上可以有好幾個獨立的框,各自有自己的 <code>n</code>。</figcaption>
+      </div>
+
+      <p>
+        把這個「先疊上去、再彈下來」的過程,用算式攤開來看,會更清楚。下半段(往回算)就是堆疊一個個彈出的瞬間:
+      </p>
+      <pre><code class="language-text">factorial(3)
+= 3 * factorial(2)
+= 3 * (2 * factorial(1))
+= 3 * (2 * 1)          ← factorial(1) 觸發 base case,回傳 1
+= 3 * 2                ← factorial(2) 拿到 1,算出 2,回傳
+= 6                    ← factorial(3) 拿到 2,算出 6,回傳</code></pre>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">堆疊不是無限大的</span>
+          <p>堆疊框會佔記憶體。函式呼叫得越深(疊越多框),用掉的堆疊空間越多。
+          這塊空間是<strong>有上限</strong>的——疊太深會「堆疊溢位(stack overflow)」。
+          這個限制,稍後談遞迴極限時會變成主角。(沒錯,知名問答網站 Stack Overflow 就是用這個術語命名的。)</p>
+        </div>
+      </div>
+
+      <div class="callout note"><div class="ico">📚</div><div class="body">
+<span class="c-title">想看另一種視角?</span><p>SICP 以「代換模型(substitution model)」說明函式呼叫的計算語意——把引數代入函式體一步步化簡——再用「環境模型(environment model)」揭示閉包與可變狀態背後的深層機制。延伸閱讀
+<a href="80-sicp-scheme.html">第 74 章 · Scheme 導引與程序抽象</a>,你會看到呼叫堆疊背後那套更精確的求值圖景。</p></div></div>
+
+      <h2>函式的進階配備:預設參數、關鍵字引數、可變參數</h2>
+      <p>
+        Python 的函式比你想的更靈活。掌握以下幾招,你寫的函式會更好用、更好讀。
+      </p>
+
+      <h3>預設參數與關鍵字引數</h3>
+      <p>
+        你可以給參數一個<strong>預設值(default value)</strong>:呼叫時不傳,就用預設;傳了,就用你傳的。
+        而呼叫時也可以<strong>指名道姓</strong>地傳——這叫<strong>關鍵字引數(keyword argument)</strong>:
+      </p>
+      <pre><code class="language-python">def greet(name, greeting="你好", punctuation="!"):   # 後兩個有預設值
+    return f"{greeting}, {name}{punctuation}"
+
+print(greet("小明"))                     # 你好, 小明!     ← 全用預設
+print(greet("小明", "早安"))             # 早安, 小明!     ← 用位置傳第二個
+print(greet("小明", punctuation="。"))   # 你好, 小明。     ← 指名只改最後一個</code></pre>
+      <p>
+        關鍵字引數讓呼叫變得自我說明:<code>greet("小明", punctuation="。")</code> 一眼就看懂「。是 punctuation」,
+        不必去數它是第幾個參數。當函式有很多參數時,這能大幅提升可讀性。
+      </p>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">陷阱:別用「可變物件」當預設值</span>
+          <p>寫 <code>def f(items=[]):</code> 是經典地雷。那個 <code>[]</code> 只在函式定義時建立<strong>一次</strong>,
+          之後每次呼叫都共用同一個 list,於是上次的資料會「黏」在下次。正確作法是用 <code>None</code> 當預設:
+          <code>def f(items=None):</code>,進函式後再 <code>if items is None: items = []</code>。這個坑幾乎每個 Python 新手都踩過一次。</p>
+        </div>
+      </div>
+
+      <h3>可變參數:<code>*args</code> 與 <code>**kwargs</code></h3>
+      <p>
+        有時你不知道呼叫者會傳幾個引數。<code>*args</code> 讓函式收下「任意多個位置引數」,把它們打包成一個 tuple;
+        <code>**kwargs</code> 則收下「任意多個關鍵字引數」,打包成一個 dict:
+      </p>
+      <pre><code class="language-python">def total(*args):              # args 收集所有位置引數,變成一個 tuple
+    s = 0
+    for x in args:
+        s += x
+    return s
+
+print(total(1, 2, 3))         # 6
+print(total(1, 2, 3, 4, 5))   # 15
+
+def show(**kwargs):           # kwargs 收集所有關鍵字引數,變成一個 dict
+    for key, value in kwargs.items():
+        print(f"{key} = {value}")
+
+show(name="小明", age=18)     # name = 小明 / age = 18</code></pre>
+      <p>
+        名字 <code>args</code> 與 <code>kwargs</code> 只是慣例,真正起作用的是 <code>*</code> 與 <code>**</code>。
+        你會在很多函式庫看到它們,例如「把所有參數原封不動轉交給另一個函式」時非常好用。
+      </p>
+
+      <h3>docstring:寫給人看的說明書</h3>
+      <p>
+        函式定義的第一行,如果是一段字串,Python 會把它當成這個函式的<strong>說明文件(docstring)</strong>。
+        它不影響執行,卻能被 <code>help()</code> 或 <code>函式.__doc__</code> 取出來,也是 IDE 顯示提示的來源:
+      </p>
+      <pre><code class="language-python">def circle_area(radius):
+    """計算圓面積。
+
+    參數:
+        radius: 圓的半徑(數字)
+    回傳:
+        圓的面積,等於 π × r²
+    """
+    return 3.14159 * radius * radius
+
+help(circle_area)            # 印出上面那段說明
+print(circle_area.__doc__)   # 也能直接取出文字</code></pre>
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">替「未來的你」寫 docstring</span>
+          <p>三個月後重看自己的程式碼,你會發現那個「未來的你」其實是個陌生人。
+          一句簡短的 docstring,說明「這函式做什麼、參數是什麼、回傳什麼」,
+          就是寫給那位陌生人的善意。好的函式名 + 好的 docstring,常常讓註解變得多餘。</p>
+        </div>
+      </div>
+
+      <h2>純函式 vs 副作用</h2>
+      <p>
+        現在埋一條伏筆,它會在本書第二部「函數式程式設計」開花結果。先問你一個問題:下面這兩個函式,有什麼根本的不同?
+      </p>
+      <pre><code class="language-python"># A:純函式
+def add(a, b):
+    return a + b
+
+# B:有副作用的函式
+log = []                       # 一個全域 list
+def add_and_record(a, b):
+    result = a + b
+    log.append(result)         # ← 副作用:偷偷改了外面的 log
+    print(result)              # ← 副作用:印到螢幕也是一種副作用(I/O)
+    return result</code></pre>
+      <p>
+        函式 A 是<strong>純函式(pure function)</strong>,它滿足兩個條件:
+      </p>
+      <ul>
+        <li><strong>相同輸入,永遠相同輸出</strong>:<code>add(2, 3)</code> 永遠是 5,跟現在幾點、跑過幾次都無關。</li>
+        <li><strong>沒有副作用(side effect)</strong>:它不改動函式以外的任何東西——不碰全域變數、不寫檔案、不印螢幕、不發網路請求。它只是「輸入 → 計算 → 回傳」。</li>
+      </ul>
+      <p>
+        函式 B 則有<strong>副作用</strong>:它改了全域的 <code>log</code>,還印了東西到螢幕。
+        「副作用」聽起來像壞事,但它其實是必要之惡——一個完全沒有副作用的程式,不能存檔、不能顯示、不能跟世界互動,等於沒用。
+        重點不是「消滅副作用」,而是<strong>把副作用集中管理、與純計算分開</strong>。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">為什麼偏愛純函式?</span>
+          <p>純函式像數學裡的函數:<strong>可預測、好測試、好組合、可放心並行</strong>。
+          你不必擔心它「偷偷做了別的事」,也不必擔心呼叫順序——因為它根本不依賴、不改變外界狀態。
+          這正是上一節「靠參數進、return 出」原則的極致版本。本書第二部會告訴你:把程式盡量寫成純函式的組合,
+          是對付複雜度的另一條優雅路線。</p>
+        </div>
+      </div>
+
+      <h2>遞迴:鏡子裡的鏡子</h2>
+      <p>
+        終於來到本章的主角。你有沒有在兩面相對的鏡子之間站過?左邊的鏡子照進右邊的鏡子,右邊又照進左邊……
+        於是你看見一條<strong>無限延伸、越來越小的鏡中走廊</strong>。或者你拆過俄羅斯娃娃(Matryoshka):
+        打開一個,裡面是一個一模一樣、但更小的娃娃;再打開,又是一個更小的……直到最裡面那個<strong>打不開的實心小娃娃</strong>為止。
+      </p>
+      <p>
+        這就是<strong>遞迴(recursion)</strong>的精神:<strong>一個函式在解決問題的過程中,呼叫了它自己</strong>——
+        但每次都把問題變得更小一點,直到小到一個「不必再拆、直接給答案」的情況。
+      </p>
+      <p>
+        每個遞迴函式都由兩個部分組成,缺一不可:
+      </p>
+      <ul>
+        <li><strong>基底情況(base case)</strong>:小到可以直接回答的情況,<em>不再呼叫自己</em>。就是那個打不開的實心娃娃。</li>
+        <li><strong>遞迴步驟(recursive case)</strong>:把問題變小一點,然後呼叫自己去解那個更小的問題。就是「打開娃娃,發現裡面還有一個」。</li>
+      </ul>
+      <p>
+        回頭看剛才的 <code>factorial</code>,現在你能看懂它的兩個部分了:
+      </p>
+      <pre><code class="language-python">def factorial(n):
+    if n &lt;= 1:                      # ← base case:0! 與 1! 都是 1,直接回答
+        return 1
+    return n * factorial(n - 1)     # ← recursive case:n! = n × (n-1)!,問題變小了</code></pre>
+      <p>
+        關鍵在 <code>factorial(n - 1)</code>:它要算的是一個<strong>更小</strong>的階乘。每呼叫一次,<code>n</code> 就少 1,
+        像剝洋蔥一樣一層層往內,最後一定會抵達 <code>n &lt;= 1</code> 這個 base case,然後開始一路回傳(如圖 3-1)。
+      </p>
+
+      <div class="callout danger">
+        <div class="ico">⛔</div>
+        <div class="body">
+          <span class="c-title">沒有 base case = 災難</span>
+          <p>如果你忘了寫 base case,或寫的遞迴步驟根本沒讓問題變小,函式就會<strong>無窮地呼叫自己</strong>——
+          堆疊框一個接一個往上疊,永遠停不下來,直到把堆疊空間用光,程式崩潰。在 Python 是 <code>RecursionError</code>,
+          在 C 是 <code>Segmentation fault</code>(堆疊溢位)。<strong>寫遞迴的第一件事,永遠是先想清楚 base case。</strong></p>
+        </div>
+      </div>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">「遞迴跳躍的信念」</span>
+          <p>寫遞迴時,別試圖在腦中追蹤每一層呼叫——你會瘋掉。換個思路:<strong>假設 <code>factorial(n-1)</code> 已經能正確算出答案</strong>,
+          那我只要想「拿到 (n-1)! 之後,怎麼算出 n!?」答案是乘以 n。再確認 base case 對就行。
+          這種「相信更小的問題已經被解決」的心態,叫做 recursive leap of faith,是寫對遞迴的心法。</p>
+        </div>
+      </div>
+
+      <h2>四個經典遞迴範例</h2>
+      <p>
+        理論談夠了,動手。我們用四個必學的例子,把遞迴的肌肉練起來。
+      </p>
+
+      <h3>1. 階乘 factorial</h3>
+      <p>
+        已經看過了。它是最純粹的遞迴範本:<strong>一個 base case、一個讓 <code>n</code> 遞減的遞迴步驟</strong>。
+        $n! = n \times (n-1) \times \cdots \times 2 \times 1$,而 $0! = 1$。複習一下展開過程(就是圖 3-1 的算式):
+      </p>
+      <pre><code class="language-text">factorial(4)
+= 4 * factorial(3)
+= 4 * 3 * factorial(2)
+= 4 * 3 * 2 * factorial(1)
+= 4 * 3 * 2 * 1
+= 24</code></pre>
+
+      <h3>2. 費氏數列 Fibonacci</h3>
+      <p>
+        費氏數列(Fibonacci sequence)是 0, 1, 1, 2, 3, 5, 8, 13, …,規則是<strong>每一項等於前兩項之和</strong>:
+        $F(n) = F(n-1) + F(n-2)$,而 $F(0)=0$、$F(1)=1$。注意,這次的遞迴步驟<strong>呼叫了自己兩次</strong>:
+      </p>
+      <pre><code class="language-python">def fib(n):
+    if n &lt; 2:                       # base case:fib(0)=0, fib(1)=1
+        return n
+    return fib(n - 1) + fib(n - 2)  # recursive case:呼叫自己「兩次」
+
+print(fib(10))                      # 55</code></pre>
+      <p>
+        這個版本很美、很貼近數學定義——但它藏著一個嚴重的效能問題,我們下一節就會揭穿它。
+      </p>
+
+      <h3>3. 河內塔 Tower of Hanoi</h3>
+      <p>
+        這是遞迴的「炫技經典」。有三根柱子 A、B、C,A 上面套著 <code>n</code> 個由大到小的盤子。目標:把整疊盤子搬到 C,規則是:
+      </p>
+      <ul>
+        <li>一次只能搬一個盤子(每次只移動最上面的)。</li>
+        <li><strong>任何時候,大盤子都不能壓在小盤子上面。</strong></li>
+      </ul>
+
+      <div class="diagram">
+<svg viewBox="0 0 600 220" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="300" y="26" text-anchor="middle" font-size="14" font-weight="800" fill="#1f2328">河內塔:把 3 個盤子從 A 搬到 C</text>
+  <rect x="40" y="178" width="520" height="14" rx="4" fill="#8a929b"/>
+  <line x1="140" y1="70" x2="140" y2="180" stroke="#b08968" stroke-width="8" stroke-linecap="round"/>
+  <line x1="300" y1="70" x2="300" y2="180" stroke="#b08968" stroke-width="8" stroke-linecap="round"/>
+  <line x1="460" y1="70" x2="460" y2="180" stroke="#b08968" stroke-width="8" stroke-linecap="round"/>
+  <rect x="80"  y="156" width="120" height="20" rx="6" fill="#2f6f6a"/>
+  <rect x="95"  y="134" width="90"  height="20" rx="6" fill="#b4541f"/>
+  <rect x="110" y="112" width="60"  height="20" rx="6" fill="#8b5cf6"/>
+  <text x="140" y="210" text-anchor="middle" font-size="13" font-weight="700" fill="#1f2328">A(起點)</text>
+  <text x="300" y="210" text-anchor="middle" font-size="13" font-weight="700" fill="#1f2328">B(中轉)</text>
+  <text x="460" y="210" text-anchor="middle" font-size="13" font-weight="700" fill="#1f2328">C(終點)</text>
+</svg>
+        <figcaption>圖 3-2:河內塔的起始狀態。看似棘手,但用遞迴思考,它會塌縮成驚人簡單的三句話。</figcaption>
+      </div>
+
+      <p>
+        直接想「怎麼搬 <code>n</code> 個」會頭痛。但用遞迴的眼光——假設「搬 <code>n-1</code> 個」這件事我已經會了——整個問題瞬間崩解成三步:
+      </p>
+      <ol>
+        <li>把上面的 <code>n-1</code> 個盤子,從 <strong>A 搬到 B</strong>(借 C 當中轉)。</li>
+        <li>把最大的那個盤子,從 <strong>A 搬到 C</strong>。</li>
+        <li>把那 <code>n-1</code> 個盤子,從 <strong>B 搬到 C</strong>(借 A 當中轉)。</li>
+      </ol>
+      <p>翻成程式,幾乎是逐字翻譯:</p>
+      <pre><code class="language-python">def hanoi(n, source, target, auxiliary):
+    if n == 1:                                     # base case:只剩一個,直接搬
+        print(f"把盤子 1 從 {source} 移到 {target}")
+        return
+    hanoi(n - 1, source, auxiliary, target)        # 1. n-1 個:A → B(借 C)
+    print(f"把盤子 {n} 從 {source} 移到 {target}")  # 2. 最大那個:A → C
+    hanoi(n - 1, auxiliary, target, source)        # 3. n-1 個:B → C(借 A)
+
+hanoi(3, 'A', 'C', 'B')</code></pre>
+      <pre><code class="language-text">把盤子 1 從 A 移到 C
+把盤子 2 從 A 移到 B
+把盤子 1 從 C 移到 B
+把盤子 3 從 A 移到 C
+把盤子 1 從 B 移到 A
+把盤子 2 從 B 移到 C
+把盤子 1 從 A 移到 C</code></pre>
+      <p>
+        七步搬完三個盤子。事實上,搬 <code>n</code> 個盤子需要的最少步數是 $2^n - 1$ 步——這也能用遞迴推出來
+        (留作練習)。想想看:64 個盤子要 $2^{64}-1$ 步,即使一秒搬一個,也得花超過 5800 億年。
+        傳說中僧侶搬完世界就會毀滅——你現在知道我們很安全。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">遞迴的威力:化繁為簡</span>
+          <p>河內塔用迴圈寫會極其燒腦,用遞迴卻只有三句話。這就是遞迴的精髓:
+          <strong>當一個問題可以「用同樣方法解決它的更小版本」時,遞迴讓你的程式碼跟你的想法一樣簡潔。</strong>
+          你不必管全部七步怎麼來的——你只描述「一層該怎麼做」,剩下的交給遞迴。</p>
+        </div>
+      </div>
+
+      <h3>4. 最大公因數 gcd(輾轉相除法)</h3>
+      <p>
+        兩個整數的最大公因數(gcd),有個超過兩千年歷史的優雅演算法:<strong>歐幾里得輾轉相除法</strong>。
+        它的核心觀察是:$\gcd(a, b) = \gcd(b, a \bmod b)$,而當 $b = 0$ 時,答案就是 $a$。這天生就是遞迴:
+      </p>
+      <pre><code class="language-python">def gcd(a, b):
+    if b == 0:              # base case:除數為 0,a 就是答案
+        return a
+    return gcd(b, a % b)    # recursive case:輾轉相除,問題不斷變小
+
+print(gcd(48, 36))         # 12
+print(gcd(1071, 462))      # 21</code></pre>
+      <p>
+        每一步,<code>a % b</code> 都會嚴格變小(且非負),所以一定會抵達 <code>b == 0</code>。
+        追蹤一次 <code>gcd(48, 36)</code>:
+      </p>
+      <pre><code class="language-text">gcd(48, 36)
+= gcd(36, 48 % 36) = gcd(36, 12)
+= gcd(12, 36 % 12) = gcd(12, 0)
+= 12                ← b 變成 0,回傳 a = 12</code></pre>
+
+      <div class="callout history">
+        <div class="ico">📜</div>
+        <div class="body">
+          <span class="c-title">人類最古老的演算法之一</span>
+          <p>輾轉相除法記載於歐幾里得約西元前 300 年的《幾何原本》(Elements)。
+          兩千三百多年後,我們仍在用它,而且它依然是已知最有效率的 gcd 演算法之一。
+          好的演算法,跟好的數學定理一樣,是不會過時的。</p>
+        </div>
+      </div>
+
+      <h2>遞迴 vs 迭代:當優雅遇上效能</h2>
+      <p>
+        遞迴讀起來很美,但美麗有時要付出代價。讓我們回去拷問那個費氏數列的樸素遞迴版,看它到底慢在哪。
+      </p>
+      <p>
+        當你呼叫 <code>fib(5)</code>,它要算 <code>fib(4)</code> 和 <code>fib(3)</code>;<code>fib(4)</code> 又要算 <code>fib(3)</code> 和 <code>fib(2)</code>……
+        把整棵呼叫的樹畫出來,你會看到一件可怕的事:<strong>同一個值被算了一遍又一遍</strong>。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 700 360" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="350" y="22" text-anchor="middle" font-size="14" font-weight="800" fill="#1f2328">fib(5) 的遞迴樹:看那些重複的計算</text>
+  <!-- edges -->
+  <g stroke="#cbd3da" stroke-width="2">
+    <line x1="350" y1="58" x2="200" y2="116"/>
+    <line x1="350" y1="58" x2="500" y2="116"/>
+    <line x1="200" y1="116" x2="120" y2="180"/>
+    <line x1="200" y1="116" x2="285" y2="180"/>
+    <line x1="500" y1="116" x2="440" y2="180"/>
+    <line x1="500" y1="116" x2="565" y2="180"/>
+    <line x1="120" y1="180" x2="70" y2="246"/>
+    <line x1="120" y1="180" x2="170" y2="246"/>
+    <line x1="285" y1="180" x2="245" y2="246"/>
+    <line x1="285" y1="180" x2="325" y2="246"/>
+    <line x1="440" y1="180" x2="405" y2="246"/>
+    <line x1="440" y1="180" x2="485" y2="246"/>
+    <line x1="70" y1="246" x2="40" y2="310"/>
+    <line x1="70" y1="246" x2="100" y2="310"/>
+  </g>
+  <!-- nodes -->
+  <g font-size="12" font-weight="700" text-anchor="middle">
+    <circle cx="350" cy="58" r="20" fill="#2f6f6a"/><text x="350" y="62" fill="#fff">5</text>
+    <circle cx="200" cy="116" r="20" fill="#2f6f6a"/><text x="200" y="120" fill="#fff">4</text>
+    <circle cx="500" cy="116" r="20" fill="#8b5cf6"/><text x="500" y="120" fill="#fff">3</text>
+    <circle cx="120" cy="180" r="20" fill="#8b5cf6"/><text x="120" y="184" fill="#fff">3</text>
+    <circle cx="285" cy="180" r="20" fill="#b4541f"/><text x="285" y="184" fill="#fff">2</text>
+    <circle cx="440" cy="180" r="20" fill="#b4541f"/><text x="440" y="184" fill="#fff">2</text>
+    <circle cx="565" cy="180" r="20" fill="#aeb6bf"/><text x="565" y="184" fill="#fff">1</text>
+    <circle cx="70" cy="246" r="20" fill="#b4541f"/><text x="70" y="250" fill="#fff">2</text>
+    <circle cx="170" cy="246" r="20" fill="#aeb6bf"/><text x="170" y="250" fill="#fff">1</text>
+    <circle cx="245" cy="246" r="20" fill="#aeb6bf"/><text x="245" y="250" fill="#fff">1</text>
+    <circle cx="325" cy="246" r="20" fill="#aeb6bf"/><text x="325" y="250" fill="#fff">0</text>
+    <circle cx="405" cy="246" r="20" fill="#aeb6bf"/><text x="405" y="250" fill="#fff">1</text>
+    <circle cx="485" cy="246" r="20" fill="#aeb6bf"/><text x="485" y="250" fill="#fff">0</text>
+    <circle cx="40" cy="310" r="20" fill="#aeb6bf"/><text x="40" y="314" fill="#fff">1</text>
+    <circle cx="100" cy="310" r="20" fill="#aeb6bf"/><text x="100" y="314" fill="#fff">0</text>
+  </g>
+  <!-- legend -->
+  <rect x="500" y="285" width="16" height="16" rx="3" fill="#8b5cf6"/><text x="522" y="298" font-size="11" fill="#4a5159">fib(3) 被算了 2 次</text>
+  <rect x="500" y="308" width="16" height="16" rx="3" fill="#b4541f"/><text x="522" y="321" font-size="11" fill="#4a5159">fib(2) 被算了 3 次</text>
+</svg>
+        <figcaption>圖 3-3:<code>fib(5)</code> 的遞迴樹。紫色的 <code>fib(3)</code> 整棵子樹被重算 2 次,磚紅的 <code>fib(2)</code> 被重算 3 次。<code>n</code> 越大,重複越誇張——這棵樹的節點數量呈指數成長。</figcaption>
+      </div>
+
+      <p>
+        這棵樹的大小大約隨 <code>n</code> <strong>指數成長</strong>,時間複雜度是 $O(2^n)$。
+        <code>fib(50)</code> 用這個版本,你的電腦會算到天荒地老。問題的根源就是圖中那些重複的子樹——同樣的功,做了千千萬萬遍。
+      </p>
+      <p>
+        換成<strong>迭代(iteration)</strong>——也就是用迴圈——只要從小到大、由下往上算,每個值<strong>只算一次</strong>,
+        用兩個變數記住「前兩項」即可:
+      </p>
+      <pre><code class="language-python">def fib_iter(n):
+    a, b = 0, 1                # a = fib(0), b = fib(1)
+    for _ in range(n):
+        a, b = b, a + b        # 往前推一步:新的 a 是舊 b,新的 b 是兩者之和
+    return a
+
+print(fib_iter(50))           # 12586269025,瞬間算完</code></pre>
+      <p>
+        這個迭代版是 $O(n)$,而且只用固定幾個變數、不堆疊。同一個問題,迭代完勝樸素遞迴。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">🧭</div>
+        <div class="body">
+          <span class="c-title">伏筆:重複計算,有解</span>
+          <p>樸素遞迴 Fibonacci 慢,<strong>不是因為遞迴本身有罪,而是因為它重複算了一堆相同的子問題</strong>。
+          如果我們把每個算過的答案「記下來」,下次直接查表,就能讓遞迴版也變成 $O(n)$。
+          這個技巧叫<strong>記憶化(memoization)</strong>,是<strong>動態規劃(dynamic programming)</strong>的入門票。
+          我們會在第六部「演算法」用一整章好好招待它。現在你只要記得:<em>看到遞迴樹裡有重複,就有最佳化的空間。</em></p>
+        </div>
+      </div>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">遞迴與迭代,怎麼選?</span>
+          <p>兩者表達能力相同——任何遞迴都能改寫成迭代,反之亦然。實務上的取捨:
+          <strong>當問題天生是「樹狀/巢狀」結構</strong>(河內塔、走訪資料夾、剖析語法)時,遞迴讓程式碼貼近想法、清晰易讀;
+          <strong>當問題是「線性累積」</strong>(加總、走訪串列)且在意效能與堆疊深度時,迭代通常更實在。
+          選清楚、選對,而不是盲目偏好其一。</p>
+        </div>
+      </div>
+
+      <h2>遞迴的極限:深度與堆疊溢位</h2>
+      <p>
+        還記得圖 3-1 那句話嗎?<strong>堆疊不是無限大的。</strong>每一層遞迴都吃掉一個堆疊框,遞得太深,堆疊就會爆。
+      </p>
+      <p>
+        Python 為了保護你(避免無窮遞迴把整台機器拖垮),特地設了一道<strong>遞迴深度上限</strong>,預設大約 1000 層。
+        超過就丟 <code>RecursionError</code>,而不是讓電腦真的崩潰:
+      </p>
+      <pre><code class="language-python">import sys
+print(sys.getrecursionlimit())   # 通常印出 1000
+
+def deep(n):
+    return deep(n + 1)           # 永遠變大,沒有 base case
+
+deep(0)
+# RecursionError: maximum recursion depth exceeded</code></pre>
+      <p>
+        你可以用 <code>sys.setrecursionlimit(100000)</code> 調高它,但這是<strong>飲鴆止渴</strong>:
+        調太高,真正的「實體堆疊」還是會被撐爆,那時 Python 攔不住,整個直譯器會直接當掉。
+        正解通常是「改寫成迭代」或「設計更淺的遞迴」。
+      </p>
+      <p>
+        C 語言可沒這麼貼心。它<strong>不會</strong>替你檢查遞迴深度,你一路遞下去,直到撞上作業系統給的堆疊上限,
+        程式就「砰」地一聲崩潰——這就是貨真價實的<strong>堆疊溢位(stack overflow)</strong>:
+      </p>
+      <pre><code class="language-c">#include &lt;stdio.h&gt;
+
+/* 沒有 base case,無窮遞迴 */
+int boom(int n) {
+    return boom(n + 1);
+}
+
+int main(void) {
+    printf("%d\n", boom(0));   /* 執行後:Segmentation fault(堆疊溢位) */
+    return 0;
+}</code></pre>
+      <p>
+        在 C 裡,堆疊溢位是惡名昭彰的當機原因——而且它不像 Python 會給你清楚的錯誤訊息,
+        往往只丟一句冷冰冰的 <code>Segmentation fault</code>,留你自己去查。這也是為什麼底層程式設計師對遞迴深度特別敏感。
+      </p>
+
+      <h3>尾遞迴:一個美麗卻在 Python 落空的最佳化</h3>
+      <p>
+        有一種特別的遞迴叫<strong>尾遞迴(tail recursion)</strong>:遞迴呼叫是函式做的<strong>最後一件事</strong>,
+        它的回傳值<em>直接</em>就是整個函式的回傳值,後面不再做任何運算。比較這兩個階乘:
+      </p>
+      <pre><code class="language-python"># 一般遞迴:回傳前還要做 "n * ..." 這個乘法
+def factorial(n):
+    if n &lt;= 1:
+        return 1
+    return n * factorial(n - 1)         # 呼叫回來後還得乘 n,不是尾遞迴
+
+# 尾遞迴:用 acc 累積結果,呼叫就是最後一步
+def factorial_tail(n, acc=1):
+    if n &lt;= 1:
+        return acc
+    return factorial_tail(n - 1, acc * n)   # 回傳值「就是」這個呼叫,尾遞迴</code></pre>
+      <p>
+        為什麼這很特別?因為當「呼叫是最後一步」時,目前這層的堆疊框其實<strong>已經沒用了</strong>——
+        沒有東西還等著它算完。聰明的編譯器可以「重用」這個框,不再往上疊新框,把遞迴變成跟迴圈一樣省記憶體。
+        這個最佳化叫<strong>尾呼叫消除(tail call optimization, TCO)</strong>,在 Scheme、Haskell 等語言是標配。
+      </p>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">Python 不做尾呼叫消除</span>
+          <p>很現實的一點:<strong>Python 刻意不支援 TCO</strong>。即使你寫成漂亮的尾遞迴,Python 仍會老老實實一層層疊框,
+          照樣會撞上深度上限。Python 之父 Guido 的理由是:TCO 會讓除錯時的「呼叫堆疊追蹤(traceback)」資訊消失,
+          得不償失。所以在 Python 裡,如果你需要很深的迴圈次數,<strong>請直接用迴圈,別指望尾遞迴幫你省堆疊。</strong></p>
+        </div>
+      </div>
+
+      <h2>C 對照:函式宣告與回傳型別</h2>
+      <p>
+        本書的慣例是用 C 看「底層真相」。同一個遞迴階乘,用 C 寫一次,你會看到 Python 替你藏起來的東西被攤在陽光下:
+      </p>
+      <pre><code class="language-c">#include &lt;stdio.h&gt;
+
+/* unsigned long long 是「回傳型別」;int n 明確標出參數的型別 */
+unsigned long long factorial(int n) {
+    if (n &lt;= 1) {
+        return 1;                                   /* base case */
+    }
+    return (unsigned long long)n * factorial(n - 1); /* recursive case */
+}
+
+int main(void) {
+    printf("%llu\n", factorial(10));   /* 3628800 */
+    return 0;
+}</code></pre>
+      <p>跟 Python 版對照,有幾個 C 特有、值得你記住的地方:</p>
+      <ul>
+        <li><strong>回傳型別要明寫</strong>:函式名前面的 <code>unsigned long long</code> 宣告「這個函式會交回一個無號的超長整數」。
+          Python 不用你管型別,C 則要求你說清楚——好處是編譯器能替你抓錯,壞處是你得想清楚數值範圍。</li>
+        <li><strong>參數型別要明寫</strong>:<code>int n</code> 而不只是 <code>n</code>。</li>
+        <li><strong>為什麼用 <code>unsigned long long</code>?</strong> 因為階乘長得飛快。<code>13!</code> 就超過了一般 <code>int</code>(32 位元)的上限,
+          會「溢位」得到亂七八糟的值。這正是 C 逼你面對的現實:<strong>整數是有大小限制的</strong>。
+          而 Python 的整數會自動長大、要多大有多大,所以你在 Python 算 <code>factorial(100)</code> 完全沒事。
+          這個「型別與位元」的世界,我們會在第二章與第五部講得更透。</li>
+      </ul>
+
+      <div class="callout note">
+        <div class="ico">🔍</div>
+        <div class="body">
+          <span class="c-title">C 的函式,Python 的函式,同一個靈魂</span>
+          <p>別被 C 的型別宣告嚇到。把它們遮起來,你會發現 <code>if (n &lt;= 1) return 1; ... return n * factorial(n-1);</code>
+          的<strong>結構跟 Python 版一模一樣</strong>:一個 base case、一個遞迴步驟。語言只是腔調,遞迴的思想是共通的。
+          這正是上一章「同一個靈魂,兩副軀殼」的延續。</p>
+        </div>
+      </div>
+
+      <h2>動手練習</h2>
+      <p>
+        遞迴是「看一百遍不如自己寫一遍」的東西。以下五題難度遞增,<strong>請務必先自己寫</strong>,卡住再看解答。
+        每一題,先問自己兩個問題:<em>base case 是什麼?遞迴步驟怎麼讓問題變小?</em>
+      </p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 3.1 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>寫一個遞迴函式 <code>power(x, n)</code>,計算 <code>x</code> 的 <code>n</code> 次方(<code>n</code> 為非負整數),<strong>不准用 <code>**</code> 或 <code>pow</code></strong>。
+          例如 <code>power(2, 10)</code> 應回傳 1024。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>關鍵觀察:$x^n = x \times x^{n-1}$,而 base case 是 $x^0 = 1$。</p>
+              <pre><code class="language-python">def power(x, n):
+    if n == 0:                 # base case:任何數的 0 次方都是 1
+        return 1
+    return x * power(x, n - 1) # recursive case:指數每次少 1
+
+print(power(2, 10))           # 1024</code></pre>
+              <p>進階:上面是 $O(n)$。利用 $x^n = (x^{n/2})^2$,可以做到 $O(\log n)$ 的<strong>快速冪</strong>:</p>
+              <pre><code class="language-python">def fast_power(x, n):
+    if n == 0:
+        return 1
+    half = fast_power(x, n // 2)     # 先算一半,只算一次!
+    if n % 2 == 0:
+        return half * half           # n 是偶數
+    return half * half * x           # n 是奇數,補乘一個 x
+
+print(fast_power(2, 10))            # 1024</code></pre>
+              <p>留意快速冪只呼叫自己<strong>一次</strong>(把結果存進 <code>half</code> 重複用),不像費氏數列那樣重複計算——這就是它快的原因。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 3.2 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>寫一個遞迴函式 <code>reverse(s)</code>,把字串 <code>s</code> 反轉。例如 <code>reverse("hello")</code> 回傳 <code>"olleh"</code>。
+          (提示:Python 可以用 <code>s[0]</code> 取第一個字元、<code>s[1:]</code> 取「除了第一個字元以外」的子字串。)</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>想法:把第一個字元「搬到最後面」,中間夾著「剩下字串的反轉」。base case 是空字串或單一字元(反轉還是自己)。</p>
+              <pre><code class="language-python">def reverse(s):
+    if len(s) &lt;= 1:                 # base case:0 或 1 個字元,反轉就是自己
+        return s
+    return reverse(s[1:]) + s[0]    # 剩下的反轉 + 原本的第一個字元
+
+print(reverse("hello"))           # olleh</code></pre>
+              <p>追蹤一下:<code>reverse("abc")</code> = <code>reverse("bc") + "a"</code> = <code>(reverse("c") + "b") + "a"</code> = <code>"cba"</code>。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 3.3 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>寫一個遞迴函式 <code>is_palindrome(s)</code>,判斷字串 <code>s</code> 是不是<strong>迴文</strong>(正著讀、反著讀都一樣),
+          例如 <code>"level"</code>、<code>"abcba"</code> 是迴文。回傳 <code>True</code> 或 <code>False</code>。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>想法:比較「頭」和「尾」。相同的話,就把頭尾剝掉,看「中間那段」是不是迴文。</p>
+              <pre><code class="language-python">def is_palindrome(s):
+    if len(s) &lt;= 1:            # base case:空字串或單一字元,一定是迴文
+        return True
+    if s[0] != s[-1]:          # 頭尾不同,直接出局
+        return False
+    return is_palindrome(s[1:-1])  # 頭尾相同,檢查中間那段
+
+print(is_palindrome("level"))   # True
+print(is_palindrome("hello"))   # False</code></pre>
+              <p>注意這裡有<strong>兩個</strong>提早結束的情況:長度夠短(base case)與頭尾不符(失敗)。
+              一個遞迴函式可以有不只一個 base case。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 3.4 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>不用 <code>sum()</code>、不用迴圈,寫一個遞迴函式 <code>list_sum(lst)</code>,回傳串列 <code>lst</code> 裡所有數字的總和。
+          例如 <code>list_sum([1, 2, 3, 4, 5])</code> 回傳 15。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>想法:總和 = 第一個元素 + 「剩下元素的總和」。base case 是空串列,總和為 0。</p>
+              <pre><code class="language-python">def list_sum(lst):
+    if not lst:                    # base case:空串列(not [] 為 True),總和是 0
+        return 0
+    return lst[0] + list_sum(lst[1:])  # 第一個 + 剩下的總和
+
+print(list_sum([1, 2, 3, 4, 5]))  # 15</code></pre>
+              <p>這就是「線性累積」型的問題。它能用遞迴漂亮表達,但對很長的串列,迭代(迴圈)更省堆疊——
+              這正是前面「遞迴 vs 迭代怎麼選」的活例子。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 3.5 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>寫一個遞迴函式 <code>permutations(s)</code>,回傳字串 <code>s</code> 所有字元的<strong>全排列</strong>(假設字元都不重複)。
+          例如 <code>permutations("abc")</code> 回傳 6 種:<code>abc, acb, bac, bca, cab, cba</code>。</p>
+          <p><strong>附加思考</strong>:回到河內塔——你能用遞迴推導出「搬 <code>n</code> 個盤子的最少步數」嗎?寫一個 <code>hanoi_moves(n)</code> 驗證它等於 $2^n - 1$。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>排列的遞迴思路:<strong>輪流</strong>把每個字元拿出來當「開頭」,再把「剩下字元的所有排列」接在它後面。
+              base case 是長度 0 或 1 的字串,它只有一種排列——它自己。</p>
+              <pre><code class="language-python">def permutations(s):
+    if len(s) &lt;= 1:                    # base case:只有一種排法
+        return [s]
+    result = []
+    for i in range(len(s)):
+        ch = s[i]                      # 選第 i 個字元當開頭
+        rest = s[:i] + s[i+1:]         # 把它從字串中拿掉,剩下這些
+        for p in permutations(rest):   # 對剩下的求所有排列
+            result.append(ch + p)      # 開頭 + 每一種子排列
+    return result
+
+print(permutations("abc"))
+# ['abc', 'acb', 'bac', 'bca', 'cab', 'cba']</code></pre>
+              <p>順帶一提,<code>n</code> 個相異字元的排列共有 $n!$ 種——所以這個函式的輸出量本身就是階乘級的爆炸,
+              小心別丟太長的字串進去。</p>
+              <p><strong>河內塔步數</strong>:搬 <code>n</code> 個盤子 = (搬上面 <code>n-1</code> 個) + (搬最大的 1 步) + (再搬 <code>n-1</code> 個),
+              所以 $T(n) = 2\,T(n-1) + 1$,而 $T(1)=1$。攤開來正好是 $2^n - 1$:</p>
+              <pre><code class="language-python">def hanoi_moves(n):
+    if n == 1:                       # base case:一個盤子,一步搞定
+        return 1
+    return 2 * hanoi_moves(n - 1) + 1
+
+print(hanoi_moves(3))               # 7   (= 2^3 - 1)
+print(hanoi_moves(10))              # 1023 (= 2^10 - 1)</code></pre>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>把這一章串起來</h2>
+      <p>
+        這一章,我們從「不要重複自己」一路走到「函式呼叫自己」。回顧幾個關鍵路標:
+      </p>
+      <ul>
+        <li><strong>函式</strong>做三件事:消除重複(DRY)、把大問題拆小、給一段邏輯一個名字(抽象)。它是你的第一個抽象工具。</li>
+        <li>分清楚<strong>參數 vs 引數</strong>、<code>print</code> vs <code>return</code>;沒 <code>return</code> 的函式回傳 <code>None</code>。</li>
+        <li><strong>作用域</strong>由 LEGB 規則決定;好函式「靠參數進、靠 return 出」,盡量別碰全域變數。</li>
+        <li><strong>呼叫堆疊</strong>是理解一切的鑰匙:每次呼叫 push 一個框,回傳時 pop 出來。堆疊有上限,疊太深會溢位。</li>
+        <li><strong>純函式</strong>(相同輸入→相同輸出、無副作用)可預測、好測試——這是第二部函數式程式設計的伏筆。</li>
+        <li><strong>遞迴</strong> = base case + recursive case。少了 base case 就無限遞迴、堆疊溢位。
+          階乘、費氏、河內塔、輾轉相除,都是它的經典舞台。</li>
+        <li><strong>遞迴 vs 迭代</strong>:樸素遞迴 Fibonacci 因為重複計算而 $O(2^n)$ 爆炸;迭代版 $O(n)$。
+          重複計算的解法叫記憶化,通往第六部的動態規劃。</li>
+        <li>遞迴有<strong>深度極限</strong>:Python 丟 <code>RecursionError</code>,C 直接 <code>Segmentation fault</code>;Python 不做尾遞迴最佳化。</li>
+      </ul>
+      <p>
+        你現在握有兩種把問題拆小的方式:把它拆成一連串步驟(迭代),或把它定義成「自己的更小版本」(遞迴)。
+        這兩種思維,會貫穿你往後讀到的每一個演算法。下一站,我們將正式踏進資料的世界,
+        看看這些函式操作的「資料」本身,可以被組織成多麼強大的結構。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">📚</div>
+        <div class="body">
+          <span class="c-title">想更深入?延伸資源</span>
+          <p>本章對應 OSSU 的
+          <a href="https://www.edx.org/learn/computer-science/massachusetts-institute-of-technology-introduction-to-computer-science-and-programming-using-python">MIT 6.0001 Introduction to CS using Python</a>
+          中關於函式、作用域與遞迴的單元。若你想把「遞迴」與「抽象」的哲學味嚐到極致,經典教材
+          <a href="https://web.mit.edu/6.001/6.037/sicp.pdf"><em>SICP</em>(Structure and Interpretation of Computer Programs)</a>
+          第 1.2 節用「遞迴程序 vs 迭代程序」「線性遞迴 vs 樹狀遞迴」把本章的概念講得鞭辟入裡——讀完它,你看遞迴的眼光會徹底不同(這本書也是免費的)。</p>
+        </div>
+      </div>
+
+          <div class="callout tip">
+        <div class="ico">🧭</div>
+        <div class="body">
+          <span class="c-title">延伸：專修軌道</span>
+          <p>遞迴是窮舉與回溯(backtracking)的引擎。想看它在競賽題大顯身手,見<a href="62-competitive-paradigms.html">第 62 章《競賽範式:暴搜、分治、貪心、DP 實戰》</a>。</p>
+        </div>
+      </div>
+

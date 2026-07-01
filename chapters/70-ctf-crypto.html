@@ -1,0 +1,1060 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>古典與現代密碼破譯 · CS 自學聖經</title>
+<meta name="description" content="CTF 密碼題的旗子,幾乎都藏在『用錯、用弱了』的密碼系統背後。本章站到攻擊者那一側:用暴力枚舉加評分函數自動破凱撒、用頻率分析與爬山法破單表替換、用重合指數找維吉尼亞金鑰長度、枚舉 256 把金鑰破單位元組 XOR;現代篇則做雜湊字典攻擊、分解弱 RSA 還原明文。理解攻擊,才能設計安全系統——呼應第 35 章那句鐵律:別自己造密碼系統。">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;700&family=Noto+Sans+TC:wght@400;700&family=Lora:ital,wght@0,400;0,600;0,700;1,400&family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <main class="main">
+    <article class="content">
+
+      <div class="eyebrow">第十八部 · 實戰資安 CTF</div>
+      <h1>古典與現代密碼破譯</h1>
+      <p class="subtitle">同一把 AES,有人拿它守護銀行,有人卻把它用成形同虛設。CTF 的密碼旗子,幾乎都藏在「用錯、用弱了」的密碼系統背後——這一章,我們翻到攻擊者那一側,親手把它們一一拆開,從而真正讀懂第 35 章那句鐵律的份量。</p>
+      <div class="byline">
+        <span class="tag">第 70 章</span>
+        <span>閱讀時間 ≈ 50 分鐘</span>
+        <span>難度:★★★★☆</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>CTF 密碼題到底在玩什麼:它考的不是「破解 AES」,而是抓出「被用錯、用弱」的密碼系統,還原明文或金鑰</li>
+          <li>破譯者的萬用配方:<strong>暴力枚舉</strong>把所有可能的金鑰跑一遍,再用<strong>評分函數</strong>讓程式自動挑出「最像英文」的那一個</li>
+          <li>古典密碼怎麼破:凱撒(枚舉 26 種位移)、單表替換(頻率分析 + 爬山法)、維吉尼亞(用重合指數找金鑰長度)、單位元組 XOR(枚舉 256 把金鑰)</li>
+          <li>現代密碼怎麼破:雜湊不可逆卻擋不住<strong>字典攻擊</strong>、為何 MD5/SHA 不該存密碼、加鹽如何救命;以及當 RSA 的 $n$ 分解得開時,如何一路算回私鑰 $d$ 解密</li>
+          <li>常見的 RSA CTF 弱點:小 $e$、共模、$p$ 與 $q$ 太近(Fermat 分解)</li>
+          <li>每一種破譯,背後都對應一條「該怎麼正確做」——攻擊者思維,正是設計者最好的老師</li>
+          <li>實戰工具箱:CyberChef、RsaCtfTool、factordb、hashcat / john</li>
+        </ul>
+      </div>
+
+      <h2>一道躺著旗子的密碼題</h2>
+      <p>
+        你打開一個 CTF 的 Crypto 題,附件只有一行十六進位字串,題目敘述寫著一句欠揍的話:「<em>我自己寫了個加密,保證沒人破得了。</em>」
+        你的任務,是從這串亂碼裡撈出一面<strong>旗子(flag)</strong>——通常長得像 <code>FLAG{s0me_secret_here}</code> 的字串,
+        交上去就得分。這就是密碼類 CTF 題的日常。
+      </p>
+      <p>
+        先把一個天大的誤會講清楚。CTF 的 Crypto 題,<strong>幾乎從不是要你去破解 AES、RSA 這些演算法本身</strong>——
+        那些演算法經過全世界密碼學家二十幾年圍攻都沒倒(這正是第 35 章反覆強調的)。真正會出現在題目裡、而且<em>真的能解開</em>的,
+        是另一類東西:
+      </p>
+      <blockquote>
+        一個「用錯了、或用弱了」的密碼系統。<br>
+        ——金鑰空間太小、金鑰重複使用、參數選得太爛、把雜湊當加密、自己手刻的「土砲加密」⋯⋯
+      </blockquote>
+      <p>
+        換句話說,CTF 密碼題是一座「<strong>反面教材博物館</strong>」:把第 35 章警告過的每一個坑,做成一道道關卡讓你親手踩。
+        而破題的目標只有兩個:<strong>還原明文</strong>(讀出旗子),或<strong>還原金鑰</strong>(往往就能讀出旗子)。這一章,
+        我們就站到攻擊者那一側,把這些坑一個個拆開——因為<strong>唯有真正理解一個系統怎麼被攻破,你才知道該怎麼把它設計得攻不破</strong>。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">攻擊是最深刻的學習</span>
+          <p>第 35 章從「設計者/使用者」的角度,教你密碼學該<em>怎麼用</em>;這一章從「攻擊者」的角度,教你密碼學被用錯時<em>怎麼倒</em>。
+          兩者是同一枚硬幣的兩面。Kerckhoffs 原則說「演算法可以公開,安全只能靠金鑰」——本章你會親眼看到,
+          一旦某個環節(金鑰、參數、模式、流程)出包,公開的演算法就成了攻擊者的施工藍圖。把這一章讀完,
+          你回頭看第 35 章那句「別自己造密碼系統」,會從「一句忠告」變成「一道道血淋淋的傷口」。</p>
+        </div>
+      </div>
+
+      <div class="callout danger">
+        <div class="ico">⛔</div>
+        <div class="body">
+          <span class="c-title">先講規矩:只破解「給你破的」東西</span>
+          <p>本章所有技術,都<strong>只能用在授權的學習環境</strong>:CTF 平台的題目、你自己出的練習、合法靶場(picoCTF、CryptoHack)。
+          這些密文是「<em>故意設弱、放在那裡等你破</em>」的教學材料。<strong>絕對不要</strong>把這些手法指向任何真實系統、別人的帳號、
+          未經授權的資料——那在《刑法》妨害電腦使用罪等規範下是犯罪,和「學習」無關。技術中立,用途有責。
+          這一章的每一行程式,都是為了讓你成為「<strong>更會防守的人</strong>」而存在。</p>
+        </div>
+      </div>
+
+      <h2>破譯者的萬用配方:枚舉 + 評分函數</h2>
+      <p>
+        在跳進各種密碼之前,先送你一把貫穿整章的萬能鑰匙。回想第 35 章練習 35.1 那個小頓悟:<strong>破解不需要「試到對」的運氣,
+        而是把人類的直覺(「哪一行讀起來像英文」)變成一個可計算的評分函數</strong>。把這句話展開,就是幾乎所有古典密碼破譯共用的兩步配方:
+      </p>
+      <ol>
+        <li><strong>枚舉(brute-force enumeration)</strong>:當金鑰空間夠小時(凱撒只有 26 種、單位元組 XOR 只有 256 種),把<em>每一把可能的金鑰</em>都拿來解一次,得到一大堆候選明文。</li>
+        <li><strong>評分(scoring)</strong>:用一個「<strong>這段文字有多像英文</strong>」的評分函數,替每個候選明文打分,分數最高的那個,十之八九就是答案。</li>
+      </ol>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 210" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs><marker id="p1" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/></marker></defs>
+  <rect x="14" y="80" width="110" height="50" rx="8" fill="#f6e7dd" stroke="#b4541f"/>
+  <text x="69" y="102" text-anchor="middle" font-size="12" font-weight="700" fill="#b4541f">密文</text>
+  <text x="69" y="119" text-anchor="middle" font-size="10" fill="#8a929b">一串亂碼</text>
+
+  <rect x="158" y="70" width="120" height="70" rx="8" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="218" y="92" text-anchor="middle" font-size="11.5" font-weight="700" fill="#1f2328">攻擊手法</text>
+  <text x="218" y="110" text-anchor="middle" font-size="9.5" fill="#4a5159">枚舉金鑰 / 統計</text>
+  <text x="218" y="124" text-anchor="middle" font-size="9.5" fill="#4a5159">分析 / 分解 n</text>
+
+  <rect x="312" y="62" width="120" height="86" rx="8" fill="#fafbfb" stroke="#d4d8dd"/>
+  <text x="372" y="82" text-anchor="middle" font-size="11.5" font-weight="700" fill="#1f2328">候選明文堆</text>
+  <text x="372" y="100" text-anchor="middle" font-size="9" fill="#8a929b">khoor / lipps</text>
+  <text x="372" y="113" text-anchor="middle" font-size="9" fill="#8a929b">hello / ifmmp</text>
+  <text x="372" y="126" text-anchor="middle" font-size="9" fill="#8a929b">⋯⋯(很多個)</text>
+
+  <rect x="466" y="70" width="120" height="70" rx="8" fill="#e3efed" stroke="#8b5cf6"/>
+  <text x="526" y="92" text-anchor="middle" font-size="11.5" font-weight="700" fill="#6d28d9">評分函數</text>
+  <text x="526" y="110" text-anchor="middle" font-size="9.5" fill="#4a5159">「像英文嗎?」</text>
+  <text x="526" y="124" text-anchor="middle" font-size="9.5" fill="#4a5159">挑分數最高的</text>
+
+  <rect x="620" y="80" width="86" height="50" rx="8" fill="#2f6f6a"/>
+  <text x="663" y="102" text-anchor="middle" font-size="12" font-weight="800" fill="#fff">FLAG</text>
+  <text x="663" y="119" text-anchor="middle" font-size="10" fill="#cfe6e2">{ ... }</text>
+
+  <line x1="124" y1="105" x2="156" y2="105" stroke="#8a929b" stroke-width="2" marker-end="url(#p1)"/>
+  <line x1="278" y1="105" x2="310" y2="105" stroke="#8a929b" stroke-width="2" marker-end="url(#p1)"/>
+  <line x1="432" y1="105" x2="464" y2="105" stroke="#8a929b" stroke-width="2" marker-end="url(#p1)"/>
+  <line x1="586" y1="105" x2="618" y2="105" stroke="#8a929b" stroke-width="2" marker-end="url(#p1)"/>
+</svg>
+        <figcaption>圖 70-1:古典密碼破譯的通用流水線。把密文丟進攻擊手法(枚舉/統計),產生一大堆候選明文,再交給評分函數自動挑出「最像人話」的那一個。整章的程式,都是這條流水線的不同變體。</figcaption>
+      </div>
+
+      <p>
+        那「像不像英文」要怎麼算?最簡單實用的做法,是<strong>給常見字母與空白加分、給亂碼(不可列印字元)重重扣分</strong>。
+        英文裡最常出現的字母是 <code>e t a o i n s h r d l u</code>,再加上空白——一段真正的英文,這些東西的密度會很高;
+        而一段「解錯了」的亂碼,則充滿了奇怪的符號。把這個直覺寫成函式:
+      </p>
+      <pre><code class="language-python"># 「這段文字有多像英文」的評分函數 —— 整章共用的核心武器
+COMMON = "etaoinshrdlu "          # 最常見的英文字母 + 空白
+
+def score_english(text):
+    s = 0
+    for c in text.lower():
+        if c in COMMON:
+            s += 2                 # 常見字母與空白:大大加分
+        elif c.isalnum() or c in "_{}":
+            s += 1                 # 其他英數字、底線、大括號(旗子常用):小加分
+        elif not c.isprintable():
+            s -= 5                 # 出現亂碼(不可列印字元):重罰
+    return s</code></pre>
+      <p>
+        就這麼簡單的一個函式,卻是整章的主角。它把「人眼掃過去覺得對」這件主觀的事,變成一個冰冷的數字——
+        而電腦最擅長的,就是在幾百萬個數字裡瞬間挑出最大值。接下來每一種古典密碼,本質上都是「換一種枚舉方式,但用同一個 <code>score_english</code> 收尾」。
+      </p>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">更講究的評分:卡方與 n-gram</span>
+          <p>上面這個「加加減減」的評分很粗暴但夠用。要更精準,密碼分析常改用兩種統計量:
+          <strong>卡方檢定(chi-squared)</strong> $\chi^2 = \sum_i \dfrac{(O_i - E_i)^2}{E_i}$ 衡量「候選明文的字母分布」和「標準英文分布」差多少(越小越像英文);
+          或用 <strong>n-gram 對數機率</strong>——把常見的雙字母(th、he)、四字母(tion、that)出現頻率取對數加總,越大越像英文。
+          待會破維吉尼亞用卡方、破單表替換用雙字母,你會看到它們的威力。</p>
+        </div>
+      </div>
+
+      <h2>古典密碼破譯(L1)</h2>
+      <p>
+        古典密碼是密碼學的童年,也是 CTF 的入門關。它們的共同死穴,第 35 章已經點破:<strong>不是金鑰空間太小(凱撒、XOR),
+        就是擋不住統計(替換、維吉尼亞)</strong>。我們就照這條線,把四種最常見的古典密碼依序拆開。
+      </p>
+
+      <h3>凱撒/移位:程式替你看 25 種可能</h3>
+      <p>
+        凱撒密碼(Caesar cipher)把每個字母往後推固定格數,金鑰就是那個「位移量」。第 35 章說過它的致命傷:
+        金鑰只有 25 種可能(在 CTF 裡這類「把字母轉一圈」的也常叫 <strong>ROT-n</strong>,如著名的 ROT13)。
+        既然金鑰空間這麼小,我們連肉眼都不必動——把 0 到 25 全試一遍,交給 <code>score_english</code> 挑冠軍:
+      </p>
+      <pre><code class="language-python">def caesar_decrypt(text, shift):
+    out = []
+    for ch in text:
+        if 'a' &lt;= ch &lt;= 'z':
+            out.append(chr((ord(ch) - 97 - shift) % 26 + 97))
+        elif 'A' &lt;= ch &lt;= 'Z':
+            out.append(chr((ord(ch) - 65 - shift) % 26 + 65))
+        else:
+            out.append(ch)                 # 非字母(空白、標點、數字)原樣保留
+    return ''.join(out)
+
+def caesar_encrypt(text, shift):
+    return caesar_decrypt(text, -shift)    # 加密 = 反方向解密
+
+def break_caesar(cipher):
+    # 對 26 種位移各解一次,挑 score_english 分數最高的
+    best = max(range(26), key=lambda s: score_english(caesar_decrypt(cipher, s)))
+    return best, caesar_decrypt(cipher, best)
+
+secret = caesar_encrypt("The flag is CTF{ROT_is_not_crypto}", 7)
+print("密文:", secret)          # Aol mshn pz JAM{YVA_pz_uva_jyfwav}
+print("破解:", break_caesar(secret))
+# (7, 'The flag is CTF{ROT_is_not_crypto}') —— 程式自己找出位移是 7</code></pre>
+      <p>
+        注意 <code>break_caesar</code> 連「位移 7」這個金鑰是怎麼被找出來的:它不靠任何聰明,
+        只是把 26 個候選明文丟給評分函數,回傳分數最高的那一個。<strong>金鑰空間小到能枚舉,等於沒上鎖</strong>——
+        這是凱撒(以及所有 ROT 系)的原罪,也是你在 CTF 裡看到「一串只有字母被打亂、空白標點都還在」的密文時,該第一個嘗試的手法。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 700 250" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="350" y="24" text-anchor="middle" font-size="13" font-weight="700" fill="#1f2328">枚舉 26 種位移 → 評分函數挑冠軍</text>
+  <!-- candidate lines -->
+  <g font-size="12" font-family="ui-monospace, monospace">
+    <text x="40" y="58" fill="#8a929b">位移 5:</text><text x="120" y="58" fill="#8a929b">Cqn oujp ...</text><text x="430" y="58" fill="#8a929b">分數 22</text>
+    <text x="40" y="84" fill="#8a929b">位移 6:</text><text x="120" y="84" fill="#8a929b">Bpm ntio ...</text><text x="430" y="84" fill="#8a929b">分數 19</text>
+    <rect x="28" y="96" width="560" height="28" rx="6" fill="#e3efed" stroke="#2f6f6a"/>
+    <text x="40" y="115" fill="#2f6f6a" font-weight="700">位移 7:</text><text x="120" y="115" fill="#1f2328" font-weight="700">The flag is CTF{...} ✓</text><text x="430" y="115" fill="#2f6f6a" font-weight="700">分數 71 ★</text>
+    <text x="40" y="142" fill="#8a929b">位移 8:</text><text x="120" y="142" fill="#8a929b">Sgd ekzf ...</text><text x="430" y="142" fill="#8a929b">分數 24</text>
+    <text x="40" y="168" fill="#8a929b">位移 9:</text><text x="120" y="168" fill="#8a929b">Rfc djye ...</text><text x="430" y="168" fill="#8a929b">分數 20</text>
+    <text x="40" y="194" fill="#8a929b">⋮</text>
+  </g>
+  <text x="350" y="228" text-anchor="middle" font-size="11" fill="#8a929b">只有「真正的英文」那一行,常見字母與空白的密度高,評分一枝獨秀</text>
+</svg>
+        <figcaption>圖 70-2:暴力枚舉 + 評分函數的「漏斗」。26 個候選裡,只有解對的那一行讀起來像英文,評分函數讓它的分數遠遠高出其他亂碼,程式於是自動鎖定金鑰 = 7。</figcaption>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 70.1 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>實作 <code>caesar_decrypt(text, shift)</code> 與 <code>break_caesar(cipher)</code>,讓程式<strong>自動</strong>(不靠肉眼逐行看)
+          破解一段凱撒密文,回傳「找到的位移」與「還原的明文」。請用本節的 <code>score_english</code> 當評分函數,
+          並用一段你自己加密的句子驗證它真的找得到正確位移。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">COMMON = "etaoinshrdlu "
+def score_english(text):
+    s = 0
+    for c in text.lower():
+        if c in COMMON:        s += 2
+        elif c.isalnum() or c in "_{}": s += 1
+        elif not c.isprintable(): s -= 5
+    return s
+
+def caesar_decrypt(text, shift):
+    out = []
+    for ch in text:
+        if 'a' &lt;= ch &lt;= 'z':
+            out.append(chr((ord(ch) - 97 - shift) % 26 + 97))
+        elif 'A' &lt;= ch &lt;= 'Z':
+            out.append(chr((ord(ch) - 65 - shift) % 26 + 65))
+        else:
+            out.append(ch)
+    return ''.join(out)
+
+def break_caesar(cipher):
+    scored = [(score_english(caesar_decrypt(cipher, s)), s) for s in range(26)]
+    best_score, shift = max(scored)
+    return shift, caesar_decrypt(cipher, shift)
+
+print(break_caesar("Aol mshn pz JAM{YVA_pz_uva_jyfwav}"))
+# (7, 'The flag is CTF{ROT_is_not_crypto}')</code></pre>
+              <p>關鍵在 <code>max(scored)</code>:Python 比較 tuple 時先比第一個元素(分數),所以它直接挑出分數最高的位移。
+              這就是「把破解變成最佳化問題」——你定義好「什麼叫好的解」(評分函數),剩下的交給枚舉。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h3>單表替換:頻率分析 + 爬山法</h3>
+      <p>
+        「金鑰太少」很好補:讓每個字母隨機對應到另一個字母,而不是整齊地推固定格數,這就是<strong>單表替換密碼(monoalphabetic substitution)</strong>。
+        金鑰是一張 26 個字母的對照表,排列數高達 $26! \approx 4 \times 10^{26}$——暴力枚舉徹底沒戲。可是第 35 章請出了九世紀的金迪(Al-Kindi):
+        <strong>每個字母換了張臉,但它出現的「頻率」沒變。</strong>
+      </p>
+      <p>
+        這就是<strong>頻率分析(frequency analysis)</strong>。密文裡最常出現的符號,八成對應明文的 <code>e</code>;次常出現的對應 <code>t</code>……。
+        但光靠單字母頻率,只能猜對幾個高頻字母,j、q、x、z 這些低頻字母會張冠李戴。怎麼自動化、又補上單字母頻率的不足?
+        答案是<strong>爬山法(hill climbing)</strong>:先用頻率猜一個起始對照表,然後不斷「<em>隨機交換表裡兩個字母的對應</em>」,
+        只要交換後「更像英文」就保留,否則還原——像爬山一樣,每一步都往分數更高處走。
+      </p>
+      <pre><code class="language-python">import random, string
+from collections import Counter
+
+ENG_FREQ = {  # 各字母在英文中的出現頻率(%)
+    'a':8.2,'b':1.5,'c':2.8,'d':4.3,'e':12.7,'f':2.2,'g':2.0,'h':6.1,
+    'i':7.0,'j':0.15,'k':0.77,'l':4.0,'m':2.4,'n':6.7,'o':7.5,'p':1.9,
+    'q':0.095,'r':6.0,'s':6.3,'t':9.1,'u':2.8,'v':0.98,'w':2.4,'x':0.15,
+    'y':2.0,'z':0.074}
+COMMON_BIGRAMS = {  # 常見的雙字母組合,出現就加分
+    'th':3,'he':3,'in':2,'er':2,'an':2,'re':2,'on':2,'at':1,'en':1,'nd':1,
+    'ti':1,'es':1,'or':1,'te':1,'of':1,'ed':1,'is':1,'it':1,'al':1,'ng':1}
+
+def decrypt_sub(cipher, key):
+    # key:字典「密文字母 → 猜測的明文字母」(皆小寫)
+    out = []
+    for c in cipher:
+        low = c.lower()
+        if low in key:
+            p = key[low]
+            out.append(p.upper() if c.isupper() else p)
+        else:
+            out.append(c)
+    return ''.join(out)
+
+def fitness(text):
+    # 評分:字母頻率越接近英文越好(差距當扣分)+ 常見雙字母加分
+    t = [c for c in text.lower() if c.isalpha()]
+    n = len(t)
+    if n == 0:
+        return -1e9
+    s = 0.0
+    for ch, f in Counter(t).items():
+        s -= abs(ENG_FREQ.get(ch, 0) - 100 * f / n)
+    low = ''.join(t)
+    for i in range(len(low) - 1):
+        s += COMMON_BIGRAMS.get(low[i:i+2], 0)
+    return s
+
+def break_substitution(cipher, restarts=20, steps=2000):
+    letters = list(string.ascii_lowercase)
+    best_key, best_score = None, -1e18
+    for _ in range(restarts):               # 多次隨機重啟,避免卡在「半山腰」
+        vals = letters[:]
+        random.shuffle(vals)
+        key = dict(zip(letters, vals))
+        score = fitness(decrypt_sub(cipher, key))
+        for _ in range(steps):
+            a, b = random.sample(letters, 2)
+            key[a], key[b] = key[b], key[a]      # 隨機交換兩個對應
+            new = fitness(decrypt_sub(cipher, key))
+            if new &gt; score:
+                score = new                       # 變好就保留
+            else:
+                key[a], key[b] = key[b], key[a]   # 沒變好就還原
+        if score &gt; best_score:
+            best_score, best_key = score, dict(key)
+    return best_key, decrypt_sub(cipher, best_key)</code></pre>
+      <p>拿一段夠長的替換密文來跑(密文越長,統計越穩,破得越準):</p>
+      <pre><code class="language-python">cipher = "rth vczwn flauq yam scpgd abhl rth xjke iao ..."   # 一段單表替換密文
+key, plain = break_substitution(cipher)
+print(plain)
+# 一次典型結果(爬山法有隨機性,約還原六七成):
+# the ????? ????n f?x ????? over the la?? dog ... while the ????? children ...
+# 高頻結構(the、over the、空白)立刻就定位,但出現太少的字母(j、q、x、z)還會張冠李戴,
+# 需要你看出大意後手動補幾個 —— 想 100% 自動還原,就把評分換成下面說的 quadgram。</code></pre>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">為什麼不是百分百還原?——因為這是「玩具評分」</span>
+          <p>用「字母頻率 + 雙字母」當評分,通常能還原六、七成,讓你一眼認出內容、補完剩下幾個字母。
+          想要程式 100% 自動破出,實務做法是把評分換成 <strong>quadgram(四連字母)對數機率</strong>:
+          事先用一大堆英文語料統計每個四字母組合的機率,評分 = 候選明文裡所有四字母對數機率的總和。
+          這個評分對「哪裡像英文、哪裡不像」極度敏感,配合爬山法,幾句話的密文就能完美還原。
+          這正是線上工具(如 quipqiup)背後的原理。但核心精神不變:<strong>枚舉/搜尋 + 一個夠好的評分函數</strong>。</p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 70.2 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>用<strong>頻率分析</strong>破單表替換。先寫最基本的一招:統計密文裡每個字母的出現頻率,
+          把「最常出現的密文字母」對應到 <code>e</code>、次常的對應 <code>t</code>……(依英文頻率排序 <code>etaoinshrdlu...</code>),
+          產生一個「起始對照表」並解密看看。然後(進階)接上本節的<strong>爬山法</strong> <code>break_substitution</code>,
+          觀察它如何從這個粗糙的起點,一步步把明文磨清楚。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">from collections import Counter
+
+ENG_ORDER = "etaoinshrdlcumwfgypbvkjxqz"   # 英文字母依頻率由高到低
+
+def frequency_guess(cipher):
+    # 密文字母依出現次數由高到低排序
+    counts = Counter(c for c in cipher.lower() if c.isalpha())
+    cipher_order = [c for c, _ in counts.most_common()]
+    # 補齊沒出現的字母,湊滿 26 個
+    for c in "abcdefghijklmnopqrstuvwxyz":
+        if c not in cipher_order:
+            cipher_order.append(c)
+    # 最常見密文字母 → e,次常 → t,以此類推
+    key = {cipher_order[i]: ENG_ORDER[i] for i in range(26)}
+    return key
+
+def decrypt_sub(cipher, key):
+    return ''.join(key.get(c.lower(), c) for c in cipher)
+
+cipher = "rth vczwn flauq yam scpgd abhl rth xjke iao"
+key0 = frequency_guess(cipher)
+print("頻率分析起始解:", decrypt_sub(cipher, key0))
+# 起點通常已能看出 'the' 等高頻字;再餵給上一節的 break_substitution() 爬山,
+# 就能把剩下的字母逐步喬對 —— 頻率分析給「起點」,爬山法給「收斂」。</code></pre>
+              <p>洞見:頻率分析單獨用,只在密文很長時準;但它是爬山法的絕佳<strong>起跑點</strong>。
+              「先用統計給個好起點,再用局部搜尋優化」——這個套路,在密碼分析、機器學習、最佳化裡反覆出現。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h3>維吉尼亞:先找出金鑰長度</h3>
+      <p>
+        單表替換敗在「同一個字母永遠換成同一個臉」,頻率藏不住。<strong>維吉尼亞密碼(Vigenère cipher)</strong>想補這個洞:
+        用一個<strong>關鍵字</strong>當金鑰,循環地對每個字母施以「不同的凱撒位移」。比方金鑰是 <code>LEMON</code>,
+        第 1 個字母位移 L(=11)、第 2 個位移 E(=4)、第 3 個位移 M(=12)……到第 6 個又繞回 L。
+        這叫<strong>多表替換(polyalphabetic)</strong>:同一個明文字母,在不同位置會變成不同的密文,單純的頻率分析就此失靈。
+      </p>
+      <p>
+        但它有個關鍵破綻:<strong>金鑰會循環</strong>。一旦你知道金鑰長度是 $L$,整個維吉尼亞就「碎成」 $L$ 個獨立的凱撒密碼——
+        第 1、$1{+}L$、$1{+}2L$… 個字母用的是同一個位移,把它們抽出來,就是一段純凱撒密文,而凱撒你已經會破了!
+        所以破維吉尼亞的關鍵,全在第一步:<strong>找出金鑰長度</strong>。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 700 250" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="350" y="22" text-anchor="middle" font-size="13" font-weight="700" fill="#1f2328">金鑰長度 = 5 → 拆成 5 條「各自是凱撒」的欄</text>
+  <!-- ciphertext row -->
+  <g font-family="ui-monospace, monospace" font-size="13">
+    <text x="30" y="62" fill="#8a929b">密文:</text>
+    <g>
+      <rect x="80"  y="48" width="22" height="20" fill="#e3efed"/><text x="91" y="63" text-anchor="middle" fill="#2f6f6a">x</text>
+      <rect x="104" y="48" width="22" height="20" fill="#f6e7dd"/><text x="115" y="63" text-anchor="middle" fill="#b4541f">r</text>
+      <rect x="128" y="48" width="22" height="20" fill="#ede7f9"/><text x="139" y="63" text-anchor="middle" fill="#6d28d9">k</text>
+      <rect x="152" y="48" width="22" height="20" fill="#e9f0e1"/><text x="163" y="63" text-anchor="middle" fill="#5a7a2a">m</text>
+      <rect x="176" y="48" width="22" height="20" fill="#fbe9f1"/><text x="187" y="63" text-anchor="middle" fill="#a23b6e">b</text>
+      <rect x="200" y="48" width="22" height="20" fill="#e3efed"/><text x="211" y="63" text-anchor="middle" fill="#2f6f6a">d</text>
+      <rect x="224" y="48" width="22" height="20" fill="#f6e7dd"/><text x="235" y="63" text-anchor="middle" fill="#b4541f">z</text>
+      <rect x="248" y="48" width="22" height="20" fill="#ede7f9"/><text x="259" y="63" text-anchor="middle" fill="#6d28d9">p</text>
+      <rect x="272" y="48" width="22" height="20" fill="#e9f0e1"/><text x="283" y="63" text-anchor="middle" fill="#5a7a2a">w</text>
+      <rect x="296" y="48" width="22" height="20" fill="#fbe9f1"/><text x="307" y="63" text-anchor="middle" fill="#a23b6e">i</text>
+      <rect x="320" y="48" width="22" height="20" fill="#e3efed"/><text x="331" y="63" text-anchor="middle" fill="#2f6f6a">f</text>
+      <rect x="344" y="48" width="22" height="20" fill="#f6e7dd"/><text x="355" y="63" text-anchor="middle" fill="#b4541f">e</text>
+    </g>
+    <text x="378" y="63" fill="#8a929b">⋯</text>
+  </g>
+  <!-- columns -->
+  <g font-size="11">
+    <rect x="80"  y="95" width="100" height="30" rx="6" fill="#e3efed" stroke="#2f6f6a"/><text x="130" y="114" text-anchor="middle" fill="#2f6f6a">欄 0:x d f ⋯</text>
+    <rect x="80"  y="130" width="100" height="30" rx="6" fill="#f6e7dd" stroke="#b4541f"/><text x="130" y="149" text-anchor="middle" fill="#b4541f">欄 1:r z e ⋯</text>
+    <rect x="80"  y="165" width="100" height="30" rx="6" fill="#ede7f9" stroke="#6d28d9"/><text x="130" y="184" text-anchor="middle" fill="#6d28d9">欄 2:k p ⋯</text>
+    <rect x="80"  y="200" width="100" height="30" rx="6" fill="#e9f0e1" stroke="#5a7a2a"/><text x="130" y="219" text-anchor="middle" fill="#5a7a2a">欄 3:m w ⋯</text>
+  </g>
+  <text x="250" y="160" font-size="12" fill="#1f2328">每一欄都是「同一個位移的凱撒」</text>
+  <text x="250" y="180" font-size="12" fill="#1f2328">→ 對每欄用卡方找最佳位移</text>
+  <text x="250" y="200" font-size="12" fill="#1f2328">→ 5 個位移拼起來就是金鑰!</text>
+  <text x="350" y="244" text-anchor="middle" font-size="11" fill="#8a929b">難點只在「怎麼知道要拆成 5 欄」—— 答案是重合指數(IC)</text>
+</svg>
+        <figcaption>圖 70-3:破維吉尼亞的核心一步。猜對金鑰長度 $L$ 後,把密文每隔 $L$ 個字母抽成一欄,每一欄就退化成一段普通的凱撒密碼,各自用卡方找出位移,再把 $L$ 個位移拼回去就是金鑰。</figcaption>
+      </div>
+
+      <p>
+        歷史上有兩種找金鑰長度的方法。<strong>Kasiski 檢測</strong>:找密文裡重複出現的字母片段,量它們之間的距離,
+        金鑰長度往往是這些距離的公因數。更穩、更好寫成程式的是<strong>重合指數(Index of Coincidence, IC)</strong>:
+      </p>
+      <p>
+        IC 衡量「隨手抓兩個字母,它們剛好相同」的機率。一段<em>自然英文</em>因為字母分布不均(e 特別多),IC 約 <strong>0.066</strong>;
+        而一段<em>接近隨機</em>的文字,IC 約 <strong>0.038</strong>。公式是:
+      </p>
+      <p>$$\text{IC} = \frac{\sum_{i=\text{a}}^{\text{z}} n_i(n_i-1)}{N(N-1)}$$</p>
+      <p>
+        其中 $n_i$ 是字母 $i$ 出現的次數,$N$ 是總字母數。妙用在這:如果我們<strong>猜對了金鑰長度</strong> $L$,
+        那麼每一欄都是「同一個凱撒位移」的英文(只是整體平移),字母分布依然不均,IC 會接近 0.066;
+        但如果<strong>猜錯</strong>,欄內混了不同位移,分布被抹平,IC 會掉向 0.038。所以——<strong>逐一試各種長度,哪個長度讓「各欄平均 IC」最接近 0.066,它就是金鑰長度。</strong>
+      </p>
+      <pre><code class="language-python">import string
+from collections import Counter
+
+def clean(text):
+    return [c for c in text.lower() if c.isalpha()]
+
+def index_of_coincidence(letters):
+    n = len(letters)
+    if n &lt; 2:
+        return 0.0
+    counts = Counter(letters)
+    return sum(c * (c - 1) for c in counts.values()) / (n * (n - 1))
+
+def guess_key_length(text, max_len=15):
+    letters = clean(text)
+    scores = []
+    for klen in range(1, max_len + 1):
+        # 把字母依「位置 mod klen」分成 klen 欄,各算 IC 取平均
+        ics = [index_of_coincidence(letters[i::klen]) for i in range(klen)]
+        scores.append((sum(ics) / klen, klen))
+    scores.sort(reverse=True)        # 平均 IC 越接近 0.066 越可能是對的長度
+    return scores
+
+ENG_FREQ = {'a':8.2,'b':1.5,'c':2.8,'d':4.3,'e':12.7,'f':2.2,'g':2.0,'h':6.1,
+    'i':7.0,'j':0.15,'k':0.77,'l':4.0,'m':2.4,'n':6.7,'o':7.5,'p':1.9,'q':0.095,
+    'r':6.0,'s':6.3,'t':9.1,'u':2.8,'v':0.98,'w':2.4,'x':0.15,'y':2.0,'z':0.074}
+
+def best_shift(col):
+    # 對單一欄(等於一段凱撒)用卡方找最佳位移
+    best_s, best_chi = 0, 1e18
+    n = len(col)
+    for s in range(26):
+        dec = [chr((ord(c) - 97 - s) % 26 + 97) for c in col]
+        cnt = Counter(dec)
+        chi = sum((cnt.get(ch, 0) - ENG_FREQ[ch] / 100 * n) ** 2 / (ENG_FREQ[ch] / 100 * n)
+                  for ch in string.ascii_lowercase)
+        if chi &lt; best_chi:
+            best_chi, best_s = chi, s
+    return best_s
+
+def break_vigenere(text, klen):
+    letters = clean(text)
+    shifts = [best_shift(letters[i::klen]) for i in range(klen)]
+    key = ''.join(chr(97 + s) for s in shifts)
+    # 用求出的位移把整段(連標點)解回來
+    out, idx = [], 0
+    for c in text:
+        if c.isalpha():
+            s = shifts[idx % klen]
+            out.append(chr((ord(c.lower()) - 97 - s) % 26 + 97))
+            idx += 1
+        else:
+            out.append(c)
+    return key, ''.join(out)</code></pre>
+      <pre><code class="language-python">def vigenere_encrypt(text, key):
+    out, idx = [], 0
+    for c in text:
+        if c.isalpha():
+            s = ord(key[idx % len(key)]) - 97
+            out.append(chr((ord(c.lower()) - 97 + s) % 26 + 97))
+            idx += 1
+        else:
+            out.append(c)
+    return ''.join(out)
+
+# 一段用金鑰 LEMON 加密的維吉尼亞密文(夠長,統計才穩):
+plaintext = ("the quick brown fox jumps over the lazy dog and then the dog runs "
+             "back to the warm house where it sleeps all afternoon while the "
+             "children play in the green garden near the river bank") * 2
+cipher = vigenere_encrypt(plaintext, "lemon")
+
+print(guess_key_length(cipher)[:4])
+# [(0.0739, 15), (0.0726, 10), (0.0680, 5), (0.0487, 9)] ← 高分都是 5 的倍數!
+key, plain = break_vigenere(cipher, 5)   # 挑「最小」的強候選 5
+print("金鑰:", key)        # lemon
+print(plain[:40])          # the quick brown fox jumps over the lazy  完整還原</code></pre>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">小心:金鑰長度的「倍數」也會得高分</span>
+          <p>上面結果裡,15、10、5 的 IC 都很高——因為金鑰長度的<strong>整數倍</strong>也能讓每一欄落在「同一個位移」上(只是切得更細)。
+          所以挑金鑰長度時,要選那群高分裡<strong>最小的</strong>(這裡是 5),它才是真正的週期。這個「真實週期 vs 其倍數」的現象,
+          在訊號處理、找重複圖樣時也會遇到,記起來很有用。</p>
+        </div>
+      </div>
+
+      <h3>單位元組 XOR:枚舉 256 把金鑰</h3>
+      <p>
+        第 69 章(CTF 編碼基礎)與第 35 章都見過 XOR:它是對稱加密最底層的原子,性質是「同一個值連續 XOR 兩次會變回自己」。
+        CTF 最常見的入門變體是<strong>單位元組 XOR(single-byte XOR)</strong>:把整段資料的<em>每一個位元組</em>,都和「同一個位元組金鑰」做 XOR。
+        金鑰只是 0 到 255 之間的一個數——金鑰空間只有 <strong>256</strong>,比凱撒還小。破法你已經完全猜得到:全試一遍,評分挑冠軍。
+      </p>
+      <pre><code class="language-python">def break_single_xor(data):
+    best = (None, -1e9, "")           # (金鑰, 分數, 明文)
+    for k in range(256):              # 枚舉全部 256 個可能的位元組金鑰
+        cand = bytes(b ^ k for b in data)
+        # 凡是出現「不可列印字元」的候選,直接淘汰
+        if any(b &lt; 9 or (13 &lt; b &lt; 32) or b &gt; 126 for b in cand):
+            continue
+        text = cand.decode("ascii", "replace")
+        sc = score_english(text)
+        if sc &gt; best[1]:
+            best = (k, sc, text)
+    return best[0], best[2]
+
+# 出題者把旗子用金鑰 0x3D 做單位元組 XOR(這把金鑰是「祕密」):
+plain  = b"CTF{single_byte_xor_falls_in_256_tries}"
+cipher = bytes(b ^ 0x3D for b in plain)
+print("密文(hex):", cipher.hex())
+# 7e697b464e54535a5158625f4449586245524f625b5c51514e625453620f080b62494f54584e40
+
+key, recovered = break_single_xor(cipher)
+print(f"破出金鑰 = {key} (0x{key:02x})")   # 破出金鑰 = 61 (0x3d)
+print(recovered)                            # CTF{single_byte_xor_falls_in_256_tries}</code></pre>
+      <p>
+        注意那行「淘汰含不可列印字元的候選」——它是評分前的<strong>硬性過濾</strong>:正確的明文是一段乾淨的 ASCII 文字,
+        而錯誤的金鑰幾乎一定會解出一堆控制字元或高位位元組。先砍掉這些明顯不可能的候選,剩下的再交給 <code>score_english</code> 精挑,
+        破解既快又準。<strong>當你在 CTF 拿到一串 hex、嗅到「可能是單位元組 XOR」時,這 20 行就是你的開罐器</strong>。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">那「多位元組 XOR」呢?——回到維吉尼亞</span>
+          <p>如果金鑰是好幾個位元組、循環重複地 XOR(repeating-key XOR),它其實就是「位元組版的維吉尼亞」!
+          破法一模一樣:先用 IC(或漢明距離)猜出金鑰長度 $L$,把資料每隔 $L$ 個位元組抽成一欄,每一欄就退化成<strong>單位元組 XOR</strong>,
+          各自枚舉 256 把金鑰破掉,再拼回完整金鑰。這正是著名的 Cryptopals 挑戰第 6 題。
+          看出來了嗎?<strong>古典密碼的破法是會「複用」的</strong>——維吉尼亞 ≈ 多重凱撒,repeating-XOR ≈ 多重單位元組 XOR。</p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 70.3 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>實作 <code>break_single_xor(data)</code>:輸入一段 <code>bytes</code>,枚舉 256 個位元組金鑰,
+          用「淘汰不可列印字元 + <code>score_english</code> 評分」自動破出金鑰與明文。用題目給的 hex
+          <code>7e697b464e54535a5158625f4449586245524f625b5c51514e625453620f080b62494f54584e40</code> 驗證,
+          你應該會還原出一面旗子。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">COMMON = "etaoinshrdlu "
+def score_english(text):
+    s = 0
+    for c in text.lower():
+        if c in COMMON:        s += 2
+        elif c.isalnum() or c in "_{}": s += 1
+        elif not c.isprintable(): s -= 5
+    return s
+
+def break_single_xor(data):
+    best = (None, -1e9, "")
+    for k in range(256):
+        cand = bytes(b ^ k for b in data)
+        if any(b &lt; 9 or (13 &lt; b &lt; 32) or b &gt; 126 for b in cand):
+            continue
+        text = cand.decode("ascii", "replace")
+        sc = score_english(text)
+        if sc &gt; best[1]:
+            best = (k, sc, text)
+    return best[0], best[2]
+
+hx = "7e697b464e54535a5158625f4449586245524f625b5c51514e625453620f080b62494f54584e40"
+key, plain = break_single_xor(bytes.fromhex(hx))
+print(f"key = {key} (0x{key:02x})")   # key = 61 (0x3d)
+print(plain)                           # CTF{single_byte_xor_falls_in_256_tries}</code></pre>
+              <p>這題和破凱撒是「同一個演算法,換個金鑰空間」:凱撒枚舉 26、單位元組 XOR 枚舉 256,收尾都靠評分函數。
+              一旦你內化了「枚舉 + 評分」這個配方,半數的入門 Crypto 題會在你眼前自己解開。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>現代密碼的破譯(L2)</h2>
+      <p>
+        古典密碼是「演算法本身就弱」;現代密碼(雜湊、RSA)的演算法很強,CTF 考的是<strong>「用法」或「參數」出了包</strong>。
+        這一節我們看兩個最經典的現代破譯場景:雜湊的字典攻擊,以及 RSA 的弱參數分解。
+      </p>
+
+      <h3>雜湊破解:單向,但擋不住字典攻擊</h3>
+      <p>
+        第 35 章說過,密碼學雜湊(MD5、SHA-256)是<strong>單向</strong>的:給輸入算指紋很容易,從指紋反推輸入「在計算上不可行」。
+        那 CTF 給你一個雜湊值要你「破解」,不是矛盾嗎?關鍵在:<strong>「不可逆」不等於「猜不到」</strong>。
+        如果原文是個常見密碼(像 <code>sunshine</code>、<code>123456</code>),攻擊者根本不必反推——
+        他把一大堆常見密碼<em>正著</em>算一遍雜湊,和目標比對,中了就是它。這就是<strong>字典攻擊(dictionary attack)</strong>。
+      </p>
+      <pre><code class="language-python">import hashlib
+
+def crack_hash(target_hex, wordlist, algo="md5"):
+    h = getattr(hashlib, algo)            # 支援 md5 / sha1 / sha256 ...
+    for w in wordlist:
+        if h(w.encode()).hexdigest() == target_hex:
+            return w                       # 找到原文!
+    return None
+
+# 假設這是外洩資料庫裡的一條雜湊(攻擊者只看得到這串):
+target = hashlib.md5(b"sunshine").hexdigest()
+print("外洩雜湊:", target, "(長度", len(target), "→ 32 個 hex,典型 MD5)")
+
+# 攻擊者拿一份常見密碼字典來逐一比對:
+wordlist = ["123456", "password", "qwerty", "sunshine", "letmein", "dragon"]
+print("破出原文:", crack_hash(target, wordlist, "md5"))   # sunshine</code></pre>
+      <p>
+        真實世界的字典不是這 6 個字,而是像 <code>rockyou.txt</code> 這種收錄了上千萬個外洩密碼的清單;
+        搭配 GPU,每秒能算上百億次雜湊。<strong>這就是為什麼第 35 章說「絕不能只存密碼的雜湊」:</strong>
+        MD5/SHA 設計得飛快(對校驗檔案是優點,對存密碼是災難),又沒加鹽,等於把使用者的密碼裝在玻璃箱裡。
+      </p>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">看長度認雜湊</span>
+          <p>拿到一串十六進位,先數長度就能猜演算法:<strong>32</strong> 個 hex 字元 = 128 bit = <strong>MD5</strong>;
+          <strong>40</strong> = 160 bit = <strong>SHA-1</strong>;<strong>64</strong> = 256 bit = <strong>SHA-256</strong>;
+          以 <code>$2y$</code>、<code>$argon2</code> 開頭的則是 bcrypt / Argon2(有加鹽、故意很慢,字典攻擊會慢到崩潰)。
+          線上工具 hash-identifier、或直接觀察長度,是 CTF 雜湊題的第一步。</p>
+        </div>
+      </div>
+
+      <p>
+        而<strong>加鹽(salt)</strong>正是字典/彩虹表攻擊的剋星(第 35 章詳述過)。看一眼它為什麼有效:
+      </p>
+      <pre><code class="language-python">import hashlib, os
+
+# 沒加鹽:同樣的密碼 → 同樣的雜湊 → 攻擊者可「預先算好一張大表」一次查光
+print(hashlib.sha256(b"sunshine").hexdigest())
+print(hashlib.sha256(b"sunshine").hexdigest())   # 兩行完全一樣 → 彩虹表的天堂
+
+# 加鹽:每個使用者配一段隨機鹽,拼進去再雜湊 → 同密碼也算出不同雜湊
+def hash_with_salt(password):
+    salt = os.urandom(16)
+    digest = hashlib.sha256(salt + password.encode()).hexdigest()
+    return salt.hex(), digest
+
+print(hash_with_salt("sunshine"))
+print(hash_with_salt("sunshine"))   # 兩行的 digest 完全不同 → 預算好的彩虹表全部作廢</code></pre>
+      <p>
+        加了鹽,攻擊者就不能「算一張表查所有人」,只能<strong>針對每一份鹽、每一個使用者,重新硬算</strong>;
+        再配上 bcrypt / Argon2 這類<strong>故意很慢</strong>的雜湊,字典攻擊的成本被推高好幾個數量級。
+        實戰裡跑大規模字典攻擊的專業工具是 <code>hashcat</code> 與 <code>john</code>(John the Ripper)——
+        一行 <code>hashcat -m 0 hash.txt rockyou.txt</code> 就能對一個 MD5 雜湊跑字典(<code>-m 0</code> 指定 MD5);
+        我們上面那 10 行 Python,正是它們的「原理縮小版」。
+      </p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 70.4 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>寫一個<strong>字典攻擊破 MD5</strong> 的小工具 <code>crack_hash(target_hex, wordlist)</code>:
+          給定一個 MD5 十六進位字串與一份候選密碼清單,逐一算雜湊比對,回傳破出的原文(找不到回傳 <code>None</code>)。
+          用 <code>0571749e2ac330a7455809c6b0e7af90</code> 當目標、用清單
+          <code>["admin","root","sunshine","hunter2"]</code> 驗證。<strong>進階:</strong>把它改成能讀 <code>md5/sha1/sha256</code>,
+          並說明為什麼「加鹽」會讓這支工具失效。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">import hashlib
+
+def crack_hash(target_hex, wordlist, algo="md5"):
+    h = getattr(hashlib, algo)
+    for w in wordlist:
+        if h(w.encode()).hexdigest() == target_hex:
+            return w
+    return None
+
+target = "0571749e2ac330a7455809c6b0e7af90"
+print(crack_hash(target, ["admin", "root", "sunshine", "hunter2"], "md5"))
+# sunshine</code></pre>
+              <p><strong>加鹽為何讓它失效?</strong>因為被雜湊的不再是 <code>password</code>,而是 <code>salt + password</code>。
+              我們字典裡算的是 <code>md5("sunshine")</code>,但資料庫存的是 <code>md5(salt + "sunshine")</code>——兩者對不上。
+              攻擊者必須<em>先知道那份鹽</em>(鹽通常和雜湊一起存,所以拿得到),再把每個候選密碼都「拼上這份鹽」重算;
+              這雖然仍可行,但<strong>同一張表不能再套用到別的使用者</strong>(每人鹽不同),攻擊成本因此暴增——
+              彩虹表(預先算好的巨表)更是直接報廢。這就是加鹽的價值。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h3>RSA 弱參數:當 n 分解得開</h3>
+      <p>
+        第 15 章與第 35 章都拼過玩具 RSA,複習它的命根子:公鑰是 $(e, n)$,私鑰指數 $d$ 滿足 $e \cdot d \equiv 1 \pmod{\varphi(n)}$,
+        其中 $\varphi(n) = (p-1)(q-1)$,而 $n = p \times q$。RSA 的安全,全押在「<strong>把 $n$ 分解回 $p, q$ 極其困難</strong>」這個信念上——
+        真實世界的 $n$ 有 2048 位元以上,分解它比宇宙年齡還久。
+      </p>
+      <p>
+        但 CTF 出題者(以及現實中的粗心工程師)常犯一個錯:<strong>$n$ 用了太小、或太好分解的質數</strong>。
+        一旦你能分解 $n$,整座城堡瞬間倒塌——因為有了 $p, q$,你就能算出 $\varphi(n)$,進而算出私鑰 $d$,然後像合法收信人一樣解密。
+        攻擊鏈是這樣的:
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 700 210" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs><marker id="r1" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/></marker></defs>
+  <rect x="14" y="80" width="118" height="52" rx="8" fill="#f6e7dd" stroke="#b4541f"/>
+  <text x="73" y="102" text-anchor="middle" font-size="12" font-weight="700" fill="#b4541f">拿到 (n, e, c)</text>
+  <text x="73" y="120" text-anchor="middle" font-size="9.5" fill="#8a929b">公鑰 + 密文</text>
+
+  <rect x="160" y="80" width="110" height="52" rx="8" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="215" y="100" text-anchor="middle" font-size="11.5" font-weight="700" fill="#1f2328">分解 n</text>
+  <text x="215" y="118" text-anchor="middle" font-size="9.5" fill="#4a5159">→ 得到 p, q</text>
+
+  <rect x="298" y="80" width="120" height="52" rx="8" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="358" y="100" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2328">φ=(p-1)(q-1)</text>
+  <text x="358" y="118" text-anchor="middle" font-size="9.5" fill="#4a5159">算尤拉函數</text>
+
+  <rect x="446" y="80" width="118" height="52" rx="8" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="505" y="100" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2328">d = e⁻¹ mod φ</text>
+  <text x="505" y="118" text-anchor="middle" font-size="9.5" fill="#4a5159">求私鑰指數</text>
+
+  <rect x="592" y="80" width="100" height="52" rx="8" fill="#2f6f6a"/>
+  <text x="642" y="100" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">m = cᵈ mod n</text>
+  <text x="642" y="118" text-anchor="middle" font-size="9.5" fill="#cfe6e2">解出明文/旗</text>
+
+  <line x1="132" y1="106" x2="158" y2="106" stroke="#8a929b" stroke-width="2" marker-end="url(#r1)"/>
+  <line x1="270" y1="106" x2="296" y2="106" stroke="#8a929b" stroke-width="2" marker-end="url(#r1)"/>
+  <line x1="418" y1="106" x2="444" y2="106" stroke="#8a929b" stroke-width="2" marker-end="url(#r1)"/>
+  <line x1="564" y1="106" x2="590" y2="106" stroke="#8a929b" stroke-width="2" marker-end="url(#r1)"/>
+  <text x="350" y="36" text-anchor="middle" font-size="13" font-weight="700" fill="#1f2328">弱 RSA 的攻擊鏈:分解 n 是骨牌的第一張</text>
+  <text x="350" y="178" text-anchor="middle" font-size="11" fill="#8a929b">只要 n 分解得開,後面每一步都是第 15 章學過的基本數論運算</text>
+</svg>
+        <figcaption>圖 70-4:破弱 RSA 的攻擊鏈。整條鏈的瓶頸只有第一步「分解 $n$」;一旦 $p, q$ 到手,算 $\varphi$、求 $d$、解密都是第 15 章的快速冪與模反元素,一氣呵成。</figcaption>
+      </div>
+
+      <p>用 Python 把這條鏈走一遍。出題者刻意把質數設小(這裡約 21 位元),試除法(trial division)幾乎瞬間就分解掉:</p>
+      <pre><code class="language-python">def factor(n):
+    # 試除法:從 2 開始找最小質因數。n 由小質數組成時秒解;
+    # 真實 RSA 的 n 有 600+ 位數,這招要算到天荒地老 —— 這正是 RSA 安全的來源。
+    i = 2
+    while i * i &lt;= n:
+        if n % i == 0:
+            return i, n // i
+        i += 1
+    return None
+
+def rsa_break(n, e, c):
+    p, q = factor(n)                 # ① 分解 n
+    phi = (p - 1) * (q - 1)          # ② 算 φ(n)
+    d = pow(e, -1, phi)              # ③ 求私鑰 d(Python 3.8+ 內建模反元素)
+    m = pow(c, d, n)                 # ④ 解密 m = c^d mod n
+    return m.to_bytes((m.bit_length() + 7) // 8, "big")   # 整數轉回位元組
+
+# ---- 出題者(用了弱參數):n 只用兩個小質數 ----
+p, q = 1299709, 2750021
+n   = p * q                          # 3574227043889
+e   = 65537
+c   = pow(int.from_bytes(b"Eul3r", "big"), e, n)   # 把旗子核心加密成密文
+print("給攻擊者的:n =", n, " e =", e, " c =", c)
+
+# ---- 攻擊者(只拿到 n, e, c)----
+inner = rsa_break(n, e, c)
+print("解出:", inner)                # b'Eul3r'
+print("旗子: FLAG{" + inner.decode() + "}")   # FLAG{Eul3r}</code></pre>
+      <p>
+        在我的機器上,<code>factor</code> 大約 0.3 秒就把 $n$ 分解掉了。<strong>這就是弱 RSA 的全部祕密:不是 RSA 演算法壞了,
+        而是有人把「天文數字的大質數」換成了「秒解的小質數」。</strong>當你在 CTF 看到一個小小的 $n$,別猶豫,直接分解。
+      </p>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">不必自己算分解:factordb 與 RsaCtfTool</span>
+          <p>很多 CTF 的 $n$,早就被世界上某個人分解過、上傳到公開資料庫 <strong>factordb.com</strong>——你把 $n$ 貼上去查,
+          可能直接拿到 $p, q$,連跑程式都省了。要更全自動,有神兵 <strong>RsaCtfTool</strong>:餵它公鑰或 $(n, e, c)$,
+          它會把幾十種已知 RSA 攻擊(下面要講的小 $e$、共模、Fermat⋯⋯)全部自動試一輪。
+          但工具是「加速器」不是「替代品」:你得先懂下面這些弱點長什麼樣,才知道工具在替你做什麼、結果對不對。</p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 70.5 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>玩具 RSA:用分解 $n$ 還原明文。給定弱公鑰與密文 <code>n = 3574227043889</code>、<code>e = 65537</code>、
+          <code>c = 409150236165</code>,請(1)用試除法分解 $n$ 得到 $p, q$;(2)算 $\varphi = (p-1)(q-1)$;
+          (3)求私鑰 $d = e^{-1} \bmod \varphi$;(4)解出 $m = c^d \bmod n$ 並轉回位元組,組出旗子。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">def factor(n):
+    i = 2
+    while i * i &lt;= n:
+        if n % i == 0:
+            return i, n // i
+        i += 1
+    return None
+
+n, e, c = 3574227043889, 65537, 409150236165
+p, q = factor(n)
+print("分解:", p, q)                       # 1299709 2750021
+phi = (p - 1) * (q - 1)
+d = pow(e, -1, phi)                         # 私鑰指數
+m = pow(c, d, n)
+inner = m.to_bytes((m.bit_length() + 7) // 8, "big")
+print("旗子: FLAG{" + inner.decode() + "}")   # FLAG{Eul3r}</code></pre>
+              <p>整題的「難」只在第一步分解;因為 $n$ 被設小,試除法瞬殺。把這四步背起來——它是 RSA 類 CTF 出現頻率最高的解法骨架。
+              延伸想一想:如果 $n$ 是 2048 位元的兩個大質數乘積,<code>factor</code> 會卡在哪?(答案:第一個 <code>while</code> 迴圈,
+              要跑到約 $\sqrt{n} \approx 2^{1024}$ 次,地老天荒。)</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h3>常見的 RSA CTF 弱點</h3>
+      <p>
+        「$n$ 太小可分解」只是最基本的一種。RSA 的數學很美,但<strong>只要任何一個參數選錯,就有對應的攻擊</strong>。
+        認識它們,既能讓你在 CTF 快速辨題,也能讓你日後設計系統時知道「哪些洞絕對不能挖」:
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>弱點</th><th>出包原因</th><th>攻擊概念</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><strong>小 $e$ + 短訊息</strong></td>
+            <td>用 $e=3$ 又不做填充(padding),且明文 $m$ 很小</td>
+            <td>若 $m^e$ 比 $n$ 還小,加密時根本沒「模到」,$c = m^e$ 是直接的乘冪;攻擊者對 $c$ 開 $e$ 次方根($m = \sqrt[e]{c}$)就還原明文,連 $n$ 都不必碰。</td>
+          </tr>
+          <tr>
+            <td><strong>共模(common modulus)</strong></td>
+            <td>同一個 $n$,用兩個互質的 $e_1, e_2$ 加密了同一則訊息</td>
+            <td>用擴展歐幾里得找 $a, b$ 使 $a e_1 + b e_2 = 1$,則 $c_1^{a} \cdot c_2^{b} \equiv m \pmod n$。<strong>不必分解 $n$</strong> 就還原明文。</td>
+          </tr>
+          <tr>
+            <td><strong>$p, q$ 太近</strong></td>
+            <td>兩個質數選得太接近(差距小)</td>
+            <td><strong>Fermat 分解</strong>:把 $n$ 寫成 $a^2 - b^2 = (a-b)(a+b)$,從 $a = \lceil\sqrt{n}\,\rceil$ 開始往上試,$p, q$ 越近,$b$ 越小,幾步就分解出來。</td>
+          </tr>
+          <tr>
+            <td><strong>$n$ 在 factordb 裡</strong></td>
+            <td>用了別人用過、或太常見的質數</td>
+            <td>直接上 factordb.com 查 $n$,$p, q$ 可能已被別人算好公開。</td>
+          </tr>
+        </tbody>
+      </table>
+      </div>
+      <p>其中 Fermat 分解最值得親手寫一次,它把「$p, q$ 太近」這個看不見的疏忽,變成幾行就能利用的攻擊:</p>
+      <pre><code class="language-python">from math import isqrt
+
+def fermat_factor(n):
+    # n = a^2 - b^2 = (a-b)(a+b);p,q 越接近,a 從 sqrt(n) 往上沒幾步就中
+    a = isqrt(n)
+    if a * a &lt; n:
+        a += 1
+    while True:
+        b2 = a * a - n
+        b = isqrt(b2)
+        if b * b == b2:           # b2 剛好是完全平方 → 找到 a, b
+            return a - b, a + b
+        a += 1
+
+# 兩個只差 30 的質數(刻意選太近):
+n = 1000003 * 1000033
+print(fermat_factor(n))           # (1000003, 1000033) —— 瞬間分解</code></pre>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">這些攻擊不是「RSA 壞了」,是「RSA 被用壞了」</span>
+          <p>每一條弱點,病根都在<strong>參數或用法</strong>,而非演算法:小 $e$ 沒填充、共用模數、質數太近或重複。
+          正確實作的 RSA(2048 位元以上、隨機獨立的大質數、$e=65537$、OAEP 填充)至今穩如泰山。
+          這完美呼應第 35 章的鐵律——演算法很少是被攻破的點,<strong>「怎麼用」的細節才是</strong>。所以,別自己拼裝 RSA。</p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 70.6 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>(任選一題)<strong>(a) Vigenère:</strong>用本章的 <code>guess_key_length</code> 與 <code>break_vigenere</code>,
+          寫一個「丟進密文 → 自動猜金鑰長度 → 還原明文與金鑰」的完整破譯器,並用一段你自己用某關鍵字加密的長文驗證。
+          <strong>(b) Fermat:</strong>實作 <code>fermat_factor(n)</code>,並設計一個小實驗:固定一個質數 $p$,
+          讓 $q$ 從「離 $p$ 很近」逐漸變「離 $p$ 很遠」,記錄 <code>fermat_factor</code> 各花了幾次迴圈,
+          用數據說明「為什麼 $p, q$ 不能選太近」。</p>
+          <details class="solution">
+            <summary>看解答(b)</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">from math import isqrt
+
+def is_prime(x):
+    if x &lt; 2: return False
+    for d in range(2, isqrt(x) + 1):
+        if x % d == 0: return False
+    return True
+
+def fermat_factor(n):
+    a = isqrt(n)
+    if a * a &lt; n:
+        a += 1
+    steps = 0
+    while True:
+        steps += 1
+        b2 = a * a - n
+        b = isqrt(b2)
+        if b * b == b2:
+            return (a - b, a + b), steps
+        a += 1
+
+p = 1000003
+for gap in [10, 100, 10_000, 1_000_000]:
+    # 找一個離 p 大約 gap 遠的質數 q
+    q = next(x for x in range(p + gap, p + gap + 5000) if is_prime(x))
+    (f1, f2), steps = fermat_factor(p * q)
+    print(f"q - p ≈ {q - p:&gt;8} → Fermat 花了 {steps} 次迴圈")
+# 你會看到:p、q 越近,steps 越小(常常 1～2 次);拉遠後 steps 暴增。
+# 結論:Fermat 分解的成本約和 (q - p)^2 成正比 → 質數必須「隨機且相距夠遠」。</code></pre>
+              <p>這個實驗把一句抽象的安全守則(「質數別選太近」)變成你<strong>親眼看到的曲線</strong>。
+              這正是攻擊者思維的價值:你不是背一條規則,而是理解規則背後那道「越近越好攻」的數學斜坡。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>攻擊者思維,讓你成為更好的設計者</h2>
+      <p>
+        現在把整章倒過來看。我們拆開的每一個系統,其實都在無聲地教我們「該怎麼正確做」——這正是 CTF 之於資安教育最珍貴的地方。
+        把破譯與防禦並排,你會發現它們是同一句話的正反兩面(全部呼應第 35 章的正確用法):
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>我們怎麼破的</th><th>弱在哪</th><th>該怎麼正確做(第 35 章)</th></tr></thead>
+        <tbody>
+          <tr><td>凱撒:枚舉 26 種位移</td><td>金鑰空間太小</td><td>用 AES,金鑰空間 $2^{128}$ 起跳,枚舉到宇宙毀滅也試不完</td></tr>
+          <tr><td>單表替換:頻率分析 + 爬山</td><td>統計特徵藏不住</td><td>用現代對稱密碼,密文要和隨機亂數無法區分(沒有可被統計的規律)</td></tr>
+          <tr><td>維吉尼亞 / repeating-XOR:找週期再各個擊破</td><td>金鑰循環重複使用</td><td>金鑰流不可重複;一次性密本的金鑰「只能用一次」;對稱加密每則訊息配獨立的隨機 nonce/IV</td></tr>
+          <tr><td>雜湊:字典攻擊正著查</td><td>快、無鹽,密碼又是常見字</td><td>存密碼用 <strong>加鹽 + 慢雜湊</strong>(bcrypt / scrypt / Argon2);絕不用 MD5/SHA 裸存</td></tr>
+          <tr><td>RSA:分解小 $n$ / Fermat / 共模</td><td>參數選錯、模數共用</td><td>2048 位元以上、隨機獨立的大質數、$e=65537$、OAEP 填充;模數絕不共用</td></tr>
+        </tbody>
+      </table>
+      </div>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">破譯者的眼睛,是設計者的良心</span>
+          <p>當你親手用 20 行 Python 拆掉一個「自以為安全」的系統,你對安全的理解會從「<em>聽說要這樣做</em>」升級成「<em>我知道不這樣做會怎麼死</em>」。
+          這就是為什麼頂尖的密碼工程師,幾乎都做過密碼分析。本章的終極收穫不是「你學會了破解」,而是:
+          下次你要設計一個需要保護資料的系統時,腦中會自動跳出本章每一個攻擊的畫面,
+          然後你會做出全章、也是全書最聰明的決定——<strong>不自己造,直接用經過全世界檢驗的成熟函式庫</strong>(Python 的 <code>cryptography</code>、libsodium)。</p>
+        </div>
+      </div>
+
+      <h2>破譯工具箱</h2>
+      <p>CTF Crypto 老手不會每題都從零寫程式。把本章的「原理」配上現成的「兵器」,效率才會起飛:</p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>工具</th><th>用途</th><th>本章對應</th></tr></thead>
+        <tbody>
+          <tr><td><strong>CyberChef</strong></td><td>瀏覽器裡的「資料處理瑞士刀」:編碼轉換、ROT、XOR、雜湊、頻率分析一鍵串接</td><td>古典密碼、編碼層(第 69 章)</td></tr>
+          <tr><td><strong>factordb.com</strong></td><td>公開的整數分解資料庫,貼上 $n$ 可能直接拿到 $p, q$</td><td>弱 RSA 分解</td></tr>
+          <tr><td><strong>RsaCtfTool</strong></td><td>自動套用幾十種已知 RSA 攻擊(小 $e$、共模、Fermat、Wiener⋯⋯)</td><td>RSA 弱參數</td></tr>
+          <tr><td><strong>hashcat / john</strong></td><td>GPU 加速的雜湊字典/暴力破解器,業界標準</td><td>雜湊字典攻擊</td></tr>
+          <tr><td><strong>quipqiup / dcode.fr</strong></td><td>線上替換密碼/各種古典密碼自動破譯</td><td>單表替換、維吉尼亞</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <div class="callout note">
+        <div class="ico">🛠️</div>
+        <div class="body">
+          <span class="c-title">先懂原理,再用工具</span>
+          <p>工具是「把你已經會的事做得更快」,不是「替你思考」。如果你不懂頻率分析,quipqiup 吐錯時你不知道哪裡怪;
+          不懂 RSA 攻擊,RsaCtfTool 失敗時你卡死。本章那些手刻的小程式,就是讓你「看懂工具在做什麼」的鑰匙——
+          這也是整個課程理念:<strong>每一關都做出一個能跑的小成品,先理解,再加速</strong>。</p>
+        </div>
+      </div>
+
+      <h2>把這一章串起來</h2>
+      <p>我們翻到攻擊者那一側,把第 35 章警告過的每一個坑,親手踩了一遍、也拆了一遍:</p>
+      <ul>
+        <li><strong>CTF Crypto 的本質</strong>:不是破解強演算法,而是抓出「用錯、用弱」的系統,還原明文或金鑰。</li>
+        <li><strong>萬用配方</strong>:<em>暴力枚舉</em> + <em>評分函數</em>(score_english / 卡方 / n-gram),把「像不像英文」變成可計算的數字。</li>
+        <li><strong>古典四破</strong>:凱撒(枚舉 26)、單表替換(頻率分析 + 爬山法)、維吉尼亞(IC 找金鑰長度,再各欄當凱撒破)、單位元組 XOR(枚舉 256)。破法會互相複用。</li>
+        <li><strong>現代兩破</strong>:雜湊用字典攻擊正著查(故加鹽 + 慢雜湊才安全);RSA 在 $n$ 分解得開時,沿「分解 → φ → d → 解密」的攻擊鏈一路推倒,並認識小 $e$、共模、$p,q$ 太近(Fermat)等經典弱點。</li>
+        <li><strong>攻防一體</strong>:每一種破譯,都對應一條「該怎麼正確做」;理解攻擊,正是設計安全系統的前提。</li>
+        <li><strong>工具箱</strong>:CyberChef、factordb、RsaCtfTool、hashcat/john——先懂原理,再用它們加速。</li>
+      </ul>
+      <p>
+        密碼破譯最迷人的地方,是它讓「安全」這個抽象詞,變成你指尖能驗證的東西:你親手讓一面藏了三千年的旗子現形,
+        也親眼看見一個聰明的系統如何因為一個小疏忽而全盤崩塌。帶著這雙「破譯者的眼睛」,你回頭再讀第 35 章那句
+        「<strong>永遠別自己造密碼系統</strong>」,終於懂了它不是膽小,而是看過太多屍體後的智慧。
+        下一章,我們會把戰場從「數學」搬到「服務與檔案」——看 Web 攻防、封包分析與檔案鑑識,
+        如何用同樣的攻擊者思維,在真實的協定與位元組之間奪旗。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">📚</div>
+        <div class="body">
+          <span class="c-title">想更深入?延伸資源</span>
+          <p>想把本章變成肌肉記憶,最好的練功房是 <a href="https://cryptohack.org/">CryptoHack</a>——
+          一個專為密碼學打造、由淺入深的互動式挑戰平台,從 XOR、古典密碼一路到 RSA、橢圓曲線,每題都附社群討論。
+          入門奪旗則推薦 <a href="https://picoctf.org/">picoCTF</a> 的 Crypto 類別(以及它的常駐練習場 picoGym),題目友善、適合第一次體驗「交旗得分」。
+          想自動分解 RSA 的 $n$,善用 <a href="https://factordb.com/">factordb.com</a>。
+          系統化的歷史與密碼分析經典,可讀 Simon Singh 的《碼書(The Code Book)》。
+          密碼學的<em>理論與正確用法</em>請回看第 35 章與第 15 章(數論、模運算、RSA);
+          本章的精神,延續自資安社團「<strong>專案制、由淺到深、先理解再加速、只在授權環境練習</strong>」的養成理念——
+          每破一道題,都是為了成為一個更會防守的人。</p>
+        </div>
+      </div>
+
+    </article>
+  </main>
+</div>
+<script src="../assets/book.js"></script>
+</body>
+</html>

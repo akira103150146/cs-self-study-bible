@@ -1,0 +1,2079 @@
+<!--meta
+title: 動態規劃
+description: 從費氏數列的指數爆炸出發,徹底拆解動態規劃:記憶化與表格法、最佳子結構與重疊子問題、可重複套用的「設計 DP 五步框架」,並用爬樓梯、硬幣找零、0/1 背包、最長共同子序列、最長遞增子序列、編輯距離等經典題逐一演練,最後揭穿 Bellman-Ford 與 Floyd-Warshall 其實也是 DP。
+-->
+
+
+      <div class="eyebrow">第六部 · 演算法與資料結構</div>
+      <h1>動態規劃</h1>
+      <p class="subtitle">初學者最害怕的四個字,其實只是一句樸實的忠告:同樣的功,別做第二遍。學會把「記住答案」變成一門手藝,你就握住了演算法工具箱裡威力最大、也最優雅的一把刀。</p>
+      <div class="byline">
+        <span class="tag">第 32 章</span>
+        <span>閱讀時間 ≈ 52 分鐘</span>
+        <span>難度:★★★★★</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>為什麼樸素遞迴的費氏數列會 $O(2^n)$ 指數爆炸,而 DP 如何把它根治成 $O(n)$</li>
+          <li><strong>記憶化(memoization,由上而下)</strong>與<strong>表格法(tabulation,由下而上)</strong>兩種實作,以及空間優化</li>
+          <li>動態規劃成立的兩個前提:<strong>最佳子結構</strong>與<strong>重疊子問題</strong></li>
+          <li>DP 與<strong>分治</strong>(子問題不重疊)、<strong>貪婪</strong>(不回頭)的本質差異</li>
+          <li>一套人人可套用的「<strong>設計 DP 五步框架</strong>」</li>
+          <li>用框架解經典題:爬樓梯、硬幣找零、0/1 背包、最長共同子序列、最長遞增子序列、編輯距離</li>
+          <li>DP 不只活在陣列上:Bellman-Ford 與 Floyd-Warshall 其實也是 DP</li>
+          <li>從「暴力遞迴 → 加記憶化 → 改表格 → 優化空間」這條人人可學的升級流程</li>
+        </ul>
+      </div>
+
+      <h2>回到那個算到天荒地老的費氏數列</h2>
+      <p>
+        還記得第 3 章那個讓電腦當機的程式嗎?我們寫了一個美得像數學定義的費氏數列(Fibonacci)函式,
+        然後發現它有個致命傷:算 <code>fib(50)</code> 要等到地老天荒。我們也當場診斷出了病因——
+        <strong>它把同樣的子問題算了一遍又一遍</strong>。這一章,我們要為這個病開出處方,而這帖藥的名字,
+        就是讓無數初學者聞之色變的四個字:<strong>動態規劃(dynamic programming,常簡稱 DP)</strong>。
+      </p>
+      <p>
+        先別怕。等你讀完這一章你會發現,動態規劃這個唬人的名字背後,其實只是一句再樸實不過的忠告:
+        <em>「同樣的功,不要做第二遍。把算過的答案記下來。」</em>就這樣。難的不是這個想法,
+        而是「認出哪些問題能這樣解」與「把它寫對」——而這兩件事,都有可以照著走的步驟。我們慢慢來。
+      </p>
+      <p>
+        先把第 3 章那個樸素遞迴版請回現場,當作我們的病人:
+      </p>
+      <pre><code class="language-python">def fib(n):
+    if n &lt; 2:                       # base case:fib(0)=0, fib(1)=1
+        return n
+    return fib(n - 1) + fib(n - 2)  # recursive case:呼叫自己「兩次」
+
+print(fib(35))                      # 答得出來,但你會感覺到電腦在喘</code></pre>
+      <p>
+        問題出在最後那行<strong>呼叫了自己兩次</strong>。把 <code>fib(5)</code> 的呼叫過程畫成一棵樹
+        (第 3 章的圖 3-3),你會看到 <code>fib(3)</code> 整棵子樹被算了 2 次、<code>fib(2)</code> 被算了 3 次。
+        <code>n</code> 越大,這種重複越誇張:這棵樹的節點數量大約是 $O(2^n)$——指數成長。
+        <code>fib(50)</code> 要呼叫超過<strong>兩百億次</strong>。你的電腦不是壞了,是真的在做兩百億件重複的傻事。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">DP 的核心直覺,一句話</span>
+          <p>當一個遞迴會反覆碰到<strong>同樣的子問題</strong>時,我們只要把每個子問題的答案<strong>算一次、記起來</strong>,
+          往後再遇到就直接查表。重複的功被砍光,指數爆炸就塌縮成線性。
+          這就是動態規劃的全部精神——其餘都是技巧與包裝。</p>
+        </div>
+      </div>
+
+      <h2>記憶化:給遞迴配一本「查得到的筆記」</h2>
+      <p>
+        最直接的修法,是<strong>幾乎不改原本那支漂亮的遞迴</strong>,只多給它一本筆記本:每算出一個
+        <code>fib(k)</code>,就把 <code>k → 答案</code> 記進筆記;下次再被要求算 <code>fib(k)</code>,先翻筆記,
+        翻得到就直接抄,翻不到才真的動手算。這個技巧叫<strong>記憶化(memoization)</strong>。
+      </p>
+      <p>
+        (順帶一提,memoization 不是 memorization 拼錯——它源自拉丁文 <em>memorandum</em>「備忘錄」,
+        指的正是「把結果寫進備忘錄」這件事。)
+      </p>
+      <p>
+        我們用第 3 章教過的「<code>None</code> 當預設值」安全寫法,避免可變預設參數的陷阱:
+      </p>
+      <pre><code class="language-python">def fib(n, memo=None):
+    if memo is None:                # 第一次呼叫才建立筆記本(避開可變預設值陷阱)
+        memo = {}
+    if n &lt; 2:                       # base case
+        return n
+    if n not in memo:               # 筆記裡沒有,才真的動手算
+        memo[n] = fib(n - 1, memo) + fib(n - 2, memo)
+    return memo[n]                  # 直接抄筆記
+
+print(fib(100))                     # 354224848179261915075,瞬間算完</code></pre>
+      <p>
+        關鍵只多了兩件事:<strong>算之前先查 <code>memo</code></strong>、<strong>算完把結果寫進 <code>memo</code></strong>。
+        效果立竿見影:第一次算 <code>fib(3)</code> 把它記下來後,第二次需要 <code>fib(3)</code> 時,
+        整棵子樹被一句「查表」取代,不必再展開。把 <code>fib(5)</code> 的記憶化過程畫出來:
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 640 400" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="320" y="24" text-anchor="middle" font-size="14" font-weight="800" fill="#1f2328">記憶化後的 fib(5):重複的子樹塌縮成「查表」</text>
+  <!-- edges -->
+  <g stroke="#cbd3da" stroke-width="2">
+    <line x1="360" y1="68" x2="200" y2="120"/>
+    <line x1="360" y1="68" x2="540" y2="120"/>
+    <line x1="200" y1="140" x2="110" y2="196"/>
+    <line x1="200" y1="140" x2="300" y2="196"/>
+    <line x1="110" y1="216" x2="62" y2="272"/>
+    <line x1="110" y1="216" x2="170" y2="272"/>
+    <line x1="62" y1="292" x2="32" y2="344"/>
+    <line x1="62" y1="292" x2="100" y2="344"/>
+  </g>
+  <!-- computed nodes -->
+  <g font-size="12" font-weight="700" text-anchor="middle">
+    <circle cx="360" cy="48" r="20" fill="#2f6f6a"/><text x="360" y="52" fill="#fff">F5</text>
+    <circle cx="200" cy="120" r="20" fill="#2f6f6a"/><text x="200" y="124" fill="#fff">F4</text>
+    <circle cx="110" cy="196" r="20" fill="#2f6f6a"/><text x="110" y="200" fill="#fff">F3</text>
+    <circle cx="62" cy="272" r="20" fill="#2f6f6a"/><text x="62" y="276" fill="#fff">F2</text>
+    <!-- base cases -->
+    <circle cx="32" cy="344" r="18" fill="#aeb6bf"/><text x="32" y="348" fill="#fff">F1</text>
+    <circle cx="100" cy="344" r="18" fill="#aeb6bf"/><text x="100" y="348" fill="#fff">F0</text>
+    <circle cx="170" cy="272" r="18" fill="#aeb6bf"/><text x="170" y="276" fill="#fff">F1</text>
+  </g>
+  <!-- cache hits -->
+  <g font-size="11" font-weight="700" text-anchor="middle">
+    <circle cx="300" cy="196" r="20" fill="#f6e7dd" stroke="#b4541f" stroke-width="2" stroke-dasharray="4 3"/><text x="300" y="200" fill="#b4541f">F2</text>
+    <text x="300" y="228" font-size="10" fill="#b4541f">查表✓</text>
+    <circle cx="540" cy="120" r="20" fill="#f6e7dd" stroke="#b4541f" stroke-width="2" stroke-dasharray="4 3"/><text x="540" y="124" fill="#b4541f">F3</text>
+    <text x="540" y="152" font-size="10" fill="#b4541f">查表✓</text>
+  </g>
+  <!-- legend -->
+  <rect x="430" y="300" width="14" height="14" rx="3" fill="#2f6f6a"/><text x="452" y="312" font-size="11" fill="#4a5159" text-anchor="start">真正計算(每個值只算一次)</text>
+  <rect x="430" y="322" width="14" height="14" rx="3" fill="#f6e7dd" stroke="#b4541f" stroke-dasharray="4 3"/><text x="452" y="334" font-size="11" fill="#4a5159" text-anchor="start">查快取,整棵子樹被砍掉</text>
+  <rect x="430" y="344" width="14" height="14" rx="3" fill="#aeb6bf"/><text x="452" y="356" font-size="11" fill="#4a5159" text-anchor="start">基底情況,直接回傳</text>
+</svg>
+        <figcaption>圖 32-1:加上記憶化後,<code>fib(5)</code> 的呼叫從原本 15 個節點塌縮成 9 次呼叫——其中只有 <code>F0</code>~<code>F5</code> 共 6 個值被真正計算,右側那兩個磚紅節點一碰到就「查表」回傳,整棵重複的子樹被砍掉。指數樹被壓成一條細長的藤蔓。</figcaption>
+      </div>
+
+      <p>
+        因為現在每個 <code>fib(k)</code> 只會被真正計算一次(總共 $n+1$ 個不同的子問題),
+        記憶化版的時間複雜度從 $O(2^n)$ 一口氣降到 $O(n)$,代價是用一個 dict 存下 $O(n)$ 個答案。
+        <strong>用空間換時間</strong>,正是 DP 永恆的交易。
+      </p>
+
+      <h3>更省事的寫法:<code>functools.lru_cache</code></h3>
+      <p>
+        手動管理 <code>memo</code> 字典雖然清楚,但 Python 標準函式庫已經幫你把這件事做成一個裝飾器(decorator)。
+        只要在函式上方加一行 <code>@lru_cache</code>,Python 就會自動幫你快取每組參數對應的回傳值:
+      </p>
+      <pre><code class="language-python">from functools import lru_cache
+
+@lru_cache(maxsize=None)            # maxsize=None 表示快取無上限
+def fib(n):
+    if n &lt; 2:
+        return n
+    return fib(n - 1) + fib(n - 2)  # 跟最原始的版本一模一樣!
+
+print(fib(100))                     # 一樣瞬間算完
+print(fib.cache_info())             # 還能看快取命中幾次</code></pre>
+      <p>
+        注意函式本體<strong>跟最樸素的版本一字不差</strong>——快取完全由裝飾器代勞。這就是記憶化最迷人的地方:
+        它幾乎不破壞你原本「貼近數學定義」的漂亮遞迴,只是悄悄替它配了一本筆記本。
+        Python 3.9 之後甚至有更簡潔的 <code>@functools.cache</code>(等同 <code>lru_cache(maxsize=None)</code>)。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">記憶化又叫「由上而下(top-down)」</span>
+          <p>記憶化是從你<strong>真正想要的那個大問題</strong>(<code>fib(n)</code>)出發,需要哪個子問題才往下遞迴去算——
+          像從樹頂往下伸手,缺什麼摘什麼,摘到的就放進口袋(快取)。
+          因為「從大往小、需要才算」,它被歸類為 <strong>top-down</strong> 的 DP。
+          下一節的表格法則是反過來,從最小的子問題開始往上堆。</p>
+        </div>
+      </div>
+
+      <h2>表格法:乾脆從最小的開始,由小到大填一張表</h2>
+      <p>
+        記憶化是「被動」的:大問題來敲門,缺哪塊才回頭去補。另一種風格是「主動」的——
+        我<strong>事先就知道</strong>要算 <code>fib(n)</code> 一定會用到 <code>fib(0), fib(1), …, fib(n-1)</code>,
+        那何不乾脆<strong>從 <code>fib(0)</code> 開始,由小到大、一格一格把答案填進一張表</strong>?
+        這種風格叫<strong>表格法(tabulation)</strong>,也叫<strong>由下而上(bottom-up)</strong>。
+      </p>
+      <pre><code class="language-python">def fib(n):
+    if n &lt; 2:
+        return n
+    dp = [0] * (n + 1)              # dp[k] 將存放 fib(k),這就是我們的「表」
+    dp[0], dp[1] = 0, 1            # base case 先填好
+    for i in range(2, n + 1):      # 由小到大,一格一格填
+        dp[i] = dp[i - 1] + dp[i - 2]   # 用「前面已經填好的格子」算出當前格子
+    return dp[n]                   # 表的最後一格就是答案
+
+print(fib(100))                    # 354224848179261915075</code></pre>
+      <p>
+        沒有遞迴、沒有堆疊、沒有快取查詢的開銷,就是一個老老實實的迴圈,把一張表從左填到右。
+        每格只填一次,所以一樣是 $O(n)$ 時間。把這張表畫出來,你會看到一條清楚的「資料流」:
+        每一格都站在它前兩格的肩膀上。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 700 200" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="350" y="24" text-anchor="middle" font-size="14" font-weight="800" fill="#1f2328">表格法:由小到大填出 fib 的表 dp[]</text>
+  <g font-size="14" font-weight="700" text-anchor="middle">
+    <rect x="20" y="80" width="74" height="46" rx="6" fill="#e3efed" stroke="#2f6f6a"/><text x="57" y="109" fill="#1f2328">0</text>
+    <rect x="100" y="80" width="74" height="46" rx="6" fill="#e3efed" stroke="#2f6f6a"/><text x="137" y="109" fill="#1f2328">1</text>
+    <rect x="180" y="80" width="74" height="46" rx="6" fill="#fff" stroke="#cbd3da"/><text x="217" y="109" fill="#1f2328">1</text>
+    <rect x="260" y="80" width="74" height="46" rx="6" fill="#fff" stroke="#cbd3da"/><text x="297" y="109" fill="#1f2328">2</text>
+    <rect x="340" y="80" width="74" height="46" rx="6" fill="#fff" stroke="#cbd3da"/><text x="377" y="109" fill="#1f2328">3</text>
+    <rect x="420" y="80" width="74" height="46" rx="6" fill="#f6e7dd" stroke="#b4541f" stroke-width="2"/><text x="457" y="109" fill="#1f2328">5</text>
+    <rect x="500" y="80" width="74" height="46" rx="6" fill="#fff" stroke="#cbd3da"/><text x="537" y="109" fill="#1f2328">8</text>
+    <rect x="580" y="80" width="74" height="46" rx="6" fill="#fff" stroke="#cbd3da"/><text x="617" y="109" fill="#1f2328">13</text>
+  </g>
+  <g font-size="11" fill="#8a929b" text-anchor="middle">
+    <text x="57" y="142">dp[0]</text><text x="137" y="142">dp[1]</text><text x="217" y="142">dp[2]</text><text x="297" y="142">dp[3]</text>
+    <text x="377" y="142">dp[4]</text><text x="457" y="142">dp[5]</text><text x="537" y="142">dp[6]</text><text x="617" y="142">dp[7]</text>
+  </g>
+  <text x="57" y="72" text-anchor="middle" font-size="10" fill="#2f6f6a" font-weight="700">base</text>
+  <text x="137" y="72" text-anchor="middle" font-size="10" fill="#2f6f6a" font-weight="700">base</text>
+  <!-- arrows showing dp[5]=dp[4]+dp[3] -->
+  <path d="M 377 78 Q 417 50 457 78" fill="none" stroke="#b4541f" stroke-width="2" marker-end="url(#fa)"/>
+  <path d="M 297 78 Q 377 36 457 78" fill="none" stroke="#b4541f" stroke-width="2" marker-end="url(#fa)"/>
+  <text x="380" y="166" text-anchor="middle" font-size="12" fill="#b4541f" font-weight="700">dp[5] = dp[4] + dp[3] = 3 + 2 = 5</text>
+  <defs><marker id="fa" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#b4541f"/></marker></defs>
+</svg>
+        <figcaption>圖 32-2:表格法把 <code>fib</code> 的答案存進一維陣列 <code>dp[]</code>,從左(小)往右(大)填。每一格只依賴它左邊已經填好的兩格——這種「當前狀態只由前面狀態決定」的結構,正是 DP 的招牌。</figcaption>
+      </div>
+
+      <h3>空間優化:其實只需要記得「前兩格」</h3>
+      <p>
+        看圖 32-2 你會發現一件事:要算 <code>dp[i]</code>,我們<strong>只用到 <code>dp[i-1]</code> 和 <code>dp[i-2]</code></strong>,
+        前面那一長串早就用不到了。既然如此,何必存整張表?用兩個變數滾動著走就好:
+      </p>
+      <pre><code class="language-python">def fib(n):
+    a, b = 0, 1                # a = fib(i-2),b = fib(i-1)
+    for _ in range(n):
+        a, b = b, a + b        # 往前滾一步
+    return a
+
+print(fib(100))               # 一樣的答案,但空間從 O(n) 降到 O(1)</code></pre>
+      <p>
+        這正是第 3 章那個 <code>fib_iter</code>!現在你看懂它的真面目了:它就是<strong>做了空間優化的 bottom-up DP</strong>。
+        當你發現「當前狀態只依賴最近的幾個狀態」時,就能把整張表丟掉,只留一個滑動視窗——
+        從 $O(n)$ 空間壓到 $O(1)$。這個「只留需要的前幾項」的把戲,在 DP 裡會反覆出現。
+      </p>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">記憶化 vs 表格法,怎麼選?</span>
+          <p>兩者算的東西完全一樣,只是方向相反。<strong>記憶化(top-down)</strong>幾乎不改原本的遞迴、
+          只算「真正用得到」的子問題,當狀態空間很大但實際只會碰到一小部分時特別划算,寫起來也最直覺。
+          <strong>表格法(bottom-up)</strong>沒有遞迴的堆疊開銷與深度上限,而且因為「填表順序」明確,
+          最容易做空間優化。新手建議:<em>先用記憶化想通,再視需要翻成表格法。</em></p>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>面向</th><th>記憶化 top-down</th><th>表格法 bottom-up</th></tr></thead>
+        <tbody>
+          <tr><td>方向</td><td>從大問題往小遞迴</td><td>從小子問題往大迭代</td></tr>
+          <tr><td>實作</td><td>遞迴 + 快取(dict / <code>lru_cache</code>)</td><td>迴圈 + 陣列(表)</td></tr>
+          <tr><td>只算用得到的子問題?</td><td>是(惰性)</td><td>否,通常全填</td></tr>
+          <tr><td>堆疊風險</td><td>有(遞迴深度上限)</td><td>無</td></tr>
+          <tr><td>空間優化</td><td>較難</td><td>容易(滾動陣列)</td></tr>
+          <tr><td>上手難度</td><td>低(像原本的遞迴)</td><td>需想清楚填表順序</td></tr>
+        </tbody>
+      </table>
+      </div>
+
+      <h2>什麼樣的問題「可以」用 DP?兩個前提</h2>
+      <p>
+        記憶化很神,但它不是萬靈丹。一個問題能用動態規劃高效解決,背後必須同時滿足<strong>兩個條件</strong>。
+        看懂這兩個條件,你就能在面對新題目時,一眼判斷「這題能不能 DP」。
+      </p>
+
+      <h3>前提一:最佳子結構(optimal substructure)</h3>
+      <p>
+        <strong>一個問題的最佳解,可以由它的子問題的最佳解組合出來。</strong>
+        以費氏為例:<code>fib(n)</code> 的答案,就是 <code>fib(n-1)</code> 與 <code>fib(n-2)</code> 這兩個子問題答案的和——
+        子問題的解直接拼出大問題的解。再以「從台北到高雄的最短路線」為例:如果最短路線經過台中,
+        那麼「台北到台中」這一段,本身一定也是台北到台中的最短路線(否則你換掉它就能讓全程更短,矛盾)。
+        這種「大最佳解內含小最佳解」的性質,就叫最佳子結構。
+      </p>
+      <p>
+        並非所有問題都有這個性質。例如「最長<em>簡單</em>路徑(不能重複經過點)」就<strong>沒有</strong>最佳子結構——
+        把兩段各自最長的路徑接起來,可能會重複經過某個點而違規。沒有最佳子結構,DP 就使不上力。
+      </p>
+
+      <h3>前提二:重疊子問題(overlapping subproblems)</h3>
+      <p>
+        <strong>同一個子問題會被反覆需要很多次。</strong>這正是費氏的痛點:<code>fib(3)</code> 在樸素遞迴裡被算了好幾遍。
+        因為會重疊,「把答案記下來」才有意義——記一次,省下無數次重算。
+        如果每個子問題都只會被用到一次(不重疊),那記下來也沒得省,記憶化就毫無價值。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">DP 成立的兩個前提</span>
+          <p><strong>① 最佳子結構</strong>:大問題的最佳解,能用子問題的最佳解拼出來(這保證「用遞推式求解」是<em>對的</em>)。<br>
+          <strong>② 重疊子問題</strong>:同樣的子問題一再出現(這保證「把答案記起來」是<em>划算的</em>)。<br>
+          兩者缺一不可:沒有①,遞推式根本不正確;沒有②,記憶化省不到任何東西。
+          看到一個問題同時具備這兩點,你心裡就該亮起燈號:<em>這題,DP 有戲。</em></p>
+        </div>
+      </div>
+
+      <h3>和分治、貪婪比一比</h3>
+      <p>
+        重疊子問題這個前提,正好把 DP 和它的兩個近親區分開來。第 27 章的<strong>分治法(divide and conquer)</strong>
+        也是把大問題拆成小問題遞迴去解,但分治拆出來的子問題<strong>互不重疊</strong>
+        (例如合併排序把陣列切成左右兩半,左半跟右半毫無交集),所以分治<em>不需要</em>記憶化。
+        第 31 章的<strong>貪婪法(greedy)</strong>則更激進:它每一步都只挑「當下看起來最好」的選擇,
+        <strong>選了就不回頭</strong>,不像 DP 會把所有可能的選擇都試過、記下、再挑最佳。
+        貪婪快,但只在「貪婪選擇性質」成立時才正確;不成立時,它會給出錯的答案(這一章稍後的硬幣找零就是活生生的反例)。
+      </p>
+
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>範式</th><th>子問題</th><th>每一步的決策</th><th>正確性靠什麼</th><th>代表問題</th></tr></thead>
+        <tbody>
+          <tr><td><strong>分治法</strong>(第 27 章)</td><td>拆成<strong>不重疊</strong>的子問題</td><td>遞迴解子問題,再合併</td><td>問題可乾淨切分</td><td>合併排序、快速冪</td></tr>
+          <tr><td><strong>貪婪法</strong>(第 31 章)</td><td>每步縮成一個子問題</td><td>選當下最好,<strong>不回頭</strong></td><td>貪婪選擇性質 + 最佳子結構</td><td>Dijkstra、霍夫曼編碼、最小生成樹</td></tr>
+          <tr><td><strong>動態規劃</strong>(本章)</td><td><strong>大量重疊</strong>的子問題</td><td>試遍所有選擇,記住結果取最佳</td><td>最佳子結構 + 重疊子問題</td><td>背包、LCS、編輯距離</td></tr>
+        </tbody>
+      </table>
+      </div>
+
+      <p>
+        一句話總結三者的關係:<strong>分治</strong>是「拆了各自解,反正不重複」;<strong>貪婪</strong>是「賭一條路走到底,不回頭」;
+        <strong>DP</strong>是「每條路都看看,但把走過的路記下來,絕不重走」。DP 可以看成「<em>會記筆記、肯回頭比較</em>的窮舉」——
+        它聰明地窮舉,而不是盲目地窮舉。
+      </p>
+
+      <div class="callout history">
+        <div class="ico">📜</div>
+        <div class="body">
+          <span class="c-title">「動態規劃」這名字其實是個煙霧彈</span>
+          <p>這個技巧由數學家 <strong>Richard Bellman</strong> 於 1950 年代在 RAND 公司提出。
+          名字裡的「programming」指的是「規劃、做決策表」的舊義(跟「寫程式」無關),
+          而「dynamic」則據 Bellman 自己回憶,是刻意挑來「聽起來很厲害、又不像在做數學」的詞——
+          因為當時他的上司、國防部長 Wilson 極度厭惡「研究(research)」和「數學」這類字眼,
+          Bellman 需要一個能矇混過關、聽起來無害的名字來幫他的研究爭取經費。
+          所以,如果你覺得「動態規劃」這名字取得莫名其妙、跟它在做的事兜不太起來——
+          恭喜你,<em>它本來就是故意取得讓人摸不著頭緒的。</em></p>
+        </div>
+      </div>
+
+      <h2>設計 DP 的五步框架</h2>
+      <p>
+        DP 之所以讓初學者害怕,常常不是因為某一題特別難,而是因為「不知道從哪裡下手」。
+        好消息是:解 DP 幾乎都能套同一套流程。把下面這<strong>五個步驟</strong>當成你的解題清單,
+        遇到新題目就一條一條問自己。這一章後面每一道經典題,我們都會老老實實走一遍這五步。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 700 250" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="350" y="24" text-anchor="middle" font-size="14" font-weight="800" fill="#1f2328">設計 DP 的五步框架</text>
+  <g font-size="12.5" font-weight="700">
+    <rect x="30" y="50" width="180" height="56" rx="10" fill="#e3efed" stroke="#2f6f6a"/>
+    <text x="120" y="74" text-anchor="middle" fill="#1f2328">① 定義狀態</text>
+    <text x="120" y="93" text-anchor="middle" font-size="10.5" font-weight="400" fill="#4a5159">dp[…] 代表什麼子問題?</text>
+
+    <rect x="260" y="50" width="180" height="56" rx="10" fill="#e3efed" stroke="#2f6f6a"/>
+    <text x="350" y="74" text-anchor="middle" fill="#1f2328">② 寫狀態轉移方程</text>
+    <text x="350" y="93" text-anchor="middle" font-size="10.5" font-weight="400" fill="#4a5159">dp[…] 怎麼由更小的算出?</text>
+
+    <rect x="490" y="50" width="180" height="56" rx="10" fill="#e3efed" stroke="#2f6f6a"/>
+    <text x="580" y="74" text-anchor="middle" fill="#1f2328">③ 確定 base case</text>
+    <text x="580" y="93" text-anchor="middle" font-size="10.5" font-weight="400" fill="#4a5159">最小的子問題答案</text>
+
+    <rect x="150" y="150" width="180" height="56" rx="10" fill="#f6e7dd" stroke="#b4541f"/>
+    <text x="240" y="174" text-anchor="middle" fill="#1f2328">④ 決定計算順序</text>
+    <text x="240" y="193" text-anchor="middle" font-size="10.5" font-weight="400" fill="#4a5159">top-down 或 bottom-up</text>
+
+    <rect x="380" y="150" width="180" height="56" rx="10" fill="#f6e7dd" stroke="#b4541f"/>
+    <text x="470" y="174" text-anchor="middle" fill="#1f2328">⑤ 從表回推答案</text>
+    <text x="470" y="193" text-anchor="middle" font-size="10.5" font-weight="400" fill="#4a5159">必要時 reconstruct 解</text>
+  </g>
+  <g stroke="#8a929b" stroke-width="2" fill="none" marker-end="url(#fr)">
+    <line x1="210" y1="78" x2="256" y2="78"/>
+    <line x1="440" y1="78" x2="486" y2="78"/>
+    <line x1="580" y1="106" x2="300" y2="148"/>
+    <line x1="330" y1="178" x2="376" y2="178"/>
+  </g>
+  <defs><marker id="fr" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/></marker></defs>
+</svg>
+        <figcaption>圖 32-3:設計 DP 的五步框架。前三步是「想清楚數學」(狀態、轉移、邊界),後兩步是「決定怎麼算、怎麼把答案拿出來」。每一道 DP 題,都建議照這五步走一遍。</figcaption>
+      </div>
+
+      <ol>
+        <li><strong>定義狀態(state)</strong>:這是<em>最關鍵也最難</em>的一步。你要決定「<code>dp</code> 的每一格代表哪一個子問題的答案」。
+          狀態定義錯了,後面全錯。例如費氏:「<code>dp[i]</code> = 第 i 個費氏數」。一個好狀態通常能用幾個整數參數(索引、容量、位置……)唯一描述一個子問題。</li>
+        <li><strong>寫出狀態轉移方程(recurrence)</strong>:用「更小的狀態」表達「當前狀態」。
+          這是 DP 的心臟。例如 $dp[i] = dp[i-1] + dp[i-2]$。通常的句型是:「當前這格的最佳解 = 對所有可能的『最後一步選擇』取最佳」。</li>
+        <li><strong>確定 base case</strong>:那些小到不必再拆、可以直接寫死答案的狀態。例如 $dp[0]=0,\ dp[1]=1$。漏掉或寫錯 base case 是 DP 最常見的 bug。</li>
+        <li><strong>決定計算順序</strong>:選 top-down(記憶化)或 bottom-up(填表)。若用填表,要確保「算每一格時,它依賴的格子都已經填好了」——這決定了迴圈該往哪個方向跑。</li>
+        <li><strong>從表回推答案(reconstruct)</strong>:有時你要的不只是「最佳值是多少」,還要「最佳解長什麼樣」(選了哪些物品、是哪個子序列)。這時要從填好的表「倒著走回去」,還原出實際的選擇。</li>
+      </ol>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">卡住時,先攻第①步</span>
+          <p>九成的 DP 難題,難就難在「定義狀態」。一個實用的起手式:<strong>先寫出一個會動但很慢的暴力遞迴</strong>,
+          觀察「這個遞迴函式靠哪幾個參數就能決定回傳值」——那幾個參數,往往就是你的狀態。
+          換句話說,<em>暴力遞迴的函式簽名,常常直接告訴你 <code>dp</code> 的維度。</em>這條捷徑,我們會在最後一節正式收束成通用流程。</p>
+        </div>
+      </div>
+
+      <h2>經典題一:爬樓梯(熱身)</h2>
+      <p>
+        <strong>題目</strong>:一段樓梯有 $n$ 階,你每次可以跨 1 階或 2 階。問:從地面爬到第 $n$ 階,總共有幾種不同的走法?
+      </p>
+      <p>套五步框架:</p>
+      <ol>
+        <li><strong>狀態</strong>:<code>dp[i]</code> = 爬到第 <code>i</code> 階的走法數。</li>
+        <li><strong>轉移</strong>:你到達第 <code>i</code> 階的「最後一步」,要嘛從第 <code>i-1</code> 階跨 1 階上來,要嘛從第 <code>i-2</code> 階跨 2 階上來。這兩種情形互斥且涵蓋所有可能,所以 $dp[i] = dp[i-1] + dp[i-2]$。</li>
+        <li><strong>base case</strong>:<code>dp[0] = 1</code>(待在地面,一種「什麼都不做」的走法),<code>dp[1] = 1</code>。</li>
+        <li><strong>順序</strong>:bottom-up,<code>i</code> 從小到大。</li>
+        <li><strong>回推</strong>:本題只要個數,不需還原路徑。</li>
+      </ol>
+      <pre><code class="language-python">def climb_stairs(n):
+    if n &lt;= 1:
+        return 1
+    a, b = 1, 1                # dp[0], dp[1]
+    for _ in range(2, n + 1):
+        a, b = b, a + b        # dp[i] = dp[i-1] + dp[i-2]
+    return b
+
+print(climb_stairs(5))        # 8</code></pre>
+      <p>
+        看出來了嗎?<strong>爬樓梯就是費氏數列換了一件衣服。</strong>這正是 DP 學習的重要一課:
+        非常多「看起來不一樣」的問題,骨子裡是同一條遞推式。當你能一眼認出「啊,這又是 $dp[i]=dp[i-1]+dp[i-2]$」,
+        你就開始有 DP 的「手感」了。(練習裡有它的變形:每次可跨 1、2 或 3 階。)
+      </p>
+
+      <h2>經典題二:硬幣找零(貪婪會在這裡翻車)</h2>
+      <p>
+        <strong>題目</strong>:給你面額為 <code>coins</code> 的硬幣(每種數量無限),要湊出金額 <code>amount</code>,
+        問<strong>最少</strong>需要幾枚硬幣?湊不出來則回傳 <code>-1</code>。
+      </p>
+      <p>
+        你的第一直覺也許是「貪婪」:每次都拿能用的最大面額。對台幣或美元這種「漂亮」的幣制,貪婪確實對。
+        但換一組幣制就會出事。假設 <code>coins = [1, 3, 4]</code>,要湊 <code>amount = 6</code>:
+      </p>
+      <ul>
+        <li><strong>貪婪</strong>:先拿最大的 4,剩 2;只能拿 1+1。總共 <strong>4+1+1 = 3 枚</strong>。</li>
+        <li><strong>最佳解</strong>:<strong>3+3 = 2 枚</strong>。貪婪輸了!</li>
+      </ul>
+      <p>
+        貪婪在這裡翻車,正是因為它「選了 4 就不回頭」,沒看到「退一步用兩個 3」更省。
+        這就是第 31 章會反覆強調的:<strong>貪婪只在特定條件下才正確,幣制不對它就會給出次佳解。</strong>
+        而 DP 不會被騙——因為它會把「每種湊法」的代價都記下來再挑最小。
+      </p>
+      <p>套五步框架:</p>
+      <ol>
+        <li><strong>狀態</strong>:<code>dp[a]</code> = 湊出金額 <code>a</code> 所需的最少硬幣數。</li>
+        <li><strong>轉移</strong>:湊出 <code>a</code> 的「最後一枚硬幣」是某個面額 <code>c</code>(且 $c \le a$),那麼剩下的 <code>a-c</code> 就用它自己的最佳解。對所有可選的 <code>c</code> 取最小:$dp[a] = \min_{c \in coins,\ c \le a} \big(dp[a-c] + 1\big)$。</li>
+        <li><strong>base case</strong>:<code>dp[0] = 0</code>(湊 0 元不需要任何硬幣)。其餘先設成「不可能的大數」代表尚未湊出。</li>
+        <li><strong>順序</strong>:bottom-up,<code>a</code> 從 1 填到 <code>amount</code>。</li>
+        <li><strong>回推</strong>:本題只求數量;若要知道「用了哪些硬幣」,可額外記錄每格選了哪枚(留作思考)。</li>
+      </ol>
+      <pre><code class="language-python">def coin_change(coins, amount):
+    INF = amount + 1                    # 比任何可能答案都大,當「不可能」的標記
+    dp = [0] + [INF] * amount           # dp[0]=0,其餘先設成 INF
+    for a in range(1, amount + 1):
+        for c in coins:
+            if c &lt;= a:                  # 這枚硬幣放得進金額 a
+                dp[a] = min(dp[a], dp[a - c] + 1)
+    return dp[amount] if dp[amount] != INF else -1
+
+print(coin_change([1, 3, 4], 6))       # 2   (= 3 + 3,DP 找到了最佳解)
+print(coin_change([2], 3))             # -1  (湊不出奇數)</code></pre>
+      <p>把 <code>coins = [1, 3, 4]</code> 的 <code>dp</code> 表填出來,看 DP 怎麼一步步逼近答案:</p>
+
+      <div class="diagram">
+<svg viewBox="0 0 640 210" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="320" y="24" text-anchor="middle" font-size="14" font-weight="800" fill="#1f2328">硬幣找零 coins=[1,3,4]:最少硬幣數 dp[]</text>
+  <g font-size="15" font-weight="700" text-anchor="middle">
+    <rect x="40" y="70" width="76" height="48" rx="6" fill="#e3efed" stroke="#2f6f6a"/><text x="78" y="100" fill="#1f2328">0</text>
+    <rect x="120" y="70" width="76" height="48" rx="6" fill="#fff" stroke="#cbd3da"/><text x="158" y="100" fill="#1f2328">1</text>
+    <rect x="200" y="70" width="76" height="48" rx="6" fill="#fff" stroke="#cbd3da"/><text x="238" y="100" fill="#1f2328">2</text>
+    <rect x="280" y="70" width="76" height="48" rx="6" fill="#fff" stroke="#cbd3da"/><text x="318" y="100" fill="#1f2328">1</text>
+    <rect x="360" y="70" width="76" height="48" rx="6" fill="#fff" stroke="#cbd3da"/><text x="398" y="100" fill="#1f2328">1</text>
+    <rect x="440" y="70" width="76" height="48" rx="6" fill="#fff" stroke="#cbd3da"/><text x="478" y="100" fill="#1f2328">2</text>
+    <rect x="520" y="70" width="76" height="48" rx="6" fill="#f6e7dd" stroke="#b4541f" stroke-width="2.5"/><text x="558" y="100" fill="#1f2328">2</text>
+  </g>
+  <g font-size="11" fill="#8a929b" text-anchor="middle">
+    <text x="78" y="134">a=0</text><text x="158" y="134">a=1</text><text x="238" y="134">a=2</text><text x="318" y="134">a=3</text>
+    <text x="398" y="134">a=4</text><text x="478" y="134">a=5</text><text x="558" y="134">a=6</text>
+  </g>
+  <text x="78" y="62" text-anchor="middle" font-size="10" fill="#2f6f6a" font-weight="700">base</text>
+  <text x="320" y="170" text-anchor="middle" font-size="12.5" fill="#b4541f" font-weight="700">dp[6] = min( dp[5]+1, dp[3]+1, dp[2]+1 ) = min(3, 2, 3) = 2</text>
+  <text x="320" y="190" text-anchor="middle" font-size="11" fill="#4a5159">(分別代表最後一枚拿 1、拿 3、拿 4;拿 3 最省 → 兩枚 3 元)</text>
+</svg>
+        <figcaption>圖 32-4:硬幣找零的 <code>dp</code> 表。<code>dp[6]</code> 比較「最後一枚拿 1 / 3 / 4」三種收尾各自的代價,選最小。注意 <code>dp[3]=1</code>(一枚 3)讓「兩枚 3 元」勝出——這正是貪婪(先拿 4)看不到的更優解。</figcaption>
+      </div>
+
+      <h2>經典題三:0/1 背包(DP 的鎮店之寶)</h2>
+      <p>
+        <strong>題目</strong>:你是個小偷,背包最多裝 <code>W</code> 公斤。眼前有 <code>n</code> 件寶物,第 <code>i</code> 件重 <code>w[i]</code> 公斤、
+        值 <code>v[i]</code> 元。每件寶物<strong>要嘛整件拿走、要嘛不拿(不能只拿半件)</strong>。
+        問:在不超重的前提下,能偷走的最大總價值是多少?
+      </p>
+      <p>
+        這個「要嘛全拿、要嘛不拿」就是名字裡 <strong>0/1</strong> 的由來。它跟第 31 章的<strong>分數背包(fractional knapsack)</strong>
+        只差一個字,命運卻天差地遠:分數背包<strong>可以</strong>切一塊寶物的零頭塞進去,於是「按 CP 值(價值/重量)從高到低貪婪地裝」就保證最佳——
+        貪婪在那裡是對的。但 0/1 背包不能切,貪婪會卡在「裝不下整件、又不能塞半件」的尷尬,給出次佳解。
+        所以 0/1 背包<strong>必須</strong>用 DP。
+      </p>
+      <p>套五步框架:</p>
+      <ol>
+        <li><strong>狀態</strong>:<code>dp[i][w]</code> = 「只考慮前 <code>i</code> 件寶物、背包容量為 <code>w</code>」時能拿到的最大價值。
+          (注意這裡的狀態需要<strong>兩個</strong>參數:看到第幾件、還剩多少容量。)</li>
+        <li><strong>轉移</strong>:對第 <code>i</code> 件寶物,只有兩種選擇——
+          <em>不拿</em>:價值就是 <code>dp[i-1][w]</code>;
+          <em>拿</em>(前提是裝得下,$w_i \le w$):價值是 <code>dp[i-1][w - w_i] + v_i</code>。取兩者較大:
+          $$dp[i][w] = \max\big(\,dp[i-1][w],\ \ dp[i-1][w - w_i] + v_i\,\big)$$</li>
+        <li><strong>base case</strong>:<code>dp[0][w] = 0</code>(一件都不考慮,價值是 0)。</li>
+        <li><strong>順序</strong>:bottom-up,外層跑寶物 <code>i</code>、內層跑容量 <code>w</code>。</li>
+        <li><strong>回推</strong>:從 <code>dp[n][W]</code> 倒著走,就能還原「到底拿了哪幾件」(見練習)。</li>
+      </ol>
+      <pre><code class="language-python">def knapsack(weights, values, W):
+    n = len(weights)
+    # dp[i][w]:前 i 件、容量 w 的最大價值;多開一行一列放 base case
+    dp = [[0] * (W + 1) for _ in range(n + 1)]
+    for i in range(1, n + 1):
+        wi, vi = weights[i - 1], values[i - 1]   # 第 i 件(注意 0-based)
+        for w in range(W + 1):
+            dp[i][w] = dp[i - 1][w]              # 先假設「不拿第 i 件」
+            if wi &lt;= w:                          # 裝得下,才考慮「拿」
+                dp[i][w] = max(dp[i][w], dp[i - 1][w - wi] + vi)
+    return dp[n][W]
+
+weights = [1, 3, 4, 5]
+values  = [1, 4, 5, 7]
+print(knapsack(weights, values, 7))   # 9  (拿第 2、3 件:重 3+4=7,值 4+5=9)</code></pre>
+      <p>把這個例子的二維表填出來。每一格都是「這麼多寶物、這麼大容量」下的最佳戰績:</p>
+
+      <div class="diagram">
+<svg viewBox="0 0 620 340" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="320" y="22" text-anchor="middle" font-size="14" font-weight="800" fill="#1f2328">0/1 背包填表 dp[i][w](容量 W=7)</text>
+  <!-- weight headers -->
+  <g font-size="12" font-weight="700" text-anchor="middle" fill="#2f6f6a">
+    <text x="176" y="62">0</text><text x="228" y="62">1</text><text x="280" y="62">2</text><text x="332" y="62">3</text>
+    <text x="384" y="62">4</text><text x="436" y="62">5</text><text x="488" y="62">6</text><text x="540" y="62">7</text>
+  </g>
+  <text x="540" y="44" text-anchor="middle" font-size="10.5" fill="#8a929b">容量 w →</text>
+  <text x="80" y="44" text-anchor="middle" font-size="10.5" fill="#8a929b">物品(重,值)</text>
+  <!-- row labels -->
+  <g font-size="11" font-weight="700" text-anchor="end" fill="#1f2328">
+    <text x="145" y="95">∅</text>
+    <text x="145" y="133">①(1,1)</text>
+    <text x="145" y="171">②(3,4)</text>
+    <text x="145" y="209">③(4,5)</text>
+    <text x="145" y="247">④(5,7)</text>
+  </g>
+  <!-- grid cells: row r=0..4, col c=0..7 -->
+  <!-- helper: x = 150 + c*52, y = 72 + r*38 ; values per row -->
+  <!-- r0 -->
+  <g font-size="13" font-weight="600" text-anchor="middle">
+    <rect x="150" y="72" width="52" height="38" fill="#f4f6f7" stroke="#cbd3da"/><text x="176" y="96">0</text>
+    <rect x="202" y="72" width="52" height="38" fill="#f4f6f7" stroke="#cbd3da"/><text x="228" y="96">0</text>
+    <rect x="254" y="72" width="52" height="38" fill="#f4f6f7" stroke="#cbd3da"/><text x="280" y="96">0</text>
+    <rect x="306" y="72" width="52" height="38" fill="#f4f6f7" stroke="#cbd3da"/><text x="332" y="96">0</text>
+    <rect x="358" y="72" width="52" height="38" fill="#f4f6f7" stroke="#cbd3da"/><text x="384" y="96">0</text>
+    <rect x="410" y="72" width="52" height="38" fill="#f4f6f7" stroke="#cbd3da"/><text x="436" y="96">0</text>
+    <rect x="462" y="72" width="52" height="38" fill="#f4f6f7" stroke="#cbd3da"/><text x="488" y="96">0</text>
+    <rect x="514" y="72" width="52" height="38" fill="#f4f6f7" stroke="#cbd3da"/><text x="540" y="96">0</text>
+  </g>
+  <!-- r1: 0 1 1 1 1 1 1 1 ; highlight (r1,c0)=0 -->
+  <g font-size="13" font-weight="600" text-anchor="middle">
+    <rect x="150" y="110" width="52" height="38" fill="#e3efed" stroke="#b4541f" stroke-width="2"/><text x="176" y="134">0</text>
+    <rect x="202" y="110" width="52" height="38" fill="#fff" stroke="#cbd3da"/><text x="228" y="134">1</text>
+    <rect x="254" y="110" width="52" height="38" fill="#fff" stroke="#cbd3da"/><text x="280" y="134">1</text>
+    <rect x="306" y="110" width="52" height="38" fill="#fff" stroke="#cbd3da"/><text x="332" y="134">1</text>
+    <rect x="358" y="110" width="52" height="38" fill="#fff" stroke="#cbd3da"/><text x="384" y="134">1</text>
+    <rect x="410" y="110" width="52" height="38" fill="#fff" stroke="#cbd3da"/><text x="436" y="134">1</text>
+    <rect x="462" y="110" width="52" height="38" fill="#fff" stroke="#cbd3da"/><text x="488" y="134">1</text>
+    <rect x="514" y="110" width="52" height="38" fill="#fff" stroke="#cbd3da"/><text x="540" y="134">1</text>
+  </g>
+  <!-- r2: 0 1 1 4 5 5 5 5 ; highlight (r2,c3)=4 -->
+  <g font-size="13" font-weight="600" text-anchor="middle">
+    <rect x="150" y="148" width="52" height="38" fill="#fff" stroke="#cbd3da"/><text x="176" y="172">0</text>
+    <rect x="202" y="148" width="52" height="38" fill="#fff" stroke="#cbd3da"/><text x="228" y="172">1</text>
+    <rect x="254" y="148" width="52" height="38" fill="#fff" stroke="#cbd3da"/><text x="280" y="172">1</text>
+    <rect x="306" y="148" width="52" height="38" fill="#e3efed" stroke="#b4541f" stroke-width="2"/><text x="332" y="172">4</text>
+    <rect x="358" y="148" width="52" height="38" fill="#fff" stroke="#cbd3da"/><text x="384" y="172">5</text>
+    <rect x="410" y="148" width="52" height="38" fill="#fff" stroke="#cbd3da"/><text x="436" y="172">5</text>
+    <rect x="462" y="148" width="52" height="38" fill="#fff" stroke="#cbd3da"/><text x="488" y="172">5</text>
+    <rect x="514" y="148" width="52" height="38" fill="#fff" stroke="#cbd3da"/><text x="540" y="172">5</text>
+  </g>
+  <!-- r3: 0 1 1 4 5 6 6 9 ; highlight (r3,c7)=9 -->
+  <g font-size="13" font-weight="600" text-anchor="middle">
+    <rect x="150" y="186" width="52" height="38" fill="#fff" stroke="#cbd3da"/><text x="176" y="210">0</text>
+    <rect x="202" y="186" width="52" height="38" fill="#fff" stroke="#cbd3da"/><text x="228" y="210">1</text>
+    <rect x="254" y="186" width="52" height="38" fill="#fff" stroke="#cbd3da"/><text x="280" y="210">1</text>
+    <rect x="306" y="186" width="52" height="38" fill="#fff" stroke="#cbd3da"/><text x="332" y="210">4</text>
+    <rect x="358" y="186" width="52" height="38" fill="#fff" stroke="#cbd3da"/><text x="384" y="210">5</text>
+    <rect x="410" y="186" width="52" height="38" fill="#fff" stroke="#cbd3da"/><text x="436" y="210">6</text>
+    <rect x="462" y="186" width="52" height="38" fill="#fff" stroke="#cbd3da"/><text x="488" y="210">6</text>
+    <rect x="514" y="186" width="52" height="38" fill="#e3efed" stroke="#b4541f" stroke-width="2"/><text x="540" y="210">9</text>
+  </g>
+  <!-- r4: 0 1 1 4 5 7 8 9 ; answer (r4,c7)=9 -->
+  <g font-size="13" font-weight="700" text-anchor="middle">
+    <rect x="150" y="224" width="52" height="38" fill="#fff" stroke="#cbd3da"/><text x="176" y="248">0</text>
+    <rect x="202" y="224" width="52" height="38" fill="#fff" stroke="#cbd3da"/><text x="228" y="248">1</text>
+    <rect x="254" y="224" width="52" height="38" fill="#fff" stroke="#cbd3da"/><text x="280" y="248">1</text>
+    <rect x="306" y="224" width="52" height="38" fill="#fff" stroke="#cbd3da"/><text x="332" y="248">4</text>
+    <rect x="358" y="224" width="52" height="38" fill="#fff" stroke="#cbd3da"/><text x="384" y="248">5</text>
+    <rect x="410" y="224" width="52" height="38" fill="#fff" stroke="#cbd3da"/><text x="436" y="248">7</text>
+    <rect x="462" y="224" width="52" height="38" fill="#fff" stroke="#cbd3da"/><text x="488" y="248">8</text>
+    <rect x="514" y="224" width="52" height="38" fill="#2f6f6a" stroke="#1f4f4a" stroke-width="2.5"/><text x="540" y="248" fill="#fff">9</text>
+  </g>
+  <!-- backtrack arrows -->
+  <g stroke="#b4541f" stroke-width="2" fill="none" marker-end="url(#kb)">
+    <line x1="540" y1="224" x2="540" y2="188"/>            <!-- (4,7)->(3,7) 不拿④ -->
+    <line x1="516" y1="190" x2="334" y2="172"/>            <!-- (3,7)->(2,3) 拿③ -->
+    <line x1="308" y1="152" x2="178" y2="134"/>            <!-- (2,3)->(1,0) 拿② -->
+  </g>
+  <defs><marker id="kb" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#b4541f"/></marker></defs>
+  <text x="300" y="300" text-anchor="middle" font-size="11.5" fill="#4a5159">回推:從綠色答案格倒走 → 不拿④、拿③、拿②、結束 ⇒ 選 {②, ③},總值 9</text>
+</svg>
+        <figcaption>圖 32-5:0/1 背包的二維填表。綠色為答案 <code>dp[4][7]=9</code>。沿磚紅箭頭回推:格子值若跟「上一列同欄」相同,代表沒拿這件;若是從「左上方 <code>w-w_i</code> 欄 +<code>v_i</code>」來的,代表拿了。一路走回去就還原出選了哪些寶物。</figcaption>
+      </div>
+
+      <h3>空間優化:二維壓成一維</h3>
+      <p>
+        觀察轉移式:<code>dp[i][...]</code> 只依賴<strong>上一列 <code>dp[i-1][...]</code></strong>。所以其實不必存整張二維表,
+        只要一條一維陣列、就地更新即可——但有個陷阱:內層的容量迴圈必須<strong>從大到小</strong>跑,
+        否則同一件寶物會被重複拿(那就變成另一種「無限背包」了)。
+      </p>
+      <pre><code class="language-python">def knapsack_1d(weights, values, W):
+    dp = [0] * (W + 1)
+    for wi, vi in zip(weights, values):
+        for w in range(W, wi - 1, -1):       # 注意:容量「從大到小」!
+            dp[w] = max(dp[w], dp[w - wi] + vi)
+    return dp[W]
+
+print(knapsack_1d([1, 3, 4, 5], [1, 4, 5, 7], 7))   # 9</code></pre>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">一維背包:迴圈方向錯了,答案就錯</span>
+          <p>0/1 背包壓成一維時,容量迴圈一定要<strong>由大到小</strong>。若由小到大,當你更新 <code>dp[w]</code> 時,
+          它依賴的 <code>dp[w - wi]</code> 已經是「<em>這一輪剛被同一件寶物更新過</em>」的值,等於允許同一件寶物拿好幾次。
+          這個方向的差別,正好區分了「0/1 背包(由大到小)」與「完全背包/無限背包(由小到大)」——
+          一個減號的方向,藏著兩種完全不同的問題。</p>
+        </div>
+      </div>
+
+      <h2>經典題四:最長共同子序列 LCS(這就是 diff 的心臟)</h2>
+      <p>
+        <strong>題目</strong>:給兩個字串 <code>X</code> 與 <code>Y</code>,找出它們<strong>最長共同子序列(longest common subsequence, LCS)</strong>的長度。
+        所謂「子序列」是指<em>可以跳著選、但不可以改順序</em>取出的字元序列。例如 <code>"ABCBDAB"</code> 與 <code>"BDCAB"</code> 的一個 LCS 是 <code>"BCAB"</code>(長度 4)。
+      </p>
+      <p>
+        為什麼值得學?因為這正是你天天在用的 <strong><code>git diff</code></strong>(第 18 章)背後的演算法。
+        把兩個版本的檔案各看成「一串行(line)」,它們的 LCS 就是「沒被改動、共同保留的那些行」;
+        不在 LCS 裡的行,就是新增或刪除——這就是 diff 的本質。拼字檢查、DNA 序列比對、抄襲偵測,也都建立在類似的子序列比對上。
+      </p>
+      <p>套五步框架:</p>
+      <ol>
+        <li><strong>狀態</strong>:<code>dp[i][j]</code> = 「<code>X</code> 的前 <code>i</code> 個字元」與「<code>Y</code> 的前 <code>j</code> 個字元」的 LCS 長度。</li>
+        <li><strong>轉移</strong>:看兩個字串的「最後一個字元」<code>X[i-1]</code> 與 <code>Y[j-1]</code>——
+          <em>若相同</em>:這個字元一定能加進 LCS,$dp[i][j] = dp[i-1][j-1] + 1$;
+          <em>若不同</em>:至少得捨棄其中一個字串的最後一個字元,取較好的那邊:$dp[i][j] = \max\big(dp[i-1][j],\ dp[i][j-1]\big)$。
+          $$dp[i][j] = \begin{cases} dp[i-1][j-1] + 1, &amp; X[i-1] = Y[j-1] \\[4pt] \max\big(dp[i-1][j],\ dp[i][j-1]\big), &amp; \text{否則} \end{cases}$$</li>
+        <li><strong>base case</strong>:任一字串為空時 LCS 為 0,即 <code>dp[0][j] = dp[i][0] = 0</code>。</li>
+        <li><strong>順序</strong>:bottom-up,<code>i</code>、<code>j</code> 由小到大(每格依賴它的上、左、左上,都比它早算)。</li>
+        <li><strong>回推</strong>:從 <code>dp[m][n]</code> 倒著走:遇到「字元相同(走左上對角)」就把該字元記下來,即可還原出實際的 LCS 字串。</li>
+      </ol>
+      <pre><code class="language-python">def lcs_length(X, Y):
+    m, n = len(X), len(Y)
+    dp = [[0] * (n + 1) for _ in range(m + 1)]
+    for i in range(1, m + 1):
+        for j in range(1, n + 1):
+            if X[i - 1] == Y[j - 1]:
+                dp[i][j] = dp[i - 1][j - 1] + 1      # 字元相同,延長
+            else:
+                dp[i][j] = max(dp[i - 1][j], dp[i][j - 1])  # 不同,取較好的一邊
+    return dp[m][n]
+
+print(lcs_length("ABCD", "ACBD"))   # 3  (LCS 為 "ABD" 或 "ACD")</code></pre>
+      <p>用較短的 <code>X = "ABCD"</code>、<code>Y = "ACBD"</code> 把表填出來,並沿對角線回推出一個 LCS:</p>
+
+      <div class="diagram">
+<svg viewBox="0 0 540 380" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="270" y="22" text-anchor="middle" font-size="14" font-weight="800" fill="#1f2328">LCS 填表:X="ABCD"(列) vs Y="ACBD"(欄)</text>
+  <!-- column headers (Y) -->
+  <g font-size="13" font-weight="800" text-anchor="middle" fill="#b4541f">
+    <text x="178" y="64">ε</text><text x="234" y="64">A</text><text x="290" y="64">C</text><text x="346" y="64">B</text><text x="402" y="64">D</text>
+  </g>
+  <!-- row headers (X) -->
+  <g font-size="13" font-weight="800" text-anchor="middle" fill="#2f6f6a">
+    <text x="128" y="100">ε</text><text x="128" y="140">A</text><text x="128" y="180">B</text><text x="128" y="220">C</text><text x="128" y="260">D</text>
+  </g>
+  <!-- cells: x=150+c*56 ; y=76+r*40 ; values -->
+  <!-- r0 -->
+  <g font-size="13" text-anchor="middle">
+    <rect x="150" y="76" width="56" height="40" fill="#f4f6f7" stroke="#cbd3da"/><text x="178" y="101">0</text>
+    <rect x="206" y="76" width="56" height="40" fill="#f4f6f7" stroke="#cbd3da"/><text x="234" y="101">0</text>
+    <rect x="262" y="76" width="56" height="40" fill="#f4f6f7" stroke="#cbd3da"/><text x="290" y="101">0</text>
+    <rect x="318" y="76" width="56" height="40" fill="#f4f6f7" stroke="#cbd3da"/><text x="346" y="101">0</text>
+    <rect x="374" y="76" width="56" height="40" fill="#f4f6f7" stroke="#cbd3da"/><text x="402" y="101">0</text>
+  </g>
+  <!-- r1 (A): 0 1 1 1 1 ; match at (1,1) -->
+  <g font-size="13" text-anchor="middle">
+    <rect x="150" y="116" width="56" height="40" fill="#f4f6f7" stroke="#cbd3da"/><text x="178" y="141">0</text>
+    <rect x="206" y="116" width="56" height="40" fill="#e3efed" stroke="#b4541f" stroke-width="2.5"/><text x="234" y="141" font-weight="700">1</text>
+    <rect x="262" y="116" width="56" height="40" fill="#fff" stroke="#cbd3da"/><text x="290" y="141">1</text>
+    <rect x="318" y="116" width="56" height="40" fill="#fff" stroke="#cbd3da"/><text x="346" y="141">1</text>
+    <rect x="374" y="116" width="56" height="40" fill="#fff" stroke="#cbd3da"/><text x="402" y="141">1</text>
+  </g>
+  <!-- r2 (B): 0 1 1 2 2 ; match at (2,3) -->
+  <g font-size="13" text-anchor="middle">
+    <rect x="150" y="156" width="56" height="40" fill="#f4f6f7" stroke="#cbd3da"/><text x="178" y="181">0</text>
+    <rect x="206" y="156" width="56" height="40" fill="#fff" stroke="#cbd3da"/><text x="234" y="181">1</text>
+    <rect x="262" y="156" width="56" height="40" fill="#fff" stroke="#cbd3da"/><text x="290" y="181">1</text>
+    <rect x="318" y="156" width="56" height="40" fill="#e3efed" stroke="#b4541f" stroke-width="2.5"/><text x="346" y="181" font-weight="700">2</text>
+    <rect x="374" y="156" width="56" height="40" fill="#fff" stroke="#cbd3da"/><text x="402" y="181">2</text>
+  </g>
+  <!-- r3 (C): 0 1 2 2 2 -->
+  <g font-size="13" text-anchor="middle">
+    <rect x="150" y="196" width="56" height="40" fill="#f4f6f7" stroke="#cbd3da"/><text x="178" y="221">0</text>
+    <rect x="206" y="196" width="56" height="40" fill="#fff" stroke="#cbd3da"/><text x="234" y="221">1</text>
+    <rect x="262" y="196" width="56" height="40" fill="#fff" stroke="#cbd3da"/><text x="290" y="221">2</text>
+    <rect x="318" y="196" width="56" height="40" fill="#fff" stroke="#cbd3da"/><text x="346" y="221">2</text>
+    <rect x="374" y="196" width="56" height="40" fill="#fff" stroke="#cbd3da"/><text x="402" y="221">2</text>
+  </g>
+  <!-- r4 (D): 0 1 2 2 3 ; answer/match at (4,4) -->
+  <g font-size="13" text-anchor="middle">
+    <rect x="150" y="236" width="56" height="40" fill="#f4f6f7" stroke="#cbd3da"/><text x="178" y="261">0</text>
+    <rect x="206" y="236" width="56" height="40" fill="#fff" stroke="#cbd3da"/><text x="234" y="261">1</text>
+    <rect x="262" y="236" width="56" height="40" fill="#fff" stroke="#cbd3da"/><text x="290" y="261">2</text>
+    <rect x="318" y="236" width="56" height="40" fill="#fff" stroke="#cbd3da"/><text x="346" y="261">2</text>
+    <rect x="374" y="236" width="56" height="40" fill="#2f6f6a" stroke="#1f4f4a" stroke-width="2.5"/><text x="402" y="261" fill="#fff" font-weight="700">3</text>
+  </g>
+  <!-- backtrack path arrows (diagonal on matches) -->
+  <g stroke="#8b5cf6" stroke-width="2.2" fill="none" marker-end="url(#lb)">
+    <line x1="395" y1="252" x2="353" y2="190"/>     <!-- (4,4)->(3,3)? actually to (2,3) via match: go diagonal to (3,3) then up -->
+  </g>
+  <g stroke="#8b5cf6" stroke-width="2.2" fill="none" marker-end="url(#lb)">
+    <line x1="346" y1="196" x2="346" y2="184"/>     <!-- (3,3)->(2,3) up -->
+    <line x1="339" y1="172" x2="241" y2="142"/>     <!-- (2,3)->(1,1) diagonal-ish through match -->
+  </g>
+  <defs><marker id="lb" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#8b5cf6"/></marker></defs>
+  <text x="270" y="306" text-anchor="middle" font-size="11.5" fill="#4a5159">紫線回推:在「字元相同」的格子走左上對角並記下字元</text>
+  <text x="270" y="326" text-anchor="middle" font-size="12.5" fill="#8b5cf6" font-weight="700">收集到的 LCS = "A" + "B" + "D" = "ABD"(長度 3)</text>
+  <text x="270" y="350" text-anchor="middle" font-size="11" fill="#8a929b">(磚紅框=字元相同的配對點;綠色=最終答案 dp[4][4])</text>
+</svg>
+        <figcaption>圖 32-6:LCS 的二維填表與回推。磚紅框是兩字串字元相同、可以納入 LCS 的「配對點」。從右下角答案沿著「相同就走對角」回推,串起經過的配對字元,就得到一個實際的 LCS 字串 <code>"ABD"</code>。</figcaption>
+      </div>
+
+      <div class="callout note">
+        <div class="ico">🔍</div>
+        <div class="body">
+          <span class="c-title">LCS 與 diff、與編輯距離</span>
+          <p>把 LCS 反過來看:兩個檔案<strong>不屬於</strong> LCS 的行,就是要刪掉(舊檔獨有)或加上(新檔獨有)的行——
+          這正是 <code>git diff</code> 印出那些 <code>+</code>/<code>-</code> 的依據。下一題的「編輯距離」是同一家族的近親:
+          LCS 問「最多能保留多少」,編輯距離問「最少要改幾刀」。兩者都是經典的二維字串 DP,填表的長相幾乎一個模子。</p>
+        </div>
+      </div>
+
+      <h2>經典題五:最長遞增子序列 LIS</h2>
+      <p>
+        <strong>題目</strong>:給一個數字陣列,找出最長的<strong>嚴格遞增子序列(longest increasing subsequence, LIS)</strong>的長度。
+        (一樣是「子序列」:可跳著選,但要保持原本的前後順序。)例如 <code>[10, 9, 2, 5, 3, 7, 101, 18]</code> 的一個 LIS 是 <code>[2, 3, 7, 101]</code>,長度 4。
+      </p>
+      <p>套五步框架(這題的狀態定義很有代表性):</p>
+      <ol>
+        <li><strong>狀態</strong>:<code>dp[i]</code> = 「<em>以第 <code>i</code> 個元素<strong>結尾</strong></em>」的最長遞增子序列長度。
+          (注意這個「以某元素結尾」的定法——很多序列型 DP 都這樣定狀態,值得記住。)</li>
+        <li><strong>轉移</strong>:要讓 <code>a[i]</code> 接在某個更早、且比它小的 <code>a[j]</code> 後面。對所有這樣的 <code>j</code> 取最好:
+          $$dp[i] = 1 + \max\big(\{\,dp[j] : j \lt i,\ a[j] \lt a[i]\,\}\ \cup\ \{0\}\big)$$
+          (那個 $\{0\}$ 是為了處理「前面沒有任何比它小的元素」時,<code>a[i]</code> 自己單獨成一段,長度為 1。)</li>
+        <li><strong>base case</strong>:每個 <code>dp[i]</code> 至少是 1(元素自己就是一個長度 1 的遞增序列)。</li>
+        <li><strong>順序</strong>:<code>i</code> 由小到大;內層掃 <code>j</code> 從 0 到 <code>i-1</code>。</li>
+        <li><strong>回推</strong>:最終答案是<strong>整個 <code>dp</code> 陣列的最大值</strong>(而非 <code>dp[n-1]</code>!因為 LIS 可能結尾在任何位置)。</li>
+      </ol>
+      <pre><code class="language-python">def lis_length(a):
+    if not a:
+        return 0
+    n = len(a)
+    dp = [1] * n                       # 每個元素自成長度 1
+    for i in range(n):
+        for j in range(i):
+            if a[j] &lt; a[i]:            # a[i] 可以接在 a[j] 之後
+                dp[i] = max(dp[i], dp[j] + 1)
+    return max(dp)                      # 答案是「結尾在任何位置」中最長的
+
+print(lis_length([10, 9, 2, 5, 3, 7, 101, 18]))   # 4</code></pre>
+      <p>
+        這個版本是兩層迴圈,時間複雜度 $O(n^2)$。
+      </p>
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">LIS 還能更快</span>
+          <p>LIS 有一個漂亮的 $O(n \log n)$ 解法:維護一個「目前各長度遞增子序列的最小可能結尾值」陣列,
+          對每個新元素用二分搜尋(第 28 章)找到它該替換的位置。它已經不太像傳統的填表 DP,而更接近貪婪 + 二分搜尋的混血。
+          這裡先知道「存在更快的做法」即可;真正想挑戰的讀者,可在學完二分搜尋後回來推敲它。</p>
+        </div>
+      </div>
+
+      <h2>經典題六:編輯距離(拼字檢查與 DNA 比對的底層)</h2>
+      <p>
+        <strong>題目</strong>:給兩個字串 <code>a</code> 與 <code>b</code>,每次操作可以<strong>插入一個字元、刪除一個字元、或替換一個字元</strong>。
+        問:把 <code>a</code> 變成 <code>b</code>,最少要幾次操作?這個最少次數叫<strong>編輯距離(edit distance)</strong>,
+        也叫 <strong>Levenshtein 距離</strong>。
+      </p>
+      <p>
+        你每天都在享受它的成果:<strong>拼字檢查</strong>把你打錯的 <code>"recieve"</code> 跟字典裡的字算編輯距離,
+        找出距離最近的 <code>"receive"</code> 建議給你;搜尋引擎的「你是不是要找……」、生物資訊學裡比對兩段 <strong>DNA / 蛋白質序列</strong>
+        相似度,核心都是編輯距離或它的變形。
+      </p>
+      <p>套五步框架:</p>
+      <ol>
+        <li><strong>狀態</strong>:<code>dp[i][j]</code> = 把「<code>a</code> 的前 <code>i</code> 個字元」變成「<code>b</code> 的前 <code>j</code> 個字元」的最少操作數。</li>
+        <li><strong>轉移</strong>:看最後一個字元 <code>a[i-1]</code> 與 <code>b[j-1]</code>——
+          <em>若相同</em>:這個字不用動,$dp[i][j] = dp[i-1][j-1]$;
+          <em>若不同</em>:取「刪除、插入、替換」三條路裡最省的,再加一次操作:
+          $$dp[i][j] = 1 + \min\big(\underbrace{dp[i-1][j]}_{\text{刪除 }a[i-1]},\ \underbrace{dp[i][j-1]}_{\text{插入 }b[j-1]},\ \underbrace{dp[i-1][j-1]}_{\text{替換}}\big)$$</li>
+        <li><strong>base case</strong>:<code>dp[i][0] = i</code>(把長度 <code>i</code> 的字串砍成空字串,要刪 <code>i</code> 次);
+          <code>dp[0][j] = j</code>(從空字串補出長度 <code>j</code>,要插 <code>j</code> 次)。</li>
+        <li><strong>順序</strong>:bottom-up,<code>i</code>、<code>j</code> 由小到大。</li>
+        <li><strong>回推</strong>:從 <code>dp[m][n]</code> 倒推每一步走的是刪/插/替/不動,即可還原「具體怎麼改」。</li>
+      </ol>
+      <pre><code class="language-python">def edit_distance(a, b):
+    m, n = len(a), len(b)
+    dp = [[0] * (n + 1) for _ in range(m + 1)]
+    for i in range(m + 1):
+        dp[i][0] = i                    # a 砍成空字串
+    for j in range(n + 1):
+        dp[0][j] = j                    # 空字串補成 b
+    for i in range(1, m + 1):
+        for j in range(1, n + 1):
+            if a[i - 1] == b[j - 1]:
+                dp[i][j] = dp[i - 1][j - 1]         # 字元相同,免費
+            else:
+                dp[i][j] = 1 + min(dp[i - 1][j],    # 刪除
+                                   dp[i][j - 1],    # 插入
+                                   dp[i - 1][j - 1])  # 替換
+    return dp[m][n]
+
+print(edit_distance("horse", "ros"))    # 3
+print(edit_distance("kitten", "sitting"))  # 3(經典範例)</code></pre>
+      <p>把 <code>"horse" → "ros"</code> 的表填出來,右下角就是答案 3:</p>
+
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>　</th><th>ε</th><th>r</th><th>o</th><th>s</th></tr></thead>
+        <tbody>
+          <tr><th>ε</th><td>0</td><td>1</td><td>2</td><td>3</td></tr>
+          <tr><th>h</th><td>1</td><td>1</td><td>2</td><td>3</td></tr>
+          <tr><th>o</th><td>2</td><td>2</td><td>1</td><td>2</td></tr>
+          <tr><th>r</th><td>3</td><td>2</td><td>2</td><td>2</td></tr>
+          <tr><th>s</th><td>4</td><td>3</td><td>3</td><td>2</td></tr>
+          <tr><th>e</th><td>5</td><td>4</td><td>4</td><td><strong>3</strong></td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>
+        最右下角的 <strong>3</strong> 就是把 <code>horse</code> 變成 <code>ros</code> 的最少操作數:
+        替換 <code>h→r</code>、保留 <code>o</code>、替換 <code>r→o</code>、保留 <code>s</code>、刪除 <code>e</code>——剛好三刀(兩次替換 + 一次刪除)。
+        你會發現它的轉移式跟 LCS 幾乎是雙胞胎:一個取 <code>max</code>(盡量保留),一個取 <code>min</code>(盡量少改)。
+        二維字串 DP 的「肌肉記憶」,練熟這兩題就有了。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">還有一整個「區間 DP」家族</span>
+          <p>本章的題目狀態都靠「索引/容量」描述。還有一類 DP 的狀態是「一段區間 <code>[i, j]</code>」,
+          轉移時枚舉「在哪裡把區間切開」,稱為<strong>區間 DP</strong>——
+          經典代表是<strong>矩陣鏈相乘(matrix-chain multiplication)</strong>:決定一串矩陣相乘時加括號的順序,
+          讓乘法次數最少。它的轉移式 $dp[i][j] = \min_{i \le k \lt j}\big(dp[i][k] + dp[k+1][j] + \text{合併成本}\big)$
+          就是「枚舉切點」的招牌長相。本章先點到為止,知道有這一支就好。</p>
+        </div>
+      </div>
+
+      <h2>DP 不只在陣列上:圖上的 DP</h2>
+      <p>
+        到目前為止,我們的「表」都是一維或二維陣列。但 DP 的思想其實更廣——
+        第 30 章你會學到兩個重量級的最短路徑演算法,它們<strong>骨子裡都是動態規劃</strong>,只是換了個舞台。
+      </p>
+
+      <h3>Bellman-Ford:對「邊數」做 DP</h3>
+      <p>
+        Bellman-Ford 求單一起點到所有點的最短路徑(且容許負權邊)。它的 DP 觀點是:
+        定義 <code>dist[v]</code> 為「<strong>最多用 k 條邊</strong>」時從起點到 <code>v</code> 的最短距離。
+        每多放寬一條邊(k 加 1),就把所有邊「鬆弛(relax)」一次:若 <code>dist[u] + w(u,v)</code> 比現有的 <code>dist[v]</code> 小就更新。
+        因為任何最短路徑最多 $V-1$ 條邊,放寬 $V-1$ 輪就收斂。這就是一個「對邊數遞增」的 DP:
+      </p>
+      <pre><code class="language-python">def bellman_ford(n, edges, src):
+    INF = float('inf')
+    dist = [INF] * n
+    dist[src] = 0
+    for _ in range(n - 1):              # 「允許的邊數」由 1 增到 n-1(DP 的層)
+        for u, v, w in edges:
+            if dist[u] != INF and dist[u] + w &lt; dist[v]:
+                dist[v] = dist[u] + w   # 鬆弛 = 一次狀態轉移
+    return dist</code></pre>
+
+      <h3>Floyd-Warshall:對「允許的中繼點」做 DP</h3>
+      <p>
+        Floyd-Warshall 一口氣求出<strong>所有點對之間</strong>的最短路徑,它的 DP 狀態定義堪稱教科書級的優雅:
+        <code>dp[k][i][j]</code> = 「只准用編號 $\le k$ 的點當中繼站」時,<code>i</code> 到 <code>j</code> 的最短距離。
+        轉移時問一個二選一的問題:這條最短路<strong>要不要經過第 k 個點</strong>?
+      </p>
+      <p>
+        $$dp[k][i][j] = \min\big(\underbrace{dp[k-1][i][j]}_{\text{不經過 }k},\ \ \underbrace{dp[k-1][i][k] + dp[k-1][k][j]}_{\text{經過 }k}\big)$$
+        因為每一層只依賴上一層,實作時可以把 <code>k</code> 那一維省掉,就地更新成三層迴圈:
+      </p>
+      <pre><code class="language-python">def floyd_warshall(dist):
+    # dist[i][j]:i→j 的邊權;無邊為 INF,對角線為 0。函式直接就地更新
+    n = len(dist)
+    for k in range(n):                       # 最外層:逐一「開放」第 k 個中繼點
+        for i in range(n):
+            for j in range(n):
+                if dist[i][k] + dist[k][j] &lt; dist[i][j]:
+                    dist[i][j] = dist[i][k] + dist[k][j]
+    return dist</code></pre>
+      <p>
+        注意那個 <strong><code>k</code> 必須在最外層</strong>的迴圈順序——它正對應 DP 的「層」:你必須先把「用到第 k 點」的所有結果算完,
+        才能往第 k+1 點推進。這跟費氏「先填小的格子」是同一個道理,只是維度更高。第 30 章會把這兩個演算法講透;
+        這裡你只需要帶走一個震撼的認知:<strong>圖上的最短路徑,本質上也是在填一張(看不見的)DP 表。</strong>
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">DP 是一種「世界觀」,不是一種資料結構</span>
+          <p>別把動態規劃跟「二維陣列」綁死。DP 的本質是:<strong>把問題拆成有重疊的子問題、把子問題答案記下來、按依賴順序求解。</strong>
+          至於那張「表」長什麼樣——一維陣列、二維矩陣、圖的距離矩陣、甚至是一個 dict——都只是載體。
+          一旦你習慣用「狀態 + 轉移」的眼光看世界,你會在最意想不到的地方認出 DP 的身影。</p>
+        </div>
+      </div>
+
+      <h2>通用流程:從一支暴力遞迴,長成一個 DP</h2>
+      <p>
+        講了這麼多題,最後把它收束成一條<strong>人人可學、照著走就行</strong>的升級流水線。面對一個新的最佳化/計數問題,
+        不要一開始就硬想 DP——按這四步走,DP 會自己浮現出來:
+      </p>
+      <ol>
+        <li><strong>先寫一支「對的」暴力遞迴。</strong>別管效率,先確保它<em>答案正確</em>。
+          通常就是「枚舉最後一步的所有選擇,遞迴解剩下的子問題,取最佳/加總」。寫對它,你就同時得到了<strong>狀態</strong>(函式的參數)與<strong>轉移</strong>(函式的本體)——這是最難的一步,而你已經在不知不覺中完成了。</li>
+        <li><strong>加上記憶化。</strong>看那支遞迴「靠哪幾個參數決定回傳值」,用那幾個參數當 key 加一本快取(或直接 <code>@lru_cache</code>)。
+          一行裝飾器,$O(2^n)$ 常常就變 $O(n)$ 或 $O(n^2)$。九成情況,到這裡就夠快、可以收工了。</li>
+        <li><strong>(需要時)翻成表格法。</strong>若你想擺脫遞迴堆疊、或要做空間優化,就把記憶化「反過來」:
+          找出子問題的依賴順序,用迴圈由小到大填表。</li>
+        <li><strong>(需要時)優化空間。</strong>觀察「每一格只依賴最近的哪幾格」,把整張表壓成滾動陣列,從 $O(n)$、$O(nW)$ 降到 $O(1)$、$O(W)$。</li>
+      </ol>
+
+      <div class="diagram">
+<svg viewBox="0 0 700 130" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <g font-size="12.5" font-weight="700" text-anchor="middle">
+    <rect x="14" y="40" width="146" height="56" rx="10" fill="#f6e7dd" stroke="#b4541f"/>
+    <text x="87" y="64" fill="#1f2328">① 暴力遞迴</text><text x="87" y="83" font-size="10.5" font-weight="400" fill="#4a5159">先求對,別管慢</text>
+    <rect x="190" y="40" width="146" height="56" rx="10" fill="#e3efed" stroke="#2f6f6a"/>
+    <text x="263" y="64" fill="#1f2328">② 加記憶化</text><text x="263" y="83" font-size="10.5" font-weight="400" fill="#4a5159">快取 / lru_cache</text>
+    <rect x="366" y="40" width="146" height="56" rx="10" fill="#e3efed" stroke="#2f6f6a"/>
+    <text x="439" y="64" fill="#1f2328">③ 改表格法</text><text x="439" y="83" font-size="10.5" font-weight="400" fill="#4a5159">擺脫遞迴堆疊</text>
+    <rect x="542" y="40" width="146" height="56" rx="10" fill="#ede7fb" stroke="#8b5cf6"/>
+    <text x="615" y="64" fill="#1f2328">④ 優化空間</text><text x="615" y="83" font-size="10.5" font-weight="400" fill="#4a5159">滾動陣列</text>
+  </g>
+  <g stroke="#8a929b" stroke-width="2.5" marker-end="url(#fl)">
+    <line x1="160" y1="68" x2="186" y2="68"/>
+    <line x1="336" y1="68" x2="362" y2="68"/>
+    <line x1="512" y1="68" x2="538" y2="68"/>
+  </g>
+  <text x="350" y="22" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">從遞迴到 DP 的升級流水線(越往右越進階,但越左越重要)</text>
+  <defs><marker id="fl" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/></marker></defs>
+</svg>
+        <figcaption>圖 32-7:從暴力遞迴一路升級到優化過的 DP。最關鍵、也最有價值的是<strong>第①②步</strong>——把問題寫成正確的遞迴、再加上快取。後兩步是錦上添花,有需要才做。</figcaption>
+      </div>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">DP 其實「人人可學」</span>
+          <p>動態規劃會嚇人,是因為很多教材一上來就丟你一個填好的二維表,要你「看出」轉移式——那當然像變魔術。
+          但真正的解題現場不是這樣。你<strong>從一支老實的暴力遞迴開始</strong>,它的參數就是狀態、它的本體就是轉移;
+          加一行快取,它就成了 DP。<em>你不需要天才般的靈光一閃,你只需要會寫遞迴,然後不重複做功。</em>
+          這,就是 DP 之所以人人可學的祕密。</p>
+        </div>
+      </div>
+
+      <h2>動手練習</h2>
+      <p>
+        DP 是徹底的「做中學」。以下八題難度遞增,<strong>請務必先寫一支會動的暴力遞迴,再優化成記憶化或表格法</strong>。
+        每一題,先逼自己回答五步框架的前三步:<em>狀態是什麼?轉移怎麼寫?base case 在哪?</em>卡住了再展開解答。
+      </p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 32.1 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>把第 3 章那支樸素遞迴費氏 <code>fib</code>,分別用<strong>(a) 手動 dict 記憶化</strong>與<strong>(b) <code>@lru_cache</code></strong>兩種方式加速,
+          並說明為什麼複雜度從 $O(2^n)$ 變成 $O(n)$。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">from functools import lru_cache
+
+# (a) 手動 dict
+def fib_memo(n, memo=None):
+    if memo is None:
+        memo = {}
+    if n &lt; 2:
+        return n
+    if n not in memo:
+        memo[n] = fib_memo(n - 1, memo) + fib_memo(n - 2, memo)
+    return memo[n]
+
+# (b) 裝飾器
+@lru_cache(maxsize=None)
+def fib_lru(n):
+    if n &lt; 2:
+        return n
+    return fib_lru(n - 1) + fib_lru(n - 2)
+
+print(fib_memo(50), fib_lru(50))   # 12586269025 12586269025</code></pre>
+              <p>原本每個 <code>fib(k)</code> 會被重算無數次(遞迴樹指數膨脹);加了快取後,每個不同的 <code>k</code>
+              只被真正計算<strong>一次</strong>,之後都是 $O(1)$ 查表。一共只有 $n+1$ 個不同的子問題,所以總時間 $O(n)$。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 32.2 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p><strong>爬樓梯變形</strong>:現在每次可以跨 <strong>1、2 或 3</strong> 階。寫 <code>climb3(n)</code> 算出爬到第 <code>n</code> 階的走法數。
+          先寫暴力遞迴,再優化。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>狀態 <code>dp[i]</code> = 到第 <code>i</code> 階的走法數;最後一步可從 <code>i-1</code>、<code>i-2</code>、<code>i-3</code> 上來,
+              所以 $dp[i] = dp[i-1] + dp[i-2] + dp[i-3]$。base case:<code>dp[0]=1</code>,負數階記為 0。</p>
+              <pre><code class="language-python">def climb3(n):
+    dp = [0] * (n + 1)
+    dp[0] = 1
+    for i in range(1, n + 1):
+        dp[i] = dp[i - 1]
+        if i &gt;= 2:
+            dp[i] += dp[i - 2]
+        if i &gt;= 3:
+            dp[i] += dp[i - 3]
+    return dp[n]
+
+print(climb3(4))   # 7</code></pre>
+              <p>這串數列叫「Tribonacci」——費氏的三項版。空間可同樣優化成只留三個變數。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 32.3 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p><strong>硬幣找零最少數</strong>:實作 <code>coin_change(coins, amount)</code>,回傳湊出 <code>amount</code> 的最少硬幣數,湊不出回 <code>-1</code>。
+          並舉一個<strong>貪婪會給出錯誤答案</strong>的幣制與金額,驗證你的 DP 比貪婪好。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">def coin_change(coins, amount):
+    INF = amount + 1
+    dp = [0] + [INF] * amount
+    for a in range(1, amount + 1):
+        for c in coins:
+            if c &lt;= a:
+                dp[a] = min(dp[a], dp[a - c] + 1)
+    return dp[amount] if dp[amount] != INF else -1
+
+print(coin_change([1, 3, 4], 6))   # 2  (= 3+3)
+# 貪婪反例:coins=[1,3,4], amount=6
+# 貪婪先拿 4,再拿兩個 1 → 3 枚;DP 找到 3+3 → 2 枚,貪婪輸。</code></pre>
+              <p>進階:再加一個 <code>parent[]</code> 記錄每格「最後一枚拿了哪種面額」,即可回推「實際用了哪些硬幣」。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 32.4 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p><strong>最大不相鄰子序列和(打家劫舍)</strong>:給一排房子各有金額 <code>nums[i]</code>,
+          你不能搶<strong>相鄰</strong>的兩間(會觸發警報)。求能搶到的最大總金額。例如 <code>[2, 7, 9, 3, 1]</code> 答案是 12(搶第 1、3、5 間:2+9+1)。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>狀態 <code>dp[i]</code> = 考慮前 <code>i</code> 間房子的最大金額。對第 <code>i</code> 間,要嘛<em>不搶</em>(沿用 <code>dp[i-1]</code>)、
+              要嘛<em>搶</em>(只能再加 <code>dp[i-2]</code>,因為 <code>i-1</code> 不能碰):$dp[i] = \max(dp[i-1],\ dp[i-2] + nums[i])$。</p>
+              <pre><code class="language-python">def rob(nums):
+    prev, cur = 0, 0           # prev = dp[i-2], cur = dp[i-1]
+    for x in nums:
+        prev, cur = cur, max(cur, prev + x)
+    return cur
+
+print(rob([2, 7, 9, 3, 1]))   # 12</code></pre>
+              <p>注意它又是「只依賴前兩格」,所以直接用兩個變數滾動,空間 $O(1)$。這題和爬樓梯是同一個骨架的近親。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 32.5 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p><strong>0/1 背包 + 回推</strong>:在本章的 <code>knapsack</code> 上,除了回傳最大價值,還要回傳<strong>實際選了哪些物品</strong>(物品索引清單)。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>先照常填二維表,再從 <code>dp[n][W]</code> 倒著走:若 <code>dp[i][w] != dp[i-1][w]</code>,代表第 <code>i</code> 件被拿了,
+              記下它並把容量扣掉 <code>w_i</code>;否則沒拿,直接往上一列。</p>
+              <pre><code class="language-python">def knapsack_items(weights, values, W):
+    n = len(weights)
+    dp = [[0] * (W + 1) for _ in range(n + 1)]
+    for i in range(1, n + 1):
+        wi, vi = weights[i - 1], values[i - 1]
+        for w in range(W + 1):
+            dp[i][w] = dp[i - 1][w]
+            if wi &lt;= w:
+                dp[i][w] = max(dp[i][w], dp[i - 1][w - wi] + vi)
+
+    # 回推:從右下角倒走
+    chosen, w = [], W
+    for i in range(n, 0, -1):
+        if dp[i][w] != dp[i - 1][w]:    # 值有變 → 第 i 件被拿了
+            chosen.append(i - 1)        # 記下 0-based 索引
+            w -= weights[i - 1]
+    chosen.reverse()
+    return dp[n][W], chosen
+
+print(knapsack_items([1, 3, 4, 5], [1, 4, 5, 7], 7))   # (9, [1, 2])</code></pre>
+              <p>結果 <code>(9, [1, 2])</code>:選了第 2、3 件(0-based 的 1、2),正是圖 32-5 回推出的 {②, ③}。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 32.6 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p><strong>LCS + 還原字串</strong>:在本章的 <code>lcs_length</code> 上,除了長度,還要回傳一個實際的最長共同子序列字串。
+          (想想 <code>git diff</code> 是怎麼靠它找出共同保留的行的。)</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>填完表後,從 <code>dp[m][n]</code> 倒推:字元相同就把它記下並往左上走;否則往「值較大的那一邊」(上或左)走。
+              最後把收集到的字元反轉。</p>
+              <pre><code class="language-python">def lcs(X, Y):
+    m, n = len(X), len(Y)
+    dp = [[0] * (n + 1) for _ in range(m + 1)]
+    for i in range(1, m + 1):
+        for j in range(1, n + 1):
+            if X[i - 1] == Y[j - 1]:
+                dp[i][j] = dp[i - 1][j - 1] + 1
+            else:
+                dp[i][j] = max(dp[i - 1][j], dp[i][j - 1])
+
+    # 回推出實際的 LCS
+    i, j, out = m, n, []
+    while i &gt; 0 and j &gt; 0:
+        if X[i - 1] == Y[j - 1]:
+            out.append(X[i - 1])
+            i, j = i - 1, j - 1
+        elif dp[i - 1][j] &gt;= dp[i][j - 1]:
+            i -= 1
+        else:
+            j -= 1
+    return dp[m][n], "".join(reversed(out))
+
+print(lcs("ABCBDAB", "BDCAB"))   # (4, 'BCAB')</code></pre>
+              <p>不同的「平手時往哪走」策略會還原出不同(但等長)的 LCS,這沒有對錯,都是合法答案。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 32.7 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p><strong>編輯距離</strong>:實作 <code>edit_distance(a, b)</code>(插入 / 刪除 / 替換各算一次操作),
+          並驗證 <code>edit_distance("kitten", "sitting") == 3</code>。先寫暴力遞迴,再加記憶化或改填表。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>先寫貼近定義的暴力遞迴(它的兩個參數 <code>i, j</code> 直接就是狀態):</p>
+              <pre><code class="language-python">from functools import lru_cache
+
+def edit_distance(a, b):
+    @lru_cache(maxsize=None)
+    def go(i, j):
+        if i == 0:               # a 用完 → 把 b 剩下的全插入
+            return j
+        if j == 0:               # b 用完 → 把 a 剩下的全刪除
+            return i
+        if a[i - 1] == b[j - 1]:
+            return go(i - 1, j - 1)
+        return 1 + min(go(i - 1, j),      # 刪除
+                       go(i, j - 1),      # 插入
+                       go(i - 1, j - 1))  # 替換
+    return go(len(a), len(b))
+
+print(edit_distance("kitten", "sitting"))   # 3</code></pre>
+              <p>這就是「先寫對的暴力遞迴 → 加一行 <code>@lru_cache</code> → 立刻變 $O(mn)$ DP」的完美示範。
+              暴力遞迴的參數 <code>(i, j)</code> 就是表的兩個維度,你幾乎沒額外動腦就得到了 DP。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 32.8 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p><strong>分割等和子集</strong>:給一個正整數陣列,判斷能否把它分成<strong>兩個總和相等</strong>的子集。
+          例如 <code>[1, 5, 11, 5]</code> 可以(<code>{1,5,5}</code> 與 <code>{11}</code> 都是 11),<code>[1, 2, 3, 5]</code> 不行。
+          (提示:這其實是一個偽裝的子集和 / 0-1 背包問題。)</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>總和為奇數時直接不可能。否則令 <code>target = 總和 / 2</code>,問題化為「能否挑出一個子集,和恰為 <code>target</code>」——
+              這是<strong>布林版的 0/1 背包</strong>(物品就是數字,容量就是 <code>target</code>)。
+              用一維 <code>dp[s]</code> 表示「能否湊出和 <code>s</code>」,內層容量一樣要<strong>從大到小</strong>跑:</p>
+              <pre><code class="language-python">def can_partition(nums):
+    total = sum(nums)
+    if total % 2 != 0:
+        return False
+    target = total // 2
+    dp = [False] * (target + 1)
+    dp[0] = True                          # 和為 0 永遠湊得出(什麼都不選)
+    for x in nums:
+        for s in range(target, x - 1, -1):   # 由大到小,避免重複用同一個數
+            dp[s] = dp[s] or dp[s - x]
+    return dp[target]
+
+print(can_partition([1, 5, 11, 5]))   # True
+print(can_partition([1, 2, 3, 5]))    # False</code></pre>
+              <p>看出 0/1 背包的影子了嗎?「能不能裝滿容量 target」就是把背包的 <code>max(價值)</code> 換成 <code>or(可行性)</code>。
+              認出「這題其實是背包」,正是 DP 練到後期最有價值的能力。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>深掘:進階 DP 題型全推導</h2>
+      <p>
+        掌握了五步框架之後,真正讓 DP 能力脫胎換骨的,是對幾個<strong>高代表性題型</strong>的深度推導——
+        不只看結論,而是把「為什麼要這樣定狀態」的設計直覺也一起消化。
+        這一節涵蓋六個主題:LIS 的 $O(n \log n)$ 升速、背包三兄弟的轉移差異、
+        矩陣鏈乘法的區間 DP 範式、戳氣球的反向思維、樹上 DP、以及狀態壓縮 bitmask TSP。
+        每題都給出狀態定義、轉移式、複雜度與可執行的 Python 程式。
+      </p>
+
+      <h3>LIS 升速版:$O(n \log n)$ 二分搜尋解</h3>
+      <p>
+        前面的 $O(n^2)$ LIS 對 <code>n = 10^5</code> 已顯得太慢。這裡給出那個「呼之欲出卻不平凡」的
+        $O(n \log n)$ 解法——它維護一條叫做 <strong><code>tails</code></strong> 的陣列:
+      </p>
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">tails 的不變量</span>
+          <p><code>tails[i]</code> = 目前見過的、所有長度為 <code>i+1</code> 的遞增子序列中,<strong>結尾最小的那個值</strong>。
+          這個陣列保持嚴格遞增,因此可以用二分搜尋定位。</p>
+        </div>
+      </div>
+      <p>對每個新元素 <code>x</code>,用 <code>bisect_left</code> 在 <code>tails</code> 裡找到「第一個 ≥ x 的位置」<code>pos</code>:</p>
+      <ul>
+        <li>若 <code>pos == len(tails)</code>:x 比所有結尾都大,可以延長最長子序列,把 x 接到末端。</li>
+        <li>否則:用 x 替換 <code>tails[pos]</code>——讓「長度 pos+1 的遞增子序列」有更小的結尾,為將來留下更多彈性。</li>
+      </ul>
+      <p>最後 <code>len(tails)</code> 就是 LIS 長度。以 <code>[10, 9, 2, 5, 3, 7, 101, 18]</code> 為例,逐步追蹤:</p>
+
+      <div class="diagram">
+<svg viewBox="0 0 700 280" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="350" y="22" text-anchor="middle" font-size="14" font-weight="800" fill="#1f2328">LIS O(n log n):tails 陣列的演化過程</text>
+  <!-- column headers -->
+  <g font-size="12" font-weight="700" fill="#8a929b" text-anchor="middle">
+    <text x="80" y="48">步驟</text><text x="160" y="48">處理 x</text><text x="280" y="48">tails(更新前→後)</text><text x="530" y="48">操作說明</text>
+  </g>
+  <!-- rows -->
+  <g font-size="12" text-anchor="middle">
+    <!-- row 1 -->
+    <rect x="10" y="54" width="680" height="28" fill="#fafbfc" stroke="#e1e4e8"/>
+    <text x="80" y="72" fill="#1f2328">① x=10</text>
+    <text x="160" y="72" fill="#b4541f" font-weight="700">10</text>
+    <text x="310" y="72" fill="#1f2328">[] → [<tspan fill="#2f6f6a" font-weight="700">10</tspan>]</text>
+    <text x="530" y="72" fill="#4a5159" text-anchor="middle">pos=0=len,append</text>
+    <!-- row 2 -->
+    <rect x="10" y="82" width="680" height="28" fill="#fff" stroke="#e1e4e8"/>
+    <text x="80" y="100" fill="#1f2328">② x=9</text>
+    <text x="160" y="100" fill="#b4541f" font-weight="700">9</text>
+    <text x="310" y="100" fill="#1f2328">[10] → [<tspan fill="#2f6f6a" font-weight="700">9</tspan>]</text>
+    <text x="530" y="100" fill="#4a5159">pos=0,替換 tails[0]</text>
+    <!-- row 3 -->
+    <rect x="10" y="110" width="680" height="28" fill="#fafbfc" stroke="#e1e4e8"/>
+    <text x="80" y="128" fill="#1f2328">③ x=2</text>
+    <text x="160" y="128" fill="#b4541f" font-weight="700">2</text>
+    <text x="310" y="128" fill="#1f2328">[9] → [<tspan fill="#2f6f6a" font-weight="700">2</tspan>]</text>
+    <text x="530" y="128" fill="#4a5159">pos=0,替換 tails[0]</text>
+    <!-- row 4 -->
+    <rect x="10" y="138" width="680" height="28" fill="#fff" stroke="#e1e4e8"/>
+    <text x="80" y="156" fill="#1f2328">④ x=5</text>
+    <text x="160" y="156" fill="#b4541f" font-weight="700">5</text>
+    <text x="310" y="156" fill="#1f2328">[2] → [2, <tspan fill="#2f6f6a" font-weight="700">5</tspan>]</text>
+    <text x="530" y="156" fill="#4a5159">pos=1=len,append</text>
+    <!-- row 5 -->
+    <rect x="10" y="166" width="680" height="28" fill="#fafbfc" stroke="#e1e4e8"/>
+    <text x="80" y="184" fill="#1f2328">⑤ x=3</text>
+    <text x="160" y="184" fill="#b4541f" font-weight="700">3</text>
+    <text x="310" y="184" fill="#1f2328">[2,5] → [2, <tspan fill="#2f6f6a" font-weight="700">3</tspan>]</text>
+    <text x="530" y="184" fill="#4a5159">pos=1,替換 tails[1]</text>
+    <!-- row 6 -->
+    <rect x="10" y="194" width="680" height="28" fill="#fff" stroke="#e1e4e8"/>
+    <text x="80" y="212" fill="#1f2328">⑥ x=7</text>
+    <text x="160" y="212" fill="#b4541f" font-weight="700">7</text>
+    <text x="310" y="212" fill="#1f2328">[2,3] → [2,3, <tspan fill="#2f6f6a" font-weight="700">7</tspan>]</text>
+    <text x="530" y="212" fill="#4a5159">pos=2=len,append</text>
+    <!-- row 7 -->
+    <rect x="10" y="222" width="680" height="28" fill="#fafbfc" stroke="#e1e4e8"/>
+    <text x="80" y="240" fill="#1f2328">⑦ x=101</text>
+    <text x="160" y="240" fill="#b4541f" font-weight="700">101</text>
+    <text x="310" y="240" fill="#1f2328">[2,3,7] → [2,3,7, <tspan fill="#2f6f6a" font-weight="700">101</tspan>]</text>
+    <text x="530" y="240" fill="#4a5159">pos=3=len,append</text>
+    <!-- row 8 -->
+    <rect x="10" y="250" width="680" height="28" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+    <text x="80" y="268" fill="#1f2328">⑧ x=18</text>
+    <text x="160" y="268" fill="#b4541f" font-weight="700">18</text>
+    <text x="310" y="268" fill="#1f2328">[2,3,7,101] → [2,3,7, <tspan fill="#2f6f6a" font-weight="700">18</tspan>]</text>
+    <text x="530" y="268" fill="#4a5159">pos=3,替換 tails[3]</text>
+  </g>
+</svg>
+        <figcaption>圖 32-8:LIS O(n log n) 中 <code>tails</code> 陣列的演化。每步都是二分搜尋(O(log n)),共 n 步,總複雜度 $O(n \log n)$。
+        最終 <code>len(tails) = 4</code> 就是 LIS 長度——注意 <code>tails</code> 本身不一定是真正的 LIS(如 <code>[2,3,7,18]</code> 是合法 LIS,但 <code>[2,3,7,101]</code> 才是一個實際的 LIS),它只負責記錄「長度」。</figcaption>
+      </div>
+
+      <pre><code class="language-python">import bisect
+
+def lis_nlogn(a):
+    """O(n log n) LIS 長度。tails[i] = 長度 i+1 之遞增子序列的最小可能結尾值。"""
+    tails = []
+    for x in a:
+        pos = bisect.bisect_left(tails, x)  # 找第一個 &gt;= x 的位置
+        if pos == len(tails):
+            tails.append(x)                 # x 比所有結尾都大,延長
+        else:
+            tails[pos] = x                  # 讓長度 pos+1 的子序列有更小的結尾
+    return len(tails)
+
+print(lis_nlogn([10, 9, 2, 5, 3, 7, 101, 18]))  # 4
+print(lis_nlogn([0, 1, 0, 3, 2, 3]))              # 4</code></pre>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">tails 不是真正的 LIS</span>
+          <p><code>tails</code> 只保證長度正確。若要還原真正的 LIS 序列,需要額外記錄每個元素被放置的位置並倒推——
+          這比只求長度複雜不少,面試時通常先問長度即可。若需要還原,可結合 patience sorting 的前驅陣列實作。</p>
+        </div>
+      </div>
+
+      <h3>背包三兄弟:0/1 × 完全 × 多重</h3>
+      <p>
+        前面已深入講過 0/1 背包。這裡補上它的兩個兄弟——
+        <strong>完全背包(unbounded knapsack)</strong>:每件物品可以拿<em>無限次</em>;
+        <strong>多重背包(bounded knapsack)</strong>:每件物品最多拿 $c_i$ 次。
+        三者的狀態定義完全相同,差異只在<strong>迴圈方向</strong>和<strong>如何枚舉「拿幾次」</strong>。
+      </p>
+
+      <h4>完全背包:一維陣列,容量由小到大</h4>
+      <p>
+        完全背包的轉移式:$$dp[w] = \max_{c \le w,\ c \in C}\!\big(dp[w-c] + v_c\big)$$
+        與 0/1 背包的唯一差別是:一維滾動陣列的容量迴圈改為<strong>由小到大</strong>。
+        這樣當你計算 <code>dp[w]</code> 時,<code>dp[w - c]</code> 已在「本輪」被更新過——
+        代表可以<em>再次</em>拿同一件物品,正是無限版的語義。
+      </p>
+      <pre><code class="language-python">def unbounded_knapsack(weights, values, W):
+    """完全背包:每件物品可重複拿。容量迴圈由小到大。"""
+    dp = [0] * (W + 1)
+    for wi, vi in zip(weights, values):
+        for w in range(wi, W + 1):          # 由小到大:允許重複拿
+            dp[w] = max(dp[w], dp[w - wi] + vi)
+    return dp[W]
+
+# 示例:coins=[1,5,10,25],W=36 → 最大化「拿幾枚硬幣的總面值」= 36
+ws = [1, 5, 10, 25]
+vs = [1, 5, 10, 25]
+print(unbounded_knapsack(ws, vs, 36))   # 36(當然:1×36 或 25+10+1 等)</code></pre>
+
+      <p>
+        注意:硬幣找零是完全背包的<strong>最小化版本</strong>(求最少枚數而非最大價值),只是把 <code>max</code> 換成 <code>min</code>、初始值設為 INF。前面章節的 <code>coin_change</code> 本質上就是完全背包。
+      </p>
+
+      <h4>多重背包:二進制分組轉為 0/1 背包</h4>
+      <p>
+        若第 <code>i</code> 件物品最多可拿 $c_i$ 次,暴力做法是在完全背包的基礎上每件最多枚舉 $c_i$ 次:
+        $O(W \sum c_i)$,當 $c_i$ 很大時太慢。
+        優化方案:<strong>二進制分組(binary grouping)</strong>——把 $c_i$ 件物品拆成若干「捆包」,
+        每捆的數量依序是 $1, 2, 4, \ldots, 2^k$,剩餘不足一倍的放成一捆。
+        這樣用 $O(\log c_i)$ 個 0/1 背包物品就能表達「拿 0 到 $c_i$ 件」的所有組合,
+        再套 0/1 背包解決。
+      </p>
+      <pre><code class="language-python">def bounded_knapsack(weights, values, counts, W):
+    """多重背包:每件物品有數量上限 counts[i]。二進制分組轉 0/1 背包。"""
+    dp = [0] * (W + 1)
+
+    for wi, vi, ci in zip(weights, values, counts):
+        # 把 ci 件拆成 log(ci) 個捆包
+        k = 1
+        remaining = ci
+        while remaining &gt; 0:
+            take = min(k, remaining)            # 本捆數量
+            bw, bv = take * wi, take * vi      # 本捆視為單一 0/1 物品
+            # 0/1 背包:由大到小
+            for w in range(W, bw - 1, -1):
+                dp[w] = max(dp[w], dp[w - bw] + bv)
+            remaining -= take
+            k *= 2                             # 下一捆數量翻倍
+
+    return dp[W]
+
+ws = [2, 3, 5]
+vs = [3, 4, 7]
+cs = [3, 2, 1]     # 物品 ①最多拿 3 件,②2 件,③1 件
+print(bounded_knapsack(ws, vs, cs, 10))   # 14  (拿 ① 兩件 + ② 兩件:3×2+4×2=14,重量 4+6=10)</code></pre>
+
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>背包類型</th><th>每件拿幾次</th><th>一維陣列迴圈方向</th><th>時間複雜度</th></tr></thead>
+        <tbody>
+          <tr><td><strong>0/1 背包</strong></td><td>0 或 1 次</td><td>容量<strong>由大到小</strong></td><td>$O(nW)$</td></tr>
+          <tr><td><strong>完全背包</strong></td><td>無限次</td><td>容量<strong>由小到大</strong></td><td>$O(nW)$</td></tr>
+          <tr><td><strong>多重背包</strong></td><td>最多 $c_i$ 次</td><td>二進制分組後由大到小</td><td>$O(W \sum \log c_i)$</td></tr>
+        </tbody>
+      </table>
+      </div>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">迴圈方向決定了背包種類</span>
+          <p>一維背包的容量迴圈方向只是一個符號的差異,背後卻是「允不允許重複拿同一件」的語義分水嶺:
+          由大到小 → 每件最多拿一次(0/1);由小到大 → 同一件可拿多次(完全)。
+          記住這個直覺,三種背包就只剩一個模板。</p>
+        </div>
+      </div>
+
+      <h3>矩陣鏈乘法——區間 DP 的標準範式</h3>
+      <p>
+        給你一串矩陣 $A_1, A_2, \ldots, A_n$,維度分別由陣列 <code>p[]</code> 描述:$A_i$ 的大小為 $p[i-1] \times p[i]$。
+        矩陣乘法滿足結合律,所以你可以自由決定加括號的順序。不同的加法順序,
+        純量乘法的次數可以差到指數倍。問:怎麼加括號,讓總乘法次數最少?
+      </p>
+      <p>
+        例如三矩陣 $A(10\times 30)$、$B(30 \times 5)$、$C(5 \times 60)$:
+        $(AB)C$ 需要 $10\cdot30\cdot5 + 10\cdot5\cdot60 = 1500+3000 = 4500$ 次;
+        $A(BC)$ 需要 $30\cdot5\cdot60 + 10\cdot30\cdot60 = 9000+18000 = 27000$ 次。
+        左邊快了 6 倍——加括號順序非同小可。
+      </p>
+      <p>
+        這是<strong>區間 DP</strong> 的標準題型:狀態是一個<strong>區間</strong> $[i, j]$,
+        轉移時枚舉「在哪裡切開這個區間」。
+      </p>
+      <ol>
+        <li><strong>狀態</strong>:<code>dp[i][j]</code> = 計算 $A_i \cdot A_{i+1} \cdots A_j$ 所需的最少純量乘法次數(0-indexed 矩陣)。</li>
+        <li><strong>轉移</strong>:枚舉切割點 $k \in [i, j)$——左半 $[i, k]$ 和右半 $[k+1, j]$ 分別遞推求解,再合併:
+        $$dp[i][j] = \min_{k=i}^{j-1}\!\big(dp[i][k] + dp[k+1][j] + p[i]\cdot p[k+1]\cdot p[j+1]\big)$$</li>
+        <li><strong>base case</strong>:<code>dp[i][i] = 0</code>(單一矩陣不需乘法)。</li>
+        <li><strong>計算順序</strong>:按<em>區間長度</em>從小到大填:先填長度 2,再填長度 3……這樣填 <code>dp[i][j]</code> 時,所有更短的子區間都已算好。</li>
+        <li><strong>複雜度</strong>:三層迴圈,$O(n^3)$ 時間,$O(n^2)$ 空間。</li>
+      </ol>
+
+      <div class="diagram">
+<svg viewBox="0 0 680 320" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="340" y="22" text-anchor="middle" font-size="14" font-weight="800" fill="#1f2328">矩陣鏈乘法:dp[i][j] 的填表順序(以 4 個矩陣為例)</text>
+  <!-- labels row: i=0..3, j=0..3 -->
+  <g font-size="12" font-weight="700" text-anchor="middle" fill="#2f6f6a">
+    <text x="200" y="60">j=0</text><text x="280" y="60">j=1</text><text x="360" y="60">j=2</text><text x="440" y="60">j=3</text>
+  </g>
+  <g font-size="12" font-weight="700" text-anchor="end" fill="#2f6f6a">
+    <text x="160" y="96">i=0</text><text x="160" y="146">i=1</text><text x="160" y="196">i=2</text><text x="160" y="246">i=3</text>
+  </g>
+  <!-- base case diagonal -->
+  <g font-size="12" text-anchor="middle">
+    <rect x="168" y="70" width="68" height="40" fill="#e3efed" stroke="#2f6f6a" stroke-width="1.5" rx="4"/>
+    <text x="202" y="94" fill="#1f2328" font-weight="700">0</text><text x="202" y="108" font-size="9" fill="#8a929b">base</text>
+    <rect x="248" y="120" width="68" height="40" fill="#e3efed" stroke="#2f6f6a" stroke-width="1.5" rx="4"/>
+    <text x="282" y="144" fill="#1f2328" font-weight="700">0</text><text x="282" y="158" font-size="9" fill="#8a929b">base</text>
+    <rect x="328" y="170" width="68" height="40" fill="#e3efed" stroke="#2f6f6a" stroke-width="1.5" rx="4"/>
+    <text x="362" y="194" fill="#1f2328" font-weight="700">0</text><text x="362" y="208" font-size="9" fill="#8a929b">base</text>
+    <rect x="408" y="220" width="68" height="40" fill="#e3efed" stroke="#2f6f6a" stroke-width="1.5" rx="4"/>
+    <text x="442" y="244" fill="#1f2328" font-weight="700">0</text><text x="442" y="258" font-size="9" fill="#8a929b">base</text>
+  </g>
+  <!-- len=2 -->
+  <g font-size="12" text-anchor="middle">
+    <rect x="248" y="70" width="68" height="40" fill="#f6e7dd" stroke="#b4541f" stroke-width="1.5" rx="4"/>
+    <text x="282" y="90" fill="#b4541f" font-weight="700">dp[0][1]</text><text x="282" y="105" font-size="9" fill="#8a929b">長度 2,先填</text>
+    <rect x="328" y="120" width="68" height="40" fill="#f6e7dd" stroke="#b4541f" stroke-width="1.5" rx="4"/>
+    <text x="362" y="140" fill="#b4541f" font-weight="700">dp[1][2]</text><text x="362" y="155" font-size="9" fill="#8a929b">長度 2</text>
+    <rect x="408" y="170" width="68" height="40" fill="#f6e7dd" stroke="#b4541f" stroke-width="1.5" rx="4"/>
+    <text x="442" y="190" fill="#b4541f" font-weight="700">dp[2][3]</text><text x="442" y="205" font-size="9" fill="#8a929b">長度 2</text>
+  </g>
+  <!-- len=3 -->
+  <g font-size="12" text-anchor="middle">
+    <rect x="328" y="70" width="68" height="40" fill="#ede7fb" stroke="#8b5cf6" stroke-width="1.5" rx="4"/>
+    <text x="362" y="90" fill="#8b5cf6" font-weight="700">dp[0][2]</text><text x="362" y="105" font-size="9" fill="#8a929b">長度 3</text>
+    <rect x="408" y="120" width="68" height="40" fill="#ede7fb" stroke="#8b5cf6" stroke-width="1.5" rx="4"/>
+    <text x="442" y="140" fill="#8b5cf6" font-weight="700">dp[1][3]</text><text x="442" y="155" font-size="9" fill="#8a929b">長度 3</text>
+  </g>
+  <!-- len=4 (answer) -->
+  <g font-size="12" text-anchor="middle">
+    <rect x="408" y="70" width="68" height="40" fill="#2f6f6a" stroke="#1f4f4a" stroke-width="2" rx="4"/>
+    <text x="442" y="90" fill="#fff" font-weight="700">dp[0][3]</text><text x="442" y="105" fill="#e3efed" font-size="9">答案,最後填</text>
+  </g>
+  <!-- fill order arrows -->
+  <g stroke="#8a929b" stroke-width="1.5" fill="none" marker-end="url(#mc)">
+    <line x1="316" y1="90" x2="326" y2="90"/>
+    <line x1="396" y1="90" x2="406" y2="90"/>
+    <line x1="396" y1="140" x2="406" y2="140"/>
+  </g>
+  <defs><marker id="mc" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#8a929b"/></marker></defs>
+  <text x="340" y="295" text-anchor="middle" font-size="11.5" fill="#4a5159">填表沿對角線從下往右上進行:長度 1(對角,base)→ 長度 2(磚紅)→ 長度 3(紫)→ 長度 4(綠,答案)</text>
+</svg>
+        <figcaption>圖 32-9:矩陣鏈乘法的「沿對角線填表」順序。區間 DP 的通用策略:按<strong>區間長度</strong>由短到長迭代,每次填完長度 $l$ 的所有格子,再填長度 $l+1$。</figcaption>
+      </div>
+
+      <pre><code class="language-python">def matrix_chain(p):
+    """矩陣鏈乘法。p[i-1]×p[i] 為第 i 個矩陣的維度(0-indexed)。O(n³)"""
+    n = len(p) - 1          # 矩陣個數
+    dp = [[0] * n for _ in range(n)]
+    for l in range(2, n + 1):            # 區間長度從 2 開始
+        for i in range(n - l + 1):      # 區間左端點
+            j = i + l - 1               # 區間右端點
+            dp[i][j] = float('inf')
+            for k in range(i, j):       # 枚舉切割點
+                cost = dp[i][k] + dp[k + 1][j] + p[i] * p[k + 1] * p[j + 1]
+                dp[i][j] = min(dp[i][j], cost)
+    return dp[0][n - 1]
+
+# CLRS 經典範例:A0(30×35), A1(35×15), A2(15×5), A3(5×10), A4(10×20), A5(20×25)
+p = [30, 35, 15, 5, 10, 20, 25]
+print(matrix_chain(p))   # 15125</code></pre>
+
+      <h3>戳氣球——「最後一個破的」的反向思維</h3>
+      <p>
+        <strong>題目</strong>:有 $n$ 個氣球,編號 $0$ 到 $n-1$,每個氣球有一個數值 <code>nums[i]</code>。
+        戳破第 $i$ 個氣球可得 $\text{nums}[i-1] \times \text{nums}[i] \times \text{nums}[i+1]$ 枚金幣
+        (邊界外的氣球視為 1)。問:按最優順序戳完所有氣球,最多能得幾枚金幣?
+      </p>
+      <p>
+        直觀想法——枚舉「第一個戳哪個」——會讓子問題邊界隨之改變,難以遞推。
+        戳氣球的精妙之處在於<strong>反過來思考</strong>:枚舉「在區間 $(i, j)$ 內,<em>最後一個</em>戳破的氣球是 $k$」。
+        因為 $k$ 最後才破,破它的瞬間 $(i, j)$ 之間只剩 $k$,兩側的鄰居恰好是 $i$ 和 $j$——
+        這樣邊界就固定了,子問題不再互相干擾。
+      </p>
+      <ol>
+        <li><strong>狀態</strong>:<code>dp[i][j]</code> = 戳完<strong>開放區間</strong> $(i, j)$ 內所有氣球能得的最大金幣數
+          (不含 $i$ 和 $j$ 本身;在兩端各加一個虛擬氣球 <code>nums = [1] + nums + [1]</code>)。</li>
+        <li><strong>轉移</strong>:枚舉 $k \in (i, j)$ 為最後一個被戳的:
+          $$dp[i][j] = \max_{k \in (i,j)}\!\big(dp[i][k] + dp[k][j] + \text{nums}[i]\cdot\text{nums}[k]\cdot\text{nums}[j]\big)$$</li>
+        <li><strong>base case</strong>:$j \le i+1$ 時區間內沒有氣球,<code>dp[i][j] = 0</code>。</li>
+        <li><strong>計算順序</strong>:同樣按區間長度由短到長,確保子區間先算好。</li>
+      </ol>
+      <pre><code class="language-python">def max_coins(nums):
+    """戳氣球。O(n³)"""
+    nums = [1] + nums + [1]   # 加虛擬邊界
+    n = len(nums)
+    dp = [[0] * n for _ in range(n)]
+    for length in range(2, n):          # 開放區間長度
+        for i in range(n - length):
+            j = i + length
+            for k in range(i + 1, j):  # k 是最後一個被戳的
+                dp[i][j] = max(dp[i][j],
+                               dp[i][k] + dp[k][j] + nums[i] * nums[k] * nums[j])
+    return dp[0][n - 1]
+
+print(max_coins([3, 1, 5, 8]))   # 167</code></pre>
+      <p>
+        這題的狀態設計是區間 DP 中最反直覺、也最值得品味的一個:
+        <em>「最後一個破的」比「第一個破的」更好用</em>——因為最後才破時兩側鄰居確定,子問題互不影響。
+        類似的反向思維在其他區間 DP 題也屢屢出現。
+      </p>
+
+      <h3>樹上 DP:樹的最大獨立集</h3>
+      <p>
+        DP 不限於陣列和字串——樹也是 DP 的舞台。
+        <strong>題目</strong>:給一棵帶權無向樹,每個節點有一個正整數權重。
+        找一個<strong>獨立集(independent set)</strong>——即任意兩個選中的節點之間都沒有邊——使得選中節點的權重總和最大。
+      </p>
+      <p>
+        狀態:對每個節點 $u$ 定義兩個值:
+        <code>dp[u][0]</code> = 不選 $u$ 時,以 $u$ 為根的子樹能得到的最大獨立集權重;
+        <code>dp[u][1]</code> = 選 $u$ 時的最大值。
+        轉移:若選了 $u$,所有子節點 $v$ 都不能選;若不選 $u$,子節點各自取最大:
+        $$dp[u][1] = w_u + \sum_{v \in \text{children}(u)} dp[v][0]$$
+        $$dp[u][0] = \sum_{v \in \text{children}(u)} \max\!\big(dp[v][0],\ dp[v][1]\big)$$
+        用 DFS 後序遍歷(先算子節點再算父節點),保證轉移順序正確。
+      </p>
+      <pre><code class="language-python">def tree_max_independent_set(n, adj, weights):
+    """樹上最大獨立集。adj:鄰接表(0-indexed),weights:各節點權重。"""
+    dp = [[0, 0] for _ in range(n)]   # dp[u][0/1]:不選/選 u
+
+    def dfs(u, parent):
+        dp[u][1] = weights[u]          # 選 u:先記自己的權重
+        dp[u][0] = 0
+        for v in adj[u]:
+            if v == parent:
+                continue
+            dfs(v, u)
+            dp[u][1] += dp[v][0]       # 選 u → 子節點只能不選
+            dp[u][0] += max(dp[v][0], dp[v][1])  # 不選 u → 子節點取最大
+
+    dfs(0, -1)
+    return max(dp[0])
+
+# 範例樹:節點 0(3) - 1(2) - 3(4),節點 0 - 2(5)
+#   0
+#  / \
+# 1   2
+# |
+# 3
+adj = [[] for _ in range(4)]
+for u, v in [(0,1),(0,2),(1,3)]:
+    adj[u].append(v); adj[v].append(u)
+weights = [3, 2, 5, 4]
+print(tree_max_independent_set(4, adj, weights))  # 9  (選節點 2 和 3:5+4=9)</code></pre>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">樹上 DP 的通用模式</span>
+          <p>樹上 DP 幾乎都是同一個框架:用 DFS 後序遍歷(先處理葉子,再往根走),
+          每個節點的 <code>dp</code> 值由其子節點的 <code>dp</code> 值合併而來。
+          「打家劫舍 III」(在樹上的版本)與本例骨架完全相同。
+          換個題目,只需換轉移式。</p>
+        </div>
+      </div>
+
+      <h3>狀態壓縮 DP:旅行商問題 $O(2^n \cdot n^2)$</h3>
+      <p>
+        <strong>旅行商問題(TSP)</strong>:給 $n$ 個城市和任意兩城市間的距離,找一條從城市 0 出發、
+        經過所有城市各一次、最後回到 0 的最短路徑。暴力窮舉所有排列要 $O(n!)$,
+        當 $n = 20$ 時已是 $2.4 \times 10^{18}$ 次,完全不可行。
+        DP 能把它壓到 $O(2^n \cdot n^2)$——仍是指數,但在 $n \le 20$ 的範圍下可接受。
+      </p>
+      <p>
+        關鍵想法:<strong>用一個 $n$ 位的二進制整數(bitmask)表示「已經拜訪過哪些城市」</strong>。
+        例如 $n=4$ 時 <code>mask = 0b1011 = 11</code> 代表「城市 0、1、3 已拜訪」。
+        這樣狀態空間從 $n!$ 的排列數壓縮到 $2^n \cdot n$ 個(mask × 當前所在城市)。
+      </p>
+      <ol>
+        <li><strong>狀態</strong>:<code>dp[mask][u]</code> = 從城市 0 出發,恰好拜訪了 <code>mask</code> 中標記的城市,
+          且<strong>目前停在城市 <code>u</code></strong> 時的最短距離。</li>
+        <li><strong>轉移</strong>:從城市 $u$ 出發,前往尚未拜訪的城市 $v$:
+          $$dp[\text{mask}\,|\,(1 \ll v)][v] = \min\!\big(dp[\text{mask}\,|\,(1 \ll v)][v],\ dp[\text{mask}][u] + \text{dist}[u][v]\big)$$</li>
+        <li><strong>base case</strong>:<code>dp[1][0] = 0</code>(只有城市 0 被訪問,停在城市 0,距離 0)。</li>
+        <li><strong>答案</strong>:全部拜訪完(<code>full = (1 &lt;&lt; n) - 1</code>)後,回到城市 0 的最短總距離:$\min_v (dp[\text{full}][v] + \text{dist}[v][0])$。</li>
+      </ol>
+
+      <div class="diagram">
+<svg viewBox="0 0 700 240" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="350" y="22" text-anchor="middle" font-size="14" font-weight="800" fill="#1f2328">Bitmask TSP:狀態轉移示意(4 個城市)</text>
+  <!-- state boxes -->
+  <g font-size="11" font-weight="700" text-anchor="middle">
+    <!-- start -->
+    <rect x="20" y="90" width="100" height="50" rx="8" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+    <text x="70" y="110" fill="#1f2328">mask=0001</text>
+    <text x="70" y="127" fill="#2f6f6a">在城市 0</text>
+    <text x="70" y="144" font-size="9.5" fill="#8a929b">dp=0</text>
+
+    <rect x="200" y="50" width="110" height="50" rx="8" fill="#f6e7dd" stroke="#b4541f" stroke-width="1.5"/>
+    <text x="255" y="70" fill="#1f2328">mask=0011</text>
+    <text x="255" y="87" fill="#b4541f">在城市 1</text>
+    <text x="255" y="104" font-size="9.5" fill="#8a929b">dp=dist[0][1]</text>
+
+    <rect x="200" y="120" width="110" height="50" rx="8" fill="#f6e7dd" stroke="#b4541f" stroke-width="1.5"/>
+    <text x="255" y="140" fill="#1f2328">mask=0101</text>
+    <text x="255" y="157" fill="#b4541f">在城市 2</text>
+    <text x="255" y="174" font-size="9.5" fill="#8a929b">dp=dist[0][2]</text>
+
+    <rect x="420" y="80" width="110" height="50" rx="8" fill="#ede7fb" stroke="#8b5cf6" stroke-width="1.5"/>
+    <text x="475" y="100" fill="#1f2328">mask=1011</text>
+    <text x="475" y="117" fill="#8b5cf6">在城市 3</text>
+    <text x="475" y="134" font-size="9.5" fill="#8a929b">dp=min(...)</text>
+
+    <!-- full -->
+    <rect x="570" y="90" width="110" height="50" rx="8" fill="#2f6f6a" stroke="#1f4f4a" stroke-width="2"/>
+    <text x="625" y="110" fill="#fff">mask=1111</text>
+    <text x="625" y="127" fill="#e3efed">全部拜訪</text>
+    <text x="625" y="144" font-size="9.5" fill="#aed6d2">+dist[v][0]</text>
+  </g>
+  <!-- arrows -->
+  <g stroke="#b4541f" stroke-width="1.8" fill="none" marker-end="url(#ta)">
+    <line x1="120" y1="105" x2="197" y2="80"/>
+    <line x1="120" y1="115" x2="197" y2="148"/>
+  </g>
+  <g stroke="#8b5cf6" stroke-width="1.8" fill="none" marker-end="url(#ta)">
+    <line x1="308" y1="75" x2="418" y2="100"/>
+    <line x1="308" y1="145" x2="418" y2="108"/>
+  </g>
+  <g stroke="#2f6f6a" stroke-width="1.8" fill="none" marker-end="url(#ta)">
+    <line x1="530" y1="105" x2="568" y2="110"/>
+  </g>
+  <defs><marker id="ta" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#8a929b"/></marker></defs>
+  <text x="350" y="210" text-anchor="middle" font-size="11.5" fill="#4a5159">每條邊代表「從當前城市前往一個尚未拜訪的城市」;state = (bitmask, 當前城市)</text>
+  <text x="350" y="228" text-anchor="middle" font-size="11.5" fill="#4a5159">共 $2^n \times n$ 個狀態,每個狀態轉移 $O(n)$ 次 → 總複雜度 $O(2^n \cdot n^2)$</text>
+</svg>
+        <figcaption>圖 32-10:Bitmask TSP 的狀態空間。每個節點是一個 (mask, 城市) 對,邊代表一次轉移。全部 $2^n$ 種 mask、$n$ 個城市,共 $O(2^n n)$ 個狀態,比 $n!$ 小得多。</figcaption>
+      </div>
+
+      <pre><code class="language-python">def tsp(dist):
+    """Bitmask TSP。dist[i][j]:城市 i 到 j 的距離。O(2ⁿ · n²)"""
+    n = len(dist)
+    INF = float('inf')
+    # dp[mask][u]:已拜訪 mask 中的城市、目前在城市 u 的最短距離
+    dp = [[INF] * n for _ in range(1 &lt;&lt; n)]
+    dp[1][0] = 0                             # 出發:只訪問了城市 0,停在城市 0
+
+    for mask in range(1, 1 &lt;&lt; n):
+        for u in range(n):
+            if dp[mask][u] == INF:
+                continue
+            if not (mask &gt;&gt; u &amp; 1):          # u 必須在 mask 中
+                continue
+            for v in range(n):
+                if mask &gt;&gt; v &amp; 1:            # v 已拜訪過,跳過
+                    continue
+                new_mask = mask | (1 &lt;&lt; v)
+                new_cost = dp[mask][u] + dist[u][v]
+                if new_cost &lt; dp[new_mask][v]:
+                    dp[new_mask][v] = new_cost
+
+    full = (1 &lt;&lt; n) - 1
+    return min(dp[full][v] + dist[v][0] for v in range(n))
+
+dist = [
+    [0, 10, 15, 20],
+    [10,  0, 35, 25],
+    [15, 35,  0, 30],
+    [20, 25, 30,  0],
+]
+print(tsp(dist))   # 80  (路線 0→1→3→2→0:10+25+30+15=80)</code></pre>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">Bitmask DP 的適用場景</span>
+          <p>「需要追蹤哪些元素已被選取/拜訪」的問題,且集合大小 $n \le 20$,幾乎都可以用 bitmask 壓縮狀態。
+          除了 TSP,常見題型還有:最少合唱團分組、狀態機 NFA 模擬、圖的最小著色下界……
+          一旦你習慣用「把子集的狀態壓成一個整數」這個思維,一整類看似組合爆炸的問題就變得可解。</p>
+        </div>
+      </div>
+
+      <h3>進階優化概覽:滾動陣列、單調佇列、斜率優化</h3>
+      <p>
+        DP 的優化通常分兩個層次:<strong>空間優化</strong>與<strong>時間優化</strong>。
+      </p>
+      <p>
+        <strong>滾動陣列(rolling array)</strong>:當 $dp[i][\cdots]$ 只依賴 $dp[i-1][\cdots]$ 時,
+        可以用兩條一維陣列交替(或直接就地更新),把二維 $O(nW)$ 空間壓成 $O(W)$。
+        0/1 背包的一維版本就是這個原理。更一般地,任何「只依賴最近 $k$ 層」的 DP 都適用。
+      </p>
+      <p>
+        <strong>單調佇列優化(monotonic queue)</strong>:有些 DP 的轉移形如
+        $$dp[i] = \min_{j \in [i-k,\ i-1]} dp[j] + f(i)$$
+        暴力掃所有 $j$ 是 $O(n^2)$,但可以用一個單調佇列維護「窗口內的最小 $dp[j]$」,
+        讓每個元素最多進出佇列一次,總複雜度降到 $O(n)$。
+        滑動視窗最大值問題(見第 28 章二分搜尋一節)就是這個技術的乾淨版本。
+      </p>
+      <p>
+        <strong>斜率優化(convex hull trick / CHT)</strong>:當轉移式可以重整成
+        $dp[i] = \min_j (dp[j] \cdot a_i + b_j)$——即對 $i$ 和 $j$ 的「線性組合」取最小——
+        可以把各個 $j$ 視為一條直線 $y = b_j + a_i \cdot x$,把問題化為「在一組直線中,
+        查詢斜率 $a_i$ 處的最小 $y$ 值」。利用凸包性質,每次查詢可以 $O(1)$ 或 $O(\log n)$ 完成,
+        把原本 $O(n^2)$ 的轉移降到 $O(n)$ 或 $O(n \log n)$。
+        常見於費用流、USACO 競賽題和各種「批次最優化」問題。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">記憶化 vs 遞推的取捨</span>
+          <p>對於矩陣鏈、戳氣球這類區間 DP,遞推(按長度填表)比記憶化更直覺,
+          因為「填表順序」就是長度遞增。對於樹上 DP,DFS 天然就是後序遍歷,記憶化 + <code>@lru_cache</code> 往往更簡潔。
+          兩種做法的複雜度相同,選哪個取決於哪個更容易讓你想清楚依賴順序。</p>
+        </div>
+      </div>
+
+      <h2>動手實驗室:從零推導一道綜合 DP 題</h2>
+      <p>
+        理論看完了,現在來一道完整的綜合題——從題目敘述一路推導到 Python 程式碼、預期輸出、
+        並附上路徑還原,讓你親眼看見「五步框架如何一步步把一個問題變成 DP」。
+      </p>
+
+      <h3>主題:網格最短路徑 (Minimum Path Sum)</h3>
+      <p>
+        <strong>題目</strong>:給一個 $m \times n$ 的非負整數網格 <code>grid</code>。
+        你從左上角 <code>(0, 0)</code> 出發,每一步只能<strong>往右</strong>或<strong>往下</strong>走,
+        直到抵達右下角 <code>(m-1, n-1)</code>。沿途所有格子的數字之和叫做「路徑和」。
+        求最小路徑和,並還原出實際的最優路徑。
+      </p>
+      <p>以下面這個 $3 \times 3$ 的網格為例,先一步步用五步框架推導:</p>
+      <div class="table-wrap">
+      <table>
+        <tbody>
+          <tr><td><strong>1</strong></td><td>3</td><td>1</td></tr>
+          <tr><td>1</td><td>5</td><td>1</td></tr>
+          <tr><td>4</td><td>2</td><td>1</td></tr>
+        </tbody>
+      </table>
+      </div>
+
+      <p><strong>① 定義狀態</strong><br>
+      「我每一步往右或往下,抵達格子 $(i, j)$ 時的最小路徑和」——
+      這正是一個可以遞推的子問題!令 $dp[i][j]$ = 從 $(0, 0)$ 到 $(i, j)$ 的最小路徑和。</p>
+
+      <p><strong>② 寫轉移方程</strong><br>
+      到達 $(i, j)$ 的「最後一步」只有兩種來源:從上方 $(i-1, j)$ 往下、或從左方 $(i, j-1)$ 往右。取較小的那條:
+      $$dp[i][j] = \text{grid}[i][j] + \min\!\big(dp[i-1][j],\ dp[i][j-1]\big)$$</p>
+
+      <p><strong>③ 確定 base case</strong><br>
+      第一行只能從左走來:$dp[0][j] = dp[0][j-1] + \text{grid}[0][j]$。<br>
+      第一列只能從上走來:$dp[i][0] = dp[i-1][0] + \text{grid}[i][0]$。</p>
+
+      <p><strong>④ 計算順序</strong><br>
+      $i$ 和 $j$ 都從小到大;每格依賴它上方和左方的格子,這兩格都比它早算,沒有問題。</p>
+
+      <p><strong>⑤ 還原路徑</strong><br>
+      從右下角 $(m-1, n-1)$ 倒推:若 $dp[i][j]$ 是從上方來的($dp[i-1][j] \le dp[i][j-1]$),就往上走;否則往左走。</p>
+
+      <pre><code class="language-python">def min_path_sum(grid):
+    m, n = len(grid), len(grid[0])
+    dp = [[0] * n for _ in range(m)]
+
+    # Base case:第一格
+    dp[0][0] = grid[0][0]
+    # Base case:第一行
+    for j in range(1, n):
+        dp[0][j] = dp[0][j - 1] + grid[0][j]
+    # Base case:第一列
+    for i in range(1, m):
+        dp[i][0] = dp[i - 1][0] + grid[i][0]
+
+    # 填表
+    for i in range(1, m):
+        for j in range(1, n):
+            dp[i][j] = grid[i][j] + min(dp[i - 1][j], dp[i][j - 1])
+
+    # 還原路徑(從右下角倒推)
+    path = []
+    i, j = m - 1, n - 1
+    while i &gt; 0 or j &gt; 0:
+        path.append((i, j))
+        if i == 0:
+            j -= 1                              # 只能往左
+        elif j == 0:
+            i -= 1                              # 只能往上
+        elif dp[i - 1][j] &lt;= dp[i][j - 1]:
+            i -= 1                              # 從上方來
+        else:
+            j -= 1                              # 從左方來
+    path.append((0, 0))
+    path.reverse()
+
+    return dp[m - 1][n - 1], path
+
+grid = [
+    [1, 3, 1],
+    [1, 5, 1],
+    [4, 2, 1],
+]
+min_sum, path = min_path_sum(grid)
+print("最小路徑和:", min_sum)     # 7
+print("最優路徑:", path)          # [(0,0),(0,1),(0,2),(1,2),(2,2)]</code></pre>
+
+      <p>
+        最優路徑是 $(0,0) \to (0,1) \to (0,2) \to (1,2) \to (2,2)$,對應格子值 $1+3+1+1+1=7$。
+        填好的 dp 表長這樣:
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>　</th><th>j=0</th><th>j=1</th><th>j=2</th></tr></thead>
+        <tbody>
+          <tr><th>i=0</th><td>1</td><td>4</td><td>5</td></tr>
+          <tr><th>i=1</th><td>2</td><td>7</td><td>6</td></tr>
+          <tr><th>i=2</th><td>6</td><td>8</td><td><strong>7</strong></td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>
+        右下角的 <strong>7</strong> 就是答案。這道題麻雀雖小五臟俱全——
+        二維狀態、base case 的邊界處理、路徑還原——把它推導一遍,你已經把五步框架走得滾瓜爛熟了。
+      </p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 Lab-1 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p><strong>最長迴文子序列(Longest Palindromic Subsequence)</strong>:給一個字串 <code>s</code>,
+          找出其中最長的迴文子序列(可以跳著選,但不改順序)的長度。
+          例如 <code>s = "bbbab"</code>,最長迴文子序列為 <code>"bbbb"</code>,長度 4。<br>
+          提示:令 <code>rev = s[::-1]</code>,這道題等於求 <code>s</code> 和 <code>rev</code> 的 LCS 長度。
+          試著用本章的 LCS 框架解它;再嘗試直接定義區間 DP 狀態 <code>dp[i][j]</code> = <code>s[i..j]</code> 的最長迴文子序列,寫出轉移式。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>方法一:轉為 LCS</strong></p>
+              <pre><code class="language-python">def longest_palindrome_subseq(s):
+    rev = s[::-1]
+    m = len(s)
+    dp = [[0] * (m + 1) for _ in range(m + 1)]
+    for i in range(1, m + 1):
+        for j in range(1, m + 1):
+            if s[i - 1] == rev[j - 1]:
+                dp[i][j] = dp[i - 1][j - 1] + 1
+            else:
+                dp[i][j] = max(dp[i - 1][j], dp[i][j - 1])
+    return dp[m][m]
+
+print(longest_palindrome_subseq("bbbab"))   # 4
+print(longest_palindrome_subseq("cbbd"))    # 2</code></pre>
+              <p><strong>方法二:直接區間 DP</strong><br>
+              狀態:<code>dp[i][j]</code> = <code>s[i..j]</code> 的最長迴文子序列長度。<br>
+              轉移:若 <code>s[i] == s[j]</code>,兩端都可納入:$dp[i][j] = dp[i+1][j-1] + 2$;
+              否則捨棄一端:$dp[i][j] = \max(dp[i+1][j], dp[i][j-1])$。<br>
+              base case:<code>dp[i][i] = 1</code>。</p>
+              <pre><code class="language-python">def lps_interval(s):
+    n = len(s)
+    dp = [[0] * n for _ in range(n)]
+    for i in range(n):
+        dp[i][i] = 1                       # 單字元,迴文長度 1
+    for l in range(2, n + 1):
+        for i in range(n - l + 1):
+            j = i + l - 1
+            if s[i] == s[j]:
+                dp[i][j] = (dp[i + 1][j - 1] if l &gt; 2 else 0) + 2
+            else:
+                dp[i][j] = max(dp[i + 1][j], dp[i][j - 1])
+    return dp[0][n - 1]
+
+print(lps_interval("bbbab"))   # 4</code></pre>
+              <p>兩種做法複雜度均為 $O(n^2)$,方法一「借用 LCS 框架」展現了「認出問題本質」的價值。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 Lab-2 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p><strong>回文最少切割(Palindrome Partitioning II)</strong>:給字串 <code>s</code>,
+          把它切成若干段,使得每段都是迴文串。問最少需要切幾刀?
+          例如 <code>s = "aab"</code>:切成 <code>"a" | "a" | "b"</code> 需要 2 刀,
+          但切成 <code>"aa" | "b"</code> 只需 <strong>1</strong> 刀——因為 <code>"aa"</code> 是迴文。<br>
+          提示:需要兩個 DP——先用 $O(n^2)$ 預處理 <code>is_pal[i][j]</code>(是否為迴文),
+          再用一維 DP <code>cut[i]</code> = 前 <code>i</code> 個字元的最少切割數。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>兩層 DP:第一層預處理迴文判斷,第二層求最少切割。</p>
+              <pre><code class="language-python">def min_cut(s):
+    n = len(s)
+    # 預處理 is_pal[i][j]:s[i..j] 是否為迴文
+    is_pal = [[False] * n for _ in range(n)]
+    for i in range(n):
+        is_pal[i][i] = True
+    for l in range(2, n + 1):
+        for i in range(n - l + 1):
+            j = i + l - 1
+            if s[i] == s[j]:
+                is_pal[i][j] = (l == 2) or is_pal[i + 1][j - 1]
+
+    # cut[i] = s[0..i-1] 的最少切割數
+    cut = list(range(n))          # 最差:每個字元單獨一段,i-1 刀
+    for i in range(1, n):
+        if is_pal[0][i]:          # 整段本身就是迴文,0 刀
+            cut[i] = 0
+        else:
+            for j in range(1, i + 1):
+                if is_pal[j][i]:  # s[j..i] 是迴文,在 j 前切一刀
+                    cut[i] = min(cut[i], cut[j - 1] + 1)
+    return cut[n - 1]
+
+print(min_cut("aab"))        # 1
+print(min_cut("abcbc"))      # 2  (最佳切法 "a" | "bcb" | "c",兩刀;
+                              #     "bcb" 是迴文,但無法只切一刀讓兩段都是迴文)
+print(min_cut("aaaa"))       # 0  (整串本身是迴文)</code></pre>
+              <p>雙層 DP 的搭配在這道題裡非常典型:先預處理一個「輔助性質」的 DP 表,再用它驅動主 DP。
+              類似結構在「最優區間分組」系列題目裡頻繁出現。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 Lab-3 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p><strong>含冷凍期的股票交易(Best Time to Buy and Sell Stock with Cooldown)</strong>:
+          給一個每日股價陣列 <code>prices</code>。你每次只能持有一股;賣出後必須休息一天(冷凍期)才能再買。
+          求最大利潤。例如 <code>prices = [1, 2, 3, 0, 2]</code>,最大利潤為 3(買1賣3,冷凍,買0賣2)。<br>
+          提示:定義三個狀態:<code>hold</code>(持有股票)、<code>sold</code>(剛賣掉,進入冷凍期)、<code>rest</code>(冷凍期結束,可以買)。
+          寫出三者的轉移方程。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>這是「狀態機 DP」的典型範例——定義多個語義明確的狀態,再寫狀態之間的轉移。</p>
+              <p>轉移方程:
+              $$\text{hold}[i] = \max(\text{hold}[i-1],\ \text{rest}[i-1] - \text{prices}[i])$$
+              $$\text{sold}[i] = \text{hold}[i-1] + \text{prices}[i]$$
+              $$\text{rest}[i] = \max(\text{rest}[i-1],\ \text{sold}[i-1])$$
+              答案為 $\max(\text{sold}[n-1],\ \text{rest}[n-1])$。</p>
+              <pre><code class="language-python">def max_profit_cooldown(prices):
+    if not prices:
+        return 0
+    # 初始狀態:第 0 天
+    hold = -prices[0]    # 買入第 0 天
+    sold = 0             # 第 0 天賣出(不合理,設 0)
+    rest = 0             # 第 0 天休息
+
+    for p in prices[1:]:
+        hold, sold, rest = (
+            max(hold, rest - p),   # 繼續持有 or 今天買(需 rest 狀態)
+            hold + p,              # 今天賣出
+            max(rest, sold),       # 繼續休息 or 冷凍期結束
+        )
+    return max(sold, rest)
+
+print(max_profit_cooldown([1, 2, 3, 0, 2]))   # 3
+print(max_profit_cooldown([1]))                # 0</code></pre>
+              <p>注意同一個 <code>for</code> 迴圈裡同時更新三個變數用了 tuple unpacking,確保它們都用的是「上一天」的值。
+              這種「狀態機 DP」在各種帶限制條件的序列決策題裡非常有用。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>把這一章串起來</h2>
+      <p>
+        我們從第 3 章那個算到天荒地老的費氏數列出發,一路把它治好,並沿途把動態規劃的全貌攤了開來。回顧幾個關鍵路標:
+      </p>
+      <ul>
+        <li>樸素遞迴費氏之所以 $O(2^n)$,病根是<strong>重複計算重疊的子問題</strong>。DP 的處方就一句話:<strong>算過的記下來,別做第二遍。</strong></li>
+        <li><strong>記憶化(top-down)</strong>:幾乎不改原遞迴,加一本快取(dict 或 <code>@lru_cache</code>),指數塌縮成線性。</li>
+        <li><strong>表格法(bottom-up)</strong>:從最小子問題由小到大填表,沒有堆疊風險、最容易做<strong>空間優化</strong>(滾動陣列)。</li>
+        <li>DP 成立需要兩個前提:<strong>最佳子結構</strong>(遞推式才正確)與<strong>重疊子問題</strong>(記憶化才划算)。它和<strong>分治</strong>(子問題不重疊)、<strong>貪婪</strong>(不回頭)各有分工。</li>
+        <li><strong>五步框架</strong>:定義狀態 → 寫轉移方程 → 確定 base case → 決定計算順序 → 必要時回推解。每題都這樣走一遍。</li>
+        <li>經典題演練:爬樓梯(費氏換衣服)、硬幣找零(貪婪翻車)、0/1 背包(分治/分數背包對照)、LCS(diff 的心臟)、LIS、編輯距離(拼字檢查/DNA)。</li>
+        <li>DP 不限於陣列:<strong>Bellman-Ford 對邊數做 DP、Floyd-Warshall 對中繼點做 DP</strong>——圖上的最短路其實也在填表。</li>
+        <li>通用流程:<strong>先寫對的暴力遞迴 → 加記憶化 → 必要時改表格 → 優化空間。</strong>暴力遞迴的參數就是狀態,它的本體就是轉移——DP 因此人人可學。</li>
+      </ul>
+      <p>
+        如果這一章你只帶走一句話,讓它是這句:<strong>不要害怕 DP,先去寫一支會動的暴力遞迴,再叫它別重複做功。</strong>
+        你會發現,那個曾經像魔法的「動態規劃」,不過是「會記筆記、肯回頭比較」的窮舉而已。
+        下一章,我們要走向演算法世界的邊界——有些問題,連 DP 這樣聰明的窮舉也救不了,
+        它們是傳說中的「NP 完備」難題。系好安全帶。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">📚</div>
+        <div class="body">
+          <span class="c-title">想更深入?延伸資源</span>
+          <p>本章對應 OSSU 的 <a href="https://www.coursera.org/specializations/algorithms">Algorithms Specialization(Stanford,Tim Roughgarden)</a> 中
+          <em>Part 2</em> 關於貪婪與動態規劃的單元。Roughgarden 把這一系列整理成一套極其清晰的免費書與影片
+          <a href="https://www.algorithmsilluminated.org/"><em>Algorithms Illuminated</em></a>(網站上有全部影片連結與書籍資訊),
+          其中 <em>Part 3: Greedy Algorithms and Dynamic Programming</em> 對本章每一題(背包、序列比對、最佳二元搜尋樹……)都有更完整的證明與推導,
+          是把 DP 從「會用」練到「懂為什麼」的絕佳下一步。經典教材 <em>CLRS</em>(<em>Introduction to Algorithms</em>)第 14、15 章
+          也是動態規劃與貪婪的權威參考。</p>
+        </div>
+      </div>
+
+          <div class="callout tip">
+        <div class="ico">🧭</div>
+        <div class="body">
+          <span class="c-title">延伸：專修軌道</span>
+          <p>想練 DP 的競賽經典題型(背包、LIS、區間 DP、狀態壓縮)?見<a href="62-competitive-paradigms.html">第 62 章《競賽範式》</a>與<a href="64-apcs-toi.html">第 64 章 APCS/TOI 題庫</a>。</p>
+        </div>
+      </div>
+

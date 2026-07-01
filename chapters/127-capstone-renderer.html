@@ -1,0 +1,1376 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>實戰:物理渲染器 · CS 自學聖經</title>
+<meta name="description" content="里程碑式 Capstone：從 vec3 與 PPM 輸出出發，逐步完成光線-球求交、反走樣、Lambertian/金屬/電介質材質、蒙地卡羅路徑追蹤、BVH 加速結構，最終輸出照片級全域光照影像。">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;700&family=Noto+Sans+TC:wght@400;700&family=Lora:ital,wght@0,400;0,600;0,700;1,400&family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <main class="main">
+    <article class="content">
+      <div class="eyebrow">第二七部 · 動手實戰專案</div>
+      <h1>實戰:物理渲染器</h1>
+      <p class="subtitle">一條光線、一顆球、一張 PPM 圖——從這三樣東西出發，你將親手打造出能產生照片級全域光照的離線路徑追蹤器。</p>
+      <div class="byline">
+        <span class="tag">第 121 章</span>
+        <span>閱讀時間 ≈ 150 分鐘</span>
+        <span>難度:★★★★★</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章，你會能做到</div>
+        <ul>
+          <li>用 Python（或 C++）從零實作一個完整的<strong>離線路徑追蹤器</strong>，輸出真實感影像</li>
+          <li>正確推導並實作<strong>光線-球求交</strong>二次方程式，處理法線與最近交點</li>
+          <li>實作 <strong>Lambertian 漫反射、金屬鏡面反射、電介質折射</strong>（含 Snell 定律與 Fresnel-Schlick 近似）</li>
+          <li>用<strong>蒙地卡羅積分</strong>估計渲染方程式，理解 $1/\sqrt{N}$ 收斂率</li>
+          <li>建構 <strong>BVH 包圍盒階層</strong>，把求交複雜度從 $O(n)$ 降到 $O(\log n)$</li>
+          <li>串起 §39 計算機圖學、§54 線性代數、§57 機率論、§50 計算幾何、§110 PBR 的理論</li>
+        </ul>
+      </div>
+
+      <!-- ══════════════════════════════════════════════════════════════ -->
+      <h2>從一條光線到一張照片：渲染器的全貌</h2>
+      <!-- ══════════════════════════════════════════════════════════════ -->
+
+      <p>
+        你有沒有想過，為什麼《玩具總動員》裡胡迪帽子上的陰影那麼柔和，而 1995 年的遊戲場景
+        陰影卻是一刀切的硬邊？答案不是算力，而是<strong>演算法</strong>。早期遊戲用「固定光源＋Phong 模型」，
+        跳過了光真正的行為；電影則用<strong>路徑追蹤器(path tracer)</strong>——讓光子一條一條地在場景裡彈跳，
+        最後才累積到感光元件上。
+      </p>
+      <p>
+        在<a href="116-pbr-path-tracing.html">第 110 章</a>你學到了渲染方程式與 BRDF 的物理原理。
+        本章的任務只有一個：<strong>把那些原理變成會出圖的程式碼</strong>。
+        我們會用七個里程碑，從最簡單的漸層 PPM 圖，一路堆到帶有全域光照、景深、BVH 加速的完整渲染器。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 800 200" xmlns="http://www.w3.org/2000/svg"
+     font-family="Inter,'Noto Sans TC',sans-serif" font-size="12">
+  <defs>
+    <marker id="arr" markerWidth="10" markerHeight="8" refX="8" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 Z" fill="#8a929b"/>
+    </marker>
+  </defs>
+  <!-- 相機 -->
+  <rect x="10" y="70" width="100" height="60" rx="8" fill="#2f6f6a"/>
+  <text x="60" y="96" fill="#fff" font-weight="700" text-anchor="middle">相機</text>
+  <text x="60" y="112" fill="#cfe6e2" font-size="10" text-anchor="middle">Camera</text>
+  <text x="60" y="126" fill="#cfe6e2" font-size="10" text-anchor="middle">生成光線</text>
+  <!-- 光線 -->
+  <line x1="110" y1="100" x2="148" y2="100" stroke="#8a929b" stroke-width="2" marker-end="url(#arr)"/>
+  <!-- 場景求交 -->
+  <rect x="150" y="60" width="120" height="80" rx="8" fill="#b4541f"/>
+  <text x="210" y="96" fill="#fff" font-weight="700" text-anchor="middle">場景求交</text>
+  <text x="210" y="112" fill="#f6e7dd" font-size="10" text-anchor="middle">Intersection</text>
+  <text x="210" y="126" fill="#f6e7dd" font-size="10" text-anchor="middle">BVH / O(log n)</text>
+  <!-- 箭頭 -->
+  <line x1="270" y1="100" x2="308" y2="100" stroke="#8a929b" stroke-width="2" marker-end="url(#arr)"/>
+  <!-- 材質著色 -->
+  <rect x="310" y="60" width="120" height="80" rx="8" fill="#8b5cf6"/>
+  <text x="370" y="96" fill="#fff" font-weight="700" text-anchor="middle">材質著色</text>
+  <text x="370" y="112" fill="#ece5ff" font-size="10" text-anchor="middle">BRDF · Scatter</text>
+  <text x="370" y="126" fill="#ece5ff" font-size="10" text-anchor="middle">遞迴追光</text>
+  <!-- 箭頭 -->
+  <line x1="430" y1="100" x2="468" y2="100" stroke="#8a929b" stroke-width="2" marker-end="url(#arr)"/>
+  <!-- 蒙地卡羅採樣 -->
+  <rect x="470" y="60" width="130" height="80" rx="8" fill="#2f6f6a"/>
+  <text x="535" y="92" fill="#fff" font-weight="700" text-anchor="middle">蒙地卡羅</text>
+  <text x="535" y="108" fill="#cfe6e2" font-size="10" text-anchor="middle">Monte Carlo</text>
+  <text x="535" y="124" fill="#cfe6e2" font-size="10" text-anchor="middle">N spp · 1/√N</text>
+  <!-- 箭頭 -->
+  <line x1="600" y1="100" x2="638" y2="100" stroke="#8a929b" stroke-width="2" marker-end="url(#arr)"/>
+  <!-- 輸出 -->
+  <rect x="640" y="70" width="100" height="60" rx="8" fill="#b4541f"/>
+  <text x="690" y="96" fill="#fff" font-weight="700" text-anchor="middle">輸出影像</text>
+  <text x="690" y="112" fill="#f6e7dd" font-size="10" text-anchor="middle">PPM / PNG</text>
+  <text x="690" y="126" fill="#f6e7dd" font-size="10" text-anchor="middle">gamma 校正</text>
+  <!-- 標題 -->
+  <text x="400" y="175" fill="#8a929b" font-size="11" text-anchor="middle">圖 121-1：離線路徑追蹤器的五個主要階段；每像素獨立計算，天然可平行化。</text>
+</svg>
+        <figcaption>圖 121-1：路徑追蹤器渲染管線全覽。相機產生光線，場景求交找命中點，材質決定散射方向，蒙地卡羅積分累積多次採樣，最後寫出 gamma 校正後的圖。</figcaption>
+      </div>
+
+      <div class="callout history">
+        <div class="ico">📜</div>
+        <div class="body">
+          <span class="c-title">從《Ray Tracing in One Weekend》到好萊塢</span>
+          <p>
+            Peter Shirley 在 2016 年以免費電子書《Ray Tracing in One Weekend》普及了路徑追蹤的實作教學，
+            三本系列書幾乎影響了此後整個世代的圖形工程師。電影工業則使用 Pixar 的 RenderMan 與開源的
+            <strong>PBRT</strong>（Physically Based Rendering Toolkit，配套教科書《Physically Based Rendering》
+            獲 Academy Award 技術成就獎）。本章的程式架構直接呼應《Ray Tracing in One Weekend》系列，
+            但每一步都推導了背後的物理與數學。
+          </p>
+        </div>
+      </div>
+
+      <p>
+        本章程式碼以 <strong>Python</strong> 呈現（易讀、易修改；標明：<em>速度比 C++ 慢數十倍，大型場景建議改用 C++ 或 NumPy 向量化</em>）。
+        結構與 C++ 完全對應，只需把 Python 類別換成 C++ struct 加 operator 重載即可遷移。
+      </p>
+
+      <!-- ══════════════════════════════════════════════════════════════ -->
+      <h2>里程碑 1 — 向量數學與 PPM 影像</h2>
+      <!-- ══════════════════════════════════════════════════════════════ -->
+
+      <p>
+        渲染器的基石是三維向量(3D vector)。位置、方向、顏色——全部用 <code>Vec3</code> 表達。
+        我們先把它實作好，再用最簡單的方式輸出第一張圖：<strong>PPM 格式</strong>。
+        PPM（Portable Pixmap）純文字格式，每個像素寫一行 <code>R G B</code>，沒有任何壓縮，
+        能用任何文字編輯器檢查，是離線渲染的經典測試格式。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">為何先連 §54 線性代數？</span>
+          <p>
+            <a href="54-linear-algebra.html">第 54 章〈線性代數〉</a>把向量運算建立在嚴格的數學基礎上：
+            點積(dot product) $\mathbf{a}\cdot\mathbf{b} = |\mathbf{a}||\mathbf{b}|\cos\theta$ 衡量「有多對齊」；
+            叉積(cross product) $\mathbf{a}\times\mathbf{b}$ 產生垂直於兩向量的新向量。
+            這兩個操作會在求交、法線計算、散射方向，反覆出現。
+          </p>
+        </div>
+      </div>
+
+      <h3>Vec3 實作</h3>
+<pre><code class="language-python"># milestone1_vec3.py  （Python 學習版，速度比 C++ 慢數十倍）
+import math, random, sys
+
+class Vec3:
+    """三維向量；顏色(Color)與點(Point3)都用同一個類別。"""
+    __slots__ = ('x', 'y', 'z')
+
+    def __init__(self, x=0.0, y=0.0, z=0.0):
+        self.x, self.y, self.z = float(x), float(y), float(z)
+
+    def __neg__(self):
+        return Vec3(-self.x, -self.y, -self.z)
+
+    def __add__(self, v):
+        return Vec3(self.x + v.x, self.y + v.y, self.z + v.z)
+
+    def __sub__(self, v):
+        return Vec3(self.x - v.x, self.y - v.y, self.z - v.z)
+
+    def __mul__(self, t):
+        if isinstance(t, Vec3):          # 分量逐一相乘（顏色合成用）
+            return Vec3(self.x*t.x, self.y*t.y, self.z*t.z)
+        return Vec3(self.x*t, self.y*t, self.z*t)
+
+    def __rmul__(self, t):
+        return self.__mul__(t)
+
+    def __truediv__(self, t):
+        return self * (1.0 / t)
+
+    def dot(self, v):
+        return self.x*v.x + self.y*v.y + self.z*v.z
+
+    def cross(self, v):
+        return Vec3(
+            self.y*v.z - self.z*v.y,
+            self.z*v.x - self.x*v.z,
+            self.x*v.y - self.y*v.x
+        )
+
+    def length_sq(self):
+        return self.dot(self)
+
+    def length(self):
+        return math.sqrt(self.length_sq())
+
+    def unit(self):
+        return self / self.length()
+
+    def near_zero(self):
+        """向量長度接近零（用於散射方向退化偵測）。"""
+        s = 1e-8
+        return abs(self.x) &lt; s and abs(self.y) &lt; s and abs(self.z) &lt; s
+
+    @staticmethod
+    def random_unit():
+        """在單位球面上均勻隨機取向。"""
+        while True:
+            v = Vec3(random.uniform(-1,1), random.uniform(-1,1), random.uniform(-1,1))
+            if v.length_sq() &lt; 1.0:
+                return v.unit()
+
+Color = Vec3
+Point3 = Vec3</code></pre>
+
+      <h3>相機與光線</h3>
+      <p>
+        最簡相機：原點在 $(0,0,0)$，朝 $-z$ 方向看，虛擬螢幕在 $z=-1$ 平面。
+        每個像素 $(i, j)$ 對應螢幕上的比例座標 $(u, v) \in [0,1]^2$，由此產生一條<strong>光線(ray)</strong>：
+      </p>
+      <p>$$\mathbf{P}(t) = \mathbf{O} + t\mathbf{d}, \quad t \in (t_{\min}, t_{\max})$$</p>
+      <p>其中 $\mathbf{O}$ 是光線起點，$\mathbf{d}$ 是方向向量，$t$ 是參數（距離）。</p>
+
+<pre><code class="language-python">class Ray:
+    __slots__ = ('origin', 'direction')
+    def __init__(self, origin: Vec3, direction: Vec3):
+        self.origin    = origin
+        self.direction = direction
+
+    def at(self, t: float) -&gt; Vec3:
+        return self.origin + self.direction * t
+
+
+def sky_color(ray: Ray) -&gt; Color:
+    """天空漸層：白色（下）→ 淺藍（上）。"""
+    unit_dir = ray.direction.unit()
+    t = 0.5 * (unit_dir.y + 1.0)          # y∈[-1,1] 映射到 [0,1]
+    return (1.0 - t) * Color(1, 1, 1) + t * Color(0.5, 0.7, 1.0)
+
+
+# === PPM 輸出 ===
+def write_ppm(filename: str, width: int, height: int, pixels):
+    with open(filename, 'w') as f:
+        f.write(f"P3\n{width} {height}\n255\n")
+        for color in pixels:
+            r = int(256 * max(0.0, min(0.999, color.x)))
+            g = int(256 * max(0.0, min(0.999, color.y)))
+            b = int(256 * max(0.0, min(0.999, color.z)))
+            f.write(f"{r} {g} {b}\n")
+
+
+# === 主程式：漸層背景 ===
+W, H = 200, 100
+aspect = W / H
+
+lower_left  = Point3(-2.0, -1.0, -1.0)
+horizontal  = Vec3(4.0,  0.0, 0.0)
+vertical    = Vec3(0.0,  2.0, 0.0)
+cam_origin  = Point3(0.0, 0.0, 0.0)
+
+pixels = []
+for j in range(H - 1, -1, -1):      # 從上到下
+    for i in range(W):
+        u = i / (W - 1)
+        v = j / (H - 1)
+        d = lower_left + u * horizontal + v * vertical - cam_origin
+        r = Ray(cam_origin, d)
+        pixels.append(sky_color(r))
+
+write_ppm("output_m1.ppm", W, H, pixels)
+print("M1 done → output_m1.ppm")</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">里程碑 1 驗收</span>
+          <p>執行上述程式碼，應產生 <code>output_m1.ppm</code>。用任何支援 PPM 的看圖程式（如 GIMP、
+          <code>eog</code>、或線上 PPM Viewer）開啟，應看到：<strong>由上到下從淺藍色漸變為白色的矩形漸層</strong>，
+          無任何球體或物件。若顏色方向相反，請檢查迴圈 <code>j</code> 的遞減方向。</p>
+        </div>
+      </div>
+
+      <!-- ══════════════════════════════════════════════════════════════ -->
+      <h2>里程碑 2 — 光線與球求交</h2>
+      <!-- ══════════════════════════════════════════════════════════════ -->
+
+      <p>
+        場景裡放一顆球，光線打過去，要判斷是否命中、命中在哪裡——這是整個渲染器的核心幾何問題。
+        它的答案藏在一條<strong>二次方程式</strong>裡。
+      </p>
+
+      <h3>求交推導：二次方程式</h3>
+      <p>
+        球以圓心 $\mathbf{C}$、半徑 $r$ 定義：$|\mathbf{P} - \mathbf{C}|^2 = r^2$。
+        把光線 $\mathbf{P}(t) = \mathbf{O} + t\mathbf{d}$ 代入：
+        $$|\mathbf{O} + t\mathbf{d} - \mathbf{C}|^2 = r^2$$
+        令 $\mathbf{oc} = \mathbf{O} - \mathbf{C}$，展開點積：
+        $$t^2(\mathbf{d}\cdot\mathbf{d}) + 2t(\mathbf{d}\cdot\mathbf{oc}) + (\mathbf{oc}\cdot\mathbf{oc} - r^2) = 0$$
+        用「半 b」優化（令 $h = \mathbf{d}\cdot\mathbf{oc}$，省掉係數 2 的因子）：
+      </p>
+      <p>
+        $$a = \mathbf{d}\cdot\mathbf{d}, \quad h = \mathbf{d}\cdot\mathbf{oc}, \quad c = \mathbf{oc}\cdot\mathbf{oc} - r^2$$
+        $$\Delta = h^2 - ac$$
+        $$t = \frac{-h \pm \sqrt{\Delta}}{a}$$
+      </p>
+      <ul>
+        <li>$\Delta &lt; 0$：無交點（光線擦過球外側）</li>
+        <li>$\Delta = 0$：剛好切線（一個交點）</li>
+        <li>$\Delta &gt; 0$：穿入再穿出（兩個交點；取較小的正 $t$ 為最近命中）</li>
+      </ul>
+
+      <div class="diagram">
+<svg viewBox="0 0 500 300" xmlns="http://www.w3.org/2000/svg"
+     font-family="Inter,'Noto Sans TC',sans-serif" font-size="12">
+  <defs>
+    <marker id="arr2" markerWidth="10" markerHeight="8" refX="8" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 Z" fill="#2f6f6a"/>
+    </marker>
+    <marker id="arr3" markerWidth="10" markerHeight="8" refX="8" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 Z" fill="#b4541f"/>
+    </marker>
+  </defs>
+  <!-- 背景 -->
+  <rect width="500" height="300" fill="#f8fcfb" rx="12"/>
+  <!-- 球 -->
+  <circle cx="310" cy="150" r="80" fill="#e3efed" stroke="#2f6f6a" stroke-width="2.5"/>
+  <!-- 圓心 C -->
+  <circle cx="310" cy="150" r="4" fill="#2f6f6a"/>
+  <text x="318" y="146" fill="#2f6f6a" font-weight="700">C</text>
+  <!-- 半徑 r -->
+  <line x1="310" y1="150" x2="310" y2="70" stroke="#8a929b" stroke-dasharray="4 3" stroke-width="1.5"/>
+  <text x="316" y="116" fill="#8a929b">r</text>
+  <!-- 光線 -->
+  <line x1="30" y1="150" x2="460" y2="150" stroke="#2f6f6a" stroke-width="2" marker-end="url(#arr2)"/>
+  <text x="20" y="140" fill="#2f6f6a" font-weight="700">O</text>
+  <circle cx="30" cy="150" r="4" fill="#2f6f6a"/>
+  <!-- 光線標籤 -->
+  <text x="200" y="138" fill="#2f6f6a" font-size="11">光線 P(t) = O + t·d →</text>
+  <!-- 交點 t1（穿入） -->
+  <circle cx="230" cy="150" r="5" fill="#b4541f"/>
+  <text x="220" y="172" fill="#b4541f" font-weight="700">t₁</text>
+  <!-- 法線 at t1 -->
+  <line x1="230" y1="150" x2="170" y2="110" stroke="#b4541f" stroke-width="2" marker-end="url(#arr3)"/>
+  <text x="145" y="106" fill="#b4541f" font-size="11">n̂(外)</text>
+  <!-- 交點 t2（穿出） -->
+  <circle cx="390" cy="150" r="5" fill="#b4541f"/>
+  <text x="384" y="172" fill="#b4541f" font-weight="700">t₂</text>
+  <!-- 法線 at t2 -->
+  <line x1="390" y1="150" x2="450" y2="116" stroke="#b4541f" stroke-width="2" marker-end="url(#arr3)"/>
+  <text x="453" y="112" fill="#b4541f" font-size="11">n̂(外)</text>
+  <!-- oc 向量 -->
+  <line x1="30" y1="158" x2="306" y2="158" stroke="#8b5cf6" stroke-width="1.5" stroke-dasharray="3 3"/>
+  <text x="160" y="174" fill="#8b5cf6" font-size="11">oc = O − C</text>
+  <!-- 說明 -->
+  <text x="250" y="270" fill="#8a929b" font-size="11" text-anchor="middle">Δ &gt; 0：穿入 t₁ 再穿出 t₂；取小 t（球外相機時選 t₁）</text>
+</svg>
+        <figcaption>圖 121-2：光線-球求交幾何。光線從 O 出發打到球，解 $\Delta &gt; 0$ 得兩個參數 $t_1 &lt; t_2$；法線從球心指向交點再正規化。</figcaption>
+      </div>
+
+      <h3>法線與可命中物件抽象</h3>
+      <p>
+        命中點的<strong>外向法線(outward normal)</strong>：把圓心到交點的向量除以半徑。
+        同時我們引入 <code>HitRecord</code> 與 <code>Hittable</code> 抽象——讓場景可以由任意幾何組成，
+        而不是寫死「只有球」。這個設計直接對應<a href="50-computational-geometry.html">第 50 章〈計算幾何〉</a>
+        的多型(polymorphism)思維。
+      </p>
+
+<pre><code class="language-python">from dataclasses import dataclass, field
+from typing import Optional
+
+@dataclass
+class HitRecord:
+    p:         Vec3    = None     # 交點座標
+    normal:    Vec3    = None     # 法線（永遠指向光線來源側）
+    t:         float   = 0.0     # 光線參數
+    front_face: bool  = True     # 光線從正面（外側）打進來?
+    material:  object = None     # 材質（Milestone 4 填入）
+
+    def set_face_normal(self, ray: Ray, outward_normal: Vec3):
+        """確保法線總是指向光線來源側（雙面材質必備）。"""
+        self.front_face = ray.direction.dot(outward_normal) &lt; 0
+        self.normal = outward_normal if self.front_face else -outward_normal
+
+
+class Hittable:
+    def hit(self, ray: Ray, t_min: float, t_max: float) -&gt; Optional[HitRecord]:
+        raise NotImplementedError
+
+
+class Sphere(Hittable):
+    def __init__(self, center: Point3, radius: float, material=None):
+        self.center   = center
+        self.radius   = radius
+        self.material = material
+
+    def hit(self, ray: Ray, t_min: float, t_max: float) -&gt; Optional[HitRecord]:
+        oc = ray.origin - self.center          # oc = O − C
+        a  = ray.direction.dot(ray.direction)  # |d|²
+        h  = ray.direction.dot(oc)             # d·oc（半 b）
+        c  = oc.dot(oc) - self.radius**2       # |oc|² − r²
+        discriminant = h*h - a*c
+
+        if discriminant &lt; 0:
+            return None                        # 未命中
+
+        sqrtd = math.sqrt(discriminant)
+        # 先嘗試較近的根
+        root = (-h - sqrtd) / a
+        if not (t_min &lt; root &lt; t_max):
+            root = (-h + sqrtd) / a           # 再試較遠的根
+            if not (t_min &lt; root &lt; t_max):
+                return None
+
+        rec = HitRecord()
+        rec.t = root
+        rec.p = ray.at(root)
+        outward_normal = (rec.p - self.center) / self.radius
+        rec.set_face_normal(ray, outward_normal)
+        rec.material = self.material
+        return rec
+
+    def bounding_box(self) -&gt; AABB:
+        r = Vec3(self.radius, self.radius, self.radius)
+        return AABB(self.center - r, self.center + r)
+
+
+class HittableList(Hittable):
+    def __init__(self):
+        self.objects: list = []
+
+    def add(self, obj: Hittable):
+        self.objects.append(obj)
+
+    def hit(self, ray: Ray, t_min: float, t_max: float) -&gt; Optional[HitRecord]:
+        closest = t_max
+        best_rec = None
+        for obj in self.objects:
+            rec = obj.hit(ray, t_min, closest)
+            if rec is not None:
+                closest  = rec.t   # 逐步縮小搜尋上限，只保留最近命中
+                best_rec = rec
+        return best_rec</code></pre>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">浮點精度：t_min 要大於 0</span>
+          <p>
+            命中後用同一個交點重新出發追蹤（遞迴）時，若 <code>t_min = 0</code>，
+            浮點誤差會讓球自己命中自己（影子痤瘡，shadow acne）。
+            實務上設 <code>t_min = 1e-4</code> 或 <code>1e-3</code>，
+            讓二次交點略微「離開表面」後才開始計算。
+          </p>
+        </div>
+      </div>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">里程碑 2 驗收</span>
+          <p>在場景加一顆球 <code>Sphere(Point3(0,0,-1), 0.5)</code>，用法線著色（把法線 $\hat{n}$ 的 xyz 映射到 RGB [0,1]）輸出圖像。
+          應看到：<strong>圓形的球，正面呈現綠色/青色/紅色漸變的法線圖</strong>（頂部偏藍，左側偏紅，右側偏青）。
+          若只看到背景色，請確認 <code>t_min</code> 設為 <code>0.001</code>。</p>
+        </div>
+      </div>
+
+      <!-- ══════════════════════════════════════════════════════════════ -->
+      <h2>里程碑 3 — 反走樣與相機模型</h2>
+      <!-- ══════════════════════════════════════════════════════════════ -->
+
+      <p>
+        現在的渲染每個像素只打一條光線，球的邊緣會有明顯的鋸齒(aliasing)。
+        解法很直觀：同一個像素打 <strong>N 條方向略有不同的光線</strong>，取顏色平均——這就是
+        <strong>超取樣反走樣(super-sampling anti-aliasing, SSAA)</strong>，
+        也是「每像素樣本數(samples per pixel, spp)」的由來。
+      </p>
+
+      <h3>Gamma 校正</h3>
+      <p>
+        人眼對暗部更敏感，螢幕亮度通常以 $\gamma \approx 2.2$ 的冪次關係呈現。
+        若直接把線性光照值寫入 PPM，暗部細節會壓縮。
+        最簡的 gamma 2 校正：儲存前對每個分量取平方根：
+        $$C_{\text{out}} = \sqrt{C_{\text{linear}}} \equiv C_{\text{linear}}^{1/2}$$
+      </p>
+
+<pre><code class="language-python">def write_color_srgb(color: Color, samples: int) -&gt; tuple:
+    """將累積顏色除以樣本數，gamma-2 校正，輸出 (R,G,B) 整數。"""
+    scale = 1.0 / samples
+    r = math.sqrt(color.x * scale)
+    g = math.sqrt(color.y * scale)
+    b = math.sqrt(color.z * scale)
+    return (
+        int(256 * max(0.0, min(0.999, r))),
+        int(256 * max(0.0, min(0.999, g))),
+        int(256 * max(0.0, min(0.999, b))),
+    )
+
+
+class Camera:
+    """
+    可調焦距、景深的薄透鏡相機。
+    lookfrom / lookat: 相機位置與注視點
+    vup: 世界上方向
+    vfov: 垂直視野角（度）
+    aperture / focus_dist: 光圈（景深）
+    """
+    def __init__(self, lookfrom, lookat, vup,
+                 vfov=90.0, aspect=16/9,
+                 aperture=0.0, focus_dist=1.0):
+        theta = math.radians(vfov)
+        h     = math.tan(theta / 2)
+        vp_h  = 2.0 * h
+        vp_w  = aspect * vp_h
+
+        w = (lookfrom - lookat).unit()    # 相機的後方
+        u = vup.cross(w).unit()           # 相機的右方
+        v = w.cross(u)                    # 相機的上方
+
+        self.origin     = lookfrom
+        self.horizontal = focus_dist * vp_w * u
+        self.vertical   = focus_dist * vp_h * v
+        self.lower_left = (lookfrom
+                           - self.horizontal/2
+                           - self.vertical/2
+                           - focus_dist * w)
+        self.lens_radius = aperture / 2
+        self.u, self.v = u, v
+
+    def get_ray(self, s: float, t: float) -&gt; Ray:
+        """取 (s,t) ∈ [0,1]² 對應像素，在光圈圓內隨機偏移模擬景深。"""
+        rd = self.lens_radius * Vec3.random_in_disk()
+        offset = self.u * rd.x + self.v * rd.y
+        direction = (self.lower_left
+                     + s * self.horizontal
+                     + t * self.vertical
+                     - self.origin - offset)
+        return Ray(self.origin + offset, direction)
+
+
+# Vec3.random_in_disk: 在 xy 平面單位圓盤內均勻採樣
+@staticmethod
+def _random_in_disk():
+    while True:
+        p = Vec3(random.uniform(-1,1), random.uniform(-1,1), 0.0)
+        if p.length_sq() &lt; 1.0:
+            return p
+Vec3.random_in_disk = _random_in_disk</code></pre>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">spp 與品質的權衡</span>
+          <p>
+            增加 spp 會讓雜訊降低，但渲染時間線性增加。
+            反走樣邊緣：32–64 spp 已明顯改善；全域光照：256–1024 spp 才會收斂。
+            每像素誤差正比於 $1/\sqrt{N}$，把誤差砍半要四倍的採樣數——這是蒙地卡羅的代價，也是 AI 降噪的動機。
+          </p>
+        </div>
+      </div>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">里程碑 3 驗收</span>
+          <p>設 <code>spp = 64</code>，輸出有球的場景。比較 spp=1 與 spp=64 的邊緣，
+          應看到<strong>球的邊緣由鋸齒變為平滑漸層</strong>。開啟景深（<code>aperture=0.1</code>），
+          聚焦在球上應看到<strong>背景模糊</strong>。若仍有硬邊，確認每次 <code>get_ray</code> 時 <code>s,t</code> 有加 <code>random.random()</code> 的抖動(jitter)。</p>
+        </div>
+      </div>
+
+      <!-- ══════════════════════════════════════════════════════════════ -->
+      <h2>里程碑 4 — 材質：漫反射、金屬與電介質</h2>
+      <!-- ══════════════════════════════════════════════════════════════ -->
+
+      <p>
+        現在場景只能顯示法線顏色，沒有真實材質感。本節加入三種核心材質，
+        對應到<a href="116-pbr-path-tracing.html">第 110 章</a>的 BRDF 分類：
+      </p>
+      <ul>
+        <li><strong>Lambertian（漫反射）</strong>：散射到任意方向，符合 Lambert 餘弦定律</li>
+        <li><strong>Metal（金屬）</strong>：鏡面反射，加模糊度參數</li>
+        <li><strong>Dielectric（電介質）</strong>：透明玻璃/水，折射＋全反射＋Fresnel</li>
+      </ul>
+
+      <h3>Lambertian 漫反射</h3>
+      <p>
+        最簡單的漫反射：新光線方向 = 法線 + 單位球面隨機向量（近似 Lambert 餘弦分佈）。
+        吸收率 = $(1 - \text{albedo})$，剩餘能量繼續追蹤。
+      </p>
+
+<pre><code class="language-python">class Material:
+    def scatter(self, ray_in: Ray, rec: HitRecord):
+        """返回 (attenuation: Color, scattered: Ray) 或 None（完全吸收）。"""
+        raise NotImplementedError
+
+
+class Lambertian(Material):
+    def __init__(self, albedo: Color):
+        self.albedo = albedo
+
+    def scatter(self, ray_in: Ray, rec: HitRecord):
+        scatter_dir = rec.normal + Vec3.random_unit()
+        if scatter_dir.near_zero():
+            scatter_dir = rec.normal   # 防止方向退化
+        return self.albedo, Ray(rec.p, scatter_dir)</code></pre>
+
+      <h3>金屬反射</h3>
+      <p>
+        完美鏡面反射的向量公式：$\mathbf{r} = \mathbf{v} - 2(\mathbf{v}\cdot\hat{\mathbf{n}})\hat{\mathbf{n}}$，
+        其中 $\mathbf{v}$ 是入射方向。加上模糊(fuzz)參數讓反射方向有隨機偏移，模擬磨砂金屬。
+      </p>
+
+<pre><code class="language-python">def reflect(v: Vec3, n: Vec3) -&gt; Vec3:
+    """鏡面反射：v − 2(v·n)n。"""
+    return v - 2 * v.dot(n) * n
+
+
+class Metal(Material):
+    def __init__(self, albedo: Color, fuzz: float = 0.0):
+        self.albedo = albedo
+        self.fuzz   = min(fuzz, 1.0)    # fuzz ∈ [0,1]：0 完美鏡面，1 最模糊
+
+    def scatter(self, ray_in: Ray, rec: HitRecord):
+        reflected = reflect(ray_in.direction.unit(), rec.normal)
+        scattered = Ray(rec.p, reflected + self.fuzz * Vec3.random_unit())
+        if scattered.direction.dot(rec.normal) &gt; 0:
+            return self.albedo, scattered
+        return None   # 散射方向進入球內側，吸收掉</code></pre>
+
+      <h3>電介質：Snell 定律與 Fresnel-Schlick</h3>
+      <p>
+        光從折射率 $\eta_1$ 的介質進入 $\eta_2$ 時，折射角滿足
+        <strong>Snell 定律(Snell's law)</strong>：
+        $$\eta_1 \sin\theta_1 = \eta_2 \sin\theta_2$$
+      </p>
+      <p>
+        向量形式的折射計算（入射方向 $\hat{\mathbf{v}}$，法線 $\hat{\mathbf{n}}$，$\eta = \eta_1/\eta_2$）：
+        $$\mathbf{r}_\perp = \eta\!\left(\hat{\mathbf{v}} + \cos\theta_1\hat{\mathbf{n}}\right), \quad
+          \mathbf{r}_\parallel = -\sqrt{1-|\mathbf{r}_\perp|^2}\,\hat{\mathbf{n}}, \quad
+          \mathbf{r} = \mathbf{r}_\perp + \mathbf{r}_\parallel$$
+        其中 $\cos\theta_1 = -\hat{\mathbf{v}}\cdot\hat{\mathbf{n}}$。
+      </p>
+      <p>
+        當 $\sin\theta_2 &gt; 1$ 時（$\sin\theta_1 &gt; \eta_2/\eta_1$）發生<strong>全反射(total internal reflection)</strong>，
+        折射不存在，強制反射。邊緣角度的部分反射以
+        <strong>Fresnel-Schlick 近似(Fresnel-Schlick approximation)</strong>估計：
+        $$R_0 = \left(\frac{\eta_1 - \eta_2}{\eta_1 + \eta_2}\right)^2, \qquad
+          R(\theta) \approx R_0 + (1 - R_0)(1 - \cos\theta)^5$$
+      </p>
+
+<pre><code class="language-python">def refract(v: Vec3, n: Vec3, eta_ratio: float) -&gt; Vec3:
+    """Snell 定律的向量折射。v 是單位入射方向，n 是單位法線。"""
+    cos_theta = min(-v.dot(n), 1.0)
+    r_perp = eta_ratio * (v + cos_theta * n)               # 垂直分量
+    r_parallel = -math.sqrt(abs(1.0 - r_perp.length_sq())) * n  # 平行分量
+    return r_perp + r_parallel
+
+
+def schlick(cos_theta: float, ref_idx: float) -&gt; float:
+    """Fresnel-Schlick 反射率近似。"""
+    r0 = ((1 - ref_idx) / (1 + ref_idx)) ** 2
+    return r0 + (1 - r0) * (1 - cos_theta) ** 5
+
+
+class Dielectric(Material):
+    """透明電介質（玻璃 ir≈1.5，水 ir≈1.33，鑽石 ir≈2.42）。"""
+    def __init__(self, ir: float):
+        self.ir = ir   # index of refraction
+
+    def scatter(self, ray_in: Ray, rec: HitRecord):
+        attenuation = Color(1.0, 1.0, 1.0)   # 玻璃不吸收顏色
+        eta_ratio = (1.0 / self.ir) if rec.front_face else self.ir
+
+        unit_dir  = ray_in.direction.unit()
+        cos_theta = min(-unit_dir.dot(rec.normal), 1.0)
+        sin_theta = math.sqrt(1.0 - cos_theta**2)
+
+        # 全反射條件：sin θ₂ = η·sin θ₁ &gt; 1
+        cannot_refract = eta_ratio * sin_theta &gt; 1.0
+        # Fresnel-Schlick：邊緣角度仍有機率反射
+        if cannot_refract or schlick(cos_theta, eta_ratio) &gt; random.random():
+            direction = reflect(unit_dir, rec.normal)
+        else:
+            direction = refract(unit_dir, rec.normal, eta_ratio)
+
+        return attenuation, Ray(rec.p, direction)</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">里程碑 4 驗收</span>
+          <p>場景：大灰球（Lambertian）、小金屬球（Metal fuzz=0.1）、小玻璃球（Dielectric 1.5）。
+          輸出 <code>spp=64</code> 應看到：<strong>灰球有柔和陰影、金屬球可看到周圍反射、玻璃球透出背景且邊緣有 Fresnel 反光</strong>。
+          若玻璃球全黑，請確認 <code>t_min = 0.001</code>；若玻璃球不透明，確認 <code>eta_ratio</code> 在出射時已取倒數。</p>
+        </div>
+      </div>
+
+      <!-- ══════════════════════════════════════════════════════════════ -->
+      <h2>里程碑 5 — 蒙地卡羅路徑追蹤</h2>
+      <!-- ══════════════════════════════════════════════════════════════ -->
+
+      <p>
+        前面的材質只散射一次，每條光線的「故事」到此為止。真實的光在場景裡<strong>無限次彈跳</strong>——
+        天花板的光打到桌面，桌面的光再打到牆——這就是<strong>全域光照(global illumination)</strong>。
+        計算它需要遞迴求解渲染方程式：
+      </p>
+      <p>
+        $$L_o(\mathbf{x},\omega_o) = L_e(\mathbf{x},\omega_o) +
+          \int_{\Omega^+} f_r(\mathbf{x},\omega_i,\omega_o)\,L_i(\mathbf{x},\omega_i)\,|\cos\theta_i|\,d\omega_i$$
+      </p>
+      <p>
+        這個半球積分沒有解析解。解法：<strong>蒙地卡羅估計量(Monte Carlo estimator)</strong>——
+        隨機取樣方向 $\omega_i \sim p(\omega_i)$，不偏估計：
+        $$\langle L_o \rangle = \frac{1}{N}\sum_{k=1}^{N} \frac{f_r\,L_i\,|\cos\theta|}{\,p(\omega_i)\,}$$
+        誤差標準差 $\propto 1/\sqrt{N}$（來自<a href="57-probability.html">第 57 章〈機率論〉</a>的大數定律與 CLT）。
+        若採樣分佈 $p$ 更集中在重要區域（<strong>重要性採樣, importance sampling</strong>），
+        同樣 $N$ 可以得到更低的變異數。
+      </p>
+
+      <h3>遞迴光線追蹤</h3>
+
+<pre><code class="language-python">def ray_color(ray: Ray, world: Hittable, depth: int) -&gt; Color:
+    """
+    遞迴路徑追蹤。
+    depth: 最大反彈次數（超過後用俄羅斯輪盤終止或直接返回黑色）。
+    """
+    if depth &lt;= 0:
+        return Color(0, 0, 0)   # 達到最大深度，光線能量耗盡
+
+    rec = world.hit(ray, 0.001, math.inf)
+
+    if rec is not None:
+        result = rec.material.scatter(ray, rec)
+        if result is not None:
+            attenuation, scattered = result
+            # 遞迴：衰減 × 繼續追蹤散射光線
+            return attenuation * ray_color(scattered, world, depth - 1)
+        return Color(0, 0, 0)   # 材質完全吸收
+
+    # 未命中任何物件 → 天空漸層（環境光）
+    return sky_color(ray)
+
+
+# === 渲染迴圈（含 spp） ===
+def render(world, cam, W, H, spp=64, max_depth=10):
+    image = []
+    for j in range(H - 1, -1, -1):
+        for i in range(W):
+            pixel_color = Color(0, 0, 0)
+            for _ in range(spp):
+                s = (i + random.random()) / (W - 1)
+                t = (j + random.random()) / (H - 1)
+                r = cam.get_ray(s, t)
+                pixel_color = pixel_color + ray_color(r, world, max_depth)
+            image.append(write_color_srgb(pixel_color, spp))
+    return image</code></pre>
+
+      <h3>俄羅斯輪盤終止</h3>
+      <p>
+        固定最大深度會讓亮材質稍微偏暗（能量仍有截斷誤差）。
+        <strong>俄羅斯輪盤(Russian roulette)</strong>是無偏估計的替代方案：
+        每次反彈以機率 $p$ 繼續、$(1-p)$ 終止，繼續時把貢獻除以 $p$ 補償——
+        這樣期望值不變，但讓追蹤自然收斂。
+      </p>
+
+<pre><code class="language-python">def ray_color_rr(ray: Ray, world: Hittable, depth: int = 50) -&gt; Color:
+    """帶俄羅斯輪盤的路徑追蹤（無偏）。"""
+    if depth &lt;= 0:
+        return Color(0, 0, 0)   # 達到最大深度，返回黑色
+    rec = world.hit(ray, 0.001, math.inf)
+    if rec is None:
+        return sky_color(ray)
+
+    result = rec.material.scatter(ray, rec)
+    if result is None:
+        return Color(0, 0, 0)
+
+    attenuation, scattered = result
+
+    # 俄羅斯輪盤：用亮度作繼續機率
+    p = max(attenuation.x, attenuation.y, attenuation.z)
+    p = min(p, 0.999)   # 確保至少 0.1% 終止機率（電介質 attenuation=1 時必要）
+    if random.random() &gt; p:
+        return Color(0, 0, 0)   # 機率終止
+
+    # 繼續，補償機率（保持無偏）
+    return (attenuation / p) * ray_color_rr(scattered, world, depth - 1)</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">里程碑 5 驗收</span>
+          <p>用 <code>spp=100, max_depth=10</code> 渲染漫反射場景（兩個 Lambertian 球＋地面）。
+          輸出應見到：<strong>球的下方有柔和陰影，球之間有顏色溢出(color bleeding)——紅球旁的白球帶一點紅色光暈</strong>。
+          比較 <code>max_depth=1</code> vs <code>max_depth=10</code>：深度 1 只有直接光照，深度 10 才有自然的間接光。</p>
+        </div>
+      </div>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">重要性採樣的下一步</span>
+          <p>
+            目前 Lambertian 材質隨機往半球散射，不知道「哪個方向的光最亮」。
+            <strong>餘弦加權採樣(cosine-weighted sampling)</strong>——讓散射方向正比於 $\cos\theta$——
+            是最基本的重要性採樣，能在相同 spp 下大幅降低漸暗角的雜訊。
+            進一步的 <strong>多重重要性採樣(Multiple Importance Sampling, MIS)</strong>
+            同時結合材質分佈與光源分佈，是 PBRT 的核心技術之一。
+          </p>
+        </div>
+      </div>
+
+      <!-- ══════════════════════════════════════════════════════════════ -->
+      <h2>里程碑 6 — BVH 包圍盒階層加速</h2>
+      <!-- ══════════════════════════════════════════════════════════════ -->
+
+      <p>
+        當場景有 1000 個球，<code>HittableList.hit</code> 要對每條光線做 1000 次求交——
+        時間複雜度 $O(n)$，場景越大越慢。
+        <strong>BVH（Bounding Volume Hierarchy，包圍盒階層）</strong>把物件按空間分組：
+        先測光線是否打中父節點的包圍盒，打中才往子樹遞迴。
+        結果是 $O(\log n)$ 求交，場景翻倍只多一層對數——和<a href="27-divide-and-conquer.html">第 27 章〈分治法〉</a>
+        的快速排序、<a href="29-data-structures.html">第 29 章〈資料結構〉</a>的二元搜尋樹完全同源。
+      </p>
+
+      <h3>軸對齊包圍盒(AABB)</h3>
+      <p>
+        <strong>AABB（Axis-Aligned Bounding Box）</strong>：$[x_{\min},x_{\max}]\times[y_{\min},y_{\max}]\times[z_{\min},z_{\max}]$。
+        光線-AABB 求交用「平板法(slab method)」：對每個軸算進入/離開時刻，取交集：
+        $$t_{\min} = \max(t_{x_{\min}}, t_{y_{\min}}, t_{z_{\min}}), \quad
+          t_{\max} = \min(t_{x_{\max}}, t_{y_{\max}}, t_{z_{\max}})$$
+        若 $t_{\min} \leq t_{\max}$ 則命中。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 600 280" xmlns="http://www.w3.org/2000/svg"
+     font-family="Inter,'Noto Sans TC',sans-serif" font-size="11">
+  <rect width="600" height="280" fill="#f8fcfb" rx="12"/>
+  <!-- Root AABB -->
+  <rect x="240" y="20" width="120" height="44" rx="6" fill="#2f6f6a"/>
+  <text x="300" y="38" fill="#fff" font-weight="700" text-anchor="middle">根節點 AABB</text>
+  <text x="300" y="56" fill="#cfe6e2" text-anchor="middle">包含全部物件</text>
+  <!-- Root lines -->
+  <line x1="268" y1="64" x2="170" y2="110" stroke="#8a929b" stroke-width="1.5"/>
+  <line x1="332" y1="64" x2="430" y2="110" stroke="#8a929b" stroke-width="1.5"/>
+  <!-- Left child -->
+  <rect x="110" y="110" width="120" height="44" rx="6" fill="#b4541f"/>
+  <text x="170" y="128" fill="#fff" font-weight="700" text-anchor="middle">左子樹 AABB</text>
+  <text x="170" y="146" fill="#f6e7dd" text-anchor="middle">左半空間物件</text>
+  <!-- Right child -->
+  <rect x="370" y="110" width="120" height="44" rx="6" fill="#b4541f"/>
+  <text x="430" y="128" fill="#fff" font-weight="700" text-anchor="middle">右子樹 AABB</text>
+  <text x="430" y="146" fill="#f6e7dd" text-anchor="middle">右半空間物件</text>
+  <!-- Left-left leaf -->
+  <line x1="138" y1="154" x2="80" y2="196" stroke="#8a929b" stroke-width="1.5"/>
+  <line x1="202" y1="154" x2="170" y2="196" stroke="#8a929b" stroke-width="1.5"/>
+  <rect x="44" y="196" width="72" height="38" rx="6" fill="#8b5cf6"/>
+  <text x="80" y="213" fill="#fff" font-weight="700" text-anchor="middle">Sphere</text>
+  <text x="80" y="228" fill="#ece5ff" text-anchor="middle">葉節點</text>
+  <rect x="134" y="196" width="72" height="38" rx="6" fill="#8b5cf6"/>
+  <text x="170" y="213" fill="#fff" font-weight="700" text-anchor="middle">Sphere</text>
+  <text x="170" y="228" fill="#ece5ff" text-anchor="middle">葉節點</text>
+  <!-- Right leaves -->
+  <line x1="398" y1="154" x2="340" y2="196" stroke="#8a929b" stroke-width="1.5"/>
+  <line x1="462" y1="154" x2="510" y2="196" stroke="#8a929b" stroke-width="1.5"/>
+  <rect x="304" y="196" width="72" height="38" rx="6" fill="#8b5cf6"/>
+  <text x="340" y="213" fill="#fff" font-weight="700" text-anchor="middle">Sphere</text>
+  <text x="340" y="228" fill="#ece5ff" text-anchor="middle">葉節點</text>
+  <rect x="474" y="196" width="72" height="38" rx="6" fill="#8b5cf6"/>
+  <text x="510" y="213" fill="#fff" font-weight="700" text-anchor="middle">Triangle</text>
+  <text x="510" y="228" fill="#ece5ff" text-anchor="middle">葉節點</text>
+  <!-- Cross mark: pruned -->
+  <text x="430" y="185" fill="#b4541f" font-size="22" text-anchor="middle" font-weight="700">✗</text>
+  <text x="430" y="268" fill="#b4541f" font-size="10" text-anchor="middle">光線若未命中右 AABB，右子樹整個剪枝 → O(log n)</text>
+  <text x="300" y="265" fill="#8a929b" font-size="10" text-anchor="middle">圖 121-3：BVH 樹結構。根節點 AABB 包含全部物件；光線只走命中的子樹。</text>
+</svg>
+        <figcaption>圖 121-3：BVH 樹示意。光線先測根節點包圍盒，未命中右子樹 AABB 則整個剪枝（打叉），只遞迴命中的左子樹，複雜度從 $O(n)$ 降為 $O(\log n)$。</figcaption>
+      </div>
+
+<pre><code class="language-python">class AABB:
+    def __init__(self, minimum: Vec3, maximum: Vec3):
+        self.minimum = minimum
+        self.maximum = maximum
+
+    def hit(self, ray: Ray, t_min: float, t_max: float) -&gt; bool:
+        for axis in ('x', 'y', 'z'):
+            d_comp = getattr(ray.direction, axis)
+            o_comp = getattr(ray.origin,    axis)
+            b_min  = getattr(self.minimum,  axis)
+            b_max  = getattr(self.maximum,  axis)
+
+            if abs(d_comp) &lt; 1e-12:
+                if not (b_min &lt;= o_comp &lt;= b_max):
+                    return False
+                continue
+
+            inv_d = 1.0 / d_comp
+            t0 = (b_min - o_comp) * inv_d
+            t1 = (b_max - o_comp) * inv_d
+            if inv_d &lt; 0:
+                t0, t1 = t1, t0
+            t_min = max(t_min, t0)
+            t_max = min(t_max, t1)
+            if t_max &lt;= t_min:
+                return False
+        return True
+
+
+def surrounding_box(box0: AABB, box1: AABB) -&gt; AABB:
+    """回傳包住兩個 AABB 的最小 AABB。"""
+    small = Vec3(min(box0.minimum.x, box1.minimum.x),
+                 min(box0.minimum.y, box1.minimum.y),
+                 min(box0.minimum.z, box1.minimum.z))
+    big   = Vec3(max(box0.maximum.x, box1.maximum.x),
+                 max(box0.maximum.y, box1.maximum.y),
+                 max(box0.maximum.z, box1.maximum.z))
+    return AABB(small, big)
+
+
+class BVHNode(Hittable):
+    def __init__(self, objects: list, start: int, end: int):
+        axis   = random.randint(0, 2)       # 隨機選分割軸（SAH 是進階版本）
+        key_fn = ['x', 'y', 'z'][axis]
+
+        span = end - start
+        if span == 1:
+            self.left = self.right = objects[start]
+        elif span == 2:
+            if getattr(objects[start].bounding_box().minimum, key_fn) \
+               &lt;= getattr(objects[start+1].bounding_box().minimum, key_fn):
+                self.left, self.right = objects[start], objects[start+1]
+            else:
+                self.left, self.right = objects[start+1], objects[start]
+        else:
+            # 按選定軸排序，遞迴分割
+            sub = sorted(objects[start:end],
+                         key=lambda o: getattr(o.bounding_box().minimum, key_fn))
+            mid = start + span // 2
+            # 重新放回 objects 列表的切片（簡化版本）
+            self.left  = BVHNode(sub, 0, span // 2)
+            self.right = BVHNode(sub, span // 2, span)
+
+        box_l = self.left.bounding_box()
+        box_r = self.right.bounding_box()
+        self._box = surrounding_box(box_l, box_r)
+
+    def bounding_box(self) -&gt; AABB:
+        return self._box
+
+    def hit(self, ray: Ray, t_min: float, t_max: float):
+        if not self._box.hit(ray, t_min, t_max):
+            return None                   # 根本沒打中包圍盒，剪枝
+        hit_l = self.left.hit(ray, t_min, t_max)
+        hit_r = self.right.hit(ray, t_min,
+                               hit_l.t if hit_l else t_max)
+        return hit_r if hit_r else hit_l   # 回傳最近命中</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">里程碑 6 驗收</span>
+          <p>建立隨機球場景（500 個球），分別用 <code>HittableList</code> 與 <code>BVHNode</code> 渲染同一畫面，
+          記錄秒數。預期：<strong>BVH 版本快 10–50 倍</strong>（取決於場景深度）。
+          兩者輸出的影像應像素完全相同（驗證正確性）。
+          若 BVH 版本更慢，確認 <code>bounding_box()</code> 在所有 Hittable 子類別都正確實作。</p>
+        </div>
+      </div>
+
+      <!-- ══════════════════════════════════════════════════════════════ -->
+      <h2>里程碑 7 — 三角網格與場景擴充</h2>
+      <!-- ══════════════════════════════════════════════════════════════ -->
+
+      <p>
+        球很好用，但真實模型是由<strong>三角形(triangle)</strong>拼成的網格(mesh)——
+        幾乎所有 3D 建模工具都以 <strong>.obj 格式</strong>匯出。
+        本里程碑加入三角求交與簡易 .obj 讀取，讓你能渲染「兔子」或任何免費 3D 模型。
+      </p>
+
+      <h3>Möller-Trumbore 三角求交</h3>
+      <p>
+        給定三角形三頂點 $\mathbf{v}_0, \mathbf{v}_1, \mathbf{v}_2$，
+        光線 $\mathbf{O} + t\mathbf{d}$。
+        用重心座標 $(u, v)$ 表示交點：$\mathbf{P} = (1-u-v)\mathbf{v}_0 + u\mathbf{v}_1 + v\mathbf{v}_2$，
+        解方程組得到 $t, u, v$——條件：$t &gt; 0$，$u \geq 0$，$v \geq 0$，$u+v \leq 1$。
+      </p>
+
+<pre><code class="language-python">class Triangle(Hittable):
+    def __init__(self, v0: Vec3, v1: Vec3, v2: Vec3, material=None):
+        self.v0 = v0
+        self.v1 = v1
+        self.v2 = v2
+        self.material = material
+        # 預算邊向量與法線
+        self.e1 = v1 - v0
+        self.e2 = v2 - v0
+        self.normal = self.e1.cross(self.e2).unit()
+
+    def hit(self, ray: Ray, t_min: float, t_max: float):
+        # Möller-Trumbore 演算法
+        h   = ray.direction.cross(self.e2)
+        det = self.e1.dot(h)
+
+        if abs(det) &lt; 1e-8:          # 光線與三角形平行
+            return None
+
+        inv_det = 1.0 / det
+        s = ray.origin - self.v0
+        u = inv_det * s.dot(h)
+        if not (0.0 &lt;= u &lt;= 1.0):
+            return None
+
+        q = s.cross(self.e1)
+        v = inv_det * ray.direction.dot(q)
+        if v &lt; 0.0 or u + v &gt; 1.0:
+            return None
+
+        t = inv_det * self.e2.dot(q)
+        if not (t_min &lt; t &lt; t_max):
+            return None
+
+        rec = HitRecord()
+        rec.t = t
+        rec.p = ray.at(t)
+        rec.material = self.material
+        rec.set_face_normal(ray, self.normal)
+        return rec
+
+    def bounding_box(self) -&gt; AABB:
+        eps = Vec3(1e-4, 1e-4, 1e-4)
+        lo = Vec3(min(self.v0.x, self.v1.x, self.v2.x),
+                  min(self.v0.y, self.v1.y, self.v2.y),
+                  min(self.v0.z, self.v1.z, self.v2.z))
+        hi = Vec3(max(self.v0.x, self.v1.x, self.v2.x),
+                  max(self.v0.y, self.v1.y, self.v2.y),
+                  max(self.v0.z, self.v1.z, self.v2.z))
+        return AABB(lo - eps, hi + eps)
+
+
+def load_obj(filename: str, material=None) -&gt; list:
+    """極簡 .obj 讀取器：只處理頂點(v)與面(f)。"""
+    vertices, triangles = [], []
+    with open(filename) as f:
+        for line in f:
+            parts = line.split()
+            if not parts:
+                continue
+            if parts[0] == 'v':
+                vertices.append(Vec3(float(parts[1]),
+                                     float(parts[2]),
+                                     float(parts[3])))
+            elif parts[0] == 'f':
+                # 面索引從 1 開始；可能是 v/vt/vn 格式
+                idxs = [int(p.split('/')[0]) - 1 for p in parts[1:]]
+                for k in range(1, len(idxs) - 1):
+                    triangles.append(Triangle(vertices[idxs[0]],
+                                              vertices[idxs[k]],
+                                              vertices[idxs[k+1]],
+                                              material))
+    return triangles</code></pre>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">面光源</span>
+          <p>
+            加入自發光材質(emissive material)很簡單：<code>scatter</code> 返回 <code>None</code>（不散射），
+            但另提供 <code>emitted() -&gt; Color</code> 返回自身發光顏色。
+            <code>ray_color</code> 在材質不散射時改為加上 <code>emitted()</code> 而非返回黑色。
+            面光源的柔和陰影自然由蒙地卡羅多次採樣產生，無需特殊的陰影光線。
+          </p>
+        </div>
+      </div>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">里程碑 7 驗收</span>
+          <p>下載 <a href="https://graphics.stanford.edu/data/3Dscanrep/" target="_blank">Stanford Bunny</a>（.obj 格式，約 5000 個三角形），
+          用 <code>load_obj</code> 載入、放進 BVH，<code>spp=64</code> 渲染。
+          應看到：<strong>兔子的三角網格以 Lambertian 白色呈現，有自然的全域光照陰影</strong>。
+          若出現黑洞或破面，請確認三角形法線方向一致（可改用頂點法線插值）；
+          若速度仍慢，確認三角形已放入 BVH 而非直接用 HittableList。</p>
+        </div>
+      </div>
+
+      <!-- ══════════════════════════════════════════════════════════════ -->
+      <h2>驗收清單與效能基準</h2>
+      <!-- ══════════════════════════════════════════════════════════════ -->
+
+      <p>下表彙整每個里程碑的驗收標準與建議效能基準，協助你確認每個階段的正確性：</p>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>里程碑</th>
+              <th>輸出物</th>
+              <th>驗收標準</th>
+              <th>典型時間（Python，W=400）</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>M1 — vec3 + PPM</td>
+              <td><code>output_m1.ppm</code></td>
+              <td>白→藍漸層，無球</td>
+              <td>&lt; 1 秒</td>
+            </tr>
+            <tr>
+              <td>M2 — 球求交</td>
+              <td><code>output_m2.ppm</code></td>
+              <td>法線著色球，邊緣硬</td>
+              <td>&lt; 2 秒</td>
+            </tr>
+            <tr>
+              <td>M3 — 反走樣</td>
+              <td><code>output_m3.ppm</code></td>
+              <td>64 spp，邊緣平滑</td>
+              <td>30–60 秒</td>
+            </tr>
+            <tr>
+              <td>M4 — 材質</td>
+              <td><code>output_m4.ppm</code></td>
+              <td>漫反射＋金屬＋玻璃同場</td>
+              <td>2–5 分鐘</td>
+            </tr>
+            <tr>
+              <td>M5 — 路徑追蹤</td>
+              <td><code>output_m5.ppm</code></td>
+              <td>顏色溢出、軟陰影</td>
+              <td>5–15 分鐘</td>
+            </tr>
+            <tr>
+              <td>M6 — BVH（500球）</td>
+              <td>加速比</td>
+              <td>比 HittableList 快 ≥10×</td>
+              <td>對照組 10–30 min → BVH &lt; 3 min</td>
+            </tr>
+            <tr>
+              <td>M7 — 網格</td>
+              <td><code>output_m7.ppm</code></td>
+              <td>Stanford Bunny 出現</td>
+              <td>依三角數與 BVH 深度</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>練習題</h3>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 121.1 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>
+            請解釋：為何在 <code>Sphere.hit</code> 裡用「半 b」優化（令 $h = \mathbf{d}\cdot\mathbf{oc}$）
+            後，判別式從 $b^2 - 4ac$ 變成 $h^2 - ac$？兩者結果是否相同？
+          </p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p>原始形式：$a = \mathbf{d}\cdot\mathbf{d}$，$b = 2\mathbf{d}\cdot\mathbf{oc}$，$c = \mathbf{oc}\cdot\mathbf{oc}-r^2$。</p>
+              <p>令 $h = b/2 = \mathbf{d}\cdot\mathbf{oc}$，則 $b = 2h$，判別式：</p>
+              <p>$$(2h)^2 - 4ac = 4h^2 - 4ac = 4(h^2 - ac)$$</p>
+              <p>正負號與 $4(h^2-ac)$ 相同（$4 &gt; 0$），因此零根、正負根的判斷完全等價。
+              解的分母從 $2a$ 變成 $a$（除以 2），正確代入後結果相同。
+              優點是省去係數 $4$ 的乘除，稍微節省浮點運算。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 121.2 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>
+            實作一個<strong>矩形面光源</strong>（平行 XY 平面的矩形，自發光材質）放在天花板。
+            場景只有面光源和地面（黑色環境光），觀察柔和陰影如何隨光源大小變化。
+          </p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p>步驟：</p>
+              <ol>
+                <li>新增 <code>DiffuseLight(emit_color)</code> 材質：<code>scatter</code> 返回 <code>None</code>，<code>emitted()</code> 返回 <code>emit_color</code>。</li>
+                <li>新增 <code>XYRect(x0,x1,y0,y1,z,material)</code> 可命中物件：光線求交解 $t = (z - O_z)/d_z$，確認 $x_0 \leq P_x \leq x_1$ 且 $y_0 \leq P_y \leq y_1$。</li>
+                <li>修改 <code>ray_color</code>：若材質不散射（返回 None），改為加上 <code>rec.material.emitted()</code>。</li>
+                <li>環境光設為黑色（<code>sky_color</code> 返回 <code>Color(0,0,0)</code>）。</li>
+              </ol>
+              <p>
+                光源越大，同一像素採樣到光源的機率越高，陰影越柔和。
+                縮小光源（點光源極限），陰影趨近硬邊——這說明了為何真實場景的柔和陰影來自「面積」光源。
+              </p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 121.3 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>
+            在 1000 個隨機球的場景中，測量並記錄 <code>HittableList</code>（暴力）vs <code>BVHNode</code>
+            的渲染時間（spp=4，W=200×H=100）。用 Python 的 <code>time.perf_counter()</code> 計時。
+            畫出「物件數量 vs 渲染時間」折線圖（100/200/500/1000 球），觀察成長曲線。
+          </p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+<pre><code class="language-python">import time, random
+
+def benchmark(n_spheres):
+    world_list = HittableList()
+    world_bvh_objs = []
+    for _ in range(n_spheres):
+        center = Point3(random.uniform(-5,5), 0.5, random.uniform(-5,5))
+        s = Sphere(center, 0.5, Lambertian(Color(0.5,0.5,0.5)))
+        world_list.add(s)
+        world_bvh_objs.append(s)
+    bvh = BVHNode(world_bvh_objs, 0, len(world_bvh_objs))
+
+    cam = Camera(Point3(0,2,5), Point3(0,0,0), Vec3(0,1,0), vfov=40, aspect=2)
+    t0 = time.perf_counter()
+    render(world_list, cam, 200, 100, spp=4)
+    t1 = time.perf_counter()
+    render(bvh, cam, 200, 100, spp=4)
+    t2 = time.perf_counter()
+    return t1-t0, t2-t1
+
+for n in [100, 200, 500, 1000]:
+    tl, tb = benchmark(n)
+    print(f"n={n:4d}  List={tl:.2f}s  BVH={tb:.2f}s  加速={tl/tb:.1f}x")</code></pre>
+              <p>預期：List 時間線性成長（$O(n)$），BVH 時間成長遠慢於 List（$O(\log n)$），加速比在 1000 球時達 20–50x。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 121.4 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>
+            Fresnel-Schlick 近似的 $R_0$ 項是從完整的 Fresnel 公式推導出來的。
+            試由菲涅耳方程式（s/p 極化）在 $\theta = 0$（垂直入射）時，
+            推導 $R_0 = \left(\frac{n_1 - n_2}{n_1 + n_2}\right)^2$ 的來源。
+          </p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p>菲涅耳反射係數（s 極化，垂直入射 $\theta_1 = \theta_2 = 0$）：</p>
+              <p>
+                $$r_s = \frac{n_1 \cos\theta_1 - n_2 \cos\theta_2}{n_1 \cos\theta_1 + n_2 \cos\theta_2}
+                       \xrightarrow{\theta \to 0}
+                       \frac{n_1 - n_2}{n_1 + n_2}$$
+              </p>
+              <p>同理 $r_p \to \frac{n_2 - n_1}{n_2 + n_1} = -r_s$（符號差異不影響能量計算）。</p>
+              <p>反射率（能量比例）= 振幅係數的平方：</p>
+              <p>$$R_0 = |r_s|^2 = \left(\frac{n_1 - n_2}{n_1 + n_2}\right)^2$$</p>
+              <p>Schlick 把 $\theta = 0$ 的反射率 $R_0$ 作為基準值，再用 $(1-\cos\theta)^5$ 插值到掠射角（$\theta \to 90°$，$R \to 1$），是計算效率與準確度的折衷。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 121.5 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>
+            實作<strong>餘弦加權半球採樣(cosine-weighted hemisphere sampling)</strong>：
+            在 Lambertian 材質中，讓散射方向機率密度正比於 $\cos\theta$（而非目前的均勻採樣）。
+            比較相同 spp 下兩者的影像品質差異，說明為何加權採樣能降低變異數。
+          </p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p>餘弦加權採樣的逆 CDF 方法（Malley 方法）：</p>
+              <ol>
+                <li>在單位圓盤均勻取樣 $(r_x, r_y)$：<code>Vec3.random_in_disk()</code></li>
+                <li>投影到半球：$z = \sqrt{1 - r_x^2 - r_y^2}$，得 $(r_x, r_y, z)$ 為局部座標</li>
+                <li>把局部座標轉換到以法線為軸的世界座標（需正交基 ONB）</li>
+              </ol>
+              <p>分析：目前 <code>n + random_unit()</code> 的機率密度 $p(\omega) \propto \cos\theta + 1$（非精確）；
+              餘弦加權的 $p(\omega) = \cos\theta / \pi$ 精確對應 Lambertian BRDF $f_r = \rho/\pi$，
+              使得 $f_r / p = \rho$（常數），變異數降為 0——這是<strong>重要性採樣完美匹配</strong>的情況。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 121.6 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>
+            用 Python 的 <code>multiprocessing</code> 或 NumPy 向量化加速渲染器：
+            每行像素(scanline)可獨立平行計算。測量加速比，並思考若要移植到 GPU
+            （<a href="118-cuda-gpu.html">第 118 章</a>）應如何修改資料結構。
+          </p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+<pre><code class="language-python">from multiprocessing import Pool
+
+def render_row(args):
+    j, world, cam, W, H, spp, max_depth = args
+    row = []
+    for i in range(W):
+        c = Color(0,0,0)
+        for _ in range(spp):
+            s = (i + random.random()) / (W-1)
+            t = (j + random.random()) / (H-1)
+            c = c + ray_color(cam.get_ray(s,t), world, max_depth)
+        row.append(write_color_srgb(c, spp))
+    return j, row
+
+with Pool() as pool:
+    jobs = [(j, world, cam, W, H, spp, 10) for j in range(H-1,-1,-1)]
+    results = pool.map(render_row, jobs)
+results.sort(key=lambda x: -x[0])   # 重新按 j 排序</code></pre>
+              <p>GPU 移植要點：把 Vec3 改為 CUDA float3，把材質多型改為 switch/enum（GPU 不支援虛擬函數在 device 上的 vtable），用 CUDA kernel 每個線程處理一個像素。參見第 118 章 CUDA 程式模型。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h3>延伸方向</h3>
+      <ul>
+        <li><strong>體積(Participating Media)</strong>：霧、煙霧、次表面散射——在光線每步有機率被散射，加入 Henyey-Greenstein 相函數</li>
+        <li><strong>多重重要性採樣(MIS)</strong>：同時用材質分佈與光源分佈採樣、加權合併，顯著降低直接光照雜訊</li>
+        <li><strong>即時 GPU 光追</strong>：NVIDIA RTX 硬體加速 BVH 遍歷（DXR / Vulkan Ray Tracing），見<a href="117-gpu-shaders.html">第 117 章</a>與<a href="118-cuda-gpu.html">第 118 章</a></li>
+        <li><strong>AI 降噪</strong>：NVIDIA DLSS / OptiX Denoiser 用神經網路把 4 spp 的雜訊影像還原成 1024 spp 的品質</li>
+        <li><strong>Spectral Rendering</strong>：用波長取代 RGB，正確模擬色散（彩虹、稜鏡）</li>
+        <li><strong>PBRT-v4</strong>：開源、可執行、與教科書同步的工業級參考渲染器，<code>git clone https://github.com/mmp/pbrt-v4</code></li>
+      </ul>
+
+      <!-- ══════════════════════════════════════════════════════════════ -->
+      <h2>把這一章串起來</h2>
+      <!-- ══════════════════════════════════════════════════════════════ -->
+
+      <p>
+        你從一個三十行的 Vec3 類別出發，一步一步走到了能輸出照片級全域光照影像的離線路徑追蹤器。
+        回顧一下這條路上你連接了哪些理論：
+      </p>
+      <ul>
+        <li>
+          <strong>§54 線性代數</strong> → Vec3 的點積與叉積，讓光線方向計算、法線正規化、相機座標系建立都有精確的數學根基
+        </li>
+        <li>
+          <strong>§50 計算幾何</strong> → 光線-球的二次方程求交、Möller-Trumbore 三角求交，幾何推導一步不差
+        </li>
+        <li>
+          <strong>§39 計算機圖學</strong> → 相機模型、光線生成、Phong 的局限——你現在知道路徑追蹤如何彌補那些不足
+        </li>
+        <li>
+          <strong>§110 PBR 與路徑追蹤</strong> → 渲染方程式、BRDF、Fresnel 菲涅耳——Schlick 近似在 Dielectric 材質裡每個像素都用到了
+        </li>
+        <li>
+          <strong>§57 機率論</strong> → 蒙地卡羅估計量、$1/\sqrt{N}$ 收斂率、俄羅斯輪盤的無偏性——這是路徑追蹤雜訊的根源與解法
+        </li>
+        <li>
+          <strong>§27 分治法 + §29 資料結構</strong> → BVH 把暴力 $O(n)$ 求交壓縮到 $O(\log n)$，和樹狀分治如出一轍
+        </li>
+      </ul>
+
+      <blockquote>
+        渲染器的美在於：它是最誠實的程式。你沒辦法假裝光線在走；你必須真的理解它如何散射、折射、衰減，
+        不然圖就是錯的。而當它真的對了，你看到玻璃球把天空壓縮在一個高光裡，
+        那一刻你明白——物理、數學、程式碼，三者在這裡完全融合。
+      </blockquote>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">延伸資源</span>
+          <ul>
+            <li>Peter Shirley《Ray Tracing in One Weekend》系列（免費電子書）—— 本章架構的直接來源：<a href="https://raytracing.github.io/" target="_blank">raytracing.github.io</a></li>
+            <li>Matt Pharr、Wenzel Jakob、Greg Humphreys《Physically Based Rendering: From Theory To Implementation》（PBRT）——業界/學術標準，第四版開源：<a href="https://pbrt.org/" target="_blank">pbrt.org</a></li>
+            <li>Scratchapixel 線上教學：<a href="https://www.scratchapixel.com/" target="_blank">scratchapixel.com</a>——大量插圖與互動推導，含 Monte Carlo、BVH 等專題</li>
+            <li>OSSU 對應課程：<em>Computer Graphics</em>（UC San Diego via edX / Coursera）、<em>Advanced Topics in Computer Graphics</em></li>
+          </ul>
+        </div>
+      </div>
+</article>
+  </main>
+</div>
+<script src="../assets/mathjax"></script>
+<script src="../assets/book.js"></script>
+</body>
+</html>

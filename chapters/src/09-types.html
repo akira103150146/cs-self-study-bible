@@ -1,0 +1,1126 @@
+<!--meta
+title: 靜態與動態型別系統
+description: 從「一組值加一組操作」徹底理解型別:用插頭與插座的比喻看型別檢查,釐清靜態 vs 動態、強 vs 弱兩條獨立的軸,再走進型別推論、代數資料型別、Option/Maybe、模式比對、泛型、型別安全,以及 Python 型別提示與 mypy 的漸進式型別。
+-->
+
+
+      <div class="eyebrow">第二部 · 程式設計核心</div>
+      <h1>靜態與動態型別系統</h1>
+      <p class="subtitle">為什麼 C 會在你按下編譯前就攔住一個 bug,Python 卻要等到程式跑到那一行才當著使用者的面爆炸?答案藏在一個你每天都在用、卻很少認真想過的東西裡——型別。</p>
+      <div class="byline">
+        <span class="tag">第 9 章</span>
+        <span>閱讀時間 ≈ 40 分鐘</span>
+        <span>難度:★★★☆☆</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>型別(type)的精確定義:<strong>一組值 + 一組能對它做的操作</strong>,以及「型別檢查」像插頭對插座</li>
+          <li>為什麼需要型別:它擋掉一整類錯誤,還是一種<strong>輕量級的證明與文件</strong></li>
+          <li><strong>靜態 vs 動態</strong>型別:型別在<em>編譯期</em>還是<em>執行期</em>被檢查,各自的優缺點</li>
+          <li><strong>強 vs 弱</strong>型別:隱式轉型的危險,以及「強弱」與「動靜」其實是兩條獨立的軸</li>
+          <li><strong>型別推論</strong>:編譯器怎麼在你一個型別都沒寫的情況下,推出完整的靜態型別</li>
+          <li><strong>代數資料型別(ADT)</strong>:積型別與和型別,以及 Option/Maybe 如何消滅 null</li>
+          <li><strong>模式比對</strong>與 ADT 的天作之合、<strong>泛型(參數多型)</strong>怎麼讓一段程式適用所有型別</li>
+          <li><strong>型別安全</strong>能保證什麼、又絕對保證不了什麼</li>
+          <li>Python 的<strong>型別提示</strong>與 <strong>mypy</strong>:漸進式型別怎麼讓動態語言也享受靜態檢查</li>
+          <li>C 的型別世界:<code>typedef</code>、<code>struct</code>、<code>union</code> 與指標型別</li>
+        </ul>
+      </div>
+
+      <h2>一個關於插頭的故事</h2>
+      <p>
+        你家牆上的插座有固定的形狀。三孔插座只收三腳插頭,圓孔插座只收圓腳插頭。
+        這不是設計師找你麻煩——它是一道<strong>安全機制</strong>:形狀對不上,你根本插不進去,
+        也就不會把 110V 的東西塞進 220V 的孔、把訊號線插進電源孔。形狀,事先就替你擋掉了一整類災難。
+      </p>
+      <p>
+        程式裡也有一模一樣的東西。每一個函式的參數,就像一個<strong>插座</strong>,它「期待」收到某種形狀的值;
+        每一個值,就像一個<strong>插頭</strong>,它自己有某種形狀。而「檢查插頭形狀符不符合插座」這件事,
+        在程式語言裡有個正式的名字,叫<strong>型別檢查(type checking)</strong>。那個決定「形狀」的東西,就是——
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">型別是什麼</span>
+          <p><strong>型別(type)= 一組值(values)+ 一組能對這些值做的操作(operations)。</strong><br>
+          例如 <code>int</code> 這個型別,它的「值」是一堆整數 …、-1、0、1、2、…;它的「操作」是加減乘除、比大小等。
+          <code>str</code> 的值是各種字串,操作是連接、取子字串、轉大寫等。型別不只是「這是什麼資料」,
+          更重要的是「你<em>可以</em>對它做什麼、<em>不可以</em>做什麼」。</p>
+        </div>
+      </div>
+
+      <p>
+        這個定義有個立刻的推論:<strong>有些操作對某些型別根本沒有意義</strong>。把兩個字串相「減」是什麼意思?
+        <code>"蘋果" - "香蕉"</code> 等於什麼?沒有答案,因為「減法」不在字串的操作清單裡。
+        型別系統的工作,就是在你犯這種錯之前(或之後)抓住你。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 700 300" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="350" y="28" text-anchor="middle" font-size="15" font-weight="800" fill="#1f2328">型別檢查 = 確認「插頭」符合「插座」</text>
+
+  <!-- Row A: int plug fits int socket -->
+  <circle cx="150" cy="98" r="28" fill="#2f6f6a"/>
+  <text x="150" y="103" text-anchor="middle" font-size="15" font-weight="800" fill="#fff">5</text>
+  <text x="150" y="146" text-anchor="middle" font-size="11" fill="#4a5159">int 值(插頭)</text>
+  <line x1="178" y1="98" x2="316" y2="98" stroke="#8a929b" stroke-width="2" stroke-dasharray="4 4"/>
+
+  <rect x="320" y="66" width="170" height="64" rx="10" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <circle cx="320" cy="98" r="20" fill="#fff" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="412" y="94" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">參數插座</text>
+  <text x="412" y="112" text-anchor="middle" font-size="11" fill="#2f6f6a">只收 int</text>
+
+  <text x="540" y="92" text-anchor="middle" font-size="26" font-weight="800" fill="#2f6f6a">✓</text>
+  <text x="588" y="100" text-anchor="start" font-size="12" fill="#4a5159">形狀相符 → 通過</text>
+
+  <!-- Row B: str plug does not fit int socket -->
+  <rect x="124" y="194" width="52" height="52" rx="5" fill="#b4541f"/>
+  <text x="150" y="227" text-anchor="middle" font-size="14" font-weight="800" fill="#fff">"5"</text>
+  <text x="150" y="266" text-anchor="middle" font-size="11" fill="#4a5159">str 值(插頭)</text>
+  <line x1="178" y1="220" x2="316" y2="220" stroke="#8a929b" stroke-width="2" stroke-dasharray="4 4"/>
+
+  <rect x="320" y="188" width="170" height="64" rx="10" fill="#f6e7dd" stroke="#b4541f" stroke-width="2"/>
+  <circle cx="320" cy="220" r="20" fill="#fff" stroke="#b4541f" stroke-width="2"/>
+  <text x="412" y="216" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">參數插座</text>
+  <text x="412" y="234" text-anchor="middle" font-size="11" fill="#b4541f">只收 int</text>
+
+  <text x="540" y="216" text-anchor="middle" font-size="26" font-weight="800" fill="#b4541f">✗</text>
+  <text x="588" y="224" text-anchor="start" font-size="12" fill="#4a5159">形狀不符 → 擋下</text>
+</svg>
+        <figcaption>圖 9-1:型別檢查就像確認插頭能不能插進插座。<code>int</code> 值能插進「期待 int」的參數,<code>str</code> 值則被擋下——這就是一次型別錯誤(type error)。剩下的問題只有一個:這個檢查,什麼時候做?</figcaption>
+      </div>
+
+      <h2>為什麼需要型別?</h2>
+      <p>
+        想像一個沒有任何型別概念的世界:所有東西都只是一串位元(bits),你想對它做什麼操作都行。
+        聽起來很自由,但這種自由是有毒的。你可以把一個「人的年齡」當成記憶體位址去跳轉,
+        可以把一張「圖片」拿去做開根號,可以把「使用者名稱」這個字串拿去做減法——機器照單全收,然後給你一堆垃圾,或直接崩潰。
+      </p>
+      <p>
+        型別替這個混亂的世界畫上界線。它至少幫你三件事:
+      </p>
+      <ul>
+        <li><strong>擋掉一整類錯誤</strong>:「把字串拿去做減法」這種錯,根本不該被允許發生。型別讓它變成「不合法」,
+          而不是「跑出莫名其妙的結果」。</li>
+        <li><strong>當成文件</strong>:當你看到 <code>def send(to: str, body: str) -&gt; bool</code>,你不必讀任何內文,
+          就知道「丟兩個字串進去,會拿回一個是否成功的布林值」。型別簽名是一行<em>永遠不會過期</em>的註解——
+          因為如果它跟程式不符,(在靜態語言裡)根本編譯不過。</li>
+        <li><strong>當成一種輕量級的證明</strong>:一個通過型別檢查的程式,等於證明了「這裡絕不會發生型別不符的操作」。
+          這聽起來不起眼,但它是你不必親自測試、就能<em>確定</em>成立的性質。型別越強,你能免費證明的東西就越多。</li>
+      </ul>
+
+      <div class="callout history">
+        <div class="ico">📜</div>
+        <div class="body">
+          <span class="c-title">型別,其實就是邏輯的證明</span>
+          <p>「型別是一種證明」不只是比喻。1930–60 年代,邏輯學家發現了一件深刻到令人起雞皮疙瘩的事:
+          <strong>程式的型別,與數學的邏輯命題,是同一個東西的兩種說法</strong>;而一個「型別正確的程式」,
+          恰好對應到「該命題的一個證明」。這叫做 <strong>Curry–Howard 對應(Curry–Howard correspondence)</strong>。
+          它是為什麼像 Coq、Agda 這類「證明助手」可以同時是程式語言:在它們裡面,寫程式跟證定理,字面上是同一件事。
+          本章我們只取它最樸素的精神:<em>把性質編碼進型別,讓編譯器替你驗證。</em></p>
+        </div>
+      </div>
+
+      <h2>何時檢查型別?靜態 vs 動態</h2>
+      <p>
+        現在來到本章第一條主軸。所有語言都會做型別檢查(否則 <code>"5" - 3</code> 不知該如何是好),
+        差別在於<strong>什麼時候檢查</strong>:
+      </p>
+      <ul>
+        <li><strong>靜態型別(static typing)</strong>:在程式<strong>執行之前</strong>,由編譯器逐行檢查所有插頭與插座。
+          形狀不符,直接拒絕編譯——你連跑都跑不起來。C、C++、Java、Rust、Haskell 都是這一派。</li>
+        <li><strong>動態型別(dynamic typing)</strong>:平時不檢查,等到程式<strong>真的執行到</strong>某個操作的那一刻,
+          才檢查「這個值現在的型別,支不支援這個操作」。不支援,就在那一瞬間丟出錯誤。Python、JavaScript、Ruby 屬於這一派。</li>
+      </ul>
+      <p>
+        這個差別聽起來抽象,但用<strong>同一個 bug</strong> 在兩種語言裡的命運一對照,你會瞬間懂。
+        我們來寫一個常見的真實錯誤:程式從外界拿到的輸入<em>其實是字串</em>(這在現實中極常見——
+        鍵盤輸入、網頁表單、設定檔讀進來的全都是字串),卻直接拿去做算術。
+      </p>
+
+      <p>先看 <strong>Python(動態)</strong>:</p>
+      <pre><code class="language-python">def discount(price):
+    return price - 10          # 想做「打折」:減 10 元
+
+user_input = "100"             # 注意:從 input()/表單拿到的永遠是「字串」
+print(discount(user_input))
+# 程式照樣啟動、照樣跑……跑到上面那行才「砰」:
+# TypeError: unsupported operand type(s) for -: 'str' and 'int'</code></pre>
+      <p>
+        關鍵在於:<strong>這個程式完全能啟動</strong>。它可能順利跑過前面九百行,直到某個使用者的某次操作走到 <code>discount</code>,
+        才當著他的面爆炸。如果這行藏在一個很少被觸發的分支裡(例如「使用者剛好用了優惠券」),
+        它甚至可能上線好幾個月都沒人發現——直到某天半夜把你叫醒。
+      </p>
+
+      <p>現在看<strong>同一個 bug 在 C(靜態)</strong>:</p>
+      <pre><code class="language-c">#include &lt;stdio.h&gt;
+
+int discount(int price) {       /* 插座明寫:只收 int */
+    return price - 10;
+}
+
+int main(void) {
+    char *user_input = "100";   /* 字串 */
+    printf("%d\n", discount(user_input));   /* ← 編譯器在這裡就翻臉 */
+    return 0;
+}
+/* 編譯時(不是執行時!)就報錯,例如:
+   error: incompatible pointer to integer conversion
+          passing 'char *' to parameter of type 'int' */</code></pre>
+      <p>
+        在 C 裡,你<strong>永遠跑不到</strong>那個 bug——因為編譯器根本不讓你產生出可執行檔。
+        錯誤在你按下「編譯」的那一秒就被攤在桌上,而不是在正式環境裡、在最糟的時間點才現形。
+        這就是靜態與動態最核心的氣質差異。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">靜態 = 事前體檢,動態 = 事後急診</span>
+          <p>靜態型別像出國前的健康檢查:慢、有點煩、會擋下一些其實沒事的人,但問題在出發<strong>前</strong>就被發現。
+          動態型別像沒體檢就出發,平常沒事跑得很順,真出狀況時人已經在國外了——而且可能是最不方便的時刻。
+          兩者沒有絕對的優劣,只有適不適合。</p>
+        </div>
+      </div>
+
+      <h3>各自的優缺點</h3>
+      <p>明白了「何時檢查」,優缺點就幾乎是自動推導出來的:</p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th></th><th>靜態型別(C / Java / Haskell)</th><th>動態型別(Python / JavaScript)</th></tr></thead>
+        <tbody>
+          <tr><td><strong>抓錯時機</strong></td><td>編譯期就抓到一大類錯誤,跑都不必跑</td><td>得等到執行到那一行,且只在「真的走到」時才現形</td></tr>
+          <tr><td><strong>文件性</strong></td><td>型別簽名是永遠正確的文件,IDE 自動完成精準</td><td>得靠命名、註解或測試去猜資料長什麼樣</td></tr>
+          <tr><td><strong>重構安全</strong></td><td>改一個型別,編譯器替你標出所有受影響處</td><td>大型專案重構像走鋼索,容易漏改</td></tr>
+          <tr><td><strong>開發速度</strong></td><td>前期較囉嗦,編譯-修正循環較慢</td><td>寫得快、改得快,極適合原型與探索</td></tr>
+          <tr><td><strong>彈性</strong></td><td>有些「其實正確」的程式會被型別系統拒絕</td><td>鴨子型別(duck typing):能動就好,自由度高</td></tr>
+          <tr><td><strong>執行效能</strong></td><td>編譯器可依型別最佳化,通常較快</td><td>執行期才確定型別,通常較慢、較吃記憶體</td></tr>
+          <tr><td><strong>需要的測試</strong></td><td>型別已涵蓋一層,測試可專注在邏輯</td><td>需要更多測試,來補回型別免費給的那層安全網</td></tr>
+        </tbody>
+      </table>
+      </div>
+
+      <div class="callout note">
+        <div class="ico">🦆</div>
+        <div class="body">
+          <span class="c-title">什麼是「鴨子型別」?</span>
+          <p>動態語言常奉行一句話:「如果牠走起來像鴨子、叫起來像鴨子,那牠就是鴨子。」(duck typing)。
+          意思是:Python 不在乎一個物件「宣稱」自己是什麼型別,只在乎「你要呼叫的那個方法它有沒有」。
+          只要一個物件有 <code>.read()</code> 方法,任何期待「可讀取物件」的函式就收它——管它是檔案、網路連線還是記憶體緩衝區。
+          這帶來巨大的彈性,代價就是:「有沒有那個方法」要到執行期才知道。</p>
+        </div>
+      </div>
+
+      <h2>怎麼轉換型別?強 vs 弱</h2>
+      <p>
+        現在來到第二條主軸,而它是初學者最容易跟第一條搞混的地方。「靜態/動態」談的是<em>什麼時候</em>檢查;
+        「強/弱」談的是當型別<em>對不上</em>時,語言有多願意<strong>偷偷幫你轉換(隱式轉型,implicit conversion)</strong>。
+      </p>
+      <ul>
+        <li><strong>強型別(strongly typed)</strong>:不亂幫你轉。型別對不上,就老實報錯,要你自己講清楚想怎麼轉。</li>
+        <li><strong>弱型別(weakly typed)</strong>:很「貼心」地自作主張,幫你把一邊轉成另一邊,好讓操作「能進行下去」——
+          即使結果常常不是你要的。</li>
+      </ul>
+      <p>
+        弱型別的「貼心」是甜蜜的陷阱。經典的反面教材是 <strong>JavaScript</strong>:
+      </p>
+      <pre><code class="language-javascript">"5" + 3      // "53"   ← 遇到 +,只要有一邊是字串,就當「字串連接」,把 3 轉成 "3"
+5 + "3"      // "53"   ← 同上,順序顛倒結果一樣
+"5" - 3      // 2      ← 但 - 沒有「字串版」!於是把 "5" 偷偷轉成數字 5,得到 2
+"5" * "2"    // 10     ← 兩個都是字串,卻都被轉成數字相乘</code></pre>
+      <p>
+        看出恐怖之處了嗎?<strong>同一個值 <code>"5"</code>,遇到 <code>+</code> 是字串、遇到 <code>-</code> 卻變數字</strong>。
+        語言的「自作主張」讓行為變得難以預測,而這類隱式轉型製造的 bug 又特別陰險——
+        因為程式不報錯,只是默默給你一個錯的答案。
+      </p>
+      <p>
+        對照之下,<strong>Python 是強型別</strong>(它<em>動態</em>,但<em>強</em>):
+      </p>
+      <pre><code class="language-python">"5" + 3
+# TypeError: can only concatenate str (not "int") to str
+# Python 拒絕猜你的意思,要你自己決定:要 "5" + str(3),還是 int("5") + 3?</code></pre>
+      <p>
+        而 <strong>C 是靜態,卻偏弱</strong>:它在編譯期檢查型別,但對數值之間的隱式轉型相當大方,
+        這正是無數底層 bug 的溫床。看一個惡名昭彰的例子——有號數與無號數比較:
+      </p>
+      <pre><code class="language-c">#include &lt;stdio.h&gt;
+
+int main(void) {
+    int i = -1;
+    unsigned int u = 1;
+
+    if (i &lt; u) {                       /* 直覺:-1 &lt; 1,當然成立 */
+        printf("i 比較小\n");
+    } else {
+        printf("居然沒進去?!\n");      /* ← 實際印出這行 */
+    }
+    return 0;
+}</code></pre>
+      <p>
+        為什麼 <code>-1 &lt; 1</code> 會是假的?因為 C 為了讓兩邊「型別一致」,
+        偷偷把 <code>i</code>(-1)<strong>轉成無號數</strong>,於是它變成一個天文數字(在 32 位元下是 4294967295),
+        當然不小於 1。這個轉換你看不見、沒人警告你(預設不會),它就靜靜地把你的程式邏輯顛倒過來。
+        這就是「弱」的代價。
+      </p>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">隱式轉型是「方便」與「災難」之間最細的一條線</span>
+          <p>弱型別的隱式轉型,寫起來確實少打幾個字,但它把「型別不符」這個明確的訊號,
+          悄悄換成了「一個你沒料到的值」。在 C/C++ 裡,養成<strong>盡量明寫轉型(explicit cast)</strong>、
+          打開編譯器警告(<code>-Wall -Wextra</code>)的習慣;在 JavaScript 裡,用 <code>===</code> 而非 <code>==</code>
+          (前者不做隱式轉型),都是在替自己拆掉這顆地雷。</p>
+        </div>
+      </div>
+
+      <h3>關鍵:這是兩條獨立的軸</h3>
+      <p>
+        現在把上面四個例子排在一起,你會發現一件很多人從沒意識到的事:<strong>「動態/靜態」和「強/弱」是兩條彼此獨立的軸</strong>,
+        一個語言在這兩條軸上的位置可以任意組合。Python 是「動態 + 強」,C 是「靜態 + 弱」,
+        它們在兩條軸上都站在不同邊。把四個象限畫出來:
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 640 520" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- quadrant tints -->
+  <rect x="60"  y="60"  width="260" height="200" fill="#e3efed"/>
+  <rect x="320" y="60"  width="260" height="200" fill="#efeaf9"/>
+  <rect x="60"  y="260" width="260" height="200" fill="#eef1f0"/>
+  <rect x="320" y="260" width="260" height="200" fill="#f6e7dd"/>
+
+  <!-- axes -->
+  <line x1="320" y1="44"  x2="320" y2="476" stroke="#4a5159" stroke-width="2"/>
+  <line x1="44"  y1="260" x2="596" y2="260" stroke="#4a5159" stroke-width="2"/>
+
+  <!-- axis labels -->
+  <text x="320" y="34"  text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">強型別 strong(不亂自動轉型)</text>
+  <text x="320" y="498" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">弱型別 weak(大量隱式轉型)</text>
+  <text x="60"  y="254" text-anchor="start"  font-size="13" font-weight="800" fill="#1f2328">靜態 static</text>
+  <text x="60"  y="272" text-anchor="start"  font-size="10" fill="#4a5159">(編譯期檢查)</text>
+  <text x="580" y="254" text-anchor="end"    font-size="13" font-weight="800" fill="#1f2328">動態 dynamic</text>
+  <text x="580" y="272" text-anchor="end"    font-size="10" fill="#4a5159">(執行期檢查)</text>
+
+  <!-- TL: static + strong -->
+  <g font-size="12" font-weight="700" fill="#1f2328">
+    <circle cx="120" cy="110" r="6" fill="#2f6f6a"/><text x="134" y="114">Haskell</text>
+    <circle cx="200" cy="150" r="6" fill="#2f6f6a"/><text x="214" y="154">ML / OCaml</text>
+    <circle cx="120" cy="190" r="6" fill="#2f6f6a"/><text x="134" y="194">Rust</text>
+    <circle cx="210" cy="218" r="6" fill="#2f6f6a"/><text x="224" y="222">Java</text>
+  </g>
+  <!-- TR: dynamic + strong -->
+  <g font-size="12" font-weight="700" fill="#1f2328">
+    <circle cx="420" cy="120" r="6" fill="#8b5cf6"/><text x="434" y="124">Python</text>
+    <circle cx="470" cy="180" r="6" fill="#8b5cf6"/><text x="484" y="184">Ruby</text>
+  </g>
+  <!-- BL: static + weak -->
+  <g font-size="12" font-weight="700" fill="#1f2328">
+    <circle cx="150" cy="330" r="6" fill="#8a929b"/><text x="164" y="334">C</text>
+    <circle cx="200" cy="390" r="6" fill="#8a929b"/><text x="214" y="394">C++</text>
+  </g>
+  <!-- BR: dynamic + weak -->
+  <g font-size="12" font-weight="700" fill="#1f2328">
+    <circle cx="410" cy="330" r="6" fill="#b4541f"/><text x="424" y="334">JavaScript</text>
+    <circle cx="470" cy="392" r="6" fill="#b4541f"/><text x="484" y="396">PHP</text>
+  </g>
+</svg>
+        <figcaption>圖 9-2:型別系統的兩條獨立軸。橫軸是「何時檢查」(靜態 ↔ 動態),縱軸是「願不願意偷偷轉型」(強 ↔ 弱)。注意 Python 與 C 站在對角線兩端——「Python 比 C 弱」是常見誤解,事實恰恰相反:Python 比 C <em>強</em>。(語言的確切位置常有爭議,強弱更是一條沒有嚴格定義的光譜,本圖取大致共識。)</figcaption>
+      </div>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">「強/弱」沒有教科書級的精確定義</span>
+          <p>誠實說:相較於「靜態/動態」有清楚的界線(編譯期 vs 執行期),「強/弱」更像是個<strong>口語的光譜</strong>,
+          不同人用法略有出入。本書採用最通行的版本:<em>強 = 不輕易隱式轉型、型別不符就報錯;弱 = 大量自動轉型</em>。
+          你只要抓住「它跟動靜是不同的事」這個重點就夠了。</p>
+        </div>
+      </div>
+
+      <h2>型別推論:編譯器自己想出來</h2>
+      <p>
+        靜態型別最大的抱怨是「囉嗦」——好像每個變數都得手動標型別。但這其實是個過時的印象。
+        現代的靜態語言有一招厲害的功夫叫<strong>型別推論(type inference)</strong>:你一個型別都不寫,
+        編譯器卻能<em>自己推導</em>出每個東西的型別,而且仍然是貨真價實、編譯期檢查的完整靜態型別。
+      </p>
+      <p>
+        這招的源頭是 ML 家族(包含 Haskell、OCaml、SML)所用的 <strong>Hindley–Milner 型別推論</strong>。
+        它的直覺其實很像解一道代數聯立方程式:從你怎麼<em>使用</em>每個值,反推它必須是什麼型別。看一段 Haskell:
+      </p>
+      <pre><code class="language-haskell">-- 你一個型別都沒寫:
+double x = x + x
+
+-- 但編譯器推論出完整型別:
+-- double :: Num a =&gt; a -&gt; a
+-- 它的推理:x 被用在 (+) 上 → x 必須是「能相加的數」;
+--          回傳 x + x,所以回傳型別跟 x 一樣。</code></pre>
+      <p>再看一個更有說服力的例子——一個處理串列的函式,完全沒寫型別,卻被推得明明白白:</p>
+      <pre><code class="language-haskell">-- 取串列的第一個元素,沒寫任何型別
+firstOf (x : _) = x
+
+-- 編譯器推論:firstOf :: [a] -&gt; a
+-- 「吃一個任意型別 a 的串列,回傳一個 a」——連泛型都自動幫你推出來了!</code></pre>
+      <p>
+        這就是 ML 家族讓人驚艷的地方:<strong>程式碼看起來像動態語言一樣乾淨,骨子裡卻有最嚴格的靜態型別保護</strong>。
+        你享受了動態的簡潔,又沒放棄靜態的安全。(SML 的味道也類似:<code>fun double x = x + x</code> 會被推成 <code>int -&gt; int</code>。)
+      </p>
+      <p>
+        型別推論並非 ML 家族的專利,只是程度不同。C++ 從 C++11 起有 <code>auto</code>,Java 有 <code>var</code>:
+      </p>
+      <pre><code class="language-cpp">// C++:auto 讓編譯器從右邊推出左邊的型別
+auto count = 42;              // 推成 int
+auto name  = std::string("Akira");  // 推成 std::string
+auto pi    = 3.14159;         // 推成 double
+// 注意:這仍是「靜態型別」!count 一旦被推成 int,就永遠是 int,
+// 你不能之後拿它去裝字串——這跟動態語言的「變數可隨時換型別」完全不同。</code></pre>
+      <p>
+        甚至連動態的 <strong>Python</strong> 也在玩這個遊戲,只是方向相反:它本來沒有型別宣告,
+        後來加上了「<strong>型別提示(type hints)</strong>」,讓你可以<em>選擇性地</em>把型別寫上去,給工具與讀者看。
+        這個我們稍後會專門細談。
+      </p>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">「不寫型別」不等於「沒有型別」</span>
+          <p>很多人以為「沒看到型別宣告 = 動態語言」。錯。Haskell 滿屏看不到型別,卻是型別系統最森嚴的語言之一。
+          關鍵分野永遠是那句老話:<strong>型別是在「跑之前」就釘死(靜態),還是在「跑的時候」才確定(動態)?</strong>
+          型別推論只是讓靜態語言「看起來」清爽,本質一點都沒鬆動。</p>
+        </div>
+      </div>
+
+      <h2>代數資料型別:用型別拼出新型別</h2>
+      <p>
+        到目前為止,我們的型別都是現成的:<code>int</code>、<code>str</code>、<code>bool</code>。但程式設計真正的力量,
+        在於你能<strong>自己組合出新型別</strong>。組合的方式只有兩種基本積木,合稱<strong>代數資料型別(algebraic data type, ADT)</strong>。
+        名字裡有「代數」,因為這兩種組合恰好對應乘法與加法——等一下你會看到這個對應美得不可思議。
+      </p>
+
+      <h3>積型別(product type):「而且」</h3>
+      <p>
+        第一種積木:把幾個型別<strong>綁在一起、同時擁有</strong>。一個「點」同時有 x <strong>而且</strong>有 y;
+        一個「人」同時有姓名、年齡、身高。這叫<strong>積型別</strong>,你早就見過它的各種化身:
+        <code>tuple</code>(Python)、<code>struct</code>(C)、<code>record</code>、物件的欄位……
+      </p>
+      <pre><code class="language-haskell">-- Haskell:一個 Point 同時有 x 和 y(積型別)
+data Point = Point Double Double
+
+-- C 的對應物:struct
+-- struct Point { double x; double y; };</code></pre>
+
+      <h3>和型別(sum type):「或」</h3>
+      <p>
+        第二種積木更有意思,也是多數主流語言長期缺席的:一個值是<strong>幾種可能性之一(其中一種,而非全部)</strong>。
+        一個「形狀」<em>是</em>圓形,<strong>或</strong>是矩形,<strong>或</strong>是三角形——同一時間只會是其中一種。這叫<strong>和型別</strong>:
+      </p>
+      <pre><code class="language-haskell">-- Haskell:一個 Shape「是」圓、矩形、或三角形之一(和型別)
+data Shape = Circle Double            -- 圓:帶一個半徑
+           | Rectangle Double Double  -- 矩形:帶寬與高
+           | Triangle Double Double   -- 三角形:帶底與高
+-- 每個「|」都是一個 variant(變體 / 構造子)。
+-- 注意每個變體可以帶自己的資料,且資料的「形狀」可以完全不同。</code></pre>
+      <p>
+        為什麼叫「積」與「和」?這是 ADT 最漂亮的一刻。數一數每個型別<strong>到底有幾個可能的值</strong>:
+      </p>
+      <ul>
+        <li><code>bool</code> 有 2 個值(<code>True</code>/<code>False</code>)。一個 <code>(bool, bool)</code> 的積型別有 <strong>2 × 2 = 4</strong> 個值。
+          欄位的值「相乘」——所以叫<strong>積</strong>。</li>
+        <li>一個「<code>bool</code> 或 一個空值 <code>()</code>」的和型別,有 <strong>2 + 1 = 3</strong> 個值。
+          各變體的值「相加」——所以叫<strong>和</strong>。</li>
+      </ul>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">積 = 而且,和 = 或</span>
+          <p><strong>積型別(struct/tuple)</strong>:「我同時擁有 A <em>而且</em> B <em>而且</em> C。」<br>
+          <strong>和型別(enum/union/Option)</strong>:「我是 A <em>或</em> B <em>或</em> C 其中之一。」<br>
+          幾乎任何真實世界的資料,都是這兩者層層套疊出來的。能流暢地用「積與和」去思考資料,
+          是區分初學者與成熟工程師的一道分水嶺。</p>
+        </div>
+      </div>
+
+      <h3>Option / Maybe:用和型別消滅 null</h3>
+      <p>
+        和型別最有名、最改變人生的應用,是消滅程式設計史上最貴的 bug 來源:<strong>null</strong>。
+        想想一個「在資料庫裡找使用者」的函式——它可能找到,也可能找不到。傳統作法是「找不到就回傳 null」,
+        但這埋下一個地雷:呼叫者<em>很容易忘記</em>檢查 null,直接拿去用,然後程式就 <code>NullPointerException</code> / 當機。
+      </p>
+      <p>
+        和型別的解法是:設計一個型別,明確地說「這裡<strong>可能有值,也可能沒有</strong>」,
+        並且<strong>強迫</strong>呼叫者面對「沒有」的情況。這個型別在 Haskell 叫 <code>Maybe</code>,在 ML/Rust 叫 <code>Option</code>:
+      </p>
+      <pre><code class="language-haskell">-- 標準庫裡就是這樣定義的(a 是任意型別,這也是泛型——下一節談):
+data Maybe a = Nothing      -- 沒有值
+             | Just a       -- 有值,值就在 Just 裡面
+
+-- 安全的除法:除以 0 時,誠實回傳「沒有結果」
+safeDiv :: Int -&gt; Int -&gt; Maybe Int
+safeDiv _ 0 = Nothing
+safeDiv a b = Just (a `div` b)</code></pre>
+      <p>
+        魔法在於:<code>safeDiv 10 2</code> 的型別是 <code>Maybe Int</code>,<strong>不是 <code>Int</code></strong>。
+        所以你<em>不能</em>直接拿它去做加減乘除——你必須先「拆開」它,而拆開時編譯器會逼你同時處理 <code>Just</code> 和 <code>Nothing</code> 兩種情況。
+        「忘記檢查」這個錯誤,在型別層次上<strong>被消滅了</strong>。怎麼拆?這正是下一節主角:模式比對。
+      </p>
+
+      <div class="callout history">
+        <div class="ico">📜</div>
+        <div class="body">
+          <span class="c-title">「十億美元的錯誤」</span>
+          <p>null 參考的發明人東尼・霍爾(Tony Hoare,著名的快速排序作者)在 2009 年的一場演講中公開懺悔:
+          「我把它叫做我的<strong>十億美元錯誤(billion-dollar mistake)</strong>……1965 年我設計了第一個 null 參考,
+          純粹因為它很好實作。但它後來造成了數不清的錯誤、漏洞與系統崩潰,過去四十年大概造成了十億美元的損失。」
+          和型別(Option/Maybe)就是業界對這個錯誤的集體解答。</p>
+        </div>
+      </div>
+
+      <h3>Python 怎麼模擬 ADT?</h3>
+      <p>
+        Python 沒有內建 ADT 的語法,但用幾個工具能拼得很像。<strong>積型別</strong>用 <code>dataclass</code>;
+        <strong>和型別</strong>用 <code>Enum</code>(若各變體不帶資料)或 <code>Union</code>(若帶不同資料);
+        「可能沒有值」則用 <code>Optional[T]</code>(等價於 <code>T | None</code>):
+      </p>
+      <pre><code class="language-python">from dataclasses import dataclass
+
+# 積型別:同時有 width 和 height(用 dataclass)
+@dataclass
+class Circle:
+    radius: float
+
+@dataclass
+class Rectangle:
+    width: float
+    height: float
+
+# 和型別:一個 Shape「是」Circle 或 Rectangle(用 Union,寫成 | )
+Shape = Circle | Rectangle
+
+# 「可能沒有值」:Optional,等價於 int | None,這就是 Python 版的 Maybe/Option
+def safe_div(a: int, b: int) -&gt; int | None:
+    if b == 0:
+        return None
+    return a // b</code></pre>
+      <p>
+        若你的和型別各變體<strong>不帶資料</strong>,只是「一組固定選項」(例如紅綠燈的三種狀態),
+        用 <code>Enum</code> 最乾淨——它也是一種和型別:
+      </p>
+      <pre><code class="language-python">from enum import Enum, auto
+
+class Light(Enum):     # 一個 Light「是」紅、黃、綠 其中之一(和型別)
+    RED = auto()
+    YELLOW = auto()
+    GREEN = auto()</code></pre>
+
+      <h2>模式比對:拆開代數資料型別</h2>
+      <p>
+        我們在第 6 章(函數式程式設計)初次見到<strong>模式比對(pattern matching)</strong>。
+        在這裡,你會看到它與和型別簡直是天作之合——它正是「安全地拆開一個和型別」的標準方式。
+      </p>
+      <p>
+        回到 Haskell 的 <code>Shape</code>。要算面積,你必須對「圓 / 矩形 / 三角形」分別處理。
+        模式比對讓你一次把所有變體攤開,並順手把裡面的資料解開來綁定到變數:
+      </p>
+      <pre><code class="language-haskell">area :: Shape -&gt; Double
+area (Circle r)      = 3.14159 * r * r     -- 是圓:把半徑解出來叫 r
+area (Rectangle w h) = w * h               -- 是矩形:解出寬 w、高 h
+area (Triangle b h)  = 0.5 * b * h         -- 是三角形:解出底 b、高 h</code></pre>
+      <p>同樣的事,用 Python 3.10+ 的 <code>match</code>:</p>
+      <pre><code class="language-python">def area(s: Shape) -&gt; float:
+    match s:
+        case Circle(radius=r):
+            return 3.14159 * r * r
+        case Rectangle(width=w, height=h):
+            return w * h
+    raise ValueError("未知的形狀")</code></pre>
+      <p>再看怎麼用模式比對<strong>安全地拆開 <code>Maybe</code>/Optional</strong>——這就是 null 被消滅的具體現場:</p>
+      <pre><code class="language-haskell">describe :: Maybe Int -&gt; String
+describe Nothing  = "沒有結果"          -- 你「被迫」處理沒有值的情況
+describe (Just x) = "結果是 " ++ show x  -- 只有在這個分支,x 才存在、才拿得到</code></pre>
+      <p>
+        看出關鍵了嗎?你<strong>無法</strong>跳過 <code>Nothing</code> 那一行直接用 <code>x</code>——<code>x</code> 根本不存在於 <code>Nothing</code> 的世界裡。
+        型別系統把「有可能沒有值」這件事,變成你<em>不得不</em>處理的東西。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">窮盡性檢查:ADT + 模式比對最強的維護力</span>
+          <p>在 Haskell、Rust、OCaml 這類語言裡,如果你的 <code>match</code> <strong>漏掉了某個變體</strong>,
+          編譯器會直接警告或報錯。這帶來一個驚人的好處:當你<em>未來</em>替 <code>Shape</code> 新增一個 <code>Pentagon</code>(五邊形),
+          編譯器會立刻替你標出<strong>程式裡每一處</strong>還沒處理五邊形的 <code>match</code>。
+          你不必靠記性、不必靠測試去找——型別系統替你維護了一份「待辦清單」。
+          這就是為什麼資深工程師如此偏愛和型別。(Python 的 <code>match</code> 預設不做窮盡性檢查,但 mypy 在某些設定下能補上。)</p>
+        </div>
+      </div>
+
+      <h2>泛型:一次寫好,處處可用</h2>
+      <p>
+        現在回頭看一個被我們略過的細節。剛才那個取串列首元素的 Haskell 函式,型別是 <code>[a] -&gt; a</code>,
+        那個小寫的 <code>a</code> 是什麼?它是個<strong>型別變數</strong>——代表「任何型別都行」。
+        這個能力叫<strong>參數多型(parametric polymorphism)</strong>,在主流語言裡更常被叫做<strong>泛型(generics)</strong>。
+      </p>
+      <p>
+        泛型解決的痛點很實際。假設你要寫一個「堆疊(stack)」資料結構。難道整數堆疊、字串堆疊、物件堆疊
+        要各寫一份一模一樣、只是型別不同的程式?那是 DRY 原則的災難。泛型讓你<strong>寫一次,適用所有型別</strong>:
+      </p>
+      <pre><code class="language-python"># Python:用 TypeVar 宣告型別變數 T
+from typing import TypeVar, Generic
+
+T = TypeVar("T")            # T 代表「某個型別,呼叫時才決定」
+
+class Stack(Generic[T]):
+    def __init__(self) -&gt; None:
+        self._items: list[T] = []
+
+    def push(self, item: T) -&gt; None:
+        self._items.append(item)
+
+    def pop(self) -&gt; T:
+        return self._items.pop()
+
+# 使用時才把 T「填」進去:
+numbers: Stack[int] = Stack()    # 一個只裝 int 的堆疊
+numbers.push(1)
+numbers.push(2)
+# numbers.push("oops")   ← mypy 會抓到:期待 int,卻給了 str</code></pre>
+      <p>
+        其他主流語言用<strong>角括號</strong> <code>&lt;...&gt;</code> 來寫泛型。同一個概念,三種腔調:
+      </p>
+      <pre><code class="language-cpp">// C++:用 template 寫泛型函式
+template &lt;typename T&gt;
+T max_of(T a, T b) {
+    return (a &gt; b) ? a : b;
+}
+// max_of(3, 5) 用 int,max_of(2.5, 1.0) 用 double——編譯器各生一份</code></pre>
+      <pre><code class="language-java">// Java:用 &lt;T&gt; 寫泛型類別
+class Box&lt;T&gt; {
+    private T value;
+    public void set(T v) { value = v; }
+    public T get() { return value; }
+}
+// new Box&lt;String&gt;() 是裝字串的盒子;List&lt;Integer&gt; 是裝整數的串列</code></pre>
+      <p>
+        雖然概念相同,三種語言實作泛型的<strong>哲學卻大不相同</strong>,這個差別會影響效能與錯誤訊息:
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>語言</th><th>泛型怎麼實作</th><th>後果</th></tr></thead>
+        <tbody>
+          <tr><td>C++ <code>template</code></td><td>編譯期為每個用到的型別<strong>各生成一份</strong>專屬程式碼(單型化 monomorphization)</td><td>執行最快(無額外成本),但編譯較慢、錯誤訊息惡名昭彰地冗長</td></tr>
+          <tr><td>Java <code>generics</code></td><td>編譯後把型別資訊<strong>抹除(type erasure)</strong>,執行期其實只剩 <code>Object</code></td><td>相容舊版,但執行期拿不到泛型型別、有些操作受限</td></tr>
+          <tr><td>Python <code>TypeVar</code></td><td>純粹給靜態檢查器(mypy)與讀者看,<strong>執行期完全不檢查</strong></td><td>零執行成本也零執行保護,安全網全靠你跑不跑 mypy</td></tr>
+        </tbody>
+      </table>
+      </div>
+
+      <div class="callout note">
+        <div class="ico">🔍</div>
+        <div class="body">
+          <span class="c-title">為什麼角括號要在 HTML 裡跳脫?</span>
+          <p>(給也在寫筆記的你)上面 C++ 的 <code>template &lt;typename T&gt;</code>、Java 的 <code>Box&lt;T&gt;</code>、<code>List&lt;String&gt;</code>,
+          在原始碼裡是 <code>&lt;</code> 和 <code>&gt;</code>,但瀏覽器會把它們當成 HTML 標籤的開頭,導致畫面壞掉。
+          所以寫網頁時必須把它們跳脫成 <code>&amp;lt;</code> 與 <code>&amp;gt;</code>。Python 用方括號 <code>List[T]</code> 就沒這個困擾——
+          這也是 Python 型別語法的一個小確幸。</p>
+        </div>
+      </div>
+
+      <h2>型別安全,以及型別擋不住的事</h2>
+      <p>
+        我們花了一整章歌頌型別,該誠實地談談它的<strong>邊界</strong>了。先給「型別安全」一個定義:
+      </p>
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">型別安全(type safety)</span>
+          <p>一個型別安全的語言,保證程式<strong>不會執行「型別系統認定為非法」的操作</strong>——
+          例如把整數當成函式去呼叫、把字串當成記憶體位址去跳轉。羅賓・米爾納(Robin Milner)有句名言:
+          <em>「Well-typed programs cannot go wrong.」</em>(型別正確的程式不會出錯。)
+          但關鍵在於:這裡的「出錯(go wrong)」有一個<strong>精確而有限</strong>的定義——它指的只是「型別層次的非法操作」,
+          <strong>不</strong>包括你的邏輯寫錯。</p>
+        </div>
+      </div>
+      <p>
+        這個「有限」非常重要,因為它是無數人對型別的誤解來源。型別系統<strong>擋不住</strong>的事,多到超乎想像:
+      </p>
+      <pre><code class="language-python"># 這個函式型別「完全正確」:吃兩個 float,回傳一個 float
+def area(width: float, height: float) -&gt; float:
+    return width + height        # ← 邏輯大錯!面積是「乘」,不是「加」
+
+# 型別檢查器看了:型別?完美。它對你的「邏輯」一無所知。
+print(area(3.0, 4.0))            # 印出 7.0,而正確答案是 12.0</code></pre>
+      <p>
+        型別管不到的還有一長串:把 <code>width</code> 和 <code>height</code> 傳反了(型別都是 <code>float</code>,看不出來)、
+        除以零、陣列索引越界(多數語言)、無窮迴圈、競態條件、商業規則寫錯、把錢算成負的……
+        這些 bug 全都「型別正確」,卻全都是 bug。
+      </p>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">型別不是萬靈丹,測試不能省</span>
+          <p>「我用了強型別語言,所以不太需要測試」是危險的錯覺。型別系統證明的是「結構不會錯」,
+          卻完全管不到「邏輯對不對」。把型別想成<strong>第一道篩網</strong>:它低成本地濾掉一大類低級錯誤,
+          讓你的測試與心力,能專注在它濾不掉的那些——真正關乎正確性的邏輯。型別與測試是隊友,不是替代品。</p>
+        </div>
+      </div>
+
+      <p>
+        話說回來,「型別能保證多少」其實是可以<strong>往上推</strong>的,而這正是型別系統研究最迷人的前沿:
+        型別越強,你能編碼進去、讓編譯器替你證明的性質就越多。Rust 把「記憶體安全」與「沒有資料競爭」
+        塞進了型別系統(它的 borrow checker);相依型別(dependent types)的語言甚至能讓型別保證「這個陣列存取絕不越界」。
+        但天下沒有白吃的午餐——由於停機問題那一類的理論極限(回憶第 1 章),
+        <strong>沒有任何型別系統能自動證明「任意程式的任意性質」</strong>。型別的疆界,終究也是計算的疆界。
+      </p>
+
+      <h2>Python 的型別提示與 mypy:漸進式型別</h2>
+      <p>
+        如果靜態與動態各有千秋,有沒有可能<strong>兩個都要</strong>?這正是 Python 從 3.5 起走的路:
+        保留動態的本性,但讓你<strong>選擇性地</strong>加上型別標註,再用外部工具做靜態檢查。
+        這種「想嚴格的地方就嚴格、想隨意的地方就隨意」的折衷,叫<strong>漸進式型別(gradual typing)</strong>。
+      </p>
+      <p>
+        先看怎麼加型別提示(type hints)。語法就是在參數和回傳值後面標型別:
+      </p>
+      <pre><code class="language-python"># greet.py
+def greet(name: str) -&gt; str:         # 吃一個 str,回傳一個 str
+    return "哈囉," + name
+
+age: int = 25
+print(greet(age))                    # 我們不小心傳了 int 進去</code></pre>
+      <p>
+        這裡有個<strong>務必記住</strong>的重點:型別提示<strong>不影響 Python 的執行</strong>。
+        Python 直譯器基本上把它們當註解略過。所以上面這支程式直接 <code>python greet.py</code> 仍會啟動,
+        然後在 <code>"哈囉," + age</code> 那行因為「字串 + 整數」當場丟 <code>TypeError</code>——
+        型別提示本身<em>不會</em>幫你擋下任何東西。
+      </p>
+      <p>
+        真正的魔法來自一個獨立工具:<strong>mypy</strong>(或 Pyright 等)。它讀你的型別提示,
+        在<strong>程式跑之前</strong>幫你做一次靜態檢查,等於替動態的 Python 補上一道編譯期的安全網:
+      </p>
+      <pre><code class="language-bash">$ mypy greet.py
+greet.py:5: error: Argument 1 to "greet" has incompatible type "int"; expected "str"  [arg-type]
+Found 1 error in 1 file (checked 1 source file)</code></pre>
+      <p>
+        漂亮——錯誤在「跑之前」就被指名道姓地抓出來,連行號都給你。mypy 還能抓到更隱晦、
+        不一定會當機但邏輯肯定錯的問題,例如「把結果存進型別不對的變數」:
+      </p>
+      <pre><code class="language-python">def first(items: list[int]) -&gt; int:
+    return items[0]
+
+result: str = first([1, 2, 3])   # 我宣告 result 是 str,卻塞了 int 進去
+# mypy: error: Incompatible types in assignment
+#       (expression has type "int", variable has type "str")</code></pre>
+      <p>
+        漸進式型別最甜美的應用,還是回到我們的老朋友 null。用 <code>int | None</code> 標出「可能沒有值」,
+        mypy 就會<strong>強迫你先檢查 <code>None</code></strong>,把 Maybe/Option 的精神帶進 Python:
+      </p>
+      <pre><code class="language-python">def find_user(uid: int) -&gt; str | None:    # 可能找到名字,也可能找不到
+    ...
+
+name = find_user(7)
+print(name.upper())     # mypy: error: Item "None" of "str | None" has no attribute "upper"
+
+# 正確寫法:先處理 None 的情況,mypy 才放行
+if name is not None:
+    print(name.upper())     # 在這個區塊裡,mypy 知道 name 一定是 str</code></pre>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">怎麼在你的專案裡用漸進式型別?</span>
+          <p>漸進式的精髓是「不必一次到位」。實務上的策略:新寫的程式碼一律加型別提示;
+          舊程式碼從<strong>最核心、最常被呼叫</strong>的模組開始慢慢補;把 <code>mypy</code> 接進 CI(持續整合),
+          讓它在每次提交時自動把關。你會驚訝於它幫你攔下多少「上線才會爆」的低級錯誤——
+          這幾乎是動態語言能拿到的、CP 值最高的一筆投資。</p>
+        </div>
+      </div>
+
+      <h2>C 的型別世界:typedef、struct 與指標</h2>
+      <p>
+        本書的慣例是用 C 看「底層真相」。C 是<strong>靜態 + 偏弱</strong>的型別系統——編譯期檢查,
+        但對數值間的隱式轉型相當縱容(還記得那個有號/無號的坑嗎)。這一節快速認識 C 裡幾個關鍵的型別工具,
+        它們也是理解第五部「計算機系統」的伏筆。
+      </p>
+
+      <h3>typedef:替型別取別名</h3>
+      <p>
+        <code>typedef</code> 讓你給一個型別取個更好懂的名字,純粹是為了可讀性:
+      </p>
+      <pre><code class="language-c">typedef unsigned long long u64;   /* 以後寫 u64 就等於 unsigned long long */
+u64 big = 18000000000ULL;         /* 清爽多了 */</code></pre>
+
+      <h3>struct:C 的積型別</h3>
+      <p>
+        <code>struct</code> 把幾個欄位綁成一個新型別——它就是 C 版的積型別,常搭配 <code>typedef</code> 一起用:
+      </p>
+      <pre><code class="language-c">#include &lt;stdio.h&gt;
+
+typedef struct {
+    char   name[20];
+    int    age;
+    double height;
+} Person;            /* 積型別:同時有 name、age、height */
+
+int main(void) {
+    Person p = {"小明", 18, 172.5};
+    printf("%s,%d 歲,%.1f 公分\n", p.name, p.age, p.height);
+    return 0;
+}</code></pre>
+
+      <h3>union:危險版的和型別</h3>
+      <p>
+        C 也有「或」的概念,叫 <code>union</code>——同一塊記憶體,可以當成<strong>幾種型別之一</strong>來解讀。
+        但它跟 ML 的安全和型別有個致命差別:<strong>它沒有「標籤」告訴你現在裝的到底是哪一種</strong>:
+      </p>
+      <pre><code class="language-c">union Value {
+    int    i;
+    double d;
+    char  *s;
+};   /* 同一塊記憶體,三種解讀方式之一——但沒人替你記住「現在是哪種」 */
+
+union Value v;
+v.i = 42;            /* 現在裝的是 int */
+double x = v.d;      /* ← 災難:把那塊位元當成 double 讀,得到垃圾值 */</code></pre>
+      <p>
+        這就是「裸 union」的危險:你存進去的是 <code>int</code>,卻沒東西阻止你把它當 <code>double</code> 讀出來。
+        安全的和型別需要一個額外的<strong>標籤(tag)</strong>來記住目前是哪個變體,這種寫法叫
+        <strong>tagged union(標籤聯合)</strong>。而 ML/Haskell 的 <code>datatype</code> 之所以安全,
+        正是因為它<em>內建</em>幫你管好了這個標籤,還用模式比對逼你正確地拆——這就是為什麼它們的和型別優雅又安全。
+      </p>
+
+      <h3>指標型別:型別決定「怎麼解讀位元」</h3>
+      <p>
+        C 最能體現「型別 = 怎麼解讀一段位元」這個本質的,是<strong>指標型別</strong>。
+        一個指標的型別,不只說「它是個位址」,還說「位址那頭,該怎麼解讀」:
+      </p>
+      <pre><code class="language-c">int   x = 42;
+int  *p = &amp;x;       /* p 的型別是「指向 int 的指標」:讀 *p 時讀 4 個位元組當 int */
+char *s = "hi";     /* s 的型別是「指向 char 的指標」:讀 *s 時讀 1 個位元組當 char */</code></pre>
+      <p>
+        同樣一個記憶體位址,透過 <code>int *</code> 看是一個四位元組的整數,透過 <code>char *</code> 看卻是一個位元組的字元。
+        型別,就是那副決定你「看見什麼」的眼鏡。這個「型別其實只是『如何詮釋一串位元』」的深層真相,
+        我們會在<strong>第五部「計算機系統」</strong>裡掀開記憶體的蓋子,講得淋漓盡致。現在,你只要記得這個埋下的伏筆。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">🔍</div>
+        <div class="body">
+          <span class="c-title">同一個靈魂,跨越所有語言</span>
+          <p>從 Haskell 的 <code>data</code>、Python 的 <code>dataclass</code>、到 C 的 <code>struct</code> 與 <code>union</code>,
+          你會發現「積型別」與「和型別」這兩個概念<strong>無所不在</strong>,只是換了腔調。
+          這正是第 1 章那句「同一個靈魂,不同軀殼」的延續——學會用型別的本質(值的集合 + 操作 + 怎麼組合)去看,
+          你就能在任何新語言裡迅速認出老朋友。</p>
+        </div>
+      </div>
+
+      <h2>動手練習</h2>
+      <p>
+        型別是「看懂」與「真懂」差距特別大的主題。以下五題難度遞增,<strong>請先自己想、自己寫</strong>,卡住再看解答。
+      </p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 9.1 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>把下列六種語言,各自歸到「動態/靜態 × 強/弱」的<strong>哪一個象限</strong>,並為每個給<strong>一句</strong>理由:
+          <code>Python</code>、<code>C</code>、<code>JavaScript</code>、<code>Haskell</code>、<code>Java</code>、<code>C++</code>。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <div class="table-wrap">
+              <table>
+                <thead><tr><th>語言</th><th>象限</th><th>一句理由</th></tr></thead>
+                <tbody>
+                  <tr><td>Haskell</td><td>靜態 + 強</td><td>編譯期完整檢查,且幾乎不做隱式轉型,連 <code>Int</code> 與 <code>Double</code> 都要你明轉</td></tr>
+                  <tr><td>Java</td><td>靜態 + 強(偏強)</td><td>編譯期檢查;雖有少量數值自動升級,但不會把字串硬轉成數字</td></tr>
+                  <tr><td>C</td><td>靜態 + 弱</td><td>編譯期檢查型別,但數值隱式轉型大方(有號/無號、縮窄轉換都默默發生)</td></tr>
+                  <tr><td>C++</td><td>靜態 + 弱</td><td>同 C 的傳統;雖比 C 多了型別工具,隱式轉型的歷史包袱仍在</td></tr>
+                  <tr><td>Python</td><td>動態 + 強</td><td>執行期才檢查,但 <code>"5" - 3</code> 會直接丟 <code>TypeError</code>,拒絕亂轉</td></tr>
+                  <tr><td>JavaScript</td><td>動態 + 弱</td><td>執行期才檢查,且 <code>"5" - 3 === 2</code>、<code>"5" + 3 === "53"</code>,隱式轉型滿天飛</td></tr>
+                </tbody>
+              </table>
+              </div>
+              <p>最容易答錯的是把 Python 當成「弱」。記住:Python 動態但<strong>強</strong>——它不像 JS 那樣偷偷幫你轉,
+              這跟 C「靜態但弱」恰好對角。能分清這兩條軸,你就贏過一大半人了。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 9.2 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>替下面這段 Python 加上完整的型別提示(type hints),然後說明:如果有人寫
+          <code>average(["a", "b"])</code> 或把 <code>repeat</code> 的兩個引數傳反,<strong>mypy 會抓到什麼</strong>?</p>
+          <pre><code class="language-python">def average(nums):
+    return sum(nums) / len(nums)
+
+def repeat(text, times):
+    return text * times</code></pre>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>加上型別提示:<code>average</code> 吃一串數字、回傳浮點數;<code>repeat</code> 吃字串與整數、回傳字串。</p>
+              <pre><code class="language-python">def average(nums: list[float]) -&gt; float:
+    return sum(nums) / len(nums)
+
+def repeat(text: str, times: int) -&gt; str:
+    return text * times</code></pre>
+              <p>mypy 會抓到的問題:</p>
+              <ul>
+                <li><code>average(["a", "b"])</code>:傳入 <code>list[str]</code>,但參數要求 <code>list[float]</code>。
+                  mypy 報 <em>incompatible type "list[str]"; expected "list[float]"</em>。
+                  (注意:不加型別時,這個錯誤要到執行期 <code>sum()</code> 試圖把字串相加才會爆。)</li>
+                <li><code>repeat(3, "hi")</code>(把引數傳反):第一個參數期待 <code>str</code> 卻收到 <code>int</code>,
+                  第二個期待 <code>int</code> 卻收到 <code>str</code>,mypy 兩個都會標出來。
+                  有趣的是,<code>3 * "hi"</code> 在 Python 執行期其實<em>不會</em>報錯(會得到 <code>"hihihi"</code>),
+                  所以這是個「不當機但邏輯錯」的 bug——正是靜態檢查最有價值的地方。</li>
+              </ul>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 9.3 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>用 <code>dataclass</code> 在 Python 裡<strong>模擬一個和型別 <code>Option</code></strong>:定義 <code>Some</code>(帶一個值)
+          與 <code>Nothing</code>(沒有值)。然後寫一個 <code>safe_sqrt(x)</code>:若 <code>x &gt;= 0</code> 回傳 <code>Some(根號 x)</code>,
+          否則回傳 <code>Nothing</code>。最後用 <code>match</code> 把結果拆開印出來。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">from dataclasses import dataclass
+import math
+
+@dataclass
+class Some:
+    value: float
+
+@dataclass
+class Nothing:
+    pass
+
+Option = Some | Nothing        # 和型別:結果「是」Some 或 Nothing
+
+def safe_sqrt(x: float) -&gt; Option:
+    if x &gt;= 0:
+        return Some(math.sqrt(x))
+    return Nothing()
+
+# 用模式比對拆開——你「被迫」處理 Nothing 的情況
+def show(result: Option) -&gt; str:
+    match result:
+        case Some(value=v):
+            return f"答案是 {v}"
+        case Nothing():
+            return "沒有實數解"
+
+print(show(safe_sqrt(16)))   # 答案是 4.0
+print(show(safe_sqrt(-9)))   # 沒有實數解</code></pre>
+              <p>這就是 Maybe/Option 的精神:<code>safe_sqrt</code> 的回傳型別是 <code>Option</code> 而不是 <code>float</code>,
+              所以你不能直接拿去做運算,必須先 <code>match</code> 拆開,順便被逼著面對「沒有結果」的情況——null 的地雷被拆掉了。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 9.4 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>設計一個<strong>泛型堆疊 <code>Stack[T]</code></strong>(用 Python 的 <code>Generic</code> 與 <code>TypeVar</code>),
+          提供 <code>push</code>、<code>pop</code>、<code>peek</code>(看頂端但不取出)、<code>is_empty</code>。
+          示範它能裝 <code>int</code> 也能裝 <code>str</code>,並說明為什麼 <code>Stack[int]</code> 裡 <code>push("x")</code> 會被 mypy 擋下。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">from typing import Generic, TypeVar
+
+T = TypeVar("T")               # 型別變數:呼叫時才決定 T 是什麼
+
+class Stack(Generic[T]):
+    def __init__(self) -&gt; None:
+        self._items: list[T] = []
+
+    def push(self, item: T) -&gt; None:
+        self._items.append(item)
+
+    def pop(self) -&gt; T:
+        return self._items.pop()
+
+    def peek(self) -&gt; T:
+        return self._items[-1]
+
+    def is_empty(self) -&gt; bool:
+        return len(self._items) == 0
+
+# 裝整數
+nums: Stack[int] = Stack()
+nums.push(1); nums.push(2)
+print(nums.pop())              # 2
+
+# 同一份程式,裝字串
+words: Stack[str] = Stack()
+words.push("hello")
+print(words.peek())           # hello
+
+# nums.push("x")              # ← mypy:Argument 1 has incompatible type "str"; expected "int"</code></pre>
+              <p>關鍵:當你寫 <code>nums: Stack[int]</code>,就把型別變數 <code>T</code> 綁定成了 <code>int</code>。
+              於是 <code>push</code> 的參數 <code>item: T</code> 在這個物件上變成 <code>item: int</code>,
+              <code>push("x")</code> 自然違反型別。<strong>泛型的好處正在這:一份程式,不同使用點各自享有精準的型別檢查</strong>。
+              注意這層保護只在 mypy 階段;Python 執行期並不會真的擋下 <code>push("x")</code>。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 9.5 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>用<strong>和型別(ADT)</strong>為一棵<strong>運算式樹(expression tree)</strong>建模:一個運算式<em>是</em>
+          一個數字,<strong>或</strong>兩個運算式的加、減、乘、除其中之一。然後寫一個求值函式 <code>eval_expr</code>,
+          用模式比對算出整棵樹的值。最後算出 <code>(1 + 2) × (8 − 3)</code>。</p>
+          <p><strong>附加思考</strong>:除法可能除以零。結合練習 9.3 的 <code>Option</code> 思維,
+          讓 <code>eval_expr</code> 回傳「可能沒有值」,優雅地處理除零。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>先把運算式樹定義成和型別:每個變體要嘛是葉子(數字),要嘛是帶兩棵子樹的運算。
+              這是 ADT 最自然的舞台——資料的「形狀」天生就是遞迴的和型別。</p>
+              <pre><code class="language-python">from dataclasses import dataclass
+
+@dataclass
+class Num:
+    value: float
+
+@dataclass
+class Add:
+    left: "Expr"
+    right: "Expr"
+
+@dataclass
+class Sub:
+    left: "Expr"
+    right: "Expr"
+
+@dataclass
+class Mul:
+    left: "Expr"
+    right: "Expr"
+
+@dataclass
+class Div:
+    left: "Expr"
+    right: "Expr"
+
+# 和型別:一個 Expr「是」數字,或四種運算之一
+Expr = Num | Add | Sub | Mul | Div
+
+def eval_expr(e: Expr) -&gt; float:
+    match e:
+        case Num(value=v):
+            return v
+        case Add(left=l, right=r):
+            return eval_expr(l) + eval_expr(r)
+        case Sub(left=l, right=r):
+            return eval_expr(l) - eval_expr(r)
+        case Mul(left=l, right=r):
+            return eval_expr(l) * eval_expr(r)
+        case Div(left=l, right=r):
+            return eval_expr(l) / eval_expr(r)
+    raise ValueError("未知的運算式")
+
+# (1 + 2) × (8 − 3)
+tree = Mul(Add(Num(1), Num(2)),
+           Sub(Num(8), Num(3)))
+print(eval_expr(tree))        # 15.0</code></pre>
+              <p>注意 <code>eval_expr</code> 對自己<strong>遞迴呼叫</strong>:要算 <code>Add</code> 的值,先算左右子樹的值——
+              這正是第 3 章「樹狀結構天生適合遞迴」的活例子,而 ADT + 模式比對讓它寫起來幾乎像在抄數學定義。</p>
+
+              <p><strong>附加:用 Option 處理除零</strong>。把回傳型別改成「可能沒有值」,任何一步除零就讓整棵樹的結果變成 <code>None</code>:</p>
+              <pre><code class="language-python">def safe_eval(e: Expr) -&gt; float | None:
+    match e:
+        case Num(value=v):
+            return v
+        case Add(left=l, right=r):
+            return _combine(safe_eval(l), safe_eval(r), lambda a, b: a + b)
+        case Sub(left=l, right=r):
+            return _combine(safe_eval(l), safe_eval(r), lambda a, b: a - b)
+        case Mul(left=l, right=r):
+            return _combine(safe_eval(l), safe_eval(r), lambda a, b: a * b)
+        case Div(left=l, right=r):
+            a, b = safe_eval(l), safe_eval(r)
+            if a is None or b is None or b == 0:   # 任何子樹失敗、或除以零
+                return None
+            return a / b
+    raise ValueError("未知的運算式")
+
+def _combine(a, b, op):
+    if a is None or b is None:    # 只要有一邊算不出來,整體就算不出來
+        return None
+    return op(a, b)
+
+print(safe_eval(Div(Num(1), Num(0))))                 # None(優雅地處理除零)
+print(safe_eval(Add(Num(10), Div(Num(6), Num(2)))))   # 13.0</code></pre>
+              <p>對照看 Haskell 寫同一棵樹有多精煉——而且它的 <code>case</code> 若漏掉某個變體,編譯器會直接警告(窮盡性檢查):</p>
+              <pre><code class="language-haskell">data Expr = Num Double
+          | Add Expr Expr
+          | Mul Expr Expr
+
+eval :: Expr -&gt; Double
+eval (Num n)   = n
+eval (Add a b) = eval a + eval b
+eval (Mul a b) = eval a * eval b</code></pre>
+              <p>你已經親手體會到:當資料的結構是「和型別」,ADT + 模式比對 + 遞迴,
+              幾乎是把問題的數學定義<em>直接翻譯</em>成程式。這就是型別替你思考的威力。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="callout note"><div class="ico">🧭</div><div class="body"><span class="c-title">延伸:新軌道</span><p>本章的型別理念在 Rust 中被推到極致。<a href="85-rust-ownership.html">第 79 章「所有權、借用與生命週期」</a>與<a href="86-rust-types-errors.html">第 80 章「型別、trait、列舉與錯誤處理」</a>展示 Rust 如何用所有權與 trait 把記憶體安全與型別正確性全部推到編譯期,讓整類執行期錯誤從語言層面徹底消失。</p></div></div>
+
+      <h2>把這一章串起來</h2>
+      <p>
+        我們從牆上的插座出發,走完了型別系統的全景。回顧這趟旅程的路標:
+      </p>
+      <ul>
+        <li><strong>型別 = 一組值 + 一組操作</strong>。型別檢查就像確認插頭符合插座,擋掉「對字串做減法」這類無意義的操作。</li>
+        <li>型別的價值有三:<strong>擋掉一整類錯誤、當永不過期的文件、當輕量級的證明</strong>(Curry–Howard 對應)。</li>
+        <li><strong>靜態 vs 動態</strong>:差別在<em>何時檢查</em>——編譯期(事前體檢)還是執行期(事後急診)。同一個 bug,C 編譯期被擋、Python 執行期才爆。</li>
+        <li><strong>強 vs 弱</strong>:差別在<em>願不願意偷偷轉型</em>。這跟動靜是<strong>兩條獨立的軸</strong>:Python 是動態但強,C 是靜態但弱,站在對角線兩端。</li>
+        <li><strong>型別推論</strong>讓靜態語言看起來像動態一樣清爽(Hindley–Milner、C++ <code>auto</code>);不寫型別,不等於沒有型別。</li>
+        <li><strong>代數資料型別</strong>:積型別(而且 / struct、tuple)與和型別(或 / enum、union、Option)。
+          <strong>Option/Maybe</strong> 用和型別消滅了「十億美元錯誤」null。</li>
+        <li><strong>模式比對</strong>是拆開和型別的標準姿勢;搭配窮盡性檢查,讓「新增一個變體」這件事變得安全。</li>
+        <li><strong>泛型(參數多型)</strong>讓一段程式適用所有型別(<code>Stack[T]</code>、C++ <code>template</code>、Java <code>&lt;T&gt;</code>),三語言的實作哲學各異。</li>
+        <li><strong>型別安全</strong>保證「不做非法的型別操作」,但<strong>管不到你的邏輯</strong>——型別是第一道篩網,不是測試的替代品。</li>
+        <li>Python 的<strong>型別提示 + mypy</strong> 實現了<strong>漸進式型別</strong>:保留動態的彈性,又能在跑之前抓錯。</li>
+        <li>C 的型別世界:<code>typedef</code>、<code>struct</code>(積)、<code>union</code>(危險的裸和型別)、指標型別——型別的本質,
+          其實是「如何解讀一段位元」,這條線會在第五部展開。</li>
+      </ul>
+      <p>
+        現在你看程式語言的眼光應該不一樣了:每一種語言,都是在「動/靜」與「強/弱」這張地圖上,
+        替「安全 vs 彈性」做出了一組取捨。沒有最好的型別系統,只有最適合手上問題的那一個。
+        下一站,我們會把這些「程式設計核心」的概念,帶往更接近機器、更講究效率的世界。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">📚</div>
+        <div class="body">
+          <span class="c-title">想更深入?延伸資源</span>
+          <p>本章對應 OSSU 的
+          <a href="https://www.coursera.org/learn/programming-languages">華盛頓大學 UW CSE341 Programming Languages</a>
+          (由 Dan Grossman 教授,Coursera 上分為 Part A/B/C,也有
+          <a href="https://courses.cs.washington.edu/courses/cse341/">完整的課程網站</a>)。
+          這門課用 SML、Racket、Ruby 三種語言,把「靜態 vs 動態」「型別推論」「ADT 與模式比對」這些主題講得異常透徹,
+          是把本章從「知道」推進到「真懂」的最佳下一步。若你想親手感受 Hindley–Milner 型別推論的魔力,
+          直接動手玩玩 Haskell(<a href="https://learnyouahaskell.github.io/"><em>Learn You a Haskell for Great Good!</em></a>,免費線上書)
+          會給你最直接的震撼。</p>
+        </div>
+      </div>
+
+    

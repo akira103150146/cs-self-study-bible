@@ -1,0 +1,1328 @@
+<!--meta
+title: Kubernetes 編排與雲原生
+description: 從單機 Compose 邁向叢集編排——理解 K8s 控制平面架構、宣告式設定、Pod/Deployment/Service/Ingress 核心物件、自我修復與水平擴展，並用 minikube 跑起你的第一個服務。
+-->
+
+      <div class="eyebrow">第二一部 · 容器、虛擬化與雲原生底層</div>
+      <h1>Kubernetes 編排與雲原生</h1>
+      <p class="subtitle">Compose 管好了單台機器——但跨十台伺服器、自動重啟、零停機更新，你需要一個叢集的「大腦」。</p>
+      <div class="byline">
+        <span class="tag">第 90 章</span>
+        <span>閱讀時間 ≈ 65 分鐘</span>
+        <span>難度:★★★★☆</span>
+      </div>
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>為何單機 Docker Compose 不夠用,需要叢集編排器(orchestrator)</li>
+          <li>Kubernetes 控制平面(api-server / scheduler / controller-manager / etcd)與工作節點(kubelet / kube-proxy)的角色分工</li>
+          <li>宣告式設定(declarative configuration)與調和迴路(reconciliation loop)的核心哲學</li>
+          <li>Pod、Deployment、ReplicaSet 的層次關係與正確 YAML 寫法</li>
+          <li>Service 如何以標籤選擇器(label selector)穩定路由到 Pod;Ingress 如何對外暴露 HTTP/HTTPS</li>
+          <li>ConfigMap / Secret / PersistentVolumeClaim 的設定與儲存概觀</li>
+          <li>liveness / readiness probe 讓 k8s 知道應用是否健康;HPA 水平自動擴展原理</li>
+          <li>用 minikube / kind 在本機跑 Deployment + Service，實際操作 kubectl apply / get / scale / rollout</li>
+        </ul>
+      </div>
+
+      <!-- ==================== h2 ① ==================== -->
+      <h2>Compose 到了頭：跨機器、自動重啟、零停機更新</h2>
+
+      <p>
+        在<a href="95-docker-practice.html">第 89 章</a>，你用 Docker Compose 把 web、db、cache 三個容器
+        宣告在一份 <code>docker-compose.yml</code> 裡，一個指令全部跑起來。這對單台機器的開發環境或小型部署非常夠用。
+        但當服務成長之後，問題一個一個冒出來：
+      </p>
+
+      <ul>
+        <li><strong>高可用(high availability)</strong>：只有一台機器，一台機器掛掉，服務就全斷。</li>
+        <li><strong>水平擴展(horizontal scaling)</strong>：流量突然翻倍，你要手動 SSH 到每台機器跑 <code>docker run</code>？</li>
+        <li><strong>滾動更新(rolling update)</strong>：Compose 沒有原生的「零停機更新 + 失敗自動回滾」機制。</li>
+        <li><strong>自我修復(self-healing)</strong>：容器崩潰後，Compose 的 <code>restart: always</code>
+            只能在同一台機器重啟；跨節點的自動重新調度做不到。</li>
+        <li><strong>跨節點網路</strong>：多台機器上的容器要互相通訊，需要 overlay 網路——Compose 管不了。</li>
+      </ul>
+
+      <p>
+        這些問題正是「容器編排器(container orchestrator)」要解決的。市場上曾出現過 Mesos、Docker Swarm
+        等競爭者，但今天 <strong>Kubernetes(K8s)</strong> 已經是事實上的業界標準——
+        從 Google 的生產系統(Borg 的開源版本)演化而來，2014 年開源，2016 年捐給 CNCF
+        (Cloud Native Computing Foundation)，目前是規模最大的開源專案之一。
+      </p>
+
+      <div class="callout history">
+        <div class="ico">📜</div>
+        <div class="body">
+          <span class="c-title">K8s 名字的由來</span>
+          <p>
+            Kubernetes 是希臘文「舵手(helmsman)」——這也是 logo 是船舵的原因。
+            「K8s」是縮寫:<code>K</code> + 8 個字母 + <code>s</code>。
+            Google 工程師將其稱為 Borg 的繼任者；2014 年在 DockerCon 首次公開展示，
+            不到兩年便在容器編排市場中確立主導地位。
+          </p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ② ==================== -->
+      <h2>Kubernetes 是什麼：控制平面與工作節點</h2>
+
+      <p>
+        一個 Kubernetes 叢集(cluster)由兩類機器組成：負責「思考決策」的
+        <strong>控制平面(control plane)</strong>，和負責「實際跑容器」的
+        <strong>工作節點(worker node)</strong>。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 800 480" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <rect width="800" height="480" fill="#f8fafb" rx="12"/>
+  <text x="400" y="28" text-anchor="middle" font-size="14" font-weight="700" fill="#1f2328">Kubernetes 叢集架構：控制平面 + 工作節點</text>
+
+  <!-- kubectl -->
+  <rect x="20" y="50" width="120" height="44" rx="8" fill="#8b5cf6" stroke="#7c3aed" stroke-width="1.5"/>
+  <text x="80" y="69" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">kubectl</text>
+  <text x="80" y="85" text-anchor="middle" font-size="9" fill="#ddd6fe">CLI 工具</text>
+
+  <!-- arrow kubectl -> api-server -->
+  <line x1="140" y1="72" x2="192" y2="72" stroke="#8b5cf6" stroke-width="2" marker-end="url(#arr)"/>
+  <text x="166" y="68" text-anchor="middle" font-size="8" fill="#8b5cf6">HTTPS</text>
+
+  <!-- Control Plane box -->
+  <rect x="192" y="40" width="330" height="290" rx="10" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="357" y="60" text-anchor="middle" font-size="12" font-weight="700" fill="#2f6f6a">Control Plane(控制平面)</text>
+
+  <!-- api-server -->
+  <rect x="210" y="68" width="290" height="52" rx="7" fill="#2f6f6a"/>
+  <text x="355" y="89" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">kube-apiserver</text>
+  <text x="355" y="108" text-anchor="middle" font-size="9" fill="#b8ddd9">叢集唯一入口：驗證、授權、轉發所有 API 請求</text>
+
+  <!-- etcd -->
+  <rect x="210" y="132" width="130" height="52" rx="7" fill="#b4541f"/>
+  <text x="275" y="153" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">etcd</text>
+  <text x="275" y="171" text-anchor="middle" font-size="9" fill="#fde8dd">分散式 KV 儲存</text>
+  <text x="275" y="182" text-anchor="middle" font-size="8" fill="#fde8dd">叢集全部狀態的唯一來源</text>
+
+  <!-- scheduler -->
+  <rect x="352" y="132" width="148" height="52" rx="7" fill="#2f6f6a"/>
+  <text x="426" y="153" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">kube-scheduler</text>
+  <text x="426" y="171" text-anchor="middle" font-size="9" fill="#b8ddd9">決定 Pod 調度到</text>
+  <text x="426" y="182" text-anchor="middle" font-size="9" fill="#b8ddd9">哪個節點</text>
+
+  <!-- controller-manager -->
+  <rect x="210" y="198" width="290" height="52" rx="7" fill="#2f6f6a"/>
+  <text x="355" y="219" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">kube-controller-manager</text>
+  <text x="355" y="238" text-anchor="middle" font-size="9" fill="#b8ddd9">調和迴路：讓現況收斂到期望狀態(Deployment/ReplicaSet 控制器...)</text>
+
+  <!-- cloud-controller-manager note -->
+  <rect x="210" y="264" width="290" height="52" rx="7" fill="#8a929b" stroke="none"/>
+  <text x="355" y="283" text-anchor="middle" font-size="10" font-weight="600" fill="#fff">cloud-controller-manager</text>
+  <text x="355" y="300" text-anchor="middle" font-size="9" fill="#e2e8f0">（雲端整合:LoadBalancer、StorageClass...）</text>
+  <text x="355" y="315" text-anchor="middle" font-size="9" fill="#e2e8f0">本機 minikube 通常略過</text>
+
+  <!-- api-server <-> etcd -->
+  <line x1="340" y1="120" x2="305" y2="132" stroke="#b4541f" stroke-width="1.5" stroke-dasharray="4,2"/>
+
+  <!-- Worker Nodes -->
+  <rect x="540" y="40" width="245" height="290" rx="10" fill="#f1f5f9" stroke="#8a929b" stroke-width="1.5"/>
+  <text x="662" y="60" text-anchor="middle" font-size="12" font-weight="700" fill="#4a5159">Worker Node (工作節點)</text>
+
+  <!-- kubelet -->
+  <rect x="555" y="70" width="210" height="44" rx="7" fill="#2f6f6a"/>
+  <text x="660" y="89" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">kubelet</text>
+  <text x="660" y="104" text-anchor="middle" font-size="9" fill="#b8ddd9">每個節點的代理人：確保 Pod 正確執行</text>
+
+  <!-- kube-proxy -->
+  <rect x="555" y="124" width="210" height="44" rx="7" fill="#2f6f6a"/>
+  <text x="660" y="143" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">kube-proxy</text>
+  <text x="660" y="158" text-anchor="middle" font-size="9" fill="#b8ddd9">維護節點網路規則(iptables/eBPF)</text>
+
+  <!-- container runtime -->
+  <rect x="555" y="178" width="210" height="44" rx="7" fill="#8a929b"/>
+  <text x="660" y="197" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">Container Runtime</text>
+  <text x="660" y="212" text-anchor="middle" font-size="9" fill="#f1f5f9">containerd / CRI-O</text>
+
+  <!-- pods -->
+  <rect x="555" y="232" width="95" height="84" rx="7" fill="#e3efed" stroke="#2f6f6a" stroke-width="1"/>
+  <text x="602" y="250" text-anchor="middle" font-size="10" font-weight="700" fill="#2f6f6a">Pod A</text>
+  <rect x="565" y="257" width="74" height="22" rx="4" fill="#2f6f6a"/>
+  <text x="602" y="271" text-anchor="middle" font-size="9" fill="#fff">container 1</text>
+  <rect x="565" y="285" width="74" height="22" rx="4" fill="#2f6f6a"/>
+  <text x="602" y="299" text-anchor="middle" font-size="9" fill="#fff">container 2</text>
+
+  <rect x="660" y="232" width="95" height="84" rx="7" fill="#e3efed" stroke="#2f6f6a" stroke-width="1"/>
+  <text x="707" y="250" text-anchor="middle" font-size="10" font-weight="700" fill="#2f6f6a">Pod B</text>
+  <rect x="670" y="257" width="74" height="22" rx="4" fill="#8b5cf6"/>
+  <text x="707" y="271" text-anchor="middle" font-size="9" fill="#fff">container 1</text>
+  <rect x="670" y="285" width="74" height="22" rx="4" fill="#8b5cf6"/>
+  <text x="707" y="299" text-anchor="middle" font-size="9" fill="#fff">sidecar</text>
+
+  <!-- api-server -> kubelet arrow -->
+  <line x1="522" y1="92" x2="555" y2="92" stroke="#2f6f6a" stroke-width="2" marker-end="url(#arr)"/>
+  <text x="538" y="87" text-anchor="middle" font-size="8" fill="#2f6f6a">watch</text>
+
+  <!-- legend -->
+  <rect x="20" y="350" width="760" height="116" rx="8" fill="#fff" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="400" y="370" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2328">工作流程：kubectl apply → api-server → etcd → controller-manager → scheduler → kubelet → 容器啟動</text>
+  <text x="35" y="392" font-size="10" fill="#4a5159">① 你執行 kubectl apply -f deploy.yaml</text>
+  <text x="35" y="410" font-size="10" fill="#4a5159">② api-server 驗證並將物件寫入 etcd</text>
+  <text x="35" y="428" font-size="10" fill="#4a5159">③ controller-manager 的 ReplicaSet 控制器發現 Pod 數不足，建立 Pod 物件</text>
+  <text x="35" y="446" font-size="10" fill="#4a5159">④ scheduler 選擇合適節點，把節點名稱寫入 Pod 物件</text>
+  <text x="35" y="464" font-size="10" fill="#4a5159">⑤ 該節點的 kubelet watch 到新 Pod，呼叫 container runtime 拉映像、啟動容器</text>
+
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#2f6f6a"/>
+    </marker>
+  </defs>
+</svg>
+        <figcaption>圖 90-1：Kubernetes 叢集架構。控制平面負責決策與狀態管理；工作節點負責實際執行容器。kubectl 只和 api-server 溝通，其他組件透過 watch api-server 取得事件。</figcaption>
+      </div>
+
+      <h3>控制平面元件詳解</h3>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>元件</th><th>職責</th><th>類比</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>kube-apiserver</code></td>
+              <td>叢集唯一的 HTTP REST 入口；驗證請求、授權、然後寫入 etcd</td>
+              <td>公司前台——所有進出都過這裡</td>
+            </tr>
+            <tr>
+              <td><code>etcd</code></td>
+              <td>分散式 key-value 儲存，保存叢集全部狀態（Pod、Deployment、Service…）</td>
+              <td>公司的資料庫——唯一的事實來源</td>
+            </tr>
+            <tr>
+              <td><code>kube-scheduler</code></td>
+              <td>監聽未調度的 Pod，根據資源需求、親和性規則選出節點</td>
+              <td>HR 排班——決定誰去哪個工作站</td>
+            </tr>
+            <tr>
+              <td><code>kube-controller-manager</code></td>
+              <td>運行多個控制器（Deployment / ReplicaSet / Node / Job…），每個控制器跑一個調和迴路</td>
+              <td>巡查主管——不斷確認現況是否符合計畫</td>
+            </tr>
+            <tr>
+              <td><code>kubelet</code>（節點）</td>
+              <td>每個工作節點上的代理人；向 api-server 回報節點狀態，並確保 Pod 依規格執行</td>
+              <td>現場領班——在機台旁執行指令</td>
+            </tr>
+            <tr>
+              <td><code>kube-proxy</code>（節點）</td>
+              <td>維護節點的網路規則（iptables / eBPF），讓 Service IP 能路由到正確 Pod</td>
+              <td>廠內電話總機——把打進來的電話轉給對的人</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">etcd 是叢集大腦的記憶體</span>
+          <p>
+            整個 Kubernetes 的「狀態」——有哪些 Pod、哪些 Deployment、哪些 Service——全部存在 etcd 裡。
+            其他元件（api-server 之外）不直接讀 etcd；它們透過 api-server 的 <strong>watch</strong> 機制
+            訂閱感興趣的資源，一旦資源有變化就收到通知並作出反應。
+            etcd 備份 = 叢集快照。
+          </p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ③ ==================== -->
+      <h2>宣告式設定與調和迴路：你描述期望，K8s 持續收斂</h2>
+
+      <p>
+        Kubernetes 最核心的哲學差異在於「<strong>宣告式(declarative)</strong>」而非「<strong>命令式(imperative)</strong>」。
+      </p>
+      <p>
+        <strong>命令式</strong>的思維是你下指令、系統執行：「啟動 3 個 nginx 容器」「把第 2 個停掉」「把第 3 個的映像換成 1.27」。
+        你要對系統當前狀態心中有數，每一步都要自己算。
+      </p>
+      <p>
+        <strong>宣告式</strong>的思維是你描述目標：「我要 3 個執行 <code>nginx:1.27</code> 的副本，帶有 label <code>app=nginx</code>。」
+        你把這份描述交給 Kubernetes，Kubernetes 負責讓現實收斂到這個目標——不管現在是 0 個還是 5 個副本。
+      </p>
+
+      <p>
+        這個「讓現實收斂到目標」的過程叫做<strong>調和(reconciliation)</strong>。Kubernetes 內部每個控制器都跑一個無限迴路：
+      </p>
+
+      <pre><code class="language-text">loop forever:
+    desired_state  = read from etcd (你宣告的期望)
+    current_state  = observe actual cluster
+    if current_state != desired_state:
+        take_action_to_converge()   # 啟動 Pod / 刪除 Pod / 更新映像…</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">宣告式帶來自我修復</span>
+          <p>
+            假設你宣告 <code>replicas: 3</code>，某個 Pod 崩潰了，現況變成 2 個——
+            調和迴路立刻發現 <code>current(2) != desired(3)</code>，自動補起一個新 Pod。
+            你不需要監控腳本，也不需要手動重啟——K8s 持續幫你把現況拉回到宣告的目標。
+            這就是「<strong>自我修復(self-healing)</strong>」的根源：不是有人在盯著看，而是
+            <a href="40-software-engineering.html">§40 軟體工程</a>中提到的「使系統行為可預測」的宣告式哲學。
+          </p>
+        </div>
+      </div>
+
+      <p>
+        這與<a href="11-software-architecture.html">§11 軟體架構</a>中「讓系統能夠推理(reasoning about systems)」
+        的原則相呼應：宣告式 YAML 是一份<em>可版本控制、可審查、可重現</em>的系統描述——
+        這比「一串 CLI 指令的執行歷史」要可靠得多。
+      </p>
+
+      <!-- ==================== h2 ④ ==================== -->
+      <h2>Pod：K8s 最小調度單位</h2>
+
+      <p>
+        在 Docker 的世界，最小單位是<em>容器(container)</em>。
+        在 Kubernetes，最小的調度單位是 <strong>Pod</strong>——一個 Pod 包含一個或多個容器，
+        這些容器共享：
+      </p>
+
+      <ul>
+        <li><strong>網路 namespace</strong>：同一個 Pod 內的容器共用同一個 IP；它們用 <code>localhost</code> 互通，
+            就像同一台機器上的兩個行程。</li>
+        <li><strong>儲存 volume</strong>：掛載到 Pod 的 volume 所有容器都可以讀寫。</li>
+        <li><strong>生命週期</strong>：同生同滅——Pod 被刪除，裡面所有容器都終止。</li>
+      </ul>
+
+      <p>一個最簡單的 Pod 宣告如下：</p>
+
+      <pre><code class="language-text"># pod.yaml — 用來理解結構，實際部署請用 Deployment(見下節)
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx-pod
+  labels:
+    app: nginx          # 標籤：供 Service selector 使用
+spec:
+  containers:
+  - name: nginx
+    image: nginx:1.27   # 映像名稱與 tag
+    ports:
+    - containerPort: 80 # 宣告容器監聽的埠(僅文件性，不自動開放)
+    resources:
+      requests:
+        cpu: "100m"       # 100 milliCPU = 0.1 個 CPU core
+        memory: "128Mi"
+      limits:
+        cpu: "500m"
+        memory: "256Mi"</code></pre>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">直接建立 Pod 的陷阱</span>
+          <p>
+            你可以 <code>kubectl apply -f pod.yaml</code> 直接建立一個 Pod——但這樣的 Pod
+            如果崩潰了，<strong>不會自動重建</strong>（沒有 ReplicaSet 看著它）。
+            節點故障的話，Pod 也就消失了。
+            實際部署請永遠用 <strong>Deployment</strong>（下一節）——Pod 只是理解結構的入口。
+          </p>
+        </div>
+      </div>
+
+      <h3>sidecar 模式</h3>
+      <p>
+        多容器 Pod 最常見的用法是 <strong>sidecar 模式</strong>：主容器跑應用程式，
+        sidecar 容器承擔橫切面關注點（cross-cutting concern）——例如日誌收集、服務網格代理（Envoy / Istio）、
+        或設定熱載入。兩個容器共享 network 和 volume，但各自有獨立的行程空間。
+      </p>
+
+      <!-- ==================== h2 ⑤ ==================== -->
+      <h2>Deployment：管理副本群、滾動更新與回滾</h2>
+
+      <p>
+        <strong>Deployment</strong> 是最常用的 k8s 工作負載物件。它管理一個 <strong>ReplicaSet</strong>，
+        ReplicaSet 再管理一組 Pod，確保副本數量符合宣告。
+        Deployment 還支援：滾動更新(rolling update)、回滾(rollback)、暫停/繼續更新。
+      </p>
+
+      <pre><code class="language-text"># deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment
+  labels:
+    app: nginx
+spec:
+  replicas: 3                   # 期望副本數
+  selector:
+    matchLabels:
+      app: nginx                # 必須與 template.metadata.labels 一致
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1               # 更新時最多多出幾個 Pod
+      maxUnavailable: 0         # 更新時允許最多幾個 Pod 不可用(0 = 零停機)
+  template:                     # Pod 模板：這裡的設定等同 Pod 的 spec
+    metadata:
+      labels:
+        app: nginx              # Deployment selector 用這個找到它的 Pod
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.27
+        ports:
+        - containerPort: 80
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "500m"
+            memory: "256Mi"</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">Deployment → ReplicaSet → Pod 的三層關係</span>
+          <p>
+            Deployment 控制器在更新時不修改舊 ReplicaSet，而是建立一個<em>新</em> ReplicaSet，
+            然後逐漸把新 RS 的副本數調高、把舊 RS 的副本數調低——這就是「滾動更新」。
+            回滾也只是把舊 ReplicaSet 的副本數調回來，速度極快。
+            <code>kubectl rollout history deployment/nginx-deployment</code> 可查看更新歷史。
+          </p>
+        </div>
+      </div>
+
+      <h3>Deployment 常用 kubectl 指令</h3>
+
+      <pre><code class="language-bash"># 套用 YAML 宣告(建立或更新)
+kubectl apply -f deployment.yaml
+
+# 查看 Deployment 狀態
+kubectl get deployment nginx-deployment
+kubectl describe deployment nginx-deployment
+
+# 查看 Pod 列表(帶標籤篩選)
+kubectl get pods -l app=nginx
+
+# 手動調整副本數
+kubectl scale deployment nginx-deployment --replicas=5
+
+# 觸發滾動更新(更新映像版本)
+kubectl set image deployment/nginx-deployment nginx=nginx:1.27.1
+
+# 查看更新進度
+kubectl rollout status deployment/nginx-deployment
+
+# 查看更新歷史
+kubectl rollout history deployment/nginx-deployment
+
+# 回滾到上一個版本
+kubectl rollout undo deployment/nginx-deployment
+
+# 回滾到指定版本
+kubectl rollout undo deployment/nginx-deployment --to-revision=2
+
+# 查看 ReplicaSet(看到新舊 RS 的副本數變化過程)
+kubectl get replicaset -l app=nginx</code></pre>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">--record 已棄用，改用 annotations</span>
+          <p>
+            舊版文件常見 <code>kubectl apply --record</code> 把指令記錄進 rollout history。
+            這個旗標已在 k8s 1.22 標記為棄用，1.25 移除。
+            現代做法是在 Deployment 的 <code>metadata.annotations</code> 加入
+            <code>kubernetes.io/change-cause: "upgrade to nginx 1.27.1"</code>
+            作為變更說明，rollout history 就能顯示原因。
+          </p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑥ ==================== -->
+      <h2>Service 與 Ingress：穩定的存取入口</h2>
+
+      <p>
+        Pod 的 IP 是<em>臨時的</em>——Pod 重啟、滾動更新後，IP 就換了。
+        如果讓別人直接連 Pod IP，系統就會在每次更新後斷線。
+        <strong>Service</strong> 解決了這個問題：它提供一個穩定的虛擬 IP（ClusterIP），
+        並用<strong>標籤選擇器(label selector)</strong> 動態追蹤後端 Pod 的集合，
+        kube-proxy 把流量分流到任一健康的 Pod。
+      </p>
+
+      <pre><code class="language-text"># service.yaml — ClusterIP Service(只在叢集內可存取)
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-service
+spec:
+  selector:
+    app: nginx          # 選取帶有 app=nginx 的所有 Pod
+  ports:
+  - protocol: TCP
+    port: 80            # Service 對外暴露的埠
+    targetPort: 80      # Pod 容器監聽的埠
+  type: ClusterIP       # 預設值：只在叢集內可存取</code></pre>
+
+      <p>
+        除了 ClusterIP，Service 還有兩種常用類型：
+      </p>
+      <ul>
+        <li><strong>NodePort</strong>：在每個節點上開一個固定埠（預設 30000–32767），
+            讓叢集外部可以透過 <code>NodeIP:NodePort</code> 存取——適合開發環境或沒有 LoadBalancer 的場景。</li>
+        <li><strong>LoadBalancer</strong>：在雲端環境（AWS/GCP/Azure）上自動建立一個外部負載均衡器，
+            分配一個外部 IP——生產環境最常用。</li>
+      </ul>
+
+      <h3>Ingress：HTTP 路由與 TLS 終止</h3>
+
+      <p>
+        <strong>Ingress</strong> 比 Service 高一層：它基於 HTTP Host 和 path 做路由，
+        並可以集中處理 TLS 憑證終止(TLS termination)——讓多個 Service 共用一個對外 IP。
+      </p>
+
+      <pre><code class="language-text"># ingress.yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: app-ingress
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+spec:
+  rules:
+  - host: api.example.com
+    http:
+      paths:
+      - path: /v1
+        pathType: Prefix
+        backend:
+          service:
+            name: api-service
+            port:
+              number: 80
+  - host: www.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: web-service
+            port:
+              number: 80
+  tls:
+  - hosts:
+    - api.example.com
+    - www.example.com
+    secretName: tls-secret     # 存放 TLS 憑證的 Secret</code></pre>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">Ingress Controller 才是實際做事的</span>
+          <p>
+            Ingress 資源本身只是宣告（routes 的規則描述）。
+            要讓它生效，叢集裡必須有一個 <strong>Ingress Controller</strong>——
+            最常見的是 <code>ingress-nginx</code>（由社群維護），也有 Traefik、Kong、AWS ALB Ingress Controller 等。
+            Ingress Controller 監聽 Ingress 物件，動態更新自己的 nginx / Envoy 設定來實現路由。
+            minikube 可用 <code>minikube addons enable ingress</code> 快速安裝。
+          </p>
+        </div>
+      </div>
+
+      <div class="diagram">
+<svg viewBox="0 0 780 300" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <rect width="780" height="300" fill="#f8fafb" rx="12"/>
+  <text x="390" y="26" text-anchor="middle" font-size="13" font-weight="700" fill="#1f2328">Service / Ingress 路由架構：標籤選擇器把流量導向 Pod</text>
+
+  <!-- Client -->
+  <rect x="20" y="120" width="80" height="44" rx="8" fill="#8b5cf6"/>
+  <text x="60" y="139" text-anchor="middle" font-size="10" font-weight="700" fill="#fff">Client</text>
+  <text x="60" y="155" text-anchor="middle" font-size="9" fill="#ddd6fe">瀏覽器/curl</text>
+
+  <!-- arrow to ingress -->
+  <line x1="100" y1="142" x2="148" y2="142" stroke="#8b5cf6" stroke-width="2" marker-end="url(#arr2)"/>
+  <text x="124" y="137" text-anchor="middle" font-size="8" fill="#8b5cf6">HTTPS</text>
+
+  <!-- Ingress box -->
+  <rect x="148" y="104" width="130" height="76" rx="8" fill="#b4541f"/>
+  <text x="213" y="126" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">Ingress Controller</text>
+  <text x="213" y="143" text-anchor="middle" font-size="9" fill="#fde8dd">ingress-nginx</text>
+  <text x="213" y="157" text-anchor="middle" font-size="9" fill="#fde8dd">/v1 → api-service</text>
+  <text x="213" y="169" text-anchor="middle" font-size="9" fill="#fde8dd">/ → web-service</text>
+
+  <!-- arrow ingress to web-service -->
+  <line x1="278" y1="125" x2="338" y2="90" stroke="#b4541f" stroke-width="1.5" marker-end="url(#arr2)"/>
+
+  <!-- arrow ingress to api-service -->
+  <line x1="278" y1="159" x2="338" y2="195" stroke="#b4541f" stroke-width="1.5" marker-end="url(#arr2)"/>
+
+  <!-- web-service -->
+  <rect x="338" y="60" width="140" height="56" rx="8" fill="#2f6f6a"/>
+  <text x="408" y="81" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">web-service</text>
+  <text x="408" y="97" text-anchor="middle" font-size="9" fill="#b8ddd9">ClusterIP selector: app=web</text>
+  <text x="408" y="110" text-anchor="middle" font-size="9" fill="#b8ddd9">port:80 → targetPort:8080</text>
+
+  <!-- web pods -->
+  <rect x="520" y="44" width="72" height="34" rx="6" fill="#e3efed" stroke="#2f6f6a" stroke-width="1.5"/>
+  <text x="556" y="58" text-anchor="middle" font-size="9" font-weight="700" fill="#2f6f6a">Pod</text>
+  <text x="556" y="71" text-anchor="middle" font-size="8" fill="#4a5159">app=web</text>
+
+  <rect x="604" y="44" width="72" height="34" rx="6" fill="#e3efed" stroke="#2f6f6a" stroke-width="1.5"/>
+  <text x="640" y="58" text-anchor="middle" font-size="9" font-weight="700" fill="#2f6f6a">Pod</text>
+  <text x="640" y="71" text-anchor="middle" font-size="8" fill="#4a5159">app=web</text>
+
+  <rect x="688" y="44" width="72" height="34" rx="6" fill="#e3efed" stroke="#2f6f6a" stroke-width="1.5"/>
+  <text x="724" y="58" text-anchor="middle" font-size="9" font-weight="700" fill="#2f6f6a">Pod</text>
+  <text x="724" y="71" text-anchor="middle" font-size="8" fill="#4a5159">app=web</text>
+
+  <!-- web-service to pods arrows -->
+  <line x1="478" y1="80" x2="520" y2="65" stroke="#2f6f6a" stroke-width="1.2" stroke-dasharray="4,2" marker-end="url(#arr2)"/>
+  <line x1="478" y1="88" x2="604" y2="65" stroke="#2f6f6a" stroke-width="1.2" stroke-dasharray="4,2" marker-end="url(#arr2)"/>
+  <line x1="478" y1="88" x2="688" y2="65" stroke="#2f6f6a" stroke-width="1.2" stroke-dasharray="4,2" marker-end="url(#arr2)"/>
+
+  <!-- api-service -->
+  <rect x="338" y="168" width="140" height="56" rx="8" fill="#2f6f6a"/>
+  <text x="408" y="190" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">api-service</text>
+  <text x="408" y="206" text-anchor="middle" font-size="9" fill="#b8ddd9">ClusterIP selector: app=api</text>
+  <text x="408" y="219" text-anchor="middle" font-size="9" fill="#b8ddd9">port:80 → targetPort:3000</text>
+
+  <!-- api pods -->
+  <rect x="520" y="192" width="72" height="34" rx="6" fill="#e3efed" stroke="#2f6f6a" stroke-width="1.5"/>
+  <text x="556" y="206" text-anchor="middle" font-size="9" font-weight="700" fill="#2f6f6a">Pod</text>
+  <text x="556" y="219" text-anchor="middle" font-size="8" fill="#4a5159">app=api</text>
+
+  <rect x="604" y="192" width="72" height="34" rx="6" fill="#e3efed" stroke="#2f6f6a" stroke-width="1.5"/>
+  <text x="640" y="206" text-anchor="middle" font-size="9" font-weight="700" fill="#2f6f6a">Pod</text>
+  <text x="640" y="219" text-anchor="middle" font-size="8" fill="#4a5159">app=api</text>
+
+  <!-- api-service to pods arrows -->
+  <line x1="478" y1="192" x2="520" y2="209" stroke="#2f6f6a" stroke-width="1.2" stroke-dasharray="4,2" marker-end="url(#arr2)"/>
+  <line x1="478" y1="196" x2="604" y2="209" stroke="#2f6f6a" stroke-width="1.2" stroke-dasharray="4,2" marker-end="url(#arr2)"/>
+
+  <!-- note at bottom -->
+  <rect x="20" y="250" width="740" height="38" rx="6" fill="#e3efed"/>
+  <text x="390" y="265" text-anchor="middle" font-size="10" fill="#2f6f6a" font-weight="600">Service 用標籤選擇器動態追蹤 Pod——Pod 重啟、IP 變了，只要 label 不變，流量就不斷</text>
+  <text x="390" y="281" text-anchor="middle" font-size="9" fill="#4a5159">Ingress Controller 是 Pod 形式部署在叢集內，通常有 type: LoadBalancer 的 Service 暴露外部 IP</text>
+
+  <defs>
+    <marker id="arr2" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#2f6f6a"/>
+    </marker>
+  </defs>
+</svg>
+        <figcaption>圖 90-2：Service 以 label selector 動態追蹤 Pod；Ingress Controller 依 host / path 規則把流量分派到對應的 Service，Service 再負載分流到後端 Pod 群。</figcaption>
+      </div>
+
+      <!-- ==================== h2 ⑦ ==================== -->
+      <h2>設定與儲存：ConfigMap、Secret 與 PersistentVolumeClaim</h2>
+
+      <h3>ConfigMap：非敏感設定</h3>
+      <p>
+        把設定從映像中分離出來，讓同一個映像能在開發/測試/生產環境用不同的設定跑起來——
+        這是 <strong>ConfigMap</strong> 的核心用途。
+      </p>
+
+      <pre><code class="language-text"># configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+data:
+  DATABASE_HOST: "postgres-service"
+  LOG_LEVEL: "info"
+  MAX_CONNECTIONS: "100"</code></pre>
+
+      <p>ConfigMap 可以以環境變數或檔案的方式注入到 Pod：</p>
+
+      <pre><code class="language-text">spec:
+  containers:
+  - name: app
+    image: myapp:1.0
+    envFrom:
+    - configMapRef:
+        name: app-config    # 把 ConfigMap 的所有 key 注入為環境變數</code></pre>
+
+      <h3>Secret：敏感設定</h3>
+      <p>
+        密碼、API 金鑰、TLS 憑證要用 <strong>Secret</strong> 存放。
+        Secret 的值是 Base64 編碼（<em>不是</em>加密）——主要目的是隔離敏感資料，
+        讓 RBAC 可以單獨控管 Secret 的存取權限；生產環境務必結合 etcd 加密或
+        HashiCorp Vault / Sealed Secrets 等外部密鑰管理。
+      </p>
+
+      <pre><code class="language-text"># 用 kubectl 建立 Secret(值自動 Base64)
+# kubectl create secret generic app-secret \
+#   --from-literal=DB_PASSWORD=supersecret \
+#   --from-literal=API_KEY=abc123
+
+# 等效的 YAML(值須手動 Base64 編碼)
+apiVersion: v1
+kind: Secret
+metadata:
+  name: app-secret
+type: Opaque
+data:
+  DB_PASSWORD: c3VwZXJzZWNyZXQ=   # echo -n 'supersecret' | base64
+  API_KEY: YWJjMTIz               # echo -n 'abc123' | base64</code></pre>
+
+      <pre><code class="language-text">spec:
+  containers:
+  - name: app
+    image: myapp:1.0
+    env:
+    - name: DB_PASSWORD
+      valueFrom:
+        secretKeyRef:
+          name: app-secret
+          key: DB_PASSWORD</code></pre>
+
+      <h3>PersistentVolumeClaim：有狀態應用的儲存</h3>
+      <p>
+        Pod 預設是無狀態的——Pod 刪除，儲存就消失。
+        資料庫等有狀態應用需要 <strong>PersistentVolume(PV)</strong> 與
+        <strong>PersistentVolumeClaim(PVC)</strong>：
+        PV 是管理員預置的儲存資源，PVC 是 Pod 對儲存的「申請書」。
+        動態供應(dynamic provisioning)讓雲端叢集自動根據 PVC 建立 PV（如 AWS EBS、GCP PD）。
+      </p>
+
+      <pre><code class="language-text"># pvc.yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-pvc
+spec:
+  accessModes:
+  - ReadWriteOnce          # 一次只有一個 Pod 可讀寫(適合資料庫)
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: standard   # 由 StorageClass 定義供應方式</code></pre>
+
+      <pre><code class="language-text">spec:
+  volumes:
+  - name: postgres-data
+    persistentVolumeClaim:
+      claimName: postgres-pvc   # 引用上面的 PVC
+  containers:
+  - name: postgres
+    image: postgres:16-alpine
+    volumeMounts:
+    - name: postgres-data
+      mountPath: /var/lib/postgresql/data</code></pre>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">Secret 的 Base64 不是加密</span>
+          <p>
+            <code>echo 'supersecret' | base64</code> 任何人都能解碼。
+            Secret 存在 etcd 預設是明文的（只有 Base64）。
+            生產叢集應啟用 etcd 的<strong>靜態加密(encryption at rest)</strong>，
+            或使用 <a href="https://sealed-secrets.netlify.app/" target="_blank" rel="noopener">Sealed Secrets</a>
+            讓 Secret 能安全提交到 Git 倉庫。
+          </p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑧ ==================== -->
+      <h2>自我修復與水平擴展：Probe 與 HPA</h2>
+
+      <h3>liveness probe：應用還活著嗎？</h3>
+      <p>
+        容器在跑不代表應用正常——有時行程還在，但已經死鎖(deadlock)或陷入無限迴圈。
+        <strong>liveness probe</strong> 讓 kubelet 定期探測應用是否「還活著」；
+        如果探測連續失敗達到 <code>failureThreshold</code>，kubelet 就重啟容器。
+      </p>
+
+      <h3>readiness probe：應用準備好接受流量了嗎？</h3>
+      <p>
+        應用剛啟動時可能還在暖機（連資料庫、載入快取）——這時候雖然行程在跑，
+        但還<em>沒準備好</em>服務請求。
+        <strong>readiness probe</strong> 探測通過後，Pod 才會被 Service 加入後端，
+        開始接收流量；失敗時從後端移除（但不重啟容器）。
+      </p>
+
+      <pre><code class="language-text"># 在 Deployment 的 container spec 裡加 probe
+spec:
+  containers:
+  - name: app
+    image: myapp:1.0
+    ports:
+    - containerPort: 8080
+    livenessProbe:
+      httpGet:
+        path: /healthz       # 應用需要提供這個 endpoint
+        port: 8080
+      initialDelaySeconds: 15  # 容器啟動後等 15 秒再開始探測
+      periodSeconds: 10        # 每 10 秒探測一次
+      failureThreshold: 3      # 連續失敗 3 次才重啟
+    readinessProbe:
+      httpGet:
+        path: /ready
+        port: 8080
+      initialDelaySeconds: 5
+      periodSeconds: 5
+      failureThreshold: 2      # 連續失敗 2 次就從 Service 後端移除</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">liveness vs readiness：容易混淆的差異</span>
+          <p>
+            <strong>liveness</strong>：「我還活著嗎？」失敗 → 重啟容器。<br>
+            <strong>readiness</strong>：「我準備好接流量了嗎？」失敗 → 從 Service 後端移除（不重啟）。<br>
+            <br>
+            典型場景：資料庫連線初始化中，readiness 失敗（Service 不分流量給我），
+            但 liveness 還通過（行程健康不需要重啟）。
+            一旦資料庫連上，readiness 通過，Service 開始把流量導過來。
+          </p>
+        </div>
+      </div>
+
+      <h3>HPA：水平自動擴展(Horizontal Pod Autoscaler)</h3>
+      <p>
+        <strong>HPA</strong> 根據 CPU / 記憶體使用率（或自訂指標）自動調整 Deployment 的副本數，
+        讓叢集在流量高峰自動橫向擴展、尖峰過後自動縮減、節省資源費用。
+      </p>
+
+      <pre><code class="language-text"># hpa.yaml
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: nginx-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: nginx-deployment
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70   # CPU 超過 70% 就擴展</code></pre>
+
+      <p>
+        HPA 需要叢集安裝 <strong>Metrics Server</strong>（minikube 用
+        <code>minikube addons enable metrics-server</code>）才能取得 Pod 的 CPU/記憶體用量。
+        Pod 的 <code>resources.requests</code> 也必須設定，HPA 才有基準值可算百分比。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">startup probe：保護啟動緩慢的應用</span>
+          <p>
+            如果應用啟動需要 60 秒（如 JVM 預熱），把 <code>initialDelaySeconds</code> 設很大很粗糙。
+            <strong>startup probe</strong>（k8s 1.18+）可在容器成功啟動之前保護它：
+            startup probe 通過之前，liveness/readiness 暫停探測，
+            不會因為啟動慢而被誤殺。Startup 通過後，才接棒給 liveness/readiness。
+          </p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑨ ==================== -->
+      <h2>動手：用 minikube 跑起第一個 Deployment + Service</h2>
+
+      <p>
+        minikube 是本機單節點 k8s 環境，適合入門學習；
+        <a href="https://kind.sigs.k8s.io/" target="_blank" rel="noopener">kind</a>(Kubernetes IN Docker)
+        則把整個叢集跑在 Docker 容器裡，適合測試多節點場景。
+        以下用 minikube 示範完整流程。
+      </p>
+
+      <h3>Step 1：安裝與啟動 minikube</h3>
+
+      <pre><code class="language-bash"># macOS(Homebrew)
+brew install minikube kubectl
+
+# Windows(winget)
+winget install Kubernetes.minikube
+winget install Kubernetes.kubectl
+
+# 啟動叢集(預設 Docker driver)
+minikube start
+
+# 確認 kubectl 已連到 minikube
+kubectl cluster-info
+kubectl get nodes</code></pre>
+
+      <h3>Step 2：建立 Deployment + Service YAML</h3>
+
+      <p>把以下兩個物件寫在同一個檔案，用 <code>---</code> 分隔（k8s 慣例）：</p>
+
+      <pre><code class="language-text"># nginx-app.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: nginx
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.27
+        ports:
+        - containerPort: 80
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 3
+          periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-service
+spec:
+  selector:
+    app: nginx
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 80
+  type: NodePort     # minikube 用 NodePort 對外暴露(不支援 LoadBalancer 的 IP)</code></pre>
+
+      <h3>Step 3：套用並驗證</h3>
+
+      <pre><code class="language-bash"># 套用 YAML(宣告式更新，不存在則建立)
+kubectl apply -f nginx-app.yaml
+
+# 觀察 Deployment 是否 READY
+kubectl get deployment nginx-deployment
+# 輸出範例:
+# NAME               READY   UP-TO-DATE   AVAILABLE   AGE
+# nginx-deployment   3/3     3            3           30s
+
+# 查看 Pod 狀態
+kubectl get pods -l app=nginx
+
+# 查看 Service
+kubectl get service nginx-service
+
+# minikube 取得可存取的 URL
+minikube service nginx-service --url
+# 輸出:http://127.0.0.1:PORT(隨機 NodePort)
+# 用瀏覽器或 curl 打開即可看到 nginx 歡迎頁面</code></pre>
+
+      <h3>Step 4：水平擴展與滾動更新</h3>
+
+      <pre><code class="language-bash"># 擴展到 5 個副本
+kubectl scale deployment nginx-deployment --replicas=5
+kubectl get pods -l app=nginx   # 觀察 Pod 數量增加
+
+# 觸發滾動更新:更新映像版本
+kubectl set image deployment/nginx-deployment nginx=nginx:1.27.1
+
+# 監看更新進度(可即時看到新舊 Pod 的切換)
+kubectl rollout status deployment/nginx-deployment
+
+# 看 ReplicaSet 變化:舊 RS 縮到 0,新 RS 擴到 5
+kubectl get replicaset
+
+# 若更新有問題,回滾
+kubectl rollout undo deployment/nginx-deployment</code></pre>
+
+      <h3>Step 5：查看日誌與除錯</h3>
+
+      <pre><code class="language-bash"># 查看某個 Pod 的日誌
+kubectl logs -l app=nginx
+
+# 進入 Pod 容器 shell
+kubectl exec -it &lt;pod-name&gt; -- sh
+
+# 查看 Pod 詳細事件(啟動失敗時最好用)
+kubectl describe pod &lt;pod-name&gt;
+
+# 查看所有資源
+kubectl get all -l app=nginx
+
+# 清理
+kubectl delete -f nginx-app.yaml</code></pre>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">kubectl 縮寫與別名</span>
+          <p>
+            常用縮寫：<code>kubectl get po</code>（pods）、<code>kubectl get svc</code>（services）、
+            <code>kubectl get deploy</code>（deployments）、<code>kubectl get ing</code>（ingress）。
+            <code>kubectl get all</code> 列出當前 namespace 的所有常見資源。
+            加 <code>-n &lt;namespace&gt;</code> 切換 namespace；
+            加 <code>-A</code>（<code>--all-namespaces</code>）查看所有 namespace。
+          </p>
+        </div>
+      </div>
+
+      <!-- ==================== 練習 ==================== -->
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 90.1 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>
+            寫一份完整的 <code>postgres-app.yaml</code>，包含：<br>
+            (a) 一個 <code>PersistentVolumeClaim</code>，申請 2Gi 的 ReadWriteOnce 儲存；<br>
+            (b) 一個 <code>Deployment</code>，跑 <code>postgres:16-alpine</code>，副本數 1，
+                掛上 PVC 到 <code>/var/lib/postgresql/data</code>，
+                並用 Secret（自行建立）注入 <code>POSTGRES_PASSWORD</code>；<br>
+            (c) 一個 <code>Service</code>（ClusterIP），把 5432 埠暴露到叢集內部；<br>
+            在 minikube 上用 <code>kubectl apply</code> 套用，確認 Pod 進入 Running 狀態，
+            並用 <code>kubectl exec</code> 進入容器執行 <code>psql -U postgres</code> 驗證。
+          </p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-bash"># 先建立 Secret
+kubectl create secret generic postgres-secret \
+  --from-literal=POSTGRES_PASSWORD=mysecretpassword</code></pre>
+              <pre><code class="language-text"># postgres-app.yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-pvc
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres-deployment
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:16-alpine
+        ports:
+        - containerPort: 5432
+        env:
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgres-secret
+              key: POSTGRES_PASSWORD
+        volumeMounts:
+        - name: postgres-data
+          mountPath: /var/lib/postgresql/data
+      volumes:
+      - name: postgres-data
+        persistentVolumeClaim:
+          claimName: postgres-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-service
+spec:
+  selector:
+    app: postgres
+  ports:
+  - protocol: TCP
+    port: 5432
+    targetPort: 5432
+  type: ClusterIP</code></pre>
+              <pre><code class="language-bash">kubectl apply -f postgres-app.yaml
+kubectl get pods -l app=postgres
+# 等 Pod Running 後
+kubectl exec -it $(kubectl get pod -l app=postgres -o name) -- psql -U postgres
+# postgres=# \l  列出資料庫</code></pre>
+              <p>
+                注意：有狀態服務（資料庫）在生產中應用 <code>StatefulSet</code> 而非 <code>Deployment</code>，
+                以確保 Pod 名稱穩定、PVC 一對一綁定、有序啟動與終止。
+                本練習用 Deployment 是為了聚焦在 PVC/Secret 的接線，理解原理後請研究 StatefulSet。
+              </p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 90.2 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>
+            解釋 <strong>liveness probe</strong> 與 <strong>readiness probe</strong> 的差異，
+            並說明以下情境下應用哪種（或兩者都用）：<br>
+            (a) 一個 Java 應用，JVM 啟動需要 30 秒，啟動期間不應接受流量，但啟動後若陷入死鎖應自動重啟；<br>
+            (b) 一個連資料庫的 API 服務，若資料庫暫時斷線，API 不應接流量，但不需要重啟；<br>
+            (c) 一個批次處理 worker，沒有 HTTP 服務，若行程卡死超過 5 分鐘應重啟。
+          </p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>(a) JVM 應用——應用 startup probe + liveness + readiness</strong></p>
+              <ul>
+                <li><strong>startup probe</strong>：保護啟動期，讓 liveness/readiness 在 JVM 暖機完成前不介入。
+                    <code>failureThreshold: 30, periodSeconds: 2</code>（最多等 60 秒）。</li>
+                <li><strong>liveness</strong>：startup 通過後，持續偵測應用是否死鎖，失敗則重啟。</li>
+                <li><strong>readiness</strong>：確保暖機完成後才接流量（可與 liveness 使用同一 endpoint 或更嚴格的 endpoint）。</li>
+              </ul>
+              <p><strong>(b) 資料庫斷線——只用 readiness probe</strong></p>
+              <ul>
+                <li><strong>readiness</strong>：probe 連資料庫，斷線時失敗 → 從 Service 後端移除，不接流量；
+                    資料庫恢復後 probe 通過 → 自動重新加入。</li>
+                <li>不應用 liveness：資料庫斷線是外部問題，重啟自身 Pod 沒有意義。</li>
+              </ul>
+              <p><strong>(c) 批次 worker——只用 liveness probe（exec 類型）</strong></p>
+              <pre><code class="language-text">livenessProbe:
+  exec:
+    command:
+    - sh
+    - -c
+    - test $(find /tmp/heartbeat -mmin -5 | wc -l) -gt 0
+  periodSeconds: 60
+  failureThreshold: 5</code></pre>
+              <p>Worker 每分鐘 touch <code>/tmp/heartbeat</code>；若超過 5 分鐘沒更新（卡死），liveness 失敗，kubelet 重啟容器。
+                 沒有 HTTP 服務，所以用 exec 類型 probe。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 90.3 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>
+            一個 Deployment 目前跑著 <code>nginx:1.26</code>，你需要零停機地更新到 <code>nginx:1.27</code>。
+            說明 Kubernetes 的滾動更新機制如何確保零停機，並回答：<br>
+            (a) <code>maxSurge: 1, maxUnavailable: 0</code> 的含義是什麼？更新 5 個副本時，副本數的變化過程是？<br>
+            (b) 什麼情況下應該選 <code>strategy: Recreate</code>（刪除全部舊 Pod 再建立新 Pod）？有什麼缺點？<br>
+            (c) 若更新途中發現新版本有 bug，如何最快速回復到舊版本？
+          </p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>(a) maxSurge: 1, maxUnavailable: 0</strong></p>
+              <p>
+                <code>maxSurge: 1</code> = 更新過程中，Pod 總數最多比期望值多 1 個。<br>
+                <code>maxUnavailable: 0</code> = 任何時候，可用的 Pod 數不得少於期望值（5 個）。
+              </p>
+              <p>更新 5 個副本的過程（<code>replicas: 5, maxSurge: 1, maxUnavailable: 0</code>）：</p>
+              <ol>
+                <li>建立 1 個新 Pod（v1.27），總數 6（5+1）</li>
+                <li>新 Pod readiness 通過後，刪除 1 個舊 Pod（v1.26），總數 5</li>
+                <li>重複直到所有 5 個 Pod 都是 v1.27</li>
+              </ol>
+              <p>整個過程可用 Pod 一直 ≥ 5，不中斷服務。</p>
+
+              <p><strong>(b) strategy: Recreate 的適用場景與缺點</strong></p>
+              <p>適用：應用不支援多版本同時執行（如持有共享資料庫 schema lock），或有狀態應用只能單副本。</p>
+              <p>缺點：有停機期——所有舊 Pod 刪除後，到新 Pod 就緒之前，服務完全中斷。</p>
+
+              <p><strong>(c) 快速回滾</strong></p>
+              <pre><code class="language-bash"># 立即回滾到上一個版本(就是把舊 ReplicaSet 的副本數調回來)
+kubectl rollout undo deployment/nginx-deployment
+
+# 驗證回滾後的映像版本
+kubectl get deployment nginx-deployment -o jsonpath='{.spec.template.spec.containers[0].image}'</code></pre>
+              <p>
+                回滾速度很快，因為 k8s 保留了舊的 ReplicaSet（只是副本數調為 0）——
+                無需重新拉取映像，只是把舊 RS 的副本數調回 5，
+                同時把更新後的 RS 縮為 0。
+                這也是宣告式模型帶來的優雅之處：回滾只是「重新宣告一次舊狀態」。
+              </p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑩ ==================== -->
+      <h2>Namespace 與 RBAC：多租戶與存取控制概觀</h2>
+
+      <p>
+        當多個團隊共用同一個 k8s 叢集，需要資源隔離與權限管控——
+        這是 <strong>Namespace</strong> 和 <strong>RBAC(Role-Based Access Control)</strong> 的用武之地。
+      </p>
+
+      <h3>Namespace</h3>
+      <p>
+        Namespace 是叢集內的邏輯隔離單位——不同 namespace 的資源名稱可以重複（如 <code>dev</code> 和 <code>prod</code>
+        各自有一個叫 <code>nginx-deployment</code> 的 Deployment，互不干擾）。
+        Network Policy 和 ResourceQuota 也以 namespace 為邊界。
+      </p>
+
+      <pre><code class="language-bash"># 建立 namespace
+kubectl create namespace production
+
+# 在指定 namespace 操作
+kubectl apply -f nginx-app.yaml -n production
+kubectl get pods -n production
+
+# 查看所有 namespace
+kubectl get namespaces</code></pre>
+
+      <h3>RBAC 基本概念</h3>
+      <p>
+        k8s RBAC 由 <strong>Role</strong>（定義可以對哪些資源做什麼操作）
+        和 <strong>RoleBinding</strong>（把 Role 綁定到 User / ServiceAccount）組成。
+        跨 Namespace 的版本是 <strong>ClusterRole</strong> 和 <strong>ClusterRoleBinding</strong>。
+      </p>
+
+      <pre><code class="language-text"># role.yaml — 只能讀取 pods
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: production
+  name: pod-reader
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  namespace: production
+  name: read-pods-binding
+subjects:
+- kind: User
+  name: alice
+  apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: Role
+  name: pod-reader
+  apiGroup: rbac.authorization.k8s.io</code></pre>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">Namespace 不是安全邊界</span>
+          <p>
+            Namespace 提供邏輯隔離與 RBAC 邊界，但不是強安全隔離——
+            不同 Namespace 的 Pod 在預設情況下可以互相通訊（透過 ClusterIP Service）。
+            要實現網路隔離，需搭配 <strong>NetworkPolicy</strong>（如 Calico、Cilium CNI 支援）。
+            多租戶強安全隔離應考慮不同叢集，或用更嚴格的機制（如 vCluster）。
+          </p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑪ 把這一章串起來 ==================== -->
+      <h2>把這一章串起來</h2>
+
+      <p>
+        這一章從「<a href="95-docker-practice.html">第 89 章</a> Compose 只管得了一台機器」出發，
+        踏進了叢集編排的世界。讓我們總結核心物件與概念的對應關係：
+      </p>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>概念 / 物件</th><th>核心職責</th><th>關鍵 YAML 欄位</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Pod</td>
+              <td>最小調度單位；共享網路 + volume 的容器群</td>
+              <td><code>spec.containers[].image</code>、<code>spec.containers[].resources</code></td>
+            </tr>
+            <tr>
+              <td>Deployment</td>
+              <td>管理 Pod 副本群、滾動更新、回滾</td>
+              <td><code>spec.replicas</code>、<code>spec.selector</code>、<code>spec.template</code>、<code>spec.strategy</code></td>
+            </tr>
+            <tr>
+              <td>ReplicaSet</td>
+              <td>Deployment 自動建立；維護固定副本數</td>
+              <td>由 Deployment 管理，通常不直接操作</td>
+            </tr>
+            <tr>
+              <td>Service</td>
+              <td>穩定 ClusterIP；標籤選擇器追蹤後端 Pod</td>
+              <td><code>spec.selector</code>、<code>spec.ports</code>、<code>spec.type</code></td>
+            </tr>
+            <tr>
+              <td>Ingress</td>
+              <td>HTTP/HTTPS 路由；TLS 終止；對外暴露多服務</td>
+              <td><code>spec.rules[].host</code>、<code>spec.rules[].http.paths</code>、<code>spec.tls</code></td>
+            </tr>
+            <tr>
+              <td>ConfigMap</td>
+              <td>非敏感設定與環境變數</td>
+              <td><code>data</code> 鍵值對；<code>envFrom.configMapRef</code></td>
+            </tr>
+            <tr>
+              <td>Secret</td>
+              <td>敏感設定（Base64 存放，搭配 etcd 加密）</td>
+              <td><code>data</code>（Base64 值）；<code>env.valueFrom.secretKeyRef</code></td>
+            </tr>
+            <tr>
+              <td>PVC</td>
+              <td>有狀態應用的持久儲存申請書</td>
+              <td><code>spec.accessModes</code>、<code>spec.resources.requests.storage</code></td>
+            </tr>
+            <tr>
+              <td>liveness / readiness probe</td>
+              <td>應用健康偵測；自我修復與流量管控</td>
+              <td><code>livenessProbe / readinessProbe</code>（httpGet / exec / tcpSocket）</td>
+            </tr>
+            <tr>
+              <td>HPA</td>
+              <td>依 CPU / 記憶體自動調整副本數</td>
+              <td><code>spec.scaleTargetRef</code>、<code>spec.metrics[].resource.target.averageUtilization</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>
+        Kubernetes 的設計哲學——宣告式設定、調和迴路、標籤選擇器——貫穿了所有物件。
+        你描述「<em>期望狀態</em>」，K8s 不停地讓「<em>現況</em>」收斂過去：
+        Pod 崩潰了，自動重建；節點故障了，Pod 調度到其他節點；
+        流量暴增，HPA 自動擴展副本；版本更新失敗，一條指令回滾。
+        這就是「<strong>雲原生(cloud native)</strong>」的核心承諾：
+        把運維複雜度從工程師的腦袋裡卸載到系統本身。
+      </p>
+
+      <p>
+        本章只觸及了 K8s 的入門層面——還有 StatefulSet（有狀態服務）、
+        DaemonSet（每個節點跑一個 Pod）、Job / CronJob（批次/定時任務）、
+        NetworkPolicy（網路隔離）、Helm（套件管理）、
+        以及 Service Mesh（Istio / Linkerd）等進階主題等著你探索。
+        在接下來的章節，這些容器化技術也將應用到 AI agent 的工具執行隔離——
+        讓每次工具呼叫都在全新容器沙箱裡安全執行。
+        而關於多個服務如何在叢集中協調通訊、實現高可用的分散式系統，
+        則是第 92 章分散式系統會深入探討的主題。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">📚</div>
+        <div class="body">
+          <span class="c-title">延伸學習資源</span>
+          <p>
+            <strong>Kubernetes 官方互動教學</strong>：
+            <a href="https://kubernetes.io/docs/tutorials/" target="_blank" rel="noopener">kubernetes.io/docs/tutorials</a>
+            ——從 Hello World 到 StatefulSet 的完整官方引導，有瀏覽器內 terminal，零安裝可上手。<br><br>
+            <strong>90DaysOfDevOps（k8s 部分）</strong>：
+            <a href="https://github.com/MichaelCade/90DaysOfDevOps" target="_blank" rel="noopener">github.com/MichaelCade/90DaysOfDevOps</a>
+            ——每天一個主題的 DevOps 學習計畫，k8s 章節涵蓋從原理到 Helm 的實戰演練，中文翻譯進行中。<br><br>
+            <strong>Kubernetes 中文教程（kdocs.cn）</strong>：
+            <a href="https://www.kubernetes.org.cn/docs" target="_blank" rel="noopener">kubernetes.org.cn/docs</a>
+            ——官方文件的中文翻譯版，概念與 API 參考齊全。<br><br>
+            <strong>Play with Kubernetes</strong>：
+            <a href="https://labs.play-with-k8s.com/" target="_blank" rel="noopener">labs.play-with-k8s.com</a>
+            ——免費的瀏覽器內多節點 k8s 環境，4 小時內可用，無需本機安裝。
+          </p>
+        </div>
+      </div>

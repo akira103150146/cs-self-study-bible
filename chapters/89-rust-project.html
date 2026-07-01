@@ -1,0 +1,938 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Rust 實戰:CLI 工具與最小服務 · CS 自學聖經</title>
+<meta name="description" content="把所有權、型別、錯誤處理、並行整合成一個能用的 Rust 專案——模組系統、Cargo 生態、CLI 工具、測試、最小 HTTP 服務與發佈工程實務全覽。">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;700&family=Noto+Sans+TC:wght@400;700&family=Lora:ital,wght@0,400;0,600;0,700;1,400&family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <main class="main">
+    <article class="content">
+      <div class="eyebrow">第二十部 · Rust 系統程式設計</div>
+      <h1>Rust 實戰:CLI 工具與最小服務</h1>
+      <p class="subtitle">真正的學習不是「懂 Rust」——而是用 Rust 做出一個能用的東西，從第一行 <code>cargo new</code> 到 <code>cargo publish</code>。</p>
+      <div class="byline">
+        <span class="tag">第 83 章</span>
+        <span>閱讀時間 ≈ 65 分鐘</span>
+        <span>難度:★★★☆☆</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章，你會知道</div>
+        <ul>
+          <li>用 <code>mod</code>/<code>pub</code>/<code>use</code> 組織模組，理解 crate root 與模組樹</li>
+          <li><code>Cargo.toml</code> 的依賴管理、<code>cargo run/build/test</code> 日常工作流</li>
+          <li>用 <code>std::env::args</code> 動手打造可執行的 CLI 統計工具（my-wc）</li>
+          <li>用 <code>Result</code>/<code>?</code> 整合 I/O 與解析錯誤，承接<a href="86-rust-types-errors.html">第 80 章</a>的錯誤處理</li>
+          <li>單元測試 <code>#[test]</code>、整合測試 <code>tests/</code> 與 <code>cargo test</code> 工作流</li>
+          <li>用 axum 框架寫最小 HTTP 端點，理解 Rust 服務的基本架構</li>
+          <li><code>cargo fmt</code>、<code>cargo clippy</code>、<code>cargo publish</code> 工程實務</li>
+        </ul>
+      </div>
+
+      <!-- ==================== h2 ① ==================== -->
+      <h2>從語法到「做出一個能用的東西」</h2>
+
+      <p>
+        前四章帶你走過 Rust 最核心的概念：<a href="85-rust-ownership.html">第 79 章</a>的所有權與借用讓你理解為何 Rust 無需 GC 也能保證記憶體安全；<a href="86-rust-types-errors.html">第 80 章</a>的型別系統與 <code>Result</code> 讓你看見 Rust 如何把錯誤處理變成編譯器強制的紀律；<a href="87-rust-collections-ds.html">第 81 章</a>把常見資料結構從所有權角度重新理解；<a href="88-rust-concurrency.html">第 82 章</a>展示了 Rust 另一個核心承諾——編譯期無懼並行。
+      </p>
+      <p>
+        但知道這些，還不代表你能「用 Rust 做東西」。就像學了英文文法卻沒辦法用英文聊天，光讀語法不等於工程能力。這一章的目標很具體：把前四章所學整合成一個真實的 Rust 專案，從建立專案、組織模組、管理依賴，到打造一個能執行的 CLI 工具、補上測試、最後瞄一眼服務端與發佈流程。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">這一章的主軸：my-wc</span>
+          <p>
+            我們將實作一個名叫 <strong>my-wc</strong> 的命令列工具，模仿 Unix 的 <code>wc</code> 指令——輸入一個檔案路徑，印出行數、字數與字元數。
+            這個工具小到可以在一章內做完，卻包含了一個真實 Rust 專案的所有關鍵要素：模組拆分、錯誤處理、測試、以及可部署的二進位執行檔。
+          </p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ② ==================== -->
+      <h2>專案結構與模組系統</h2>
+
+      <p>
+        用 <code>cargo new my-wc --bin</code> 建立一個新的二進位專案：
+      </p>
+
+      <pre><code class="language-bash">cargo new my-wc --bin
+# 產生:
+# my-wc/
+# ├── Cargo.toml   ← 專案描述與依賴宣告
+# └── src/
+#     └── main.rs  ← 進入點（binary crate）</code></pre>
+
+      <p>
+        一個 Rust 專案（稱為 <strong>package</strong>）可以同時包含一個<strong>函式庫 crate（library crate）</strong>和一個<strong>二進位 crate（binary crate）</strong>。按照慣例，<code>src/main.rs</code> 是二進位進入點，<code>src/lib.rs</code> 是函式庫根（crate root）。我們的 my-wc 採用這個架構：
+      </p>
+      <ul>
+        <li><code>src/lib.rs</code>：定義並公開（<code>pub</code>）統計函式——可被 <code>main.rs</code> 和 <code>tests/</code> 引用。</li>
+        <li><code>src/main.rs</code>：解析命令列引數、讀取檔案，呼叫函式庫函式，印出結果。</li>
+        <li><code>tests/integration_test.rs</code>：整合測試，從外部使用函式庫的公開 API 進行驗證。</li>
+      </ul>
+
+      <div class="diagram">
+<svg viewBox="0 0 680 320" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <rect width="680" height="320" fill="#f8fafb" rx="10"/>
+  <text x="340" y="26" text-anchor="middle" font-size="14" font-weight="bold" fill="#1f2328">my-wc 專案結構與 Crate 關係</text>
+
+  <!-- ===== LEFT: Directory Tree ===== -->
+  <rect x="20" y="42" width="288" height="262" rx="8" fill="#f0f4f8" stroke="#8a929b" stroke-width="1.5"/>
+  <text x="34" y="66" font-size="12" font-weight="bold" fill="#1f2328">my-wc/</text>
+
+  <!-- Cargo.toml -->
+  <rect x="36" y="75" width="256" height="28" rx="4" fill="#fff" stroke="#8a929b" stroke-width="1"/>
+  <text x="48" y="94" font-size="11" fill="#555">├── Cargo.toml</text>
+  <text x="162" y="94" font-size="10" fill="#8a929b">← 專案設定與依賴</text>
+
+  <!-- src/ folder -->
+  <rect x="36" y="112" width="256" height="108" rx="4" fill="#e3efed" stroke="#2f6f6a" stroke-width="1.5"/>
+  <text x="48" y="132" font-size="11" font-weight="bold" fill="#2f6f6a">├── src/</text>
+
+  <!-- main.rs -->
+  <rect x="52" y="140" width="230" height="26" rx="4" fill="#fef3ec" stroke="#b4541f" stroke-width="1"/>
+  <text x="62" y="158" font-size="10" fill="#b4541f">│   ├── main.rs  ← binary crate 進入點</text>
+
+  <!-- lib.rs -->
+  <rect x="52" y="173" width="230" height="26" rx="4" fill="#e3efed" stroke="#2f6f6a" stroke-width="1"/>
+  <text x="62" y="191" font-size="10" fill="#2f6f6a">│   └── lib.rs   ← library crate 公開 API</text>
+
+  <!-- tests/ folder -->
+  <rect x="36" y="230" width="256" height="60" rx="4" fill="#f5f3ff" stroke="#8b5cf6" stroke-width="1.5"/>
+  <text x="48" y="250" font-size="11" font-weight="bold" fill="#8b5cf6">└── tests/</text>
+  <rect x="52" y="257" width="230" height="24" rx="4" fill="#f5f3ff" stroke="#8b5cf6" stroke-width="1"/>
+  <text x="62" y="274" font-size="10" fill="#8b5cf6">    └── integration_test.rs</text>
+
+  <!-- ===== RIGHT: Crate Diagram ===== -->
+  <defs>
+    <marker id="ch89-ga" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 Z" fill="#2f6f6a"/>
+    </marker>
+    <marker id="ch89-pa" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 Z" fill="#8b5cf6"/>
+    </marker>
+  </defs>
+
+  <!-- Binary crate box -->
+  <rect x="348" y="75" width="172" height="55" rx="8" fill="#fef3ec" stroke="#b4541f" stroke-width="2"/>
+  <text x="434" y="99" text-anchor="middle" font-size="12" font-weight="bold" fill="#b4541f">Binary Crate</text>
+  <text x="434" y="119" text-anchor="middle" font-size="10" fill="#b4541f">main.rs（可執行檔）</text>
+
+  <!-- Library crate box (center-right) -->
+  <rect x="495" y="160" width="172" height="55" rx="8" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="581" y="184" text-anchor="middle" font-size="12" font-weight="bold" fill="#2f6f6a">Library Crate</text>
+  <text x="581" y="204" text-anchor="middle" font-size="10" fill="#2f6f6a">lib.rs（公開 API）</text>
+
+  <!-- Integration tests box -->
+  <rect x="348" y="247" width="172" height="50" rx="8" fill="#f5f3ff" stroke="#8b5cf6" stroke-width="2"/>
+  <text x="434" y="272" text-anchor="middle" font-size="11" font-weight="bold" fill="#8b5cf6">整合測試</text>
+  <text x="434" y="289" text-anchor="middle" font-size="10" fill="#8b5cf6">tests/</text>
+
+  <!-- Arrow: Binary -> Library -->
+  <path d="M 520 102 Q 540 102 540 187 Q 540 187 495 187" fill="none" stroke="#2f6f6a" stroke-width="1.8" marker-end="url(#ch89-ga)"/>
+  <text x="545" y="148" font-size="10" fill="#2f6f6a">use my_wc::...</text>
+
+  <!-- Arrow: Tests -> Library -->
+  <path d="M 520 265 Q 540 265 540 210 Q 540 210 495 210" fill="none" stroke="#8b5cf6" stroke-width="1.8" marker-end="url(#ch89-pa)"/>
+  <text x="545" y="244" font-size="10" fill="#8b5cf6">use my_wc::...</text>
+</svg>
+        <figcaption>圖 83-1：my-wc 專案結構。<code>src/lib.rs</code> 定義公開 API；<code>src/main.rs</code>（binary crate）與 <code>tests/</code>（整合測試）都透過 <code>use my_wc::...</code> 使用它。Cargo.toml 的 <code>name = "my-wc"</code> 在程式碼裡變 <code>my_wc</code>（連字號換底線）。</figcaption>
+      </div>
+
+      <h3>模組系統：mod、pub、use</h3>
+
+      <p>
+        Rust 的模組系統讓你把程式碼組織成樹狀結構（<strong>模組樹，module tree</strong>）。三個關鍵字分工明確：
+      </p>
+      <ul>
+        <li><strong><code>mod</code></strong>：宣告一個模組。可以是內嵌（<code>mod stats { ... }</code>）或指向同名檔案（<code>mod stats;</code> 會讀取 <code>src/stats.rs</code>）。</li>
+        <li><strong><code>pub</code></strong>：使項目對外可見。Rust 預設一切是私有的——就連同 crate 的其他模組也看不到私有項目。</li>
+        <li><strong><code>use</code></strong>：把路徑帶入當前作用域，省去每次都寫全路徑的麻煩。</li>
+      </ul>
+
+      <pre><code class="language-rust">// src/lib.rs 裡的內嵌子模組示範
+mod stats {
+    // 子模組內的項目預設私有；pub fn 才對外暴露
+    pub fn count_lines(text: &amp;str) -&gt; usize {
+        text.lines().count()
+    }
+}
+
+// 在 crate root 層面重新匯出（re-export）
+// 讓使用者可以直接寫 use my_wc::count_lines 而非 use my_wc::stats::count_lines
+pub use stats::count_lines;</code></pre>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">連字號 → 底線：crate 命名規則</span>
+          <p>
+            <code>Cargo.toml</code> 的 <code>[package] name</code> 可以用連字號（<code>my-wc</code>），這是 crates.io 的常見慣例。
+            但 Rust 識別字不允許連字號，所以在程式碼裡引用時要改底線：<code>use my_wc::...</code>。
+            Cargo 會自動做這個對應，不需要手動設定。
+          </p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ③ ==================== -->
+      <h2>Cargo 生態：依賴管理與語意化版本</h2>
+
+      <p>
+        <code>Cargo.toml</code> 是 Rust 專案的心臟。它宣告 crate 的名稱、版本，以及最重要的——<strong>依賴（dependencies）</strong>。
+      </p>
+
+      <pre><code class="language-text">[package]
+name    = "my-wc"        # crate 名稱（程式碼裡寫 my_wc）
+version = "0.1.0"        # 語意化版本：major.minor.patch
+edition = "2021"         # Rust Edition，建議一律用 2021
+
+[dependencies]
+# 本章 CLI 工具只用標準函式庫，不需任何外部 crate
+# 若需要解析複雜命令列引數，可加：
+# clap = { version = "4", features = ["derive"] }
+
+[dev-dependencies]
+# 只在 cargo test 時才需要的 crate；不會打包進最終二進位
+# tempfile = "3"   ← 整合測試用的暫存檔工具</code></pre>
+
+      <h3>加入外部依賴</h3>
+
+      <p>
+        在 <code>[dependencies]</code> 裡加一行，Cargo 就會在下次 <code>cargo build</code> 時自動從 <a href="https://crates.io" target="_blank">crates.io</a> 下載並快取：
+      </p>
+
+      <pre><code class="language-text">[dependencies]
+serde      = { version = "1", features = ["derive"] }   # 序列化框架
+serde_json = "1"                                         # JSON 支援
+tokio      = { version = "1", features = ["full"] }     # 非同步執行時</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">語意化版本（Semantic Versioning）與 Cargo.lock</span>
+          <p>
+            Cargo 遵循 <strong>SemVer</strong>：<code>major.minor.patch</code>。版本規格 <code>"1"</code>（相當於 <code>"^1"</code>）允許 Cargo 自動升級到 <code>&gt;=1.0.0, &lt;2.0.0</code> 的任意版本，保留相容性升級彈性而不破壞 API（major 版本變更才代表破壞性更新）。
+            <code>Cargo.lock</code> 記錄每個依賴的<strong>確切</strong>版本——有了它，不同機器、不同時間點的 build 都能完全重現。二進位專案應 commit <code>Cargo.lock</code>；函式庫則通常不 commit。
+          </p>
+        </div>
+      </div>
+
+      <h3>常用 cargo 指令</h3>
+
+      <pre><code class="language-bash">cargo new my-wc --bin    # 建立新的二進位專案（--lib 建函式庫）
+cargo build              # 編譯（debug 模式，不最佳化，加 debug symbol）
+cargo build --release    # 編譯（release 模式，開啟完整最佳化）
+cargo run                # 編譯並立刻執行
+cargo run -- hello.txt   # 傳遞引數給程式（-- 之後才是程式自己的引數）
+cargo test               # 執行所有測試（單元 + 整合）
+cargo test count_lines   # 只執行名稱包含 count_lines 的測試
+cargo clean              # 清除 target/ 編譯產物</code></pre>
+
+      <!-- ==================== h2 ④ ==================== -->
+      <h2>動手做：my-wc CLI 統計工具</h2>
+
+      <p>
+        現在開始實作。先寫函式庫（<code>src/lib.rs</code>），再寫二進位進入點（<code>src/main.rs</code>）。這樣的分離有個重要好處：整合測試可以直接呼叫函式庫函式，不需要啟動二進位再解析輸出。
+      </p>
+
+      <h3>src/lib.rs — 三個統計函式</h3>
+
+      <pre><code class="language-rust">// src/lib.rs — 函式庫 crate 的根（crate root）
+// main.rs 與 tests/ 都能透過 `use my_wc::...` 引用這裡的公開項目
+
+/// 計算行數（基於 str::lines()；尾端換行不計入額外空行）
+pub fn count_lines(text: &amp;str) -&gt; usize {
+    text.lines().count()
+}
+
+/// 計算單詞數（以任何連續空白字元為分隔，包含 Tab、換行）
+pub fn count_words(text: &amp;str) -&gt; usize {
+    text.split_whitespace().count()
+}
+
+/// 計算 Unicode 字元數（碼位數，非位元組數；CJK 字元各算 1 個）
+pub fn count_chars(text: &amp;str) -&gt; usize {
+    text.chars().count()
+}
+
+// ----- 單元測試（只在 cargo test 時編譯） -----
+#[cfg(test)]
+mod tests {
+    use super::*;   // 引入上層模組的所有公開項目
+
+    #[test]
+    fn test_count_lines() {
+        assert_eq!(count_lines("hello\nworld\nfoo"), 3);    // 3 行（無尾端換行）
+        assert_eq!(count_lines("hello\nworld\nfoo\n"), 3);  // 尾端換行不算額外行
+        assert_eq!(count_lines("single"), 1);               // 無換行符 → 1 行
+        assert_eq!(count_lines(""), 0);                     // 空字串 → 0 行
+    }
+
+    #[test]
+    fn test_count_words() {
+        assert_eq!(count_words("hello world foo"), 3);      // 3 個單詞
+        assert_eq!(count_words("  tabs\there  "), 2);       // tab 也算空白，共 2 個單詞
+        assert_eq!(count_words(""), 0);                     // 空字串 → 0
+    }
+
+    #[test]
+    fn test_count_chars() {
+        assert_eq!(count_chars("hello"), 5);                // 5 個 ASCII 字元
+        assert_eq!(count_chars("你好世界"), 4);             // 4 個 Unicode 碼位（各佔 3 bytes 但算 1 個字元）
+        assert_eq!(count_chars(""), 0);                     // 空字串 → 0
+    }
+}</code></pre>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title"><code>str::lines()</code> vs <code>split('\n')</code></span>
+          <p>
+            <code>lines()</code> 同時處理 <code>\n</code>（Unix）與 <code>\r\n</code>（Windows），且不因尾端換行多算一行：
+            <code>"hello\n"</code> 用 <code>lines().count()</code> 得到 1，用 <code>split('\n').count()</code> 得到 2（產生空字串元素）。
+            處理使用者上傳的文字檔時，<code>lines()</code> 的行為通常更符合直覺。
+          </p>
+        </div>
+      </div>
+
+      <h3>src/main.rs — 二進位進入點</h3>
+
+      <pre><code class="language-rust">// src/main.rs
+use std::env;
+use std::fs;
+use std::process;
+
+// my-wc 的 Cargo.toml name = "my-wc"；程式碼裡用底線 my_wc
+use my_wc::{count_chars, count_lines, count_words};
+
+fn main() {
+    // args() 回傳迭代器；collect() 蒐集成 Vec&lt;String&gt;
+    // args[0] 是程式名稱本身，使用者的引數從 args[1] 開始
+    let args: Vec&lt;String&gt; = env::args().collect();
+
+    if args.len() &lt; 2 {
+        eprintln!("用法: {} &lt;檔案路徑&gt;", args[0]);   // eprintln! 印到 stderr
+        process::exit(1);
+    }
+
+    let path = &amp;args[1];
+
+    if let Err(e) = run(path) {
+        eprintln!("錯誤: {}", e);
+        process::exit(1);
+    }
+}
+
+fn run(path: &amp;str) -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
+    // read_to_string 可能失敗（檔案不存在、權限不足等）
+    // ? 運算子：若 Err，立刻提早回傳，不繼續執行後面的程式碼
+    let text = fs::read_to_string(path)?;
+
+    // {:&gt;8}：右對齊、最小欄位寬度 8 字元
+    println!("{:&gt;8} 行   {:&gt;8} 字   {:&gt;8} 字元   {}",
+        count_lines(&amp;text),
+        count_words(&amp;text),
+        count_chars(&amp;text),
+        path
+    );
+
+    Ok(())
+}</code></pre>
+
+      <p>
+        建置並執行：
+      </p>
+
+      <pre><code class="language-bash">cargo build --release
+./target/release/my-wc README.md
+#        5 行         20 字        120 字元   README.md</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">分離 lib 與 bin 的三個工程理由</span>
+          <p>
+            把邏輯放 <code>lib.rs</code>、入口放 <code>main.rs</code>，帶來三個好處：
+            (1) 測試可以直接呼叫函式，不需要啟動整個程式再解析輸出——更快、更精確。
+            (2) 將來可把函式庫發佈到 crates.io，讓別人引用你的統計函式。
+            (3) 同一個 package 可以有多個 binary（放在 <code>src/bin/*.rs</code>），全部共用同一個 lib。
+          </p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑤ ==================== -->
+      <h2>錯誤處理整合：Result、? 與自訂錯誤型別</h2>
+
+      <p>
+        在<a href="86-rust-types-errors.html">第 80 章</a>，我們學過 <code>Result&lt;T, E&gt;</code> 與 <code>?</code> 的基礎。現在把它用在真實的 I/O 場景。
+      </p>
+      <p>
+        <code>run()</code> 的回傳型別是 <code>Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt;</code>。為什麼要用 <code>Box&lt;dyn std::error::Error&gt;</code>？因為 I/O 操作可能拋出 <code>std::io::Error</code>，路徑解析可能拋出 <code>ParseIntError</code>，這些是不同型別的錯誤。用 <strong>trait object</strong> <code>Box&lt;dyn Error&gt;</code> 可統一裝入任何實作 <code>Error</code> trait 的型別，方便在 CLI 中快速整合多種錯誤源。
+      </p>
+
+      <pre><code class="language-rust">use std::fs;
+
+// 一個讀取整數設定值並翻倍的小例子
+fn read_and_double(path: &amp;str) -&gt; Result&lt;i32, Box&lt;dyn std::error::Error&gt;&gt; {
+    let content = fs::read_to_string(path)?;    // io::Error 自動轉成 Box&lt;dyn Error&gt;
+    let number: i32 = content.trim().parse()?;  // ParseIntError 也自動轉
+    Ok(number * 2)
+}</code></pre>
+
+      <h3>公開 API 應使用具名錯誤型別</h3>
+
+      <p>
+        對公開的函式庫 API，建議定義具名錯誤型別，而非 <code>Box&lt;dyn Error&gt;</code>——這讓呼叫者能夠對不同錯誤做模式比對：
+      </p>
+
+      <pre><code class="language-rust">use std::{fmt, io};
+
+/// my-wc 可能發生的錯誤
+#[derive(Debug)]
+pub enum WcError {
+    Io(io::Error),   // 檔案讀取失敗
+    EmptyPath,       // 傳入空路徑
+}
+
+impl fmt::Display for WcError {
+    fn fmt(&amp;self, f: &amp;mut fmt::Formatter&lt;'_&gt;) -&gt; fmt::Result {
+        match self {
+            WcError::Io(e)     =&gt; write!(f, "I/O 錯誤: {}", e),
+            WcError::EmptyPath =&gt; write!(f, "路徑不得為空"),
+        }
+    }
+}
+
+impl std::error::Error for WcError {}
+
+// From&lt;io::Error&gt;：讓 ? 能自動把 io::Error 轉成 WcError::Io(e)
+impl From&lt;io::Error&gt; for WcError {
+    fn from(e: io::Error) -&gt; Self { WcError::Io(e) }
+}
+
+/// 回傳 (行數, 字數, 字元數) 或 WcError
+pub fn count_file(path: &amp;str) -&gt; Result&lt;(usize, usize, usize), WcError&gt; {
+    if path.is_empty() {
+        return Err(WcError::EmptyPath);
+    }
+    let text = std::fs::read_to_string(path)?;   // io::Error 由 From impl 自動轉
+    Ok((
+        crate::count_lines(&amp;text),
+        crate::count_words(&amp;text),
+        crate::count_chars(&amp;text),
+    ))
+}</code></pre>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">小 CLI 用 Box&lt;dyn Error&gt;，函式庫用具名錯誤型別</span>
+          <p>
+            <code>Box&lt;dyn std::error::Error&gt;</code> 在 <code>main.rs</code> 這類「只管印錯誤訊息」的場景非常方便，用 <code>?</code> 統一拋出即可。
+            但函式庫的公開 API 應該定義具名錯誤型別（如 <code>WcError</code>），讓呼叫者能分情況處理——
+            「路徑為空」和「檔案不存在」是不同問題，應該能分別應對。
+          </p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑥ ==================== -->
+      <h2>測試：#[test]、整合測試與 cargo test</h2>
+
+      <p>
+        Rust 的測試系統直接內建於語言與 Cargo 中，不需要額外框架。在<a href="46-debugging-testing.html">第 46 章</a>我們討論過軟體測試的一般概念；這裡聚焦 Rust 特有的實作方式。
+      </p>
+
+      <h3>單元測試（Unit Tests）</h3>
+
+      <p>
+        單元測試放在被測模組的<strong>同一個檔案</strong>裡，用 <code>#[cfg(test)]</code> 標記的 <code>mod tests { }</code> 包起來。<code>#[test]</code> 標記個別測試函式；<code>assert_eq!</code>、<code>assert_ne!</code>、<code>assert!</code> 是最常用的斷言巨集。
+      </p>
+
+      <pre><code class="language-rust">// src/lib.rs（片段）
+
+#[cfg(test)]    // 只在 `cargo test` 時才編譯此模組，不影響正式 build
+mod tests {
+    use super::*;   // 引入上層模組（lib.rs）的公開與私有項目
+
+    #[test]
+    fn empty_string_gives_zero_lines() {
+        assert_eq!(count_lines(""), 0);
+    }
+
+    #[test]
+    #[should_panic]   // 標記「預期這個函式會 panic」；若沒 panic，測試失敗
+    fn this_panics() {
+        panic!("刻意觸發");
+    }
+
+    #[test]
+    fn count_words_with_unicode() {
+        // 中英文混合，以空白分隔
+        let text = "Hello 世界 Rust";
+        assert_eq!(count_words(text), 3);   // "Hello"、"世界"、"Rust" = 3 個單詞
+    }
+}</code></pre>
+
+      <h3>整合測試（Integration Tests）</h3>
+
+      <p>
+        整合測試放在專案根目錄的 <code>tests/</code> 資料夾，每個 <code>.rs</code> 是獨立的 crate，從<strong>外部</strong>使用你的函式庫，與函式庫的公開契約完全一致。
+      </p>
+
+      <pre><code class="language-rust">// tests/integration_test.rs
+// 整個檔案就是測試環境；不需要 mod tests { } 包裝
+
+#[test]
+fn integration_stats_consistency() {
+    let text = "hello world\nfoo bar\n";
+
+    // 2 行（"hello world" 和 "foo bar"；尾端 \n 不算額外行）
+    assert_eq!(my_wc::count_lines(text), 2);
+
+    // 4 個單詞：hello, world, foo, bar
+    assert_eq!(my_wc::count_words(text), 4);
+
+    // 20 個字元（h,e,l,l,o,空白,w,o,r,l,d,\n,f,o,o,空白,b,a,r,\n）
+    assert_eq!(my_wc::count_chars(text), 20);
+}
+
+#[test]
+fn integration_empty_input() {
+    assert_eq!(my_wc::count_lines(""), 0);
+    assert_eq!(my_wc::count_words(""), 0);
+    assert_eq!(my_wc::count_chars(""), 0);
+}
+
+#[test]
+fn integration_unicode_text() {
+    let text = "你好\n世界\n";
+    assert_eq!(my_wc::count_lines(text), 2);             // 2 行
+    assert_eq!(my_wc::count_chars(text), 6);             // 你,好,\n,世,界,\n = 6 個字元
+}</code></pre>
+
+      <p>
+        執行 <code>cargo test</code> 同時跑單元測試與整合測試：
+      </p>
+
+      <pre><code class="language-bash">cargo test
+# running 6 tests
+# test tests::test_count_lines          ... ok
+# test tests::test_count_words          ... ok
+# test tests::test_count_chars          ... ok
+# test integration_stats_consistency    ... ok
+# test integration_empty_input          ... ok
+# test integration_unicode_text         ... ok
+# test result: ok. 6 passed; 0 failed; 0 ignored</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">測試即文件：精確、機器可驗證的行為規格</span>
+          <p>
+            <code>integration_stats_consistency</code> 這個測試告訴讀者：給定 <code>"hello world\nfoo bar\n"</code>，預期 2 行、4 個單詞、20 個字元。這比任何文字說明都精確，且機器每次 build 都能自動驗證。Rust 工程師通常把「先寫測試、再寫實作」（Test-Driven Development）視為健康的工作流。
+          </p>
+        </div>
+      </div>
+
+      <!-- ==================== 練習 1 ==================== -->
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 83.1 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>
+            為 <code>src/lib.rs</code> 新增一個 <code>count_bytes(text: &amp;str) -&gt; usize</code> 函式，回傳 UTF-8 位元組數（不是字元數）。
+            再在 <code>src/main.rs</code> 加入 <code>--bytes</code> 旗標：當使用者輸入 <code>my-wc --bytes &lt;file&gt;</code> 時，只印出位元組數。
+            最後補寫至少一個單元測試，驗證 ASCII 文字的位元組數等於字元數，而中文字元的位元組數大於字元數。
+          </p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>src/lib.rs — 新增 count_bytes：</strong></p>
+              <pre><code class="language-rust">/// 計算 UTF-8 位元組數（str::len() 回傳位元組數，非字元數）
+pub fn count_bytes(text: &amp;str) -&gt; usize {
+    text.len()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_count_bytes() {
+        // ASCII 文字：位元組數 == 字元數
+        assert_eq!(count_bytes("hello"), 5);
+        assert_eq!(count_chars("hello"), 5);
+
+        // 中文字元：UTF-8 每個佔 3 bytes，但 chars().count() 算 1 個字元
+        assert_eq!(count_bytes("你好"), 6);   // 2 個字元 × 3 bytes = 6 bytes
+        assert_eq!(count_chars("你好"), 2);   // 2 個 Unicode 碼位
+    }
+}</code></pre>
+              <p><strong>src/main.rs — 處理 --bytes 旗標：</strong></p>
+              <pre><code class="language-rust">use my_wc::{count_bytes, count_chars, count_lines, count_words};
+
+fn main() {
+    let args: Vec&lt;String&gt; = env::args().collect();
+
+    match args.as_slice() {
+        [_, flag, path] if flag == "--bytes" =&gt; {
+            match fs::read_to_string(path) {
+                Ok(text) =&gt; println!("{} bytes  {}", count_bytes(&amp;text), path),
+                Err(e)   =&gt; { eprintln!("錯誤: {}", e); process::exit(1); }
+            }
+        }
+        [_, path] =&gt; {
+            if let Err(e) = run(path) {
+                eprintln!("錯誤: {}", e);
+                process::exit(1);
+            }
+        }
+        _ =&gt; {
+            eprintln!("用法: {} [--bytes] &lt;檔案路徑&gt;", args[0]);
+            process::exit(1);
+        }
+    }
+}</code></pre>
+              <p>
+                核心重點：<code>str::len()</code> 回傳 UTF-8 位元組數，<code>str::chars().count()</code> 回傳 Unicode 碼位數。
+                對 ASCII 文字兩者相同；對 CJK 字元（各佔 3 bytes），<code>len()</code> 的結果會是 <code>chars().count()</code> 的 3 倍。
+              </p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ==================== 練習 2 ==================== -->
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 83.2 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>
+            目前 <code>count_lines</code>、<code>count_words</code>、<code>count_chars</code> 都直接定義在 <code>src/lib.rs</code> 的 crate root。
+            請把這三個函式移進一個名為 <code>stats</code> 的子模組（在 <code>lib.rs</code> 裡用 <code>mod stats { ... }</code>），
+            並在 crate root 層用 <code>pub use</code> 重新匯出，讓外部的 <code>use my_wc::count_lines</code> 仍然有效。
+          </p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-rust">// src/lib.rs — 重構後
+
+mod stats {
+    /// 計算行數
+    pub fn count_lines(text: &amp;str) -&gt; usize {
+        text.lines().count()
+    }
+
+    /// 計算單詞數
+    pub fn count_words(text: &amp;str) -&gt; usize {
+        text.split_whitespace().count()
+    }
+
+    /// 計算 Unicode 字元數
+    pub fn count_chars(text: &amp;str) -&gt; usize {
+        text.chars().count()
+    }
+}
+
+// pub use 讓呼叫者直接寫 use my_wc::count_lines，不需要知道內部是 stats 模組
+pub use stats::{count_chars, count_lines, count_words};</code></pre>
+              <p>
+                <code>mod stats { ... }</code> 預設是私有模組；但透過 <code>pub use</code>，它的公開函式可以在 crate root 層被「再匯出」（re-export）。
+                對使用者而言，<code>use my_wc::count_lines</code> 完全不需要更改——模組的內部組織是實作細節，公開 API 不受影響。
+                這是 Rust 函式庫常見的封裝模式：內部隨意重組模組，對外只維持穩定的公開路徑。
+              </p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑦ ==================== -->
+      <h2>進一步：最小 HTTP 服務初探</h2>
+
+      <p>
+        CLI 工具示範了 Rust 處理檔案 I/O 與錯誤的能力；Rust 在服務端（server-side）同樣強大。
+        得益於 <a href="88-rust-concurrency.html">第 82 章</a>的 async/await 與 tokio，Rust 可以用極少的執行緒承載大量並發 HTTP 連線。
+        這一節簡介用 <strong>axum</strong> 框架寫一個最小 HTTP 服務，作為「用 Rust 寫 Web 服務」的鋪路。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">axum：建立在 tokio 生態上的輕量 Web 框架</span>
+          <p>
+            <strong>axum</strong> 是由 tokio 團隊維護的 HTTP 框架，以型別安全、零樣板、與 tokio 生態深度整合著稱。
+            除了 axum，Rust 生態還有 actix-web（以效能聞名）和 warp。
+            本節以 axum 0.7 為例；往後用 Rust 撰寫 MCP server 或 gRPC 服務時，都是以相同的 tokio + axum 架構為基礎。
+          </p>
+        </div>
+      </div>
+
+      <p>
+        首先在 <code>Cargo.toml</code> 加入依賴：
+      </p>
+
+      <pre><code class="language-text">[dependencies]
+axum  = "0.7"
+tokio = { version = "1", features = ["full"] }</code></pre>
+
+      <p>
+        最小 HTTP 服務，只需幾十行：
+      </p>
+
+      <pre><code class="language-rust">// src/main.rs（HTTP 服務版本）
+use axum::{routing::get, Router};
+
+#[tokio::main]
+async fn main() {
+    // Router 把 URL 路徑對應到 handler 函式
+    let app = Router::new()
+        .route("/",       get(root))      // GET /     → root()
+        .route("/health", get(health));   // GET /health → health()
+
+    // tokio::net::TcpListener 在 0.0.0.0:3000 監聽
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
+        .await
+        .unwrap();
+    println!("伺服器啟動：http://localhost:3000");
+
+    // axum::serve 開始接受連線（永久阻塞）
+    axum::serve(listener, app).await.unwrap();
+}
+
+// handler 函式必須是 async，回傳型別自動轉成 HTTP 回應
+async fn root() -&gt; &amp;'static str {
+    "Hello from Rust!"
+}
+
+async fn health() -&gt; &amp;'static str {
+    "ok"
+}</code></pre>
+
+      <pre><code class="language-bash">cargo run
+# 伺服器啟動：http://localhost:3000
+
+curl http://localhost:3000/
+# Hello from Rust!
+
+curl http://localhost:3000/health
+# ok</code></pre>
+
+      <p>
+        這幾行背後發生了什麼？<code>#[tokio::main]</code> 宏展開成一個多執行緒 tokio runtime，在所有 CPU 核心上驅動 async Future；每個進來的 HTTP 連線都是一個輕量任務（task），不佔用 OS 執行緒。理論上，這個最小服務在一台普通機器上可以同時處理數萬條並發連線。
+      </p>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">回傳 JSON：加入 axum::Json</span>
+          <p>
+            把回傳型別改成 <code>axum::Json&lt;T&gt;</code>（其中 <code>T: Serialize</code>），axum 會自動序列化成 JSON 並設定正確的 <code>Content-Type</code> header：
+          </p>
+          <pre><code class="language-rust">use axum::Json;
+use serde::Serialize;
+
+#[derive(Serialize)]
+struct Status { ok: bool, version: &amp;'static str }
+
+async fn status() -&gt; Json&lt;Status&gt; {
+    Json(Status { ok: true, version: "0.1.0" })
+    // 自動回傳 {"ok":true,"version":"0.1.0"}
+}</code></pre>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑧ ==================== -->
+      <h2>發佈與工程實務：fmt、clippy、publish</h2>
+
+      <p>
+        寫出能執行的程式只是第一步；讓程式<strong>可維護、可協作、可分享</strong>，才是工程實務的核心。Cargo 提供了三個重要工具：
+      </p>
+
+      <h3>cargo fmt — 統一排版風格</h3>
+
+      <pre><code class="language-bash">cargo fmt          # 依 Rust 官方風格指南自動排版整個專案
+cargo fmt --check  # CI 裡用：若有任何未格式化的程式碼，回傳非零 exit code</code></pre>
+
+      <p>
+        <code>rustfmt</code> 是 Rust 的官方格式化工具，規則由社群共識固定（縮排 4 空白、最大行寬 100 字元等），開發者不需要再爭「縮排要不要用 Tab」。讓所有 PR 在合入前都跑 <code>cargo fmt --check</code>，是維持程式碼風格一致的最低成本做法。
+      </p>
+
+      <h3>cargo clippy — 靜態分析與慣用語提示</h3>
+
+      <pre><code class="language-bash">cargo clippy              # 執行靜態分析，印出改進建議
+cargo clippy -- -D warnings  # 把所有 clippy 警告視為錯誤（CI 嚴格模式）</code></pre>
+
+      <p>
+        <code>clippy</code> 是 Rust 的靜態分析工具（linter），能抓出常見的非慣用語寫法、效能問題、以及潛在 bug。例如：
+      </p>
+
+      <pre><code class="language-rust">// clippy 會警告這段程式碼，建議改用 is_empty()
+if text.len() == 0 {     // ⚠️ clippy: use `is_empty()` instead of comparing to zero
+    return 0;
+}
+
+// 改成：
+if text.is_empty() {     // ✓ 慣用語，清楚且效能等同
+    return 0;
+}</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">CI 三件套：fmt + clippy + test</span>
+          <p>
+            成熟的 Rust 專案 CI pipeline 通常包含三道關卡：
+            <code>cargo fmt --check</code>（風格）、
+            <code>cargo clippy -- -D warnings</code>（靜態分析）、
+            <code>cargo test</code>（功能正確性）。
+            三道全過，PR 才能合入。這讓每次合入都有最低限度的品質保證。
+          </p>
+        </div>
+      </div>
+
+      <h3>cargo publish — 發佈到 crates.io</h3>
+
+      <p>
+        準備好把函式庫分享給全世界？先確認 <code>Cargo.toml</code> 已填入必要欄位：
+      </p>
+
+      <pre><code class="language-text">[package]
+name        = "my-wc"
+version     = "0.1.0"
+edition     = "2021"
+description = "一個簡單的 CLI 文字統計工具"
+license     = "MIT"
+repository  = "https://github.com/yourname/my-wc"
+readme      = "README.md"</code></pre>
+
+      <pre><code class="language-bash">cargo login             # 用 crates.io API token 登入（一次性設定）
+cargo publish --dry-run # 模擬發佈，不真正上傳（先確認沒問題）
+cargo publish           # 正式發佈到 crates.io</code></pre>
+
+      <p>
+        發佈後，全球任何人都能在自己的 <code>Cargo.toml</code> 裡加一行 <code>my-wc = "0.1.0"</code> 來使用你的 crate。版本一旦發佈無法刪除（只能 yank，讓它在搜尋中隱藏，但已有的依賴仍能下載），所以請先確認 API 穩定再發佈。
+      </p>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">發佈前務必確認的事</span>
+          <p>
+            (1) <strong>不要發佈包含私密金鑰或 token 的 crate</strong>——crates.io 是公開的。
+            (2) 確認 <code>license</code> 欄位填寫正確（常見選擇：MIT、Apache-2.0、MIT OR Apache-2.0）。
+            (3) <code>cargo publish --dry-run</code> 會列出所有將被打包的檔案，用 <code>.cargo_ignore</code> 或 <code>[package] exclude</code> 排除不必要的檔案。
+          </p>
+        </div>
+      </div>
+
+      <!-- ==================== 練習 3 ==================== -->
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 83.3 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>
+            在 <code>tests/</code> 目錄下新增一個整合測試，使用 <code>std::fs</code> 與 <code>std::env::temp_dir()</code> 建立一個暫存檔，寫入兩行已知內容，再呼叫 <code>my_wc::count_lines</code> 與 <code>my_wc::count_words</code> 驗證結果。測試結束後清除暫存檔。
+          </p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-rust">// tests/file_io_test.rs
+use std::fs;
+use std::io::Write;
+
+#[test]
+fn integration_with_real_file() {
+    // 建立暫存檔路徑
+    let mut path = std::env::temp_dir();
+    path.push("my_wc_test_83.txt");
+
+    // 寫入已知內容
+    let mut file = fs::File::create(&amp;path).expect("建立暫存檔失敗");
+    writeln!(file, "line one").expect("寫入失敗");   // "line one\n"
+    writeln!(file, "line two").expect("寫入失敗");   // "line two\n"
+    drop(file);   // 確保 file handle 關閉、資料刷新到磁碟
+
+    // 讀回並驗證
+    let text = fs::read_to_string(&amp;path).expect("讀取暫存檔失敗");
+    assert_eq!(my_wc::count_lines(&amp;text), 2);   // "line one" 和 "line two" = 2 行
+    assert_eq!(my_wc::count_words(&amp;text), 4);   // line, one, line, two = 4 個單詞
+
+    // 清除暫存檔（失敗也無妨；系統重啟會自動清理 temp_dir）
+    let _ = fs::remove_file(&amp;path);
+}</code></pre>
+              <p>
+                注意 <code>drop(file)</code>：Rust 的 <code>File</code> 在 drop 時才保證刷新（flush）並關閉。雖然 <code>File</code> 實作了 <code>Drop</code>，這裡顯式呼叫 <code>drop()</code> 是為了確保在讀取前資料已完全寫入磁碟——在同一個程序內連續寫再讀，偶爾會踩到 OS 快取的競態。
+              </p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑨ ==================== -->
+      <h2>把這一章串起來</h2>
+
+      <p>
+        這一章是 Rust 部（第二十部）的整合實戰。我們從建立一個真實的 Rust 專案出發，走過了工程師每天都會用到的工作流：
+      </p>
+
+      <ul>
+        <li>
+          <strong>模組系統（mod/pub/use）</strong>：Rust 預設一切私有，<code>pub</code> 才對外公開。<code>mod</code> 宣告模組，<code>pub use</code> 在適當層級重新匯出——讓使用者看到簡潔的公開 API，內部實作自由重組。
+        </li>
+        <li>
+          <strong>Cargo 生態</strong>：<code>Cargo.toml</code> 宣告依賴；SemVer 讓 Cargo 能安全地自動升級相容版本；<code>Cargo.lock</code> 保證完全可重現的 build。<code>cargo run/build/test/clean</code> 是日常節奏。
+        </li>
+        <li>
+          <strong>lib + bin 分離架構</strong>：把邏輯放 <code>src/lib.rs</code>、入口放 <code>src/main.rs</code>，讓測試能直接呼叫函式庫函式，同時保留未來發佈函式庫或加入多個 binary 的彈性。
+        </li>
+        <li>
+          <strong>錯誤處理整合</strong>：CLI 用 <code>Box&lt;dyn std::error::Error&gt;</code> + <code>?</code> 快速整合多種錯誤源；函式庫 API 用具名錯誤型別（<code>enum WcError</code>）讓呼叫者能分情況處理，並用 <code>From</code> impl 讓 <code>?</code> 自動轉型。
+        </li>
+        <li>
+          <strong>測試</strong>：單元測試放在 <code>#[cfg(test)] mod tests { }</code> 裡，可以存取私有項目；整合測試放在 <code>tests/</code>，從外部驗證公開 API。<code>cargo test</code> 一鍵執行全部。
+        </li>
+        <li>
+          <strong>最小 HTTP 服務</strong>：axum + tokio 讓 Rust 以少量執行緒處理大量並發連線，是 Rust Web 服務的主流架構。<code>#[tokio::main]</code>、<code>Router::new().route()</code>、<code>axum::serve()</code> 是最小必知三件套。
+        </li>
+        <li>
+          <strong>工程實務</strong>：<code>cargo fmt</code> 統一風格、<code>cargo clippy</code> 靜態分析、<code>cargo publish</code> 發佈到 crates.io。CI pipeline 三件套（fmt + clippy + test）是成熟 Rust 專案的標配。
+        </li>
+      </ul>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">Rust 的整合哲學：型別系統是你最忠實的協作夥伴</span>
+          <p>
+            把前五章放在一起看：所有權保證記憶體安全、型別系統保證錯誤被處理、<code>Send</code>/<code>Sync</code> 保證並行安全、trait 保證介面契約——全部在編譯期，全部零執行時開銷。
+            模組系統和 Cargo 把這些保證延伸到整個生態系：你依賴的每個 crate 也受到同樣嚴格的靜態檢查。
+            這就是為什麼許多工程師說，一旦 Rust 程式能編譯通過，它的行為往往就是你預期的。
+          </p>
+        </div>
+      </div>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">延伸學習資源</span>
+          <p>
+            <a href="https://doc.rust-lang.org/book/ch07-00-managing-growing-projects-with-packages-crates-and-modules.html" target="_blank">《The Rust Programming Language》第 7 章</a>——模組系統完整說明（pub/use/crate 路徑）。<br>
+            <a href="https://doc.rust-lang.org/cargo/" target="_blank">《The Cargo Book》</a>——Cargo 官方文件：依賴解析、workspace、發佈、build script 全覽。<br>
+            <a href="https://course.rs/basic/crate-module/intro.html" target="_blank">rust-course（Rust 聖經）模組章節</a>——繁中深入介紹，適合中文讀者鞏固模組概念。<br>
+            <a href="https://zero2prod.com/" target="_blank">《Zero To Production In Rust》</a>（Luca Palmieri 著）——用 Rust 從零打造生產級 Web 服務，涵蓋 axum/actix-web、資料庫、部署；Rust 後端開發的最佳實戰書。
+          </p>
+        </div>
+      </div>
+</article>
+  </main>
+</div>
+<script src="../assets/book.js"></script>
+</body>
+</html>

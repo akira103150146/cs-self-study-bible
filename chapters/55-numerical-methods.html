@@ -1,0 +1,1670 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>數值方法 · CS 自學聖經</title>
+<meta name="description" content="給 CS 人的數值方法:當數學算不出漂亮的封閉解,就用逼近加迭代算出夠好的答案。浮點數的真相、條件數與穩定性、求根、線性方程組、內插、數值微積分與常微分方程——每個 ML 框架與模擬器底層的引擎。">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;700&family=Noto+Sans+TC:wght@400;700&family=Lora:ital,wght@0,400;0,600;0,700;1,400&family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <main class="main">
+    <article class="content">
+
+      <div class="eyebrow">第十四部 · 進階數學</div>
+      <h1>數值方法</h1>
+      <p class="subtitle">真實世界的數學問題,大多沒有漂亮的「封閉解」,甚至根本解不出來。數值方法(numerical methods)是電腦科學家的祕密武器:用「逼近 + 迭代」算出一個<em>夠好</em>的答案。它是科學計算、工程模擬與機器學習底層那台默默運轉的引擎。</p>
+      <div class="byline">
+        <span class="tag">第 55 章</span>
+        <span>閱讀時間 ≈ 55 分鐘</span>
+        <span>難度:★★★★☆</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>為什麼大多數數學問題沒有公式解,而「逼近 + 迭代」是電腦算數學的真正方式</li>
+          <li>浮點數的真相:IEEE 754、機器 epsilon、捨入誤差 vs 截斷誤差,以及恐怖的<strong>災難性抵消</strong></li>
+          <li>用<strong>條件數</strong>分辨「問題天生難算」與「演算法不穩定」這兩件不同的事</li>
+          <li>三種求根法(二分、牛頓、割線)與它們的<strong>收斂速度</strong>差異(線性 vs 二次)</li>
+          <li>解線性方程組的直接法 vs 迭代法,以及為什麼「永遠別算反矩陣」</li>
+          <li>多項式內插的危險(Runge 現象)、最小平方法,以及數值微分、積分、常微分方程怎麼算</li>
+        </ul>
+      </div>
+
+      <h2>當數學「算不出來」的時候</h2>
+      <p>
+        你在第 12 章學過,要算 $\int_0^1 x^2\,dx$,只要找個反導數 $\frac{x^3}{3}$,代入端點相減就好,
+        答案精確是 $\frac{1}{3}$,分秒不差。那種「找到一條公式,代數字進去就得到確切答案」的解,
+        叫<strong>封閉解(closed-form solution)</strong>,也叫<em>解析解</em>。它很美。問題是——
+        <strong>在真實世界,這種美麗的封閉解是稀有的例外,不是常態。</strong>
+      </p>
+      <p>
+        舉幾個你以為「應該算得出來」其實算不出來的例子:
+      </p>
+      <ul>
+        <li>積分 $\displaystyle\int_0^1 e^{-x^2}\,dx$(高斯鐘形曲線下的面積,統計學天天在用)<strong>沒有</strong>用基本函數寫得出來的反導數。它不是「很難找」,是<em>數學上被證明不存在</em>。</li>
+        <li>五次以上的多項式方程式 $x^5 - x - 1 = 0$,根據<strong>阿貝爾–魯菲尼定理</strong>,一般情況下<strong>沒有</strong>用加減乘除與開根號寫成的求根公式(高中背的「公式解」到四次方就到頂了)。</li>
+        <li>單擺的運動方程式 $\theta'' = -\frac{g}{L}\sin\theta$ 是個微分方程,只要不做「小角度近似」,它的解就寫不成基本函數。</li>
+      </ul>
+      <p>
+        那這些問題就無解了嗎?當然不是——飛機照飛、天氣照報、神經網路照訓練。
+        祕訣在於:<strong>我們不堅持要那個「精確的符號答案」,改而追求一個「誤差小到無所謂」的數值答案。</strong>
+        要算 $\int_0^1 e^{-x^2}\,dx$?把曲線切成幾千個小薄片加起來(第 12 章的黎曼和,本章會升級它)。
+        要解 $x^5-x-1=0$?先猜一個數,再用某條規則一次次修正這個猜測,讓它越來越靠近真正的根。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">數值方法的兩個動詞:逼近與迭代</span>
+          <p><strong>逼近(approximation)</strong>:用算得動的簡單東西(多項式、矩形、線性步進)去代替算不動的複雜東西,
+          換來一點點可控的誤差。<br>
+          <strong>迭代(iteration)</strong>:從一個粗略的猜測出發,反覆套用一條改進規則,讓答案一步步收斂到目標。<br>
+          這兩件事貫穿整章——求根、解方程組、算積分、解微分方程,骨子裡全是「逼近 + 迭代」。
+          這也呼應了第 1 章說的:電腦只懂<em>命令式知識</em>(一步步怎麼做),而數值方法,正是把「求解」這件事翻譯成命令式步驟的藝術。</p>
+        </div>
+      </div>
+
+      <p>
+        但天下沒有白吃的午餐。一旦我們從「精確」退到「近似」,就得睜大眼睛盯著一個東西:<strong>誤差</strong>。
+        誤差從哪來?會不會越滾越大?我的答案到底準到第幾位?要回答這些,我們得先掀開一個你每天用、
+        卻很可能誤會它的東西——電腦裡的小數。
+      </p>
+
+      <h2>浮點數的真相:電腦眼中的數字</h2>
+      <p>
+        你在第 2 章已經被劇透過一個驚悚事實:在 Python 裡 <code>0.1 + 0.2</code> 不等於 <code>0.3</code>。
+        當時我們點到為止。現在做數值方法,這件事從「冷知識」升級成「攸關生死的基本功」——
+        因為你接下來算的每一個數,都活在這套規則底下。
+      </p>
+
+      <h3>為什麼 0.1 存不進去</h3>
+      <p>
+        電腦用<strong>二進位</strong>存數字。十進位的 $0.1$,換成二進位是
+        $0.0001100110011001100\ldots_2$ —— 一個<strong>無限循環</strong>小數,就像十進位寫不完 $\frac{1}{3}=0.333\ldots$ 一樣。
+        但記憶體是有限的(雙精度浮點數總共只有 64 個位元),電腦只好在某一位<strong>截斷並四捨五入</strong>,
+        存進去的其實是一個離 $0.1$ 極近、但<em>不完全相等</em>的數。
+      </p>
+      <pre><code class="language-python">from decimal import Decimal
+
+# 看看電腦「真正」存的 0.1 是什麼
+print(Decimal(0.1))
+# 0.1000000000000000055511151231257827021181583404541015625
+#   ↑ 不是 0.1,是離它最近的那個「可表示的數」
+
+print(0.1 + 0.2)          # 0.30000000000000004
+print(0.1 + 0.2 == 0.3)   # False</code></pre>
+      <p>
+        這套「用有限位元逼近實數」的規格,就是 <strong>IEEE 754</strong> 標準。一個雙精度(double, Python 的 <code>float</code>)
+        浮點數,把 64 個位元切成三段:1 個<strong>符號位</strong>、11 個<strong>指數位</strong>、52 個<strong>尾數位(mantissa)</strong>。
+        它本質上是「科學記號的二進位版」:$\pm\, 1.\underbrace{m_1 m_2 \ldots m_{52}}_{\text{尾數}} \times 2^{e}$。
+        指數讓它能表示極大與極小的數,尾數則決定了<strong>精度</strong>——而精度,是有上限的。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 620 150" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <rect x="40" y="50" width="50" height="46" rx="6" fill="#f6e7dd" stroke="#b4541f"/>
+  <text x="65" y="78" text-anchor="middle" font-size="14" font-weight="700" fill="#b4541f">S</text>
+  <rect x="90" y="50" width="160" height="46" rx="6" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="170" y="78" text-anchor="middle" font-size="13" font-weight="700" fill="#2f6f6a">指數 (11 bits)</text>
+  <rect x="250" y="50" width="330" height="46" rx="6" fill="#efeaf9" stroke="#8b5cf6"/>
+  <text x="415" y="78" text-anchor="middle" font-size="13" font-weight="700" fill="#7c3aed">尾數 mantissa (52 bits)</text>
+  <text x="65" y="118" text-anchor="middle" font-size="11" fill="#8a929b">正負號</text>
+  <text x="170" y="118" text-anchor="middle" font-size="11" fill="#8a929b">數有多大</text>
+  <text x="415" y="118" text-anchor="middle" font-size="11" fill="#8a929b">數有多精確 ← 誤差的來源</text>
+  <text x="40" y="34" font-size="13" font-weight="800" fill="#1f2328">IEEE 754 雙精度浮點數(64 位元)</text>
+</svg>
+        <figcaption>圖 55-1:雙精度浮點數的位元布局。指數位決定數值的「量級」,尾數位決定「精度」。因為尾數只有 52 位,任何需要更多位元才能精確表示的數(例如 $0.1$),都只能存一個最接近的近似值。</figcaption>
+      </div>
+
+      <h3>機器 epsilon:精度的天花板</h3>
+      <p>
+        既然精度有限,自然會有一個「最小有感的相對誤差」。這個數叫<strong>機器 epsilon(machine epsilon,$\varepsilon_{\text{mach}}$)</strong>:
+        它是「$1.0$ 與比它<em>大</em>的下一個可表示浮點數之間的距離」。對雙精度而言,$\varepsilon_{\text{mach}} \approx 2.22\times 10^{-16}$。
+        直覺上,它告訴你浮點數大約只有 <strong>15 到 16 位有效數字</strong>,再細的差別電腦根本「看不見」。
+      </p>
+      <pre><code class="language-python">import numpy as np
+
+eps = np.finfo(float).eps
+print(eps)                    # 2.220446049250313e-16
+
+# 比 epsilon 還小的擾動,加上去等於沒加
+print(1.0 + 1e-16 == 1.0)     # True  ← 1e-16 &lt; eps,被「吃掉」了
+print(1.0 + 1e-15 == 1.0)     # False ← 這個還勉強看得見</code></pre>
+      <p>
+        記住 $\varepsilon_{\text{mach}}$ 這個數量級($\sim 10^{-16}$),它是本章所有「能準到多少位」討論的天花板。
+        沒有任何演算法能在雙精度下,給你比這更精確的答案。
+      </p>
+
+      <h3>兩種誤差:捨入 vs 截斷</h3>
+      <p>
+        數值計算裡的誤差,主要來自兩個完全不同的源頭,務必分清楚:
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>誤差類型</th><th>來自哪裡</th><th>例子</th></tr></thead>
+        <tbody>
+          <tr><td><strong>捨入誤差(round-off error)</strong></td><td>浮點數位元有限,每次運算都被迫四捨五入</td><td>$0.1$ 存不準;一千萬次加總後誤差累積</td></tr>
+          <tr><td><strong>截斷誤差(truncation error)</strong></td><td>我們用有限步逼近一個本該無限的數學過程</td><td>泰勒級數只取前幾項;積分只切有限個矩形</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>
+        關鍵洞見是:這兩種誤差常常<strong>互相拉扯</strong>。以數值微分為例(等一下會詳談),你用越小的步長 $h$,
+        截斷誤差越小——但 $h$ 太小時,$f(x+h)$ 與 $f(x)$ 兩個數幾乎一樣,相減後捨入誤差反而爆炸。
+        於是存在一個「最佳的 $h$」,在兩種誤差之間取得平衡。這個拉扯,我們後面會用一張圖看清楚。
+      </p>
+
+      <h3>災難性抵消:數值計算的頭號殺手</h3>
+      <p>
+        所有捨入誤差的災難裡,最陰險的一種叫<strong>災難性抵消(catastrophic cancellation)</strong>:
+        當你把<strong>兩個非常接近的數相減</strong>,它們前面相同的有效位數會彼此抵消、消失不見,
+        只剩下尾巴那幾位「本來就不太準」的數字撐場面——相對誤差因此被瞬間放大幾個數量級。
+      </p>
+      <p>
+        看一個具體例子:計算 $f(x) = \sqrt{x+1} - \sqrt{x}$。當 $x$ 很大時,$\sqrt{x+1}$ 與 $\sqrt{x}$ 幾乎一模一樣,
+        直接相減就是在自找麻煩:
+      </p>
+      <pre><code class="language-python">import math
+
+def naive(x):
+    return math.sqrt(x + 1) - math.sqrt(x)   # 兩個幾乎相等的數相減 → 抵消
+
+def stable(x):
+    # 代數恆等式:乘上「共軛」再除回去,把減法消掉
+    # (√(x+1) - √x)(√(x+1) + √x) = 1
+    return 1.0 / (math.sqrt(x + 1) + math.sqrt(x))
+
+x = 1e16
+print("天真寫法:", naive(x))    # 0.0           ← 完全錯!兩數在浮點下已相等
+print("穩定寫法:", stable(x))   # 5e-09         ← 正確答案 ≈ 1/(2√x)</code></pre>
+      <p>
+        天真寫法直接吐出 <code>0.0</code>——因為在浮點數眼中 $\sqrt{10^{16}+1}$ 和 $\sqrt{10^{16}}$ 已經是同一個數了,
+        相減當然是零。而穩定寫法用一個代數小技巧把減法<em>轉化</em>掉,完全避開了抵消,給出正確答案。
+        <strong>同一個數學式,兩種寫法,一個全錯一個全對</strong>——這就是數值方法和純數學最不一樣的地方:
+        <em>運算的「順序」與「形式」會決定答案的對錯。</em>
+      </p>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">看到「相近的數相減」就要警鈴大作</span>
+          <p>災難性抵消潛伏在無數地方:用 $b^2-4ac$ 的求根公式解 $x^2+10^8 x + 1=0$(練習會看到)、
+          算變異數時用 $E[x^2]-(E[x])^2$、算 $1-\cos x$ 當 $x$ 很小時……
+          症狀都一樣:結果的有效位數莫名其妙地少、甚至變成 0。<br>
+          <strong>解法</strong>通常是「換個數學上等價、但不需要相減的式子」(乘共軛、用三角恆等式、改用 Vieta 公式、Kahan 求和等)。
+          這也是為什麼<code>numpy</code>/<code>scipy</code> 的函式值得信賴——它們的作者花了幾十年把這些陷阱一個個填平。</p>
+        </div>
+      </div>
+
+      <h3>誤差會累積</h3>
+      <p>
+        單次運算的捨入誤差小到 $10^{-16}$,看似無害。但數值方法動輒做幾百萬、幾十億次運算,
+        誤差會<strong>一點一滴累積</strong>。最經典的示範:把 $0.1$ 加一千萬次,理論上該是一百萬,實際呢?
+      </p>
+      <pre><code class="language-python">total = 0.0
+for _ in range(10_000_000):
+    total += 0.1
+print(total)              # 999999.9999839197   ← 不是 1000000.0!
+print(repr(1000000.0 - total))   # 1.6080332940444350e-05 的誤差</code></pre>
+      <p>
+        每次加 $0.1$ 都帶進一點點捨入誤差,累積一千萬次後,就偏掉了百萬分之十六。
+        在科學計算與長時間模擬裡,如何<strong>抑制</strong>誤差累積(例如 Kahan 補償求和、選用穩定的演算法)
+        本身就是一門學問。先記住這個直覺:<em>誤差不只會發生,還會長大。</em>
+      </p>
+
+      <h2>條件數與穩定性:有些問題天生難算</h2>
+      <p>
+        當一個數值答案算壞了,你該怪誰?這裡有個極重要、卻常被混為一談的區別:
+        到底是<strong>問題本身</strong>太敏感(怎麼算都難準),還是你的<strong>演算法</strong>太爛(把好問題算壞了)?
+        這兩件事分別叫<strong>條件(conditioning)</strong>與<strong>穩定性(stability)</strong>。
+      </p>
+      <ul>
+        <li><strong>條件數(condition number)</strong>是<em>問題</em>的性質,與你用什麼方法無關。它衡量:
+        「輸入動一點點,輸出會跟著動多少?」條件數大(<em>ill-conditioned,病態</em>)的問題,
+        輸入一丁點的誤差(別忘了輸入本身就帶著捨入誤差)就會被放大成輸出的巨大誤差——<strong>它天生就難算準</strong>。</li>
+        <li><strong>穩定性</strong>是<em>演算法</em>的性質。一個穩定的演算法,不會在計算過程中<em>額外</em>放大誤差;
+        不穩定的演算法(例如剛剛那個會抵消的天真寫法)會把一個好端端的問題算爛。</li>
+      </ul>
+      <p>
+        對函數求值 $y=f(x)$ 而言,相對條件數大約是 $\kappa \approx \left|\dfrac{x\,f'(x)}{f(x)}\right|$
+        ——看到沒,它就是用第 12 章的導數來衡量「敏感度」。當 $f(x)$ 接近 0(例如求根時),$\kappa$ 會爆大,
+        這正是為什麼「求根」附近數值上特別棘手。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">一句話分清楚這兩者</span>
+          <p><strong>條件數差,是問題的錯;不穩定,是演算法的錯。</strong>
+          一個經驗法則:在雙精度下,如果問題的條件數是 $\kappa \approx 10^{k}$,
+          你大約會<em>損失 $k$ 位</em>有效數字——本來有 16 位,病態到 $\kappa=10^{10}$ 時就只剩 6 位可信。
+          這也是為什麼專業的數值函式庫常會回報「估計的條件數」:它在誠實地告訴你「這個答案可以信幾位」。
+          你無法用更聰明的演算法去拯救一個病態的問題(那是問題的天性),但你<strong>絕對</strong>可以用爛演算法毀掉一個好問題。</p>
+        </div>
+      </div>
+
+      <h2>求根:解 f(x) = 0</h2>
+      <p>
+        我們從第一個經典任務開始:給一個函數 $f$,找出讓 $f(x)=0$ 的那個 $x$(叫它的<strong>根 root</strong>)。
+        這看似冷僻,其實無所不在:「兩條曲線在哪相交」是求 $f-g=0$;「利潤最大在哪」是求導數 $f'(x)=0$;
+        「這個方程式的解是多少」更是直接求根。而正如開頭說的,大多數方程式<em>沒有</em>求根公式,只能用迭代逼近。
+      </p>
+
+      <h3>二分法:慢,但穩如老狗</h3>
+      <p>
+        第一個方法,你其實在第 5 章的<strong>二分搜尋</strong>已經見過它的靈魂。觀念極簡:
+        如果一個連續函數在 $a$ 點是負的、在 $b$ 點是正的,那它中間<strong>一定</strong>穿過零(這叫<em>介值定理</em>)。
+        於是我們看中點 $m=\frac{a+b}{2}$ 的正負,就能把根所在的區間<strong>砍掉一半</strong>;反覆砍,區間越縮越小,
+        最後夾出那個根。
+      </p>
+      <pre><code class="language-python">def bisection(f, a, b, tol=1e-12, max_iter=200):
+    """前提:f(a) 與 f(b) 異號,根必在 [a, b] 之間"""
+    assert f(a) * f(b) &lt; 0, "端點必須異號,才保證區間內有根"
+    for i in range(max_iter):
+        m = (a + b) / 2
+        if abs(f(m)) &lt; tol or (b - a) / 2 &lt; tol:
+            return m, i + 1
+        if f(a) * f(m) &lt; 0:   # 根在左半邊
+            b = m
+        else:                 # 根在右半邊
+            a = m
+    return m, max_iter
+
+# 求 √2:就是解 f(x) = x² − 2 = 0 在 [1, 2] 的根
+root, iters = bisection(lambda x: x*x - 2, 1, 2)
+print(f"√2 ≈ {root:.12f},用了 {iters} 次迭代")   # ≈ 1.414213562373,約 40 次</code></pre>
+      <p>
+        二分法的優點是<strong>保證收斂</strong>:只要起始區間端點異號,它<em>一定</em>會夾到根,絕不發散。
+        缺點是<strong>慢</strong>:每次只把誤差砍一半。每次誤差變成上一次的 $\frac{1}{2}$ 倍,
+        這種「誤差以固定比例縮小」叫<strong>線性收斂(linear convergence)</strong>。要多準一位十進位,得多做約 3.3 次迭代。
+      </p>
+
+      <h3>牛頓法:快如閃電,但需要好起點</h3>
+      <p>
+        想更快?用上第 12 章的<strong>導數</strong>。牛頓法(Newton's method)的點子很漂亮:
+        在你目前的猜測 $x_n$ 處,畫出函數的<strong>切線</strong>(切線是函數最好的局部直線近似),
+        然後看這條切線打在 $x$ 軸的哪裡,把那個交點當成<em>更好的</em>下一個猜測 $x_{n+1}$。
+        切線斜率就是 $f'(x_n)$,簡單推一下交點,就得到牛頓法的招牌公式:
+      </p>
+      <p>$$x_{n+1} = x_n - \frac{f(x_n)}{f'(x_n)}$$</p>
+
+      <div class="diagram">
+<svg viewBox="0 0 560 300" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="nax" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#8a929b"/></marker>
+  </defs>
+  <!-- x 軸 -->
+  <line x1="50" y1="200" x2="535" y2="200" stroke="#8a929b" stroke-width="1.4" marker-end="url(#nax)"/>
+  <text x="528" y="218" font-size="12" fill="#8a929b">x</text>
+  <!-- 曲線 f(x)=x^2-2 -->
+  <path d="M 70 255 Q 200 245 239.5 200 Q 290 145 479 90 L 520 67"
+        fill="none" stroke="#2f6f6a" stroke-width="2.6"/>
+  <text x="486" y="78" font-size="13" font-weight="700" fill="#2f6f6a">f(x)=x²−2</text>
+  <!-- 切線 1:在 x0=2 (479,90)，打到 x1=1.5 (274.6,200) -->
+  <line x1="240" y1="278.6" x2="520" y2="60.4" stroke="#b4541f" stroke-width="2"/>
+  <!-- 切線 2:在 x1=1.5 (274.6,186.25)，打到 x2≈1.417 (240.4,200) -->
+  <line x1="210" y1="219.4" x2="305" y2="155.9" stroke="#8b5cf6" stroke-width="2"/>
+  <!-- 點 P0 -->
+  <circle cx="479" cy="90" r="5" fill="#b4541f"/>
+  <line x1="479" y1="90" x2="479" y2="200" stroke="#b4541f" stroke-width="1" stroke-dasharray="4 3"/>
+  <text x="470" y="216" font-size="12" font-weight="700" fill="#b4541f">x₀=2</text>
+  <!-- 點 P1 -->
+  <circle cx="274.6" cy="186.25" r="5" fill="#8b5cf6"/>
+  <line x1="274.6" y1="186.25" x2="274.6" y2="200" stroke="#8b5cf6" stroke-width="1" stroke-dasharray="4 3"/>
+  <text x="268" y="232" font-size="12" font-weight="700" fill="#7c3aed">x₁=1.5</text>
+  <!-- 根 -->
+  <circle cx="239.5" cy="200" r="5.5" fill="#16a34a"/>
+  <text x="180" y="195" font-size="12" font-weight="700" fill="#16a34a">根 √2≈1.414</text>
+  <text x="246" y="216" font-size="11" fill="#16a34a">x₂≈1.417</text>
+  <text x="120" y="40" font-size="13" font-weight="700" fill="#1f2328">沿切線滑向 x 軸,交點就是更好的猜測</text>
+</svg>
+        <figcaption>圖 55-2:牛頓法求 $\sqrt 2$($f(x)=x^2-2$ 的正根)。從 $x_0=2$ 出發,沿切線(磚紅)滑到 $x$ 軸得 $x_1=1.5$;再從 $x_1$ 沿新切線(紫)滑到 $x_2\approx 1.417$,已經非常接近真值。每一步都靠導數「指路」,所以收斂得飛快。</figcaption>
+      </div>
+
+      <pre><code class="language-python">def newton(f, df, x0, tol=1e-12, max_iter=100):
+    x = x0
+    for i in range(max_iter):
+        fx = f(x)
+        if abs(fx) &lt; tol:
+            return x, i
+        x = x - fx / df(x)            # 沿切線滑到 x 軸
+    return x, max_iter
+
+# 一樣求 √2:f(x)=x²−2,f'(x)=2x
+root, iters = newton(lambda x: x*x - 2, lambda x: 2*x, x0=2.0)
+print(f"√2 ≈ {root:.15f},只用了 {iters} 次迭代")   # ≈ 1.414213562373095,約 5 次!</code></pre>
+      <p>
+        二分法用了約 40 次才到 12 位精度,牛頓法只用了<strong>5 次</strong>就到 15 位。差距怎麼這麼大?
+        因為牛頓法是<strong>二次收斂(quadratic convergence)</strong>:每一步<em>正確位數大約翻倍</em>
+        (誤差 $e_{n+1} \approx C\,e_n^2$)。第一步準 1 位、下一步準 2 位、再下一步 4、8、16……一下就撞到機器 epsilon 的天花板。
+      </p>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">牛頓法的代價:它不保證收斂</span>
+          <p>速度是有條件的。牛頓法需要(1)會算<strong>導數</strong>,(2)一個<strong>夠好的起點</strong>。
+          起點不好時,它可能衝過頭、在兩點間來回跳、甚至飛到無窮遠;若某步踩到 $f'(x_n)\approx 0$(切線幾乎水平),
+          下一步會被甩到天邊。二分法又慢又笨,但<em>絕不背叛你</em>;牛頓法又快又聰明,但<em>需要呵護</em>。
+          實務上常把兩者結合(例如 Brent's method):平時用快的,一旦發現要飛出去就退回穩的。</p>
+        </div>
+      </div>
+
+      <h3>割線法:沒有導數時的折衷</h3>
+      <p>
+        牛頓法要你提供導數 $f'$,但很多時候 $f$ 是個複雜的黑盒子,導數根本寫不出來。
+        <strong>割線法(secant method)</strong>的補救很自然:用最近兩個點連成的<em>割線</em>斜率,
+        去近似那條切線的斜率(這正是第 12 章「割線是切線的前身」的逆用):
+      </p>
+      <p>$$x_{n+1} = x_n - f(x_n)\,\frac{x_n - x_{n-1}}{f(x_n) - f(x_{n-1})}$$</p>
+      <p>
+        它不需要導數,收斂階約為 $p=\frac{1+\sqrt 5}{2}\approx 1.618$(就是黃金比例!)——
+        比二分法的線性($p=1$)快,比牛頓法的二次($p=2$)略慢,是個漂亮的折衷。
+      </p>
+
+      <h3>收斂速度,眼見為憑</h3>
+      <p>
+        「線性 vs 二次收斂」聽起來抽象,我們把三種方法求 $\sqrt 2$ 時的<strong>誤差隨迭代次數變化</strong>畫出來。
+        注意縱軸是<strong>對數刻度</strong>(每往下一格,誤差小 10 倍),這樣才看得出天差地別的速度:
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 600 340" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- 格線(每 4 個 decade) -->
+  <g stroke="#e3efed" stroke-width="1">
+    <line x1="70" y1="50" x2="560" y2="50"/>
+    <line x1="70" y1="110" x2="560" y2="110"/>
+    <line x1="70" y1="170" x2="560" y2="170"/>
+    <line x1="70" y1="230" x2="560" y2="230"/>
+    <line x1="70" y1="290" x2="560" y2="290"/>
+  </g>
+  <!-- 軸 -->
+  <line x1="70" y1="50" x2="70" y2="290" stroke="#8a929b" stroke-width="1.4"/>
+  <line x1="70" y1="290" x2="560" y2="290" stroke="#8a929b" stroke-width="1.4"/>
+  <!-- y 標籤 -->
+  <text x="62" y="54" text-anchor="end" font-size="11" fill="#8a929b">10⁰</text>
+  <text x="62" y="114" text-anchor="end" font-size="11" fill="#8a929b">10⁻⁴</text>
+  <text x="62" y="174" text-anchor="end" font-size="11" fill="#8a929b">10⁻⁸</text>
+  <text x="62" y="234" text-anchor="end" font-size="11" fill="#8a929b">10⁻¹²</text>
+  <text x="62" y="294" text-anchor="end" font-size="11" fill="#8a929b">10⁻¹⁶</text>
+  <text x="30" y="170" font-size="12" fill="#4a5159" transform="rotate(-90 30 170)">誤差(對數刻度)</text>
+  <!-- x 標籤 -->
+  <text x="70" y="308" text-anchor="middle" font-size="11" fill="#8a929b">0</text>
+  <text x="164" y="308" text-anchor="middle" font-size="11" fill="#8a929b">10</text>
+  <text x="258" y="308" text-anchor="middle" font-size="11" fill="#8a929b">20</text>
+  <text x="353" y="308" text-anchor="middle" font-size="11" fill="#8a929b">30</text>
+  <text x="447" y="308" text-anchor="middle" font-size="11" fill="#8a929b">40</text>
+  <text x="541" y="308" text-anchor="middle" font-size="11" fill="#8a929b">50</text>
+  <text x="315" y="328" text-anchor="middle" font-size="12" fill="#4a5159">迭代次數</text>
+  <!-- 二分法:線性,直線下降到 ~50 步 -->
+  <line x1="70" y1="50" x2="560" y2="285" stroke="#2f6f6a" stroke-width="2.4"/>
+  <text x="470" y="245" font-size="12" font-weight="700" fill="#2f6f6a">二分法(線性)</text>
+  <!-- 割線法:超線性 -->
+  <polyline points="70,55 79.4,80 88.8,118 98.3,168 107.7,232 117.1,288" fill="none" stroke="#b4541f" stroke-width="2.4"/>
+  <text x="128" y="282" font-size="12" font-weight="700" fill="#b4541f">割線(p≈1.6)</text>
+  <!-- 牛頓法:二次,5 步觸底 -->
+  <polyline points="70,53.5 79.4,66 88.8,89 98.3,135 107.7,227 117.1,286" fill="none" stroke="#8b5cf6" stroke-width="2.6"/>
+  <circle cx="70" cy="53.5" r="3" fill="#8b5cf6"/><circle cx="79.4" cy="66" r="3" fill="#8b5cf6"/>
+  <circle cx="88.8" cy="89" r="3" fill="#8b5cf6"/><circle cx="98.3" cy="135" r="3" fill="#8b5cf6"/>
+  <circle cx="107.7" cy="227" r="3" fill="#8b5cf6"/><circle cx="117.1" cy="286" r="3" fill="#8b5cf6"/>
+  <text x="124" y="120" font-size="12" font-weight="700" fill="#7c3aed">牛頓(二次)</text>
+</svg>
+        <figcaption>圖 55-3:三種求根法的誤差收斂曲線(縱軸為對數刻度)。<strong>二分法</strong>是一條斜直線——每步誤差固定減半,要 ~50 步才觸及機器精度。<strong>牛頓法</strong>幾乎垂直俯衝,5 步就到底(正確位數每步翻倍)。<strong>割線法</strong>介於兩者之間。在對數圖上,「直線」代表線性收斂,「往下彎的曲線」代表超線性/二次收斂。</figcaption>
+      </div>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">收斂階(order of convergence)的定義</span>
+          <p>若誤差滿足 $|e_{n+1}| \approx C\,|e_n|^{p}$,則 $p$ 就是收斂階。$p=1$ 是<strong>線性</strong>(誤差等比例縮小,如二分法);
+          $1&lt;p&lt;2$ 是<strong>超線性</strong>(如割線法 $p\approx 1.618$);$p=2$ 是<strong>二次</strong>(正確位數翻倍,如牛頓法)。
+          階數越高,衝到機器精度所需的迭代次數越少——但通常也要求越多資訊(牛頓法要導數)或越好的起點。
+          這是貫穿數值方法的核心權衡:<em>速度、穩健、與所需資訊,三者難以兼得。</em></p>
+        </div>
+      </div>
+
+      <h4>一句話:不動點迭代</h4>
+      <p>
+        其實上面這些都可以放進一個更一般的框架——<strong>不動點迭代(fixed-point iteration)</strong>:
+        把方程式改寫成 $x = g(x)$ 的形式,然後反覆代入 $x_{n+1} = g(x_n)$,
+        當 $|g'(x)|&lt;1$(這叫<em>壓縮映射</em>)時,序列就會收斂到那個讓 $x=g(x)$ 成立的「不動點」——它正是原方程式的根。
+        牛頓法,其實就是一個收斂得特別快的不動點迭代特例。
+      </p>
+
+      <h2>解線性方程組:直接法 vs 迭代法</h2>
+      <p>
+        從「解一個方程式」升級到「解一整組聯立方程式」:$A\mathbf{x} = \mathbf{b}$,其中 $A$ 是矩陣、$\mathbf{x}$ 與 $\mathbf{b}$ 是向量。
+        這是第 54 章線性代數的核心問題,也是整個科學計算最高頻的運算——電路分析、結構力學、PageRank、
+        最小平方擬合、偏微分方程離散化……到最後幾乎都化約成「解一個(可能超大的)線性系統」。
+        解法分兩大門派。
+      </p>
+
+      <h3>直接法:高斯消去與 LU 分解</h3>
+      <p>
+        你高中解聯立方程式用的「消元法」,正式名稱是<strong>高斯消去法(Gaussian elimination)</strong>:
+        用列運算把矩陣化成上三角形,再由下往上回代。把這個過程「記錄下來」,
+        就得到 <strong>LU 分解(LU decomposition)</strong>:把 $A$ 拆成一個下三角矩陣 $L$ 乘一個上三角矩陣 $U$,即 $A=LU$。
+        分解一次之後,要解任何右側 $\mathbf{b}$,都只需兩次便宜的三角回代。直接法的特點是
+        <strong>有限步驟得到(理論上的)精確解</strong>,對中小型稠密矩陣是首選。它的代價是 $O(n^3)$ 的運算量。
+      </p>
+      <pre><code class="language-python">import numpy as np
+
+A = np.array([[3.0, 2.0, -1.0],
+              [2.0, -2.0, 4.0],
+              [-1.0, 0.5, -1.0]])
+b = np.array([1.0, -2.0, 0.0])
+
+x = np.linalg.solve(A, b)     # 內部就是做 LU 分解 + 回代
+print(x)                      # [ 1.  -2.  -2. ]
+print(np.allclose(A @ x, b))  # True:驗證 Ax 確實等於 b</code></pre>
+
+      <h3>為什麼「永遠別算反矩陣」</h3>
+      <p>
+        數學課教你 $A\mathbf{x}=\mathbf{b}$ 的解是 $\mathbf{x}=A^{-1}\mathbf{b}$,於是初學者很自然想寫
+        <code>np.linalg.inv(A) @ b</code>。<strong>請不要這樣做。</strong>這是新手最常見的數值錯誤之一,理由有三:
+      </p>
+      <ul>
+        <li><strong>更慢</strong>:算出整個反矩陣 $A^{-1}$ 比直接解一個方程組貴得多(大約 3 倍運算量),而你根本用不到反矩陣的全部。</li>
+        <li><strong>更不準</strong>:求逆再相乘會引入額外的捨入誤差,放大條件數的傷害;<code>solve</code> 走的路徑數值上穩定得多。</li>
+        <li><strong>沒必要</strong>:你要的是 $\mathbf{x}$,不是 $A^{-1}$。<code>np.linalg.solve(A, b)</code> 直奔答案。</li>
+      </ul>
+      <div class="callout danger">
+        <div class="ico">⛔</div>
+        <div class="body">
+          <span class="c-title">記住這條鐵律</span>
+          <p>看到 $A^{-1}\mathbf{b}$,心裡翻譯成「<strong>解</strong> $A\mathbf{x}=\mathbf{b}$」,用 <code>np.linalg.solve(A, b)</code>,
+          而不是 <code>np.linalg.inv(A) @ b</code>。同理,$A^{-1}B$ 也用 <code>solve(A, B)</code>。
+          幾乎沒有任何正當理由需要顯式地把一個反矩陣算出來。這條原則,連資深工程師都常踩雷。</p>
+        </div>
+      </div>
+
+      <h3>迭代法:為什麼大稀疏系統不用直接法</h3>
+      <p>
+        當矩陣巨大(比方 $10^6 \times 10^6$,在偏微分方程模擬裡稀鬆平常)但<strong>稀疏(sparse,絕大多數元素是 0)</strong>時,
+        $O(n^3)$ 的直接法會直接撐爆記憶體與時間(光是存 $L$、$U$ 就把好不容易的稀疏性「填滿」毀掉)。
+        這時改用<strong>迭代法(iterative method)</strong>:從一個猜測 $\mathbf{x}^{(0)}$ 出發,反覆改進,讓它收斂到解——
+        又是「逼近 + 迭代」的老精神。每一步只需做矩陣–向量乘法(對稀疏矩陣超便宜),記憶體也省。
+      </p>
+      <p>
+        最入門的兩個迭代法是 <strong>Jacobi 法</strong>與 <strong>Gauss–Seidel 法</strong>。
+        想法都是「把第 $i$ 條方程式拿來解出第 $i$ 個未知數,其餘變數先用上一輪的估計值代入」:
+      </p>
+      <p>$$x_i^{(k+1)} = \frac{1}{a_{ii}}\left(b_i - \sum_{j\neq i} a_{ij}\,x_j^{(k)}\right)$$</p>
+      <p>
+        兩者差別只在一個小細節:Jacobi 整輪都用舊值;Gauss–Seidel 一算出新值就<em>立刻</em>拿來用,所以通常收斂更快。
+      </p>
+      <pre><code class="language-python">import numpy as np
+
+def jacobi(A, b, iters=50):
+    n = len(b)
+    x = np.zeros(n)
+    D = np.diag(A)                       # 對角線元素
+    R = A - np.diagflat(D)               # 其餘部分
+    for _ in range(iters):
+        x = (b - R @ x) / D             # 一次更新全部分量
+    return x
+
+A = np.array([[10.0, -1.0, 2.0],
+              [-1.0, 11.0, -1.0],
+              [2.0, -1.0, 10.0]])
+b = np.array([6.0, 25.0, -11.0])
+
+print(jacobi(A, b))               # ≈ [1.043 2.270 -1.082]
+print(np.linalg.solve(A, b))      # 對照直接法的答案,幾乎相同</code></pre>
+      <p>
+        迭代法不保證對任意矩陣收斂(常需要矩陣「對角佔優」之類的條件),且只給近似解。
+        但對巨大稀疏系統,它往往是<em>唯一</em>可行的選擇。實務上會用更強的迭代法(共軛梯度 CG、GMRES 等),
+        <code>scipy.sparse.linalg</code> 都備好了。
+      </p>
+
+      <h2>內插與逼近:從離散點還原連續曲線</h2>
+      <p>
+        你手上常常只有一堆<strong>離散的資料點</strong>(實驗測量、感測器讀數),卻想知道「點與點<em>之間</em>」的值,
+        或想用一條平滑曲線概括整體趨勢。這就是<strong>內插(interpolation)</strong>與<strong>逼近(approximation)</strong>。
+        兩者有個關鍵區別:內插要求曲線<em>剛好穿過每一個點</em>;逼近只要求曲線<em>整體貼近</em>(允許不穿過,以換取平滑與抗雜訊)。
+      </p>
+
+      <h3>多項式內插與 Runge 現象</h3>
+      <p>
+        給定 $n+1$ 個點,理論上存在<strong>唯一</strong>一條 $n$ 次多項式穿過它們全部。
+        <strong>拉格朗日內插(Lagrange interpolation)</strong>給了一條漂亮的顯式公式來寫出它。
+        聽起來很美——點越多,用越高次的多項式,不就越準嗎?<strong>大錯特錯。</strong>
+      </p>
+      <p>
+        當你用<em>等距</em>的點去做<em>高次</em>多項式內插,多項式會在區間<strong>兩端</strong>劇烈地上下震盪,
+        誤差不減反增,而且增得很恐怖。這個違反直覺的災難叫 <strong>Runge 現象(Runge's phenomenon)</strong>,
+        以函數 $f(x)=\frac{1}{1+25x^2}$ 為經典反例:
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 560 300" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="rax" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#8a929b"/></marker>
+  </defs>
+  <!-- 軸 -->
+  <line x1="40" y1="240" x2="540" y2="240" stroke="#8a929b" stroke-width="1.3" marker-end="url(#rax)"/>
+  <line x1="280" y1="285" x2="280" y2="45" stroke="#8a929b" stroke-width="1.3" marker-end="url(#rax)"/>
+  <text x="532" y="258" font-size="11" fill="#8a929b">x</text>
+  <text x="286" y="56" font-size="11" fill="#8a929b">y</text>
+  <!-- 高次內插多項式:劇烈震盪(磚紅) -->
+  <polyline points="60,235.8 82,64 104,233.5 126,273 148,229 170,205 192,218 214,206 236,185 258,150 280,130 302,150 324,185 346,206 368,218 390,205 412,229 434,273 456,233.5 478,64 500,235.8"
+            fill="none" stroke="#b4541f" stroke-width="2" stroke-dasharray="6 3"/>
+  <text x="300" y="78" font-size="12" font-weight="700" fill="#b4541f">10 次內插多項式(亂震!)</text>
+  <!-- 真函數 f(x)=1/(1+25x^2)(鐘形,teal) -->
+  <polyline points="60,235.8 104,233.5 148,229 192,218 236,185 280,130 324,185 368,218 412,229 456,233.5 500,235.8"
+            fill="none" stroke="#2f6f6a" stroke-width="2.8"/>
+  <text x="300" y="120" font-size="12" font-weight="700" fill="#2f6f6a">真函數 f(x)=1/(1+25x²)</text>
+  <!-- 節點 -->
+  <g fill="#1f2328">
+    <circle cx="60" cy="235.8" r="3.5"/><circle cx="104" cy="233.5" r="3.5"/><circle cx="148" cy="229" r="3.5"/>
+    <circle cx="192" cy="218" r="3.5"/><circle cx="236" cy="185" r="3.5"/><circle cx="280" cy="130" r="3.5"/>
+    <circle cx="324" cy="185" r="3.5"/><circle cx="368" cy="218" r="3.5"/><circle cx="412" cy="229" r="3.5"/>
+    <circle cx="456" cy="233.5" r="3.5"/><circle cx="500" cy="235.8" r="3.5"/>
+  </g>
+</svg>
+        <figcaption>圖 55-4:Runge 現象。黑點是 11 個等距取樣點,綠線是真正的鐘形函數。穿過所有黑點的 10 次多項式(磚紅虛線)在中央還算貼合,但一靠近兩端就<strong>瘋狂震盪</strong>,誤差遠大於低次內插。教訓:盲目提高多項式次數,反而把事情搞砸。</figcaption>
+      </div>
+
+      <h3>樣條:用低次多項式分段拼接</h3>
+      <p>
+        解法不是用一條高次多項式硬撐全場,而是<strong>分段</strong>:每兩個相鄰點之間用一小段低次(通常三次)多項式,
+        再要求接縫處平滑銜接——這就是<strong>樣條內插(spline)</strong>,工程繪圖與動畫曲線的標準工具,既貼合又不亂震
+        (<code>scipy.interpolate.CubicSpline</code> 一行搞定)。
+      </p>
+
+      <h3>最小平方法:當資料有雜訊,別硬穿過去</h3>
+      <p>
+        如果你的資料來自有雜訊的測量,「硬穿過每一點」根本是<em>錯誤</em>的目標——你會把雜訊也一起內插進去。
+        正確的做法是<strong>逼近</strong>:選一個簡單模型(例如一條直線 $y=ax+b$),找出讓它<strong>整體</strong>離所有點最近的參數。
+        「最近」用「各點殘差平方和最小」來定義,這就是<strong>最小平方法(least squares)</strong>——
+        而它,正是你在第 38 章見過的<strong>線性迴歸</strong>的數學本體!
+      </p>
+      <pre><code class="language-python">import numpy as np
+
+# 一組帶雜訊、大致呈線性的資料
+x = np.array([0, 1, 2, 3, 4, 5], dtype=float)
+y = np.array([1.1, 2.9, 5.2, 6.8, 9.1, 11.2])
+
+# 用最小平方擬合一條直線 y = a·x + b(deg=1 表示一次多項式)
+a, b = np.polyfit(x, y, deg=1)
+print(f"擬合直線:y = {a:.3f}·x + {b:.3f}")   # ≈ y = 2.017·x + 0.962
+
+# polyfit 背後解的是「正規方程式」,等價於最小化 Σ(yᵢ − (a·xᵢ+b))²</code></pre>
+      <p>
+        第 38 章用梯度下降<em>迭代</em>地找這條線;這裡 <code>polyfit</code> 直接解<strong>正規方程式
+        $\mathbf{w}=(X^\top X)^{-1}X^\top \mathbf{y}$</strong> 一步到位(當然,它內部明智地用 <code>solve</code> 而非真的求逆)。
+        同一個「線性迴歸」,一個是 ML 視角(梯度下降),一個是數值線性代數視角(最小平方)——
+        你現在能看出它們是<em>同一件事的兩張臉</em>了,這正是把不同章節串起來的樂趣。
+      </p>
+
+      <h2>數值微分與積分</h2>
+      <p>
+        第 12 章教過微分(斜率)與積分(面積)的<em>概念</em>與<em>封閉解</em>。但當函數沒有公式、只有一堆數值(或反導數寫不出來)時,
+        我們得回到定義,用數值的方式硬算。
+      </p>
+
+      <h3>數值微分:有限差分</h3>
+      <p>
+        導數的定義是 $f'(x)=\lim_{h\to 0}\frac{f(x+h)-f(x)}{h}$。把極限拿掉、$h$ 取一個小但非零的數,
+        就得到<strong>前向差分(forward difference)</strong>:
+      </p>
+      <p>$$f'(x)\approx \frac{f(x+h)-f(x)}{h}\qquad(\text{截斷誤差 }O(h))$$</p>
+      <p>
+        更聰明的是對稱地取兩側的<strong>中央差分(central difference)</strong>,誤差小一個數量級:
+      </p>
+      <p>$$f'(x)\approx \frac{f(x+h)-f(x-h)}{2h}\qquad(\text{截斷誤差 }O(h^2))$$</p>
+      <p>
+        但這裡藏著本章開頭預告的那場拉扯:$h$ 越小,<em>截斷</em>誤差越小;可是 $h$ 太小時,
+        $f(x+h)$ 與 $f(x-h)$ 幾乎相等,相減觸發<strong>災難性抵消</strong>,<em>捨入</em>誤差爆炸。
+        兩股力量一拉一扯,總誤差呈現一個 V 形,存在一個「最佳的 $h$」:
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 600 320" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- 軸 -->
+  <line x1="70" y1="45" x2="70" y2="285" stroke="#8a929b" stroke-width="1.4"/>
+  <line x1="70" y1="285" x2="565" y2="285" stroke="#8a929b" stroke-width="1.4"/>
+  <text x="40" y="165" font-size="12" fill="#4a5159" transform="rotate(-90 40 165)">總誤差(對數)</text>
+  <text x="315" y="312" text-anchor="middle" font-size="12" fill="#4a5159">步長 h(對數,左小右大)</text>
+  <text x="70" y="302" text-anchor="middle" font-size="11" fill="#8a929b">10⁻¹⁶</text>
+  <text x="560" y="302" text-anchor="middle" font-size="11" fill="#8a929b">10⁰</text>
+  <!-- V 形誤差曲線 -->
+  <polyline points="70,58.2 131.2,98.2 192.4,138.2 253.6,178.2 324.6,218.6 376,191 437.2,151 498.4,111 559.6,71"
+            fill="none" stroke="#2f6f6a" stroke-width="2.6"/>
+  <!-- 左支:捨入主導 -->
+  <text x="120" y="80" font-size="11.5" font-weight="700" fill="#b4541f">捨入誤差主導</text>
+  <text x="120" y="95" font-size="10.5" fill="#b4541f">∝ ε / h(h 太小)</text>
+  <!-- 右支:截斷主導 -->
+  <text x="430" y="95" font-size="11.5" font-weight="700" fill="#8b5cf6">截斷誤差主導</text>
+  <text x="455" y="110" font-size="10.5" fill="#8b5cf6">∝ h(h 太大)</text>
+  <!-- 最佳 h -->
+  <circle cx="324.6" cy="218.6" r="5" fill="#16a34a"/>
+  <line x1="324.6" y1="218.6" x2="324.6" y2="285" stroke="#16a34a" stroke-width="1" stroke-dasharray="4 3"/>
+  <text x="330" y="245" font-size="11.5" font-weight="700" fill="#16a34a">最佳 h ≈ √ε</text>
+  <text x="270" y="262" font-size="10.5" fill="#16a34a">總誤差在此最小</text>
+</svg>
+        <figcaption>圖 55-5:數值微分的總誤差 vs 步長 $h$(雙對數)。右半邊 $h$ 太大,截斷誤差主導(正比於 $h$);左半邊 $h$ 太小,兩個相近的數相減引發捨入誤差,主導項正比於 $\varepsilon/h$。兩者交會處(前向差分約在 $h\approx\sqrt{\varepsilon}\approx 10^{-8}$)總誤差最小。這就是「$h$ 不是越小越好」的鐵證——也是捨入與截斷兩種誤差拉扯的最佳示範。</figcaption>
+      </div>
+
+      <h3>數值積分:從黎曼和到辛普森</h3>
+      <p>
+        第 12 章用<strong>黎曼和</strong>(一堆矩形)逼近積分,它能用,但收斂慢(誤差 $O(h)$)。
+        只要把「矩形」換成更貼合曲線的形狀,精度立刻飛躍:
+      </p>
+      <ul>
+        <li><strong>梯形法(trapezoidal rule)</strong>:用<em>梯形</em>(連接相鄰兩點的直線)而非矩形去逼近,誤差 $O(h^2)$。</li>
+        <li><strong>辛普森法(Simpson's rule)</strong>:更進一步,用<em>拋物線</em>(二次曲線)去逼近每一小段,誤差 $O(h^4)$——
+        步長減半,誤差只剩 $\frac{1}{16}$,快得驚人。</li>
+      </ul>
+      <p>$$\text{辛普森法:}\quad \int_a^b f\,dx \approx \frac{h}{3}\Big[f_0 + 4(f_1+f_3+\cdots) + 2(f_2+f_4+\cdots) + f_n\Big]$$</p>
+      <p>來算 $\int_0^{\pi}\sin x\,dx$(真值精確是 2),比較三種方法在相同切片數下的誤差:</p>
+      <pre><code class="language-python">import numpy as np
+
+def riemann(f, a, b, n):
+    x = np.linspace(a, b, n, endpoint=False)
+    return np.sum(f(x)) * (b - a) / n           # 左端點矩形
+
+def trapezoid(f, a, b, n):
+    x = np.linspace(a, b, n + 1)
+    y = f(x)
+    h = (b - a) / n
+    return h * (y[0]/2 + y[1:-1].sum() + y[-1]/2)
+
+def simpson(f, a, b, n):                          # n 必須是偶數
+    x = np.linspace(a, b, n + 1)
+    y = f(x)
+    h = (b - a) / n
+    return h/3 * (y[0] + 4*y[1:-1:2].sum() + 2*y[2:-1:2].sum() + y[-1])
+
+f, a, b, true = np.sin, 0, np.pi, 2.0
+for n in [4, 8, 16]:
+    print(f"n={n:2d}  矩形誤差={abs(riemann(f,a,b,n)-true):.2e}  "
+          f"梯形誤差={abs(trapezoid(f,a,b,n)-true):.2e}  "
+          f"辛普森誤差={abs(simpson(f,a,b,n)-true):.2e}")
+
+# n= 4  矩形誤差=1.81e-01  梯形誤差=1.29e-01  辛普森誤差=4.56e-03
+# n= 8  矩形誤差=7.72e-02  梯形誤差=3.23e-02  辛普森誤差=2.69e-04
+# n=16  矩形誤差=3.80e-02  梯形誤差=8.06e-03  辛普森誤差=1.59e-05</code></pre>
+      <p>
+        看那一整排數字:同樣切 16 段,矩形法誤差還在 $10^{-2}$,辛普森法已經到 $10^{-5}$,精度差了上千倍。
+        這就是<strong>選對演算法</strong>的威力——不是算更多次,而是<em>算得更聰明</em>。實務上直接用
+        <code>scipy.integrate.quad</code>(自適應、高精度)就好,但理解背後這幾招,你才知道它在做什麼、什麼時候會失準。
+      </p>
+
+      <h2>常微分方程的數值解</h2>
+      <p>
+        終於來到最能展現「逼近 + 迭代」威力的舞台:<strong>常微分方程(ODE)</strong>。
+        一個 ODE 長這樣:$\frac{dy}{dt}=f(t, y)$,給定起點 $y(t_0)=y_0$,問「之後 $y$ 怎麼隨時間演變」。
+        它描述了世界上幾乎所有「會隨時間變化」的系統:人口、放射衰變、彈簧、行星、傳染病、電路。
+        而正如開頭所說,絕大多數 ODE <strong>沒有封閉解</strong>——只能一步步往前「模擬」。
+      </p>
+
+      <h3>歐拉法:最樸素的時間步進</h3>
+      <p>
+        導數 $\frac{dy}{dt}$ 就是「$y$ 此刻變化的速率」。<strong>歐拉法(Euler method)</strong>的想法直白到近乎天真:
+        既然我知道現在的位置 $y_n$ 和現在的變化率 $f(t_n, y_n)$,那就假設「在接下來一小段時間 $h$ 內,
+        變化率維持不變」,直接沿著這個斜率走一步:
+      </p>
+      <p>$$y_{n+1} = y_n + h\,f(t_n, y_n)$$</p>
+      <p>
+        這其實就是把切線當成曲線,踏著一段段小直線往前「拼」出整條軌跡。$h$ 越小,拼得越像,
+        但步數越多。歐拉法的全域誤差是 $O(h)$——精度不高,卻是理解一切 ODE 解法的起點。
+        我們拿它模擬指數成長 $\frac{dy}{dt}=y,\ y(0)=1$(它的封閉解剛好是 $y=e^t$,方便驗證):
+      </p>
+      <pre><code class="language-python">import numpy as np
+
+def euler(f, y0, t0, t_end, h):
+    ts = np.arange(t0, t_end + h, h)
+    ys = np.zeros(len(ts))
+    ys[0] = y0
+    for i in range(len(ts) - 1):
+        ys[i+1] = ys[i] + h * f(ts[i], ys[i])   # 沿當前斜率走一步
+    return ts, ys
+
+f = lambda t, y: y                  # dy/dt = y
+ts, ys = euler(f, y0=1.0, t0=0, t_end=2, h=0.5)
+for t, y in zip(ts, ys):
+    print(f"t={t:.1f}  歐拉={y:7.4f}  真值 e^t={np.exp(t):7.4f}")
+
+# t=0.0  歐拉= 1.0000  真值 e^t= 1.0000
+# t=0.5  歐拉= 1.5000  真值 e^t= 1.6487
+# t=1.0  歐拉= 2.2500  真值 e^t= 2.7183
+# t=1.5  歐拉= 3.3750  真值 e^t= 4.4817
+# t=2.0  歐拉= 5.0625  真值 e^t= 7.3891   ← 步子太大,越走越偏</code></pre>
+
+      <div class="diagram">
+<svg viewBox="0 0 560 300" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="oax" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#8a929b"/></marker>
+  </defs>
+  <!-- 軸 -->
+  <line x1="55" y1="260" x2="540" y2="260" stroke="#8a929b" stroke-width="1.4" marker-end="url(#oax)"/>
+  <line x1="60" y1="275" x2="60" y2="40" stroke="#8a929b" stroke-width="1.4" marker-end="url(#oax)"/>
+  <text x="532" y="278" font-size="11" fill="#8a929b">t</text>
+  <text x="66" y="50" font-size="11" fill="#8a929b">y</text>
+  <!-- t 刻度 -->
+  <text x="60" y="276" text-anchor="middle" font-size="10" fill="#8a929b">0</text>
+  <text x="290" y="276" text-anchor="middle" font-size="10" fill="#8a929b">1</text>
+  <text x="520" y="276" text-anchor="middle" font-size="10" fill="#8a929b">2</text>
+  <!-- 真值 e^t(teal) -->
+  <path d="M 60 230 L 117.5 221.5 L 175 210.5 L 232.5 196.5 L 290 178.4 L 347.5 155.3 L 405 125.5 L 462.5 87.4 L 520 38.3"
+        fill="none" stroke="#2f6f6a" stroke-width="2.8"/>
+  <text x="430" y="60" font-size="12" font-weight="700" fill="#2f6f6a">真解 y=eᵗ</text>
+  <!-- 歐拉 h=0.5(磚紅折線) -->
+  <polyline points="60,230 175,215 290,192.5 405,158.75 520,108.1"
+            fill="none" stroke="#b4541f" stroke-width="2.2"/>
+  <g fill="#b4541f">
+    <circle cx="60" cy="230" r="3.5"/><circle cx="175" cy="215" r="3.5"/><circle cx="290" cy="192.5" r="3.5"/>
+    <circle cx="405" cy="158.75" r="3.5"/><circle cx="520" cy="108.1" r="3.5"/>
+  </g>
+  <text x="350" y="200" font-size="12" font-weight="700" fill="#b4541f">歐拉法(h=0.5)</text>
+  <!-- RK4(紫點,貼著真解) -->
+  <g fill="#8b5cf6">
+    <circle cx="60" cy="230" r="3"/><circle cx="175" cy="210.5" r="3"/><circle cx="290" cy="178.6" r="3"/>
+    <circle cx="405" cy="125.8" r="3"/><circle cx="520" cy="38.8" r="3"/>
+  </g>
+  <text x="300" y="100" font-size="12" font-weight="700" fill="#7c3aed">RK4(幾乎完美貼合)</text>
+</svg>
+        <figcaption>圖 55-6:用三種方式逼近 $\frac{dy}{dt}=y$(真解 $y=e^t$)。<strong>歐拉法</strong>(磚紅折線)用大步長 $h=0.5$,把切線當曲線,一路<em>低估</em>、越走越偏。<strong>RK4</strong>(紫點)即使同樣只走 4 步,也幾乎和真解(綠線)重合。步進法的精髓:用局部的斜率資訊,拼出全域的軌跡。</figcaption>
+      </div>
+
+      <h3>Runge–Kutta(RK4):業界主力</h3>
+      <p>
+        歐拉法的毛病在於「整段只用<em>起點</em>的斜率」,難怪會偏。<strong>四階 Runge–Kutta 法(RK4)</strong>聰明在:
+        它在一步之內<em>試探</em>多個位置的斜率(起點、兩個中點、終點),再加權平均出一個更有代表性的斜率才走,
+        全域誤差一舉降到 $O(h^4)$。同樣的步長,RK4 的精度遠勝歐拉法,因此成為大多數 ODE 求解器的預設主力。
+      </p>
+      <pre><code class="language-python">def rk4(f, y0, t0, t_end, h):
+    ts = np.arange(t0, t_end + h, h)
+    ys = np.zeros(len(ts))
+    ys[0] = y0
+    for i in range(len(ts) - 1):
+        t, y = ts[i], ys[i]
+        k1 = f(t,         y)
+        k2 = f(t + h/2,   y + h/2 * k1)      # 用 k1 試探中點的斜率
+        k3 = f(t + h/2,   y + h/2 * k2)      # 再修正一次中點斜率
+        k4 = f(t + h,     y + h   * k3)      # 終點的斜率
+        ys[i+1] = y + h/6 * (k1 + 2*k2 + 2*k3 + k4)   # 加權平均
+    return ts, ys
+
+ts, ys = rk4(lambda t, y: y, 1.0, 0, 2, 0.5)
+print(f"RK4 在 t=2 的值 = {ys[-1]:.5f},真值 e² = {np.exp(2):.5f}")
+# RK4 在 t=2 的值 = 7.38380,真值 e² = 7.38906   ← 只走 4 步就準到小數第 2 位!</code></pre>
+      <p>
+        實務上你會直接用 <code>scipy.integrate.solve_ivp</code>(內建 RK45 等自適應步長演算法,會自動在曲線陡的地方縮小步長)。
+        但親手寫過歐拉與 RK4,你才真正<em>懂</em>「模擬一個動態系統」是怎麼一回事——
+        從遊戲物理引擎、SpaceX 的軌道計算,到天氣預報模型,核心都是這套「時間步進」。
+      </p>
+
+      <h2>一句話帶過的幾位鄰居</h2>
+      <p>
+        數值方法是一片大陸,本章只走了主幹道。幾個重要的鄰近領域,先在你心裡種下名字:
+      </p>
+      <ul>
+        <li><strong>最佳化(optimization)</strong>:找函數的極值。你其實已經學過它最重要的工具——
+        第 12、38 章的<strong>梯度下降</strong>;更進階的有牛頓法的多維版、L-BFGS、共軛梯度等,是 ML 訓練的引擎。</li>
+        <li><strong>蒙地卡羅方法(Monte Carlo)</strong>:用<em>隨機取樣</em>來估計積分或機率(呼應第 14 章)。
+        當維度極高(例如百維積分),傳統的「切格子」徹底失效,撒隨機點反而又快又準——這是金融、物理、渲染的祕密武器。</li>
+        <li><strong>快速傅立葉變換(FFT)</strong>:把訊號在「時域」與「頻域」之間瞬間切換的神級演算法,
+        $O(n\log n)$ 取代了笨方法的 $O(n^2)$,撐起了音訊/影像壓縮、通訊與訊號處理的半邊天。</li>
+      </ul>
+
+      <h2>工具:站在巨人的肩膀上,但要知道巨人會在哪裡跌倒</h2>
+      <p>
+        本章手刻了二分法、牛頓法、Jacobi、辛普森、歐拉、RK4——不是要你以後真的自己寫這些。
+        相反,<strong>實務上你幾乎永遠該用 <code>numpy</code> 與 <code>scipy</code></strong>。它們是數十年數值演算法研究的結晶,
+        在速度、精度、穩定性上,業餘的手寫版完全比不過:
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>任務</th><th>該用的工具</th></tr></thead>
+        <tbody>
+          <tr><td>求根</td><td><code>scipy.optimize.brentq</code> / <code>newton</code></td></tr>
+          <tr><td>解線性系統</td><td><code>numpy.linalg.solve</code>(稀疏用 <code>scipy.sparse.linalg</code>)</td></tr>
+          <tr><td>最小平方擬合</td><td><code>numpy.polyfit</code> / <code>numpy.linalg.lstsq</code></td></tr>
+          <tr><td>數值積分</td><td><code>scipy.integrate.quad</code></td></tr>
+          <tr><td>解 ODE</td><td><code>scipy.integrate.solve_ivp</code></td></tr>
+          <tr><td>內插</td><td><code>scipy.interpolate.CubicSpline</code></td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>
+        那為什麼還要懂原理?因為這些函式<strong>不是魔法,它們會在你看不見的地方失準或失敗</strong>:
+        牛頓法可能發散、矩陣可能病態、$h$ 太小反而更不準、高次內插會 Runge 震盪。
+        當 <code>solve_ivp</code> 跑出一條離譜的軌跡、當你的擬合曲線扭曲、當答案的有效位數莫名變少時,
+        只有<em>懂原理的人</em>才知道發生了什麼、該怎麼救。工具讓你跑得快,原理讓你跌不死。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">數值素養:用工具,但保持懷疑</span>
+          <p>一個有數值素養的工程師,看到任何浮點計算的結果,心裡都會默默問三句:
+          <strong>(1) 這個問題的條件數好嗎?</strong>(答案天生能信幾位)
+          <strong>(2) 我用的演算法穩定嗎?</strong>(有沒有災難性抵消之類的陷阱)
+          <strong>(3) 我的誤差來自截斷還是捨入?往哪個方向調參數?</strong>
+          會問這三句,你就從「會呼叫函式庫的人」升級成「真正懂數值計算的人」了。</p>
+        </div>
+      </div>
+
+      <h2>動手做:練習題</h2>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 55.1 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>用<strong>二分法</strong>與<strong>牛頓法</strong>兩種方式求 $\sqrt 2$(即解 $f(x)=x^2-2=0$),
+          各自跑到誤差小於 $10^{-12}$,並印出兩者分別用了幾次迭代。比較看看差距有多大,並解釋為什麼。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>關鍵是在每次迭代記錄「離真值 $\sqrt 2$ 的誤差」,直到小於門檻才停。</p>
+              <pre><code class="language-python">import math
+TRUE = math.sqrt(2)
+
+def bisection_count(f, a, b, tol=1e-12):
+    n = 0
+    while (b - a) / 2 &gt; tol:
+        m = (a + b) / 2
+        n += 1
+        if f(a) * f(m) &lt; 0:
+            b = m
+        else:
+            a = m
+    return (a + b) / 2, n
+
+def newton_count(f, df, x0, tol=1e-12):
+    x, n = x0, 0
+    while abs(f(x)) &gt; tol:
+        x = x - f(x) / df(x)
+        n += 1
+    return x, n
+
+f  = lambda x: x*x - 2
+df = lambda x: 2*x
+
+xb, nb = bisection_count(f, 1, 2)
+xn, nn = newton_count(f, df, 2.0)
+print(f"二分法:√2 ≈ {xb:.13f},迭代 {nb} 次")   # 約 40 次
+print(f"牛頓法:√2 ≈ {xn:.13f},迭代 {nn} 次")   # 約 5 次</code></pre>
+              <p>二分法約 40 次、牛頓法約 5 次。原因就是<strong>收斂階</strong>:二分法是線性收斂
+              (每步誤差只減半,要多準一位十進位得多做 $\log_2 10 \approx 3.3$ 次),
+              牛頓法是二次收斂(正確位數每步翻倍)。差距會隨要求的精度越高而越懸殊。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 55.2 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>展示一個<strong>災難性抵消</strong>的例子。用標準求根公式
+          $x = \frac{-b + \sqrt{b^2-4ac}}{2a}$ 去解 $x^2 + 10^8 x + 1 = 0$ 的<em>較小</em>那個根(接近 0 的根),
+          你會發現算出來嚴重失準。找出失準的原因,並用一個數值穩定的方法修正它。
+          (提示:Vieta 公式說兩根乘積 $x_1 x_2 = c/a$。)</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>當 $b=10^8$ 很大時,$\sqrt{b^2-4ac}\approx b$,於是 $-b+\sqrt{b^2-4ac}$ 是「兩個幾乎相等的大數相減」,
+              有效位數大量抵消,算出的小根幾乎全是雜訊。</p>
+              <pre><code class="language-python">import math
+a, b, c = 1.0, 1e8, 1.0
+
+# 天真寫法:會抵消
+disc = math.sqrt(b*b - 4*a*c)
+x_naive = (-b + disc) / (2*a)
+
+# 穩定寫法:先算「不抵消」的大根,再用 Vieta x1*x2=c/a 反推小根
+x_big   = (-b - disc) / (2*a)        # 這個是 -b - √… ,兩個負的大數相加,不抵消
+x_small = (c / a) / x_big            # 由乘積反推小根
+
+print("天真小根:", x_naive)    # -7.45e-09  ← 錯得離譜
+print("穩定小根:", x_small)    # -1.0000...e-08  ← 正確(理論值 ≈ -1e-8)
+print("驗證(代回方程):", a*x_small**2 + b*x_small + c)  # ≈ 0</code></pre>
+              <p>訣竅:永遠讓 $-b$ 和 $\pm\sqrt{\cdots}$ <strong>同號相加</strong>(這裡 $b&gt;0$ 故先取 $-b-\sqrt{\cdots}$ 算大根),
+              避開相減;另一根用乘積關係 $x_1 x_2 = c/a$ 安全地反推。這是處理二次公式的標準數值技巧。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 55.3 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>用<strong>最小平方法</strong>擬合一組帶雜訊的資料(呼應第 38 章線性迴歸)。
+          自己造一組大致符合 $y=3x+2$ 但加了雜訊的資料,用 <code>numpy.polyfit</code> 擬合一條直線,
+          印出擬合出的斜率與截距,看看是否接近真實的 3 與 2。進階:不用 <code>polyfit</code>,
+          改用 <code>numpy.linalg.lstsq</code> 直接解最小平方,得到一樣的答案。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">import numpy as np
+rng = np.random.default_rng(0)
+
+x = np.linspace(0, 10, 30)
+y = 3*x + 2 + rng.normal(0, 1.5, size=x.size)   # 真實 y=3x+2 加高斯雜訊
+
+# 方法一:polyfit
+a, b = np.polyfit(x, y, 1)
+print(f"polyfit:   斜率={a:.3f}, 截距={b:.3f}")   # 接近 3 與 2
+
+# 方法二:自己組「設計矩陣」X,解最小平方 min ‖Xβ − y‖²
+X = np.column_stack([x, np.ones_like(x)])        # 每列是 [xᵢ, 1]
+beta, *_ = np.linalg.lstsq(X, y, rcond=None)
+print(f"lstsq:     斜率={beta[0]:.3f}, 截距={beta[1]:.3f}")</code></pre>
+              <p>兩種方法給出幾乎一樣的結果,都會落在 $(3, 2)$ 附近(因雜訊而略有偏差)。
+              這正是第 38 章「線性迴歸」的數值本體:<code>lstsq</code> 在最小化殘差平方和 $\sum_i (y_i - (ax_i+b))^2$,
+              等價於解正規方程式 $X^\top X\,\beta = X^\top y$。差別只在第 38 章用<em>梯度下降迭代</em>逼近這個解,
+              這裡用<em>直接法一步</em>解出。注意我們<strong>沒有</strong>顯式算 $(X^\top X)^{-1}$——<code>lstsq</code> 內部用更穩定的 QR/SVD 分解。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 55.4 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>用<strong>梯形法</strong>與<strong>辛普森法</strong>數值計算 $\displaystyle\int_0^1 e^{-x^2}\,dx$
+          (還記得嗎?這個積分<em>沒有</em>封閉解,只能數值算)。用同樣的切片數 $n=10$ 算兩者,
+          並以 <code>scipy.integrate.quad</code> 的高精度結果當「真值」,比較兩種方法的誤差。
+          你會看到辛普森法為什麼是甜蜜點。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">import numpy as np
+from scipy import integrate
+
+f = lambda x: np.exp(-x**2)
+
+def trapezoid(f, a, b, n):
+    x = np.linspace(a, b, n + 1); y = f(x); h = (b - a) / n
+    return h * (y[0]/2 + y[1:-1].sum() + y[-1]/2)
+
+def simpson(f, a, b, n):              # n 須為偶數
+    x = np.linspace(a, b, n + 1); y = f(x); h = (b - a) / n
+    return h/3 * (y[0] + 4*y[1:-1:2].sum() + 2*y[2:-1:2].sum() + y[-1])
+
+true, _ = integrate.quad(f, 0, 1)    # 高精度「真值」≈ 0.7468241328
+print(f"真值(quad)    = {true:.10f}")
+print(f"梯形法 (n=10)  誤差 = {abs(trapezoid(f,0,1,10) - true):.2e}")
+print(f"辛普森 (n=10)  誤差 = {abs(simpson(f,0,1,10)   - true):.2e}")
+
+# 真值(quad)    = 0.7468241328
+# 梯形法 (n=10)  誤差 = 6.20e-04
+# 辛普森 (n=10)  誤差 = 3.92e-07   ← 同樣 10 片,精度高了三個數量級</code></pre>
+              <p>梯形法誤差 $O(h^2)$,辛普森法 $O(h^4)$。同樣只切 10 片,辛普森就準了上千倍——
+              因為它用拋物線而非直線去逼近每一小段。進階觀察:把 $n$ 加倍,梯形法誤差約變 $\frac14$,
+              辛普森法約變 $\frac{1}{16}$,完全符合各自的誤差階。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 55.5 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>用<strong>歐拉法</strong>解一個簡單 ODE:放射性衰變 $\frac{dy}{dt}=-0.5\,y,\ y(0)=100$。
+          它的封閉解是 $y(t)=100\,e^{-0.5t}$。用步長 $h=0.5$ 與 $h=0.1$ 各模擬到 $t=4$,
+          比較兩者在終點與真值的誤差,驗證「步長減半,誤差大約也減半」(歐拉法是一階方法)。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">import numpy as np
+
+def euler(f, y0, t_end, h):
+    n = int(round(t_end / h))
+    y, t = y0, 0.0
+    for _ in range(n):
+        y = y + h * f(t, y)
+        t += h
+    return y
+
+f = lambda t, y: -0.5 * y
+true = 100 * np.exp(-0.5 * 4)        # 真值 y(4) ≈ 13.5335
+
+for h in [0.5, 0.1, 0.05]:
+    approx = euler(f, 100.0, 4.0, h)
+    print(f"h={h:4}  歐拉終值={approx:8.4f}  誤差={abs(approx-true):.4f}")
+
+# h= 0.5  歐拉終值=13.3484  誤差=0.1851
+# h= 0.1  歐拉終值=13.4990  誤差=0.0345    ← h 縮 5 倍,誤差約縮 5 倍
+# h=0.05  歐拉終值=13.5164  誤差=0.0171    ← 再減半,誤差又約減半</code></pre>
+              <p>誤差與步長 $h$ 大致成<strong>正比</strong>(一階方法 $O(h)$),這就是歐拉法的特徵。
+              想用更少步數達到更高精度?換 RK4($O(h^4)$):同樣 $h=0.5$,RK4 的誤差會小到 $10^{-4}$ 等級,
+              碾壓歐拉法。試著把練習裡的歐拉換成本章的 <code>rk4</code> 跑跑看。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 55.6 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>進階題,二選一(或都做):</p>
+          <p><strong>(A) 牛頓法的發散。</strong>用牛頓法求多項式 $f(x)=x^3-2x+2$ 的根。
+          試試起點 $x_0=0$,觀察它會發生什麼事;再試 $x_0=-2$,看是否收斂。解釋為何某些起點會讓牛頓法<em>卡住或發散</em>。</p>
+          <p><strong>(B) 直接法 vs 迭代法。</strong>對一個對角佔優的線性系統,分別用 <code>numpy.linalg.solve</code>(直接)
+          與你手寫的 Jacobi(迭代)求解,比較結果與收斂行為。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>(A)</strong> 起點 $x_0=0$ 會掉進一個<strong>週期循環</strong>:$f'(0)=-2$,
+              $x_1 = 0 - \frac{2}{-2} = 1$;$f(1)=1,\ f'(1)=1$,$x_2 = 1 - 1 = 0$……於是在 $0,1,0,1,\dots$ 之間
+              <em>永遠來回跳</em>,根本不收斂。而 $x_0=-2$ 離真實的根(約 $-1.7693$)夠近,會快速收斂。</p>
+              <pre><code class="language-python">def newton_trace(f, df, x0, steps=8):
+    x = x0
+    for i in range(steps):
+        print(f"  step {i}: x = {x:.6f}")
+        if df(x) == 0:
+            print("  導數為 0,牛頓法當機!"); break
+        x = x - f(x) / df(x)
+    return x
+
+f  = lambda x: x**3 - 2*x + 2
+df = lambda x: 3*x**2 - 2
+
+print("起點 x0 = 0(會循環):")
+newton_trace(f, df, 0.0)          # 在 0, 1, 0, 1, ... 之間跳,不收斂
+print("起點 x0 = -2(會收斂):")
+newton_trace(f, df, -2.0)         # 迅速收斂到 ≈ -1.769292</code></pre>
+              <p>教訓:牛頓法的二次收斂只在「起點夠靠近根」時成立。起點不好,可能落入循環、發散、
+              或踩到 $f'(x)=0$(切線水平,下一步飛向無窮)。這就是為什麼穩健的求根器會把牛頓法和二分法<em>混搭</em>。</p>
+              <p><strong>(B)</strong> 直接法一步給出精確解;Jacobi 需要數十次迭代逐步逼近,但每步極便宜。</p>
+              <pre><code class="language-python">import numpy as np
+
+A = np.array([[10., -1., 2., 0.],
+              [-1., 11., -1., 3.],
+              [2., -1., 10., -1.],
+              [0., 3., -1., 8.]])
+b = np.array([6., 25., -11., 15.])
+
+x_direct = np.linalg.solve(A, b)          # 直接法:精確解
+
+# 迭代法:Jacobi,印出每幾步離直接解多遠
+D = np.diag(A); R = A - np.diagflat(D); x = np.zeros(4)
+for k in range(1, 26):
+    x = (b - R @ x) / D
+    if k % 5 == 0:
+        print(f"Jacobi 第 {k:2d} 次,離精確解差距 = {np.linalg.norm(x - x_direct):.2e}")
+
+print("直接解 =", x_direct)
+print("迭代解 =", x)</code></pre>
+              <p>你會看到 Jacobi 的誤差每幾次迭代就縮小一個數量級,逐步逼近直接法的答案。
+              對這種小稠密矩陣,直接法當然完勝;但若矩陣是 $10^6$ 維的稀疏矩陣,直接法會爆記憶體,
+              迭代法才是唯一能跑的選擇——這正是兩派分工的根本原因。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>期中期末實戰題庫</h2>
+      <p>
+        以下 14 題涵蓋資工系「數值方法」或「科學計算」期中期末考最常見的五類題型。
+        難度徽章由左至右遞增:<span class="badge">觀念</span> → <span class="badge">計算</span> → <span class="badge">證明</span> → <span class="badge">實作</span> → <span class="badge">挑戰</span>。
+        建議先獨立作答,再展開解答對照。
+      </p>
+
+      <h3>一、觀念辨析</h3>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 題庫 Q1 <span class="badge">觀念</span></div>
+        <div class="ex-body">
+          <p>設真值 $x^* = \pi \approx 3.14159265$,近似值 $\tilde{x} = 3.14$。</p>
+          <p><strong>(a)</strong> 計算絕對誤差與相對誤差(保留 4 位有效數字)。</p>
+          <p><strong>(b)</strong> 說明「捨入誤差(round-off error)」與「截斷誤差(truncation error)」各從何而來,並各舉一個具體例子。</p>
+          <p><strong>(c)</strong> 雙精度浮點數的機器 epsilon $\varepsilon_{\text{mach}} \approx 2.22\times 10^{-16}$。
+          若某計算結果的相對誤差為 $5\times 10^{-14}$,問雙精度的 16 位有效數字中大約還能信幾位?</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>(a)</strong></p>
+              <p>
+                絕對誤差 $= |\tilde{x} - x^*| = |3.14 - 3.14159265| \approx 1.593 \times 10^{-3}$<br>
+                相對誤差 $= \dfrac{|\tilde{x}-x^*|}{|x^*|} \approx \dfrac{1.593\times10^{-3}}{3.14159} \approx 5.07\times10^{-4}$
+              </p>
+              <p><strong>(b)</strong></p>
+              <ul>
+                <li><strong>捨入誤差</strong>:浮點數位元有限,每次運算被迫四捨五入而引入。
+                  例:$0.1$ 以 IEEE 754 雙精度儲存的實際值是 $0.1000000000000000055\ldots$,而非精確的 $\frac{1}{10}$。</li>
+                <li><strong>截斷誤差</strong>:以有限步逼近本應無限的數學過程。
+                  例:計算 $e^x$ 時只取泰勒級數前 $k$ 項,捨去第 $k+1$ 項起的無窮餘項即為截斷誤差。</li>
+              </ul>
+              <p><strong>(c)</strong>
+                相對誤差 $5\times10^{-14}$ 約佔 $10^{-13.3}$ 量級。
+                有效數字位數 $\approx -\log_{10}(\text{相對誤差}) \approx 13.3$ 位。
+                因此大約有 <strong>13 位</strong>仍可信,損失了約 $16-13=3$ 位有效數字。
+                一般規則:若相對誤差 $\sim 10^{-k}$,則有 $k$ 位有效數字可信。
+              </p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 題庫 Q2 <span class="badge">觀念</span></div>
+        <div class="ex-body">
+          <p>辨析以下三個說法,各指出對錯並解釋原因:</p>
+          <ol>
+            <li>「某線性系統病態(ill-conditioned),改用更好的演算法就能算準。」</li>
+            <li>「高斯消去法若不做部分軸元選取(partial pivoting),可能把條件數良好的問題算壞——這屬於演算法的穩定性問題。」</li>
+            <li>「矩陣條件數 $\kappa(A) \approx 10^{10}$,雙精度下解 $A\mathbf{x}=\mathbf{b}$ 時,答案最多只能信約 6 位有效數字。」</li>
+          </ol>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <ol>
+                <li><strong>錯誤。</strong>條件數是<em>問題本身</em>的性質,與演算法無關。
+                  病態問題對輸入誤差天生敏感:浮點數表示帶來的捨入誤差會被條件數放大到輸出。
+                  更好的演算法只能做到「不<em>額外</em>引入誤差」(穩定),卻無法消除條件數對輸入誤差的放大效應。</li>
+                <li><strong>正確。</strong>這說的是演算法的穩定性。無 pivoting 的高斯消去在某些矩陣上會因為選到極小的軸元,
+                  引入遠超必要的捨入誤差——把一個條件數只有 $10^2$ 的好問題也算壞了。這是演算法的錯,不是問題的錯。</li>
+                <li><strong>正確(近似估算)。</strong>在雙精度(~16 位有效數字)下,$\kappa \approx 10^{k}$ 意味大約損失 $k$ 位有效數字。
+                  $\kappa=10^{10}$ 故損失約 10 位,剩 $16-10=6$ 位可信。
+                  這只是規則的簡化版,實際損失取決於演算法穩定性與具體數值,但提供了很好的量級估算。</li>
+              </ol>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 題庫 Q3 <span class="badge">觀念</span></div>
+        <div class="ex-body">
+          <p>三種求根法求 $\sqrt{2}$ 時的誤差序列(部分)如下:</p>
+          <div class="table-wrap">
+          <table>
+            <thead><tr><th>迭代次數</th><th>方法 A</th><th>方法 B</th><th>方法 C</th></tr></thead>
+            <tbody>
+              <tr><td>1</td><td>$5\times10^{-1}$</td><td>$5\times10^{-1}$</td><td>$5\times10^{-1}$</td></tr>
+              <tr><td>2</td><td>$2.5\times10^{-1}$</td><td>$6.3\times10^{-2}$</td><td>$1.3\times10^{-2}$</td></tr>
+              <tr><td>3</td><td>$1.25\times10^{-1}$</td><td>$8\times10^{-3}$</td><td>$8\times10^{-5}$</td></tr>
+            </tbody>
+          </table>
+          </div>
+          <p><strong>(a)</strong> 判斷 A、B、C 各是什麼收斂階?對應哪種方法(二分法/割線法/牛頓法)?</p>
+          <p><strong>(b)</strong> 方法 C(牛頓法)若繼續,第 4 次迭代的誤差大約是多少?</p>
+          <p><strong>(c)</strong> 收斂快的方法不一定最好——請給出兩個具體理由說明牛頓法的代價。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>(a)</strong></p>
+              <ul>
+                <li><strong>方法 A</strong>:$e_2/e_1 = 0.5$,每步誤差減半 → 線性收斂 $p=1$ → <strong>二分法</strong>。</li>
+                <li><strong>方法 B</strong>:誤差比 $e_3/e_2^{1.618} \approx \text{const}$,超線性 $p\approx1.618$ → <strong>割線法</strong>。</li>
+                <li><strong>方法 C</strong>:$e_3/e_2^2 \approx 8\times10^{-5}/(1.3\times10^{-2})^2 \approx 0.47$,誤差正比 $e_n^2$ → 二次收斂 $p=2$ → <strong>牛頓法</strong>。</li>
+              </ul>
+              <p><strong>(b)</strong>
+                $e_4 \approx 0.47\times e_3^2 = 0.47\times(8\times10^{-5})^2 \approx 3\times10^{-9}$。
+                正確位數從 4–5 位飛躍到約 9 位——這正是「位數翻倍」的二次收斂。
+              </p>
+              <p><strong>(c)</strong>
+                牛頓法的代價:(1) 需要提供解析導數 $f'$,若 $f$ 是黑盒或導數難算就無法使用;
+                (2) 需要一個「夠靠近根」的初始猜測,起點不好可能發散、落入循環或踩到 $f'=0$ 而當機。
+                二分法雖慢,只要端點異號就<em>保證</em>收斂。
+              </p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h3>二、考卷計算題</h3>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 題庫 Q4 <span class="badge">計算</span></div>
+        <div class="ex-body">
+          <p>用<strong>二分法</strong>求 $f(x)=x^3-x-2=0$ 在 $[1,2]$ 的根,手算 3 次迭代。
+          每步列出 $[a,b]$、中點 $m$、$f(m)$ 的值與符號,並說明如何縮小區間。
+          3 次後,誤差界是多少?</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>先驗證:$f(1)=1-1-2=-2&lt;0$,$f(2)=8-2-2=4&gt;0$,異號,區間內必有根。</p>
+              <div class="table-wrap">
+              <table>
+                <thead><tr><th>步</th><th>$a$</th><th>$b$</th><th>$m$</th><th>$f(m)$</th><th>新區間</th></tr></thead>
+                <tbody>
+                  <tr><td>1</td><td>1</td><td>2</td><td>1.5</td><td>$3.375-1.5-2=−0.125&lt;0$</td><td>[1.5, 2]</td></tr>
+                  <tr><td>2</td><td>1.5</td><td>2</td><td>1.75</td><td>$5.359-1.75-2=1.609&gt;0$</td><td>[1.5, 1.75]</td></tr>
+                  <tr><td>3</td><td>1.5</td><td>1.75</td><td>1.625</td><td>$4.291-1.625-2=0.666&gt;0$</td><td>[1.5, 1.625]</td></tr>
+                </tbody>
+              </table>
+              </div>
+              <p>3 次後根確定在 $[1.5, 1.625]$,區間長 $0.125 = (b_0-a_0)/2^3$。</p>
+              <p>取中點 $1.5625$ 為近似根,誤差界 $\le \dfrac{0.125}{2} = 0.0625$。</p>
+              <p>一般公式:$n$ 步後誤差 $\le \dfrac{b_0-a_0}{2^{n+1}}$。真根約為 $x^*\approx 1.5214$。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 題庫 Q5 <span class="badge">計算</span></div>
+        <div class="ex-body">
+          <p>對同一方程 $f(x)=x^3-x-2=0$,用<strong>牛頓法</strong>從 $x_0=2$ 出發,手算 3 步。
+          列出每步的 $x_n$、$f(x_n)$、$f'(x_n)$、$x_{n+1}$。
+          比較與二分法 3 步後的精度差距,並解釋牛頓法為何快得多。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>$f(x)=x^3-x-2$,$f'(x)=3x^2-1$。更新式:$x_{n+1}=x_n-\dfrac{x_n^3-x_n-2}{3x_n^2-1}$</p>
+              <div class="table-wrap">
+              <table>
+                <thead><tr><th>$n$</th><th>$x_n$</th><th>$f(x_n)$</th><th>$f'(x_n)$</th><th>$x_{n+1}$</th></tr></thead>
+                <tbody>
+                  <tr><td>0</td><td>2</td><td>$8-2-2=4$</td><td>$12-1=11$</td><td>$2-4/11\approx1.6364$</td></tr>
+                  <tr><td>1</td><td>1.6364</td><td>$\approx0.751$</td><td>$\approx7.032$</td><td>$\approx1.5296$</td></tr>
+                  <tr><td>2</td><td>1.5296</td><td>$\approx0.051$</td><td>$\approx6.021$</td><td>$\approx1.5211$</td></tr>
+                </tbody>
+              </table>
+              </div>
+              <p>3 步後 $x_3\approx1.5211$,誤差 $\approx|1.5211-1.5214|\approx3\times10^{-4}$。</p>
+              <p>相比之下,二分法 3 步後誤差界仍是 $0.0625$,差了兩個數量級。</p>
+              <p>原因:<strong>二次收斂</strong>——牛頓法每步用導數(切線)指路,正確位數近似翻倍;
+              二分法是線性收斂,每步只砍掉一半的誤差,要多準一位十進位需額外約 3.3 次迭代。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 題庫 Q6 <span class="badge">計算</span></div>
+        <div class="ex-body">
+          <p>給定三個資料點:$(0,1)$、$(1,3)$、$(3,13)$。</p>
+          <p><strong>(a)</strong> 用<strong>拉格朗日內插</strong>建構通過這三點的二次多項式 $P(x)$。</p>
+          <p><strong>(b)</strong> 計算 $P(2)$。</p>
+          <p><strong>(c)</strong> 若真函數是 $f(x)=x^2+x+1$,驗算插值多項式是否精確重現真函數,並說明何時插值誤差一定為零。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>(a)</strong> 節點 $x_0=0,x_1=1,x_2=3$。拉格朗日基函數:</p>
+              <p>
+                $L_0(x) = \dfrac{(x-1)(x-3)}{(0-1)(0-3)} = \dfrac{(x-1)(x-3)}{3}$<br>
+                $L_1(x) = \dfrac{(x-0)(x-3)}{(1-0)(1-3)} = \dfrac{x(x-3)}{-2}$<br>
+                $L_2(x) = \dfrac{(x-0)(x-1)}{(3-0)(3-1)} = \dfrac{x(x-1)}{6}$
+              </p>
+              <p>
+                $P(x) = 1\cdot L_0 + 3\cdot L_1 + 13\cdot L_2$<br>
+                $= \dfrac{(x-1)(x-3)}{3} - \dfrac{3x(x-3)}{2} + \dfrac{13x(x-1)}{6}$
+              </p>
+              <p>通分展開(分母為 6):</p>
+              <p>$= \dfrac{2(x-1)(x-3) - 9x(x-3) + 13x(x-1)}{6}$</p>
+              <p>分子展開:$2(x^2-4x+3) - 9(x^2-3x) + 13(x^2-x)$
+                $= 2x^2-8x+6 - 9x^2+27x + 13x^2-13x$
+                $= 6x^2+6x+6$</p>
+              <p>$\therefore P(x) = x^2+x+1$</p>
+              <p><strong>(b)</strong> $P(2) = 4+2+1 = 7$</p>
+              <p><strong>(c)</strong> 真函數 $f(x)=x^2+x+1$ 也是二次多項式。
+              驗算:$f(0)=1$✓,$f(1)=3$✓,$f(3)=13$✓——正好與三點吻合。
+              插值多項式精確重現了 $f$,誤差為零。
+              一般結論:<strong>若真函數本身的次數 $\le n$(插值多項式次數),插值誤差恆為零</strong>——
+              因為穿過 $n+1$ 個點的 $n$ 次多項式是唯一的,而真函數本身就是那個多項式。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 題庫 Q7 <span class="badge">計算</span></div>
+        <div class="ex-body">
+          <p>用<strong>梯形法</strong>與<strong>辛普森法</strong>估計 $I=\displaystyle\int_0^2 x^2\,dx$,取 $n=4$ 子區間($h=0.5$)。</p>
+          <p><strong>(a)</strong> 列出各取樣點的函數值,計算兩種方法的近似值。</p>
+          <p><strong>(b)</strong> 真值為 $8/3$,分別計算誤差,並解釋辛普森法誤差為何特別小。</p>
+          <p><strong>(c)</strong> 若步長縮為 $h=0.25$($n$ 加倍),梯形法與辛普森法的誤差各約縮小為原來的幾分之幾?</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>取樣點與函數值($f(x)=x^2$):</p>
+              <div class="table-wrap">
+              <table>
+                <thead><tr><th>$x$</th><th>0</th><th>0.5</th><th>1</th><th>1.5</th><th>2</th></tr></thead>
+                <tbody>
+                  <tr><td>$f(x)$</td><td>0</td><td>0.25</td><td>1</td><td>2.25</td><td>4</td></tr>
+                </tbody>
+              </table>
+              </div>
+              <p><strong>(a)</strong></p>
+              <p>梯形法:$T = \dfrac{h}{2}[f_0+2f_1+2f_2+2f_3+f_4] = \dfrac{0.5}{2}[0+0.5+2+4.5+4] = 0.25\times11 = 2.75$</p>
+              <p>辛普森法:$S = \dfrac{h}{3}[f_0+4f_1+2f_2+4f_3+f_4] = \dfrac{0.5}{3}[0+1+2+9+4] = \dfrac{0.5}{3}\times16 = \dfrac{8}{3}$</p>
+              <p><strong>(b)</strong> 真值 $= 8/3 \approx 2.6\overline{6}$。</p>
+              <p>梯形法誤差 $= |2.75 - 8/3| = |1/12| \approx 0.0833$</p>
+              <p>辛普森法誤差 $= |8/3 - 8/3| = 0$(!)</p>
+              <p>辛普森法誤差為零原因:辛普森法的誤差項含 $f^{(4)}(\xi)$,而 $f(x)=x^2$ 的四階導數 $\equiv 0$,
+              故誤差精確為零。辛普森法對次數 $\le 3$ 的多項式均精確成立(精確度次數為 3)——
+              比看起來的「二次拋物線近似」高一個次數,這正是它 $O(h^4)$ 精度的本質原因。</p>
+              <p><strong>(c)</strong> 梯形法誤差 $O(h^2)$:$h$ 減半 → 誤差縮為 $(1/2)^2=1/4$。
+              辛普森法誤差 $O(h^4)$:$h$ 減半 → 誤差縮為 $(1/2)^4=1/16$。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 題庫 Q8 <span class="badge">計算</span></div>
+        <div class="ex-body">
+          <p>對以下 $3\times 3$ 線性系統:</p>
+          <p>$$\begin{pmatrix}2 &amp; 1 &amp; -1 \\ 4 &amp; 3 &amp; -2 \\ -2 &amp; 1 &amp; 3\end{pmatrix}\mathbf{x} = \begin{pmatrix}8\\14\\-4\end{pmatrix}$$</p>
+          <p><strong>(a)</strong> 以第一列為軸列(pivot row)執行一步<strong>高斯消去</strong>,算出消去因子 $m_{21},m_{31}$,對第 2、3 列消去,寫出中間的增廣矩陣。</p>
+          <p><strong>(b)</strong> 對以下<em>對角佔優</em>的系統,從 $\mathbf{x}^{(0)}=(0,0,0)^T$ 出發執行一步 <strong>Gauss–Seidel 迭代</strong>($i=1,2,3$ 依序更新,每解出一個分量立刻用於下一個):</p>
+          <p>$$10x_1 - x_2 + 2x_3 = 6,\quad -x_1 + 11x_2 - x_3 = 25,\quad 2x_1 - x_2 + 10x_3 = -11$$</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>(a) 高斯消去第一步</strong></p>
+              <p>消去因子:$m_{21}=\dfrac{4}{2}=2$,$m_{31}=\dfrac{-2}{2}=-1$</p>
+              <p>第 2 列 $\leftarrow$ 第 2 列 $- 2\times$ 第 1 列:$[4,3,-2|14]-2[2,1,-1|8]=[0,1,0|-2]$</p>
+              <p>第 3 列 $\leftarrow$ 第 3 列 $-(-1)\times$ 第 1 列:$[-2,1,3|-4]+[2,1,-1|8]=[0,2,2|4]$</p>
+              <p>中間增廣矩陣:</p>
+              <p>$$\begin{pmatrix}2 &amp; 1 &amp; -1 &amp; | &amp; 8 \\ 0 &amp; 1 &amp; 0 &amp; | &amp; -2 \\ 0 &amp; 2 &amp; 2 &amp; | &amp; 4\end{pmatrix}$$</p>
+              <p>繼續消去後回代可得精確解:由第 2 列得 $x_2=-2$;由第 3 列 $2x_2+2x_3=4$ 得 $x_3=4$;由第 1 列得 $x_1=(8-x_2+x_3)/2=7$。精確解 $\mathbf{x}^*=(7,-2,4)^T$。</p>
+              <p><strong>(b) Gauss–Seidel 第 1 步</strong></p>
+              <p>更新公式(對角元素在分母):</p>
+              <p>
+                $x_1^{(1)} = \dfrac{6+x_2^{(0)}-2x_3^{(0)}}{10} = \dfrac{6+0-0}{10} = 0.6$<br>
+                (立刻用 $x_1^{(1)}=0.6$)
+                $x_2^{(1)} = \dfrac{25+x_1^{(1)}+x_3^{(0)}}{11} = \dfrac{25+0.6+0}{11} \approx 2.327$<br>
+                (立刻用 $x_1^{(1)},x_2^{(1)}$)
+                $x_3^{(1)} = \dfrac{-11-2x_1^{(1)}+x_2^{(1)}}{10} = \dfrac{-11-1.2+2.327}{10} \approx -0.987$
+              </p>
+              <p>$\mathbf{x}^{(1)}\approx(0.6,\ 2.327,\ -0.987)^T$。真解約為 $(1.043,\ 2.270,\ -1.082)^T$。
+              僅一步迭代已相當接近,繼續迭代會線性收斂到真解(此矩陣嚴格對角佔優,收斂保證)。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h3>三、直覺證明</h3>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 題庫 Q9 <span class="badge">證明</span></div>
+        <div class="ex-body">
+          <p>用<strong>泰勒展開</strong>推導牛頓法的二次收斂。設 $x^*$ 是 $f$ 的單根($f(x^*)=0,f'(x^*)\ne0$),令 $e_n=x_n-x^*$。
+          由更新式 $x_{n+1}=x_n-\dfrac{f(x_n)}{f'(x_n)}$ 推導 $e_{n+1}\approx+\dfrac{f''(x^*)}{2f'(x^*)}\,e_n^2$。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>在 $x^*$ 附近展開 $f(x_n)$($x_n=x^*+e_n$):</p>
+              <p>$$f(x_n)=f(x^*)+f'(x^*)e_n+\tfrac{1}{2}f''(x^*)e_n^2+O(e_n^3)=f'(x^*)e_n+\tfrac{1}{2}f''(x^*)e_n^2+O(e_n^3)$$</p>
+              <p>(因 $f(x^*)=0$)</p>
+              <p>同樣展開 $f'(x_n)=f'(x^*)+f''(x^*)e_n+O(e_n^2)$。</p>
+              <p>牛頓步 $e_{n+1}=x_{n+1}-x^*=e_n-\dfrac{f(x_n)}{f'(x_n)}$,代入:</p>
+              <p>$$e_{n+1}=e_n-\frac{f'(x^*)e_n+\frac{1}{2}f''(x^*)e_n^2}{f'(x^*)+f''(x^*)e_n}$$</p>
+              <p>分子分母同除 $f'(x^*)$,分母用 $\dfrac{1}{1+u}\approx1-u$(因 $e_n\to0$,令 $u=\dfrac{f''}{f'}e_n$):</p>
+              <p>$$e_{n+1}\approx e_n-\left(e_n+\frac{f''}{2f'}e_n^2\right)\left(1-\frac{f''}{f'}e_n\right)$$</p>
+              <p>展開保留至 $O(e_n^2)$:</p>
+              <p>$$e_{n+1}\approx e_n-e_n+\frac{f''}{f'}e_n^2-\frac{f''}{2f'}e_n^2=+\frac{f''(x^*)}{2f'(x^*)}e_n^2 \qquad\square$$</p>
+              <p><strong>結論</strong>:$|e_{n+1}|\approx C|e_n|^2$,其中 $C=\left|\dfrac{f''(x^*)}{2f'(x^*)}\right|$。
+              誤差以平方速率遞減——正確位數每步翻倍,這就是「二次收斂」名字的由來。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 題庫 Q10 <span class="badge">證明</span></div>
+        <div class="ex-body">
+          <p><strong>(a) 不動點迭代的收斂條件</strong>:說明若 $g$ 在不動點 $x^*$($g(x^*)=x^*$)鄰域內滿足 $|g'(x)|&lt;1$,
+          則迭代 $x_{n+1}=g(x_n)$ 從夠近的任意起點出發都會收斂。(給直覺論證。)</p>
+          <p><strong>(b) 辛普森法的「意外精度」</strong>:辛普森法名義上用二次拋物線逼近 $f$,
+          按理誤差應是 $O(h^3)$,但實際上是 $O(h^4)$。用對稱性解釋為何誤差階多了一階。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>(a)</strong> 對 $g$ 在 $x^*$ 用均值定理:$e_{n+1}=g(x_n)-g(x^*)=g'(\xi)\cdot e_n$,其中 $\xi$ 在 $x_n$ 與 $x^*$ 之間。
+              若 $|g'(x)|\le L&lt;1$ 在 $x^*$ 鄰域成立,則 $|e_{n+1}|\le L|e_n|$,誤差每步至少縮小因子 $L$,
+              等比級數收斂 $\Rightarrow e_n\to0$。這就是壓縮映射(contraction mapping)定理的核心直覺。</p>
+              <p><strong>(b)</strong> 在子區間 $[c-h,c+h]$ 上將 $f$ 在中點 $c$ 展開:
+              $f(c\pm h)=f(c)\pm f'(c)h+\frac{1}{2}f''(c)h^2\pm\frac{1}{6}f'''(c)h^3+\frac{1}{24}f^{(4)}(c)h^4+\cdots$</p>
+              <p>辛普森法在此區間的積分近似為 $\dfrac{h}{3}[f(c-h)+4f(c)+f(c+h)]$,代入展開後,
+              含 $h,h^3,h^5\ldots$(奇次項)的部分因<strong>對稱性</strong>兩兩相消($f(c+h)$ 與 $f(c-h)$ 的奇次項剛好異號加總為零),
+              最低的剩餘誤差項正比於 $h^5\cdot f^{(4)}$,對應的全域誤差(把區間分成 $N=O(1/h)$ 個子區間)為 $O(h^4)$。
+              對稱消去讓誤差從期望的 $O(h^3)$ 升一階到 $O(h^4)$。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h3>四、Python 實作</h3>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 題庫 Q11 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>實作一個通用<strong>牛頓法求根器</strong>,求 $f(x)=\cos x - x = 0$ 的不動點(Dottie number),
+          起點 $x_0=1$,收斂條件 $|f(x)|&lt;10^{-12}$。並與 <code>scipy.optimize.newton</code> 的結果比較精度與迭代次數。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">import math
+from scipy.optimize import newton as scipy_newton
+
+def my_newton(f, df, x0, tol=1e-12, max_iter=50):
+    """手寫牛頓法,回傳 (根, 迭代次數, 各步 |f(x)| 序列)"""
+    x = x0
+    history = []
+    for i in range(max_iter):
+        fx = f(x)
+        history.append(abs(fx))
+        if abs(fx) &lt; tol:
+            return x, i + 1, history
+        dfx = df(x)
+        if dfx == 0:
+            raise ZeroDivisionError("f'(x)=0,牛頓法無法繼續")
+        x = x - fx / dfx
+    return x, max_iter, history
+
+# 目標:解 cos(x) - x = 0
+f  = lambda x: math.cos(x) - x
+df = lambda x: -math.sin(x) - 1
+
+root_mine, n_mine, hist = my_newton(f, df, x0=1.0)
+root_scipy = scipy_newton(f, x0=1.0, fprime=df, tol=1e-12)
+
+print(f"手寫牛頓法: root = {root_mine:.15f},迭代 {n_mine} 次")
+print(f"scipy 牛頓法: root = {root_scipy:.15f}")
+print(f"兩者差距: {abs(root_mine - root_scipy):.2e}")
+
+print("\n各步 |f(x)| 收斂序列(展示二次加速):")
+for i, e in enumerate(hist):
+    print(f"  第 {i+1:2d} 步: {e:.3e}")</code></pre>
+              <p>Dottie number $\approx 0.739085133215160641655$,即 $\cos$ 函數的唯一不動點。
+              手寫版約需 <strong>5–6 步</strong>就到機器精度,與 scipy 結果差距在 $10^{-16}$ 以內。
+              從各步的 $|f(x)|$ 序列可以清楚看到:誤差每步約以「平方」速率縮小——$10^{-1}\to10^{-2}\to10^{-4}\to10^{-8}\to10^{-16}$,這就是二次收斂的視覺指紋。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 題庫 Q12 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>以<strong>手寫梯形法與辛普森法</strong>計算 $\displaystyle\int_0^1 e^{-x^2}\,dx$(沒有封閉解的高斯積分),
+          對 $n=4,8,16,32$ 各計算一次,以 <code>scipy.integrate.quad</code> 的高精度結果為「真值」,
+          驗證梯形法誤差 $\propto h^2$、辛普森法誤差 $\propto h^4$(步長減半時誤差縮小的倍數)。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">import numpy as np
+from scipy import integrate
+
+f = lambda x: np.exp(-x**2)
+true, _ = integrate.quad(f, 0, 1)   # 高精度真值 ≈ 0.7468241328124271
+
+def trapezoid(f, a, b, n):
+    x = np.linspace(a, b, n + 1); y = f(x); h = (b - a) / n
+    return h * (y[0]/2 + y[1:-1].sum() + y[-1]/2)
+
+def simpson(f, a, b, n):             # n 須為偶數
+    x = np.linspace(a, b, n + 1); y = f(x); h = (b - a) / n
+    return h/3 * (y[0] + 4*y[1:-1:2].sum() + 2*y[2:-1:2].sum() + y[-1])
+
+print(f"真值 = {true:.12f}\n")
+print(f"{'n':&gt;4}  {'梯形誤差':&gt;12}  {'縮小倍數':&gt;8}  {'辛普森誤差':&gt;13}  {'縮小倍數':&gt;8}")
+prev_t, prev_s = None, None
+for n in [4, 8, 16, 32]:
+    et = abs(trapezoid(f, 0, 1, n) - true)
+    es = abs(simpson(f, 0, 1, n) - true)
+    ratio_t = f"{prev_t/et:.1f}" if prev_t else "—"
+    ratio_s = f"{prev_s/es:.1f}" if prev_s else "—"
+    print(f"{n:4d}  {et:12.3e}  {ratio_t:&gt;8}  {es:13.3e}  {ratio_s:&gt;8}")
+    prev_t, prev_s = et, es</code></pre>
+              <p>注意:<code>&gt;</code> 在 HTML 裡要寫成 <code>&amp;gt;</code>;程式碼中 <code>f"{n:&gt;4}"</code> 的 <code>&gt;</code> 需 HTML 跳脫。(上面程式碼已處理。)</p>
+              <p>預期輸出:$n$ 每次加倍,梯形法誤差縮小約 <strong>4 倍</strong>($\times 1/4$),辛普森法縮小約 <strong>16 倍</strong>($\times 1/16$),完美符合 $O(h^2)$ 與 $O(h^4)$ 的理論預測。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 題庫 Q13 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>用 Python 解下列 $4\times4$ 線性系統,並同時評估系統的條件數:</p>
+          <p>$$A=\begin{pmatrix}10&amp;-1&amp;2&amp;0\\-1&amp;11&amp;-1&amp;3\\2&amp;-1&amp;10&amp;-1\\0&amp;3&amp;-1&amp;8\end{pmatrix},\quad \mathbf{b}=\begin{pmatrix}6\\25\\-11\\15\end{pmatrix}$$</p>
+          <p><strong>(a)</strong> 用 <code>numpy.linalg.solve</code> 求解。</p>
+          <p><strong>(b)</strong> 用手寫 Gauss–Seidel 迭代 25 步,每 5 步印出與精確解的 2-norm 誤差。</p>
+          <p><strong>(c)</strong> 計算 $\kappa(A)$ 並解讀:這個矩陣「好算」還是「難算」?</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">import numpy as np
+
+A = np.array([[10., -1.,  2.,  0.],
+              [-1., 11., -1.,  3.],
+              [ 2., -1., 10., -1.],
+              [ 0.,  3., -1.,  8.]])
+b = np.array([6., 25., -11., 15.])
+
+# (a) 精確解
+x_exact = np.linalg.solve(A, b)
+print("精確解:", np.round(x_exact, 6))
+# 預期: ≈ [1.000, 2.000, -1.000, 1.000]
+
+# (b) Gauss–Seidel 迭代
+n = len(b)
+x = np.zeros(n)
+print("\nGauss–Seidel 收斂過程:")
+for k in range(1, 26):
+    for i in range(n):
+        sigma = sum(A[i, j] * x[j] for j in range(n) if j != i)
+        x[i] = (b[i] - sigma) / A[i, i]
+    if k % 5 == 0:
+        err = np.linalg.norm(x - x_exact)
+        print(f"  第 {k:2d} 步: ‖x−x*‖₂ = {err:.3e}")
+
+# (c) 條件數
+kappa = np.linalg.cond(A)
+print(f"\n條件數 κ(A) = {kappa:.4f}")</code></pre>
+              <p>預期結果:</p>
+              <ul>
+                <li>精確解 $\approx (1, 2, -1, 1)^T$(整數解,驗算 $A\mathbf{x}=\mathbf{b}$ 即可)。</li>
+                <li>Gauss–Seidel 誤差每 5 步約縮小一到兩個數量級,25 步後達到 $10^{-10}$ 以下。</li>
+                <li>$\kappa(A)\approx 7$——<strong>良好條件</strong>。雙精度下只損失不到 1 位有效數字,遠低於危險線 $10^8$。
+                  這個矩陣嚴格對角佔優,是 Gauss–Seidel 收斂的充分條件。</li>
+              </ul>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h3>五、挑戰題</h3>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 題庫 Q14 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p><strong>病態矩陣的條件數分析(Hilbert 矩陣)</strong></p>
+          <p>Hilbert 矩陣 $H_n$ 定義為 $H_{ij}=\dfrac{1}{i+j-1}$,是教科書中最著名的病態矩陣。</p>
+          <p><strong>(a)</strong> 用 Python 建構 $H_5$,計算其條件數,並與 $H_8$ 的條件數比較。</p>
+          <p><strong>(b)</strong> 設真解 $\mathbf{x}^*=\mathbf{1}$(全 1 向量),構造 $\mathbf{b}=H_5\mathbf{1}$。
+          用 <code>numpy.linalg.solve</code> 解 $H_5\mathbf{x}=\mathbf{b}$,計算誤差。</p>
+          <p><strong>(c)</strong> 對 $\mathbf{b}$ 加一個 $\|\delta\mathbf{b}\|/\|\mathbf{b}\|\approx 10^{-10}$ 的隨機擾動後再解,
+          觀察解的相對變化量。用條件數理論解釋你看到的放大倍數。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">import numpy as np
+
+def hilbert(n):
+    return np.array([[1.0/(i+j+1) for j in range(n)] for i in range(n)])
+
+H5 = hilbert(5); H8 = hilbert(8)
+print(f"κ(H_5) = {np.linalg.cond(H5):.3e}")   # ≈ 4.77e+05
+print(f"κ(H_8) = {np.linalg.cond(H8):.3e}")   # ≈ 1.53e+10
+
+# (b) 真解 = 全 1
+n = 5
+x_true = np.ones(n)
+b = H5 @ x_true
+x_hat = np.linalg.solve(H5, b)
+rel_err = np.linalg.norm(x_hat - x_true) / np.linalg.norm(x_true)
+print(f"\n(b) 相對誤差 ‖x̂-x*‖/‖x*‖ = {rel_err:.2e}")
+
+# (c) 加擾動
+rng = np.random.default_rng(0)
+delta_b = 1e-10 * b * rng.standard_normal(n)   # 相對擾動 ~1e-10
+b_perturbed = b + delta_b
+x_perturbed = np.linalg.solve(H5, b_perturbed)
+
+rel_delta_b = np.linalg.norm(delta_b) / np.linalg.norm(b)
+rel_delta_x = np.linalg.norm(x_perturbed - x_hat) / np.linalg.norm(x_hat)
+print(f"(c) ‖δb‖/‖b‖ = {rel_delta_b:.2e}")
+print(f"    ‖δx‖/‖x‖ = {rel_delta_x:.2e}")
+print(f"    放大倍數  = {rel_delta_x/rel_delta_b:.2e}")
+print(f"    κ(H_5)上界 = {np.linalg.cond(H5):.2e}")</code></pre>
+              <p><strong>分析</strong>:</p>
+              <ul>
+                <li>$\kappa(H_5)\approx4.77\times10^5$:輸入誤差被放大約 50 萬倍。雙精度捨入誤差 $\sim10^{-16}$,
+                  經放大後答案誤差約 $\sim10^{-11}$——仍可接受。但 $\kappa(H_8)\sim10^{10}$ 就危險了,損失約 10 位有效數字。</li>
+                <li>條件數誤差放大上界:$\dfrac{\|\delta\mathbf{x}\|/\|\mathbf{x}\|}{\|\delta\mathbf{b}\|/\|\mathbf{b}\|}\le\kappa(A)$。
+                  實驗值通常比上界小,但量級一致。</li>
+                <li>若改用 $H_{12}$,$\kappa$ 超過 $10^{16}$,雙精度下幾乎沒有可信位數——
+                  這正是「病態問題再好的演算法也救不了」的最佳教材。</li>
+              </ul>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>把這一章串起來</h2>
+      <p>
+        我們從「大多數數學問題沒有漂亮的封閉解」這個樸素事實出發,一路看見電腦如何用「逼近 + 迭代」征服它們。回顧路標:
+      </p>
+      <ul>
+        <li><strong>浮點數的真相</strong>:IEEE 754 用有限位元逼近實數,機器 epsilon($\sim 10^{-16}$)是精度天花板;
+        誤差分<strong>捨入</strong>與<strong>截斷</strong>兩種,而<strong>災難性抵消</strong>(相近的數相減)是頭號殺手。</li>
+        <li><strong>條件數 vs 穩定性</strong>:條件數差是<em>問題</em>天生難算;不穩定是<em>演算法</em>把好問題算爛。兩者要分清楚。</li>
+        <li><strong>求根</strong>:二分法穩但慢(線性收斂),牛頓法快但需導數與好起點(二次收斂),割線法折衷(超線性)。</li>
+        <li><strong>線性方程組</strong>:小稠密用直接法(LU 分解),大稀疏用迭代法(Jacobi/Gauss–Seidel);永遠用 <code>solve</code>,別算反矩陣。</li>
+        <li><strong>內插與逼近</strong>:高次多項式內插會 Runge 震盪,改用樣條;有雜訊時用最小平方逼近——它就是第 38 章的線性迴歸。</li>
+        <li><strong>數值微積分與 ODE</strong>:有限差分求導(留意最佳 $h$)、梯形/辛普森求積分、歐拉/RK4 解微分方程,全是「逼近 + 迭代」。</li>
+      </ul>
+      <p>
+        這一章其實在講一件大事:<strong>數值方法是「理論數學」與「真實計算」之間的那座橋。</strong>
+        微積分、線性代數告訴你「答案<em>存在</em>、長什麼樣」;數值方法告訴你「在一台只有有限位元、會犯捨入誤差的真實機器上,
+        怎麼<em>真的把它算出來</em>」。你每天用的每一個 ML 框架、每一個物理模擬器、每一套 CAD 軟體、每一次天氣預報,
+        掀開蓋子,底層轉動的都是這一章的這些齒輪。當你下次呼叫 <code>scipy</code> 的某個函式時,
+        希望你會心一笑——因為你現在<em>知道</em>蓋子底下發生了什麼,也知道它什麼時候會出錯。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">📚</div>
+        <div class="body">
+          <span class="c-title">想更深入?延伸資源</span>
+          <p>本章對應 OSSU 進階數學中的
+          <a href="https://ocw.mit.edu/courses/18-335j-introduction-to-numerical-methods-spring-2019/">MIT 18.335 Introduction to Numerical Methods</a>
+          (MIT OCW 上有完整講義與作業;課程的 <a href="https://github.com/mitmath/18335">GitHub 頁面</a>有逐年更新的筆記與 Julia 範例)。
+          它把本章每個主題(浮點誤差分析、條件數、線性系統、特徵值、迭代法)都推進到更嚴謹的層次,並大量觸及數值線性代數。
+          若你想要一本平易近人、配 Python 的入門書,Jaan Kiusalaas 的 <em>Numerical Methods in Engineering with Python</em>
+          很適合搭配閱讀。學完這章,你已經握有讀懂它們所需的全部直覺——接下來,就是把橋走得更深、更遠。</p>
+        </div>
+      </div>
+
+    </article>
+  </main>
+</div>
+<script src="../assets/book.js"></script>
+</body>
+</html>

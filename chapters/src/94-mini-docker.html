@@ -1,0 +1,1064 @@
+<!--meta
+title: 手寫迷你 Docker
+description: 把第 87 章的 namespaces、cgroups、pivot_root、OverlayFS 親手串成一個能跑命令的 container runtime——用 C 呼叫 clone() 系統呼叫、用 pivot_root 換根、用 cgroup v2 限資源、用 OverlayFS 疊可寫層，拼出 mydocker run 的最小骨幹，親眼看見 Docker 的核心是什麼。
+-->
+
+      <div class="eyebrow">第二一部 · 容器、虛擬化與雲原生底層</div>
+      <h1>手寫迷你 Docker</h1>
+      <p class="subtitle">把 Docker 的品牌包裝剝掉，核心其實是幾個 Linux 系統呼叫——這一章，我們用 C 語言親手把它們拼在一起，讓 <code>mydocker run</code> 真的跑起來。</p>
+      <div class="byline">
+        <span class="tag">第 88 章</span>
+        <span>閱讀時間 ≈ 70 分鐘</span>
+        <span>難度:★★★★★</span>
+      </div>
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>如何用 <code>clone()</code> 系統呼叫一次開啟四個 namespace,建立容器的隔離環境</li>
+          <li><code>pivot_root</code> 的完整步驟,以及它為何比 <code>chroot</code> 更安全</li>
+          <li>如何在新 mount namespace 裡掛載 <code>/proc</code> 讓 <code>ps</code>、<code>top</code> 正常運作</li>
+          <li>cgroup v2 的路徑介面與操作方式:限制記憶體、PID 數量、CPU 配額</li>
+          <li>如何用 bash 指令建立 OverlayFS 掛載,給容器一個可寫層</li>
+          <li>veth pair + bridge 組合最簡容器網路的概念與指令</li>
+          <li>把約 200 行 C 程式碼拼成一個可運作的 <code>mydocker</code> container runtime</li>
+          <li>這個教學 runtime 與真實 Docker 的差距在哪裡,以及下一步學什麼</li>
+        </ul>
+      </div>
+
+      <!-- ==================== h2 ① ==================== -->
+      <h2>Docker 拿掉品牌後,核心剩下什麼?</h2>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">誠實標示:教學用最小 container runtime</span>
+          <p>本章實作的 <code>mydocker</code> 是一個<strong>教學用最小 container runtime</strong>——目的是把
+          <a href="93-container-internals.html">第 87 章</a>的理論對應到真實的系統呼叫,讓每一行程式碼都能對應到一個機制。
+          它<strong>不處理</strong>映像格式(OCI image spec)、registry 拉取、網路 CNI 外掛、安全強化(seccomp profile / capabilities 收縮)、
+          rootless 模式或任何生產級功能。需要 <strong>root 或 CAP_SYS_ADMIN</strong> 才能執行。
+          本章使用 <strong>C 語言</strong>呈現系統呼叫語義(系統呼叫全部從 C 直接呼叫);
+          在適當處會標注「也可用 Rust 重寫,呼應<a href="90-rust-os-kernel.html">第 84 章</a>的 bare-metal 精神」。</p>
+        </div>
+      </div>
+
+      <p>
+        在<a href="93-container-internals.html">第 87 章</a>，我們拆解了 <code>docker run</code> 背後的四層機制:
+        namespace 隔離視圖、cgroup 資源上限、OverlayFS 聯合掛載、capabilities + seccomp 最小權限。
+        你現在知道 Docker 的本質是什麼——但「知道」和「親手拼出來」是兩回事。
+      </p>
+      <p>
+        這一章做的事情就一件:把那四層機制用 C 語言的系統呼叫親手連起來,
+        做出一個能執行 <code>mydocker run /path/to/rootfs /bin/sh</code> 的最小 container runtime。
+        大約 200 行 C 程式碼。不依賴任何容器函式庫。每一行都有對應的機制說明。
+      </p>
+      <p>
+        歷史上第一個做這件事(並公開講解)的人是 Liz Rice——她在 2016 年 DockerCon 的演講
+        「Containers from Scratch」裡用 Go 語言現場直播寫了一個迷你 runtime。
+        我們的版本改用 C,因為 C 的系統呼叫語義更直接(Go 的 <code>syscall</code> 套件
+        做了一層包裝),而且與本書整體語言選擇一致。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">核心等式</span>
+          <p>一個最小 container runtime = <code>clone()</code>(開 namespace) +
+          <code>pivot_root()</code>(換根) + <code>mount()</code>(掛 /proc) +
+          cgroup v2(寫 /sys/fs/cgroup) + <code>execvp()</code>(執行指令)。
+          這五個步驟,就是 Docker 的骨架。</p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ② ==================== -->
+      <h2>目標與全局架構:mydocker run 要做什麼</h2>
+
+      <p>
+        我們的目標指令介面是:
+      </p>
+      <pre><code class="language-bash">sudo ./mydocker /path/to/rootfs /bin/sh
+# 在隔離環境裡進入 /bin/sh</code></pre>
+
+      <p>
+        執行後,使用者拿到一個 shell。在這個 shell 裡:
+      </p>
+      <ul>
+        <li><code>echo $$</code> 輸出 <code>1</code>——它是新 PID namespace 的 PID 1</li>
+        <li><code>hostname</code> 輸出 <code>mycontainer</code>——獨立的 UTS namespace</li>
+        <li><code>ps aux</code> 只看到容器內的行程——mount namespace + /proc 隔離</li>
+        <li><code>ls /</code> 看到的是 rootfs 的根目錄,而不是主機的 /——pivot_root 換根</li>
+      </ul>
+
+      <p>
+        要達到這個效果,<code>mydocker</code> 需要完成以下六個步驟,如下圖所示:
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 760 490" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <rect width="760" height="490" fill="#f8fafb" rx="12"/>
+  <text x="380" y="28" text-anchor="middle" font-size="14" font-weight="700" fill="#1f2328">mydocker run — Fork/Clone 執行流程</text>
+
+  <!-- main() box -->
+  <rect x="235" y="44" width="290" height="52" rx="8" fill="#2f6f6a"/>
+  <text x="380" y="66" text-anchor="middle" font-size="12" font-weight="700" fill="#fff">main() — 父行程</text>
+  <text x="380" y="83" text-anchor="middle" font-size="10" fill="#b8ddd9">mydocker [rootfs] [cmd]</text>
+
+  <!-- Arrow down to clone -->
+  <line x1="380" y1="96" x2="380" y2="118" stroke="#555" stroke-width="2"/>
+  <polygon points="374,116 380,128 386,116" fill="#555"/>
+
+  <!-- clone() box -->
+  <rect x="155" y="128" width="450" height="58" rx="8" fill="#8b5cf6"/>
+  <text x="380" y="150" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">clone(container_fn, stack+STACK_SIZE,</text>
+  <text x="380" y="167" text-anchor="middle" font-size="10" fill="#ddd6fe">CLONE_NEWPID | CLONE_NEWNS | CLONE_NEWUTS | CLONE_NEWIPC | SIGCHLD, &amp;cfg)</text>
+  <text x="380" y="181" text-anchor="middle" font-size="9" fill="#c4b5fd">← 一次呼叫,同時建立四個新 namespace</text>
+
+  <!-- Fork lines -->
+  <line x1="275" y1="186" x2="145" y2="226" stroke="#555" stroke-width="2"/>
+  <polygon points="137,222 144,234 153,223" fill="#555"/>
+  <text x="170" y="220" font-size="9" fill="#b4541f">父行程(pid &gt; 0)</text>
+
+  <line x1="485" y1="186" x2="615" y2="226" stroke="#555" stroke-width="2"/>
+  <polygon points="607,223 615,235 623,224" fill="#555"/>
+  <text x="575" y="220" font-size="9" fill="#2f6f6a">子行程(pid == 0)</text>
+
+  <!-- Parent branch -->
+  <rect x="20" y="232" width="238" height="42" rx="6" fill="#f9c8b0"/>
+  <text x="139" y="250" text-anchor="middle" font-size="10" font-weight="600" fill="#1f2328">setup_cgroup(pid, 256MB)</text>
+  <text x="139" y="266" text-anchor="middle" font-size="9" fill="#555">寫 /sys/fs/cgroup/mydocker/ 各控制器</text>
+  <line x1="139" y1="274" x2="139" y2="290" stroke="#b4541f" stroke-width="1.5"/>
+  <polygon points="133,288 139,300 145,288" fill="#b4541f"/>
+  <rect x="20" y="300" width="238" height="36" rx="6" fill="#f9c8b0"/>
+  <text x="139" y="318" text-anchor="middle" font-size="10" fill="#1f2328">waitpid(pid, NULL, 0)</text>
+  <text x="139" y="331" text-anchor="middle" font-size="9" fill="#555">阻塞,等容器行程結束</text>
+  <line x1="139" y1="336" x2="139" y2="350" stroke="#b4541f" stroke-width="1.5"/>
+  <rect x="20" y="350" width="238" height="30" rx="6" fill="#4a5159"/>
+  <text x="139" y="369" text-anchor="middle" font-size="10" fill="#fff">容器結束 → 父行程 return 0</text>
+
+  <!-- Child branch -->
+  <rect x="502" y="232" width="238" height="36" rx="6" fill="#b8ddd9"/>
+  <text x="621" y="249" text-anchor="middle" font-size="10" font-weight="600" fill="#1f2328">① pivot_root(rootfs, .pivot_old)</text>
+  <text x="621" y="263" text-anchor="middle" font-size="9" fill="#555">換根;bind-mount → pivot → umount 舊根</text>
+  <line x1="621" y1="268" x2="621" y2="282" stroke="#2f6f6a" stroke-width="1.5"/>
+  <polygon points="615,280 621,292 627,280" fill="#2f6f6a"/>
+
+  <rect x="502" y="292" width="238" height="36" rx="6" fill="#b8ddd9"/>
+  <text x="621" y="309" text-anchor="middle" font-size="10" font-weight="600" fill="#1f2328">② mount("proc","/proc","proc",0,NULL)</text>
+  <text x="621" y="323" text-anchor="middle" font-size="9" fill="#555">掛 /proc 讓 ps / top 看到正確行程</text>
+  <line x1="621" y1="328" x2="621" y2="342" stroke="#2f6f6a" stroke-width="1.5"/>
+  <polygon points="615,340 621,352 627,340" fill="#2f6f6a"/>
+
+  <rect x="502" y="352" width="238" height="30" rx="6" fill="#b8ddd9"/>
+  <text x="621" y="372" text-anchor="middle" font-size="10" font-weight="600" fill="#1f2328">③ sethostname("mycontainer", 11)</text>
+  <line x1="621" y1="382" x2="621" y2="396" stroke="#2f6f6a" stroke-width="1.5"/>
+  <polygon points="615,394 621,406 627,394" fill="#2f6f6a"/>
+
+  <rect x="502" y="406" width="238" height="40" rx="6" fill="#2f6f6a"/>
+  <text x="621" y="422" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">④ execvp(argv[0], argv)</text>
+  <text x="621" y="438" text-anchor="middle" font-size="9" fill="#b8ddd9">容器指令在此執行 (e.g. /bin/sh)</text>
+
+  <!-- Namespace badge -->
+  <rect x="240" y="456" width="280" height="26" rx="6" fill="#e3efed" stroke="#2f6f6a" stroke-width="1"/>
+  <text x="380" y="473" text-anchor="middle" font-size="9" fill="#2f6f6a">新 namespace: PID ns · Mount ns · UTS ns · IPC ns (由 clone() 同時建立)</text>
+</svg>
+        <figcaption>圖 88-1:mydocker run 的執行流程。clone() 同時建立四個 namespace 並 fork 出子行程;父行程設定 cgroup 限制資源後 waitpid;子行程在新 namespace 內依序換根、掛 /proc、設 hostname、exec 指令。</figcaption>
+      </div>
+
+      <p>
+        在動手寫程式之前,先準備一個 rootfs。最簡單的方法是用
+        <code>debootstrap</code> 從頭建立一個最小 Ubuntu 環境:
+      </p>
+      <pre><code class="language-bash"># 安裝 debootstrap(若尚未安裝)
+sudo apt install debootstrap
+
+# 建立最小 Ubuntu 22.04 rootfs(約 300MB)
+sudo debootstrap --arch=amd64 jammy /tmp/myrootfs
+
+# 確認結構
+ls /tmp/myrootfs   # bin  etc  lib  proc  tmp  usr  var ...</code></pre>
+
+      <p>
+        有了 rootfs,我們就可以開始一步一步拼這個 runtime。
+      </p>
+
+      <!-- ==================== h2 ③ ==================== -->
+      <h2>第一步:用 clone() 同時開啟四個 namespace</h2>
+
+      <p>
+        在<a href="93-container-internals.html">第 87 章</a>我們看到 <code>clone()</code> 如何接受一組
+        <code>CLONE_NEW*</code> 旗標,一次建立多個新 namespace。現在把它放進 <code>main()</code>:
+      </p>
+
+      <pre><code class="language-c">#define _GNU_SOURCE
+#include &lt;sched.h&gt;      /* CLONE_NEWPID, CLONE_NEWNS, CLONE_NEWUTS, CLONE_NEWIPC */
+#include &lt;stdlib.h&gt;     /* malloc, free */
+#include &lt;sys/wait.h&gt;   /* waitpid */
+#include &lt;stdio.h&gt;      /* perror */
+
+#define STACK_SIZE (8 * 1024 * 1024)   /* 子行程堆疊 8 MB */
+
+/* 容器設定:rootfs 路徑 + 要執行的指令 */
+struct cfg {
+    char  *rootfs;   /* 容器根目錄 */
+    char **argv;     /* 指令與參數 */
+};
+
+/* 子行程函式(見下一節) */
+static int container_fn(void *arg);
+
+int main(int argc, char *argv[]) {
+    if (argc &lt; 3) {
+        fprintf(stderr, "用法: mydocker &lt;rootfs&gt; &lt;cmd&gt; [args...]\n");
+        return 1;
+    }
+
+    /* 把 rootfs 路徑與指令打包成 cfg */
+    struct cfg cfg = { .rootfs = argv[1], .argv = &amp;argv[2] };
+
+    /* 分配子行程堆疊 */
+    char *stack = malloc(STACK_SIZE);
+    if (!stack) { perror("malloc"); return 1; }
+
+    /* ── clone():一次建立四個新 namespace ── */
+    pid_t pid = clone(
+        container_fn,            /* 子行程從此函式開始執行           */
+        stack + STACK_SIZE,      /* 堆疊頂端(x86 堆疊向下成長)       */
+        CLONE_NEWPID |           /* 新 PID ns:容器 PID 從 1 開始     */
+        CLONE_NEWNS  |           /* 新 mount ns:獨立掛載點視圖        */
+        CLONE_NEWUTS |           /* 新 UTS ns:可設定獨立 hostname     */
+        CLONE_NEWIPC |           /* 新 IPC ns:隔離 SHM / MQ           */
+        SIGCHLD,                 /* 子行程退出時父行程收到 SIGCHLD     */
+        &amp;cfg);
+
+    if (pid &lt; 0) { perror("clone"); free(stack); return 1; }
+
+    /* 父行程:設定 cgroup,然後等容器結束 */
+    setup_cgroup(pid, 256L * 1024 * 1024);   /* 256 MB 記憶體上限 */
+    waitpid(pid, NULL, 0);
+    free(stack);
+    return 0;
+}</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">clone() 的旗標語義</span>
+          <p>
+            <code>CLONE_NEWPID</code>:子行程在新 PID namespace 內是 PID 1。
+            從主機看到的真實 PID 仍是一個正常數字,但容器內看到的是 1。<br>
+            <code>CLONE_NEWNS</code>:「NS」是最早的 namespace 旗標(2002 年,當時只有一種 namespace),
+            現在代表 mount namespace——容器有自己的掛載點視圖。<br>
+            <code>CLONE_NEWUTS</code>:UTS(Unix Timesharing System)namespace,
+            讓容器可用 <code>sethostname()</code> 設定獨立的主機名稱。<br>
+            <code>CLONE_NEWIPC</code>:隔離 System V 共享記憶體(SHM)與訊息佇列(MQ)。
+          </p>
+        </div>
+      </div>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">為何不加 CLONE_NEWNET?</span>
+          <p>加入 <code>CLONE_NEWNET</code> 會讓容器進入一個全空的 net namespace——
+          只有一個無法通訊的 loopback 介面。要讓容器有網路,
+          需要在主機上建立 veth pair 並連上 bridge。
+          這部分留到第八節「最簡網路」說明。本節先跳過 CLONE_NEWNET,
+          讓容器暫時與主機共用 net namespace——足夠示範其他機制。</p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ④ ==================== -->
+      <h2>第二步:pivot_root — 比 chroot 更安全的換根</h2>
+
+      <p>
+        在第 87 章我們看到 <code>chroot</code> 的限制:它只改變了「根目錄的視圖」,
+        但一個擁有 root 權限的行程可以透過巢狀 chroot 或存取 <code>/proc</code> 逃逸。
+        <strong>pivot_root(2)</strong> 系統呼叫是更徹底的解決方案——它真正地把
+        <em>整個掛載樹的根</em>換掉,配合卸載舊根,讓容器完全看不到主機的原始檔案系統。
+      </p>
+
+      <p>
+        <code>pivot_root</code> 的正確操作步驟如下:
+      </p>
+
+      <ol>
+        <li>把 <code>new_root</code> bind-mount 到自身(<code>mount --bind new_root new_root</code>)——
+            這是必要條件,因為 <code>pivot_root</code> 要求目標必須是一個掛載點。</li>
+        <li>在 <code>new_root</code> 內建立一個暫存目錄 <code>.pivot_old</code>,作為舊根的「停車場」。</li>
+        <li>呼叫 <code>pivot_root(new_root, new_root/.pivot_old)</code>——
+            核心把 <code>new_root</code> 提升為 <code>/</code>,舊的 <code>/</code> 掛進 <code>/.pivot_old</code>。</li>
+        <li><code>chdir("/")</code> 更新當前工作目錄到新根。</li>
+        <li><code>umount2("/.pivot_old", MNT_DETACH)</code> 懶卸載舊根——容器從此看不到主機的原始 <code>/</code>。</li>
+        <li><code>rmdir("/.pivot_old")</code> 移除暫存目錄。</li>
+      </ol>
+
+      <pre><code class="language-c">#define _GNU_SOURCE
+#include &lt;unistd.h&gt;      /* chdir, rmdir */
+#include &lt;sys/mount.h&gt;   /* mount, umount2, MS_BIND, MS_REC, MNT_DETACH */
+#include &lt;sys/stat.h&gt;    /* mkdir */
+#include &lt;sys/syscall.h&gt; /* SYS_pivot_root */
+#include &lt;stdio.h&gt;       /* perror, snprintf */
+#include &lt;string.h&gt;      /* snprintf */
+
+static int do_pivot_root(const char *new_root)
+{
+    /* ① bind-mount new_root 到自身:讓它成為掛載點 */
+    if (mount(new_root, new_root, NULL, MS_BIND | MS_REC, NULL) &lt; 0) {
+        perror("bind-mount rootfs");
+        return -1;
+    }
+
+    /* ② 在 new_root 內建立舊根的暫存目錄 */
+    char old[512];
+    snprintf(old, sizeof(old), "%s/.pivot_old", new_root);
+    mkdir(old, 0700);   /* 若已存在也無妨 */
+
+    /* ③ pivot_root:glibc 無封裝,直接用 syscall()
+     *    SYS_pivot_root 在 x86-64 上是 syscall 155        */
+    if (syscall(SYS_pivot_root, new_root, old) &lt; 0) {
+        perror("pivot_root");
+        return -1;
+    }
+
+    /* ④ 更新 CWD 到新根 */
+    chdir("/");
+
+    /* ⑤ 懶卸載舊根(MNT_DETACH:等待無行程使用後完成) */
+    if (umount2("/.pivot_old", MNT_DETACH) &lt; 0) {
+        perror("umount2 .pivot_old");
+        return -1;
+    }
+
+    /* ⑥ 清理暫存目錄 */
+    rmdir("/.pivot_old");
+    return 0;
+}</code></pre>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">為何是 MNT_DETACH 而不是 MNT_FORCE?</span>
+          <p><code>MNT_DETACH</code>(懶卸載)立刻把掛載點從掛載樹分離,讓新行程無法存取——
+          但對於已開啟檔案的現有行程,卸載動作會等到它們關閉後才真正完成。
+          <code>MNT_FORCE</code> 是強制卸載,可能中斷 NFS 等網路掛載的 I/O。
+          對 <code>pivot_old</code> 舊根使用 <code>MNT_DETACH</code> 是標準做法:
+          容器初始化時不會有任何行程在使用舊根,卸載實際上立即完成。</p>
+        </div>
+      </div>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">pivot_root vs chroot 的根本差異</span>
+          <p><code>chroot</code> 只改變了行程的「根目錄視圖」(<code>fs-&gt;root</code>),
+          但行程仍然在同一個 mount namespace 裡——所以擁有 root 的行程可以用巢狀 chroot 逃逸。
+          <code>pivot_root</code> 配合 mount namespace(<code>CLONE_NEWNS</code>)和 <code>umount2</code> 舊根,
+          才是真正的隔離:容器行程活在一個全新的掛載樹裡,主機的原始 <code>/</code> 已被卸載,
+          根本不存在於這個 mount namespace 的任何位置。</p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑤ ==================== -->
+      <h2>第三步:掛載 /proc 與設定容器 hostname</h2>
+
+      <p>
+        換根之後,容器的 <code>/</code> 已經是 rootfs 的根目錄。
+        但如果現在在容器裡執行 <code>ps aux</code>,會看到奇怪的結果——
+        因為 <code>/proc</code> 還沒有掛載。
+        <code>ps</code>、<code>top</code>、<code>/proc/self/</code> 等都依賴 <code>/proc</code> 偽檔案系統。
+      </p>
+      <p>
+        同時,我們在 <code>CLONE_NEWUTS</code> namespace 裡,可以呼叫
+        <code>sethostname()</code> 設定容器自己的主機名稱,
+        讓 <code>hostname</code> 指令在容器內顯示正確的值。
+      </p>
+
+      <pre><code class="language-c">/* 在 container_fn 裡,do_pivot_root 成功後接著做: */
+
+/* ① 設定容器 hostname(在 UTS namespace 內,不影響主機) */
+sethostname("mycontainer", 11);
+
+/* ② 掛載 /proc 偽檔案系統
+ *    source : "proc"  (proc 掛載的「裝置名稱」,只是慣例字串)
+ *    target : "/proc" (rootfs 裡必須有這個目錄)
+ *    type   : "proc"  (檔案系統類型)
+ *    flags  : 0       (無特殊旗標)
+ *    data   : NULL    (無額外掛載選項)
+ */
+if (mount("proc", "/proc", "proc", 0, NULL) &lt; 0) {
+    perror("mount /proc");
+    /* 非致命:容器仍可執行,只是 ps 會看到舊 /proc */
+}</code></pre>
+
+      <p>
+        <code>sethostname()</code> 必須在 <code>CLONE_NEWUTS</code> namespace 裡才有意義——
+        在新的 UTS namespace 裡呼叫它只影響容器自己的 hostname,主機的 hostname 完全不受影響。
+        如果不在 UTS namespace 裡(例如沒有 <code>CLONE_NEWUTS</code>),
+        呼叫 <code>sethostname()</code> 就真的會改掉主機的 hostname。
+      </p>
+
+      <pre><code class="language-bash"># 驗證:進入容器後
+hostname          # 輸出: mycontainer
+echo $$           # 輸出: 1  (新 PID namespace 的 PID 1)
+ps aux            # 只看到容器內的行程(因為 /proc 是新掛載的)
+cat /proc/1/comm  # 輸出: sh (容器內 PID 1 的指令名稱)</code></pre>
+
+      <!-- ==================== h2 ⑥ ==================== -->
+      <h2>第四步:cgroup v2 限制記憶體與行程數</h2>
+
+      <p>
+        Namespace 解決了「看到什麼」的問題;
+        cgroup v2 解決的是「能用多少」的問題。
+        在父行程呼叫 <code>clone()</code> 得到子行程的 PID 之後、在子行程執行
+        <code>execvp()</code> 之前,父行程有一個視窗可以設定 cgroup——
+        把子行程的 PID 寫入 cgroup 的 <code>cgroup.procs</code> 介面。
+      </p>
+
+      <pre><code class="language-c">#include &lt;sys/stat.h&gt;  /* mkdir */
+#include &lt;stdio.h&gt;     /* fopen, fprintf, fclose */
+
+static void setup_cgroup(pid_t pid, long mem_max)
+{
+    const char *cg = "/sys/fs/cgroup/mydocker";
+    char p[256];
+    FILE *f;
+
+    /* ① 建立 cgroup 子目錄 */
+    mkdir(cg, 0755);
+
+    /* ② 在父 cgroup 啟用子控制器
+     *    只有父 cgroup 的 cgroup.subtree_control 允許的控制器
+     *    才能在子目錄中使用                                    */
+    f = fopen("/sys/fs/cgroup/cgroup.subtree_control", "w");
+    if (f) { fprintf(f, "+memory +pids"); fclose(f); }
+
+    /* ③ 設定記憶體上限(memory.max)
+     *    超過此值 → OOM killer 在 cgroup 範圍內 SIGKILL 行程  */
+    snprintf(p, sizeof(p), "%s/memory.max", cg);
+    f = fopen(p, "w");
+    if (f) { fprintf(f, "%ld", mem_max); fclose(f); }
+
+    /* ④ 設定最大行程數(pids.max),防止 fork bomb */
+    snprintf(p, sizeof(p), "%s/pids.max", cg);
+    f = fopen(p, "w");
+    if (f) { fprintf(f, "64"); fclose(f); }
+
+    /* ⑤ 把容器行程加入 cgroup(寫入 PID)
+     *    之後容器的所有子行程也會自動繼承此 cgroup             */
+    snprintf(p, sizeof(p), "%s/cgroup.procs", cg);
+    f = fopen(p, "w");
+    if (f) { fprintf(f, "%d", (int)pid); fclose(f); }
+}</code></pre>
+
+      <p>
+        以下是等效的 bash 示範,方便驗證 cgroup 行為:
+      </p>
+
+      <pre><code class="language-bash"># ── cgroup v2 操作示範(需要 root) ──
+
+# 建立 cgroup
+mkdir /sys/fs/cgroup/mydocker
+
+# 啟用記憶體與 PID 控制器
+echo "+memory +pids" &gt; /sys/fs/cgroup/cgroup.subtree_control
+
+# 記憶體上限:256 MB = 268435456 bytes
+echo 268435456 &gt; /sys/fs/cgroup/mydocker/memory.max
+
+# PID 上限:最多 64 個行程
+echo 64 &gt; /sys/fs/cgroup/mydocker/pids.max
+
+# 把當前 shell 加入 cgroup(用 $$ 取得目前 PID)
+echo $$ &gt; /sys/fs/cgroup/mydocker/cgroup.procs
+
+# 驗證:查看目前記憶體用量
+cat /sys/fs/cgroup/mydocker/memory.current
+
+# 確認行程已加入
+cat /proc/$$/cgroup</code></pre>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">父 cgroup 的 subtree_control 必須先啟用</span>
+          <p>cgroup v2 採用「委派」模型:子 cgroup(<code>/sys/fs/cgroup/mydocker/</code>)能使用的控制器,
+          必須先在父 cgroup(<code>/sys/fs/cgroup/</code>)的 <code>cgroup.subtree_control</code> 中明確開啟。
+          若父 cgroup 沒有 <code>+memory</code>,在子目錄寫 <code>memory.max</code> 會回傳
+          <code>ENOENT</code> 或寫入無效。
+          另:若系統上 systemd 已獨佔使用 cgroup v2 的某些控制器,
+          可能需要先調整 systemd 設定(或在容器 / VM 環境中測試)。</p>
+        </div>
+      </div>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">加入 CPU 配額</span>
+          <p>要加上 CPU 配額限制,先在 <code>subtree_control</code> 啟用 <code>+cpu</code>,
+          然後寫 <code>cpu.max</code>:格式是 <code>$MAX $PERIOD</code>(微秒)。
+          例如 <code>echo "50000 100000" &gt; cpu.max</code> 表示每 100ms 最多用 50ms,
+          相當於 50% 一顆 CPU。練習 88.1 會帶你實驗這個配額。</p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑦ ==================== -->
+      <h2>第五步:OverlayFS — 疊一個可寫層</h2>
+
+      <p>
+        目前我們的 <code>mydocker</code> 讓容器直接在 rootfs 上讀寫——容器任何寫入動作
+        都會修改原始的 rootfs 目錄。要做到「多個容器共用同一個唯讀 rootfs,每個容器有自己的可寫層」,
+        就需要 <strong>OverlayFS</strong>。
+      </p>
+      <p>
+        在<a href="93-container-internals.html">第 87 章</a>我們已詳細解釋 OverlayFS 的原理(lowerdir/upperdir/workdir/merged)。
+        這裡直接看如何在 <code>mydocker</code> 使用前設定 OverlayFS 掛載:
+      </p>
+
+      <pre><code class="language-bash">#!/bin/bash
+# setup-overlay.sh — 為 mydocker 建立 OverlayFS 可寫層
+# 用法: source setup-overlay.sh /path/to/rootfs
+# 執行後 $MERGED 指向容器看到的根目錄
+
+ROOTFS="${1:-/tmp/myrootfs}"    # 唯讀 rootfs(lowerdir)
+WORKDIR="/tmp/mydocker"
+
+UPPER="$WORKDIR/upper"          # 容器可寫層
+WORK="$WORKDIR/work"            # OverlayFS 核心暫存(必須與 upper 同一檔案系統)
+MERGED="$WORKDIR/merged"        # 容器看到的統一視圖
+
+# 建立目錄
+mkdir -p "$UPPER" "$WORK" "$MERGED"
+
+# 掛載 OverlayFS
+sudo mount -t overlay overlay \
+    -o lowerdir="$ROOTFS",upperdir="$UPPER",workdir="$WORK" \
+    "$MERGED"
+
+echo "OverlayFS 已掛載:"
+echo "  lowerdir(唯讀): $ROOTFS"
+echo "  upperdir(可寫): $UPPER"
+echo "  merged(容器的 /): $MERGED"
+
+# 現在把 $MERGED 傳給 mydocker
+sudo ./mydocker "$MERGED" /bin/sh</code></pre>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 390" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <rect width="720" height="390" fill="#f8fafb" rx="12"/>
+  <text x="360" y="26" text-anchor="middle" font-size="14" font-weight="700" fill="#1f2328">OverlayFS:為 mydocker 疊一個可寫層</text>
+
+  <!-- merged layer -->
+  <rect x="40" y="44" width="640" height="58" rx="8" fill="#2f6f6a"/>
+  <text x="360" y="68" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">merged — 容器看到的 /</text>
+  <text x="360" y="87" text-anchor="middle" font-size="10" fill="#b8ddd9">/tmp/mydocker/merged  ·  upper 的檔案蓋過 lower 同名檔</text>
+
+  <!-- union arrows -->
+  <line x1="180" y1="102" x2="180" y2="130" stroke="#8a929b" stroke-width="1.5"/>
+  <line x1="360" y1="102" x2="360" y2="130" stroke="#8a929b" stroke-width="1.5"/>
+  <line x1="540" y1="102" x2="540" y2="130" stroke="#8a929b" stroke-width="1.5"/>
+  <text x="360" y="123" text-anchor="middle" font-size="10" fill="#8a929b">▲  OverlayFS union mount</text>
+
+  <!-- upper + workdir -->
+  <rect x="40" y="130" width="318" height="64" rx="8" fill="#8b5cf6"/>
+  <text x="199" y="154" text-anchor="middle" font-size="12" font-weight="700" fill="#fff">upperdir (可寫層)</text>
+  <text x="199" y="172" text-anchor="middle" font-size="10" fill="#ddd6fe">/tmp/mydocker/upper</text>
+  <text x="199" y="187" text-anchor="middle" font-size="10" fill="#ddd6fe">容器新增或修改的檔案存放於此</text>
+
+  <rect x="370" y="130" width="310" height="64" rx="8" fill="#6d28d9"/>
+  <text x="525" y="154" text-anchor="middle" font-size="12" font-weight="700" fill="#fff">workdir (核心暫存)</text>
+  <text x="525" y="172" text-anchor="middle" font-size="10" fill="#ddd6fe">/tmp/mydocker/work</text>
+  <text x="525" y="187" text-anchor="middle" font-size="10" fill="#ddd6fe">必須與 upperdir 在同一個檔案系統</text>
+
+  <!-- CoW banner -->
+  <rect x="40" y="208" width="640" height="28" rx="5" fill="#fff3cd" stroke="#d97706" stroke-width="1"/>
+  <text x="360" y="226" text-anchor="middle" font-size="10" font-weight="700" fill="#92400e">寫時複製 copy-on-write:修改 lowerdir 的檔案時,核心先把原始檔複製到 upperdir,再修改 — lowerdir 永遠唯讀</text>
+
+  <!-- lower layer -->
+  <rect x="40" y="250" width="640" height="62" rx="8" fill="#b4541f"/>
+  <text x="360" y="276" text-anchor="middle" font-size="12" font-weight="700" fill="#fff">lowerdir (唯讀 rootfs)</text>
+  <text x="360" y="295" text-anchor="middle" font-size="10" fill="#fde8dd">/tmp/myrootfs  ·  e.g. debootstrap 建立的 Ubuntu 22.04 minimal rootfs</text>
+
+  <!-- Note -->
+  <text x="360" y="334" text-anchor="middle" font-size="10" fill="#8a929b">10 個容器可共用同一個 lowerdir — 磁碟只需一份 rootfs;各容器的 upperdir 彼此獨立</text>
+  <text x="360" y="350" text-anchor="middle" font-size="10" fill="#8a929b">刪除 lowerdir 的檔案時 OverlayFS 在 upper 建立 whiteout 節點,讓 merged 看不到該檔案</text>
+  <text x="360" y="368" text-anchor="middle" font-size="9" fill="#4a5159">mount -t overlay overlay -o lowerdir=[rootfs],upperdir=[upper],workdir=[work] [merged]</text>
+</svg>
+        <figcaption>圖 88-2:OverlayFS 三層結構用於 mydocker。lowerdir 是唯讀的 rootfs;upperdir 是容器的可寫層;merged 是容器看到的統一根目錄。多個容器可共用同一個 lowerdir,各自只需要自己的 upperdir。</figcaption>
+      </div>
+
+      <p>
+        卸載 OverlayFS 時:
+      </p>
+      <pre><code class="language-bash"># 容器退出後卸載
+sudo umount /tmp/mydocker/merged
+
+# 查看容器在 upper 層做了哪些修改
+ls -la /tmp/mydocker/upper/   # 容器建立或修改的檔案都在這裡</code></pre>
+
+      <!-- ==================== h2 ⑧ ==================== -->
+      <h2>第六步(進階):最簡網路 — veth pair 連到主機 bridge</h2>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">本節為進階選讀</span>
+          <p>這一節要在 main() 裡加入 <code>CLONE_NEWNET</code>,並在容器外建立 veth pair 連到 bridge。
+          概念層次偏複雜,初次閱讀可跳過,先看第九節的完整程式。
+          生產環境的容器網路由 CNI(Container Network Interface)外掛負責,
+          Docker 用的是 bridge 模式的 CNI 實作。</p>
+        </div>
+      </div>
+
+      <p>
+        要讓容器有自己的網路介面,需要在 clone() 加入 <code>CLONE_NEWNET</code>,
+        然後在容器外建立一個 <strong>veth pair(虛擬乙太網路對)</strong>——
+        想像成一條兩端都有插頭的虛擬網路線:一端留在主機,另一端插進容器的 net namespace。
+      </p>
+
+      <pre><code class="language-bash">#!/bin/bash
+# net-setup.sh — 為 mydocker 容器設定最簡網路
+# 用法: bash net-setup.sh $CONTAINER_PID
+CONTAINER_PID=$1
+
+# ① 建立 veth pair: veth0(主機端) - ctr-eth0(容器端)
+ip link add veth0 type veth peer name ctr-eth0
+
+# ② 把 ctr-eth0 移入容器的 net namespace
+ip link set ctr-eth0 netns $CONTAINER_PID
+
+# ③ 主機側:建立 bridge br0 並掛上 veth0
+ip link add br0 type bridge
+ip link set veth0 master br0
+ip link set veth0 up
+ip link set br0 up
+ip addr add 172.20.0.1/24 dev br0
+
+# ④ 容器側:透過 nsenter 進入容器 net namespace 設定
+nsenter -t $CONTAINER_PID -n -- ip addr add 172.20.0.2/24 dev ctr-eth0
+nsenter -t $CONTAINER_PID -n -- ip link set ctr-eth0 up
+nsenter -t $CONTAINER_PID -n -- ip link set lo up
+nsenter -t $CONTAINER_PID -n -- ip route add default via 172.20.0.1
+
+echo "容器網路已設定: 172.20.0.2 &lt;-- veth --&gt; bridge 172.20.0.1"</code></pre>
+
+      <p>
+        主機要開啟 IP forwarding 並設定 NAT,容器才能存取外部網路:
+      </p>
+      <pre><code class="language-bash"># 開啟 IP forwarding
+echo 1 &gt; /proc/sys/net/ipv4/ip_forward
+
+# NAT:讓容器流量從主機網卡出去(eth0 替換為實際介面名稱)
+iptables -t nat -A POSTROUTING -s 172.20.0.0/24 -o eth0 -j MASQUERADE</code></pre>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">時序問題:先建立容器再設定網路</span>
+          <p>veth pair 移入容器 net namespace 必須在容器行程存在之後(clone 之後)、
+          但在容器使用網路之前。實際做法:在 clone() 後、setup_cgroup() 之後,
+          fork 一個子行程執行 <code>net-setup.sh $pid</code>,
+          然後再 waitpid 等容器結束。
+          Docker 用 containerd 的 goroutine 協調這個時序;我們的 runtime 用 shell script 示意。</p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑨ ==================== -->
+      <h2>串在一起:完整的 mydocker 主程式</h2>
+
+      <p>
+        把前面各節的片段整合成一個完整的 C 程式。這就是我們的最小 container runtime:
+      </p>
+
+      <pre><code class="language-c">/* mydocker.c — 教學用最小 container runtime
+ * 需要 root / CAP_SYS_ADMIN。非生產級,僅供學習。
+ * 編譯: gcc -o mydocker mydocker.c
+ * 執行: sudo ./mydocker /path/to/rootfs /bin/sh
+ */
+#define _GNU_SOURCE
+#include &lt;sched.h&gt;       /* CLONE_NEWPID, CLONE_NEWNS, CLONE_NEWUTS, CLONE_NEWIPC */
+#include &lt;stdio.h&gt;       /* printf, fprintf, perror, fopen, fclose */
+#include &lt;stdlib.h&gt;      /* malloc, free */
+#include &lt;unistd.h&gt;      /* sethostname, chdir, rmdir, execvp */
+#include &lt;sys/mount.h&gt;   /* mount, umount2, MS_BIND, MS_REC, MNT_DETACH */
+#include &lt;sys/stat.h&gt;    /* mkdir */
+#include &lt;sys/syscall.h&gt; /* SYS_pivot_root */
+#include &lt;sys/wait.h&gt;    /* waitpid */
+
+#define STACK_SIZE (8 * 1024 * 1024)   /* 子行程堆疊 8 MB */
+
+/* ── 容器設定 ───────────────────────────────────── */
+struct cfg {
+    char  *rootfs;   /* 容器根目錄路徑 */
+    char **argv;     /* 要 exec 的指令與參數 */
+};
+
+/* ── ① pivot_root:換根並卸載舊根 ─────────────────── */
+static int do_pivot_root(const char *new_root)
+{
+    char old[512];
+    snprintf(old, sizeof(old), "%s/.pivot_old", new_root);
+
+    /* bind-mount new_root 到自身,使其成為掛載點 */
+    if (mount(new_root, new_root, NULL, MS_BIND | MS_REC, NULL) &lt; 0) {
+        perror("bind-mount rootfs"); return -1;
+    }
+    mkdir(old, 0700);   /* 建立舊根的停車場目錄 */
+
+    /* pivot_root:glibc 未提供 wrapper,直接呼叫 syscall */
+    if (syscall(SYS_pivot_root, new_root, old) &lt; 0) {
+        perror("pivot_root"); return -1;
+    }
+    chdir("/");   /* 更新 CWD 到新根目錄 */
+
+    /* 懶卸載舊根:容器從此看不到主機的原始 / */
+    if (umount2("/.pivot_old", MNT_DETACH) &lt; 0) {
+        perror("umount2 .pivot_old"); return -1;
+    }
+    rmdir("/.pivot_old");
+    return 0;
+}
+
+/* ── ② cgroup v2:限制資源 ────────────────────────── */
+static void setup_cgroup(pid_t pid, long mem_max)
+{
+    const char *cg = "/sys/fs/cgroup/mydocker";
+    char p[256]; FILE *f;
+
+    mkdir(cg, 0755);
+
+    /* 在父 cgroup 啟用子控制器 */
+    f = fopen("/sys/fs/cgroup/cgroup.subtree_control", "w");
+    if (f) { fprintf(f, "+memory +pids"); fclose(f); }
+
+    /* 記憶體上限 */
+    snprintf(p, sizeof(p), "%s/memory.max", cg);
+    f = fopen(p, "w");
+    if (f) { fprintf(f, "%ld", mem_max); fclose(f); }
+
+    /* PID 上限(防止 fork bomb) */
+    snprintf(p, sizeof(p), "%s/pids.max", cg);
+    f = fopen(p, "w");
+    if (f) { fprintf(f, "64"); fclose(f); }
+
+    /* 把容器行程加入 cgroup */
+    snprintf(p, sizeof(p), "%s/cgroup.procs", cg);
+    f = fopen(p, "w");
+    if (f) { fprintf(f, "%d", (int)pid); fclose(f); }
+}
+
+/* ── ③ 子行程:在新 namespace 內執行 ─────────────── */
+static int container_fn(void *arg)
+{
+    struct cfg *c = (struct cfg *)arg;
+
+    /* 設定容器 hostname(在 UTS namespace 內,不影響主機) */
+    sethostname("mycontainer", 11);
+
+    /* 換根:pivot_root 到指定 rootfs */
+    if (do_pivot_root(c-&gt;rootfs) &lt; 0) return 1;
+
+    /* 掛載 /proc:讓 ps、top、/proc/self 正常運作 */
+    if (mount("proc", "/proc", "proc", 0, NULL) &lt; 0)
+        perror("mount /proc");   /* 非致命,繼續執行 */
+
+    /* exec 容器指令:替換子行程映像 */
+    execvp(c-&gt;argv[0], c-&gt;argv);
+    perror("execvp");   /* 只有 exec 失敗才執行到此 */
+    return 1;
+}
+
+/* ── ④ 主程式:父行程 ──────────────────────────── */
+int main(int argc, char *argv[])
+{
+    if (argc &lt; 3) {
+        fprintf(stderr,
+            "用法: mydocker &lt;rootfs&gt; &lt;cmd&gt; [args...]\n"
+            "範例: sudo ./mydocker /tmp/myrootfs /bin/sh\n");
+        return 1;
+    }
+
+    struct cfg cfg = {
+        .rootfs = argv[1],
+        .argv   = &amp;argv[2],
+    };
+
+    /* 分配子行程的堆疊空間 */
+    char *stack = malloc(STACK_SIZE);
+    if (!stack) { perror("malloc"); return 1; }
+
+    /* clone():一次建立四個 namespace 並 fork 子行程 */
+    pid_t pid = clone(
+        container_fn,
+        stack + STACK_SIZE,      /* 堆疊頂端,向下成長 */
+        CLONE_NEWPID |           /* 新 PID namespace   */
+        CLONE_NEWNS  |           /* 新 mount namespace */
+        CLONE_NEWUTS |           /* 新 UTS namespace   */
+        CLONE_NEWIPC |           /* 新 IPC namespace   */
+        SIGCHLD,                 /* 子行程結束發 SIGCHLD */
+        &amp;cfg);
+
+    if (pid &lt; 0) { perror("clone"); free(stack); return 1; }
+
+    /* 父行程:在子行程 exec 之前設定 cgroup */
+    setup_cgroup(pid, 256L * 1024 * 1024);   /* 256 MB 記憶體上限 */
+
+    /* 等待容器行程結束 */
+    waitpid(pid, NULL, 0);
+    free(stack);
+    return 0;
+}
+/* ═══════════════════════════════════════════════════
+ * 編譯與執行:
+ *   gcc -o mydocker mydocker.c
+ *   sudo ./mydocker /tmp/myrootfs /bin/sh
+ *
+ * 在容器內驗證:
+ *   echo $$        # 應輸出 1
+ *   hostname       # 應輸出 mycontainer
+ *   ps aux         # 只看到容器內的行程
+ *   ls /           # 看到 rootfs 的根目錄
+ * ═══════════════════════════════════════════════════ */</code></pre>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">也可以用 Rust 重寫</span>
+          <p>上述 C 程式的每一個系統呼叫,在 Rust 裡都有對應的 libc crate 繫結(或 nix crate 的安全包裝)。
+          呼應<a href="90-rust-os-kernel.html">第 84 章</a>的 bare-metal 精神:
+          <code>libc::clone()</code>、<code>nix::mount::mount()</code>、<code>nix::unistd::sethostname()</code>——
+          Rust 的 borrow checker 甚至能幫你在編譯期抓出部分未初始化堆疊的問題。
+          唯一需要 <code>unsafe</code> 的地方是 <code>clone()</code> 的函式指標和堆疊指標操作,
+          其餘都可以包在安全的 Rust API 裡。</p>
+        </div>
+      </div>
+
+      <!-- ==================== 練習 ==================== -->
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 88.1 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>在 <code>setup_cgroup()</code> 函式中加入 CPU 配額限制:
+          每 100ms 最多使用 50ms(相當於 50% 一顆 CPU)。
+          然後在容器內執行 <code>stress --cpu 1 --timeout 10</code>(需安裝 <code>stress</code> 套件),
+          同時在主機上用 <code>top</code> 觀察該行程的 CPU 使用率是否被限制在 50% 以下。
+          提示:需要先在 <code>cgroup.subtree_control</code> 啟用 <code>+cpu</code>。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>在 <code>setup_cgroup()</code> 中,先把 subtree_control 改為同時啟用三個控制器,
+              然後寫入 <code>cpu.max</code>:</p>
+              <pre><code class="language-c">/* 1. 啟用 memory + cpu + pids 三個控制器 */
+f = fopen("/sys/fs/cgroup/cgroup.subtree_control", "w");
+if (f) { fprintf(f, "+memory +cpu +pids"); fclose(f); }
+
+/* 2. CPU 配額:每 100ms 最多用 50ms = 50% 一顆 CPU */
+snprintf(p, sizeof(p), "%s/cpu.max", cg);
+f = fopen(p, "w");
+if (f) { fprintf(f, "50000 100000"); fclose(f); }</code></pre>
+              <p>等效的 bash 指令:</p>
+              <pre><code class="language-bash">echo "+memory +cpu +pids" &gt; /sys/fs/cgroup/cgroup.subtree_control
+echo "50000 100000" &gt; /sys/fs/cgroup/mydocker/cpu.max</code></pre>
+              <p><code>cpu.max</code> 格式是 <code>$MAX $PERIOD</code>(單位微秒)。
+              <code>50000 100000</code> = 每個 100ms 週期最多使用 50ms CPU 時間。
+              在主機上執行 <code>top</code> 時,容器內的 stress 行程的 %CPU 應穩定在 50% 左右,
+              即使主機有空閒 CPU 也不會更高。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 88.2 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>執行 <code>mydocker</code> 進入容器後,分別在容器內和主機上執行以下指令並記錄結果:</p>
+          <pre><code class="language-bash"># 容器內
+echo $$      # 容器認為自己的 PID 是?
+ps aux       # 看到幾個行程?
+
+# 主機上(另開一個終端)
+ps aux | grep sh          # 看到容器的 sh 行程了嗎?它的 PID 是多少?
+ls /proc/$(pgrep -n sh)/ns/pid   # 容器的 PID namespace inode 是多少?
+ls /proc/$$/ns/pid               # 主機 shell 的 PID namespace inode 是多少?</code></pre>
+          <p>解釋:為什麼容器內看到的 PID 是 1,但從主機上看到的是一個不同的 PID?
+          這說明了 PID namespace 的什麼特性?</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>容器內:</strong>
+              <code>echo $$</code> 輸出 <code>1</code>。<code>ps aux</code> 只看到 2–3 個行程(sh + ps 本身)。
+              這是因為 <code>CLONE_NEWPID</code> 建立了一個新的 PID namespace,
+              <code>container_fn</code> 是新 namespace 的第一個行程,所以被分配到 PID 1。
+              <code>/proc</code> 是在新 mount namespace 裡重新掛載的,
+              只反映新 PID namespace 裡的行程,因此 <code>ps</code> 看不到主機上的其他行程。</p>
+              <p><strong>主機上:</strong>
+              <code>ps aux</code> 能看到容器的 sh 行程,但 PID 是一個比 1 大的正常數字
+              (例如 3847)——這是它在主機 PID namespace 裡的「真實 PID」。
+              PID namespace 的核心特性:每個行程在<em>每個可見的 PID namespace</em>裡都有一個 PID。
+              容器 sh 在自己的 namespace 裡是 PID 1,但在主機的 namespace 裡是 3847。
+              這兩個數字同時存在——只是視角不同。</p>
+              <p><strong>namespace inode:</strong>
+              <code>ls /proc/.../ns/pid</code> 會顯示像 <code>pid:[4026532132]</code> 的符號連結。
+              容器 sh 的 PID namespace inode 與主機 shell 的不同,證明它們確實在不同的 PID namespace 裡。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 88.3 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>我們在第四節說明了為什麼 <code>pivot_root</code> 比 <code>chroot</code> 更安全。
+          現在請具體回答:</p>
+          <ol>
+            <li>一個在 <code>chroot</code> 環境裡擁有 root 權限的行程,
+                可以透過什麼方式「逃逸」回到主機的根目錄?</li>
+            <li>在 <code>pivot_root</code> 之後執行 <code>umount2("/.pivot_old", MNT_DETACH)</code>
+                是整個安全鏈的哪個環節?如果省略這一步,容器是否真的隔離了?</li>
+            <li>就算 <code>pivot_root + umount</code> 做好了,為什麼我們還需要 <code>CLONE_NEWNS</code>?
+                如果沒有 <code>CLONE_NEWNS</code>,<code>pivot_root</code> 還能執行嗎?</li>
+          </ol>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>1. chroot 逃逸的方法:</strong>
+              一個擁有 root 的行程可以在 chroot 環境裡用 <code>mkdir + chroot</code>
+              建立一個巢狀的 chroot 環境,然後多次向上 <code>cd ..</code> 回到真實的 <code>/</code>。
+              也可以用 <code>open("/proc/1/root")</code>(若 <code>/proc</code> 仍可存取)直接存取主機根目錄。
+              根本原因是 <code>chroot</code> 只改變了行程的根目錄視圖,
+              行程仍在同一個 mount namespace 裡,仍然可以透過各種方式存取主機的掛載點。</p>
+              <p><strong>2. umount2 的安全意義:</strong>
+              <code>pivot_root</code> 之後,舊根仍然可從 <code>/.pivot_old</code> 存取——
+              這個時候容器其實還能看到主機的整個檔案系統!
+              <code>umount2("/.pivot_old", MNT_DETACH)</code> 才是真正把舊根從容器的 mount namespace 裡「消失」的那一步。
+              如果省略這步,攻擊者在容器內找到 <code>/.pivot_old</code> 就可以讀寫主機的所有檔案——
+              隔離完全失效。<code>umount2 + rmdir</code> 是安全鏈不可省略的最後一步。</p>
+              <p><strong>3. CLONE_NEWNS 的必要性:</strong>
+              <code>pivot_root</code> 要求呼叫行程必須在一個獨立的 mount namespace 裡——
+              在 Linux 手冊頁(<code>man 2 pivot_root</code>)中明確規定:
+              「The calling process must have the <code>CAP_SYS_ADMIN</code> capability,
+              and new root and put old must not be on the same filesystem as the current root.」
+              實際上,若沒有 <code>CLONE_NEWNS</code>,<code>pivot_root</code> 在主機共用的 mount namespace 裡
+              會影響整個系統的根目錄——這非常危險。
+              <code>CLONE_NEWNS</code> 讓 <code>pivot_root</code> 的效果侷限在容器自己的 mount namespace 裡,
+              主機的根目錄完全不受影響。沒有 <code>CLONE_NEWNS</code>,<code>pivot_root</code> 實際上無法安全執行。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑩ ==================== -->
+      <h2>把這一章串起來</h2>
+
+      <p>
+        從一個空白的 C 檔開始,我們一步一步拼出了一個能跑命令的 container runtime。
+        回顧一下每個機制對應的程式碼:
+      </p>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>步驟</th><th>機制</th><th>程式碼</th><th>作用</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>①</td>
+              <td>namespace 隔離</td>
+              <td><code>clone(CLONE_NEWPID | CLONE_NEWNS | CLONE_NEWUTS | CLONE_NEWIPC | SIGCHLD, ...)</code></td>
+              <td>一次建立四個隔離視圖</td>
+            </tr>
+            <tr>
+              <td>②</td>
+              <td>換根</td>
+              <td><code>mount(bind) → syscall(SYS_pivot_root) → umount2(MNT_DETACH)</code></td>
+              <td>容器看不到主機的原始 /</td>
+            </tr>
+            <tr>
+              <td>③</td>
+              <td>/proc 掛載</td>
+              <td><code>mount("proc", "/proc", "proc", 0, NULL)</code></td>
+              <td>ps / top / /proc/self 正常運作</td>
+            </tr>
+            <tr>
+              <td>④</td>
+              <td>hostname</td>
+              <td><code>sethostname("mycontainer", 11)</code></td>
+              <td>容器有獨立的主機名稱</td>
+            </tr>
+            <tr>
+              <td>⑤</td>
+              <td>資源限制</td>
+              <td><code>/sys/fs/cgroup/mydocker/memory.max</code> 等</td>
+              <td>防止容器耗光主機資源</td>
+            </tr>
+            <tr>
+              <td>⑥</td>
+              <td>可寫層</td>
+              <td><code>mount -t overlay ... merged</code></td>
+              <td>容器寫入不污染唯讀 rootfs</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>
+        這 ~200 行程式碼就是「Docker 的骨架」。但它還缺少很多東西——
+        而且這些缺少的部分正是 Docker 複雜度的所在:
+      </p>
+      <ul>
+        <li><strong>映像格式與 registry</strong>:OCI image spec 定義了映像的 JSON manifest、layer tarball 格式與 digest 校驗。
+            Docker Hub 的 registry API 讓 <code>docker pull</code> 能下載、快取、驗證映像。我們的 runtime 需要你自己準備 rootfs。</li>
+        <li><strong>seccomp 與 capabilities 收縮</strong>:我們的 runtime 讓容器繼承了父行程的全部 capabilities。
+            生產級 runtime(runc)套用一個預設 seccomp profile,並把 capabilities 收縮到最小集合——
+            這是<a href="34-security-fundamentals.html">第 34 章</a>最小權限原則的直接體現。</li>
+        <li><strong>rootless 模式</strong>:加入 <code>CLONE_NEWUSER</code> 並設定 uid_map / gid_map,
+            讓容器在不需要 Host root 的情況下模擬 root——我們的 runtime 需要 sudo。</li>
+        <li><strong>網路 CNI 外掛</strong>:正式的容器網路由 CNI spec 規範,
+            每個 plugin(bridge、macvlan、host-local IPAM)負責不同面向的網路設定。
+            我們只展示了最基本的 veth pair + bridge 手動設定。</li>
+        <li><strong>OCI runtime spec / runc</strong>:標準化的 config.json 讓 containerd、Podman、cri-o
+            都能呼叫同一個 runtime binary——interoperability 的基礎。</li>
+      </ul>
+
+      <p>
+        下一章(Docker 實戰:映像、網路、Compose)將站在這一章的骨架上,
+        補全映像生命週期、網路驅動和 Compose 多服務編排。
+        而 MCP 沙箱(後面的章節)會把容器技術用於大型語言模型工具執行的安全隔離——
+        也就是說,你在這裡親手拼出的這幾個系統呼叫,未來會在 AI 工具鏈的安全邊界裡繼續發揮作用。
+      </p>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">教學 runtime 不等於生產安全邊界</span>
+          <p>本章的 <code>mydocker</code> <strong>缺少</strong>:seccomp syscall 過濾、capabilities 收縮、
+          user namespace(rootless)、AppArmor / SELinux LSM profile、
+          映像 digest 校驗、網路策略等。
+          在<a href="34-security-fundamentals.html">第 34 章</a>我們看過縱深防禦的原則——
+          容器的安全是這些機制的<em>疊加</em>,缺少任何一層都意味著更大的攻擊面。
+          在生產環境中,請使用 Docker / Podman / containerd 等經過嚴格稽核的 runtime,
+          而不是本章的教學版本。</p>
+        </div>
+      </div>
+
+      <div class="callout note">
+        <div class="ico">📚</div>
+        <div class="body">
+          <span class="c-title">延伸閱讀與資源</span>
+          <p>
+            <strong>Liz Rice — Containers from Scratch</strong>:
+            <a href="https://www.youtube.com/watch?v=8fi7uSYlOdc" target="_blank" rel="noopener">DockerCon 2017 演講影片</a>
+            (YouTube),現場直播用 Go 語言從零寫一個 container runtime,
+            是本章最直接的靈感來源。觀看時對照本章的 C 版本,能更深刻理解每個步驟。<br><br>
+            <strong>docker_practice</strong>:
+            <a href="https://yeasy.gitbook.io/docker_practice/" target="_blank" rel="noopener">Docker — 從入門到實踐</a>
+            涵蓋從 Dockerfile 到 Compose 的完整工作流程,是理解下一章 Docker 實戰的最佳補充。<br><br>
+            <strong>Linux man pages</strong>:
+            <a href="https://man7.org/linux/man-pages/man2/pivot_root.2.html" target="_blank" rel="noopener">man 2 pivot_root</a>、
+            <a href="https://man7.org/linux/man-pages/man2/clone.2.html" target="_blank" rel="noopener">man 2 clone</a>、
+            <a href="https://man7.org/linux/man-pages/man7/cgroups.7.html" target="_blank" rel="noopener">man 7 cgroups</a>
+            是最權威的技術參考——本章每個系統呼叫的 flags 與語義都在這裡有完整的規格說明。<br><br>
+            <strong>OCI 規範</strong>:
+            <a href="https://github.com/opencontainers/runtime-spec" target="_blank" rel="noopener">opencontainers/runtime-spec</a>
+            定義了 container runtime(如 runc)的標準介面與 config.json 格式——
+            了解這份規範讓你看懂 Docker 和 containerd 之間的分工。
+          </p>
+        </div>
+      </div>

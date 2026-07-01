@@ -1,0 +1,1602 @@
+<!--meta
+title: 軟體除錯與測試理論
+description: 從一隻飛蛾到一整套科學:理解 bug 的傳播鏈(缺陷→感染→失效)、科學除錯法、delta debugging、測試的理論極限與覆蓋率、等價分割與邊界值、TDD、性質測試(Hypothesis)、模糊測試、變異測試與測試替身。
+-->
+
+
+      <div class="eyebrow">第十部 · 進階程式設計</div>
+      <h1>軟體除錯與測試理論</h1>
+      <p class="subtitle">寫程式只佔工程師一小半的時間,另一大半,花在「為什麼它不動?」與「我怎麼知道它真的會動?」這兩個問題上。這一章,我們把抓 bug 從「手藝」升級成「科學」,把測試從「跑跑看」升級成「理論」。</p>
+      <div class="byline">
+        <span class="tag">第 46 章</span>
+        <span>閱讀時間 ≈ 55 分鐘</span>
+        <span>難度:★★★☆☆</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>bug 的本質:缺陷(defect)→ 感染(infection)→ 失效(failure)這條傳播鏈,以及「失效點為何不是缺陷點」</li>
+          <li>像科學家一樣除錯:觀察 → 假設 → 預測 → 實驗 → 修正,而不是亂槍打鳥</li>
+          <li>進階除錯技術:最小可重現案例、delta debugging 自動縮小失敗輸入、二分定位、向後推理</li>
+          <li>測試的理論極限:為什麼「測完所有情況」不可能,以及覆蓋率的用途與陷阱</li>
+          <li>系統化設計測試案例:等價分割、邊界值分析、決策表</li>
+          <li>用 <code>pytest</code> 寫專業測試(fixtures、parametrize),以及完整走一遍 TDD 紅綠重構</li>
+          <li>三種「比手寫案例更強」的進階測試法:性質測試、模糊測試、變異測試</li>
+          <li>測試替身(mock / stub / fake)、防禦性思考,以及「可測試性是好設計的副產品」</li>
+        </ul>
+      </div>
+
+      <h2>一隻蛾,與一場永無止境的戰爭</h2>
+      <p>
+        1947 年 9 月,在哈佛大學一台叫 Harvard Mark II 的巨型電機式電腦裡,一隻飛蛾不小心飛進了繼電器(relay),
+        被金屬接點夾死,造成電腦運算錯誤。工程師團隊(其中包括日後的程式語言先驅
+        <strong>葛麗絲・霍普(Grace Hopper)</strong>)把那隻蛾用膠帶黏進工作日誌,旁邊寫下一行字:
+        <em>「First actual case of bug being found.」</em>(發現的第一個真正的「蟲」。)
+      </p>
+
+      <div class="callout history">
+        <div class="ico">📜</div>
+        <div class="body">
+          <span class="c-title">「bug」其實比那隻蛾更老</span>
+          <p>把工程故障叫做「bug」,並不是 1947 年才發明的——愛迪生(Thomas Edison)早在 1870 年代的信件裡就用過 bug 形容電路裡的小毛病。
+          但那隻被黏進日誌的飛蛾,是第一個「貨真價實、有實體」的 bug,也讓 <strong>debug(除蟲/除錯)</strong> 這個詞從此深植程式設計的血液裡。
+          那本日誌與那隻蛾,如今收藏在史密森尼學會(Smithsonian)。我們在第 5 章提過這段故事,這一章,我們要正式把「除蟲」變成一門學問。</p>
+        </div>
+      </div>
+
+      <p>
+        從那隻蛾到今天,軟體的世界翻天覆地,但有一件事從沒變過:<strong>程式總是有 bug,而且找 bug 通常比寫程式還久。</strong>
+        研究與業界經驗都指向同一個殘酷數字——軟體開發的總成本裡,有將近一半花在「除錯與測試」上。一個剛入行的工程師最大的震撼,
+        往往是發現「寫」原來是最快、最爽的部分;真正吃掉你人生的,是「為什麼它不動」。
+      </p>
+      <p>
+        為什麼會這樣?因為寫程式是<strong>創造</strong>(從無到有,你掌握全局),而除錯是<strong>調查</strong>(從一個壞掉的結果,
+        反推到那行你看了十遍都沒看出來的錯)。這一章的目標,就是讓你的調查不再靠運氣與直覺,而是靠一套可重複、可教學、可累積的方法。
+        我們會先把「bug 到底是什麼」這件事,從根本上講清楚。
+      </p>
+
+      <h2>bug 的本質:缺陷、感染、失效</h2>
+      <p>
+        日常我們把所有問題都籠統地叫「bug」,但要科學地除錯,得先把它拆成三個<strong>不同的東西</strong>。
+        這個區分來自軟體除錯大師 <strong>安德烈亞斯・澤勒(Andreas Zeller)</strong> 的經典著作《Why Programs Fail》,
+        它是整章的地基:
+      </p>
+      <ul>
+        <li><strong>缺陷(defect / fault)</strong>:程式碼裡那行<em>寫錯的東西</em>。它是靜態的、躺在原始碼裡的事實。例如某個鍵打錯字、某個 <code>&lt;</code> 該寫成 <code>&lt;=</code>。</li>
+        <li><strong>感染(infection)</strong>:當程式執行到缺陷時,產生了一個<em>錯誤的程式狀態</em>(某個變數變成了不該有的值)。注意——此刻畫面上往往<strong>什麼都沒發生</strong>,錯誤只是悄悄潛伏在記憶體裡。</li>
+        <li><strong>失效(failure)</strong>:那個被感染的錯誤狀態,一路傳播、擴大,最後<em>外顯</em>成你看得見的錯誤——崩潰、錯誤的輸出、當掉。這是你<strong>唯一直接觀察到</strong>的東西。</li>
+      </ul>
+
+      <div class="diagram">
+<svg viewBox="0 0 760 250" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="dpc-arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/></marker>
+  </defs>
+  <text x="380" y="26" text-anchor="middle" font-size="13" font-weight="700" fill="#1f2328">程式執行的時間軸 →</text>
+
+  <!-- defect -->
+  <rect x="30" y="56" width="150" height="58" rx="10" fill="#f6e7dd" stroke="#b4541f" stroke-width="2"/>
+  <text x="105" y="80" text-anchor="middle" font-size="13" font-weight="800" fill="#b4541f">① 缺陷 defect</text>
+  <text x="105" y="100" text-anchor="middle" font-size="11" fill="#4a5159">原始碼裡寫錯的那行</text>
+
+  <!-- infection -->
+  <rect x="305" y="56" width="150" height="58" rx="10" fill="#efe7fb" stroke="#8b5cf6" stroke-width="2"/>
+  <text x="380" y="80" text-anchor="middle" font-size="13" font-weight="800" fill="#8b5cf6">② 感染 infection</text>
+  <text x="380" y="100" text-anchor="middle" font-size="11" fill="#4a5159">變數變成錯的值(潛伏)</text>
+
+  <!-- failure -->
+  <rect x="580" y="56" width="150" height="58" rx="10" fill="#fde2e1" stroke="#dc2626" stroke-width="2"/>
+  <text x="655" y="80" text-anchor="middle" font-size="13" font-weight="800" fill="#dc2626">③ 失效 failure</text>
+  <text x="655" y="100" text-anchor="middle" font-size="11" fill="#4a5159">你看見的錯誤/崩潰</text>
+
+  <line x1="180" y1="85" x2="300" y2="85" stroke="#8a929b" stroke-width="2" marker-end="url(#dpc-arrow)"/>
+  <line x1="455" y1="85" x2="575" y2="85" stroke="#8a929b" stroke-width="2" marker-end="url(#dpc-arrow)"/>
+  <text x="240" y="78" text-anchor="middle" font-size="10" fill="#8a929b">執行到</text>
+  <text x="515" y="78" text-anchor="middle" font-size="10" fill="#8a929b">傳播放大</text>
+
+  <!-- the gap -->
+  <path d="M105 114 L105 175 L655 175 L655 114" stroke="#2f6f6a" stroke-width="1.5" stroke-dasharray="5 4" fill="none"/>
+  <rect x="250" y="158" width="260" height="34" rx="8" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="380" y="180" text-anchor="middle" font-size="12" font-weight="700" fill="#2f6f6a">這段距離,就是除錯之所以難</text>
+
+  <text x="380" y="225" text-anchor="middle" font-size="12" fill="#4a5159">你只看得到 ③,卻必須一路逆推回 ①。中間可能隔了幾百行、好幾個函式。</text>
+</svg>
+        <figcaption>圖 46-1:bug 的傳播鏈。你能直接觀察的只有最右邊的「失效」,但要修的卻是最左邊的「缺陷」。除錯的本質,就是沿著感染傳播的路徑,從失效一路逆流而上,找到那個源頭。</figcaption>
+      </div>
+
+      <p>
+        為什麼要這麼龜毛地分三層?因為它解釋了除錯最反直覺、也最讓新手抓狂的一件事——
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">失效的地方,幾乎不是缺陷的地方</span>
+          <p>程式在 A 函式崩潰,不代表 bug 在 A。很可能是 B 函式很早以前就把一個變數弄錯了(缺陷+感染),
+          那個錯值安安靜靜地被傳來傳去,直到 A 拿它來用才終於爆炸(失效)。
+          新手會死盯著崩潰那一行猛改,卻怎麼也改不對——因為兇手根本不在現場。
+          <strong>除錯的第一個心法,就是別把「失效點」當成「缺陷點」。</strong></p>
+        </div>
+      </div>
+
+      <p>來看一個小到不能再小、卻完美演示這條鏈的例子:</p>
+      <pre><code class="language-python">def build_profile(name, age):
+    return {"name": name, "aeg": age}     # ① 缺陷:鍵打錯字,"aeg" 應為 "age"
+
+def greet(profile):
+    return f"Hi {profile['name']}, you are {profile['age']} years old"
+
+p = build_profile("Mei", 20)              # ② 感染:p 帶著錯誤狀態誕生,但此刻毫無異狀
+# ......中間可能隔了幾十行、好幾個函式,p 被傳來傳去,一切看起來都很正常......
+print(greet(p))                           # ③ 失效:KeyError: 'age'</code></pre>
+      <p>
+        Python 會在 <code>greet</code> 的 <code>profile['age']</code> 這行丟出 <code>KeyError: 'age'</code>。
+        一個新手會在 <code>greet</code> 裡翻來覆去找錯——但 <code>greet</code> 一個字都沒寫錯!真正的缺陷遠在 <code>build_profile</code>,
+        在一個此刻看起來「執行得很順、毫無問題」的地方。<strong>失效在 <code>greet</code>,缺陷在 <code>build_profile</code></strong>——
+        這就是傳播鏈在現實裡的長相。理解了這一點,你才會養成「往回走」而不是「盯著現場」的除錯本能。
+      </p>
+
+      <h2>科學除錯法:像科學家一樣抓 bug</h2>
+      <p>
+        我們在第 5 章埋過一句話:「不要亂槍打鳥地瞎改,要先形成假設,再驗證。」這一節,我們把它展開成一套完整的方法論——
+        <strong>科學除錯法(scientific debugging)</strong>。它的核心洞見是:<em>除錯,本質上就是科學研究。</em>
+        你面對一個無法解釋的現象(失效),你要找出背後的因果機制(缺陷),而科學方法,正是人類發明出來「從現象逆推原因」最強的工具。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 700 320" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="sci-arrow" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#2f6f6a"/></marker>
+  </defs>
+  <!-- nodes around a circle -->
+  <g font-size="12.5" font-weight="700" text-anchor="middle">
+    <rect x="270" y="20"  width="160" height="46" rx="23" fill="#2f6f6a"/><text x="350" y="48" fill="#fff">① 觀察現象</text>
+    <rect x="500" y="120" width="160" height="46" rx="23" fill="#2f6f6a"/><text x="580" y="148" fill="#fff">② 提出假設</text>
+    <rect x="430" y="250" width="160" height="46" rx="23" fill="#b4541f"/><text x="510" y="278" fill="#fff">③ 推導預測</text>
+    <rect x="110" y="250" width="160" height="46" rx="23" fill="#b4541f"/><text x="190" y="278" fill="#fff">④ 設計實驗</text>
+    <rect x="40"  y="120" width="160" height="46" rx="23" fill="#8b5cf6"/><text x="120" y="148" fill="#fff">⑤ 觀察結果</text>
+  </g>
+  <g stroke="#2f6f6a" stroke-width="2" fill="none" marker-end="url(#sci-arrow)">
+    <path d="M430 48 C 490 60, 530 85, 558 116"/>
+    <path d="M600 166 C 615 200, 580 230, 545 250"/>
+    <path d="M430 277 C 380 292, 320 292, 272 277"/>
+    <path d="M150 250 C 110 215, 100 195, 110 168"/>
+  </g>
+  <!-- decision back to start or to fix -->
+  <path d="M120 120 C 150 70, 230 48, 268 44" stroke="#8b5cf6" stroke-width="2" fill="none" stroke-dasharray="5 4" marker-end="url(#sci-arrow)"/>
+  <text x="350" y="160" text-anchor="middle" font-size="12.5" font-weight="800" fill="#1f2328">假設驅動的循環</text>
+  <text x="350" y="182" text-anchor="middle" font-size="11" fill="#4a5159">預測符合 → 假設成立,收斂到缺陷</text>
+  <text x="350" y="200" text-anchor="middle" font-size="11" fill="#4a5159">預測不符 → 推翻假設,換一個再來</text>
+  <text x="208" y="105" text-anchor="middle" font-size="10" fill="#8b5cf6">不符就回到 ②</text>
+</svg>
+        <figcaption>圖 46-2:科學除錯法的循環。每一圈你都用一個<strong>明確的假設</strong>驅動行動;實驗結果若推翻假設,你並沒有白費——你排除了一個可能,搜尋範圍又縮小了。這跟亂改一通最大的差別是:你永遠知道「自己現在在驗證什麼」。</figcaption>
+      </div>
+
+      <p>把五個步驟落實到一個真實的 bug。假設我們寫了一個算「中位數(median)」的函式:</p>
+      <pre><code class="language-python">def median(xs):
+    """回傳一串數字的中位數"""
+    s = sorted(xs)
+    n = len(s)
+    return s[n // 2]          # 看起來很合理……真的嗎?
+
+print(median([1, 2, 3, 4]))  # 預期 2.5,實際印出 3</code></pre>
+      <p>現在,啟動科學除錯的引擎:</p>
+      <ol>
+        <li><strong>觀察現象:</strong><code>median([1, 2, 3, 4])</code> 回傳 <code>3</code>,但正確答案應是中間兩數 <code>2</code> 與 <code>3</code> 的平均,即 <code>2.5</code>。</li>
+        <li><strong>提出假設:</strong>「我猜當串列<em>長度為偶數</em>時,沒有單一的中間元素,而這段程式硬取了 <code>s[n // 2]</code> 一個值,所以錯了。」</li>
+        <li><strong>推導預測:</strong>如果假設成立,那麼<em>奇數</em>長度應該是對的,只有<em>偶數</em>長度會錯。具體預測:<code>median([1, 2, 3])</code> 會正確回傳 <code>2</code>。</li>
+        <li><strong>設計實驗:</strong>跑 <code>median([1, 2, 3])</code> 與 <code>median([1, 2, 3, 4])</code>,觀察奇偶兩種情況。</li>
+        <li><strong>觀察結果:</strong>奇數那個確實回傳 <code>2</code>(對),偶數那個回傳 <code>3</code>(錯)。<strong>結果符合預測,假設成立!</strong>缺陷被定位:偶數長度的處理。</li>
+      </ol>
+      <p>假設一旦被證實,修正就水到渠成:</p>
+      <pre><code class="language-python">def median(xs):
+    s = sorted(xs)
+    n = len(s)
+    if n % 2 == 1:                       # 奇數:正中間那一個
+        return s[n // 2]
+    return (s[n // 2 - 1] + s[n // 2]) / 2   # 偶數:中間兩個的平均</code></pre>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">寫下你的「除錯日誌」</span>
+          <p>科學家做實驗會記錄,你除錯也該記。開一個小筆記,寫下:「假設 1:______;實驗:______;結果:______(成立/推翻)」。
+          這看起來很慢,卻能救你一命——它防止你<strong>重複試同一個沒用的東西</strong>(除錯到後來最常發生的鬼打牆),
+          也讓你在求助別人時能說清楚「我已經排除了 A、B、C」。<strong>沒記錄的除錯,是在原地繞圈。</strong></p>
+        </div>
+      </div>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">一次只改一件事</span>
+          <p>最常見的除錯陷阱,是「同時改五個地方,然後它好了」——你永遠不會知道是哪一個改動真正修好的,
+          甚至可能其中四個是新的 bug,只是剛好互相抵消。科學實驗的鐵律是<strong>控制變因</strong>:一次只改一個變數,看結果,再決定下一步。
+          除錯時請守住同一條紀律。</p>
+        </div>
+      </div>
+
+      <h2>重現:沒有穩定的重現,就沒有除錯</h2>
+      <p>
+        科學方法的第一步是「觀察現象」,但前提是<strong>現象要能被你穩定地觀察到</strong>。一個「偶爾才出現」的 bug,
+        是工程師的噩夢——因為你改完根本無法確認到底修好了沒。所以除錯真正的第一步,是讓 bug <strong>穩定重現(reproduce)</strong>。
+      </p>
+      <h3>最小可重現案例(minimal reproducible example)</h3>
+      <p>
+        當你拿到一個「在三萬行的系統裡、載入某個 50 MB 檔案後、點某個按鈕才會崩潰」的 bug,你不可能在這團迷霧裡除錯。
+        你要做的是<strong>不斷簡化</strong>:能不能用更小的輸入觸發?能不能拿掉一半的步驟還是會壞?最終目標是一個
+        <strong>最小可重現案例</strong>——一段短到不能再短、卻仍然穩定觸發 bug 的程式與輸入。
+      </p>
+      <p>這件事的回報高得驚人:</p>
+      <ul>
+        <li>簡化的過程本身,往往就讓你<strong>在還沒開始除錯前就看見了缺陷</strong>(每拿掉一塊,你都在排除嫌疑)。</li>
+        <li>最小案例讓「實驗」變得飛快——你不必每次都跑完整個系統。</li>
+        <li>當你要<strong>求助</strong>(問同事、發 GitHub issue、貼 Stack Overflow)時,一個最小可重現案例是別人願意幫你的前提。沒人想讀你三萬行的程式。</li>
+      </ul>
+
+      <h3>delta debugging:讓電腦幫你縮小失敗輸入</h3>
+      <p>
+        手動簡化很累。Andreas Zeller 提出了一個漂亮的點子:既然「簡化」本身就是一套機械化的流程,何不<strong>讓電腦自動做</strong>?
+        這就是 <strong>delta debugging(差量除錯)</strong> 的核心,它的演算法叫 <code>ddmin</code>。
+      </p>
+      <p>
+        想像一個 4000 字元的輸入會讓某個解析器崩潰。<code>ddmin</code> 的思路很像二分搜尋:
+        把輸入切成幾塊,試著<strong>刪掉一塊</strong>——如果刪掉後<em>還是會崩潰</em>,代表那塊是無辜的,丟掉它,問題規模就小了一半;
+        如果刪掉後<em>不崩潰了</em>,代表那塊裡有關鍵,保留它,再往更細的粒度切。如此反覆,最後逼出一個「再刪任何一個字元就不崩潰」的最小輸入。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 260" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="20" y="24" font-size="13" font-weight="700" fill="#1f2328">delta debugging:不斷刪掉「刪了還是會崩潰」的部分(★ = 真正的關鍵字元)</text>
+
+  <!-- row 1: full input -->
+  <text x="20" y="62" font-size="11" fill="#8a929b">原始輸入(會崩潰)</text>
+  <g>
+    <rect x="180" y="48" width="240" height="26" rx="4" fill="#e3efed" stroke="#2f6f6a"/>
+    <rect x="420" y="48" width="40"  height="26" rx="4" fill="#fde2e1" stroke="#dc2626"/>
+    <text x="440" y="66" text-anchor="middle" font-size="13" font-weight="800" fill="#dc2626">★</text>
+    <rect x="460" y="48" width="200" height="26" rx="4" fill="#e3efed" stroke="#2f6f6a"/>
+  </g>
+
+  <!-- row 2: remove right half -->
+  <text x="20" y="106" font-size="11" fill="#8a929b">刪掉右半 → 還是崩潰 ✓</text>
+  <g>
+    <rect x="180" y="92" width="240" height="26" rx="4" fill="#e3efed" stroke="#2f6f6a"/>
+    <rect x="420" y="92" width="40"  height="26" rx="4" fill="#fde2e1" stroke="#dc2626"/>
+    <text x="440" y="110" text-anchor="middle" font-size="13" font-weight="800" fill="#dc2626">★</text>
+    <rect x="460" y="92" width="200" height="26" rx="4" fill="#f0f1f3" stroke="#d4d8dd" stroke-dasharray="4 3"/>
+    <text x="560" y="110" text-anchor="middle" font-size="11" fill="#b5bcc4">已刪</text>
+  </g>
+
+  <!-- row 3: try remove left half -->
+  <text x="20" y="150" font-size="11" fill="#8a929b">再刪左半 → 不崩潰了 ✗ 留著</text>
+  <g>
+    <rect x="180" y="136" width="240" height="26" rx="4" fill="#f0f1f3" stroke="#d4d8dd" stroke-dasharray="4 3"/>
+    <text x="300" y="154" text-anchor="middle" font-size="11" fill="#b5bcc4">刪了就不崩 → 不能刪</text>
+    <rect x="420" y="136" width="40"  height="26" rx="4" fill="#fde2e1" stroke="#dc2626"/>
+    <text x="440" y="154" text-anchor="middle" font-size="13" font-weight="800" fill="#dc2626">★</text>
+  </g>
+
+  <!-- row 4: minimal -->
+  <text x="20" y="200" font-size="11" fill="#8a929b">繼續細分……最終</text>
+  <g>
+    <rect x="180" y="186" width="40" height="26" rx="4" fill="#fde2e1" stroke="#dc2626" stroke-width="2"/>
+    <text x="200" y="204" text-anchor="middle" font-size="13" font-weight="800" fill="#dc2626">★</text>
+    <text x="240" y="204" font-size="12" font-weight="700" fill="#dc2626">最小可重現輸入!再刪就不崩潰了</text>
+  </g>
+  <text x="20" y="244" font-size="11.5" fill="#4a5159">從一大段輸入,自動收斂到「最小、最純」的觸發條件——這正是 Hypothesis 之類工具「shrinking」的精神。</text>
+</svg>
+        <figcaption>圖 46-3:delta debugging 用「刪一塊、看還崩不崩」的二分式策略,自動把巨大的失敗輸入縮成最小核心。你會在練習 46.6 親手實作一個簡化版的 <code>ddmin</code>。</figcaption>
+      </div>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">這個概念,你其實會反覆遇到</span>
+          <p>「自動縮小失敗輸入」不是學院派的玩具。本章稍後會講的<strong>性質測試工具 Hypothesis</strong>,
+          在找到反例後會自動把它「縮小(shrink)」成最簡單的形式;Git 的 <code>git bisect</code>(第 18 章)
+          則是把同樣的二分思想用在「哪一次提交引入了 bug」上。看到一個概念在三個不同地方出現,你就知道它是真功夫了。</p>
+        </div>
+      </div>
+
+      <h2>觀察與定位:把缺陷逼到牆角</h2>
+      <p>
+        重現之後,進入「觀察」與「定位」的核心戰場。第 5 章已經給過你基本工具(traceback、print、小黃鴨、pdb),
+        這裡我們把它們組織成一套「由輕到重」的武器庫,並補上更進階的招式。
+      </p>
+
+      <h3>觀察:看見程式真正的狀態</h3>
+      <p>除錯的本質是「我以為的狀態」與「實際的狀態」之間有落差。所有觀察工具都在做同一件事:把實際狀態攤開給你看。</p>
+      <ul>
+        <li><strong><code>print</code> / logging:</strong>最樸素也最萬用。差別在於 <code>print</code> 是臨時的,用完要刪;
+        <strong>logging(日誌)</strong>是長久的基礎建設——用 <code>logging.debug(...)</code> 寫下的訊息,平時靜音,出事時把等級調到 <code>DEBUG</code> 就全部現形,而且自帶時間戳、模組名、嚴重等級。生產環境靠 logging,不靠 print。</li>
+        <li><strong>斷言(assertion):</strong>把「我假設這裡一定成立」的條件寫成 <code>assert</code>。它是會自我檢查的觀察點——一旦狀態被感染、違反了你的假設,程式會<em>在感染剛發生的當下</em>就停下來,而不是等它傳播到很遠才失效。斷言把「失效點」往前拉到更靠近「缺陷點」的地方,這正是它珍貴之處。</li>
+        <li><strong>除錯器(debugger):</strong>Python 的 <code>pdb</code>、C/C++ 的 <code>gdb</code>。它讓你<strong>設斷點(breakpoint)</strong>暫停程式、<strong>單步執行</strong>、<strong>檢視堆疊(stack)</strong>看「現在是誰呼叫誰一路走到這裡」、<strong>監看(watch)變數</strong>看某個值何時被改動。當 bug 牽涉複雜的控制流或狀態變化,除錯器遠勝過洗版式的 print。</li>
+      </ul>
+      <pre><code class="language-python">import logging
+logging.basicConfig(level=logging.DEBUG)   # 把等級開到 DEBUG,debug 訊息才會顯示
+
+def withdraw(balance, amount):
+    logging.debug(f"進入 withdraw: balance={balance}, amount={amount}")
+    assert amount &gt;= 0, "提款金額不該是負數"        # 斷言:守住一個你深信的前提
+    balance -= amount
+    assert balance &gt;= 0, "餘額不該變成負數(感染就在這裡發生!)"
+    return balance
+
+# 若有人呼叫 withdraw(100, 150),第二個斷言會立刻喊停,
+# 把失效點釘在「餘額剛變負」的瞬間,而不是等到很久以後對帳才發現對不上</code></pre>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">斷言是除錯工具,不是輸入驗證</span>
+          <p>斷言用來檢查「<em>程式內部</em>不該發生的事」(即你認為永遠為真的不變量),不該用來檢查「<em>外部</em>使用者的輸入」。
+          原因有二:一是語意不同(輸入錯誤是預期內的,該丟 <code>ValueError</code> 並好好處理;斷言失敗代表「程式有 bug」);
+          二是技術上,Python 以 <code>-O</code> 最佳化旗標執行時,<strong>所有 <code>assert</code> 會被整個移除</strong>——你拿它擋輸入,上線就破功了。
+          輸入驗證請用 <code>if ... raise</code>(第 5 章與第 36 章的防禦性程式設計)。</p>
+        </div>
+      </div>
+
+      <h3>定位:用二分法與向後推理找到源頭</h3>
+      <p>
+        觀察讓你看見「哪裡的狀態錯了」,定位則是「順著它找到缺陷」。兩個最有威力的策略:
+      </p>
+      <ul>
+        <li><strong>二分定位(bisection):</strong>第 5 章講過——在程式中段插一個檢查點,「到這裡為止狀態還對嗎?」對 → bug 在後半;不對 → 在前半。每次砍掉一半嫌疑。把這招用在<em>時間維度</em>上,就是 <code>git bisect</code>(第 18 章):在一堆 commit 裡用二分法,幾步就找出「是哪一次提交把它弄壞的」。對 1000 次提交,只要約 10 次測試就能定位。</li>
+        <li><strong>向後推理(backward reasoning):</strong>這正是對付圖 46-1 那道「失效≠缺陷」鴻溝的利器。從失效點開始問:「這個錯誤的值,是<em>哪一行</em>賦給它的?」找到後再問:「那一行用到的輸入,又是<em>哪裡</em>來的、為什麼是錯的?」一路逆流而上,沿著資料的「來路」回溯,直到抵達第一個「輸入正確、輸出卻錯誤」的地方——那就是缺陷。</li>
+      </ul>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">隔離變因 &amp; 橡皮鴨:最便宜的兩招</span>
+          <p><strong>隔離變因:</strong>把可疑的程式碼<em>單獨抽出來</em>跑(就是在做最小可重現案例),排除掉「會不會是別的東西干擾」。
+          <strong>橡皮鴨除錯法:</strong>把程式一行一行講給一隻橡皮鴨(或任何人)聽。當你被迫把「我以為它在做什麼」說出口,
+          大腦會自動撞見「咦,它其實沒在做這件事」。這兩招不花一毛錢,卻常常在你還沒動用除錯器前就破案。</p>
+        </div>
+      </div>
+
+      <h2>測試:你怎麼知道它「真的」對?</h2>
+      <p>
+        除錯是在 bug <em>出現之後</em>把它揪出來;測試則是主動地、有系統地<strong>在 bug 害到使用者之前先逼它現形</strong>。
+        但在學怎麼寫測試之前,我們得先面對一個冷酷的理論事實——這個事實會徹底改變你對測試的期待。
+      </p>
+
+      <h3>為什麼不能「測完所有情況」</h3>
+      <p>
+        新手常有的幻想是:「我把所有可能的輸入都測一遍,不就證明程式完全正確了嗎?」聽起來合理,
+        但「所有可能的輸入」這個空間,大到超乎想像。
+      </p>
+      <p>
+        考慮一個再簡單不過的函式:它吃<strong>兩個</strong> 32 位元整數,回傳它們的和。輸入的組合有多少種?
+        每個整數有 $2^{32}$ 種可能,兩個就是 $2^{32} \times 2^{32} = 2^{64}$ 種,大約是 1844 京($1.8 \times 10^{19}$)種組合。
+        就算你的電腦每秒能測十億次,跑完也要超過 <strong>500 年</strong>。而這還只是「兩個整數相加」!一個吃字串的函式,輸入空間是<em>無限大</em>的。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 700 240" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="350" y="24" text-anchor="middle" font-size="13" font-weight="700" fill="#1f2328">所有可能的輸入(浩瀚無垠)</text>
+  <rect x="40" y="40" width="620" height="160" rx="10" fill="#f3f5f7" stroke="#8a929b"/>
+  <!-- tested dots -->
+  <g fill="#2f6f6a">
+    <circle cx="120" cy="90"  r="6"/>
+    <circle cx="300" cy="140" r="6"/>
+    <circle cx="500" cy="80"  r="6"/>
+    <circle cx="220" cy="170" r="6"/>
+    <circle cx="600" cy="160" r="6"/>
+    <circle cx="410" cy="110" r="6"/>
+  </g>
+  <!-- a hidden bug region -->
+  <ellipse cx="180" cy="120" rx="28" ry="20" fill="#fde2e1" stroke="#dc2626" stroke-dasharray="4 3"/>
+  <text x="180" y="124" text-anchor="middle" font-size="10" font-weight="700" fill="#dc2626">藏著 bug</text>
+  <text x="350" y="225" text-anchor="middle" font-size="12" fill="#4a5159">綠點 = 你測過的幾個案例。它們覆蓋到的,只是這片汪洋裡的幾滴水。bug 完全可能躲在你沒踩到的地方。</text>
+</svg>
+        <figcaption>圖 46-4:輸入空間爆炸。測試永遠只能取樣其中極少數的點;它無法窮舉。這不是你不夠努力,而是組合數學的硬限制。</figcaption>
+      </div>
+
+      <p>
+        既然測不完,測試到底能保證什麼?這就要請出計算機科學史上最有名的一句關於測試的話。
+      </p>
+      <blockquote>
+        「測試只能證明 bug 的存在,永遠無法證明 bug 不存在。」——艾茲赫爾・戴克斯特拉(Edsger Dijkstra)
+      </blockquote>
+      <p>
+        這句話我們在第 13 章(離散數學)當作引子用過。它的意思是:測試通過了,只代表「在你試過的這些輸入上沒出錯」,
+        不代表「在所有輸入上都對」。一個測試失敗,能<strong>確定</strong>地告訴你「這裡有 bug」;但一萬個測試全過,
+        也<strong>無法保證</strong>「沒有 bug」。要真正「證明」程式正確,你需要的是數學上的<strong>形式化驗證(formal verification)</strong>,
+        那是另一個世界(第 13 章鋪的地基)。對絕大多數軟體而言,測試是務實的折衷:它無法給你確定性,但能給你<em>信心</em>。
+
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">測試的目的是「找出 bug」,不是「證明沒 bug」</span>
+          <p>這個心態轉換很關鍵。一個「全部通過」的測試套件不該讓你沾沾自喜——它可能只是測得太弱。
+          一個<strong>好</strong>的測試,是那種<strong>最有可能讓程式露出馬腳</strong>的測試。所以寫測試時,別問「我要怎麼證明它對」,
+          要問「我要怎麼<em>弄垮它</em>」。帶著找碴的心態,你才會去戳那些 bug 真正會躲的角落。</p>
+        </div>
+      </div>
+
+      <h3>覆蓋率(coverage):衡量「測到多少」</h3>
+      <p>
+        既然測不完,我們至少想知道「測試到底碰到了多少程式碼」。這就是<strong>覆蓋率(code coverage)</strong>。常見有三種,嚴格程度遞增:
+      </p>
+      <ul>
+        <li><strong>敘述覆蓋率(statement coverage):</strong>每一<em>行</em>程式碼是否至少被執行過一次。最寬鬆。</li>
+        <li><strong>分支覆蓋率(branch coverage):</strong>每個 <code>if</code> 的<em>真</em>與<em>假</em>兩條岔路,是否都各走過一次。比敘述嚴格。</li>
+        <li><strong>路徑覆蓋率(path coverage):</strong>每一條可能的執行<em>路徑</em>(分支的所有組合)是否都走過。最嚴格,但通常無法達成——$k$ 個獨立的 <code>if</code> 就有 $2^k$ 條路徑,迴圈更是讓路徑數爆炸成天文數字。</li>
+      </ul>
+      <p>用一個例子看「敘述」與「分支」覆蓋率的差別:</p>
+      <pre><code class="language-python">def abs_value(x):
+    if x &lt; 0:
+        x = -x        # 這一行
+    return x
+
+# 只用一個測試案例:
+assert abs_value(-3) == 3</code></pre>
+      <p>
+        只測 <code>abs_value(-3)</code>,程式裡<em>每一行都被執行到了</em>——所以<strong>敘述覆蓋率 100%</strong>!
+        看起來很完美。但 <code>if</code> 的「假」那條岔路(<code>x &gt;= 0</code> 時跳過)從來沒被走過,所以<strong>分支覆蓋率只有 50%</strong>。
+        假如缺陷剛好藏在「正數」這條路上(例如不小心寫成 <code>return -x</code>),這個「100% 敘述覆蓋」的測試完全抓不到。
+        這就帶出覆蓋率最重要的一課:
+      </p>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">高覆蓋率 ≠ 沒有 bug</span>
+          <p>覆蓋率只告訴你「哪些程式碼被<em>執行</em>過」,不告訴你「執行時有沒有<em>好好檢查結果</em>」。
+          你可以寫一個跑遍每一行、卻一個 <code>assert</code> 都沒有的測試——覆蓋率 100%,抓 bug 能力是 0。
+          反過來,90% 的覆蓋率,也<strong>不代表</strong>剩下 10% 沒事(更何況輸入空間根本測不完)。
+          把覆蓋率當<strong>地圖</strong>(找出「完全沒測到」的盲區)很好用;把它當 <strong>KPI 門檻</strong>(規定一定要 95%)就會逼出一堆假裝在測試、其實什麼都沒驗證的爛測試。第 40 章說得好:<em>覆蓋率是好僕人,壞主人。</em></p>
+        </div>
+      </div>
+
+      <h2>測試設計:有系統地挑出「該測哪些」</h2>
+      <p>
+        既然不能全測、又想測得聰明,我們需要方法,從浩瀚的輸入空間裡<strong>挑出最有代表性、最可能抓到 bug 的少數案例</strong>。
+        這就是測試設計技術。三個經典且實用的:
+      </p>
+
+      <h3>等價分割(equivalence partitioning)</h3>
+      <p>
+        核心洞見:很多輸入「本質上是同一類」,程式對它們的處理方式相同。既然如此,<strong>每一類挑一個代表來測就夠了</strong>——
+        測 <code>add(2, 3)</code> 對了,你不太需要再測 <code>add(2, 4)</code>,因為它們走的是同一條路。
+        我們把輸入空間切成幾個<strong>等價類(equivalence class)</strong>,每類取一個代表。
+      </p>
+      <p>
+        舉例:一個 <code>letter_grade(score)</code> 函式,把 0–100 的分數轉成等第(F: 0–59、D: 60–69、C: 70–79、B: 80–89、A: 90–100)。
+        輸入空間 0–100 有 101 個值,但等價類只有幾個:<code>[0,59]</code>→F、<code>[60,69]</code>→D、<code>[70,79]</code>→C、
+        <code>[80,89]</code>→B、<code>[90,100]</code>→A,外加兩個<strong>不合法</strong>的等價類:<code>&lt; 0</code> 與 <code>&gt; 100</code>。
+        每類挑一個代表(例如 30、65、75、85、95、−10、150),七個案例就涵蓋了所有「行為類別」。
+      </p>
+
+      <h3>邊界值分析(boundary value analysis)</h3>
+      <p>
+        等價分割告訴你「類別之間」,而 bug 最愛躲在<strong>類別的交界處</strong>——也就是邊界。這就是第 1、5 章一再強調的
+        <strong>邊界情況(edge case)</strong>。「差一錯誤(off-by-one)」幾乎都發生在這裡:到底 <code>&gt;=</code> 還是 <code>&gt;</code>?
+        59 算 F 還是 D?所以,除了每類取代表,更要<strong>專門測每個邊界的兩側</strong>。
+      </p>
+      <p>對 <code>letter_grade</code>,關鍵邊界與它們的兩側是:</p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 170" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="20" y="24" font-size="13" font-weight="700" fill="#1f2328">等價分割(分區)＋ 邊界值(★ 兩側最危險)</text>
+  <!-- the number line -->
+  <line x1="40" y1="95" x2="690" y2="95" stroke="#8a929b" stroke-width="2"/>
+  <!-- partitions -->
+  <g font-size="11" text-anchor="middle">
+    <rect x="40"  y="78" width="130" height="34" rx="4" fill="#fde2e1" stroke="#dc2626"/><text x="105" y="100" fill="#dc2626" font-weight="700">F  0–59</text>
+    <rect x="170" y="78" width="115" height="34" rx="4" fill="#f6e7dd" stroke="#b4541f"/><text x="227" y="100" fill="#b4541f" font-weight="700">D 60–69</text>
+    <rect x="285" y="78" width="115" height="34" rx="4" fill="#e3efed" stroke="#2f6f6a"/><text x="342" y="100" fill="#2f6f6a" font-weight="700">C 70–79</text>
+    <rect x="400" y="78" width="115" height="34" rx="4" fill="#efe7fb" stroke="#8b5cf6"/><text x="457" y="100" fill="#8b5cf6" font-weight="700">B 80–89</text>
+    <rect x="515" y="78" width="135" height="34" rx="4" fill="#dcfce7" stroke="#16a34a"/><text x="582" y="100" fill="#16a34a" font-weight="700">A 90–100</text>
+  </g>
+  <!-- boundary stars -->
+  <g font-size="11" text-anchor="middle" fill="#1f2328">
+    <text x="160" y="68" fill="#dc2626" font-weight="800">★</text><text x="160" y="135">59 / 60</text>
+    <text x="278" y="68" fill="#dc2626" font-weight="800">★</text><text x="278" y="135">69 / 70</text>
+    <text x="393" y="68" fill="#dc2626" font-weight="800">★</text><text x="393" y="135">79 / 80</text>
+    <text x="508" y="68" fill="#dc2626" font-weight="800">★</text><text x="508" y="135">89 / 90</text>
+  </g>
+  <text x="105" y="155" text-anchor="middle" font-size="10" fill="#dc2626">別忘了 −1、0、100、101 這些範圍的端點與越界值</text>
+</svg>
+        <figcaption>圖 46-5:等價分割把輸入切成「行為相同」的區塊,各取一個代表;邊界值分析則專攻每個交界的兩側(59/60、69/70…)與整體範圍的端點(0、100)及越界值(−1、101)。兩者合用,寥寥十幾個案例就有極高的抓 bug 效率。</figcaption>
+      </div>
+
+      <h3>決策表(decision table):多條件的組合</h3>
+      <p>
+        當輸出取決於<strong>多個條件的組合</strong>時,光靠分區還不夠,容易漏掉某些組合。<strong>決策表</strong>把所有條件的真假組合列成一張表,
+        確保每一種組合都被考慮到。例如一個「是否核發貸款」的規則,取決於兩個條件:信用良好嗎?有穩定收入嗎?
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>案例</th><th>信用良好?</th><th>收入穩定?</th><th>預期結果</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>1</td><td>是</td><td>是</td><td>核准</td></tr>
+          <tr><td>2</td><td>是</td><td>否</td><td>婉拒</td></tr>
+          <tr><td>3</td><td>否</td><td>是</td><td>婉拒</td></tr>
+          <tr><td>4</td><td>否</td><td>否</td><td>婉拒</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>
+        兩個布林條件就有 $2^2 = 4$ 種組合。決策表逼你把<strong>每一格</strong>都想清楚並各寫一個測試,避免「只測了核准跟一種婉拒,漏掉另一種婉拒」這種常見疏漏。
+        條件越多,決策表越能保護你不漏組合(雖然 $n$ 個條件會有 $2^n$ 列,這時又得回頭用等價的概念合併不影響結果的組合)。
+      </p>
+
+      <h2>測試的層次與類型</h2>
+      <p>
+        測試不只一種,它們在<strong>不同的層級</strong>運作,各有任務。第 40 章(軟體工程)已經完整講過<strong>測試金字塔(testing pyramid)</strong>,
+        這裡快速複習,讓你把它和本章的理論接起來:
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 700 260" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- pyramid -->
+  <polygon points="350,30 420,90 280,90" fill="#dc2626" opacity="0.85"/>
+  <polygon points="280,90 420,90 470,160 230,160" fill="#b4541f" opacity="0.85"/>
+  <polygon points="230,160 470,160 540,235 160,235" fill="#2f6f6a" opacity="0.9"/>
+  <g text-anchor="middle" fill="#fff" font-weight="700">
+    <text x="350" y="75" font-size="12">驗收 / E2E</text>
+    <text x="350" y="132" font-size="13">整合測試</text>
+    <text x="350" y="205" font-size="15">單元測試</text>
+  </g>
+  <!-- side labels -->
+  <text x="560" y="60" font-size="11" fill="#dc2626">少、慢、貴、脆</text>
+  <text x="560" y="225" font-size="11" fill="#2f6f6a">多、快、穩、便宜</text>
+  <line x1="555" y1="70" x2="555" y2="215" stroke="#8a929b" stroke-width="1.5" marker-end="url(#py-a)"/>
+  <defs><marker id="py-a" markerWidth="9" markerHeight="9" refX="7" refY="6" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#8a929b" transform="rotate(90 3 3)"/></marker></defs>
+  <text x="130" y="150" font-size="11" fill="#4a5159" transform="rotate(-90 130 150)">越往上越接近真實使用</text>
+</svg>
+        <figcaption>圖 46-6:測試金字塔(詳見第 40 章)。底層的單元測試又快又便宜又精準,所以寫最多;越往上越貼近真實情境但也越慢、越脆,所以越精選。倒過來變「冰淇淋甜筒」是常見反模式。</figcaption>
+      </div>
+
+      <ul>
+        <li><strong>單元測試(unit test):</strong>測一小塊——通常是<em>單一函式或類別</em>,並把它和外界(資料庫、網路、檔案)隔離。又快又準,壞了立刻知道是哪裡。這是本章程式範例的主角。</li>
+        <li><strong>整合測試(integration test):</strong>測「幾塊湊在一起」能不能正確合作,例如「你的程式 + 真的資料庫」。</li>
+        <li><strong>系統測試 / 端對端(E2E):</strong>把整個系統當黑盒子,模擬真人從頭到尾跑完一條完整流程(如登入→下單→付款)。</li>
+        <li><strong>驗收測試(acceptance test):</strong>站在<em>使用者/客戶</em>角度,驗證「這是不是他們真正要的東西」。</li>
+      </ul>
+      <p>還有兩個跨層級、按「目的」分類的重要類型,你一定會反覆聽到:</p>
+      <ul>
+        <li><strong>回歸測試(regression test):</strong>每修好一個 bug,就為它補一個測試,確保這個老毛病<em>永遠不會再復發</em>。回歸測試套件是你重構與改版時的安全網——它讓你敢動程式,因為一改壞就立刻有紅燈。</li>
+        <li><strong>冒煙測試(smoke test):</strong>名字來自硬體界——「通電後會不會冒煙?」。它是一組極快、極淺的測試,只驗證「系統最基本的功能有沒有整個掛掉」(例如服務能不能啟動、首頁打不打得開)。改完先跑冒煙測試,過了再跑完整套件,免得在一個已經根本壞掉的版本上浪費時間。</li>
+      </ul>
+
+      <h2>自動化測試:用 pytest 把測試變成日常</h2>
+      <p>
+        理論談夠了,來寫真的測試。第 5 章介紹過 <code>pytest</code> 的入門(檔名與函式都以 <code>test_</code> 開頭、直接用 <code>assert</code>);
+        這裡我們補上兩個讓測試從「能用」變「專業」的利器:<strong>parametrize</strong> 與 <strong>fixtures</strong>。
+      </p>
+
+      <h3>parametrize:一個測試,餵很多組資料</h3>
+      <p>
+        前面用等價分割與邊界值挑出了一堆案例。如果每個案例都複製貼上寫一個 <code>def test_...</code>,既囉嗦又難維護。
+        <code>@pytest.mark.parametrize</code> 讓你用<strong>一個</strong>測試函式,自動跑過<strong>多組</strong>輸入與預期輸出:
+      </p>
+      <pre><code class="language-python"># test_grade.py
+import pytest
+from grade import letter_grade
+
+@pytest.mark.parametrize("score, expected", [
+    (30,  "F"),   # F 區代表
+    (59,  "F"),   # ★ 邊界:59 仍是 F
+    (60,  "D"),   # ★ 邊界:60 跳到 D
+    (75,  "C"),   # C 區代表
+    (89,  "B"),   # ★ 邊界:89 仍是 B
+    (90,  "A"),   # ★ 邊界:90 跳到 A
+    (100, "A"),   # 範圍端點
+])
+def test_letter_grade(score, expected):
+    assert letter_grade(score) == expected
+
+# 不合法輸入應該要報錯,單獨測:
+@pytest.mark.parametrize("bad_score", [-1, 101, 150])
+def test_letter_grade_rejects_out_of_range(bad_score):
+    with pytest.raises(ValueError):
+        letter_grade(bad_score)</code></pre>
+      <p>
+        在終端機跑 <code>pytest</code>,它會把上面<em>每一組</em>參數當成一個獨立的測試來執行並回報。哪一組掛了,
+        pytest 會清楚告訴你是哪組參數(例如 <code>test_letter_grade[59-F]</code>),定位超快。
+        你會發現,測試設計技術(等價分割+邊界值)與 parametrize,是天作之合。
+      </p>
+
+      <h3>fixtures:準備與清理測試所需的環境</h3>
+      <p>
+        很多測試需要先「準備好某個東西」才能測——一個資料庫連線、一份範例資料、一個暫存檔。
+        如果每個測試都自己準備、自己善後,程式碼會重複又容易出錯。<strong>fixture(測試夾具)</strong>把這件事抽出來,
+        測試只要把 fixture 的名字寫進參數,pytest 就會自動幫它準備好:
+      </p>
+      <pre><code class="language-python">import pytest
+
+@pytest.fixture
+def sample_accounts():
+    """提供一份乾淨的範例帳戶資料給每個用到它的測試"""
+    return {"alice": 100, "bob": 50}
+
+def test_transfer_ok(sample_accounts):       # 把 fixture 名字寫進參數即可
+    transfer(sample_accounts, "alice", "bob", 30)
+    assert sample_accounts["alice"] == 70
+    assert sample_accounts["bob"] == 80
+
+def test_transfer_insufficient(sample_accounts):
+    with pytest.raises(ValueError):          # 餘額不足應該報錯
+        transfer(sample_accounts, "bob", "alice", 999)</code></pre>
+      <p>
+        關鍵好處:每個測試拿到的都是<strong>全新、互不干擾</strong>的 <code>sample_accounts</code>。
+        測試之間若會互相影響(一個測試改了資料,害下一個測試掛掉),是測試套件最惡名昭彰的問題之一。
+        fixture 幫你守住「每個測試都從乾淨狀態出發」這條紀律。(進階的 fixture 還能用 <code>yield</code> 做「測試後自動清理」,例如關閉連線、刪除暫存檔。)
+      </p>
+
+      <h3>TDD:先寫測試,再寫程式</h3>
+      <p>
+        <strong>測試驅動開發(Test-Driven Development, TDD)</strong>把順序顛倒過來:<strong>先寫一個會失敗的測試,再寫剛好能讓它通過的程式。</strong>
+        它的節奏是一個三拍循環:
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 640 220" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs><marker id="tdd-a" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/></marker></defs>
+  <circle cx="160" cy="110" r="58" fill="#fde2e1" stroke="#dc2626" stroke-width="2"/>
+  <text x="160" y="100" text-anchor="middle" font-size="22">🔴</text>
+  <text x="160" y="126" text-anchor="middle" font-size="12" font-weight="800" fill="#dc2626">RED</text>
+  <text x="160" y="143" text-anchor="middle" font-size="10" fill="#4a5159">寫一個失敗的測試</text>
+
+  <circle cx="320" cy="110" r="58" fill="#dcfce7" stroke="#16a34a" stroke-width="2"/>
+  <text x="320" y="100" text-anchor="middle" font-size="22">🟢</text>
+  <text x="320" y="126" text-anchor="middle" font-size="12" font-weight="800" fill="#16a34a">GREEN</text>
+  <text x="320" y="143" text-anchor="middle" font-size="10" fill="#4a5159">寫剛好能過的程式</text>
+
+  <circle cx="480" cy="110" r="58" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="480" y="100" text-anchor="middle" font-size="22">🔵</text>
+  <text x="480" y="126" text-anchor="middle" font-size="12" font-weight="800" fill="#2f6f6a">REFACTOR</text>
+  <text x="480" y="143" text-anchor="middle" font-size="10" fill="#4a5159">在綠燈保護下重構</text>
+
+  <line x1="218" y1="100" x2="262" y2="100" stroke="#8a929b" stroke-width="2" marker-end="url(#tdd-a)"/>
+  <line x1="378" y1="100" x2="422" y2="100" stroke="#8a929b" stroke-width="2" marker-end="url(#tdd-a)"/>
+  <path d="M470 165 C 380 205, 240 205, 168 167" stroke="#8a929b" stroke-width="2" fill="none" stroke-dasharray="5 4" marker-end="url(#tdd-a)"/>
+  <text x="320" y="205" text-anchor="middle" font-size="11" fill="#8a929b">再回到 RED,加下一個測試</text>
+</svg>
+        <figcaption>圖 46-7:TDD 的紅綠重構循環。每一圈只前進一小步:紅(先定義「對」是什麼)→ 綠(用最簡單的方式達成)→ 藍(在測試的保護下把程式整理乾淨)。</figcaption>
+      </div>
+
+      <p>
+        用一個經典範例完整走一遍:開發一個 <code>to_roman(n)</code>,把整數轉成羅馬數字(1→"I"、4→"IV"、9→"IX"…)。
+      </p>
+      <p><strong>第一圈 🔴→🟢:</strong>先寫一個最簡單的失敗測試。此刻 <code>to_roman</code> 還不存在,測試當然失敗(紅燈)。</p>
+      <pre><code class="language-python"># test_roman.py
+from roman import to_roman
+
+def test_simple_ones():
+    assert to_roman(1) == "I"
+    assert to_roman(2) == "II"
+    assert to_roman(3) == "III"</code></pre>
+      <p>寫<strong>剛好能讓它過</strong>的程式——別想太多,最笨的寫法也行(綠燈):</p>
+      <pre><code class="language-python"># roman.py
+def to_roman(n):
+    return "I" * n          # 笨,但 1,2,3 確實過了</code></pre>
+      <p><strong>第二圈 🔴→🟢:</strong>加一個新測試,逼程式長大。<code>"I" * 4</code> 會得到 <code>"IIII"</code>,但羅馬數字 4 是 <code>"IV"</code>——紅燈。</p>
+      <pre><code class="language-python">def test_subtractive():
+    assert to_roman(4) == "IV"
+    assert to_roman(5) == "V"
+    assert to_roman(9) == "IX"</code></pre>
+      <p>修改程式讓新舊測試<em>全部</em>通過。這時自然會想到「用一張對照表,從大到小不斷扣」:</p>
+      <pre><code class="language-python">def to_roman(n):
+    table = [(10, "X"), (9, "IX"), (5, "V"), (4, "IV"), (1, "I")]
+    result = []
+    for value, symbol in table:
+        while n &gt;= value:
+            result.append(symbol)
+            n -= value
+    return "".join(result)</code></pre>
+      <p><strong>第三圈 🔴→🟢→🔵:</strong>再加更難的測試,逼出完整的表。</p>
+      <pre><code class="language-python">def test_big_numbers():
+    assert to_roman(40) == "XL"
+    assert to_roman(90) == "XC"
+    assert to_roman(1994) == "MCMXCIV"</code></pre>
+      <p>程式結構已經對了,只要把對照表補完整——這一步既是讓測試變綠,也是<strong>重構</strong>(藍燈):結構不變,只擴充資料。</p>
+      <pre><code class="language-python">def to_roman(n):
+    table = [
+        (1000, "M"), (900, "CM"), (500, "D"), (400, "CD"),
+        (100, "C"), (90, "XC"), (50, "L"), (40, "XL"),
+        (10, "X"), (9, "IX"), (5, "V"), (4, "IV"), (1, "I"),
+    ]
+    result = []
+    for value, symbol in table:
+        while n &gt;= value:
+            result.append(symbol)
+            n -= value
+    return "".join(result)</code></pre>
+      <p>全部測試通過。注意這趟旅程帶來的三個禮物:</p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">TDD 給你的,遠不只是測試</span>
+          <p><strong>一、它逼你先想清楚規格</strong>:寫測試前,你必須先回答「怎樣才算對」——這把模糊的需求變成精確的例子。
+          <strong>二、它讓你永遠有安全網</strong>:每一步都在綠燈保護下進行,重構時一旦改壞,立刻紅燈。
+          <strong>三、你最後免費得到一整套測試</strong>:它們不是事後補的功課,而是開發的副產品。
+          就算你不嚴格遵守 TDD,「動手前先想一個具體的測試案例」這個習慣本身,就價值連城。</p>
+        </div>
+      </div>
+
+      <h2>進階測試法:比手寫案例更強的三招</h2>
+      <p>
+        到目前為止,我們都在「手動挑案例」。但人腦想得到的案例,恰恰是 bug 最不會躲的地方(因為你想得到,你就會處理它)。
+        bug 真正躲的,是你<em>沒想到</em>的角落。下面三招,都是用來攻擊「你沒想到」的。
+      </p>
+
+      <h3>性質測試(property-based testing):驗證「性質」而非「例子」</h3>
+      <p>
+        手寫測試是「給定輸入 X,輸出應該是 Y」;<strong>性質測試</strong>則更高一層:「<em>無論</em>輸入是什麼,輸出都應該滿足某個<strong>性質</strong>」。
+        然後讓工具<strong>自動生成成千上百個隨機輸入</strong>去攻擊這個性質。Python 的代表工具是 <strong>Hypothesis</strong>。
+      </p>
+      <p>
+        經典例子:測試排序。你不必想「<code>[3,1,2]</code> 應該變 <code>[1,2,3]</code>」這種具體案例,而是宣告排序<em>必須滿足</em>的性質:
+      </p>
+      <pre><code class="language-python">from hypothesis import given, strategies as st
+from collections import Counter
+
+def my_sort(xs):
+    return sorted(xs)
+
+@given(st.lists(st.integers()))      # Hypothesis 會自動生成各種整數串列
+def test_length_preserved(xs):
+    assert len(my_sort(xs)) == len(xs)             # 性質一:長度不變
+
+@given(st.lists(st.integers()))
+def test_is_ordered(xs):
+    result = my_sort(xs)
+    for i in range(len(result) - 1):
+        assert result[i] &lt;= result[i + 1]          # 性質二:相鄰元素遞增
+
+@given(st.lists(st.integers()))
+def test_is_permutation(xs):
+    assert Counter(my_sort(xs)) == Counter(xs)     # 性質三:就是原本那堆數(沒憑空多/少)</code></pre>
+      <p>
+        這三個性質合起來,幾乎就是「正確排序」的<strong>定義</strong>。Hypothesis 會丟空串列、單元素、巨大串列、全相同、含負數、
+        含重複……各種你懶得手寫的刁鑽案例。一旦找到反例,它還會自動把反例<strong>縮小(shrink)</strong>到最簡形式——
+        這正是前面 delta debugging 的精神!來看它抓 bug 的威力:
+      </p>
+      <pre><code class="language-python">def lower_first(s):
+    return s[0].lower() + s[1:]     # 把字串首字母轉小寫……有個沒想到的洞
+
+@given(st.text())                    # 自動生成各種字串
+def test_lower_first_no_crash(s):
+    lower_first(s)                   # 性質:對任何字串都不該崩潰
+
+# Hypothesis 跑沒幾下就回報:
+# Falsifying example: test_lower_first_no_crash(s='')
+# —— 空字串!s[0] 會 IndexError。而且它「縮小」到了最簡單的反例:''</code></pre>
+      <p>
+        你大概永遠不會手動想到去測「空字串」——但 Hypothesis 會,而且每次都會。這就是性質測試的價值:
+        <strong>它幫你探索你想不到的輸入空間。</strong>
+      </p>
+
+      <h3>模糊測試(fuzzing):用混亂的輸入找崩潰</h3>
+      <p>
+        <strong>模糊測試(fuzzing)</strong>是性質測試的近親,但目標更純粹、更暴力:<strong>持續餵給程式大量隨機或變異(mutated)的輸入,
+        看它會不會崩潰、當掉、或洩漏記憶體。</strong>它通常只驗證一個最低限度的性質——「不可以崩潰」。
+      </p>
+      <p>
+        現代的模糊器(如 <strong>AFL++</strong>、<strong>libFuzzer</strong>,Python 有 <strong>Atheris</strong>)更聰明:它們是
+        <strong>覆蓋率導向(coverage-guided)</strong>的——會觀察哪些輸入觸發了新的程式路徑,然後優先在那些輸入上做變異,
+        像演化一樣逐步鑽進程式更深的角落。這讓 fuzzing 在挖掘記憶體安全漏洞(緩衝區溢位、越界讀寫)上效果驚人。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">🛡️</div>
+        <div class="body">
+          <span class="c-title">fuzzing 在資安裡的角色</span>
+          <p>我們在第 36 章(安全程式設計)看過:fuzzing 的精神,正是「永遠假設輸入是惡意的」這句資安鐵律的<strong>自動化版本</strong>。
+          無數 C/C++ 函式庫的重大漏洞(包括著名的 Heartbleed 類問題)都是 fuzzing 挖出來的;Google 的 OSS-Fuzz 專案
+          至今已為開源軟體找出數萬個 bug。當你的程式會接觸不可信的外部輸入(網路封包、檔案格式、使用者上傳),fuzzing 幾乎是必備的防線。</p>
+        </div>
+      </div>
+
+      <h3>變異測試(mutation testing):測試你的測試</h3>
+      <p>
+        前面我們一直在用測試檢查程式。但有個更深的問題:<strong>誰來檢查你的測試?</strong>一套覆蓋率 100% 的測試,
+        可能根本沒在認真驗證(還記得那個一個 <code>assert</code> 都沒有的反例嗎)。<strong>變異測試(mutation testing)</strong>就是來回答這個問題的。
+      </p>
+      <p>
+        它的點子既邪惡又天才:<strong>故意把你的程式改壞</strong>,製造出一堆「變異體(mutant)」——把 <code>&gt;</code> 改成 <code>&gt;=</code>、
+        把 <code>+</code> 改成 <code>-</code>、把 <code>return x</code> 改成 <code>return None</code>……然後對每一個變異體跑你的測試套件。
+        邏輯是:如果你的測試夠好,它<strong>應該要因為這個故意製造的錯而失敗</strong>(我們說這個變異體被「殺死(killed)」了)。
+        如果改壞了程式、測試卻還是全部通過(變異體「存活」了),那代表——<strong>你的測試有盲區,沒能抓到這種錯。</strong>
+      </p>
+      <pre><code class="language-python"># 原始程式
+def is_adult(age):
+    return age &gt;= 18
+
+# 變異體:把 &gt;= 改成 &gt;
+def is_adult_mutant(age):
+    return age &gt; 18
+
+# 如果你的測試只有 assert is_adult(20) == True、assert is_adult(10) == False,
+# 那這個變異體會「存活」——因為你沒測到 age == 18 這個邊界!
+# 補上 assert is_adult(18) == True,就能「殺死」這個變異體。</code></pre>
+      <p>
+        <strong>變異分數(mutation score)= 被殺死的變異體 / 變異體總數</strong>,它衡量的是測試的「強度」,遠比覆蓋率誠實。
+        Python 有 <code>mutmut</code>、<code>cosmic-ray</code> 等工具。注意上面那個例子——存活的變異體精準地指出「你漏測了 18 這個邊界值」,
+        這跟我們前面講的邊界值分析完美呼應:<strong>變異測試會自動幫你發現你漏掉的邊界。</strong>
+      </p>
+
+      <h2>測試替身:當程式有「外部相依」</h2>
+      <p>
+        單元測試要「快、穩、隔離」,但真實程式常常相依於外部世界:它會寄 email、打 API、讀資料庫、看現在幾點。
+        這些東西<strong>慢</strong>(網路要等)、<strong>不穩</strong>(API 可能掛)、<strong>有副作用</strong>(你不想每跑一次測試就真的寄一封信)。
+        解法是用<strong>測試替身(test double)</strong>——一個假的、可控的東西,在測試時頂替真貨。常見三種:
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>替身</th><th>它是什麼</th><th>典型用途</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><strong>stub(樁)</strong></td><td>回傳<em>事先寫死</em>的答案</td><td>讓被測程式拿到一個可預測的回應,例如「假裝 API 回傳了這筆資料」</td></tr>
+          <tr><td><strong>mock(模擬)</strong></td><td>會<em>記錄自己被怎麼呼叫</em>的假物件</td><td>驗證「互動」:被測程式有沒有<em>正確地</em>呼叫它(呼叫幾次、傳什麼參數)</td></tr>
+          <tr><td><strong>fake(偽件)</strong></td><td>有<em>真的、但簡化的</em>實作</td><td>例如用「記憶體裡的字典」當作假資料庫,行為像真的但不落地</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>
+        用 Python 內建的 <code>unittest.mock</code> 看一個 mock 的例子。假設 <code>notify_user</code> 會透過一個「寄信器」寄信,
+        我們不想在測試裡真的寄信,只想驗證「它有沒有用正確的地址與內容去呼叫寄信器」:
+      </p>
+      <pre><code class="language-python">from unittest.mock import Mock
+
+def notify_user(user_id, mailer):
+    address = f"user{user_id}@example.com"
+    mailer.send(address, "歡迎加入!")        # 真實情況下這會寄出一封信
+    return True
+
+def test_notify_user_sends_correct_email():
+    fake_mailer = Mock()                       # 一個假的寄信器,不會真的寄信
+    notify_user(42, fake_mailer)
+    # 驗證「互動」:send 是否被呼叫了一次,且參數正確?
+    fake_mailer.send.assert_called_once_with("user42@example.com", "歡迎加入!")</code></pre>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">別 mock 上癮</span>
+          <p>測試替身很方便,但用過頭會把測試變成「測試你對實作的假設」而不是「測試行為」。如果你 mock 了一切,
+          測試可能全綠,程式卻在真實環境整個壞掉(因為你 mock 的行為跟真貨不一樣)。原則:
+          <strong>mock 那些慢的、不穩的、有副作用的邊界(網路、資料庫、時間),核心邏輯則用真貨直接測。</strong>
+          需要大量 mock 才測得動,常常是一個訊號——你的程式相依糾纏太深,該重新設計了。這把我們帶到最後一個主題。</p>
+        </div>
+      </div>
+
+      <h2>心態:bug 是老師,可測試性是好設計的影子</h2>
+      <p>
+        技術講完了,但決定你能走多遠的,是心態。最後送你三個觀念,它們會貫穿你整個工程生涯。
+      </p>
+      <p>
+        <strong>第一,bug 是學習機會,不是羞恥。</strong>第 5 章說過:連最頂尖的工程師,寫程式的時間有一大半花在除錯上。
+        每一個你親手抓到的 bug,都在你腦中刻下一條「下次別再這樣」的神經迴路。會寫程式的人和很會寫程式的人,
+        差別不在「誰寫的 bug 少」(都很多),而在「誰從每個 bug 學到更多、誰抓 bug 的系統更強」。
+        把除錯當成查案的樂趣,而不是失敗的懲罰。
+      </p>
+      <p>
+        <strong>第二,防禦性程式設計(defensive programming)。</strong>第 5、36 章埋下的種子在這裡長成習慣:
+        在函式入口驗證輸入、用斷言守住內部不變量、對「不該發生」的情況明確報錯而不是默默吞掉。
+        防禦性程式設計的精髓,是讓 bug <strong>盡早、盡可能大聲地失效</strong>——一個在感染當下就崩潰的程式,
+        遠比一個帶著錯誤狀態默默跑下去、最後給你一個無法解釋的錯誤結果的程式,好除錯一百倍。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">可測試性,是好設計的副產品</span>
+          <p>這是整章最值得帶走的一句話。當你發現某段程式<strong>很難寫測試</strong>——要 mock 一大堆東西、要先建好複雜的環境、
+          一個函式做了太多事不知從何測起——這幾乎總是在告訴你:<strong>這段程式的設計有問題。</strong>
+          它可能耦合太緊、職責太雜、相依太多。反過來,當你帶著「這要怎麼測?」的問題去寫程式,你會自然地寫出
+          職責單一、相依清楚、輸入輸出分明的函式——也就是<em>好設計</em>。所以「為了測試而設計」不是額外負擔,
+          它是一面鏡子,照出你設計的好壞。<strong>難測的程式,通常就是壞的程式。</strong></p>
+        </div>
+      </div>
+
+      <h2>動手練習</h2>
+      <p>看懂和會做是兩回事。下面六題由淺入深,涵蓋本章的核心技能。請務必先自己動手,卡住了再看解答。</p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 46.1 <span class="badge">除錯</span></div>
+        <div class="ex-body">
+          <p>下面這個 <code>count_vowels</code> 想數出字串裡的母音數量,但它<strong>少數了</strong>一些。
+          請用<strong>科學除錯法</strong>(觀察 → 假設 → 預測 → 實驗 → 修正)定位並修好它。寫下你的假設與驗證它的實驗。</p>
+          <pre><code class="language-python">def count_vowels(s):
+    vowels = "aeiou"
+    count = 0
+    for ch in s:
+        if ch in vowels:
+            count += 1
+    return count
+
+print(count_vowels("Hello"))      # 預期 2,實際 1
+print(count_vowels("AEIOU"))      # 預期 5,實際 0</code></pre>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>觀察:</strong><code>"Hello"</code> 應有 e、o 兩個母音卻只數到 1;<code>"AEIOU"</code> 全是母音卻數到 0。</p>
+              <p><strong>假設:</strong>兩個失敗案例的共通點是「大寫母音沒被算到」。我猜 <code>vowels</code> 只放了小寫,
+              而 <code>"Hello"</code> 的 <code>H</code>…等比對只認小寫,大寫的 <code>E</code>(在 AEIOU 裡)完全沒被認出。</p>
+              <p><strong>預測:</strong>若假設成立,則「全小寫母音」的輸入應該正確。預測 <code>count_vowels("aeiou") == 5</code>(正確),
+              而任何含大寫母音的都會少算。</p>
+              <p><strong>實驗:</strong>跑 <code>count_vowels("aeiou")</code> → 得到 5,正確!對照 <code>"AEIOU"</code> → 0,錯誤。假設成立。</p>
+              <p><strong>修正:</strong>比對前先把字元轉小寫(或把大寫也放進 <code>vowels</code>)。</p>
+              <pre><code class="language-python">def count_vowels(s):
+    vowels = "aeiou"
+    count = 0
+    for ch in s.lower():       # 統一轉小寫再比對
+        if ch in vowels:
+            count += 1
+    return count
+
+assert count_vowels("Hello") == 2
+assert count_vowels("AEIOU") == 5
+assert count_vowels("xyz") == 0      # 別忘了補一個邊界:沒有母音
+print("通過 ✅")</code></pre>
+              <p>重點不在這幾行修正,而在你<strong>先形成「是大小寫問題」的假設、再用一個實驗確認</strong>的過程——而不是亂猜亂改。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 46.2 <span class="badge">測試設計</span></div>
+        <div class="ex-body">
+          <p>有一個 <code>ticket_price(age)</code> 票價函式,規則如下:<strong>0–2 歲免費(0 元)、3–12 歲兒童票(80 元)、
+          13–64 歲全票(150 元)、65 歲以上敬老票(60 元)</strong>;年齡為負數或非整數應視為不合法。
+          請<strong>不看實作</strong>,只憑這段規格,用<strong>等價分割 + 邊界值分析</strong>設計一組測試案例。你能列出哪些等價類?哪些邊界?</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>等價類(各取一代表):</strong>不合法負數(如 −1)、嬰兒 [0,2](如 1)、兒童 [3,12](如 8)、
+              全票 [13,64](如 30)、敬老 [65,∞)(如 70)。</p>
+              <p><strong>邊界值(每個交界的兩側,最容易 off-by-one):</strong>−1/0、2/3、12/13、64/65。
+              這些正是「到底 12 算兒童還是全票」這種最容易寫錯的地方。</p>
+              <pre><code class="language-python">import pytest
+from tickets import ticket_price
+
+@pytest.mark.parametrize("age, price", [
+    (0,   0),     # ★ 邊界:免費區下端
+    (1,   0),     # 嬰兒區代表
+    (2,   0),     # ★ 邊界:免費區上端
+    (3,   80),    # ★ 邊界:跳到兒童票
+    (8,   80),    # 兒童區代表
+    (12,  80),    # ★ 邊界:兒童票上端
+    (13,  150),   # ★ 邊界:跳到全票
+    (30,  150),   # 全票區代表
+    (64,  150),   # ★ 邊界:全票上端
+    (65,  60),    # ★ 邊界:跳到敬老票
+    (70,  60),    # 敬老區代表
+])
+def test_ticket_price(age, price):
+    assert ticket_price(age) == price
+
+@pytest.mark.parametrize("bad_age", [-1, -100, 3.5, "abc"])
+def test_ticket_price_invalid(bad_age):
+    with pytest.raises((ValueError, TypeError)):
+        ticket_price(bad_age)</code></pre>
+              <p>注意:11 個正常案例裡有 8 個是邊界——這正確反映了「bug 最愛躲在邊界」。能列出這份清單,
+              代表你已經把規格徹底想透了,這比實作本身更有價值。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 46.3 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>為下面這個 <code>is_palindrome</code>(判斷字串是否為回文,忽略大小寫)寫一組 <code>pytest</code> 測試,
+          <strong>必須使用 <code>@pytest.mark.parametrize</code></strong>,並涵蓋:一般回文、非回文、空字串、單一字元、含大小寫混合。</p>
+          <pre><code class="language-python">def is_palindrome(s):
+    s = s.lower()
+    return s == s[::-1]    # s[::-1] 是反轉字串</code></pre>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">import pytest
+from palindrome import is_palindrome
+
+@pytest.mark.parametrize("text, expected", [
+    ("racecar", True),    # 一般回文
+    ("hello",   False),   # 非回文
+    ("",        True),    # 邊界:空字串(反轉還是空,算回文)
+    ("a",       True),    # 邊界:單一字元
+    ("Anna",    True),    # 大小寫混合,忽略大小寫後是回文
+    ("Python",  False),   # 大小寫混合的非回文
+])
+def test_is_palindrome(text, expected):
+    assert is_palindrome(text) == expected</code></pre>
+              <p>用 <code>parametrize</code> 的好處:六個案例共用一個測試函式,新增案例只要多一行 tuple。
+              跑 <code>pytest</code> 時每組會被當成獨立測試回報,哪組掛了一目了然。
+              進階思考:真實的回文判斷常需忽略空格與標點(如 "A man a plan a canal Panama")——你會怎麼擴充函式與測試?</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 46.4 <span class="badge">TDD</span></div>
+        <div class="ex-body">
+          <p>用 <strong>TDD(先寫測試,再寫程式)</strong>開發一個 <code>run_length_encode(s)</code>:把字串做「行程長度編碼」,
+          例如 <code>"aaabbc"</code> → <code>"a3b2c1"</code>、<code>"x"</code> → <code>"x1"</code>、<code>""</code> → <code>""</code>。
+          請先寫出會失敗的測試(紅),再寫出剛好能通過的實作(綠)。把你的紅綠步驟寫下來。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>🔴 紅:</strong>先把「對」定義成測試。此時函式還不存在,全部失敗。</p>
+              <pre><code class="language-python"># test_rle.py
+import pytest
+from rle import run_length_encode
+
+@pytest.mark.parametrize("text, expected", [
+    ("",       ""),          # 邊界:空字串
+    ("x",      "x1"),        # 邊界:單一字元
+    ("aaabbc", "a3b2c1"),    # 一般情況
+    ("abc",    "a1b1c1"),    # 沒有重複
+    ("aaaa",   "a4"),        # 全相同
+])
+def test_run_length_encode(text, expected):
+    assert run_length_encode(text) == expected</code></pre>
+              <p><strong>🟢 綠:</strong>寫剛好能讓全部通過的實作。逐字掃描,累計連續相同字元的長度。</p>
+              <pre><code class="language-python"># rle.py
+def run_length_encode(s):
+    if not s:                    # 邊界:空字串直接回傳空
+        return ""
+    result = []
+    prev = s[0]
+    count = 1
+    for ch in s[1:]:
+        if ch == prev:
+            count += 1           # 還是同一個字元,計數加一
+        else:
+            result.append(f"{prev}{count}")   # 換字元了,把上一段寫出來
+            prev = ch
+            count = 1
+    result.append(f"{prev}{count}")           # 別忘了最後一段!
+    return "".join(result)</code></pre>
+              <p><strong>🔵 重構:</strong>這個版本已經乾淨,可不動。重點是體會:因為測試<em>先</em>寫好,
+              你寫實作時心裡清楚知道「最後一段別漏掉」「空字串要處理」——這兩個正是此題最容易出的 bug,
+              而你的測試早就替你守住了。這就是 TDD 的威力。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 46.5 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>用 <strong>Hypothesis 性質測試</strong>驗證 Python 的 <code>list(reversed(...))</code>。請寫出至少兩個「性質」:
+          (1) 反轉兩次會回到原本;(2) 反轉後長度不變。然後思考:你能否設計一個性質,專門抓出一個「<em>故意寫錯</em>」的反轉實作?</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">from hypothesis import given, strategies as st
+
+def my_reverse(xs):
+    return list(reversed(xs))
+
+@given(st.lists(st.integers()))
+def test_reverse_twice_is_identity(xs):
+    assert my_reverse(my_reverse(xs)) == xs       # 性質一:反轉兩次 = 原本
+
+@given(st.lists(st.integers()))
+def test_reverse_preserves_length(xs):
+    assert len(my_reverse(xs)) == len(xs)          # 性質二:長度不變
+
+@given(st.lists(st.integers()))
+def test_reverse_first_becomes_last(xs):
+    if xs:                                          # 非空時
+        assert my_reverse(xs)[0] == xs[-1]          # 性質三:原本最後一個變成第一個</code></pre>
+              <p><strong>抓錯的能力:</strong>假設有人把實作寫成 <code>return xs</code>(根本沒反轉)。性質一、二都<em>還是會通過</em>
+              (反轉兩次=原本 ✓、長度不變 ✓)——這告訴我們「性質不夠強」!但<strong>性質三</strong>會立刻抓到它:
+              對 <code>[1, 2]</code>,錯誤實作的 <code>[0]</code> 是 1,而 <code>xs[-1]</code> 是 2,不相等,測試失敗。</p>
+              <p>教訓:性質測試的威力,取決於你的性質寫得<strong>夠不夠刻畫本質</strong>。
+              這也呼應變異測試的精神——好的測試,要能殺死「偷懶的錯誤實作」。
+              最強的性質往往是「跟一個已知正確的參考實作比對」:<code>assert my_reverse(xs) == xs[::-1]</code>。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 46.6 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>實作一個簡化版的 <strong>delta debugging</strong>。給定一個「失敗判定函式」<code>fails(s)</code>
+          (回傳 <code>True</code> 代表這個輸入會觸發 bug),寫一個 <code>minimize(s, fails)</code>,
+          把一個會失敗的字串縮小成「再刪任何一塊就不再失敗」的最小輸入。用「含有子字串 <code>"bug"</code> 就失敗」來測試你的縮小器。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>核心策略(圖 46-3):把字串切成 <code>n</code> 塊,試著刪掉每一塊;若刪掉後<em>還是失敗</em>,就採用這個更短的版本。
+              刪不動時,把粒度切得更細(<code>n</code> 加倍),直到無法再縮。</p>
+              <pre><code class="language-python">def minimize(s, fails):
+    """把會讓 fails(s)==True 的輸入縮到最小"""
+    assert fails(s), "初始輸入就必須是會失敗的"
+    n = 2
+    while len(s) &gt;= 2:
+        chunk = len(s) // n
+        reduced = False
+        # 試著刪掉每一塊
+        for i in range(0, len(s), chunk):
+            candidate = s[:i] + s[i + chunk:]      # 刪掉第 i 塊
+            if candidate and fails(candidate):
+                s = candidate                      # 刪了還是失敗 → 採用更短的
+                n = max(n - 1, 2)
+                reduced = True
+                break
+        if not reduced:
+            if n &gt;= len(s):                         # 已經細到逐字元都刪不動
+                break
+            n = min(n * 2, len(s))                  # 切更細再試
+    return s
+
+# 測試:含 "bug" 就算失敗
+def fails(s):
+    return "bug" in s
+
+original = "the quick brown bug jumps over"
+print(minimize(original, fails))   # 縮成最小,結果是 "bug"</code></pre>
+              <p>跑起來,一段長句子會被自動縮成核心的 <code>"bug"</code> 三個字元——再刪任何一個都不再含 "bug",也就不再失敗。
+              這正是 Hypothesis「shrinking」與 <code>git bisect</code> 背後的同一個思想:用機械化的二分式刪減,
+              自動逼出「觸發 bug 的最小條件」。你親手體會了一次,以後再看到這個概念就不陌生了。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>動手實驗室:寫測試抓真實 Bug</h2>
+      <p>
+        理論學完了,現在把手弄髒。這個實驗室帶你走過兩個完整的實戰循環:
+        <strong>TDD 紅→綠</strong>(用 <code>unittest</code> 為一個有邊界 bug 的函式先寫測試、再修好)
+        與<strong>自製隨機性質測試</strong>(不依賴外部框架,用迷你隨機產生器驗證不變量,並親眼看見隨機測試抓出植入的 bug)。
+        最後三題練習鞏固這兩項技能,每題都附解答。
+      </p>
+
+      <h3>實驗一:TDD 循環──為有邊界缺陷的 binary search 補測試並修好</h3>
+      <p>
+        下面的 <code>binary_search</code> 有一個典型的差一錯誤(off-by-one):
+        當搜尋目標恰好落在串列<strong>最後一個位置</strong>時,函式錯誤地回傳 <code>-1</code>。
+      </p>
+      <p><strong>Step 0:看見問題</strong></p>
+      <pre><code class="language-python">def binary_search(xs, target):
+    """在已排序串列 xs 裡找 target,回傳索引或 -1"""
+    lo, hi = 0, len(xs) - 1
+    while lo &lt; hi:           # ← 缺陷:應為 lo &lt;= hi
+        mid = (lo + hi) // 2
+        if xs[mid] == target:
+            return mid
+        elif xs[mid] &lt; target:
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    return -1
+
+xs = [1, 3, 5, 7, 9]
+print(binary_search(xs, 9))   # 預期 4,實際 -1  ← 失效!</code></pre>
+      <p>
+        問題的根源:當 <code>xs=[1,3,5,7,9]</code>、<code>target=9</code> 時,搜尋最後會走到 <code>lo=4, hi=4</code>。
+        <code>4 &lt; 4</code> 為 <code>False</code>——迴圈直接退出,從未檢查過 <code>xs[4]</code>,回傳 <code>-1</code>。
+      </p>
+      <p><strong>Step 1 🔴 先把失敗化成測試</strong>──讓測試替你永久記住這個 bug:</p>
+      <pre><code class="language-python">import unittest
+
+class TestBinarySearch(unittest.TestCase):
+
+    def setUp(self):
+        self.xs = [1, 3, 5, 7, 9]
+
+    def test_found_in_middle(self):
+        self.assertEqual(binary_search(self.xs, 5), 2)
+
+    def test_found_at_start(self):
+        self.assertEqual(binary_search(self.xs, 1), 0)
+
+    def test_found_at_last(self):           # ← 這個測試會紅燈!
+        self.assertEqual(binary_search(self.xs, 9), 4)
+
+    def test_not_found(self):
+        self.assertEqual(binary_search(self.xs, 4), -1)
+
+    def test_empty_list(self):              # 邊界:空串列
+        self.assertEqual(binary_search([], 1), -1)
+
+    def test_single_element_found(self):    # 邊界:單一元素且找到
+        self.assertEqual(binary_search([42], 42), 0)
+
+    def test_single_element_not_found(self):
+        self.assertEqual(binary_search([42], 99), -1)
+
+if __name__ == "__main__":
+    unittest.main()</code></pre>
+      <p>
+        跑 <code>python -m unittest</code>,<strong>兩個測試失敗:<code>test_found_at_last</code> 與 <code>test_single_element_found</code></strong>;其餘五個通過。
+        <code>test_single_element_found</code> 也失敗,是因為 <code>xs=[42]</code> 時 <code>lo=hi=0</code>,<code>0 &lt; 0</code> 為 <code>False</code>,迴圈直接退出,從未檢查唯一那個元素。
+        兩盞精準的紅燈,把缺陷同時點亮了。
+      </p>
+      <p><strong>Step 2 🟢 修復:一個字符的差異</strong></p>
+      <pre><code class="language-python">def binary_search(xs, target):
+    lo, hi = 0, len(xs) - 1
+    while lo &lt;= hi:          # ← 把 &lt; 改成 &lt;=,lo==hi 時多試最後一次
+        mid = (lo + hi) // 2
+        if xs[mid] == target:
+            return mid
+        elif xs[mid] &lt; target:
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    return -1</code></pre>
+      <p>
+        再跑一次,七個測試全綠。<strong>一個字符(<code>&lt;</code>→<code>&lt;=</code>),七個測試守住這條邊界永遠不再復發。</strong>
+        這就是測試作為回歸防護網的意義——bug 一旦被捕,就寫成測試,讓它沒有第二次逃跑的機會。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">連回本章:分支覆蓋率與單元測試分類</span>
+          <p>
+            上面七個 case 都是<strong>單元測試</strong>:只測一個函式、無外部相依、幾毫秒跑完、失敗時立刻知道是哪個邊界。
+            從覆蓋率角度看,有 bug 的 <code>while lo &lt; hi</code> 版本,「<code>lo == hi</code> 時進入迴圈」這個分支從未被踩過——
+            <strong>分支覆蓋率未達 100%</strong>。這正是為什麼光有敘述覆蓋率不夠:那個未走到的分支裡藏著缺陷。
+            補上 <code>test_found_at_last</code> 與 <code>test_single_element_found</code>,兩條岔路都踩到,漏洞才現形。
+          </p>
+        </div>
+      </div>
+
+      <h3>實驗二:自製隨機性質測試</h3>
+      <p>
+        不依賴任何外部框架,只用標準庫的 <code>random</code> 模組,手寫一個迷你性質測試引擎。
+        兩個部分:先驗證排序的三個不變量,再對 encode/decode <strong>植入一個邊界 bug</strong>,看隨機測試能不能抓到它。
+      </p>
+      <p><strong>Part A:排序的三個不變量</strong></p>
+      <pre><code class="language-python">import random
+
+def random_int_list(max_len=20, lo=-100, hi=100):
+    """產生一個隨機整數串列"""
+    length = random.randint(0, max_len)
+    return [random.randint(lo, hi) for _ in range(length)]
+
+def check_sort_properties(trials=1000):
+    for _ in range(trials):
+        xs = random_int_list()
+        result = sorted(xs)
+
+        # 不變量一:長度不變
+        assert len(result) == len(xs), f"長度不符: xs={xs}"
+
+        # 不變量二:相鄰元素遞增(= 已排序)
+        for i in range(len(result) - 1):
+            assert result[i] &lt;= result[i + 1], f"未排序: {result}"
+
+        # 不變量三:是原串列的重排(多重集合相同)
+        from collections import Counter
+        assert Counter(result) == Counter(xs), f"元素不吻合: xs={xs}"
+
+    print(f"排序三不變量:跑了 {trials} 次全部通過 ✅")
+
+check_sort_properties()</code></pre>
+      <p><strong>Part B:encode/decode 往返不變量(植入 bug)</strong></p>
+      <p>
+        用行程長度編碼(run-length encoding)示範往返不變量 <code>decode(encode(x)) == x</code>。
+        <code>decode_buggy</code> 裡植入了一個真實的邊界 bug:當計數達到兩位數(≥ 10)時,解碼就會出錯。
+      </p>
+      <pre><code class="language-python">import random
+
+def encode(s):
+    """行程長度編碼:"aaabbc" → "a3b2c1" """
+    if not s:
+        return ""
+    result, prev, count = [], s[0], 1
+    for ch in s[1:]:
+        if ch == prev:
+            count += 1
+        else:
+            result.append(f"{prev}{count}")
+            prev, count = ch, 1
+    result.append(f"{prev}{count}")
+    return "".join(result)
+
+def decode_buggy(encoded):
+    """有 bug 版:只讀計數的第一位數字,多位數計數時剩餘數字被誤當成字元"""
+    result, i = [], 0
+    while i &lt; len(encoded):
+        ch = encoded[i]; i += 1
+        if i &lt; len(encoded) and encoded[i].isdigit():
+            count = int(encoded[i]); i += 1    # ← bug:只讀一位,計數 &gt;= 10 時解碼出錯
+        else:
+            count = 0
+        result.append(ch * count)
+    return "".join(result)
+
+def random_string(max_len=30):
+    length = random.randint(0, max_len)
+    return "".join(random.choice("ab") for _ in range(length))  # 只有兩個字母→ run ≥ 10 很容易出現
+
+def check_roundtrip(decode_fn, trials=500, label=""):
+    for _ in range(trials):
+        s = random_string()
+        if decode_fn(encode(s)) != s:
+            print(f"[{label}] 往返不變量被打破!反例: {s!r}")
+            return
+    print(f"[{label}] 跑了 {trials} 次,往返不變量成立 ✅")
+
+print("--- 有 bug 的 decode ---")
+check_roundtrip(decode_buggy, label="buggy")</code></pre>
+      <p>實際跑一次會看到:</p>
+      <pre><code>[buggy] 往返不變量被打破!反例: 'ababbaaaabaababbbbbbbbbba'</code></pre>
+      <p>
+        字串裡有連續 10 個 <code>b</code>,被編碼成 <code>"...b10..."</code>。<code>decode_buggy</code> 只讀了
+        <code>'1'</code>,把 <code>"10"</code> 拆成計數 <code>1</code> 加上多餘字元 <code>'0'</code>,
+        後續解碼全部錯位,回傳的字串與原字串不同,往返不變量就此被打破。補上正確版:
+      </p>
+      <pre><code class="language-python">def decode(encoded):
+    """正確版:貪婪地讀取連續數字,支援多位數計數"""
+    result, i = [], 0
+    while i &lt; len(encoded):
+        ch = encoded[i]; i += 1
+        num_str = []
+        while i &lt; len(encoded) and encoded[i].isdigit():
+            num_str.append(encoded[i]); i += 1
+        result.append(ch * int("".join(num_str)))
+    return "".join(result)
+
+print("--- 修好的 decode ---")
+check_roundtrip(decode, label="fixed")   # 跑 500 次全部通過 ✅</code></pre>
+      <p>
+        你不必事先想到「要測連續 10 個以上相同字元」這個角落——隨機產生器自然會走到那裡,並把 bug 揪出來。
+        <strong>這就是隨機性質測試的核心優勢:攻擊你「沒想到」的輸入空間。</strong>
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">自製隨機測試的三個要素</span>
+          <p>
+            無論是自製版或 Hypothesis,性質測試的骨架都是:
+            <strong>(1) 產生器</strong>——自動生成多樣化輸入(<code>random_int_list</code>、<code>random_string</code>);
+            <strong>(2) 不變量</strong>——對所有合法輸入應成立的條件(長度保留、遞增、往返一致);
+            <strong>(3) 反例縮小(shrink)</strong>——找到反例後盡量縮成最簡單的形式(本章 delta debugging 的精神)。
+            你的自製版本覆蓋了 (1)(2);Hypothesis 還把 (3) 自動化了。
+          </p>
+        </div>
+      </div>
+
+      <h3>實驗室練習</h3>
+      <p>完成以上兩個實驗後,試做這三題進階練習。請先自己動手,卡住再看解答。</p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 實驗室練習 L1 <span class="badge">補邊界測試</span></div>
+        <div class="ex-body">
+          <p>
+            下面的 <code>clamp(value, lo, hi)</code> 把 <code>value</code> 限制在 <code>[lo, hi]</code> 內。
+            它有一個<strong>前置條件漏洞</strong>:當呼叫方傳入 <code>lo &gt; hi</code>(無效範圍)時,函式靜默回傳錯誤結果而不報錯。
+            你的任務:(1) 補充邊界測試,讓其中一個測試<strong>紅燈</strong>;(2) 修好函式讓測試<strong>全綠</strong>。
+          </p>
+          <pre><code class="language-python">def clamp(value, lo, hi):
+    if value &lt; lo:
+        return lo
+    if value &gt; hi:
+        return hi
+    return value
+
+# 邊界提示:value == lo、value == hi、lo == hi、lo &gt; hi 各應如何?</code></pre>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">import pytest
+
+@pytest.mark.parametrize("value, lo, hi, expected", [
+    (5,  1, 10,  5),    # 在範圍內
+    (0,  1, 10,  1),    # 小於 lo → 回 lo
+    (15, 1, 10, 10),    # 大於 hi → 回 hi
+    (1,  1, 10,  1),    # ★ 邊界:等於 lo
+    (10, 1, 10, 10),    # ★ 邊界:等於 hi
+    (5,  5,  5,  5),    # ★ 邊界:lo == hi
+])
+def test_clamp(value, lo, hi, expected):
+    assert clamp(value, lo, hi) == expected
+
+def test_clamp_invalid_range():
+    """lo &gt; hi 應該報錯,不能靜默"""
+    with pytest.raises(ValueError):
+        clamp(5, 10, 1)    # ← 這個測試目前會紅燈!</code></pre>
+              <p>補上前置條件守護後:</p>
+              <pre><code class="language-python">def clamp(value, lo, hi):
+    if lo &gt; hi:
+        raise ValueError(f"lo ({lo}) 不能大於 hi ({hi})")
+    if value &lt; lo:
+        return lo
+    if value &gt; hi:
+        return hi
+    return value</code></pre>
+              <p>
+                全部測試通過。這道題的重點是「<strong>先想好什麼輸入應該報錯,寫成測試讓它紅燈</strong>」——
+                只有紅燈告訴你「這裡沒有守護」,你才有動力補上防禦。
+                這正是 TDD 紅→綠循環的防禦性程式設計版本,呼應本章「防禦性程式設計讓 bug 盡早大聲失效」的原則。
+              </p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 實驗室練習 L2 <span class="badge">設計 property</span></div>
+        <div class="ex-body">
+          <p>
+            用自製的隨機產生器,為下面的 <code>flatten</code>(把任意巢狀整數串列展平成一層)
+            設計並驗證至少<strong>兩個不變量</strong>。先想清楚「對所有輸入都應成立的條件是什麼」,再寫成可執行的測試。
+          </p>
+          <pre><code class="language-python">def flatten(nested):
+    """把任意深度的巢狀整數串列展平成一層
+    例:flatten([1, [2, [3, 4]], 5]) → [1, 2, 3, 4, 5]
+    """
+    result = []
+    for item in nested:
+        if isinstance(item, list):
+            result.extend(flatten(item))
+        else:
+            result.append(item)
+    return result</code></pre>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>三個自然的不變量:</p>
+              <ul>
+                <li><strong>無巢狀</strong>:結果的每個元素都是整數,沒有 <code>list</code>。</li>
+                <li><strong>元素總數保留</strong>:原巢狀結構裡的整數總數 = 展平後的長度。</li>
+                <li><strong>多重集合相同</strong>:展平後的元素(含重複)與原本所有整數完全吻合。</li>
+              </ul>
+              <pre><code class="language-python">import random
+from collections import Counter
+
+def count_ints(nested):
+    n = 0
+    for x in nested:
+        n += count_ints(x) if isinstance(x, list) else 1
+    return n
+
+def all_ints(nested):
+    r = []
+    for x in nested:
+        r.extend(all_ints(x) if isinstance(x, list) else [x])
+    return r
+
+def random_nested(depth=3, width=4):
+    """產生隨機的巢狀整數結構"""
+    if depth == 0 or random.random() &lt; 0.5:
+        return random.randint(-50, 50)
+    return [random_nested(depth - 1, width) for _ in range(random.randint(0, width))]
+
+def check_flatten(trials=500):
+    for _ in range(trials):
+        nested = [random_nested() for _ in range(random.randint(0, 5))]
+        flat = flatten(nested)
+
+        # 不變量一:無巢狀
+        assert all(not isinstance(x, list) for x in flat), f"仍含 list: {flat}"
+        # 不變量二:長度
+        assert len(flat) == count_ints(nested), "長度不符"
+        # 不變量三:多重集合
+        assert Counter(flat) == Counter(all_ints(nested)), "元素不吻合"
+
+    print("flatten 三不變量:全部通過 ✅")
+
+check_flatten()</code></pre>
+              <p>
+                設計不變量的訣竅:<strong>先用一句話描述操作的本質</strong>。
+                展平的本質是「把結構拿掉、元素保留」——說出這句話,「元素不增不減(多重集合)」與「結果無巢狀」就自然浮現。
+                能把本質說成語言,就能把它變成可執行的測試。
+              </p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 實驗室練習 L3 <span class="badge">找出 flaky 測試成因</span></div>
+        <div class="ex-body">
+          <p>
+            <strong>Flaky test(不穩定測試)</strong>是「有時通過、有時失敗、程式完全沒改」的測試。
+            下面兩個測試都是 flaky——找出<strong>每個的根本成因</strong>,並分別改寫成穩定版本。
+          </p>
+          <pre><code class="language-python">import random, time
+
+# Flaky A:不穩定的原因是?
+def get_token():
+    return random.choice(["ok", "ok", "ok", "error"])  # 75% 機率是 "ok"
+
+def test_token_is_ok():
+    assert get_token() == "ok"   # 大部分時候通過,偶爾失敗
+
+# Flaky B:不穩定的原因是?
+def make_id():
+    return int(time.time() * 1000)   # 毫秒時間戳
+
+def test_ids_distinct():
+    a, b = make_id(), make_id()
+    assert a != b   # 在快速機器上可能相同!</code></pre>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>根本成因診斷:</strong></p>
+              <ul>
+                <li>
+                  <strong>Flaky A</strong>:測試對一次隨機呼叫的<em>具體值</em>下斷言,但輸出本身是非確定性的。
+                  25% 的機率讓測試失敗。修法:改測<strong>性質</strong>——對所有合法輸出都應成立的條件,而不是某次輸出的值。
+                </li>
+                <li>
+                  <strong>Flaky B</strong>:依賴時鐘解析度。在同一毫秒內連續呼叫兩次,<code>time.time()</code> 回傳相同值。
+                  在快速機器或 CI 環境特別容易發生。修法:改用設計上就唯一的識別符(UUID)。
+                </li>
+              </ul>
+              <pre><code class="language-python">import uuid
+
+# 修好 A:測「性質」而非「具體值」
+def test_token_in_valid_set():
+    valid = {"ok", "error"}
+    for _ in range(200):              # 多次取樣,每次都應在合法集合內
+        assert get_token() in valid   # 這個性質確定性地成立
+
+# 修好 B:用 UUID 取代時間戳
+def make_id_stable():
+    return str(uuid.uuid4())
+
+def test_ids_distinct_stable():
+    ids = {make_id_stable() for _ in range(1000)}
+    assert len(ids) == 1000   # UUID 碰撞機率極低且不依賴時鐘精度</code></pre>
+              <p><strong>Flaky test 的三大常見根源:</strong>
+              (1) <strong>非確定性輸入/輸出</strong>:隨機、時間、網路、並行——改用測試替身隔離或改測性質;
+              (2) <strong>全局狀態洩漏</strong>:一個測試改了 <code>random.seed</code> 或全域變數,害後面的測試受影響,用 <code>setUp</code>/<code>tearDown</code> 重置;
+              (3) <strong>時序假設</strong>:假設操作夠快或夠慢——應改用明確的同步或 mock 掉時間。
+              Flaky test 比「永遠失敗」更危險:它讓你習慣忽略紅燈,最終侵蝕整個測試套件的可信度。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>把這一章串起來</h2>
+      <p>
+        我們從一隻 1947 年的飛蛾出發,把「除蟲」變成了一門有理論、有方法、可累積的科學。回顧這趟旅程的路標:
+      </p>
+      <ul>
+        <li><strong>bug 有三層</strong>:缺陷(寫錯的程式碼)→ 感染(錯誤的狀態)→ 失效(看得見的錯誤)。關鍵領悟:<em>失效點往往不是缺陷點</em>,所以要往回走,不要盯著現場。</li>
+        <li><strong>科學除錯法</strong>:觀察 → 假設 → 預測 → 實驗 → 修正。用假設驅動、記錄你試過什麼、一次只改一件事。</li>
+        <li><strong>重現是第一步</strong>:最小可重現案例與 delta debugging,把巨大的失敗自動縮成最小核心。</li>
+        <li><strong>觀察與定位</strong>:print/logging、斷言、除錯器看狀態;二分定位(含 <code>git bisect</code>)與向後推理找源頭。</li>
+        <li><strong>測試的理論</strong>:輸入空間爆炸 → 測不完;Dijkstra——測試只能證明 bug 存在,不能證明不存在;覆蓋率是地圖不是 KPI,高覆蓋 ≠ 無 bug。</li>
+        <li><strong>測試設計</strong>:等價分割挑代表、邊界值分析攻交界、決策表覆蓋組合。</li>
+        <li><strong>自動化</strong>:用 <code>pytest</code> 的 parametrize 與 fixtures 寫專業測試;TDD 紅綠重構讓測試先行、設計變好。</li>
+        <li><strong>進階三招</strong>:性質測試(Hypothesis)驗證性質、模糊測試暴力找崩潰、變異測試「測試你的測試」。</li>
+        <li><strong>測試替身</strong>:stub/mock/fake 隔離外部相依——但別 mock 上癮。</li>
+        <li><strong>心態</strong>:bug 是老師不是羞恥;防禦性程式設計讓 bug 盡早大聲失效;<em>可測試性是好設計的影子——難測的程式通常就是壞的設計。</em></li>
+      </ul>
+      <p>
+        第 5 章我們把除錯與測試當「入門技能」教了一遍;這一章,我們把它們升級成「進階理論」。
+        從現在起,當你寫下任何一個函式,腦中應該同時響起兩個問題:「它會在哪裡壞?」與「我怎麼證明它真的會動?」——
+        能持續、嚴肅地回答這兩個問題的人,才是真正可靠的工程師。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">📚</div>
+        <div class="body">
+          <span class="c-title">想更深入?延伸資源</span>
+          <p>本章對應 OSSU 進階課程裡由 Andreas Zeller 主講的兩門 Udacity 經典課:
+          <a href="https://www.udacity.com/course/software-debugging--cs259">Software Debugging(CS259)</a>(科學除錯法、delta debugging、自動化除錯的源頭)
+          與 <a href="https://www.udacity.com/course/software-testing--cs258">Software Testing(CS258)</a>(覆蓋率、測試設計、隨機與性質測試)。
+          想啃硬的,Zeller 的教科書 <a href="https://www.whyprogramsfail.com/"><em>Why Programs Fail: A Guide to Systematic Debugging</em></a>
+          是這套「把除錯科學化」思想的權威來源(本章的缺陷/感染/失效鏈與 delta debugging 都出自此)。
+          想動手玩性質測試,讀 <a href="https://hypothesis.readthedocs.io/">Hypothesis 官方文件</a>;
+          測試的層次、金字塔與 CI/CD,請回顧第 40 章(軟體工程);fuzzing 與資安的關係,請回顧第 36 章(安全程式設計)。</p>
+        </div>
+      </div>
+
+    

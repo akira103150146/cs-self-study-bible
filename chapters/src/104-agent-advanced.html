@@ -1,0 +1,1394 @@
+<!--meta
+title: 進階單代理:規劃、反思與自我改進
+description: 在 ReAct 之上加入 Plan-and-Execute、reflection/self-critique 與記憶增強,讓單一 agent 能拆解子目標、反省自己的錯誤、跨步驟記住教訓;誠實面對失敗模式與護欄設計。
+-->
+
+      <div class="eyebrow">第二二部 · 動手打造 LLM Agent</div>
+      <h1>進階單代理:規劃、反思與自我改進</h1>
+      <p class="subtitle">ReAct 讓 agent 能動手,但大任務需要的不只是「動手」——它需要先想清楚再動手,做完後還要回頭看看自己做得對不對。這一章,我們給 agent 加上規劃、反思與記憶。</p>
+      <div class="byline">
+        <span class="tag">第 98 章</span>
+        <span>閱讀時間 ≈ 70 分鐘</span>
+        <span>難度:★★★★☆</span>
+      </div>
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>ReAct(§95)為何在面對複雜多步任務時容易「走一步算一步」而迷路</li>
+          <li>Plan-and-Execute 如何讓 agent 先產出子步驟計畫再逐一執行,以及它與 ReAct 的根本差異</li>
+          <li>Reflection/self-critique(反思/自我批判)的概念——做完讓 agent 自己審查輸出、找錯、改進</li>
+          <li>如何把 §96 的 <code>VectorStore</code> 當作 agent 的長期記憶,跨步驟記住事實與教訓</li>
+          <li>子目標分解(task decomposition)的原理與「何時停止分解」的判斷</li>
+          <li>如何在 §94–96 的零件上手刻一個 Plan → Execute → Reflect 的完整單 agent 骨架</li>
+          <li>無限迴圈、幻覺、工具誤用、成本爆炸的偵測與護欄設計</li>
+          <li>何時「夠了」——過度工程的 agent vs 簡單提示就能解的任務</li>
+        </ul>
+      </div>
+
+      <!-- ========== h2 ①:開場 ========== -->
+      <h2>開場:ReAct 很好,但面對大任務會「走一步算一步」迷路</h2>
+      <p>
+        假設你交給第 95 章的 ReAct agent 這個任務:
+      </p>
+      <blockquote>
+        「分析這份 50 頁的競品報告,找出三個主要競爭對手的定價策略,與我們的產品做比較,
+        然後寫一份三頁的執行摘要,附上建議。」
+      </blockquote>
+      <p>
+        ReAct 的模式是「Thought → Action → Observation → Thought → …」——<strong>邊想邊做</strong>。
+        這對小任務很好用:計算一個算式、查一個事實、寫一段程式碼——幾步就能搞定。
+        但面對上面這種「多階段、需要大量中間結果相互參照」的任務,「走一步算一步」會遇到幾個問題:
+      </p>
+      <ul>
+        <li><strong>方向漂移(goal drift)</strong>:模型在第 8 步突然忘記了第 1 步設定的目標——「要比較定價策略」——開始分析別的東西。Context window 越長,「早期目標」越容易被後期的 Observation 淹沒。</li>
+        <li><strong>缺乏全局觀</strong>:沒有計畫,agent 無法判斷「現在做的這一步對全局有沒有幫助」——它只能貪婪地選擇當下看起來最合理的下一步。</li>
+        <li><strong>難以回頭</strong>:如果某一步走錯了,純 ReAct agent 通常會繼續往前走,而不是退回來重新規劃。它的「自我修正」只發生在工具回傳錯誤的時候,不發生在「策略方向」出錯的時候。</li>
+        <li><strong>輸出品質沒有驗證</strong>:寫完執行摘要就直接回傳了。「這三頁有沒有回答原本的問題?」——agent 自己不會問這個問題。</li>
+      </ul>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">ReAct 的本質限制</span>
+          <p>ReAct 是優秀的「戰術執行」框架——它讓 agent 能一步一步地用工具完成具體行動。
+          但它沒有「戰略層」:沒有事前計畫、沒有事後反思、沒有持久記憶。
+          對複雜任務,你需要在 ReAct 之上加一層。</p>
+        </div>
+      </div>
+
+      <p>
+        這一章要在 §94–§96 的零件基礎上加三個新能力:
+      </p>
+      <ul>
+        <li><strong>規劃(planning)</strong>:執行前先讓 LLM 產出子步驟計畫</li>
+        <li><strong>反思(reflection)</strong>:執行後讓 agent 審查自己的輸出</li>
+        <li><strong>記憶(memory)</strong>:用 §96 的 <code>VectorStore</code> 讓教訓跨步驟持久化</li>
+      </ul>
+      <p>
+        這三個能力都能降低失敗率——但不能消除它。我們會誠實地討論它們的邊界。
+      </p>
+
+      <!-- ========== h2 ②:Plan-and-Execute ========== -->
+      <h2>Plan-and-Execute:先計畫,後執行</h2>
+      <p>
+        <strong>Plan-and-Execute</strong>(規劃後執行)是一種把「計畫產生」和「計畫執行」分開的 agent 架構。
+        基本流程只有兩個階段:
+      </p>
+      <ol>
+        <li><strong>Plan 階段</strong>:用 LLM 對整個任務做一次推理,輸出一個有序的「子步驟清單」。</li>
+        <li><strong>Execute 階段</strong>:依序執行每個子步驟——每一步可以用 ReAct 迴圈、工具呼叫或直接 LLM 生成來完成。</li>
+      </ol>
+      <p>
+        這和純 ReAct 的「邊想邊做」有根本的差異,如下圖所示:
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 760 400" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="arr-g" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#8a929b"/>
+    </marker>
+    <marker id="arr-t" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#2f6f6a"/>
+    </marker>
+    <marker id="arr-p" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#8b5cf6"/>
+    </marker>
+    <marker id="arr-o" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#b4541f"/>
+    </marker>
+  </defs>
+
+  <!-- 左半:ReAct -->
+  <rect x="10" y="10" width="350" height="370" rx="10" fill="#fdf5ff" stroke="#8b5cf6" stroke-width="1.5" stroke-dasharray="6,3"/>
+  <text x="185" y="35" text-anchor="middle" font-size="13" font-weight="700" fill="#6d28d9">純 ReAct(邊想邊做)</text>
+
+  <rect x="95" y="50" width="180" height="36" rx="8" fill="#f0f2f5" stroke="#8a929b" stroke-width="1.5"/>
+  <text x="185" y="73" text-anchor="middle" font-size="12" fill="#4a5159">任務輸入</text>
+
+  <line x1="185" y1="86" x2="185" y2="104" stroke="#8a929b" stroke-width="1.5" marker-end="url(#arr-g)"/>
+
+  <rect x="80" y="106" width="210" height="36" rx="8" fill="#ede4fb" stroke="#8b5cf6" stroke-width="1.5"/>
+  <text x="185" y="129" text-anchor="middle" font-size="12" fill="#6d28d9">Thought(推理下一步)</text>
+
+  <line x1="185" y1="142" x2="185" y2="160" stroke="#8b5cf6" stroke-width="1.5" marker-end="url(#arr-p)"/>
+
+  <rect x="80" y="162" width="210" height="36" rx="8" fill="#f6e7dd" stroke="#b4541f" stroke-width="1.5"/>
+  <text x="185" y="185" text-anchor="middle" font-size="12" fill="#b4541f">Action(呼叫工具)</text>
+
+  <line x1="185" y1="198" x2="185" y2="216" stroke="#b4541f" stroke-width="1.5" marker-end="url(#arr-o)"/>
+
+  <rect x="80" y="218" width="210" height="36" rx="8" fill="#e3efed" stroke="#2f6f6a" stroke-width="1.5"/>
+  <text x="185" y="241" text-anchor="middle" font-size="12" fill="#2f6f6a">Observation(工具結果)</text>
+
+  <path d="M80,236 L40,236 L40,124 L80,124" stroke="#8b5cf6" stroke-width="1.5" fill="none" stroke-dasharray="5,3" marker-end="url(#arr-p)"/>
+  <text x="25" y="185" text-anchor="middle" font-size="10" fill="#8b5cf6" transform="rotate(-90, 25, 185)">重複</text>
+
+  <rect x="80" y="280" width="210" height="36" rx="8" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="185" y="303" text-anchor="middle" font-size="12" font-weight="700" fill="#2f6f6a">Final Answer</text>
+
+  <line x1="185" y1="254" x2="185" y2="278" stroke="#8a929b" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arr-g)"/>
+  <text x="215" y="270" font-size="10" fill="#8a929b">或任意步</text>
+
+  <text x="185" y="345" text-anchor="middle" font-size="11" fill="#8a929b">沒有事前計畫;</text>
+  <text x="185" y="362" text-anchor="middle" font-size="11" fill="#8a929b">每步都重新「想下一步」</text>
+
+  <!-- 右半:Plan-and-Execute -->
+  <rect x="400" y="10" width="350" height="370" rx="10" fill="#f0f9f8" stroke="#2f6f6a" stroke-width="1.5" stroke-dasharray="6,3"/>
+  <text x="575" y="35" text-anchor="middle" font-size="13" font-weight="700" fill="#2f6f6a">Plan-and-Execute(先計畫後執行)</text>
+
+  <rect x="480" y="50" width="190" height="36" rx="8" fill="#f0f2f5" stroke="#8a929b" stroke-width="1.5"/>
+  <text x="575" y="73" text-anchor="middle" font-size="12" fill="#4a5159">任務輸入</text>
+
+  <line x1="575" y1="86" x2="575" y2="104" stroke="#8a929b" stroke-width="1.5" marker-end="url(#arr-g)"/>
+
+  <!-- Plan 階段 -->
+  <rect x="455" y="106" width="240" height="70" rx="8" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="575" y="128" text-anchor="middle" font-size="12" font-weight="700" fill="#2f6f6a">Plan 階段</text>
+  <text x="575" y="146" text-anchor="middle" font-size="10" fill="#4a5159">1. 讀競品報告</text>
+  <text x="575" y="160" text-anchor="middle" font-size="10" fill="#4a5159">2. 提取定價策略 × 3</text>
+  <text x="575" y="174" text-anchor="middle" font-size="10" fill="#4a5159">3. 比較與我們的差異  …</text>
+
+  <line x1="575" y1="176" x2="575" y2="198" stroke="#2f6f6a" stroke-width="1.5" marker-end="url(#arr-t)"/>
+
+  <!-- Execute 階段:子步驟 -->
+  <rect x="460" y="200" width="230" height="32" rx="8" fill="#f6e7dd" stroke="#b4541f" stroke-width="1.5"/>
+  <text x="575" y="221" text-anchor="middle" font-size="11" fill="#b4541f">Execute 步驟 1(ReAct/Tool)</text>
+
+  <line x1="575" y1="232" x2="575" y2="248" stroke="#b4541f" stroke-width="1.5" marker-end="url(#arr-o)"/>
+
+  <rect x="460" y="250" width="230" height="32" rx="8" fill="#f6e7dd" stroke="#b4541f" stroke-width="1.5"/>
+  <text x="575" y="271" text-anchor="middle" font-size="11" fill="#b4541f">Execute 步驟 2(ReAct/Tool)</text>
+
+  <line x1="575" y1="282" x2="575" y2="296" stroke="#b4541f" stroke-width="1.5" marker-end="url(#arr-o)"/>
+
+  <text x="575" y="310" text-anchor="middle" font-size="11" fill="#8a929b">… 依序執行計畫中每一步 …</text>
+
+  <rect x="460" y="318" width="230" height="32" rx="8" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="575" y="339" text-anchor="middle" font-size="11" font-weight="700" fill="#2f6f6a">整合結果 → 最終輸出</text>
+
+  <text x="575" y="365" text-anchor="middle" font-size="11" fill="#2f6f6a">有全局計畫;每步知道</text>
+  <text x="575" y="380" text-anchor="middle" font-size="11" fill="#2f6f6a">「自己在完成計畫的哪一步」</text>
+</svg>
+        <figcaption>圖 98-1:純 ReAct(左)與 Plan-and-Execute(右)的根本差異。ReAct 的每個 Thought 都在「即興」決定下一步;Plan-and-Execute 先用一次 LLM 呼叫產出整份計畫,再依序執行。計畫提供了全局地圖——agent 在任何一步都知道自己在整體流程的哪個位置。</figcaption>
+      </div>
+
+      <h3>手刻 Plan 階段</h3>
+      <p>
+        Plan 階段的實作非常簡單——就是一次帶有精心設計提示的 LLM 呼叫,
+        讓它輸出一個有序的子步驟清單:
+      </p>
+      <pre><code class="language-python">"""planner.py — Plan 階段:讓 LLM 把大任務拆成子步驟清單"""
+from llm_client import LLMClient   # 第 94 章定義
+
+
+def make_plan(client: LLMClient,
+              task: str,
+              tools_desc: str = "") -&gt; list[str]:
+    """呼叫 LLM 把任務拆成有序子步驟清單。
+    回傳:子步驟字串的 list,例如:
+      ["1. 搜尋競品 A 的定價頁面",
+       "2. 提取定價方案關鍵資訊",
+       "3. 對競品 B 重複上述步驟",
+       "4. 整合比較並撰寫摘要"]
+
+    Args:
+        client     — LLMClient(第 94 章)
+        task       — 使用者的完整任務描述
+        tools_desc — 可用工具的描述字串(讓 LLM 知道能做什麼)
+    """
+    tools_block = (
+        f"\n\n可用工具:\n{tools_desc}" if tools_desc else ""
+    )
+
+    prompt = (
+        f"你是一個任務規劃助理。請把以下任務拆解成清晰、可執行的子步驟清單。{tools_block}\n\n"
+        "要求:\n"
+        "- 每個子步驟應該是獨立可執行的行動\n"
+        "- 步驟之間有明確的先後依賴關係\n"
+        "- 步驟數量適中(3–8 步);不要拆得太細也不要太粗\n"
+        "- 輸出格式:每行一個步驟,前綴為 '步驟 N: '\n"
+        "- 只輸出步驟清單,不要其他說明\n\n"
+        f"任務:\n{task}"
+    )
+
+    raw = client.complete(prompt)
+
+    # 解析輸出:提取以「步驟 N:」或數字開頭的行
+    steps = []
+    for line in raw.strip().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        # 接受「步驟 1:」「1.」「1)」「Step 1:」等格式
+        if (line[0].isdigit() or
+                line.lower().startswith("步驟") or
+                line.lower().startswith("step")):
+            steps.append(line)
+
+    # 如果解析完全失敗(模型給了奇怪格式),把整個輸出當一個步驟
+    return steps if steps else [raw.strip()]
+
+
+# ── 使用示範 ─────────────────────────────────────────────────────────────────
+if __name__ == "__main__":
+    from llm_client import get_client
+    client = get_client()
+    plan = make_plan(client,
+                     "分析三家競品的定價策略並寫出比較摘要",
+                     tools_desc="- web_search: 搜尋網路\n- read_file: 讀取本地文件")
+    print("計畫:")
+    for step in plan:
+        print(f"  {step}")</code></pre>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">Plan 是假設,不是承諾</span>
+          <p>LLM 產生的計畫是它對「怎麼做這件事」的最佳猜測,不是正確答案。
+          計畫可能過於樂觀(步驟 3「直接取得競品的全部定價資料」——哪有這麼簡單),
+          也可能有遺漏。真實的 Plan-and-Execute 系統往往允許在執行中<strong>重新規劃</strong>:
+          當某個步驟的結果與預期差距太大時,把目前進度帶回 Plan 階段生成新計畫。
+          本章先實作最基本的「一次計畫,從頭到尾執行」版本。</p>
+        </div>
+      </div>
+
+      <h3>Execute 階段:把每個子步驟交給 ReAct</h3>
+      <p>
+        有了計畫,Execute 階段依序把每個子步驟交給 §95 的 <code>run_react</code> 執行,
+        並把每步的結果存起來供後續步驟參考:
+      </p>
+      <pre><code class="language-python">"""executor.py — Execute 階段:依序執行計畫中每個子步驟"""
+from llm_client import LLMClient
+from tool_registry import ToolRegistry
+from react_loop import run_react   # 第 95 章定義
+
+
+def execute_plan(client: LLMClient,
+                 registry: ToolRegistry,
+                 plan: list[str],
+                 original_task: str) -&gt; dict[str, str]:
+    """依序執行計畫中每個子步驟。
+
+    Args:
+        client        — LLMClient
+        registry      — 工具登記表
+        plan          — make_plan() 產出的子步驟清單
+        original_task — 原始任務描述(讓每步都知道「終極目標是什麼」)
+
+    回傳:
+        results — dict,key 為步驟字串,value 為該步驟的輸出
+    """
+    results: dict[str, str] = {}
+    context_so_far = ""   # 把前面步驟的結果累積成「背景知識」
+
+    for i, step in enumerate(plan, 1):
+        # 組合「這一步的任務」:帶上整體目標和前面已完成的背景
+        step_task = (
+            f"整體目標:{original_task}\n\n"
+            f"目前執行到第 {i}/{len(plan)} 步:\n{step}"
+        )
+        if context_so_far:
+            step_task += f"\n\n前面步驟已完成的結果摘要:\n{context_so_far}"
+
+        print(f"\n[執行] 步驟 {i}/{len(plan)}: {step}")
+        result = run_react(client, registry, step_task)
+        results[step] = result
+
+        # 把這步結果加進累積背景(截取前 300 字,避免 context 爆炸)
+        summary = result[:300] + ("…" if len(result) &gt; 300 else "")
+        context_so_far += f"\n步驟 {i} 結果: {summary}"
+
+    return results</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">Plan-and-Execute 的核心優勢</span>
+          <p>每個子步驟執行時,agent 明確知道「自己在整體計畫的哪個位置」和「前面已經做了什麼」。
+          這解決了純 ReAct 的方向漂移問題——context 裡始終有「整體目標」作為錨點。</p>
+        </div>
+      </div>
+
+      <!-- ========== h2 ③:反思與自我批判 ========== -->
+      <h2>反思(Reflection)與自我批判:讓 agent 看自己的臉</h2>
+      <p>
+        2023 年,Shinn et al. 發表了 <em>Reflexion: Language Agents with Verbal Reinforcement Learning</em>,
+        提出一個優雅的想法:讓 agent 在每次嘗試後,用<strong>自然語言</strong>對自己的輸出做評估和批判,
+        把這個「反思」存成記憶,下次再嘗試時就能避免同樣的錯誤。
+      </p>
+      <p>
+        反思(reflection)的基本模式:
+      </p>
+      <ol>
+        <li><strong>嘗試</strong>:執行任務,取得輸出</li>
+        <li><strong>評估</strong>:讓 LLM 評判「這個輸出好不好?哪裡不足?」</li>
+        <li><strong>反思</strong>:讓 LLM 生成一段「給自己的建議」——下次應該怎麼做才能更好</li>
+        <li><strong>改進嘗試</strong>:帶著反思再試一次(或直接輸出改進版)</li>
+      </ol>
+
+      <div class="diagram">
+<svg viewBox="0 0 600 360" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="ra2" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#8a929b"/>
+    </marker>
+    <marker id="rt2" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#2f6f6a"/>
+    </marker>
+    <marker id="rp2" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#8b5cf6"/>
+    </marker>
+    <marker id="ro2" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#b4541f"/>
+    </marker>
+  </defs>
+
+  <text x="300" y="25" text-anchor="middle" font-size="14" font-weight="700" fill="#1f2328">Reflection 迴圈(Reflexion 概念)</text>
+
+  <!-- 任務 -->
+  <rect x="205" y="40" width="190" height="36" rx="8" fill="#f0f2f5" stroke="#8a929b" stroke-width="1.5"/>
+  <text x="300" y="63" text-anchor="middle" font-size="12" fill="#4a5159">任務輸入</text>
+  <line x1="300" y1="76" x2="300" y2="96" stroke="#8a929b" stroke-width="1.5" marker-end="url(#ra2)"/>
+
+  <!-- 嘗試 -->
+  <rect x="175" y="98" width="250" height="40" rx="8" fill="#f6e7dd" stroke="#b4541f" stroke-width="2"/>
+  <text x="300" y="116" text-anchor="middle" font-size="12" font-weight="700" fill="#b4541f">① 嘗試</text>
+  <text x="300" y="131" text-anchor="middle" font-size="11" fill="#4a5159">run_react / 工具呼叫 / LLM 生成</text>
+  <line x1="300" y1="138" x2="300" y2="158" stroke="#b4541f" stroke-width="1.5" marker-end="url(#ro2)"/>
+
+  <!-- 輸出 -->
+  <rect x="175" y="160" width="250" height="36" rx="8" fill="#f0f2f5" stroke="#8a929b" stroke-width="1.5"/>
+  <text x="300" y="183" text-anchor="middle" font-size="12" fill="#4a5159">輸出(attempt output)</text>
+  <line x1="300" y1="196" x2="300" y2="214" stroke="#8a929b" stroke-width="1.5" marker-end="url(#ra2)"/>
+
+  <!-- 評估 -->
+  <rect x="155" y="216" width="290" height="40" rx="8" fill="#ede4fb" stroke="#8b5cf6" stroke-width="2"/>
+  <text x="300" y="234" text-anchor="middle" font-size="12" font-weight="700" fill="#6d28d9">② 評估(Evaluation)</text>
+  <text x="300" y="249" text-anchor="middle" font-size="11" fill="#4a5159">LLM 判斷:輸出是否達標?</text>
+  <line x1="300" y1="256" x2="300" y2="274" stroke="#8b5cf6" stroke-width="1.5" marker-end="url(#rp2)"/>
+
+  <!-- 反思 -->
+  <rect x="155" y="276" width="290" height="40" rx="8" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="300" y="294" text-anchor="middle" font-size="12" font-weight="700" fill="#2f6f6a">③ 反思(Reflection)</text>
+  <text x="300" y="309" text-anchor="middle" font-size="11" fill="#4a5159">LLM 生成「給自己的建議」</text>
+
+  <!-- 達標 → 完成 -->
+  <line x1="445" y1="236" x2="510" y2="236" stroke="#8b5cf6" stroke-width="1.5" marker-end="url(#rp2)"/>
+  <text x="480" y="228" text-anchor="middle" font-size="10" fill="#6d28d9">達標</text>
+  <rect x="512" y="220" width="70" height="32" rx="8" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="547" y="241" text-anchor="middle" font-size="12" font-weight="700" fill="#2f6f6a">完成</text>
+
+  <!-- 反思 → 回去嘗試(左側回路) -->
+  <path d="M155,296 L100,296 L100,118 L175,118" stroke="#2f6f6a" stroke-width="1.5" fill="none" stroke-dasharray="5,3" marker-end="url(#rt2)"/>
+  <text x="60" y="210" text-anchor="middle" font-size="10" fill="#2f6f6a" transform="rotate(-90, 60, 210)">帶著反思再試</text>
+</svg>
+        <figcaption>圖 98-2:Reflection 迴圈(Reflexion 概念)。執行後讓 LLM 評估輸出品質,若未達標則生成「給自己的建議」,帶著這份反思再次嘗試。迴圈持續到輸出達標或達到最大嘗試次數。</figcaption>
+      </div>
+
+      <h3>手刻 reflect_and_improve</h3>
+      <pre><code class="language-python">"""reflection.py — 讓 agent 反思並改進自己的輸出"""
+from llm_client import LLMClient   # 第 94 章
+
+
+MAX_REFLECT_ROUNDS = 3   # 最多反思幾輪(防止無限迴圈)
+
+
+def evaluate_output(client: LLMClient,
+                    task: str,
+                    output: str,
+                    criteria: str = "") -&gt; tuple[bool, str]:
+    """讓 LLM 評估輸出是否達標,並給出評語。
+
+    回傳:
+        (is_good: bool, feedback: str)
+        is_good  — True 表示輸出已達標,不需要再改進
+        feedback — 如果未達標,說明哪裡不足
+    """
+    criteria_block = (
+        f"\n\n評估標準:\n{criteria}" if criteria
+        else "\n\n評估標準:輸出應完整、準確地完成任務,沒有明顯錯誤或遺漏。"
+    )
+
+    eval_prompt = (
+        f"你是一個嚴格但公正的輸出品質評估員。{criteria_block}\n\n"
+        f"任務:\n{task}\n\n"
+        f"輸出:\n{output}\n\n"
+        "請評估這個輸出的品質。\n"
+        "如果輸出完全達標,第一行輸出:PASS\n"
+        "如果輸出有不足,第一行輸出:FAIL,然後在後續行說明具體問題。"
+    )
+    raw = client.complete(eval_prompt).strip()
+    first_line = raw.splitlines()[0].strip().upper()
+    is_good = first_line.startswith("PASS")
+    feedback = raw if not is_good else ""
+    return is_good, feedback
+
+
+def generate_reflection(client: LLMClient,
+                        task: str,
+                        output: str,
+                        feedback: str) -&gt; str:
+    """根據評估回饋生成「給自己的反思建議」。
+    這份反思會在下一輪嘗試時加進 context,引導 agent 做得更好。
+    """
+    reflect_prompt = (
+        "你正在回顧一次任務的嘗試結果。\n\n"
+        f"原始任務:\n{task}\n\n"
+        f"你的輸出:\n{output[:500]}{'...' if len(output) &gt; 500 else ''}\n\n"
+        f"評估回饋:\n{feedback}\n\n"
+        "請根據以上資訊,用繁體中文撰寫一段「給自己的行動建議」:\n"
+        "- 具體說明下次應該怎麼做才能改善\n"
+        "- 指出哪些假設是錯誤的\n"
+        "- 建議換什麼策略或步驟順序\n"
+        "- 只寫建議,不要重複問題描述"
+    )
+    return client.complete(reflect_prompt).strip()
+
+
+def reflect_and_improve(client: LLMClient,
+                        task: str,
+                        initial_output: str,
+                        improve_fn,
+                        criteria: str = "") -&gt; str:
+    """主反思迴圈:評估 → 反思 → 改進,最多 MAX_REFLECT_ROUNDS 輪。
+
+    Args:
+        client         — LLMClient
+        task           — 原始任務描述
+        initial_output — 第一次嘗試的輸出
+        improve_fn     — callable(task, reflection) -&gt; str,
+                         接受任務和反思建議,回傳改進後的輸出
+        criteria       — 評估標準描述字串(選填)
+
+    回傳:最終輸出(達標或耗盡輪數)
+    """
+    output = initial_output
+    reflections: list[str] = []
+
+    for round_num in range(MAX_REFLECT_ROUNDS):
+        is_good, feedback = evaluate_output(client, task, output, criteria)
+
+        if is_good:
+            print(f"[反思] 第 {round_num} 輪評估通過 ✓")
+            break
+
+        print(f"[反思] 第 {round_num + 1} 輪評估未通過,生成反思...")
+        reflection = generate_reflection(client, task, output, feedback)
+        reflections.append(reflection)
+        print(f"[反思建議] {reflection[:100]}...")
+
+        # 帶著所有累積反思重新嘗試
+        combined_reflection = "\n".join(
+            f"反思 {i+1}: {r}" for i, r in enumerate(reflections)
+        )
+        output = improve_fn(task, combined_reflection)
+
+    return output</code></pre>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">反思不等於正確</span>
+          <p>讓 LLM 評估 LLM 的輸出,存在「自我評估偏見」:模型可能對自己的錯誤很寬鬆,或者把正確的輸出評為錯的。
+          Reflexion 的效果高度依賴評估標準的清晰度——你給的 <code>criteria</code> 越具體,評估越可靠。
+          如果評估標準是「答案要正確」,模型根本無法驗證事實——它只能評估格式、完整度、邏輯一致性等表面特徵。
+          對需要高精確度的場景,反思只能作為輔助,不能替代人工審核。</p>
+        </div>
+      </div>
+
+      <!-- ========== h2 ④:記憶增強 ========== -->
+      <h2>記憶增強:用 VectorStore 當 agent 的長期記憶</h2>
+      <p>
+        ReAct 迴圈的「記憶」只存在於一次呼叫的 <code>messages</code> 串列裡——
+        程式結束、context window 滿了,記憶就消失了。
+        但真實的 agent 任務往往需要跨步驟、跨會話的記憶:
+      </p>
+      <ul>
+        <li>「上次搜尋到某個 API endpoint 的 URL」</li>
+        <li>「第三步的工具呼叫結果裡有一個重要事實,第七步會用到」</li>
+        <li>「上週這個任務失敗了,因為 XXX——這次要避免」</li>
+      </ul>
+      <p>
+        解法:把 §96 的 <code>VectorStore</code> 當作 agent 的<strong>長期記憶(long-term memory)</strong>。
+        重要的中間結果、教訓、事實——全部 <code>store.add()</code> 進去;
+        需要查詢時 <code>store.search()</code> 用語意搜尋取回。
+      </p>
+
+      <pre><code class="language-python">"""memory_agent.py — 帶長期記憶的 agent 工具函式"""
+from vector_store import VectorStore   # 第 96 章定義
+from llm_client import LLMClient
+
+
+def remember(store: VectorStore,
+             content: str,
+             metadata: dict | None = None) -&gt; None:
+    """把重要資訊存進長期記憶。
+    content  — 要記住的內容(自然語言描述)
+    metadata — 選填的元資料,例如 {"type": "fact", "step": 3, "task": "..."}
+    """
+    store.add(content, metadata or {})
+    print(f"[記憶] 已存入: {content[:60]}...")
+
+
+def recall(store: VectorStore,
+           query: str,
+           k: int = 3) -&gt; str:
+    """從長期記憶中搜尋相關資訊,回傳格式化的字串供 LLM 閱讀。"""
+    results = store.search(query, k=k)
+    if not results:
+        return "(長期記憶中沒有相關資訊)"
+
+    lines = ["=== 從長期記憶中找到的相關資訊 ==="]
+    for i, r in enumerate(results, 1):
+        score = r["score"]
+        text  = r["text"]
+        meta  = r.get("metadata", {})
+        source_info = f"  [相似度: {score:.3f}]"
+        if meta.get("step"):
+            source_info += f"  [來自步驟 {meta['step']}]"
+        lines.append(f"{i}. {text}{source_info}")
+    return "\n".join(lines)
+
+
+def log_lesson(store: VectorStore,
+               task: str,
+               what_went_wrong: str,
+               how_to_fix: str) -&gt; None:
+    """把一次失敗的教訓存進長期記憶。
+    下次執行類似任務時,agent 可以先搜尋「過去失敗過嗎?」來避免重蹈覆轍。
+    """
+    lesson = (
+        f"任務類型: {task[:100]}\n"
+        f"遇到的問題: {what_went_wrong}\n"
+        f"解決方式: {how_to_fix}"
+    )
+    store.add(lesson, {"type": "lesson", "task": task[:50]})
+    print(f"[記憶] 教訓已記錄: {what_went_wrong[:50]}...")
+
+
+# ── 使用示範 ─────────────────────────────────────────────────────────────────
+if __name__ == "__main__":
+    from vector_store import VectorStore
+    from llm_client import get_client
+
+    store = VectorStore()
+    client = get_client()
+
+    # 模擬 agent 在步驟中記錄資訊
+    remember(store, "競品 A 的基本方案定價為每月 $29,進階方案 $99。",
+             {"type": "fact", "step": 1, "source": "競品A官網"})
+    remember(store, "競品 B 採用按用量計費,無固定月費,平均每用戶 $15。",
+             {"type": "fact", "step": 2, "source": "競品B官網"})
+
+    # 步驟 5 需要回憶步驟 1、2 的資訊
+    memory = recall(store, "競品定價比較", k=3)
+    print("\n=== 從記憶中取回 ===")
+    print(memory)</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">兩種記憶,用法不同</span>
+          <p><strong>短期記憶</strong>:LLM 的 context window(<code>messages</code> 串列)——在單次呼叫中有效,自動可用,但有長度上限。<br>
+          <strong>長期記憶</strong>:<code>VectorStore</code>——跨步驟、跨會話持久,用 <code>store.add()</code> 寫入,用 <code>store.search()</code> 語意搜尋取回。<br>
+          設計原則:把「短期內不會再用到」的中間結果存進長期記憶,以免 context window 被填滿;需要時再用語意搜尋取回。</p>
+        </div>
+      </div>
+
+      <!-- ========== h2 ⑤:子目標分解 ========== -->
+      <h2>子目標分解(Task Decomposition):大目標拆成可執行小問題</h2>
+      <p>
+        <strong>子目標分解(task decomposition)</strong>是計畫的更深層形式:
+        把一個大目標遞迴地拆成更小的子目標,直到每個葉節點都是 agent 能直接執行的具體行動。
+        這和 <code>make_plan</code> 的差別在於:
+      </p>
+      <ul>
+        <li><code>make_plan</code> 產出的是<strong>線性</strong>的步驟清單(Step 1 → Step 2 → …)</li>
+        <li>子目標分解可以產出<strong>樹狀</strong>的任務結構——某些子目標本身又需要被拆解</li>
+      </ul>
+      <p>
+        以「為公司產品制定競爭策略」這個任務為例,子目標樹可能長這樣:
+      </p>
+      <pre><code class="language-text">制定競爭策略
+├── 市場分析
+│   ├── 識別主要競品(3 家)
+│   └── 分析各競品定價
+│       ├── 取得競品 A 定價資料
+│       ├── 取得競品 B 定價資料
+│       └── 取得競品 C 定價資料
+├── 內部能力評估
+│   ├── 列出產品現有優勢
+│   └── 識別差距與改進空間
+└── 策略合成
+    ├── 比較競品與自家定位
+    └── 撰寫執行摘要</code></pre>
+
+      <p>
+        實務上,完整的樹狀分解對中小型任務來說有些過度工程。
+        一個輕量的做法是<strong>兩層分解</strong>:
+        頂層 plan 把任務拆成 3–8 個子目標,每個子目標再用 ReAct 迴圈（它內部自然會分多步執行）。
+        這就是 Plan-and-Execute 的精髓。
+      </p>
+
+      <h3>何時停止分解?</h3>
+      <p>
+        過度分解的成本不低:每次分解都是一次 LLM 呼叫(時間 + 費用),
+        而且分解出來的子目標越細,agent 越難看到全局。
+        判斷是否需要繼續分解的啟發式規則:
+      </p>
+      <ul>
+        <li><strong>子目標是否具體可執行?</strong>「搜尋競品 A 官網的定價頁面」→ 可以直接用工具執行,不用再拆。「分析市場」→ 太籠統,需要拆。</li>
+        <li><strong>子目標是否需要多個不同類型的工具?</strong>如果一個子目標需要「搜尋 → 讀取 → 計算 → 寫入」,ReAct 會自動處理,不需要預先分解。</li>
+        <li><strong>執行時間/步數估計</strong>:如果某個子目標預計 ReAct 要跑 10+ 步才能完成,考慮在計畫階段就拆開。</li>
+      </ul>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">讓 LLM 自己判斷要不要繼續拆</span>
+          <p>在 <code>make_plan</code> 的提示裡可以加上:「如果某個子步驟本身很複雜,請在該步驟後面用縮排列出它的子步驟。」
+          讓 LLM 在一次呼叫裡就完成兩層分解——比遞迴呼叫更省 token。</p>
+        </div>
+      </div>
+
+      <!-- ========== h2 ⑥:整合骨架 ========== -->
+      <h2>整合:手刻 Plan → Execute → Reflect 單 agent 骨架</h2>
+      <p>
+        現在把所有零件組起來——用 §94 的 <code>LLMClient</code>、§95 的 <code>ToolRegistry</code>/<code>run_react</code>、
+        §96 的 <code>VectorStore</code>,加上本章的 <code>make_plan</code>、<code>execute_plan</code>、<code>reflect_and_improve</code>、
+        <code>remember</code>/<code>recall</code>,組成一個完整的進階單 agent 骨架。
+      </p>
+
+      <pre><code class="language-python">"""advanced_agent.py — Plan-Execute-Reflect 單 agent 骨架
+
+依賴:
+    第 94 章: llm_client.py   → LLMClient, get_client
+    第 95 章: tool_registry.py → ToolRegistry
+             react_loop.py    → run_react
+    第 96 章: vector_store.py  → VectorStore
+    本章:    planner.py        → make_plan
+             executor.py       → execute_plan
+             reflection.py     → reflect_and_improve
+             memory_agent.py   → remember, recall, log_lesson
+"""
+from llm_client import LLMClient, get_client
+from tool_registry import ToolRegistry
+from vector_store import VectorStore
+from react_loop import run_react
+
+from planner import make_plan
+from executor import execute_plan
+from reflection import reflect_and_improve, evaluate_output, MAX_REFLECT_ROUNDS
+from memory_agent import remember, recall, log_lesson
+
+
+# ── 護欄常數 ─────────────────────────────────────────────────────────────────
+MAX_PLAN_STEPS   = 8     # 計畫最多幾步(防止過細分解)
+# MAX_REFLECT_ROUNDS 由 reflection.py 統一定義(實際上限 = 3)
+BUDGET_LIMIT     = 30    # 最大工具呼叫次數(粗略預算護欄)
+
+
+class AdvancedAgent:
+    """Plan-Execute-Reflect 進階單 agent。
+
+    使用方式:
+        agent = AdvancedAgent(registry, long_term_memory=store)
+        result = agent.run("你的複雜任務描述")
+    """
+
+    def __init__(self,
+                 registry: ToolRegistry,
+                 long_term_memory: VectorStore | None = None,
+                 model: str | None = None,
+                 client: LLMClient | None = None):
+        self.client   = client if client is not None else get_client(model=model)
+        self.registry = registry
+        self.memory   = long_term_memory or VectorStore()
+
+    def run(self,
+            task: str,
+            criteria: str = "",
+            verbose: bool = True) -&gt; str:
+        """執行任務:Plan → Execute → Reflect。
+
+        Args:
+            task     — 完整任務描述字串
+            criteria — 選填:評估標準(用於 Reflect 階段)
+            verbose  — 是否印出執行進度
+
+        回傳:最終輸出字串
+        """
+        # ── 0. 先查長期記憶,看有沒有相關教訓 ────────────────────────────────
+        prior_knowledge = recall(self.memory, task, k=2)
+        if verbose and prior_knowledge != "(長期記憶中沒有相關資訊)":
+            print(f"[記憶] 找到相關先備知識:\n{prior_knowledge}\n")
+
+        # ── 1. Plan 階段 ──────────────────────────────────────────────────────
+        if verbose:
+            print("=== Plan 階段 ===")
+
+        tools_desc = self.registry.describe_all()
+        context_hint = (
+            f"\n\n參考先備知識:\n{prior_knowledge}" if prior_knowledge != "(長期記憶中沒有相關資訊)" else ""
+        )
+        plan = make_plan(self.client, task + context_hint, tools_desc)
+
+        # 護欄:計畫不能太長
+        if len(plan) &gt; MAX_PLAN_STEPS:
+            if verbose:
+                print(f"[護欄] 計畫有 {len(plan)} 步,截斷為前 {MAX_PLAN_STEPS} 步")
+            plan = plan[:MAX_PLAN_STEPS]
+
+        if verbose:
+            print(f"計畫({len(plan)} 步):")
+            for s in plan:
+                print(f"  {s}")
+            print()
+
+        # ── 2. Execute 階段 ───────────────────────────────────────────────────
+        if verbose:
+            print("=== Execute 階段 ===")
+
+        step_results = execute_plan(
+            self.client, self.registry, plan, task
+        )
+
+        # 把每步重要結果存入長期記憶
+        for step, result in step_results.items():
+            if len(result) &gt; 20:   # 過短的結果不值得記錄
+                remember(self.memory, f"步驟「{step[:50]}」的結果: {result[:200]}",
+                         {"type": "step_result", "task": task[:50]})
+
+        # 整合所有步驟結果 → 生成初稿
+        if verbose:
+            print("\n=== 整合結果 ===")
+
+        integration_prompt = (
+            f"任務:\n{task}\n\n"
+            f"以下是按計畫執行後各步驟的結果:\n"
+        )
+        for step, result in step_results.items():
+            integration_prompt += f"\n【{step}】\n{result[:400]}\n"
+        integration_prompt += "\n請整合以上所有結果,生成完整、連貫的最終答案。"
+
+        initial_output = self.client.complete(integration_prompt)
+
+        # ── 3. Reflect 階段 ───────────────────────────────────────────────────
+        if verbose:
+            print("\n=== Reflect 階段 ===")
+
+        def improve_with_context(task: str, reflection: str) -&gt; str:
+            """帶著反思和步驟結果重新整合。"""
+            improved_prompt = (
+                f"{integration_prompt}\n\n"
+                f"=== 上次輸出的反思與改進建議 ===\n{reflection}\n\n"
+                "請根據以上反思,產出改進後的最終答案。"
+            )
+            return self.client.complete(improved_prompt)
+
+        final_output = reflect_and_improve(
+            self.client,
+            task,
+            initial_output,
+            improve_fn=improve_with_context,
+            criteria=criteria,
+        )
+
+        # 記錄這次任務的教訓(若有反思改進過)
+        if final_output != initial_output:
+            log_lesson(
+                self.memory,
+                task,
+                what_went_wrong="初稿未達標,需要反思改進",
+                how_to_fix="改進版在 Reflect 階段生成",
+            )
+
+        return final_output
+
+
+# ── 端對端使用示範 ────────────────────────────────────────────────────────────
+if __name__ == "__main__":
+    from tool_registry import ToolRegistry, Tool
+    from safe_eval import calculator_tool    # 第 95 章的計算機工具
+    from file_tools import read_file_tool    # 第 95 章的讀檔工具
+
+    registry = ToolRegistry()
+    registry.register(calculator_tool)
+    registry.register(read_file_tool)
+
+    store  = VectorStore()
+    agent  = AdvancedAgent(registry, long_term_memory=store)
+
+    task = (
+        "分析三家虛構競品(Alpha、Beta、Gamma)的特色差異,找出每家的主要定價優勢,"
+        "並寫出一份 200 字的比較摘要供管理層參考。"
+    )
+
+    result = agent.run(task, criteria="摘要應包含三家競品的定價比較和明確的建議")
+    print("\n===== 最終輸出 =====")
+    print(result)</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">零件組合 vs 從頭設計</span>
+          <p><code>AdvancedAgent</code> 沒有重新發明任何東西——它把 §94–§96 的零件
+          (<code>LLMClient</code>、<code>run_react</code>、<code>VectorStore</code>)與本章的
+          <code>make_plan</code>、<code>reflect_and_improve</code>、<code>remember</code> 組合起來。
+          這正是模組化設計的威力:每一層只做一件事,組合出來的 agent 卻遠比任何一個零件更強大。</p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 98.1 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>
+            為 §95 的 ReAct agent 加上一層 <strong>reflection</strong>。
+            具體做法:在 <code>run_react</code> 回傳最終答案後,
+            呼叫 <code>evaluate_output</code> 評估答案品質,
+            若未通過則呼叫 <code>generate_reflection</code> 生成反思,
+            再以「含反思建議的提示」重新呼叫 <code>run_react</code>。
+            最多反思一輪(避免 token 爆炸)。
+          </p>
+          <p>請實作函式 <code>run_react_with_reflection(client, registry, task, criteria="") -&gt; str</code>。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">from llm_client import LLMClient
+from tool_registry import ToolRegistry
+from react_loop import run_react
+from reflection import evaluate_output, generate_reflection
+
+
+def run_react_with_reflection(client: LLMClient,
+                               registry: ToolRegistry,
+                               task: str,
+                               criteria: str = "") -&gt; str:
+    """在 run_react 外包一層反思:做完後評估,若未達標則帶反思重試。
+
+    最多反思 1 輪——節省 token 成本。
+    """
+    # 第一次嘗試
+    output = run_react(client, registry, task)
+
+    # 評估
+    is_good, feedback = evaluate_output(client, task, output, criteria)
+    if is_good:
+        return output   # 達標,直接回傳
+
+    # 生成反思
+    reflection = generate_reflection(client, task, output, feedback)
+    print(f"[反思] {reflection[:120]}...")
+
+    # 帶反思重試:把反思加進任務描述
+    refined_task = (
+        f"{task}\n\n"
+        f"=== 上次嘗試的問題與改進建議 ===\n{reflection}\n"
+        "請根據以上建議,產出更好的答案。"
+    )
+    return run_react(client, registry, refined_task)
+
+
+# ── 使用示範 ─────────────────────────────────────────────────────────────────
+if __name__ == "__main__":
+    from llm_client import get_client
+    from tool_registry import ToolRegistry
+    from safe_eval import calculator_tool
+
+    client = get_client()
+    registry = ToolRegistry()
+    registry.register(calculator_tool)
+
+    answer = run_react_with_reflection(
+        client, registry,
+        task="計算 (123 + 456) × 789 - 1000 的結果,並解釋計算過程",
+        criteria="答案必須包含明確的數值計算結果和清楚的逐步說明",
+    )
+    print("最終答案:", answer)</code></pre>
+              <p>
+                <strong>為什麼限制只反思一輪?</strong>
+                每次反思都包含 <code>evaluate_output</code> + <code>generate_reflection</code> + 一次 <code>run_react</code>——
+                三次 LLM 呼叫,而且 <code>run_react</code> 本身可能又跑 5–10 步。
+                無限反思在理論上能無限改進輸出,但成本以倍數增加,而改進收益快速遞減。
+                務實的做法:對關鍵輸出限制 1–2 輪反思;對低優先度輸出不做反思。
+              </p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 98.2 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>
+            設計一個「子目標分解」的系統提示,讓 <code>make_plan</code> 能支援<strong>兩層分解</strong>:
+            頂層輸出 3–5 個主要子目標,每個子目標下面如果需要,用縮排列出 2–3 個具體的執行步驟。
+          </p>
+          <p>
+            (a) 寫出修改後的系統提示。<br>
+            (b) 說明要如何解析這種「帶縮排的兩層清單」格式,取出所有葉節點步驟供 Execute 階段使用。<br>
+            (c) 什麼類型的任務最能從兩層分解受益?什麼類型不需要?
+          </p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>(a) 修改後的系統提示:</strong></p>
+              <pre><code class="language-python">TWO_LEVEL_PLAN_PROMPT = """你是一個任務規劃助理。請把任務拆解成兩層結構:
+- 頂層:3-5 個主要子目標,前綴為 '目標 N: '
+- 每個目標下如果需要,用兩格縮排列出具體步驟,前綴為 '  步驟 N.M: '
+  (如果目標已經夠具體可直接執行,就不需要列子步驟)
+
+輸出範例:
+目標 1: 收集資料
+  步驟 1.1: 搜尋競品 A 的官網定價頁面
+  步驟 1.2: 下載競品報告 PDF
+目標 2: 分析資料
+  步驟 2.1: 比較三家定價結構
+目標 3: 撰寫摘要
+
+只輸出計畫,不要其他說明。"""</code></pre>
+              <p><strong>(b) 解析邏輯:</strong></p>
+              <pre><code class="language-python">def parse_two_level_plan(raw: str) -&gt; list[str]:
+    """從兩層縮排格式提取所有葉節點步驟。
+    有子步驟的目標:只取子步驟(葉節點)
+    沒有子步驟的目標:把目標本身當葉節點
+    """
+    lines = [l.rstrip() for l in raw.splitlines() if l.strip()]
+    leaf_steps = []
+    current_goal_has_children = False
+    current_goal_line = None
+
+    for line in lines:
+        is_goal = line.startswith("目標")
+        is_step = line.startswith("  步驟") or line.startswith("\t步驟")
+
+        if is_goal:
+            # 如果上一個目標沒有子步驟,把它本身加進來
+            if current_goal_line and not current_goal_has_children:
+                leaf_steps.append(current_goal_line.strip())
+            current_goal_line = line
+            current_goal_has_children = False
+        elif is_step:
+            leaf_steps.append(line.strip())
+            current_goal_has_children = True
+
+    # 處理最後一個目標
+    if current_goal_line and not current_goal_has_children:
+        leaf_steps.append(current_goal_line.strip())
+
+    return leaf_steps</code></pre>
+              <p><strong>(c) 適合兩層分解的任務:</strong></p>
+              <ul>
+                <li><strong>適合</strong>:研究報告撰寫(收集資料/分析/撰寫三個大目標,每個下面有多個具體步驟)、
+                軟體功能開發(設計/實作/測試,每個有子任務)、多源資料整合任務。</li>
+                <li><strong>不需要</strong>:單一工具呼叫就能解決的任務(「查詢今天的匯率」)、
+                三步以內就能完成的線性任務(「計算 → 寫入 → 確認」)、
+                任務結構本身就很清楚不需要進一步分解的情況。</li>
+              </ul>
+              <p>原則:分解的開銷(LLM 呼叫次數)要小於「沒有分解導致的失敗重試成本」。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ========== h2 ⑦:失敗模式與護欄 ========== -->
+      <h2>失敗模式與護欄:無限迴圈、幻覺、成本爆炸</h2>
+      <p>
+        進階 agent 的能力越強,失控時的破壞力也越大。
+        不只是「工具拋出例外」這種低層失敗——還有更難偵測的高層失敗模式。
+      </p>
+
+      <h3>失敗模式一:規劃幻覺(plan hallucination)</h3>
+      <p>
+        LLM 產生了一份計畫,其中某一步假設了一個<strong>不存在的工具或能力</strong>:
+        「步驟 3:用 <code>competitor_db</code> 工具查詢全球競品資料庫」——但 <code>competitor_db</code> 根本沒有被 register。
+      </p>
+      <p>
+        護欄:在 Execute 階段執行每個子步驟時,先對計畫做「可行性預驗」——
+        掃描子步驟描述裡有沒有提到不存在的工具名稱:
+      </p>
+      <pre><code class="language-python">def validate_plan(plan: list[str], registry: ToolRegistry) -&gt; list[str]:
+    """檢查計畫中有沒有提到不存在的工具名稱。
+    回傳警告訊息清單(空 list 表示計畫通過驗證)。
+    """
+    # 假設 ToolRegistry 提供公開列舉;否則請依第 95 章介面調整
+    available = set(registry._tools.keys())
+    warnings = []
+    for step in plan:
+        # 找步驟描述裡的「工具名稱」候選(假設工具名是 snake_case)
+        import re
+        candidates = re.findall(r'\b([a-z][a-z0-9_]+)\b', step)
+        for cand in candidates:
+            # 啟發式:如果候選詞「像」工具名但不在登記表裡
+            if "_" in cand and cand not in available and len(cand) &gt; 5:
+                warnings.append(
+                    f"步驟「{step[:40]}」提到了可能不存在的工具: {cand}"
+                )
+    return warnings</code></pre>
+
+      <h3>失敗模式二:反思迴圈(reflection loop)</h3>
+      <p>
+        評估函式永遠說 FAIL,反思永遠生成新的建議,agent 就陷入無限的「嘗試 → 反思 → 再嘗試」迴圈。
+        原因通常是評估標準設得太嚴苛,或者任務本身超出 LLM 的能力範圍。
+      </p>
+      <p>
+        護欄:
+      </p>
+      <ul>
+        <li><strong>硬性輪數上限</strong>:<code>MAX_REFLECT_ROUNDS</code>——達到上限就回傳最後一次輸出,並附上警告標記。</li>
+        <li><strong>改進量偵測</strong>:如果連續兩輪的輸出相似度很高(可用 edit distance 估計),說明反思沒有帶來改進,提前終止。</li>
+        <li><strong>誠實的失敗訊息</strong>:與其回傳一個不達標的輸出假裝成功,不如明確標記「⚠️ 此輸出未通過品質驗證」。</li>
+      </ul>
+
+      <h3>失敗模式三:成本爆炸(cost explosion)</h3>
+      <p>
+        Plan-and-Execute + Reflection 在最壞情況下的 LLM 呼叫次數是:
+        <code>(計畫步數 × ReAct 迴圈步數) + 反思輪數 × 2</code>。
+        如果計畫有 8 步,每步 ReAct 跑 10 輪,加上 2 輪反思——
+        可能超過 <strong>100 次 LLM 呼叫</strong>。對付費 API,成本會非常可觀。
+      </p>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">成本估算 before you ship</span>
+          <p>在把進階 agent 部署到生產環境之前,務必先做「最壞情況成本估算」:
+          <code>MAX_PLAN_STEPS × MAX_REACT_STEPS × token_per_call × cost_per_token × MAX_REFLECT_ROUNDS</code>。
+          建議在開發和測試階段設置極保守的上限(如 <code>MAX_PLAN_STEPS=3, MAX_REFLECT_ROUNDS=1</code>),
+          確認邏輯正確後再放寬。</p>
+        </div>
+      </div>
+
+      <p>
+        實務上的成本護欄:
+      </p>
+      <pre><code class="language-python">class BudgetGuard:
+    """追蹤 LLM 呼叫次數,超過預算時拋出例外。
+
+    在 LLMClient 外面包一層計數器,把它傳給所有子函式。
+    """
+
+    def __init__(self, client: LLMClient, max_calls: int = 50):
+        self._client    = client
+        self._max_calls = max_calls
+        self._calls     = 0
+
+    def complete(self, prompt: str) -&gt; str:
+        self._check_budget()
+        result = self._client.complete(prompt)
+        self._calls += 1
+        return result
+
+    def chat(self, messages: list) -&gt; str:
+        self._check_budget()
+        result = self._client.chat(messages)
+        self._calls += 1
+        return result
+
+    def _check_budget(self) -&gt; None:
+        if self._calls &gt;= self._max_calls:
+            raise RuntimeError(
+                f"[BudgetGuard] 已達 LLM 呼叫上限 {self._max_calls} 次,任務終止。"
+                f"請調高 max_calls 或簡化任務。"
+            )
+
+    @property
+    def calls_used(self) -&gt; int:
+        return self._calls
+
+
+# 使用方式:
+# guarded = BudgetGuard(get_client(), max_calls=30)
+# agent   = AdvancedAgent(registry, client=guarded)
+# result  = agent.run(task)</code></pre>
+
+      <h3>失敗模式四:計畫與任務脫鉤</h3>
+      <p>
+        任務是「分析台灣的電動車市場」,但 LLM 產出的計畫第一步是「搜尋美國特斯拉的銷售數據」——
+        計畫和任務邏輯上相關,但實際方向完全偏掉了。
+        ReAct 的個別步驟會老老實實地執行偏差的計畫,最終輸出文不對題。
+      </p>
+      <p>
+        護欄:在 Execute 階段開始前,讓 LLM 做一次「計畫稽核」:
+        「以下計畫能否正確解決原始任務?如果不能,說明問題。」
+        如果稽核失敗,重新呼叫 <code>make_plan</code>。
+      </p>
+
+      <div class="callout danger">
+        <div class="ico">⛔</div>
+        <div class="body">
+          <span class="c-title">人類確認點(Human-in-the-Loop)</span>
+          <p>對高風險行動(刪除資料、發送郵件、進行金融交易),進階 agent 應該在執行前加入<strong>人類確認點</strong>:
+          先印出計畫讓使用者確認,得到明確同意後才執行。
+          這不是技術問題,而是設計哲學問題:agent 的自主程度應該與它能造成的損害成反比。
+          「越自動」的 agent 越需要嚴格的護欄與人工審核節點。</p>
+        </div>
+      </div>
+
+      <!-- ========== h2 ⑧:何時夠了 ========== -->
+      <h2>何時「夠了」:過度工程的 agent vs 簡單提示就能解的任務</h2>
+      <p>
+        讀到這裡,你可能有個衝動:「以後我的所有 LLM 任務都要用 Plan-Execute-Reflect 架構！」
+        請先克制一下。
+      </p>
+      <p>
+        進階 agent 架構的代價是真實的:更多 LLM 呼叫、更多延遲、更高成本、更複雜的除錯。
+        這些代價只在任務夠複雜時才值得付。
+      </p>
+
+      <h3>用提示解決 vs 用 agent 架構解決</h3>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>任務類型</th>
+              <th>建議方式</th>
+              <th>理由</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>單一、清楚、自包含的問題</td>
+              <td>直接 LLM 呼叫(<code>client.complete</code>)</td>
+              <td>一步就夠,不需要迴圈或計畫</td>
+            </tr>
+            <tr>
+              <td>需要工具(查詢/計算/讀檔),但步驟不多</td>
+              <td>ReAct(<code>run_react</code>)</td>
+              <td>ReAct 能自動決定什麼時候用工具</td>
+            </tr>
+            <tr>
+              <td>多步驟、有明確順序、任一步的結果影響後續</td>
+              <td>Plan-and-Execute</td>
+              <td>全局計畫避免方向漂移</td>
+            </tr>
+            <tr>
+              <td>輸出品質有明確可驗證的標準</td>
+              <td>ReAct 或 Plan-Execute + Reflection</td>
+              <td>可以自動評估並改進</td>
+            </tr>
+            <tr>
+              <td>需要記住跨步驟或跨會話的資訊</td>
+              <td>任何架構 + VectorStore 記憶</td>
+              <td>記憶是獨立的能力,可以疊加</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">過度工程的代價</span>
+          <p>一個「三步就能解決的任務」用了 Plan-Execute-Reflect:
+          8 步計畫 × 10 輪 ReAct × 2 輪反思 = 160+ LLM 呼叫,回答延遲可能達數分鐘。
+          在這種情況下,直接一次 LLM 呼叫就能給你一個「好夠用」的答案——
+          而且快 100 倍、便宜 100 倍。複雜架構是為了解決複雜問題;不要用大砲打蚊子。</p>
+        </div>
+      </div>
+
+      <h3>務實的決策流程</h3>
+      <p>
+        在選擇 agent 架構前,問自己這三個問題:
+      </p>
+      <ol>
+        <li><strong>任務可以在 3 步以內完成嗎?</strong>→ 是:直接 <code>run_react</code> 或甚至直接 <code>client.complete</code>。</li>
+        <li><strong>任務需要多個異質步驟,且步驟之間有強依賴?</strong>→ 是:考慮 Plan-and-Execute。</li>
+        <li><strong>輸出品質有客觀可衡量的標準,且改進值得額外成本?</strong>→ 是:加上 Reflection。</li>
+      </ol>
+      <p>
+        大多數任務停在第 1 或第 2 層就夠了。進入第 3 層之前,想清楚「多花這些 token 值不值得」。
+      </p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 98.3 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>
+            為 <code>AdvancedAgent</code> 加入<strong>步數/預算上限護欄</strong>。
+            具體要求:
+          </p>
+          <ol>
+            <li>在 <code>execute_plan</code> 裡追蹤每個步驟的 ReAct 呼叫次數(提示:可以包裝一個帶計數器的 <code>run_react</code>)。</li>
+            <li>如果總呼叫次數超過 <code>BUDGET_LIMIT</code>(本章設為 30),中止後續步驟,回傳目前已完成步驟的整合結果並附上警告。</li>
+            <li>在最終輸出裡附加一段「執行統計」:使用了幾次 LLM 呼叫、完成了幾個步驟。</li>
+          </ol>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">"""executor_with_budget.py — 帶預算護欄的 Execute 階段"""
+from llm_client import LLMClient
+from tool_registry import ToolRegistry
+from react_loop import run_react
+
+BUDGET_LIMIT = 30   # 整體 LLM 呼叫上限
+
+
+class CallCounter:
+    """包裝 LLMClient,追蹤呼叫次數。"""
+
+    def __init__(self, client: LLMClient):
+        self._client = client
+        self.count   = 0
+
+    def complete(self, prompt: str) -&gt; str:
+        self.count += 1
+        return self._client.complete(prompt)
+
+    def chat(self, messages: list) -&gt; str:
+        self.count += 1
+        return self._client.chat(messages)
+
+    # 轉發其他方法
+    def __getattr__(self, name: str):
+        return getattr(self._client, name)
+
+
+def execute_plan_with_budget(client: LLMClient,
+                              registry: ToolRegistry,
+                              plan: list[str],
+                              original_task: str,
+                              budget: int = BUDGET_LIMIT) -&gt; dict:
+    """帶預算護欄的 execute_plan。
+
+    回傳:
+        {
+          "results":    {step: result, ...},
+          "stats":      {"calls_used": N, "steps_done": M, "budget_hit": bool},
+          "summary_warning": "..." or None
+        }
+    """
+    counter = CallCounter(client)
+    results: dict[str, str] = {}
+    context_so_far = ""
+    warning = None
+
+    for i, step in enumerate(plan, 1):
+        # 預算檢查
+        if counter.count &gt;= budget:
+            warning = (
+                f"⚠️ 已達 LLM 呼叫上限({budget} 次),"
+                f"只完成了 {i-1}/{len(plan)} 個步驟。"
+                f"後續步驟({step} 等)未執行。"
+            )
+            print(f"\n[護欄] {warning}")
+            break
+
+        step_task = (
+            f"整體目標:{original_task}\n\n"
+            f"目前執行第 {i}/{len(plan)} 步:\n{step}"
+        )
+        if context_so_far:
+            step_task += f"\n\n前面步驟摘要:\n{context_so_far}"
+
+        result = run_react(counter, registry, step_task)
+        results[step] = result
+
+        summary = result[:300] + ("…" if len(result) &gt; 300 else "")
+        context_so_far += f"\n步驟 {i}: {summary}"
+
+    stats = {
+        "calls_used":  counter.count,
+        "steps_done":  len(results),
+        "budget_hit":  warning is not None,
+    }
+
+    return {
+        "results":         results,
+        "stats":           stats,
+        "summary_warning": warning,
+    }
+
+
+# ── 使用示範 ─────────────────────────────────────────────────────────────────
+if __name__ == "__main__":
+    from llm_client import get_client
+    from tool_registry import ToolRegistry
+
+    client   = get_client()
+    registry = ToolRegistry()
+
+    plan = [
+        "步驟 1: 研究背景",
+        "步驟 2: 收集資料",
+        "步驟 3: 分析資料",
+        "步驟 4: 撰寫報告",
+    ]
+
+    outcome = execute_plan_with_budget(
+        client, registry, plan,
+        original_task="撰寫市場分析報告",
+        budget=10,   # 設很低以觸發護欄
+    )
+
+    print("\n=== 執行統計 ===")
+    print(f"LLM 呼叫次數: {outcome['stats']['calls_used']}")
+    print(f"完成步驟數:   {outcome['stats']['steps_done']}")
+    print(f"觸發預算護欄: {outcome['stats']['budget_hit']}")
+    if outcome["summary_warning"]:
+        print(f"警告: {outcome['summary_warning']}")</code></pre>
+              <p>
+                <strong>設計思考:</strong>
+                <code>CallCounter</code> 用「包裝器(wrapper)」模式讓計數邏輯與 LLMClient 解耦——
+                不需要修改 <code>LLMClient</code> 或 <code>run_react</code> 的原始碼,
+                只需在外面套一層。這是軟體設計的「開放/封閉原則」(open for extension, closed for modification)的體現。
+              </p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ========== h2 ⑨:把這一章串起來 ========== -->
+      <h2>把這一章串起來</h2>
+      <p>
+        這一章在 §94–§96 的零件上加了三層能力,讓單一 agent 從「會動手」進化到「會規劃、會反思、記得住」。
+        核心產物回顧:
+      </p>
+      <ul>
+        <li><strong><code>make_plan(client, task, tools_desc) -&gt; list[str]</code></strong>:
+        讓 LLM 把大任務拆成有序子步驟清單,在 Execute 前提供全局地圖。
+        計畫是假設不是承諾——可以重規劃。</li>
+        <li><strong><code>execute_plan(client, registry, plan, original_task) -&gt; dict</code></strong>:
+        依序把每個子步驟交給 <a href="101-tool-react.html">§95 的 <code>run_react</code></a> 執行,
+        並把前面步驟的結果累積為後面步驟的背景知識。</li>
+        <li><strong><code>evaluate_output + generate_reflection + reflect_and_improve</code></strong>:
+        Reflexion 模式——執行後讓 LLM 自評、生成反思建議、帶建議重試。
+        最多 <code>MAX_REFLECT_ROUNDS</code> 輪。</li>
+        <li><strong><code>remember / recall / log_lesson</code></strong>:
+        把 <a href="102-rag-from-scratch.html">§96 的 <code>VectorStore</code></a> 當長期記憶——
+        中間結果、重要事實、失敗教訓都可以存入,跨步驟語意搜尋取回。</li>
+        <li><strong><code>AdvancedAgent</code></strong>:
+        把所有零件組合成 Plan → Execute → Reflect 完整骨架,
+        帶護欄(MAX_PLAN_STEPS、MAX_REFLECT_ROUNDS、BudgetGuard)。</li>
+        <li><strong>誠實邊界</strong>:這些技術降低但不消除失敗。計畫可以幻覺、反思可以偏差、記憶可以取回錯誤資訊。
+        成本與複雜度隨能力增加而上升。「夠用」永遠優先於「更強」。</li>
+      </ul>
+      <p>
+        這一章完成了單 agent 的進化——從 §95 的「反應式」agent,到本章的「規劃+反思+記憶」agent。
+        接下來,第 99 章會把問題推向下一個維度:
+        當<strong>多個 agent 協作</strong>時,如何設計溝通協議、分工策略與失敗處理——
+        讓複雜任務能被多個專業化 agent 並行分工完成。
+        第 100 章則會探索現有的 agent 框架(LangGraph、AutoGen 等)如何工程化地實現這些模式。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">📚</div>
+        <div class="body">
+          <span class="c-title">延伸資源</span>
+          <p><strong>Reflexion 論文</strong>:Shinn et al. (2023)「Reflexion: Language Agents with Verbal Reinforcement Learning」
+          — <a href="https://arxiv.org/abs/2303.11366">arxiv.org/abs/2303.11366</a>。
+          原始 Reflexion 架構的設計、實驗與評估——包含 HotpotQA、AlfWorld、HumanEval 上的效果對比。</p>
+          <p><strong>Agentic Design Patterns</strong>:Andrew Ng 的四大 agentic patterns 系列文章
+          (Reflection / Tool Use / Planning / Multi-agent)——
+          <a href="https://www.deeplearning.ai/the-batch/agentic-design-patterns-part-1-reflection/">deeplearning.ai</a>。
+          以直覺講解為主,適合快速掌握大局。</p>
+          <p><strong>Plan-and-Execute Agent(LangChain)</strong>:
+          <a href="https://blog.langchain.dev/plan-and-execute-agents/">blog.langchain.dev/plan-and-execute-agents</a>
+          ——LangChain 對 Plan-and-Execute 架構的工程實現與評估,包含與純 ReAct 的對比實驗。</p>
+          <p>本章沿用了
+          <a href="100-llm-client.html">第 94 章《手刻你的 LLM client》</a>的 <code>LLMClient</code>、
+          <a href="101-tool-react.html">第 95 章《工具呼叫與 ReAct》</a>的 <code>run_react</code>/<code>ToolRegistry</code>、
+          <a href="102-rag-from-scratch.html">第 96 章《手刻最小 RAG》</a>的 <code>VectorStore</code>。
+          第 99 章(多代理協作)與第 100 章(agent 框架導覽)是本章概念的自然延伸。</p>
+        </div>
+      </div>

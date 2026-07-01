@@ -1,0 +1,1125 @@
+<!--meta
+title: 虛擬機與編譯器
+description: 從『沒人想用組合語言寫遊戲』的痛點出發,理解為什麼要在高階語言與機器之間插一層虛擬機(VM):堆疊機、Hack VM 語言、函式呼叫協定、VM 翻譯器,再一路講到高階語言 Jack 與編譯器的三步驟(詞法分析、語法分析、程式碼產生),最後把第 19–23 章串成『從 NAND 到能跑程式』的完整故事。
+-->
+
+
+      <div class="eyebrow">第五部 · 計算機系統</div>
+      <h1>虛擬機與編譯器</h1>
+      <p class="subtitle">沒有人想用組合語言寫一個遊戲。我們想寫的是 <code>if score &gt; high: ...</code>。從這種人話,到上一章那串 0 與 1,中間到底發生了什麼?這一章,我們補上抽象高塔最關鍵、也最迷人的一段樓梯。</p>
+      <div class="byline">
+        <span class="tag">第 23 章</span>
+        <span>閱讀時間 ≈ 65 分鐘</span>
+        <span>難度:★★★★☆</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>為什麼要在高階語言與機器之間插一層<strong>虛擬機(virtual machine)</strong>,以及這個「中間層」如何把 M×N 個編譯器降成 M+N 個(Java 的 JVM、.NET 的 CLR 都靠這招)</li>
+          <li><strong>堆疊(stack)</strong>是什麼、為什麼後進先出的結構天生適合做算術與函式呼叫</li>
+          <li>Hack VM 語言:算術/邏輯命令(<code>add sub neg eq gt lt and or not</code>)與記憶體存取命令(<code>push</code>/<code>pop</code> 加上各種 segment)</li>
+          <li><strong>函式呼叫協定(calling convention)</strong>:呼叫框(stack frame)、引數與區域變數、return,以及為什麼遞迴天生就能跑</li>
+          <li><strong>VM 翻譯器</strong>怎麼把一條 VM 命令,翻成第 22 章那種 Hack 組合語言</li>
+          <li>高階語言長什麼樣(以 Nand2Tetris 的 <strong>Jack</strong> 為例),以及它終將被翻成 VM 命令</li>
+          <li><strong>編譯器</strong>的三步驟:詞法分析(tokenizing)→ 語法分析(parsing,建出剖析樹)→ 程式碼產生(code generation)</li>
+          <li>怎麼把整本書第 19–23 章串成一個完整故事:<strong>從 NAND 閘,一路到能跑你寫的程式</strong></li>
+        </ul>
+      </div>
+
+      <h2>最後一段樓梯</h2>
+      <p>
+        我們已經爬得很高了。第 19、20 章用一堆 NAND 閘親手造出了 ALU 與記憶體;第 21 章把它們組成 CPU,看懂了機器碼;
+        第 22 章寫了一個<strong>組譯器(assembler)</strong>,讓 <code>D=D+A</code> 自動變成 <code>1110000010010000</code>。
+        從組合語言到機器碼這一哩,已經通了。
+      </p>
+      <p>
+        但說真的——你願意用組合語言寫一個貪食蛇嗎?光是「如果分數超過最高分就更新」這種小事,
+        用 <code>@</code>、<code>D=M</code>、<code>0;JMP</code> 拼起來就要寫一大串,還得自己記住每個變數借住在 RAM 的哪一格。
+        人類真正想寫的,是這樣的東西:
+      </p>
+      <pre><code class="language-text">if (score &gt; high) {
+    high = score;
+}</code></pre>
+      <p>
+        從這種<strong>高階語言(high-level language)</strong>的「人話」,到 CPU 真正吃的那串 0 與 1,
+        中間還隔著好幾層樓梯。這一章,我們要把這段樓梯一階一階鋪好。而第一個問題,出乎意料地不是「怎麼翻譯」,
+        而是——<strong>「翻譯成什麼?」</strong>
+      </p>
+
+      <h2>為什麼要多一層:M×N 的惡夢</h2>
+      <p>
+        最直覺的想法是:寫一個編譯器,把高階語言<strong>直接</strong>翻成某顆 CPU 的機器碼。聽起來很合理,直到你開始數數量。
+      </p>
+      <p>
+        假設世界上有 <strong>M 種</strong>高階語言(C、Java、Python、Go、Rust……)和 <strong>N 種</strong>CPU 平台
+        (x86、ARM、RISC-V、我們的 Hack……)。如果每個語言都直接翻到每個平台,你需要幾個編譯器?
+        答案是 <strong>M×N</strong> 個——每多一種語言,就得為「所有」平台各寫一個後端;每出一顆新晶片,就得為「所有」語言各補一個編譯器。
+        這是一場組合爆炸的惡夢。
+      </p>
+      <p>
+        聰明的解法,是電腦科學最愛用的一招:<strong>多加一層中間層(intermediate layer)</strong>。我們發明一種人造的、
+        不對應任何真實 CPU 的<strong>虛擬機語言(VM language,也叫位元組碼 bytecode)</strong>,讓它夾在中間:
+      </p>
+      <ul>
+        <li><strong>前端(front end)</strong>:每種高階語言只要寫<em>一個</em>編譯器,把自己翻成這套通用的 VM 語言。</li>
+        <li><strong>後端(back end)</strong>:每個平台只要寫<em>一個</em> VM 翻譯器,把 VM 語言翻成自己的機器碼。</li>
+      </ul>
+      <p>
+        於是總數從 M×N 驟降為 <strong>M+N</strong>。多一種語言?寫一個前端就好,它立刻能在所有平台上跑。
+        出一顆新晶片?寫一個後端就好,所有語言立刻能用它。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 330" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- languages (left) -->
+  <text x="95" y="34" text-anchor="middle" font-size="12" font-weight="800" fill="#2f6f6a">高階語言(M 種)</text>
+  <rect x="30" y="50"  width="130" height="40" rx="8" fill="#e3efed" stroke="#2f6f6a"/><text x="95" y="75" text-anchor="middle" font-size="13" fill="#1f2328">Jack</text>
+  <rect x="30" y="100" width="130" height="40" rx="8" fill="#e3efed" stroke="#2f6f6a"/><text x="95" y="125" text-anchor="middle" font-size="13" fill="#1f2328">Java</text>
+  <rect x="30" y="150" width="130" height="40" rx="8" fill="#e3efed" stroke="#2f6f6a"/><text x="95" y="175" text-anchor="middle" font-size="13" fill="#1f2328">C#</text>
+  <text x="95" y="225" text-anchor="middle" font-size="11" fill="#8a929b">… 每種寫一個編譯器</text>
+
+  <!-- VM box (center) -->
+  <rect x="280" y="95" width="160" height="100" rx="12" fill="#8b5cf6"/>
+  <text x="360" y="135" text-anchor="middle" font-size="15" font-weight="800" fill="#fff">VM 中間語言</text>
+  <text x="360" y="158" text-anchor="middle" font-size="11" fill="#ede9fe">bytecode</text>
+  <text x="360" y="178" text-anchor="middle" font-size="11" fill="#ede9fe">不對應任何真 CPU</text>
+
+  <!-- platforms (right) -->
+  <text x="625" y="34" text-anchor="middle" font-size="12" font-weight="800" fill="#b4541f">硬體平台(N 種)</text>
+  <rect x="560" y="50"  width="130" height="40" rx="8" fill="#f6e7dd" stroke="#b4541f"/><text x="625" y="75" text-anchor="middle" font-size="13" fill="#1f2328">Hack CPU</text>
+  <rect x="560" y="100" width="130" height="40" rx="8" fill="#f6e7dd" stroke="#b4541f"/><text x="625" y="125" text-anchor="middle" font-size="13" fill="#1f2328">x86</text>
+  <rect x="560" y="150" width="130" height="40" rx="8" fill="#f6e7dd" stroke="#b4541f"/><text x="625" y="175" text-anchor="middle" font-size="13" fill="#1f2328">ARM</text>
+  <text x="625" y="225" text-anchor="middle" font-size="11" fill="#8a929b">… 每個寫一個翻譯器</text>
+
+  <!-- converging arrows L -> VM -->
+  <line x1="160" y1="70"  x2="278" y2="120" stroke="#2f6f6a" stroke-width="2" marker-end="url(#vc)"/>
+  <line x1="160" y1="120" x2="278" y2="140" stroke="#2f6f6a" stroke-width="2" marker-end="url(#vc)"/>
+  <line x1="160" y1="170" x2="278" y2="160" stroke="#2f6f6a" stroke-width="2" marker-end="url(#vc)"/>
+  <!-- diverging arrows VM -> R -->
+  <line x1="442" y1="120" x2="558" y2="70"  stroke="#b4541f" stroke-width="2" marker-end="url(#vd)"/>
+  <line x1="442" y1="140" x2="558" y2="120" stroke="#b4541f" stroke-width="2" marker-end="url(#vd)"/>
+  <line x1="442" y1="160" x2="558" y2="170" stroke="#b4541f" stroke-width="2" marker-end="url(#vd)"/>
+
+  <text x="360" y="285" text-anchor="middle" font-size="13" font-weight="700" fill="#1f2328">編譯器 M 個 + 翻譯器 N 個 = <tspan fill="#8b5cf6" font-weight="800">M + N</tspan>(而不是 M × N)</text>
+  <text x="360" y="308" text-anchor="middle" font-size="11" fill="#8a929b">多一種語言只要 +1,多一個平台也只要 +1</text>
+
+  <defs>
+    <marker id="vc" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#2f6f6a"/></marker>
+    <marker id="vd" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#b4541f"/></marker>
+  </defs>
+</svg>
+        <figcaption>圖 23-1:中間層的威力。把所有語言先匯流到一套 VM 語言,再從 VM 分流到各平台,編譯器的數量就從 M×N(每條線都要一個)降成 M+N。這正是「兩階段編譯」的核心。</figcaption>
+      </div>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">兩階段編譯(two-tier compilation)</span>
+          <p>整個翻譯過程被切成兩段,中間以一套<strong>虛擬機語言</strong>為樞紐:
+          <strong>① 編譯器(compiler)</strong>:高階語言 → VM 語言(與硬體無關)。
+          <strong>② VM 翻譯器(VM translator)</strong>:VM 語言 → 某平台的機器碼(與語言無關)。
+          這條界線把「語言的事」和「硬體的事」乾淨地切開——這正是<strong>關注點分離(separation of concerns)</strong>的經典範例,
+          也是 Java、C# 等現代語言能「跨平台」的根本原因。</p>
+        </div>
+      </div>
+
+      <p>
+        這個想法不是教科書上的玩具。<strong>Java</strong> 的編譯器把 <code>.java</code> 翻成 <code>.class</code>(Java 位元組碼),
+        再交給各平台的 <strong>JVM(Java Virtual Machine)</strong>去執行;微軟 <strong>.NET</strong> 把 C#、F# 等語言翻成
+        <strong>CIL</strong> 位元組碼,交給 <strong>CLR(Common Language Runtime)</strong>。這就是 Java 那句著名口號
+        <em>「Write Once, Run Anywhere(一次編譯,到處執行)」</em>的祕密:你編譯出來的位元組碼不認得任何特定 CPU,
+        到處執行的是那台<em>虛擬</em>的機器,而每個平台都備了一台它的「替身」。
+      </p>
+      <p>
+        那麼問題來了:這台虛擬機,該長什麼樣?它要簡單到「每個平台都好實作」,又要通用到「什麼語言都翻得進來」。
+        Nand2Tetris 給的答案,跟絕大多數真實 VM(包括 JVM)一樣,是一個優雅得驚人的設計——<strong>堆疊機</strong>。
+      </p>
+
+      <h2>堆疊:一疊盤子的魔法</h2>
+      <p>
+        在設計虛擬機之前,我們得先認識它的心臟:<strong>堆疊(stack)</strong>。
+        你其實天天在用它的實體版——一疊餐盤。新洗好的盤子<strong>疊到最上面</strong>;要用盤子時,也<strong>從最上面拿</strong>。
+        你永遠不會從中間抽一個。這種「最後放進去的、最先被拿出來」的規則,叫做
+        <strong>後進先出(LIFO,Last In, First Out)</strong>。
+      </p>
+      <p>
+        堆疊只開放兩個動作(這也是它美妙的地方——簡單到不能再簡單):
+      </p>
+      <ul>
+        <li><strong>push(壓入)</strong>:把一個值放到堆疊頂端。</li>
+        <li><strong>pop(彈出)</strong>:把頂端的值拿走,並回傳它。</li>
+      </ul>
+      <p>
+        就這兩招。沒有「讀第三個」、沒有「插到中間」。正因為這麼受限,它反而出奇地好用——
+        尤其是拿來做<strong>算術運算</strong>。
+      </p>
+
+      <h3>為什麼堆疊適合做算術</h3>
+      <p>
+        想算 <code>7 + 8</code>。在堆疊機(stack machine)上,這件事被拆成三個極簡的動作:
+        <strong>push 7</strong>(把 7 壓進去)、<strong>push 8</strong>(把 8 壓進去)、<strong>add</strong>
+        (把頂端兩個值彈出來、相加、把結果壓回去)。我們把這三步畫出來:
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 280" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- snapshot 1: after push 7 -->
+  <text x="110" y="40" text-anchor="middle" font-size="12" font-weight="800" fill="#2f6f6a">push 7</text>
+  <rect x="60" y="180" width="100" height="40" fill="#e3efed" stroke="#2f6f6a"/><text x="110" y="206" text-anchor="middle" font-size="15" font-weight="700" fill="#1f2328">7</text>
+  <line x1="50" y1="220" x2="170" y2="220" stroke="#8a929b" stroke-width="3"/>
+  <text x="110" y="240" text-anchor="middle" font-size="10" fill="#8a929b">堆疊底</text>
+  <text x="185" y="205" font-size="11" fill="#b4541f">← 頂端</text>
+
+  <!-- snapshot 2: after push 8 -->
+  <text x="350" y="40" text-anchor="middle" font-size="12" font-weight="800" fill="#2f6f6a">push 8</text>
+  <rect x="300" y="180" width="100" height="40" fill="#e3efed" stroke="#2f6f6a"/><text x="350" y="206" text-anchor="middle" font-size="15" font-weight="700" fill="#1f2328">7</text>
+  <rect x="300" y="140" width="100" height="40" fill="#f6e7dd" stroke="#b4541f"/><text x="350" y="166" text-anchor="middle" font-size="15" font-weight="700" fill="#1f2328">8</text>
+  <line x1="290" y1="220" x2="410" y2="220" stroke="#8a929b" stroke-width="3"/>
+  <text x="425" y="165" font-size="11" fill="#b4541f">← 頂端</text>
+
+  <!-- snapshot 3: after add -->
+  <text x="600" y="40" text-anchor="middle" font-size="12" font-weight="800" fill="#2f6f6a">add</text>
+  <text x="600" y="58" text-anchor="middle" font-size="10" fill="#8a929b">(彈 8、彈 7,壓回 15)</text>
+  <rect x="550" y="180" width="100" height="40" fill="#ede9fe" stroke="#8b5cf6"/><text x="600" y="206" text-anchor="middle" font-size="15" font-weight="800" fill="#1f2328">15</text>
+  <line x1="540" y1="220" x2="660" y2="220" stroke="#8a929b" stroke-width="3"/>
+  <text x="675" y="205" font-size="11" fill="#b4541f">← 頂端</text>
+
+  <!-- arrows -->
+  <line x1="200" y1="200" x2="285" y2="200" stroke="#8a929b" stroke-width="2" marker-end="url(#sa)"/>
+  <line x1="445" y1="200" x2="535" y2="200" stroke="#8a929b" stroke-width="2" marker-end="url(#sa)"/>
+  <defs><marker id="sa" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/></marker></defs>
+</svg>
+        <figcaption>圖 23-2:在堆疊機上算 7 + 8。<code>add</code> 不需要任何運算元——它「知道」自己該去頂端拿兩個數。所有算術命令都長這樣:從堆疊頂端拿幾個值、算一算、把結果放回頂端。</figcaption>
+      </div>
+
+      <p>
+        注意一件關鍵的事:<code>add</code> 這個命令<strong>不帶任何參數</strong>。它不需要說「把誰跟誰相加」,
+        因為遊戲規則就是「永遠拿頂端那兩個」。這種「運算元位置固定在頂端」的特性,讓堆疊機的指令短到不能再短,
+        也讓<strong>翻譯</strong>變得超級規律——這正是我們選它當虛擬機的原因。
+      </p>
+
+      <h3>堆疊機怎麼吃下複雜算式</h3>
+      <p>
+        厲害的還在後頭。複雜算式 <code>(7 + 8) * 3</code> 怎麼辦?一樣只用 push 與運算:
+      </p>
+      <pre><code class="language-text">push 7      // 堆疊:[7]
+push 8      // 堆疊:[7, 8]
+add         // 彈 8、彈 7,壓回 15      → 堆疊:[15]
+push 3      // 堆疊:[15, 3]
+mul         // 彈 3、彈 15,壓回 45     → 堆疊:[45]
+            // 結束時堆疊頂端 = 答案 45</code></pre>
+      <p>
+        每個運算子都「就地」消化掉它下方剛算好的中間結果,完全不需要暫存變數、不需要管「先算哪個」——
+        因為我們在<em>產生</em>這串命令時,就已經把順序安排好了。這種寫法,其實有個古老的名字。
+      </p>
+
+      <div class="callout history">
+        <div class="ico">📜</div>
+        <div class="body">
+          <span class="c-title">逆波蘭表示法(Reverse Polish Notation)</span>
+          <p>把運算子寫在運算元<em>後面</em>的寫法(<code>7 8 +</code> 而非 <code>7 + 8</code>),叫<strong>後序(postfix)</strong>或
+          <strong>逆波蘭表示法(RPN)</strong>,1920 年代由波蘭邏輯學家 <strong>Jan Łukasiewicz</strong> 的前序記法演變而來。
+          它最迷人的地方是:<strong>完全不需要括號</strong>,運算順序由位置唯一決定。1970 年代的 HP 工程計算機就用 RPN 輸入,
+          至今仍有死忠擁護者。而堆疊機執行的,本質上就是一串 RPN——本章最後一個練習,你會親手寫一台 RPN 計算機。</p>
+        </div>
+      </div>
+
+      <h2>Hack VM 語言:兩類命令搞定一切</h2>
+      <p>
+        現在來看 Nand2Tetris 實際定義的虛擬機語言。它跟 Hack 機器語言一樣走極簡路線,整套只有<strong>兩大類命令</strong>:
+        <strong>算術/邏輯命令</strong>(操作堆疊頂端)與<strong>記憶體存取命令</strong>(push/pop)。先看第一類。
+      </p>
+
+      <h3>算術與邏輯命令</h3>
+      <p>
+        這九個命令全都<strong>不帶參數</strong>,清一色是「從堆疊頂端拿值、算、把結果放回去」:
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>命令</th><th>拿幾個</th><th>做什麼</th><th>等價算式(x 在下、y 在上)</th></tr></thead>
+        <tbody>
+          <tr><td><code>add</code></td><td>2</td><td>相加</td><td>x + y</td></tr>
+          <tr><td><code>sub</code></td><td>2</td><td>相減</td><td>x − y</td></tr>
+          <tr><td><code>neg</code></td><td>1</td><td>取負</td><td>−y</td></tr>
+          <tr><td><code>eq</code></td><td>2</td><td>是否相等(真壓 −1,假壓 0)</td><td>x == y</td></tr>
+          <tr><td><code>gt</code></td><td>2</td><td>是否大於</td><td>x &gt; y</td></tr>
+          <tr><td><code>lt</code></td><td>2</td><td>是否小於</td><td>x &lt; y</td></tr>
+          <tr><td><code>and</code></td><td>2</td><td>逐位元 AND</td><td>x &amp; y</td></tr>
+          <tr><td><code>or</code></td><td>2</td><td>逐位元 OR</td><td>x | y</td></tr>
+          <tr><td><code>not</code></td><td>1</td><td>逐位元 NOT</td><td>~y</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        留意一個常見的坑:<code>sub</code> 算的是「下面那個減上面那個」(x − y),不是反過來。順序很重要,
+        待會的練習會專門考你這點。另外注意比較命令(<code>eq/gt/lt</code>)的「真」是 <strong>−1</strong>(十六個位元全 1),
+        「假」是 <strong>0</strong>——這跟第 20 章布林邏輯的慣例一致。
+      </p>
+
+      <h3>記憶體存取:push / pop 與 segment</h3>
+      <p>
+        光有算術還不夠——數字得從某個地方來、算完得存到某個地方去。這就是另一類命令:
+        <code>push</code> 與 <code>pop</code>。但這裡有個關鍵設計:它們的格式是
+      </p>
+      <pre><code class="language-text">push segment index
+pop  segment index</code></pre>
+      <p>
+        <code>segment</code>(段)指出「從哪一塊記憶體區域」,<code>index</code> 是「那塊區域裡的第幾格」。
+        為什麼要分段?因為高階語言裡的變數,天生就分好幾種角色:有區域變數、有函式引數、有物件欄位……
+        VM 用<strong>段</strong>把它們分門別類,各住各的區,翻譯時才不會打架。Hack VM 有八個段:
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>段(segment)</th><th>裝的是</th><th>對應的高階概念</th></tr></thead>
+        <tbody>
+          <tr><td><code>constant</code></td><td>常數本身(虛擬的段,只能 push)</td><td>字面值,如 <code>push constant 7</code> 就是把 7 壓進去</td></tr>
+          <tr><td><code>local</code></td><td>目前函式的區域變數</td><td><code>var</code> 宣告的變數</td></tr>
+          <tr><td><code>argument</code></td><td>呼叫時傳進來的引數</td><td>函式的參數</td></tr>
+          <tr><td><code>this</code> / <code>that</code></td><td>目前物件 / 陣列指到的記憶體</td><td>物件欄位、陣列元素</td></tr>
+          <tr><td><code>static</code></td><td>整個檔案共用的靜態變數</td><td>類別層級的 <code>static</code> 變數</td></tr>
+          <tr><td><code>temp</code></td><td>8 格通用暫存空間</td><td>編譯器產生的臨時值</td></tr>
+          <tr><td><code>pointer</code></td><td>2 格,用來設定 <code>this</code>/<code>that</code> 指向哪</td><td>物件/陣列的位址操作</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        實際用起來,直覺很單純。<code>push local 2</code> 是「把第 2 號區域變數的值,壓到堆疊頂端」;
+        <code>pop local 2</code> 是「把堆疊頂端彈出,存進第 2 號區域變數」。來看一個完整小例子:
+        把區域變數 <code>local 0</code> 與引數 <code>argument 1</code> 相加,再存回 <code>local 0</code>
+        (相當於高階語言的 <code>x = x + n</code>):
+      </p>
+      <pre><code class="language-text">push local 0      // 把 x 壓上來        堆疊:[x]
+push argument 1   // 把 n 壓上來        堆疊:[x, n]
+add               // 相加              堆疊:[x+n]
+pop local 0       // 彈出存回 x         堆疊:[]</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">堆疊是「動詞」,段是「名詞」</span>
+          <p>看懂 VM 程式,只要記住兩件事:<strong>算術命令</strong>在堆疊頂端「做事」(動詞),
+          <strong>push/pop</strong> 在堆疊與各個記憶體段之間「搬東西」(把名詞搬上台、搬下台)。
+          任何高階運算式,最後都被攤平成一串「push 一些值上來 → 用算術命令把它們消化掉」。
+          一旦抓到這個節奏,VM 程式就再也不神祕了。</p>
+        </div>
+      </div>
+
+      <h2>函式呼叫協定:堆疊真正的殺手級應用</h2>
+      <p>
+        算術只是開胃菜。堆疊真正不可取代的地方,是<strong>函式呼叫</strong>。
+        回想第 3 章我們講遞迴時提到的<strong>呼叫堆疊(call stack)</strong>——當時是個比喻,現在我們要看見它的本體。
+      </p>
+      <p>
+        問題是這樣的:函式 A 呼叫函式 B,B 又呼叫 C……每一層都有自己的引數、自己的區域變數,
+        而且做完之後要能<strong>準確回到</strong>呼叫它的地方繼續跑。這些「每一層自己的東西」,該放哪?
+        答案優雅得不得了:<strong>放在堆疊上</strong>。每呼叫一次函式,就在堆疊頂端疊一塊新的
+        <strong>呼叫框(stack frame,也叫 activation record)</strong>;函式回傳時,就把這塊框拆掉。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 380" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- caller's frame (below) -->
+  <rect x="220" y="40" width="280" height="36" fill="#eef6f4" stroke="#2f6f6a"/><text x="360" y="63" text-anchor="middle" font-size="12" fill="#4a5159">…呼叫者(caller)自己的呼叫框…</text>
+
+  <!-- arguments -->
+  <rect x="220" y="76" width="280" height="34" fill="#f6e7dd" stroke="#b4541f"/><text x="360" y="98" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">argument 0, 1, …(呼叫者壓上來的引數)</text>
+  <text x="195" y="98" text-anchor="end" font-size="11" fill="#b4541f">ARG →</text>
+
+  <!-- saved state -->
+  <rect x="220" y="110" width="280" height="30" fill="#fff" stroke="#8a929b"/><text x="360" y="130" text-anchor="middle" font-size="11" fill="#1f2328">return address(做完跳回哪)</text>
+  <rect x="220" y="140" width="280" height="30" fill="#fff" stroke="#8a929b"/><text x="360" y="160" text-anchor="middle" font-size="11" fill="#1f2328">saved LCL / ARG / THIS / THAT(存好,回來時還原)</text>
+
+  <!-- locals -->
+  <rect x="220" y="170" width="280" height="34" fill="#e3efed" stroke="#2f6f6a"/><text x="360" y="192" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">local 0, 1, …(被呼叫函式的區域變數)</text>
+  <text x="195" y="192" text-anchor="end" font-size="11" fill="#2f6f6a">LCL →</text>
+
+  <!-- working stack -->
+  <rect x="220" y="204" width="280" height="60" fill="#ede9fe" stroke="#8b5cf6"/><text x="360" y="230" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">工作堆疊(算術 push/pop 在這發生)</text>
+  <text x="360" y="250" text-anchor="middle" font-size="11" fill="#8a929b">↑ 成長方向</text>
+  <text x="195" y="262" text-anchor="end" font-size="11" fill="#8b5cf6">SP →</text>
+
+  <!-- brace for the whole frame -->
+  <path d="M 520 76 Q 532 76 532 88 L 532 192 Q 532 204 544 204" fill="none" stroke="#b4541f" stroke-width="1.5"/>
+  <text x="548" y="145" font-size="12" font-weight="800" fill="#b4541f">被呼叫者的</text>
+  <text x="548" y="162" font-size="12" font-weight="800" fill="#b4541f">呼叫框</text>
+  <text x="548" y="179" font-size="12" font-weight="800" fill="#b4541f">(stack frame)</text>
+
+  <text x="100" y="320" font-size="11" fill="#4a5159">call:把引數、回返位址、現場狀態</text>
+  <text x="100" y="338" font-size="11" fill="#4a5159">一層層疊上去,設好 ARG/LCL,跳進函式。</text>
+  <text x="100" y="362" font-size="11" fill="#4a5159">return:把這整塊框拆掉,還原現場,跳回去。</text>
+</svg>
+        <figcaption>圖 23-3:一塊呼叫框。它把「這次呼叫需要的一切」打包在堆疊上:引數、回返位址、要還原的現場(LCL/ARG/THIS/THAT)、區域變數、以及函式自己的工作堆疊。函式做完,整塊拆掉,世界回到呼叫前的樣子。</figcaption>
+      </div>
+
+      <p>
+        Hack VM 用三個命令完成這套協定:
+      </p>
+      <ul>
+        <li><code>function f k</code>:宣告函式 <code>f</code>,它有 <code>k</code> 個區域變數(進入時會把這 k 格初始化為 0)。</li>
+        <li><code>call f n</code>:呼叫 <code>f</code>,此時堆疊頂端已經放好 <code>n</code> 個引數。</li>
+        <li><code>return</code>:把堆疊頂端的值當回傳值,拆掉呼叫框,跳回呼叫處。</li>
+      </ul>
+      <p>
+        <code>call</code> 背後做的事,概念上是:把「回返位址」與現在的 <code>LCL/ARG/THIS/THAT</code> 全部 push 到堆疊上保存,
+        然後重新設定 <code>ARG</code>(指向第一個引數)與 <code>LCL</code>(指向第一個區域變數),最後跳進函式。
+        <code>return</code> 則是反向操作:把回傳值蓋到 argument 0 的位置(呼叫者預期答案出現在那)、還原四個被保存的指標、
+        跳回返位址。你不需要背這些細節,但要抓到<strong>那個對稱的美感</strong>:呼叫時疊上去的,回傳時剛好一層層撤下來。
+      </p>
+
+      <h3>為什麼遞迴「天生」就能跑</h3>
+      <p>
+        這套協定最漂亮的回報,是<strong>遞迴自動成立</strong>。第 3 章我們算階乘 <code>factorial(n)</code> 時,
+        它會呼叫 <code>factorial(n-1)</code>、再呼叫 <code>factorial(n-2)</code>……每一層都在「同一個函式」裡跑,
+        卻各自有不同的 <code>n</code>。怎麼做到的?
+      </p>
+      <p>
+        因為<strong>每一次呼叫都會疊一塊全新、獨立的呼叫框</strong>。<code>factorial(3)</code> 的 <code>n=3</code> 住在它那塊框,
+        <code>factorial(2)</code> 的 <code>n=2</code> 住在上面新疊的那塊,兩者井水不犯河水。
+        當最內層 <code>factorial(1)</code> 算完回傳,它的框被拆掉,控制權落回 <code>factorial(2)</code> 的框——
+        那個 <code>n=2</code> 還好端端地等在那裡。堆疊的後進先出,恰好對應「最後呼叫的最先返回」。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">遞迴不是語言的恩賜,是堆疊的副產品</span>
+          <p>很多初學者覺得「遞迴能跑」是一件神奇、要特別設計的事。其實不然:只要你的呼叫機制是
+          <strong>用堆疊保存每一層的現場</strong>,遞迴就<em>自動</em>能跑——因為「同一個函式的不同次呼叫」不過是堆疊上幾塊不同的框而已,
+          機器根本分不出、也不需要分出它們是不是「同一個」函式。這也解釋了第 3 章那個警告:
+          遞迴太深會<strong>堆疊溢位(stack overflow)</strong>——因為框疊太多,把堆疊空間用光了。
+          那個著名網站的名字,就是這麼來的。</p>
+        </div>
+      </div>
+
+      <h2>VM 翻譯器:把 VM 命令落地成組合語言</h2>
+      <p>
+        VM 語言再怎麼漂亮,Hack CPU 也聽不懂——它只認得第 21 章那兩種機器指令。所以我們需要
+        <strong>VM 翻譯器(VM translator)</strong>:讀進一行行 VM 命令,把每一條翻成<em>幾條</em>第 22 章的 Hack 組合語言。
+        (注意:跟組譯器「一行組語 = 一條機器碼」的一對一不同,VM 翻譯是<strong>一對多</strong>——一條 VM 命令通常展開成好幾條組語。)
+      </p>
+      <p>
+        關鍵前提:在 Hack 的記憶體裡,有一個約定俗成的<strong>堆疊指標 <code>SP</code></strong>(存在 <code>RAM[0]</code>),
+        它永遠指向「堆疊頂端的下一個空格」。所有 push/pop 都圍繞著它打轉。先看 <code>push constant 7</code> 怎麼翻:
+      </p>
+      <pre><code class="language-text">// VM:  push constant 7
+@7          // A = 7
+D=A         // D = 7              (把常數放進 D)
+@SP         // A = 0(SP 的位址)
+A=M         // A = RAM[SP] = 堆疊頂端那一格的位址
+M=D         // *SP = 7            (把 7 寫進堆疊頂端)
+@SP
+M=M+1       // SP++              (堆疊長高一格)</code></pre>
+      <p>
+        讀懂它:就是「把 7 放到 <code>SP</code> 指的那格,然後 <code>SP</code> 加一」。
+        每個 push 的最後兩步永遠是 <code>@SP / M=M+1</code>,規律到你可以閉著眼睛寫。再看算術命令 <code>add</code>:
+      </p>
+      <pre><code class="language-text">// VM:  add
+@SP
+AM=M-1      // SP--,同時 A = 新的 SP(指向頂端的 y)
+D=M         // D = y             (頂端那個值)
+A=A-1       // A 往下一格 → 指向 x
+M=D+M       // x = x + y         (結果留在這格,它現在是新的頂端)</code></pre>
+      <p>
+        <code>add</code> 的精髓:把堆疊「縮短一格」(兩個運算元變一個結果),並把和留在原本 x 的位置。
+        <code>sub</code> 只要把最後一行改成 <code>M=M-D</code>(注意是 x − y,印證前面說的順序)。
+        其他算術命令都是這個模板的小變奏。
+      </p>
+      <p>
+        看出門道了嗎?VM 翻譯器的工作,大半是<strong>查表 + 套模板</strong>:每種 VM 命令對應一個固定的組語樣板,
+        把參數填進去就好。它不「思考」,只是機械地展開——這跟第 22 章的組譯器一脈相承,也跟第 21 章那句
+        「控制單元其實不太聰明,只是佈線」遙相呼應。整條翻譯鏈,都是這種「規律的笨」堆出來的奇蹟。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">VM 翻譯 vs 直譯</span>
+          <p>我們這裡講的是<strong>提前翻譯(ahead-of-time)</strong>:VM 命令先被翻成機器碼,再執行。
+          但 VM 也可以<strong>直譯(interpret)</strong>:寫一個程式,一條一條讀 VM 命令、當場「假裝執行」它(就像本章開頭的
+          堆疊操作那樣維護一個堆疊陣列)。早期的 JVM 是直譯的,所以 Java 曾以「慢」聞名;
+          後來引入 <strong>JIT(Just-In-Time)即時編譯</strong>——執行時才把熱點位元組碼翻成原生機器碼——速度才大幅追上。
+          翻譯與直譯的取捨,我們留到第十部編譯器那章再細談。</p>
+        </div>
+      </div>
+
+      <h2>往上一層:高階語言長什麼樣(Jack)</h2>
+      <p>
+        VM 語言已經比組合語言友善多了,但它仍然在「攤平」的層次——你還是得自己想清楚 push/pop 的順序。
+        真正讓人舒服的,是<strong>高階語言</strong>。Nand2Tetris 配了一個叫 <strong>Jack</strong> 的小語言,
+        它刻意設計得像一個簡化版的 Java,讓你一眼就有熟悉感。看一段 Jack:
+      </p>
+      <pre><code class="language-text">class Main {
+    function void main() {
+        var int sum, i;       // 宣告區域變數
+        let sum = 0;
+        let i = 1;
+        while (i &lt; 101) {      // 1 加到 100
+            let sum = sum + i;
+            let i = i + 1;
+        }
+        do Output.printInt(sum);   // 呼叫函式(印出結果)
+        return;
+    }
+}</code></pre>
+      <p>
+        即使你沒學過 Jack,大概也猜得到它在幹嘛——這就是高階語言的價值:它用人類熟悉的結構
+        (<strong>類別 class、函式 function、變數宣告 var、流程控制 while/if、賦值 let</strong>)說話,
+        而不是逼你管堆疊指標。Jack 也支援物件導向(第 8 章的概念),例如定義一個「點」:
+      </p>
+      <pre><code class="language-text">class Point {
+    field int x, y;                    // 物件的欄位
+
+    constructor Point new(int ax, int ay) {  // 建構子
+        let x = ax;
+        let y = ay;
+        return this;
+    }
+
+    method int getX() { return x; }    // 方法
+}</code></pre>
+      <p>
+        重點不是學會 Jack 的每個語法,而是體會:<strong>這層東西,終究會被編譯成上面那種 VM 命令</strong>。
+        <code>let sum = sum + i;</code> 會變成 <code>push local 0 / push local 1 / add / pop local 0</code>;
+        <code>while</code> 會變成「比較 + 條件跳躍」(就像第 21 章看到的);
+        <code>do Output.printInt(sum)</code> 會變成 <code>push</code> 引數再 <code>call Output.printInt 1</code>。
+        把這層「人話」翻成 VM 命令的那個程式,就是<strong>編譯器</strong>。它到底怎麼做到的?
+      </p>
+
+      <h2>編譯器在做什麼:一條三段式的管線</h2>
+      <p>
+        「編譯器」聽起來像黑魔法,但它其實是一條結構非常清楚的<strong>管線(pipeline)</strong>——
+        正是第 11 章軟體架構講過的那種「資料流過一連串處理站」的設計。原始碼從一端流入,VM 命令從另一端流出,
+        中間經過三個處理站:
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 250" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- input -->
+  <rect x="20" y="90" width="110" height="70" rx="8" fill="#fff" stroke="#8a929b"/>
+  <text x="75" y="118" text-anchor="middle" font-size="12" font-weight="800" fill="#1f2328">原始碼</text>
+  <text x="75" y="138" text-anchor="middle" font-size="10" fill="#8a929b">let x=y+2;</text>
+
+  <!-- stage 1 -->
+  <rect x="175" y="80" width="120" height="90" rx="10" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="235" y="112" text-anchor="middle" font-size="12" font-weight="800" fill="#1f2328">① 詞法分析</text>
+  <text x="235" y="130" text-anchor="middle" font-size="10" fill="#4a5159">Tokenizer</text>
+  <text x="235" y="150" text-anchor="middle" font-size="9" fill="#8a929b">切成 token</text>
+
+  <!-- stage 2 -->
+  <rect x="335" y="80" width="120" height="90" rx="10" fill="#ede9fe" stroke="#8b5cf6" stroke-width="2"/>
+  <text x="395" y="112" text-anchor="middle" font-size="12" font-weight="800" fill="#1f2328">② 語法分析</text>
+  <text x="395" y="130" text-anchor="middle" font-size="10" fill="#4a5159">Parser</text>
+  <text x="395" y="150" text-anchor="middle" font-size="9" fill="#8a929b">建出剖析樹</text>
+
+  <!-- stage 3 -->
+  <rect x="495" y="80" width="120" height="90" rx="10" fill="#f6e7dd" stroke="#b4541f" stroke-width="2"/>
+  <text x="555" y="112" text-anchor="middle" font-size="12" font-weight="800" fill="#1f2328">③ 程式碼產生</text>
+  <text x="555" y="130" text-anchor="middle" font-size="10" fill="#4a5159">Code Gen</text>
+  <text x="555" y="150" text-anchor="middle" font-size="9" fill="#8a929b">輸出 VM 命令</text>
+
+  <!-- output -->
+  <rect x="640" y="90" width="64" height="70" rx="8" fill="#fff" stroke="#8a929b"/>
+  <text x="672" y="118" text-anchor="middle" font-size="11" font-weight="800" fill="#1f2328">VM</text>
+  <text x="672" y="136" text-anchor="middle" font-size="9" fill="#8a929b">push…</text>
+  <text x="672" y="150" text-anchor="middle" font-size="9" fill="#8a929b">add…</text>
+
+  <!-- arrows with labels -->
+  <line x1="130" y1="125" x2="173" y2="125" stroke="#8a929b" stroke-width="2" marker-end="url(#cp)"/>
+  <line x1="295" y1="125" x2="333" y2="125" stroke="#8a929b" stroke-width="2" marker-end="url(#cp)"/>
+  <text x="314" y="116" text-anchor="middle" font-size="9" fill="#8a929b">tokens</text>
+  <line x1="455" y1="125" x2="493" y2="125" stroke="#8a929b" stroke-width="2" marker-end="url(#cp)"/>
+  <text x="474" y="116" text-anchor="middle" font-size="9" fill="#8a929b">樹/AST</text>
+  <line x1="615" y1="125" x2="638" y2="125" stroke="#8a929b" stroke-width="2" marker-end="url(#cp)"/>
+
+  <text x="360" y="210" text-anchor="middle" font-size="11" fill="#4a5159">每一站只做一件事,把半成品交給下一站——這就是「管線」。複雜的編譯,被切成三個好懂的小問題。</text>
+
+  <defs><marker id="cp" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/></marker></defs>
+</svg>
+        <figcaption>圖 23-4:編譯器的三段式管線。詞法分析把字元流切成 token,語法分析把 token 組成有結構的剖析樹,程式碼產生再走訪這棵樹、吐出 VM 命令。把一個大問題拆成三個小問題,正是工程的精髓。</figcaption>
+      </div>
+
+      <p>
+        接下來我們逐站拆解。為了讓你真的「看見」每一步,我們不用 Jack,而是用一個你更熟的小語言——
+        <strong>算術運算式</strong>(像 <code>x + y * 2</code>)當主角,並用 Python 寫出可以真的跑的小程式。
+        概念跟編譯 Jack 完全相同,只是規模小到能一眼看穿。
+      </p>
+
+      <h2>① 詞法分析:把字元串切成 token</h2>
+      <p>
+        編譯器拿到的原始碼,本質上只是一長串<strong>字元</strong>:<code>l</code>、<code>e</code>、<code>t</code>、空格、<code>x</code>……
+        它眼中沒有「單字」,得自己切。<strong>詞法分析(lexical analysis,俗稱 tokenizing 或 lexing)</strong>
+        就是把這串字元切成一個個有意義的最小單位——<strong>token(詞元)</strong>,並標上類別。常見類別有:
+      </p>
+      <ul>
+        <li><strong>關鍵字(keyword)</strong>:語言保留的字,如 <code>class</code>、<code>if</code>、<code>while</code>、<code>let</code>。</li>
+        <li><strong>符號(symbol)</strong>:<code>+</code>、<code>*</code>、<code>(</code>、<code>;</code>、<code>=</code> 等。</li>
+        <li><strong>識別字(identifier)</strong>:程式設計師自取的名字,如變數名 <code>x</code>、函式名 <code>main</code>。</li>
+        <li><strong>常數(constant)</strong>:數字 <code>42</code>、字串 <code>"hello"</code>。</li>
+      </ul>
+      <p>
+        這一步其實不難——掃過字元、遇到空白就跳過、遇到數字就一路吃到不是數字為止、遇到符號就單獨切出來。
+        我們用 Python 替算術運算式寫一個迷你 tokenizer:
+      </p>
+      <pre><code class="language-python">def tokenize(text):
+    """把算術運算式的字元串,切成 (類別, 值) 的 token 串列。"""
+    tokens = []
+    i = 0
+    while i &lt; len(text):
+        c = text[i]
+        if c.isspace():               # 空白:跳過
+            i += 1
+        elif c.isdigit():             # 數字:一路吃到不是數字
+            num = ""
+            while i &lt; len(text) and text[i].isdigit():
+                num += text[i]
+                i += 1
+            tokens.append(("NUM", int(num)))
+        elif c.isalpha():             # 字母開頭:識別字(變數名)
+            name = ""
+            while i &lt; len(text) and text[i].isalnum():
+                name += text[i]
+                i += 1
+            tokens.append(("ID", name))
+        elif c in "+-*/()":           # 符號
+            tokens.append(("OP", c))
+            i += 1
+        else:
+            raise ValueError(f"非法字元:{c!r}")
+    return tokens
+
+print(tokenize("x + y * 2"))
+# [('ID', 'x'), ('OP', '+'), ('ID', 'y'), ('OP', '*'), ('NUM', 2)]</code></pre>
+      <p>
+        看那行輸出:原本一串沒結構的字元,現在成了一排乾淨、標好類別的 token。
+        注意 tokenizer <strong>不在乎文法對不對</strong>——你餵它 <code>+ + )</code> 它照樣切得出 token。
+        「這些 token 拼起來合不合語法」是下一站的事。詞法分析只負責「斷詞」,就像把一句沒有空格的英文
+        切成一個個單字,但還沒讀懂句子。
+      </p>
+
+      <h2>② 語法分析:把 token 組成一棵樹</h2>
+      <p>
+        有了一排 token,接下來要搞懂它們的<strong>結構</strong>:誰是主、誰是從、先算誰。這叫
+        <strong>語法分析(syntactic analysis,俗稱 parsing)</strong>,它的產物是一棵
+        <strong>剖析樹(parse tree)</strong>,或經過精簡的<strong>抽象語法樹(AST,Abstract Syntax Tree)</strong>。
+      </p>
+      <p>
+        為什麼需要樹?因為運算式天生有<strong>階層</strong>。<code>x + y * 2</code> 不是「從左到右」算的——
+        乘法優先,所以要先算 <code>y * 2</code>,再把結果跟 <code>x</code> 相加。這個「先後」的關係,用一棵樹表達最自然:
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 320" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- root + -->
+  <circle cx="360" cy="60" r="28" fill="#2f6f6a"/><text x="360" y="68" text-anchor="middle" font-size="22" font-weight="800" fill="#fff">+</text>
+  <text x="360" y="28" text-anchor="middle" font-size="11" fill="#8a929b">最後才做的運算 = 樹根</text>
+
+  <!-- left child x -->
+  <circle cx="220" cy="170" r="26" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/><text x="220" y="178" text-anchor="middle" font-size="18" font-weight="700" fill="#1f2328">x</text>
+
+  <!-- right child * -->
+  <circle cx="500" cy="170" r="28" fill="#8b5cf6"/><text x="500" y="178" text-anchor="middle" font-size="22" font-weight="800" fill="#fff">*</text>
+  <text x="500" y="138" text-anchor="middle" font-size="11" fill="#8a929b">乘法優先 → 在較深層</text>
+
+  <!-- * children y, 2 -->
+  <circle cx="420" cy="270" r="26" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/><text x="420" y="278" text-anchor="middle" font-size="18" font-weight="700" fill="#1f2328">y</text>
+  <circle cx="580" cy="270" r="26" fill="#f6e7dd" stroke="#b4541f" stroke-width="2"/><text x="580" y="278" text-anchor="middle" font-size="18" font-weight="700" fill="#1f2328">2</text>
+
+  <!-- edges -->
+  <line x1="343" y1="83" x2="237" y2="150" stroke="#8a929b" stroke-width="2"/>
+  <line x1="377" y1="83" x2="483" y2="150" stroke="#8a929b" stroke-width="2"/>
+  <line x1="483" y1="192" x2="435" y2="248" stroke="#8a929b" stroke-width="2"/>
+  <line x1="517" y1="192" x2="565" y2="248" stroke="#8a929b" stroke-width="2"/>
+
+  <text x="120" y="300" font-size="11" fill="#4a5159">讀法:要算根 +,得先有它的兩個小孩;</text>
+  <text x="120" y="316" font-size="11" fill="#4a5159">右小孩是 *,所以 y*2 會先被算出來。優先序「長」進了樹的形狀裡。</text>
+</svg>
+        <figcaption>圖 23-5:<code>x + y * 2</code> 的剖析樹。運算子優先序不再需要括號或規則來記憶——它直接<strong>體現在樹的形狀</strong>:越晚算的越靠近樹根,越先算的越靠近樹葉。樹,把「順序」變成了「結構」。</figcaption>
+      </div>
+
+      <p>
+        那 parser 怎麼從一排扁平的 token,長出這棵有階層的樹?最直覺、也最常被手寫編譯器採用的方法,叫
+        <strong>遞迴下降(recursive descent)</strong>。它的點子非常符合直覺:<strong>為文法裡的每一條規則,寫一個函式;
+        規則之間互相引用,函式就互相呼叫</strong>(包括遞迴呼叫)。先看我們這個小語言的文法(grammar):
+      </p>
+      <pre><code class="language-text">expr   → term (('+' | '-') term)*      // 運算式 = 一串用 +/- 連起來的 term
+term   → factor (('*' | '/') factor)*  // term = 一串用 */÷ 連起來的 factor
+factor → NUM | ID | '(' expr ')'       // factor = 數字、變數、或括號裡的運算式</code></pre>
+      <p>
+        這三條規則藏著大玄機:把 <code>*</code>、<code>/</code> 放在比 <code>+</code>、<code>-</code> 更「裡層」的 <code>term</code>,
+        就<strong>自動</strong>讓乘除先算——優先序被編碼進文法的層次裡了。而 <code>factor</code> 又能回頭引用 <code>expr</code>
+        (括號的情況),這個「繞回去」正是「遞迴」下降的由來,也是括號能任意巢狀的原因。
+      </p>
+      <p>
+        把這三條規則一對一翻成 Python 函式,一個會建出 AST 的 parser 就成形了。我們用巢狀的 tuple 表示樹節點
+        <code>(運算子, 左子樹, 右子樹)</code>:
+      </p>
+      <pre><code class="language-python">class Parser:
+    def __init__(self, tokens):
+        self.tokens = tokens
+        self.pos = 0
+
+    def peek(self):                         # 看目前這個 token(不前進)
+        return self.tokens[self.pos] if self.pos &lt; len(self.tokens) else (None, None)
+
+    def eat(self):                          # 吃掉目前這個 token,前進
+        tok = self.tokens[self.pos]
+        self.pos += 1
+        return tok
+
+    def parse_expr(self):                   # expr → term (('+'|'-') term)*
+        node = self.parse_term()
+        while self.peek() == ("OP", "+") or self.peek() == ("OP", "-"):
+            op = self.eat()[1]
+            right = self.parse_term()
+            node = (op, node, right)        # 把目前的樹,變成新運算子的左子樹
+        return node
+
+    def parse_term(self):                   # term → factor (('*'|'/') factor)*
+        node = self.parse_factor()
+        while self.peek() == ("OP", "*") or self.peek() == ("OP", "/"):
+            op = self.eat()[1]
+            right = self.parse_factor()
+            node = (op, node, right)
+        return node
+
+    def parse_factor(self):                 # factor → NUM | ID | '(' expr ')'
+        kind, value = self.eat()
+        if kind in ("NUM", "ID"):
+            return value                    # 葉節點:直接是數字或變數名
+        if (kind, value) == ("OP", "("):
+            node = self.parse_expr()        # 遞迴!括號裡又是一個完整 expr
+            self.eat()                      # 吃掉對應的 ')'
+            return node
+        raise ValueError(f"語法錯誤,非預期的 token:{(kind, value)}")
+
+
+tokens = tokenize("x + y * 2")
+tree = Parser(tokens).parse_expr()
+print(tree)        # ('+', 'x', ('*', 'y', 2))</code></pre>
+      <p>
+        看最後那行輸出 <code>('+', 'x', ('*', 'y', 2))</code>——它正是圖 23-5 那棵樹的文字版!
+        <code>+</code> 在最外層(最後算),<code>('*', 'y', 2)</code> 巢在裡面(先算)。
+        我們什麼優先序規則都沒「特別處理」,優先序卻自己浮現了——因為它早就藏在文法的分層裡。這就是遞迴下降的優雅。
+      </p>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">文法不只用來「檢查」,更用來「生成程式」</span>
+          <p>注意我們做的事:文法的每條規則 → 一個函式;規則的選項(<code>|</code>)→ <code>if</code> 分支;
+          規則的重複(<code>*</code>)→ <code>while</code> 迴圈;規則引用別的規則 → 函式呼叫。
+          這種「文法直接變程式碼」的對應關係如此機械,以至於有工具(如 ANTLR、yacc/bison)能讀進文法、
+          <strong>自動幫你生出 parser</strong>。你現在手寫的這支,就是它們自動產生的東西的縮小版。</p>
+        </div>
+      </div>
+
+      <h2>③ 程式碼產生:走訪樹,吐出 VM 命令</h2>
+      <p>
+        最後一站。我們手上有一棵 AST,目標是吐出堆疊機的 VM 命令。這裡有個美到不行的對應:
+        <strong>把運算式樹用「後序」走訪(先左子樹、再右子樹、最後自己),產生的命令順序剛好就是正確的堆疊機程式!</strong>
+      </p>
+      <p>
+        為什麼?因為堆疊機要求「運算子動作前,運算元得先在堆疊上」。後序走訪恰恰保證:處理一個運算子之前,
+        它的兩個子樹(運算元)都已經先被處理、值已經 push 上堆疊了。於是程式碼產生器短得驚人:
+      </p>
+      <pre><code class="language-python">def generate(node):
+    """後序走訪 AST,印出堆疊機 VM 命令。"""
+    if isinstance(node, int):             # 數字葉節點
+        print(f"push constant {node}")
+    elif isinstance(node, str):           # 變數葉節點
+        print(f"push {node}")             # (簡化:假裝變數名能直接 push)
+    else:                                 # (運算子, 左, 右)
+        op, left, right = node
+        generate(left)                    # 先把左子樹的值 push 上去
+        generate(right)                   # 再把右子樹的值 push 上去
+        ops = {"+": "add", "-": "sub", "*": "mul", "/": "div"}
+        print(ops[op])                    # 最後輸出運算命令
+
+
+generate(("+", "x", ("*", "y", 2)))
+# push x
+# push y
+# push constant 2
+# mul
+# add</code></pre>
+      <p>
+        盯著那串輸出,跟本章開頭手算的堆疊機程式一模一樣!<code>x + y * 2</code> 被翻成
+        「push x、push y、push 2、mul、add」——先把 <code>y * 2</code> 算好留在堆疊上,再跟 <code>x</code> 相加。
+        我們從沒寫過「先算乘法」這條規則,但因為優先序已經長進了樹的形狀、後序走訪又忠實地照樹的形狀產生命令,
+        正確的順序就<strong>自動</strong>掉出來了。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">真實的 Jack 編譯器只是「規模」更大</span>
+          <p>我們的玩具只處理運算式,但真實的 Jack 編譯器骨架完全一樣,只是要多照顧:
+          <code>let</code>/<code>if</code>/<code>while</code>(產生條件跳躍與標籤,如第 21 章所見)、
+          函式呼叫(產生 push 引數 + <code>call</code>)、變數要查一張<strong>符號表(symbol table)</strong>
+          搞清楚每個名字屬於哪個段(local? argument? field?)。乘法 <code>*</code> 在 Jack 裡其實會編成
+          <code>call Math.multiply 2</code>(因為 Hack 硬體沒有乘法器)。這些細節不難,只是多——
+          我們留到<strong>第十部第 42 章</strong>正式深入編譯器理論時再完整展開。</p>
+        </div>
+      </div>
+
+      <h2>收束:從 NAND 到能跑你的程式</h2>
+      <p>
+        深呼吸。我們可以把整本書第 19 章以來蓋的東西,全部串起來了。你寫的一行 Jack,
+        會像水流過一連串水閘那樣,一層層往下落,最後變成電子在你親手用 NAND 閘造的 CPU 裡流動:
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 470" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- L1 Jack -->
+  <rect x="170" y="20" width="380" height="56" rx="8" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="360" y="42" text-anchor="middle" font-size="13" font-weight="800" fill="#2f6f6a">高階語言 Jack</text>
+  <text x="360" y="63" text-anchor="middle" font-size="12" fill="#1f2328" font-family="ui-monospace, Menlo, Consolas, monospace">let sum = sum + i;</text>
+
+  <!-- L2 VM -->
+  <rect x="170" y="116" width="380" height="56" rx="8" fill="#ede9fe" stroke="#8b5cf6" stroke-width="2"/>
+  <text x="360" y="138" text-anchor="middle" font-size="13" font-weight="800" fill="#8b5cf6">VM 命令(堆疊機)</text>
+  <text x="360" y="159" text-anchor="middle" font-size="12" fill="#1f2328" font-family="ui-monospace, Menlo, Consolas, monospace">push local 0 / push local 1 / add / pop local 0</text>
+
+  <!-- L3 asm -->
+  <rect x="170" y="212" width="380" height="56" rx="8" fill="#f6e7dd" stroke="#b4541f" stroke-width="2"/>
+  <text x="360" y="234" text-anchor="middle" font-size="13" font-weight="800" fill="#b4541f">Hack 組合語言</text>
+  <text x="360" y="255" text-anchor="middle" font-size="12" fill="#1f2328" font-family="ui-monospace, Menlo, Consolas, monospace">@SP / AM=M-1 / D=M / A=A-1 / M=D+M …</text>
+
+  <!-- L4 machine -->
+  <rect x="170" y="308" width="380" height="56" rx="8" fill="#fbeae0" stroke="#b4541f" stroke-width="2"/>
+  <text x="360" y="330" text-anchor="middle" font-size="13" font-weight="800" fill="#b4541f">機器碼(0 與 1)</text>
+  <text x="360" y="351" text-anchor="middle" font-size="12" fill="#1f2328" font-family="ui-monospace, Menlo, Consolas, monospace">0000000000000000 1111110010001000 …</text>
+
+  <!-- L5 CPU -->
+  <rect x="170" y="404" width="380" height="50" rx="8" fill="#2f6f6a"/>
+  <text x="360" y="426" text-anchor="middle" font-size="13" font-weight="800" fill="#fff">你用 NAND 閘造的 CPU(第 19–21 章)</text>
+  <text x="360" y="445" text-anchor="middle" font-size="11" fill="#cfe6e2">取指 → 解碼 → 執行,每秒幾十億次</text>
+
+  <!-- arrows + tool labels (right side) -->
+  <line x1="360" y1="76"  x2="360" y2="116" stroke="#8a929b" stroke-width="2.5" marker-end="url(#ch)"/>
+  <line x1="360" y1="172" x2="360" y2="212" stroke="#8a929b" stroke-width="2.5" marker-end="url(#ch)"/>
+  <line x1="360" y1="268" x2="360" y2="308" stroke="#8a929b" stroke-width="2.5" marker-end="url(#ch)"/>
+  <line x1="360" y1="364" x2="360" y2="404" stroke="#8a929b" stroke-width="2.5" marker-end="url(#ch)"/>
+
+  <rect x="560" y="82" width="150" height="28" rx="6" fill="#fff" stroke="#8b5cf6"/><text x="635" y="101" text-anchor="middle" font-size="11" font-weight="700" fill="#8b5cf6">編譯器(本章/第42章)</text>
+  <rect x="560" y="178" width="150" height="28" rx="6" fill="#fff" stroke="#8b5cf6"/><text x="635" y="197" text-anchor="middle" font-size="11" font-weight="700" fill="#8b5cf6">VM 翻譯器(本章)</text>
+  <rect x="560" y="274" width="150" height="28" rx="6" fill="#fff" stroke="#b4541f"/><text x="635" y="293" text-anchor="middle" font-size="11" font-weight="700" fill="#b4541f">組譯器(第 22 章)</text>
+  <rect x="560" y="370" width="150" height="28" rx="6" fill="#fff" stroke="#2f6f6a"/><text x="635" y="389" text-anchor="middle" font-size="11" font-weight="700" fill="#2f6f6a">載入記憶體執行</text>
+
+  <text x="36" y="240" font-size="12" font-weight="700" fill="#4a5159" transform="rotate(-90 36 240)">抽象層級:高 ───────→ 低</text>
+
+  <defs><marker id="ch" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/></marker></defs>
+</svg>
+        <figcaption>圖 23-6:從 NAND 到能跑程式的完整故事。每一層之間,都站著一個「翻譯程式」:編譯器、VM 翻譯器、組譯器。它們全都建立在第 21 章那句洞見上——「指令也只是數字」,所以「讀進一種文字、吐出另一種文字」的程式,才可能存在。這座高塔,就是你從第 1 章爬到現在的全部。</figcaption>
+      </div>
+
+      <p>
+        停下來,好好看這張圖一分鐘。最上面那行 <code>let sum = sum + i;</code> 是你會寫的人話;
+        最下面那台 CPU,是你<strong>真的用邏輯閘造出來</strong>的東西。中間每一道箭頭,都是一個你現在已經懂、
+        甚至能自己動手寫的翻譯程式。沒有任何一層是魔法——它們全是「規律的笨」:查表、套模板、走訪樹。
+      </p>
+      <p>
+        這就是 Nand2Tetris 那個副標題的意思:<em>The Elements of Computing Systems</em>。
+        你不是「學了」計算機系統,你是把它<strong>從一顆 NAND 閘開始,一磚一瓦地蓋了出來</strong>。
+        從這一刻起,當你按下「執行」,你會清楚知道那背後發生的每一件事。那種感覺,值回票價。
+      </p>
+
+      <h2>動手練習</h2>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 23.1 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>當一回程式碼產生器,把下面兩個中綴算式,手動轉成堆疊機的命令序列(用 <code>push</code> 與 <code>add/sub/mul</code>)。
+          特別注意第二題的運算子優先序。</p>
+          <pre><code class="language-text">(a)  (3 + 4) * 5
+(b)  3 + 4 * 5</code></pre>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>(a) <code>(3 + 4) * 5</code></strong>:括號逼著加法先算。</p>
+              <pre><code class="language-text">push 3
+push 4
+add        // 堆疊:[7]
+push 5
+mul        // 堆疊:[35]   ← 答案</code></pre>
+              <p><strong>(b) <code>3 + 4 * 5</code></strong>:沒有括號,乘法優先,所以要先把 <code>4 * 5</code> 算好,再加 3。
+              對照它的剖析樹會是 <code>('+', 3, ('*', 4, 5))</code>,後序走訪就得到:</p>
+              <pre><code class="language-text">push 3
+push 4
+push 5
+mul        // 堆疊:[3, 20]
+add        // 堆疊:[23]   ← 答案</code></pre>
+              <p>看出差別了嗎?同樣的數字、同樣的運算子,只因優先序不同,命令的<strong>順序</strong>就不同——
+              而這個順序,正是由樹的形狀決定的。這就是為什麼編譯器一定要先建樹,不能從左到右硬翻。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 23.2 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>追蹤下面這段 VM 程式,寫出<strong>每一條命令執行後</strong>堆疊的內容(由底到頂)。最後堆疊頂端是多少?</p>
+          <pre><code class="language-text">push constant 10
+push constant 3
+sub
+push constant 2
+add</code></pre>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <div class="table-wrap">
+              <table>
+                <thead><tr><th>命令</th><th>動作</th><th>執行後的堆疊(底 → 頂)</th></tr></thead>
+                <tbody>
+                  <tr><td><code>push constant 10</code></td><td>壓 10</td><td>[10]</td></tr>
+                  <tr><td><code>push constant 3</code></td><td>壓 3</td><td>[10, 3]</td></tr>
+                  <tr><td><code>sub</code></td><td>彈 3、彈 10,壓 10−3</td><td>[7]</td></tr>
+                  <tr><td><code>push constant 2</code></td><td>壓 2</td><td>[7, 2]</td></tr>
+                  <tr><td><code>add</code></td><td>彈 2、彈 7,壓 7+2</td><td>[9]</td></tr>
+                </tbody>
+              </table></div>
+              <p>最後堆疊頂端是 <strong>9</strong>。關鍵陷阱在 <code>sub</code>:它算的是「下面減上面」=10−3=7,
+              <em>不是</em> 3−10。如果你算成 −7,就是踩到了這個順序坑。這整段其實就是 <code>(10 - 3) + 2</code> 的堆疊機版本。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 23.3 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>用你自己的話解釋:為什麼 Java 能做到「一次編譯,到處執行(Write Once, Run Anywhere)」?
+          它跟「把 C 程式直接編成 x86 機器碼」這種傳統做法,本質差別在哪?這個設計付出了什麼代價?</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>核心機制:中間層。</strong>Java 編譯器不把 <code>.java</code> 直接編成某顆 CPU 的機器碼,
+              而是編成一種與硬體無關的<strong>位元組碼(bytecode)</strong>(<code>.class</code>)。
+              這份位元組碼不認得任何真實 CPU——它認得的是一台<em>虛擬</em>的機器:<strong>JVM</strong>。
+              每個平台(Windows/Mac/Linux/手機)各自裝一台 JVM 當「替身」,負責把位元組碼翻成(或直譯成)自己的機器碼。</p>
+              <p><strong>與傳統做法的差別:</strong>傳統 C 編譯是「一次編譯,綁死一個平台」——你為 x86 編出的執行檔,
+              拿到 ARM 上不能跑,得重編。Java 把編譯切成兩段(原始碼→位元組碼、位元組碼→機器碼),
+              讓「跨平台」這件事,從「重編 M×N 次」變成「各平台寫一台 JVM」。同一份 <code>.class</code> 檔,
+              到處都能跑,因為到處都有它的虛擬機。</p>
+              <p><strong>代價:</strong>多一層就多一層開銷。位元組碼在執行時還要被翻譯/直譯,
+              所以原始的 JVM 比原生機器碼慢(這是早年 Java「慢」的惡名來源)。後來靠
+              <strong>JIT 即時編譯</strong>(執行時把熱點程式碼即時編成原生碼)大幅縮小了差距,
+              但啟動時間與記憶體占用仍是它換來「可攜性」付出的學費。.NET 的 CIL/CLR 是完全相同的思路。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 23.4 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>擴充本章的 <code>tokenize</code> 函式,讓它能辨認<strong>比較運算子</strong> <code>&gt;</code>、<code>&lt;</code>、
+          以及由兩個字元組成的 <code>&gt;=</code>、<code>&lt;=</code>、<code>==</code>。
+          (提示:遇到 <code>&gt;</code>、<code>&lt;</code>、<code>=</code> 時,要<strong>偷看下一個字元</strong>是不是 <code>=</code>,
+          來決定切出一個字元還是兩個字元的 token。)讓 <code>tokenize("x &gt;= 10")</code> 能正確切出三個 token。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>處理「多字元符號」的通用技巧叫<strong>前瞻(lookahead)</strong>:先看下一個字元,再決定吃幾個。
+              我們在原本的符號分支前,加一段專門處理可能成對的運算子:</p>
+              <pre><code class="language-python">def tokenize(text):
+    tokens = []
+    i = 0
+    while i &lt; len(text):
+        c = text[i]
+        if c.isspace():
+            i += 1
+        elif c.isdigit():
+            num = ""
+            while i &lt; len(text) and text[i].isdigit():
+                num += text[i]; i += 1
+            tokens.append(("NUM", int(num)))
+        elif c.isalpha():
+            name = ""
+            while i &lt; len(text) and text[i].isalnum():
+                name += text[i]; i += 1
+            tokens.append(("ID", name))
+        elif c in "&lt;&gt;=":                       # 可能是 1 或 2 個字元的運算子
+            nxt = text[i+1] if i+1 &lt; len(text) else ""
+            if nxt == "=":                       # 偷看到 '=',吃兩個字元
+                tokens.append(("OP", c + "="))   # 例如 '&gt;='
+                i += 2
+            else:
+                tokens.append(("OP", c))         # 單獨的 '&gt;' 或 '&lt;'
+                i += 1
+        elif c in "+-*/()":
+            tokens.append(("OP", c)); i += 1
+        else:
+            raise ValueError(f"非法字元:{c!r}")
+    return tokens
+
+print(tokenize("x &gt;= 10"))
+# [('ID', 'x'), ('OP', '&gt;='), ('NUM', 10)]
+print(tokenize("a &lt; b"))
+# [('ID', 'a'), ('OP', '&lt;'), ('ID', 'b')]</code></pre>
+              <p>這正是真實 tokenizer 每天在做的事:像 <code>++</code>、<code>--&gt;</code>、<code>&lt;=</code>、<code>!=</code>
+              這種多字元符號,全靠前瞻來分辨。「貪心地盡量吃長」(maximal munch)是詞法分析的標準原則。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 23.5 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>當一回 VM 翻譯器。把下面這條 VM 命令,翻成 Hack 組合語言(可參考本章 <code>push constant</code> 的模板)。
+          假設常數段。</p>
+          <pre><code class="language-text">push constant 5</code></pre>
+          <p>進階:接著翻 <code>sub</code>,並說明它跟本章 <code>add</code> 模板差在哪一行、為什麼。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><code>push constant 5</code> 就是把模板裡的 7 換成 5:把 5 放到 <code>SP</code> 指的格子,再讓 <code>SP</code> 加一。</p>
+              <pre><code class="language-text">// push constant 5
+@5
+D=A         // D = 5
+@SP
+A=M         // A = 堆疊頂端的位址
+M=D         // *SP = 5
+@SP
+M=M+1       // SP++</code></pre>
+              <p><strong>進階 — <code>sub</code>:</strong>它跟 <code>add</code> 模板<em>只差最後一行</em>。
+              <code>add</code> 的最後一行是 <code>M=D+M</code>(x + y),<code>sub</code> 改成 <code>M=M-D</code>:</p>
+              <pre><code class="language-text">// sub
+@SP
+AM=M-1      // SP--,A 指向頂端的 y
+D=M         // D = y
+A=A-1       // A 指向下面的 x
+M=M-D       // x = x - y   ← 跟 add 唯一的差別</code></pre>
+              <p>為什麼是 <code>M-D</code> 不是 <code>D-M</code>?因為 <code>D</code> 裝的是頂端的 <code>y</code>、<code>M</code> 是下面的 <code>x</code>,
+              而 <code>sub</code> 規定算「下面減上面」=x−y。順序寫反就是經典 bug。
+              你會發現所有二元算術命令(add/sub/and/or)都是這個模板,只換最後那一行的運算——
+              VM 翻譯器的工作,大半就是這種「查表、套模板」。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 23.6 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>把本章學到的東西<strong>全部串起來</strong>,用 Python 寫一台極簡的「算式計算機」,支援
+          <code>+ - *</code> 與括號,能正確處理運算子優先序。例如 <code>calc("2 + 3 * (4 - 1)")</code> 要回傳 <code>11</code>。</p>
+          <p>(建議走本章那條管線:<strong>tokenize → 轉成 RPN(後序)→ 用堆疊求值</strong>。
+          這恰好把「程式碼產生」和「堆疊機執行」兩件事都做了一遍。)</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>我們用三個小步驟,正好對應一條迷你編譯+執行管線。中間用經典的
+              <strong>調度場演算法(shunting-yard algorithm,Dijkstra 發明)</strong>把中綴轉成 RPN——
+              它用一個「運算子堆疊」來處理優先序與括號,本身就是堆疊的漂亮應用。</p>
+              <pre><code class="language-python">def tokenize(text):
+    """① 詞法分析:切成數字與符號。"""
+    tokens, i = [], 0
+    while i &lt; len(text):
+        c = text[i]
+        if c.isspace():
+            i += 1
+        elif c.isdigit():
+            num = ""
+            while i &lt; len(text) and text[i].isdigit():
+                num += text[i]; i += 1
+            tokens.append(int(num))
+        elif c in "+-*()":
+            tokens.append(c); i += 1
+        else:
+            raise ValueError(f"非法字元:{c!r}")
+    return tokens
+
+
+def to_rpn(tokens):
+    """② 轉後序(調度場演算法),把優先序「攤平」成順序。"""
+    prec = {"+": 1, "-": 1, "*": 2}      # * 優先序比 +/- 高
+    output, ops = [], []
+    for t in tokens:
+        if isinstance(t, int):
+            output.append(t)
+        elif t in prec:
+            # 把堆疊上「優先序 &gt;= 自己」的運算子先倒出來
+            while ops and ops[-1] != "(" and prec[ops[-1]] &gt;= prec[t]:
+                output.append(ops.pop())
+            ops.append(t)
+        elif t == "(":
+            ops.append(t)
+        elif t == ")":
+            while ops[-1] != "(":
+                output.append(ops.pop())
+            ops.pop()                    # 丟掉那個 "("
+    while ops:
+        output.append(ops.pop())
+    return output
+
+
+def eval_rpn(rpn):
+    """③ 堆疊機執行:這就是一台 VM!"""
+    stack = []
+    for t in rpn:
+        if isinstance(t, int):
+            stack.append(t)              # push 常數
+        else:
+            y = stack.pop()              # 注意:先彈的是上面(y)
+            x = stack.pop()
+            if t == "+": stack.append(x + y)
+            elif t == "-": stack.append(x - y)
+            elif t == "*": stack.append(x * y)
+    return stack.pop()
+
+
+def calc(text):
+    return eval_rpn(to_rpn(tokenize(text)))
+
+
+print(calc("2 + 3 * (4 - 1)"))   # 11
+print(calc("(3 + 4) * 5"))       # 35
+print(calc("3 + 4 * 5"))         # 23</code></pre>
+              <p>體會這三段的對應:<code>tokenize</code> 是<strong>詞法分析</strong>;<code>to_rpn</code> 兼了
+              <strong>語法分析 + 程式碼產生</strong>(它直接輸出後序的「堆疊機程式」,優先序處理就藏在那個 while 條件裡);
+              <code>eval_rpn</code> 則是<strong>一台堆疊式虛擬機</strong>,逐一執行 RPN——跟本章開頭手算 <code>7 + 8</code> 的過程一字不差。</p>
+              <p>你剛剛,用三十幾行 Python,造了一條「從原始碼到執行結果」的完整迷你工具鏈。
+              真實的編譯器與 VM,規模大上千倍,骨架卻就是這個。如果你想挑戰更純粹的做法,
+              也可以改用本章的<strong>遞迴下降</strong> parser 直接建 AST、再走訪它求值——殊途同歸。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>把這一章串起來</h2>
+      <p>這一章,我們補完了抽象高塔裡「從人話到機器」最長、也最迷人的那段樓梯。回顧路標:</p>
+      <ul>
+        <li>直接把每種語言翻到每種 CPU 是 <strong>M×N</strong> 的惡夢。插一層<strong>虛擬機語言</strong>當中介,就降成 <strong>M+N</strong>——這是 JVM、CLR 跨平台的根本。</li>
+        <li><strong>堆疊</strong>是後進先出的結構,只開放 push/pop。它天生適合做算術(運算元固定在頂端)與函式呼叫(每次呼叫疊一塊呼叫框)。</li>
+        <li><strong>Hack VM 語言</strong>只有兩類命令:操作堆疊頂端的<strong>算術/邏輯命令</strong>,與在堆疊和各<strong>段</strong>之間搬值的 <strong>push/pop</strong>。</li>
+        <li><strong>函式呼叫協定</strong>用呼叫框把每層的引數、區域變數、回返位址打包在堆疊上。正因如此,<strong>遞迴自動成立</strong>——它只是堆疊上幾塊不同的框。</li>
+        <li><strong>VM 翻譯器</strong>把每條 VM 命令查表、套模板,展開成數條第 22 章的組合語言。</li>
+        <li><strong>編譯器</strong>是一條三段式管線:<strong>詞法分析</strong>(字元 → token)→ <strong>語法分析</strong>(token → 剖析樹,用遞迴下降,優先序藏進文法分層)→ <strong>程式碼產生</strong>(後序走訪樹 → VM 命令)。</li>
+        <li>把第 19–23 章疊起來:<strong>Jack → VM 命令 → Hack 組語 → 機器碼 → 在你親手用 NAND 造的 CPU 上跑</strong>。每道箭頭都是一個不「思考」、只「規律地翻譯」的程式。</li>
+      </ul>
+      <p>
+        我們花了五個章節,從一顆 NAND 閘出發,蓋出了一整台能跑高階程式的電腦,還親手寫了讓它讀懂人話的整條翻譯鏈。
+        這是計算機科學裡最有成就感的一段旅程之一——你不再把電腦當黑盒子,因為這個盒子,是你自己蓋的。
+      </p>
+      <p>
+        但故事還沒完。我們蓋的這台機器,一次只能跑一個程式、還得自己管記憶體裡每個變數住哪。
+        真實的電腦能同時跑幾十個程式、管理檔案、分配記憶體、應付當機——這背後有一個更大的指揮者:
+        <strong>作業系統(operating system)</strong>。那,就是第五部接下來的故事。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">📚</div>
+        <div class="body">
+          <span class="c-title">想更深入?延伸資源</span>
+          <p>本章對應 OSSU 的 <a href="https://www.nand2tetris.org/">Nand2Tetris(The Elements of Computing Systems)Part II</a> 的第 7–8 章(VM I/II:堆疊運算與函式呼叫)、
+          第 9 章(高階語言 Jack)、第 10–11 章(編譯器 I/II:語法分析與程式碼產生)。官網有免費的 VM 模擬器,
+          強烈建議你在上面親手跑本章的 push/add/call,看堆疊一格一格地長高縮短——那種「親眼看見抽象運作」的感覺無可取代。
+          配套教材《<em>The Elements of Computing Systems</em>》(Nisan &amp; Schocken)把這整條翻譯鏈講得極為紮實。
+          至於編譯器更完整的理論(各種 parser、最佳化、型別檢查),我們留到<strong>第十部第 42 章</strong>再正式深入;
+          想先嘗鮮的話,經典的「龍書」<em>Compilers: Principles, Techniques, and Tools</em> 是公認的聖經。</p>
+        </div>
+      </div>
+
+    

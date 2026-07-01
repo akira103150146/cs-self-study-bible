@@ -1,0 +1,1183 @@
+<!--meta
+title: 深度學習視覺:CNN、YOLO、分割
+description: 從手工特徵到自動學特徵:傳統 HOG+SVM 影像分類的瓶頸,引出卷積神經網路 CNN。用 PyTorch 從零訓練、遷移學習與資料工程、YOLO 物件偵測(IoU/NMS/mAP)、U-Net 與 SAM 影像分割、人臉辨識與姿態估計、OCR、即時部署與最佳化,以及電腦視覺的倫理。
+-->
+
+
+      <div class="eyebrow">第十七部 · 電腦視覺與影像辨識</div>
+      <h1>深度學習視覺:CNN、YOLO、分割</h1>
+      <p class="subtitle">第 65、66 章裡,「核(kernel)」是人手工設計的——Sobel 抓邊緣、高斯做模糊。這一章,我們把設計核這件事<em>交給機器自己學</em>。從此,電腦不再依賴人類想得到的特徵,而是從上百萬張圖裡,長出一套人類想不到、卻管用得驚人的「眼睛」。</p>
+      <div class="byline">
+        <span class="tag">第 67 章</span>
+        <span>閱讀時間 ≈ 75 分鐘</span>
+        <span>難度:★★★★☆</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>「手工特徵 + 分類器」這個傳統範式(HOG+SVM)怎麼做影像分類,以及它撞上的天花板</li>
+          <li>為什麼<strong>卷積神經網路(CNN)</strong>天生適合影像:卷積層自動學「核」、層層抽象(邊緣→紋理→部件→物件)、池化與參數共享</li>
+          <li>用 <strong>PyTorch</strong> 從零定義一個小 CNN、寫出訓練迴圈,並看懂背後的損失與反向傳播(直接延續第 12、38 章)</li>
+          <li><strong>遷移學習</strong>:為何站在預訓練模型的肩膀上,用幾百張圖就能達標;資料增強、資料切分與資料洩漏</li>
+          <li><strong>物件偵測</strong>:分類 / 偵測 / 分割的差別,YOLO「一次看全圖」的核心思想,以及 bounding box、IoU、NMS、mAP</li>
+          <li><strong>影像分割</strong>:語意 vs 實例分割、U-Net 編碼-解碼直覺、SAM 一句話</li>
+          <li><strong>人臉與姿態</strong>:embedding 比對的人臉辨識、臉部/身體關鍵點、MediaPipe,以及「健身動作計數器」的原理</li>
+          <li><strong>OCR</strong> 的偵測+辨識兩階段;以及如何把模型<strong>部署</strong>成能用的產品(量化、ONNX、Streamlit/Gradio、即時效能)</li>
+          <li>電腦視覺的<strong>倫理</strong>:人臉辨識的隱私與偏見、深偽(deepfake)</li>
+        </ul>
+      </div>
+
+      <h2>一個自動分類垃圾的工廠</h2>
+      <p>
+        想像你接了一個案子:某資源回收廠想裝一台相機,讓輸送帶上的東西一經過,就自動判斷它是<strong>塑膠、紙、金屬還是玻璃</strong>,
+        好把它撥到對的桶子。你讀過<a href="38-machine-learning.html">第 38 章</a>,信心滿滿:這不就是個分類問題嗎?蒐集資料、訓練一個分類器就行。
+      </p>
+      <p>
+        問題是——機器學習的分類器(像 SVM、邏輯迴歸)只吃<strong>一串數字(特徵向量)</strong>,它不吃「一張圖」。
+        一張 200×200 的彩色照片,攤平就是 200×200×3 = 120000 個像素值。你能直接把這十二萬個數字丟進 SVM 嗎?
+        可以,但效果會慘不忍睹:像素值對「亮一點、移一格、轉個角度」極度敏感,同一個寶特瓶換個位置,整串數字就面目全非。
+        分類器根本學不到「寶特瓶之所以是寶特瓶」的本質。
+      </p>
+      <p>
+        所以在深度學習之前,電腦視覺的核心功夫,是<strong>怎麼把一張圖,變成一串「聰明的數字」</strong>——
+        一串能濃縮形狀、紋理、結構,又不被光照與位移干擾的特徵。這件事,過去由<strong>人</strong>來設計;
+        而這一章的主角,是讓<strong>機器自己</strong>學會這件事。我們先看人怎麼做(也是第 66 章傳統視覺的收尾),再看機器怎麼接手。
+      </p>
+
+      <h2>從手工特徵到自動學特徵</h2>
+
+      <h3>傳統範式:特徵 + 分類器</h3>
+      <p>
+        深度學習之前,影像辨識走的是一條清楚的兩段式流水線:
+      </p>
+      <div class="diagram">
+<svg viewBox="0 0 720 150" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="t1" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/></marker>
+  </defs>
+  <rect x="20" y="50" width="110" height="50" rx="9" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="75" y="72" text-anchor="middle" font-size="13" font-weight="700" fill="#1f2328">影像</text>
+  <text x="75" y="90" text-anchor="middle" font-size="11" fill="#4a5159">一堆像素</text>
+  <rect x="190" y="50" width="150" height="50" rx="9" fill="#f6e7dd" stroke="#b4541f"/>
+  <text x="265" y="72" text-anchor="middle" font-size="13" font-weight="800" fill="#b4541f">抽特徵(人設計)</text>
+  <text x="265" y="90" text-anchor="middle" font-size="11" fill="#4a5159">HOG / LBP / 色彩直方圖</text>
+  <rect x="400" y="50" width="120" height="50" rx="9" fill="#fff" stroke="#8a929b"/>
+  <text x="460" y="72" text-anchor="middle" font-size="13" font-weight="700" fill="#1f2328">特徵向量</text>
+  <text x="460" y="90" text-anchor="middle" font-size="11" fill="#4a5159">一串數字</text>
+  <rect x="580" y="50" width="120" height="50" rx="9" fill="#ede4fb" stroke="#8b5cf6"/>
+  <text x="640" y="72" text-anchor="middle" font-size="13" font-weight="800" fill="#7c3aed">分類器</text>
+  <text x="640" y="90" text-anchor="middle" font-size="11" fill="#4a5159">SVM / kNN → 類別</text>
+  <line x1="130" y1="75" x2="186" y2="75" stroke="#8a929b" stroke-width="2" marker-end="url(#t1)"/>
+  <line x1="340" y1="75" x2="396" y2="75" stroke="#8a929b" stroke-width="2" marker-end="url(#t1)"/>
+  <line x1="520" y1="75" x2="576" y2="75" stroke="#8a929b" stroke-width="2" marker-end="url(#t1)"/>
+  <text x="265" y="36" text-anchor="middle" font-size="12" font-weight="800" fill="#b4541f">↑ 人類的智慧都花在這一段</text>
+</svg>
+        <figcaption>圖 67-1:傳統影像分類的兩段式流水線。最關鍵、也最花人力的是中間「抽特徵」那一段——它決定了分類器看到的是「聰明的數字」還是「一團噪音」。深度學習的革命,就是把這段也交給機器去學。</figcaption>
+      </div>
+      <p>
+        最經典的手工特徵之一是 <strong>HOG(方向梯度直方圖,Histogram of Oriented Gradients)</strong>:
+        把影像切成許多小格,每格統計「邊緣朝哪些方向、有多強」。它對<strong>形狀</strong>敏感、又對光照變化穩定,
+        是行人偵測的傳奇特徵。在 OpenCV 裡,連訓練好的行人偵測器都內建了,幾行就能跑:
+      </p>
+      <pre><code class="language-python">import cv2
+
+hog = cv2.HOGDescriptor()
+# 載入 OpenCV 內建、預訓練好的「行人」SVM 偵測器
+hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
+rects, weights = hog.detectMultiScale(img)   # 多尺度掃描整張圖找人形
+# rects:框出來的人;weights:每個框的信心分數</code></pre>
+      <p>
+        這背後是一個<strong>SVM(支援向量機)</strong>,正是<a href="38-machine-learning.html">第 38 章</a>介紹過的那位「找最寬的街」的分類器。
+        如果要自己訓練,流程就是第 38 章那套監督式學習的標準骨架——切資料、<code>fit</code> 學、<code>score</code> 評:
+      </p>
+      <pre><code class="language-python">from sklearn.svm import SVC
+from sklearn.model_selection import train_test_split
+
+# X:每列是一張圖的「特徵向量」(如 HOG);y:每張圖的正確類別
+X_tr, X_te, y_tr, y_te = train_test_split(X, y, test_size=0.2, random_state=0)
+clf = SVC(kernel='rbf').fit(X_tr, y_tr)   # rbf 核能畫彎曲決策邊界
+print(clf.score(X_te, y_te))              # 用「沒看過」的測試集評估</code></pre>
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">第 38 章的鐵律,在影像上一樣成立</span>
+          <p>測試集只能在<strong>最後</strong>用來評估,絕不能拿去訓練或調參,否則就是<strong>資料洩漏(data leakage)</strong>,分數會虛高、上線崩盤。
+          另外,SVM 對特徵尺度很敏感,記得先做<strong>特徵縮放(標準化)</strong>。這些第 38 章講透的觀念,在影像辨識裡一字不差地適用——
+          因為影像辨識,骨子裡就是機器學習。</p>
+        </div>
+      </div>
+
+      <h3>傳統範式的天花板</h3>
+      <p>
+        HOG+SVM 在「形狀單純、背景乾淨、類別不多」的場景(行人、手寫數字)表現很好。但它有兩道難以跨越的牆:
+      </p>
+      <ul>
+        <li><strong>特徵是人想的,人的想像力有限。</strong>HOG 抓得到形狀邊緣,但「貓的耳朵」「狗的鼻子」「金屬的反光質感」這些更高層、更抽象的概念,你要怎麼用一條公式設計出來?越複雜的辨識任務,越沒有人寫得出對應的特徵。</li>
+        <li><strong>每換一個任務,就要重想一套特徵。</strong>辨識行人用 HOG、辨識材質可能要換 LBP、辨識顏色又要色彩直方圖……特徵工程是一門又貴又不通用的手藝。</li>
+      </ul>
+      <p>
+        2012 年是個分水嶺。在影像辨識競賽 ImageNet 上,一個叫 <strong>AlexNet</strong> 的深度卷積網路,
+        把錯誤率從前一年的 26% 一舉砍到 16%,把所有手工特徵的方法遠遠甩在後頭。它做對了一件事:
+        <strong>不再由人設計特徵,而是讓網路從資料中,自己把「該抽什麼特徵」也一起學出來</strong>。這就是本章主角——CNN——的登場。
+      </p>
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">深度學習的核心翻轉:端到端</span>
+          <p>傳統做法是「<strong>人抽特徵 → 機器學分類</strong>」兩段分離;深度學習是「<strong>端到端(end-to-end)</strong>」:
+          從原始像素直接到最終答案,中間「抽什麼特徵」<em>也是學出來的</em>。換句話說,第 65、66 章那種「人手工設計的核」,
+          在 CNN 裡變成了「<strong>由訓練自動學出來的核</strong>」。這一個轉變,釋放了人類想像力的天花板。</p>
+        </div>
+      </div>
+
+      <h2>CNN:為什麼卷積天生適合影像</h2>
+      <p>
+        終於來到重頭戲。<strong>卷積神經網路(convolutional neural network,CNN)</strong>是這整條影像辨識線的心臟。
+        它其實就是<a href="38-machine-learning.html">第 38 章</a>講的神經網路,只是換上了一種特別適合影像的「零件」——卷積層。
+        要懂它,得先問:把一張圖丟進普通的全連接神經網路,有什麼不對?
+      </p>
+
+      <h3>全連接網路為什麼不適合影像</h3>
+      <p>
+        假設一張 200×200 的彩色圖,攤平成 12 萬個輸入,接到一層只有 1000 個神經元的全連接層。
+        光這一層就需要 $120000 \times 1000 = 1.2$ 億個權重——還沒算後面的層。這有三個致命問題:
+      </p>
+      <ul>
+        <li><strong>參數爆炸:</strong>上億個權重,記憶體吃不消、也極易過擬合。</li>
+        <li><strong>丟掉了空間結構:</strong>一攤平,「相鄰像素」這個關鍵資訊就沒了。可是影像的意義,正藏在「鄰近像素如何組成邊緣、邊緣如何組成形狀」裡。</li>
+        <li><strong>不耐位移:</strong>同一隻貓往右挪 10 個像素,對全連接層而言輸入完全變了,它得「重新學一次」貓在右邊長什麼樣。</li>
+      </ul>
+      <p>
+        CNN 用三個漂亮的點子,一次解決這三個問題:<strong>局部連接</strong>、<strong>參數共享</strong>、<strong>層層抽象</strong>。
+        而這三個點子,全都濃縮在一個你已經認識的操作裡——<strong>卷積</strong>。
+      </p>
+
+      <h3>卷積層:把第 65 章的「核」變成可以學的</h3>
+      <p>
+        在<a href="65-cv-basics-processing.html">第 65 章</a>,你已經學過卷積:拿一個小小的<strong>核(kernel,又叫濾鏡 filter)</strong>,
+        在影像上一格一格滑動,每滑到一處,就把核與底下那塊像素「對應相乘再相加」,得到一個輸出值。
+        當時那些核是<strong>人設計的</strong>:Sobel 核抓水平/垂直邊緣、高斯核做模糊。
+      </p>
+      <p>
+        CNN 的卷積層做的<em>完全是同一件事</em>——只有一個革命性的差別:<strong>核裡的那 9 個(3×3)數字,不再由人填,而是當成「參數」,由訓練自動學出來</strong>。
+        一個卷積層通常有很多個核(例如 16 個),每個核掃過整張圖,各自產生一張<strong>特徵圖(feature map)</strong>,
+        標示出「我這個核負責偵測的東西,在圖上哪些地方出現了」。
+      </p>
+      <div class="diagram">
+<svg viewBox="0 0 660 260" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="cv" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#b4541f"/></marker>
+  </defs>
+  <!-- 輸入網格 5x5 -->
+  <text x="100" y="28" text-anchor="middle" font-size="12" font-weight="700" fill="#2f6f6a">輸入(局部)</text>
+  <g stroke="#9fb8b4" fill="#eef5f4">
+    <rect x="40" y="40" width="36" height="36"/><rect x="76" y="40" width="36" height="36"/><rect x="112" y="40" width="36" height="36"/><rect x="148" y="40" width="36" height="36"/>
+    <rect x="40" y="76" width="36" height="36"/><rect x="76" y="76" width="36" height="36"/><rect x="112" y="76" width="36" height="36"/><rect x="148" y="76" width="36" height="36"/>
+    <rect x="40" y="112" width="36" height="36"/><rect x="76" y="112" width="36" height="36"/><rect x="112" y="112" width="36" height="36"/><rect x="148" y="112" width="36" height="36"/>
+    <rect x="40" y="148" width="36" height="36"/><rect x="76" y="148" width="36" height="36"/><rect x="112" y="148" width="36" height="36"/><rect x="148" y="148" width="36" height="36"/>
+  </g>
+  <!-- 高亮 3x3 視窗 -->
+  <rect x="40" y="40" width="108" height="108" fill="none" stroke="#b4541f" stroke-width="3"/>
+  <text x="100" y="208" text-anchor="middle" font-size="11" fill="#4a5159">3×3 視窗(感受野)</text>
+  <!-- 核 -->
+  <text x="300" y="28" text-anchor="middle" font-size="12" font-weight="700" fill="#b4541f">核 (學出來的權重)</text>
+  <g stroke="#b4541f" fill="#f6e7dd">
+    <rect x="262" y="60" width="30" height="30"/><rect x="292" y="60" width="30" height="30"/><rect x="322" y="60" width="30" height="30"/>
+    <rect x="262" y="90" width="30" height="30"/><rect x="292" y="90" width="30" height="30"/><rect x="322" y="90" width="30" height="30"/>
+    <rect x="262" y="120" width="30" height="30"/><rect x="292" y="120" width="30" height="30"/><rect x="322" y="120" width="30" height="30"/>
+  </g>
+  <text x="307" y="170" text-anchor="middle" font-size="11" fill="#4a5159">w₁ … w₉(訓練學)</text>
+  <!-- 運算 -->
+  <text x="430" y="100" text-anchor="middle" font-size="22" font-weight="800" fill="#8a929b">⊙</text>
+  <text x="430" y="122" text-anchor="middle" font-size="10" fill="#8a929b">逐元素相乘相加</text>
+  <line x1="358" y1="105" x2="402" y2="105" stroke="#b4541f" stroke-width="2" marker-end="url(#cv)"/>
+  <!-- 輸出一格 -->
+  <rect x="540" y="86" width="40" height="40" fill="#ede4fb" stroke="#8b5cf6" stroke-width="2.5"/>
+  <text x="560" y="111" text-anchor="middle" font-size="14" font-weight="800" fill="#7c3aed">5</text>
+  <text x="560" y="146" text-anchor="middle" font-size="11" fill="#7c3aed">特徵圖一格</text>
+  <line x1="458" y1="105" x2="534" y2="105" stroke="#8b5cf6" stroke-width="2" marker-end="url(#cv)"/>
+  <text x="330" y="240" text-anchor="middle" font-size="11.5" fill="#4a5159">核滑過整張圖的每個位置 → 產生一整張特徵圖。<tspan font-weight="700" fill="#b4541f">同一個核走遍全圖 = 參數共享</tspan></text>
+</svg>
+        <figcaption>圖 67-2:一次卷積運算。把核蓋在輸入的 3×3 視窗上,逐元素相乘再加總,得到特徵圖的一格;核滑過所有位置,就填滿整張特徵圖。注意:<strong>同一個核(同一組權重)走遍全圖</strong>,這就是「參數共享」——也讓「貓不管在左邊還是右邊,都用同一個核偵測」,自然帶來位移不變性。</figcaption>
+      </div>
+      <p>三個點子,各對應一個好處:</p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>卷積帶來的</th><th>是什麼</th><th>解決了全連接的什麼問題</th></tr></thead>
+        <tbody>
+          <tr><td><strong>局部連接</strong></td><td>每個輸出只看一小塊(感受野),不是整張圖</td><td>保住空間結構、大幅減少連線</td></tr>
+          <tr><td><strong>參數共享</strong></td><td>同一個核走遍全圖,所有位置共用那 9 個權重</td><td>參數從上億降到幾百;且天生耐位移</td></tr>
+          <tr><td><strong>層層堆疊</strong></td><td>一層的特徵圖,當成下一層的輸入再卷積</td><td>讓網路從簡單特徵,組合出複雜概念</td></tr>
+        </tbody>
+      </table>
+      </div>
+
+      <h3>層層抽象:邊緣 → 紋理 → 部件 → 物件</h3>
+      <p>
+        最迷人的是第三點。當卷積層一層疊一層,網路學到的特徵會<strong>越來越抽象</strong>,
+        這不是工程師硬編的,而是訓練自然「長」出來的層級——這也正是人們研究 CNN 內部時真實觀察到的現象:
+      </p>
+      <div class="diagram">
+<svg viewBox="0 0 720 230" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="ab" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/></marker>
+  </defs>
+  <!-- L1 邊緣 -->
+  <rect x="20" y="50" width="140" height="110" rx="8" fill="#fafbfc" stroke="#dfe3e8"/>
+  <text x="90" y="42" text-anchor="middle" font-size="12" font-weight="800" fill="#2f6f6a">淺層</text>
+  <g stroke="#2f6f6a" stroke-width="3" fill="none">
+    <line x1="45" y1="70" x2="75" y2="100"/><line x1="95" y1="100" x2="125" y2="70"/>
+    <line x1="50" y1="130" x2="130" y2="130"/><line x1="90" y1="115" x2="90" y2="150"/>
+  </g>
+  <text x="90" y="178" text-anchor="middle" font-size="12" font-weight="700" fill="#2f6f6a">邊緣 / 方向</text>
+  <!-- L2 紋理 -->
+  <rect x="200" y="50" width="140" height="110" rx="8" fill="#fafbfc" stroke="#dfe3e8"/>
+  <text x="270" y="42" text-anchor="middle" font-size="12" font-weight="800" fill="#b4541f">中層</text>
+  <g stroke="#b4541f" stroke-width="2.4" fill="none">
+    <circle cx="240" cy="85" r="14"/><path d="M270 75 q15 12 30 0 q-15 12 -30 0" /><path d="M225 125 l12 12 l12 -12 l12 12"/><circle cx="300" cy="125" r="10"/>
+  </g>
+  <text x="270" y="178" text-anchor="middle" font-size="12" font-weight="700" fill="#b4541f">紋理 / 角點</text>
+  <!-- L3 部件 -->
+  <rect x="380" y="50" width="140" height="110" rx="8" fill="#fafbfc" stroke="#dfe3e8"/>
+  <text x="450" y="42" text-anchor="middle" font-size="12" font-weight="800" fill="#7c3aed">深層</text>
+  <g stroke="#8b5cf6" stroke-width="2.4" fill="#ede4fb">
+    <circle cx="425" cy="90" r="13"/><circle cx="425" cy="90" r="4" fill="#7c3aed"/>
+    <path d="M460 80 q12 -14 24 0 q-12 10 -24 0" fill="none"/>
+    <path d="M430 130 q20 18 44 0" fill="none"/>
+  </g>
+  <text x="450" y="178" text-anchor="middle" font-size="12" font-weight="700" fill="#7c3aed">部件(眼、耳)</text>
+  <!-- L4 物件 -->
+  <rect x="560" y="50" width="140" height="110" rx="8" fill="#fafbfc" stroke="#dfe3e8"/>
+  <text x="630" y="42" text-anchor="middle" font-size="12" font-weight="800" fill="#1f2328">最深</text>
+  <g stroke="#1f2328" stroke-width="2" fill="#f6e7dd">
+    <ellipse cx="630" cy="110" rx="36" ry="28"/>
+    <path d="M600 90 l-8 -18 l16 8 Z"/><path d="M660 90 l8 -18 l-16 8 Z"/>
+    <circle cx="618" cy="108" r="3" fill="#1f2328"/><circle cx="642" cy="108" r="3" fill="#1f2328"/>
+  </g>
+  <text x="630" y="178" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">完整物件(貓)</text>
+  <line x1="162" y1="105" x2="198" y2="105" stroke="#8a929b" stroke-width="2" marker-end="url(#ab)"/>
+  <line x1="342" y1="105" x2="378" y2="105" stroke="#8a929b" stroke-width="2" marker-end="url(#ab)"/>
+  <line x1="522" y1="105" x2="558" y2="105" stroke="#8a929b" stroke-width="2" marker-end="url(#ab)"/>
+  <text x="360" y="218" text-anchor="middle" font-size="11.5" fill="#4a5159">越深的層,看的範圍越大、概念越抽象——這個層級是「學」出來的,不是人編的</text>
+</svg>
+        <figcaption>圖 67-3:CNN 學到的特徵階層。淺層的核偵測<strong>邊緣與方向</strong>;把邊緣組合起來,中層偵測<strong>紋理與角點</strong>;再組合成<strong>部件</strong>(眼睛、耳朵);最深層組合成<strong>完整物件</strong>(一隻貓)。這正是 HOG 那種手工特徵永遠做不到的事——它只能停在第一層的「邊緣」。</figcaption>
+      </div>
+
+      <h3>池化:抓重點、縮尺寸、更耐位移</h3>
+      <p>
+        卷積層之間,常夾一個<strong>池化層(pooling)</strong>。最常用的是<strong>最大池化(max pooling)</strong>:
+        把特徵圖切成 2×2 的小塊,每塊<strong>只留最大值</strong>。效果有三:把特徵圖長寬各砍一半(降維、省算力)、
+        保留「這附近最強的反應」、以及讓特徵更<strong>抗位移</strong>(物件晃一點點,最大值多半還在同一塊裡)。
+      </p>
+      <p>
+        把這些零件接起來,一個典型的 CNN 就是:<strong>卷積 → 激活(ReLU)→ 池化</strong> 反覆幾輪,
+        把空間尺寸越縮越小、特徵通道越疊越多(越深越抽象),最後<strong>攤平(flatten)</strong>成一條向量,
+        接上<a href="38-machine-learning.html">第 38 章</a>那種全連接層,輸出「屬於各類別的分數」:
+      </p>
+      <div class="diagram">
+<svg viewBox="0 0 720 260" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="ar" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#8a929b"/></marker>
+  </defs>
+  <!-- 輸入 -->
+  <rect x="20" y="80" width="64" height="64" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="52" y="160" text-anchor="middle" font-size="10.5" fill="#4a5159">輸入</text>
+  <text x="52" y="174" text-anchor="middle" font-size="10" fill="#8a929b">32×32×3</text>
+  <!-- conv1 -->
+  <g>
+    <rect x="120" y="74" width="56" height="56" fill="#f6e7dd" stroke="#b4541f"/>
+    <rect x="126" y="80" width="56" height="56" fill="#f6e7dd" stroke="#b4541f"/>
+    <rect x="132" y="86" width="56" height="56" fill="#f6e7dd" stroke="#b4541f"/>
+  </g>
+  <text x="158" y="166" text-anchor="middle" font-size="10.5" fill="#b4541f">Conv+ReLU</text>
+  <text x="158" y="180" text-anchor="middle" font-size="10" fill="#8a929b">32×32×16</text>
+  <!-- pool1 -->
+  <rect x="218" y="92" width="40" height="40" fill="#fdf2ea" stroke="#b4541f" stroke-dasharray="3 2"/>
+  <text x="238" y="160" text-anchor="middle" font-size="10.5" fill="#b4541f">Pool</text>
+  <text x="238" y="174" text-anchor="middle" font-size="10" fill="#8a929b">16×16×16</text>
+  <!-- conv2 -->
+  <g>
+    <rect x="296" y="94" width="34" height="34" fill="#f6e7dd" stroke="#b4541f"/>
+    <rect x="301" y="99" width="34" height="34" fill="#f6e7dd" stroke="#b4541f"/>
+    <rect x="306" y="104" width="34" height="34" fill="#f6e7dd" stroke="#b4541f"/>
+    <rect x="311" y="109" width="34" height="34" fill="#f6e7dd" stroke="#b4541f"/>
+  </g>
+  <text x="328" y="166" text-anchor="middle" font-size="10.5" fill="#b4541f">Conv+ReLU</text>
+  <text x="328" y="180" text-anchor="middle" font-size="10" fill="#8a929b">16×16×32</text>
+  <!-- pool2 -->
+  <rect x="380" y="106" width="24" height="24" fill="#fdf2ea" stroke="#b4541f" stroke-dasharray="3 2"/>
+  <text x="392" y="160" text-anchor="middle" font-size="10.5" fill="#b4541f">Pool</text>
+  <text x="392" y="174" text-anchor="middle" font-size="10" fill="#8a929b">8×8×32</text>
+  <!-- flatten -->
+  <g fill="#fff" stroke="#8a929b">
+    <rect x="448" y="60" width="14" height="14"/><rect x="448" y="76" width="14" height="14"/><rect x="448" y="92" width="14" height="14"/>
+    <rect x="448" y="108" width="14" height="14"/><rect x="448" y="124" width="14" height="14"/><rect x="448" y="140" width="14" height="14"/>
+  </g>
+  <text x="455" y="172" text-anchor="middle" font-size="10.5" fill="#4a5159">Flatten</text>
+  <text x="455" y="186" text-anchor="middle" font-size="10" fill="#8a929b">2048</text>
+  <!-- fc -->
+  <g fill="#ede4fb" stroke="#8b5cf6">
+    <circle cx="540" cy="80" r="9"/><circle cx="540" cy="105" r="9"/><circle cx="540" cy="130" r="9"/>
+  </g>
+  <text x="540" y="172" text-anchor="middle" font-size="10.5" fill="#7c3aed">全連接</text>
+  <!-- output -->
+  <g fill="#fff" stroke="#1f2328">
+    <rect x="620" y="72" width="60" height="18"/><rect x="620" y="96" width="60" height="18"/><rect x="620" y="120" width="60" height="18"/>
+  </g>
+  <text x="650" y="85" text-anchor="middle" font-size="10" fill="#1f2328">塑膠 0.9</text>
+  <text x="650" y="109" text-anchor="middle" font-size="10" fill="#8a929b">紙 0.05</text>
+  <text x="650" y="133" text-anchor="middle" font-size="10" fill="#8a929b">金屬 0.05</text>
+  <text x="650" y="172" text-anchor="middle" font-size="10.5" fill="#1f2328">類別分數</text>
+  <!-- arrows -->
+  <g stroke="#8a929b" stroke-width="1.8">
+    <line x1="86" y1="112" x2="116" y2="112" marker-end="url(#ar)"/>
+    <line x1="190" y1="112" x2="214" y2="112" marker-end="url(#ar)"/>
+    <line x1="260" y1="112" x2="290" y2="112" marker-end="url(#ar)"/>
+    <line x1="348" y1="112" x2="376" y2="112" marker-end="url(#ar)"/>
+    <line x1="408" y1="118" x2="444" y2="112" marker-end="url(#ar)"/>
+    <line x1="466" y1="112" x2="528" y2="105" marker-end="url(#ar)"/>
+    <line x1="552" y1="105" x2="616" y2="105" marker-end="url(#ar)"/>
+  </g>
+  <text x="360" y="232" text-anchor="middle" font-size="11.5" fill="#4a5159">空間尺寸越來越小、特徵通道(深度)越來越多——「把圖壓成意義」</text>
+</svg>
+        <figcaption>圖 67-4:一個典型的小型 CNN 架構。輸入經過多輪「卷積→ReLU→池化」,空間尺寸一路縮小(32→16→8)、特徵深度一路加厚(3→16→32),最後攤平接全連接層輸出類別分數。整條路上的卷積核,全都是訓練學出來的。</figcaption>
+      </div>
+
+      <h3>用 PyTorch 從零定義並訓練一個 CNN</h3>
+      <p>
+        理論到此,動手。我們用 <a href="38-machine-learning.html">PyTorch</a> 把上圖那個小 CNN 寫出來。
+        PyTorch 的網路寫法有固定套路:繼承 <code>nn.Module</code>,在 <code>__init__</code> 裡<strong>宣告會用到的層</strong>(像備好積木),
+        在 <code>forward</code> 裡<strong>定義資料怎麼一層層流過</strong>:
+      </p>
+      <pre><code class="language-python">import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class Net(nn.Module):
+    """小型 CNN:兩層卷積 + 一層全連接。"""
+    def __init__(self, n_cls):
+        super().__init__()                          # 一定要先呼叫父類別建構子
+        self.c1 = nn.Conv2d(3, 16, 3, padding=1)    # 輸入3通道→16張特徵圖,3×3核
+        self.c2 = nn.Conv2d(16, 32, 3, padding=1)   # 16→32 張特徵圖
+        self.fc = nn.Linear(32 * 8 * 8, n_cls)      # 攤平後接到「各類別分數」
+
+    def forward(self, x):                           # 定義資料怎麼一層層流過
+        x = F.max_pool2d(F.relu(self.c1(x)), 2)     # 卷積→ReLU→池化:32→16
+        x = F.max_pool2d(F.relu(self.c2(x)), 2)     # 再一次:16→8
+        return self.fc(x.flatten(1))                # 攤平成向量 → 全連接輸出</code></pre>
+      <p>
+        <code>nn.Conv2d(3, 16, 3, padding=1)</code> 就是<strong>圖 67-2 那個卷積層</strong>:吃 3 個輸入通道、產生 16 張特徵圖、用 3×3 的核;
+        <code>padding=1</code> 是在邊緣補一圈零,讓輸出長寬和輸入一樣。<code>F.relu</code> 是激活函數(把負值砍成 0,注入非線性,
+        否則疊再多層都還是線性、白搭——這點第 38 章講過)。<code>F.max_pool2d(..., 2)</code> 就是 2×2 最大池化。
+      </p>
+      <p>
+        網路備好,接著是<strong>訓練迴圈</strong>。這是整個深度學習最核心的一段,而它的本質,你在<a href="38-machine-learning.html">第 38 章</a>早就懂了:
+        <strong>前向算預測與損失 → 反向算梯度 → 梯度下降更新權重</strong>。在 PyTorch 裡是固定的「四步」:
+      </p>
+      <pre><code class="language-python">model = Net(n_cls=10)
+opt   = torch.optim.Adam(model.parameters(), lr=1e-3)  # 最佳化器,1e-3 是學習率
+lossf = nn.CrossEntropyLoss()                          # 分類用的交叉熵損失(第 38 章)
+
+for epoch in range(10):                 # 把整份資料學 10 輪(10 個 epoch)
+    for x, y in loader:                 # 每次拿一批(batch)影像 x 與標籤 y
+        opt.zero_grad()                 # ① 清掉上一輪的梯度(忘了會累加、訓練爆掉!)
+        pred = model(x)                 # ② 前向:算出預測
+        loss = lossf(pred, y)           #    算「錯多少」
+        loss.backward()                 # ③ 反向傳播:算出每個權重的梯度
+        opt.step()                      # ④ 依梯度更新權重(往下坡走一步)</code></pre>
+      <div class="diagram">
+<svg viewBox="0 0 700 170" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="lp" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#1f2328"/></marker>
+  </defs>
+  <rect x="20" y="40" width="140" height="56" rx="8" fill="#e3efed" stroke="#2f6f6a" stroke-width="1.8"/>
+  <text x="90" y="64" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">① 清梯度</text>
+  <text x="90" y="83" text-anchor="middle" font-size="11" fill="#4a5159">zero_grad()</text>
+  <rect x="190" y="40" width="140" height="56" rx="8" fill="#e3efed" stroke="#2f6f6a" stroke-width="1.8"/>
+  <text x="260" y="64" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">② 前向算 loss</text>
+  <text x="260" y="83" text-anchor="middle" font-size="11" fill="#4a5159">pred=model(x)</text>
+  <rect x="360" y="40" width="140" height="56" rx="8" fill="#f6e7dd" stroke="#b4541f" stroke-width="1.8"/>
+  <text x="430" y="64" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">③ 反向算梯度</text>
+  <text x="430" y="83" text-anchor="middle" font-size="11" fill="#4a5159">loss.backward()</text>
+  <rect x="530" y="40" width="140" height="56" rx="8" fill="#ede4fb" stroke="#8b5cf6" stroke-width="1.8"/>
+  <text x="600" y="64" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">④ 更新權重</text>
+  <text x="600" y="83" text-anchor="middle" font-size="11" fill="#4a5159">opt.step()</text>
+  <g stroke="#1f2328" stroke-width="2">
+    <line x1="160" y1="68" x2="186" y2="68" marker-end="url(#lp)"/>
+    <line x1="330" y1="68" x2="356" y2="68" marker-end="url(#lp)"/>
+    <line x1="500" y1="68" x2="526" y2="68" marker-end="url(#lp)"/>
+  </g>
+  <path d="M 600 96 L 600 130 L 90 130 L 90 98" fill="none" stroke="#8a929b" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#lp)"/>
+  <text x="345" y="150" text-anchor="middle" font-size="11.5" fill="#4a5159">對每一批資料重複;跑完整份資料一輪 = 一個 epoch</text>
+</svg>
+        <figcaption>圖 67-5:訓練迴圈四步。這四步是所有深度學習訓練的心跳,和第 38 章的「前向算值、反向算梯度、梯度下降更新」完全是同一件事。<strong>頭號新手坑</strong>:忘了第 ① 步 <code>zero_grad()</code>,梯度會跨批次累加,訓練直接爆掉。</figcaption>
+      </div>
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title"><code>loss.backward()</code> 背後,就是你學過的鏈鎖法則</span>
+          <p>第 38 章說過:<strong>反向傳播 = 鏈鎖法則 + 梯度下降</strong>。CNN 不過是把卷積也納入這條合成函數鏈。
+          你寫 <code>loss.backward()</code> 時,PyTorch 的<strong>自動微分(autograd)</strong>就沿著整個網路,由後往前把梯度逐層相乘、分配回每一個卷積核的每個權重——
+          這正是<a href="12-calculus.html">第 12 章</a>的鏈鎖法則,只是規模放大到百萬個參數、而且自動化了。你早就懂這個引擎,現在只是換了輛更大的車。</p>
+        </div>
+      </div>
+
+      <h3>過擬合,還是老問題</h3>
+      <p>
+        CNN 參數雖比全連接少很多,但動輒幾百萬,<strong>過擬合(overfitting)</strong>依然是頭號敵人——
+        症狀就是第 38 章那個:<strong>訓練準確率很高、測試/驗證準確率卻很差</strong>,模型在「背題庫」而非「學規律」。
+        對付它的武器,有些是 CNN 特有的,有些是第 38 章的老朋友:
+      </p>
+      <ul>
+        <li><strong>蒐集更多資料</strong>(最有效,但最貴)、以及下一節的<strong>資料增強</strong>(用變化「變」出更多資料)。</li>
+        <li><strong>Dropout</strong>:訓練時隨機「關掉」一部分神經元,逼網路別過度依賴某幾條路,效果像在做集成。</li>
+        <li><strong>權重衰減(weight decay)</strong>:其實就是第 38 章的 <strong>L2 正則化</strong>,懲罰過大的權重。</li>
+        <li><strong>提早停止(early stopping)</strong>:盯著驗證誤差,一旦它開始回升,就停止訓練。</li>
+      </ul>
+
+      <h2>遷移學習:站在巨人的肩膀上</h2>
+      <p>
+        現在你會訓練 CNN 了。但真實世界有個殘酷現實:工廠只蒐得到 200 張瑕疵照、農場只有 5 種病蟲害各幾十張。
+        用這麼一點資料<strong>從零訓練</strong>一個幾百萬參數的 CNN,結果一定是慘烈的過擬合。難道沒有大數據就不能做了嗎?
+      </p>
+      <p>
+        有救,而且這一招是業界落地<strong>最關鍵</strong>的一手:<strong>遷移學習(transfer learning)</strong>。
+      </p>
+
+      <h3>為什麼有效:特徵是通用的</h3>
+      <p>
+        回想圖 67-3:CNN 的淺、中層學的是<strong>邊緣、紋理、形狀</strong>——這些東西,辨識貓、辨識瑕疵、辨識病蟲害<em>都用得到</em>,
+        是通用的視覺基本功。一個在 <strong>ImageNet</strong>(上百萬張、一千類)上訓練好的模型(如 ResNet),
+        早就把這套基本功練得爐火純青。我們何必從頭再練一次?
+      </p>
+      <p>
+        遷移學習的做法是:<strong>借用預訓練模型的「眼睛」(前面所有層),只把最後負責「下判斷」的分類層換成自己的</strong>。
+        因為前面的通用特徵直接重用,我們的任務只剩「重新組合這些特徵」,所以幾百張圖就夠了。
+      </p>
+      <div class="diagram">
+<svg viewBox="0 0 700 200" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="tl" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#8a929b"/></marker>
+  </defs>
+  <text x="350" y="26" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">預訓練的 ResNet</text>
+  <!-- 凍結骨幹 -->
+  <rect x="60" y="50" width="420" height="80" rx="10" fill="#e3efed" stroke="#2f6f6a" stroke-width="1.8"/>
+  <text x="270" y="84" text-anchor="middle" font-size="13" font-weight="800" fill="#2f6f6a">骨幹(卷積層們)——凍結 ❄️</text>
+  <text x="270" y="106" text-anchor="middle" font-size="11" fill="#4a5159">在 ImageNet 學好的通用特徵:邊緣 / 紋理 / 形狀,直接重用</text>
+  <!-- 換掉的尾端 -->
+  <rect x="500" y="50" width="140" height="80" rx="10" fill="#f6e7dd" stroke="#b4541f" stroke-width="2.2"/>
+  <text x="570" y="80" text-anchor="middle" font-size="13" font-weight="800" fill="#b4541f">新分類層</text>
+  <text x="570" y="100" text-anchor="middle" font-size="11" fill="#4a5159">換成你的類別</text>
+  <text x="570" y="116" text-anchor="middle" font-size="11" fill="#b4541f">只訓練這層 🔥</text>
+  <line x1="480" y1="90" x2="498" y2="90" stroke="#8a929b" stroke-width="2" marker-end="url(#tl)"/>
+  <text x="350" y="170" text-anchor="middle" font-size="11.5" fill="#4a5159">第一階段:凍結骨幹、只訓尾端。第二階段(選用):解凍上層,用<tspan font-weight="700" fill="#b4541f">更小的學習率</tspan>微調</text>
+</svg>
+        <figcaption>圖 67-6:遷移學習。把預訓練模型的卷積骨幹「凍結」(權重不更新)、保住它學好的通用特徵,只換掉並訓練最後的分類層。進階做法是兩階段:先訓尾端,再解凍上層、用很小的學習率「微調(fine-tune)」。</figcaption>
+      </div>
+      <pre><code class="language-python">import torch.nn as nn
+from torchvision import models
+
+m = models.resnet18(weights='IMAGENET1K_V1')      # 載入 ImageNet 預訓練的 ResNet18
+for p in m.parameters():
+    p.requires_grad = False                        # 凍結骨幹:這些權重訓練時不更新
+
+# 把最後的分類層換成自己的(輸出改成你的類別數);新層預設 requires_grad=True
+m.fc = nn.Linear(m.fc.in_features, num_classes)
+# 於是只有 m.fc 會被訓練。之後可再解凍上層、用更小 lr 做第二階段微調</code></pre>
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">兩個遷移學習翻車點</span>
+          <p>(1) <strong>正規化要對齊</strong>:預訓練模型當初是用特定的平均/標準差(mean/std)正規化輸入的,你餵資料時要用<em>同一組</em>數值,否則特徵會錯位。
+          (2) <strong>別一開始就解凍全網路 + 大學習率</strong>:那會在模型還沒站穩時,用你的小資料把辛苦學來的通用特徵「洗掉」,反而更差。先凍結、後微調,順序很重要。</p>
+        </div>
+      </div>
+
+      <h3>資料增強:用變化「變」出更多資料</h3>
+      <p>
+        資料少還有一招:<strong>資料增強(data augmentation)</strong>。每次訓練時,隨機把圖<strong>裁切、翻轉、調色</strong>一下,
+        等於讓模型看到「同一張圖的許多變體」,逼它學「本質」而非死背某張照片的細節——泛化能力因此提升。
+      </p>
+      <pre><code class="language-python">from torchvision import transforms
+
+train_aug = transforms.Compose([          # 把多個處理串成一條流水線
+    transforms.RandomResizedCrop(224),    # 隨機裁一塊再縮到 224×224
+    transforms.RandomHorizontalFlip(),    # 隨機左右翻
+    transforms.ColorJitter(0.2, 0.2, 0.2),# 隨機微調亮度/對比/飽和度
+    transforms.ToTensor(),                # 轉成 PyTorch 張量
+])</code></pre>
+      <div class="callout danger">
+        <div class="ico">⛔</div>
+        <div class="body">
+          <span class="c-title">資料增強只給訓練集!驗證/測試集不能增強</span>
+          <p>這是第 38 章「資料洩漏」鐵律在影像上的具體化身。<strong>只有訓練集做隨機增強</strong>;驗證/測試集<em>只做</em> resize 與正規化。
+          否則你的評估會被隨機變動汙染、失真。更隱蔽的洩漏:切分資料時,<strong>同一個物件(或同一段影片的相鄰幀)別跨集</strong>——
+          否則訓練集和測試集藏著幾乎一樣的圖,測試分數會虛高得離譜,上線立刻現形。把測試集鎖進保險箱,從頭到尾只用一次。</p>
+        </div>
+      </div>
+
+      <h2>物件偵測:不只「是什麼」,還要「在哪裡」</h2>
+      <p>
+        到目前為止,我們做的都是<strong>分類</strong>:給整張圖一個標籤。但回收廠的輸送帶上,常常一次有<em>好幾樣</em>東西;
+        自駕車要同時知道畫面裡<em>每一個</em>人、車的位置。這需要更強的能力:<strong>物件偵測(object detection)</strong>——
+        同時回答「<strong>在哪裡</strong>」與「<strong>是什麼</strong>」。先把三種任務的差別講清楚:
+      </p>
+      <div class="diagram">
+<svg viewBox="0 0 720 240" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- 共用:畫一隻貓一隻狗的簡化場景 -->
+  <!-- Panel 1 分類 -->
+  <g>
+    <rect x="20" y="40" width="200" height="150" rx="6" fill="#fafbfc" stroke="#dfe3e8"/>
+    <text x="120" y="32" text-anchor="middle" font-size="13" font-weight="800" fill="#2f6f6a">分類</text>
+    <circle cx="80" cy="110" r="22" fill="#cfe0dc"/><circle cx="160" cy="120" r="26" fill="#e6d2c4"/>
+    <rect x="40" y="160" width="160" height="22" rx="4" fill="#e3efed" stroke="#2f6f6a"/>
+    <text x="120" y="176" text-anchor="middle" font-size="12" font-weight="700" fill="#2f6f6a">「有動物」</text>
+    <text x="120" y="208" text-anchor="middle" font-size="11" fill="#4a5159">整張圖一個標籤</text>
+  </g>
+  <!-- Panel 2 偵測 -->
+  <g>
+    <rect x="260" y="40" width="200" height="150" rx="6" fill="#fafbfc" stroke="#dfe3e8"/>
+    <text x="360" y="32" text-anchor="middle" font-size="13" font-weight="800" fill="#b4541f">偵測</text>
+    <circle cx="320" cy="110" r="22" fill="#cfe0dc"/><circle cx="400" cy="120" r="26" fill="#e6d2c4"/>
+    <rect x="294" y="84" width="52" height="52" fill="none" stroke="#2f6f6a" stroke-width="2.5"/>
+    <text x="320" y="80" text-anchor="middle" font-size="10" font-weight="700" fill="#2f6f6a">貓</text>
+    <rect x="370" y="92" width="62" height="58" fill="none" stroke="#b4541f" stroke-width="2.5"/>
+    <text x="401" y="88" text-anchor="middle" font-size="10" font-weight="700" fill="#b4541f">狗</text>
+    <text x="360" y="208" text-anchor="middle" font-size="11" fill="#4a5159">多個框 + 各自類別</text>
+  </g>
+  <!-- Panel 3 分割 -->
+  <g>
+    <rect x="500" y="40" width="200" height="150" rx="6" fill="#fafbfc" stroke="#dfe3e8"/>
+    <text x="600" y="32" text-anchor="middle" font-size="13" font-weight="800" fill="#7c3aed">分割</text>
+    <circle cx="560" cy="110" r="22" fill="#2f6f6a"/><circle cx="640" cy="120" r="26" fill="#b4541f"/>
+    <text x="600" y="208" text-anchor="middle" font-size="11" fill="#4a5159">像素級輪廓(誰屬於誰)</text>
+  </g>
+</svg>
+        <figcaption>圖 67-7:三種任務的層級。<strong>分類</strong>給整張圖一個標籤;<strong>偵測</strong>用方框框出每個物件並標類別;<strong>分割</strong>更進一步,逐<em>像素</em>標出每個物件的精確輪廓。能力越強、資訊越細,標註成本與計算量也越高。</figcaption>
+      </div>
+
+      <h3>YOLO 的核心思想:You Only Look Once</h3>
+      <p>
+        偵測的早期做法(如 R-CNN)是「兩階段」:先用一個方法<strong>提議</strong>幾千個「可能有東西」的候選框,再逐個丟進分類器判斷——慢得無法即時。
+        <strong>YOLO(You Only Look Once)</strong>的革命性,在於把偵測變成「<strong>一次前向就搞定</strong>」的單階段問題,快到能即時:
+      </p>
+      <p>
+        它的點子很巧:把圖<strong>切成一個格網(grid)</strong>,讓<strong>每一格</strong>同時負責預測「以我為中心,有沒有物件、框多大、是什麼類別」。
+        整張圖只看一次(一次卷積前向),所有格子的預測同時吐出來。這就是名字的由來——你只要看一次。
+      </p>
+      <div class="diagram">
+<svg viewBox="0 0 480 280" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <rect x="40" y="40" width="360" height="216" rx="6" fill="#fafbfc" stroke="#dfe3e8"/>
+  <!-- 格網 -->
+  <g stroke="#cbd2d9" stroke-width="1">
+    <line x1="100" y1="40" x2="100" y2="256"/><line x1="160" y1="40" x2="160" y2="256"/><line x1="220" y1="40" x2="220" y2="256"/>
+    <line x1="280" y1="40" x2="280" y2="256"/><line x1="340" y1="40" x2="340" y2="256"/>
+    <line x1="40" y1="76" x2="400" y2="76"/><line x1="40" y1="112" x2="400" y2="112"/><line x1="40" y1="148" x2="400" y2="148"/>
+    <line x1="40" y1="184" x2="400" y2="184"/><line x1="40" y1="220" x2="400" y2="220"/>
+  </g>
+  <!-- 物件:一台車 -->
+  <ellipse cx="210" cy="150" rx="70" ry="34" fill="#e6d2c4"/>
+  <!-- 負責的格子(中心所在) -->
+  <rect x="160" y="148" width="60" height="36" fill="#b4541f" fill-opacity="0.25" stroke="#b4541f" stroke-width="2.5"/>
+  <circle cx="210" cy="150" r="4" fill="#b4541f"/>
+  <!-- 預測框 -->
+  <rect x="140" y="116" width="140" height="68" fill="none" stroke="#2f6f6a" stroke-width="2.6"/>
+  <text x="210" y="110" text-anchor="middle" font-size="11" font-weight="700" fill="#2f6f6a">car 0.92</text>
+  <text x="220" y="30" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">把圖切格,每格各自預測</text>
+  <text x="248" y="166" font-size="9.5" fill="#b4541f">中心落此格</text>
+</svg>
+        <figcaption>圖 67-8:YOLO 的格點預測。物件中心落在哪一格,就由<strong>那一格</strong>負責預測它的邊界框與類別。整張圖一次前向,所有格子並行預測,所以又快又準,能跑即時。</figcaption>
+      </div>
+      <p>
+        用 Ultralytics 的 YOLO,推論簡單到不可思議——先體驗成果,再回頭理解指標:
+      </p>
+      <pre><code class="language-python">from ultralytics import YOLO
+
+model = YOLO('yolov8n.pt')      # 載入預訓練模型(COCO 80 類);n=最小最快版,首次自動下載
+results = model('street.jpg')   # 丟圖片(也可丟資料夾/影片/網址/攝影機)
+results[0].show()               # 顯示:框 + 類別 + 信心
+for box in results[0].boxes:    # 取出每個框的細節
+    print(box.cls, box.conf, box.xyxy)   # 類別、信心分數、座標(左上、右下)</code></pre>
+
+      <h3>偵測的三個關鍵指標:IoU、NMS、mAP</h3>
+      <p>
+        要評斷偵測好不好,有三個詞你會天天遇到。先講最基礎的 <strong>IoU(交並比,Intersection over Union)</strong>:
+        衡量「預測框」和「正解框」貼得多準——就是兩框的<strong>交集面積 ÷ 聯集面積</strong>,值在 0 到 1,越高越貼。
+        慣例是 <strong>IoU ≥ 0.5</strong> 才算這次「命中」。
+      </p>
+      <div class="diagram">
+<svg viewBox="0 0 560 240" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- 兩個重疊框 -->
+  <rect x="60" y="50" width="170" height="130" fill="#2f6f6a" fill-opacity="0.12" stroke="#2f6f6a" stroke-width="2.5"/>
+  <text x="95" y="42" font-size="12" font-weight="700" fill="#2f6f6a">正解框</text>
+  <rect x="160" y="90" width="170" height="120" fill="#b4541f" fill-opacity="0.12" stroke="#b4541f" stroke-width="2.5"/>
+  <text x="288" y="224" font-size="12" font-weight="700" fill="#b4541f">預測框</text>
+  <!-- 交集 -->
+  <rect x="160" y="90" width="70" height="90" fill="#8b5cf6" fill-opacity="0.45" stroke="#8b5cf6" stroke-width="1.5"/>
+  <text x="195" y="140" text-anchor="middle" font-size="11" font-weight="800" fill="#5b21b6">交集</text>
+  <!-- 公式 -->
+  <text x="400" y="90" font-size="14" font-weight="800" fill="#1f2328">IoU =</text>
+  <line x1="400" y1="108" x2="540" y2="108" stroke="#1f2328" stroke-width="1.6"/>
+  <text x="470" y="102" text-anchor="middle" font-size="13" font-weight="700" fill="#5b21b6">交集面積</text>
+  <text x="470" y="128" text-anchor="middle" font-size="13" font-weight="700" fill="#1f2328">聯集面積</text>
+  <text x="400" y="165" font-size="12" fill="#4a5159">0 = 完全沒重疊</text>
+  <text x="400" y="185" font-size="12" fill="#4a5159">1 = 完美重合</text>
+  <text x="400" y="205" font-size="12" fill="#b4541f">≥ 0.5 算命中</text>
+</svg>
+        <figcaption>圖 67-9:IoU = 交集面積 ÷ 聯集面積。它衡量「框得準不準」,和「信心分數」(模型有多大把握)是<strong>兩回事</strong>,常被混淆。聯集 = 兩框面積總和 − 交集。</figcaption>
+      </div>
+      <p>接著兩個:</p>
+      <ul>
+        <li><strong>NMS(非極大值抑制,Non-Maximum Suppression)</strong>:同一個物件常被框出好幾個重疊的框。NMS 的工作是<strong>留下信心最高的那個框,把跟它重疊太多(IoU 大)的其餘框刪掉</strong>,讓一個物件最後只剩一個乾淨的框。</li>
+        <li><strong>mAP(mean Average Precision,平均精度均值)</strong>:偵測的「總成績單」。對每一類算 AP(精確率-召回率曲線下的面積,呼應第 38 章的 precision/recall),再對所有類別取平均。<strong>看 mAP 高低判斷模型好壞</strong>,比只數「框對幾個」客觀得多。</li>
+      </ul>
+      <p>
+        要訓練<em>自己的</em>偵測器(例如偵測安全帽、口罩),其實也是<strong>遷移學習</strong>:從預訓練的 <code>yolov8n.pt</code> 出發,
+        用你標註好的資料繼續學,幾百張框就能有不錯結果:
+      </p>
+      <pre><code class="language-python">model = YOLO('yolov8n.pt')                          # 從預訓練權重出發(遷移學習)
+model.train(data='data.yaml', epochs=100, imgsz=640)  # data.yaml 指定資料路徑與類別名
+metrics = model.val()                              # 驗證,看 mAP
+print('mAP50-95:', metrics.box.map)</code></pre>
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">即時偵測,就是第 65 章那個迴圈換個核心</span>
+          <p>把偵測接上攝影機就是即時應用——本質還是「讀一幀 → 處理 → 顯示」的迴圈,只是「處理」換成 YOLO:</p>
+          <pre><code class="language-python">import cv2
+for r in model.predict(source=0, stream=True):  # source=0 攝影機;stream 逐幀吐結果
+    cv2.imshow('det', r.plot())                 # r.plot() 把框畫上去
+    if cv2.waitKey(1) &amp; 0xFF == ord('q'):       # 按 q 離開
+        break</code></pre>
+          <p>「業務邏輯」就加在這迴圈裡:例如「偵測到未戴安全帽就畫紅框並計數」。資料品質比 epochs 更重要——標註鬆散、漏標,mAP 怎麼都上不去。</p>
+        </div>
+      </div>
+
+      <h2>影像分割:精確到每一個像素</h2>
+      <p>
+        偵測給的是方框,但方框是粗的:一個框裡有一大半是背景。自駕車要知道「<em>哪些像素</em>是路面、哪些是行人」、
+        醫療影像要量腫瘤的<em>面積</em>、修圖要做<em>無綠幕去背</em>——這些都需要像素級的<strong>影像分割(image segmentation)</strong>。
+      </p>
+      <h3>語意分割 vs 實例分割</h3>
+      <ul>
+        <li><strong>語意分割(semantic segmentation)</strong>:只管「每個像素屬於<em>哪一類</em>」,同類不分個體——畫面裡所有的車都標成同一種「車」色。</li>
+        <li><strong>實例分割(instance segmentation)</strong>:更進一步,同類也要<em>分出個體</em>——車1、車2、車3 各有各的輪廓。</li>
+      </ul>
+      <p>
+        分割<strong>不能用準確率(accuracy)評估</strong>:因為背景像素通常占絕大多數,一個「全部猜背景」的爛模型,
+        準確率也能很高卻毫無用處。要改用 <strong>IoU 或 Dice 係數</strong>(都是衡量「預測遮罩與正解遮罩重疊多少」)——
+        這又是第 38 章「類別不平衡時準確率會騙人」的翻版。
+      </p>
+
+      <h3>U-Net:先壓縮理解,再還原定位</h3>
+      <p>
+        語意分割的經典架構是 <strong>U-Net</strong>,因形狀像字母 U 而得名。它的直覺是個漂亮的兩難解法:
+        要「看懂整張圖在說什麼」,得把圖<strong>壓小、抽象化</strong>(才有大局觀);但輸出又要<strong>逐像素、和原圖一樣大</strong>(才能定位細節)。
+        U-Net 用兩條路解決:
+      </p>
+      <div class="diagram">
+<svg viewBox="0 0 620 290" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="un" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#8a929b"/></marker>
+    <marker id="sk" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#8b5cf6"/></marker>
+  </defs>
+  <!-- 編碼器(左,往下) -->
+  <text x="120" y="30" text-anchor="middle" font-size="12.5" font-weight="800" fill="#2f6f6a">編碼器(下採樣,抽特徵)</text>
+  <rect x="60" y="46" width="120" height="30" fill="#e3efed" stroke="#2f6f6a"/>
+  <rect x="74" y="92" width="92" height="30" fill="#e3efed" stroke="#2f6f6a"/>
+  <rect x="88" y="138" width="64" height="30" fill="#e3efed" stroke="#2f6f6a"/>
+  <!-- 底部 -->
+  <rect x="250" y="190" width="120" height="34" fill="#ede4fb" stroke="#8b5cf6" stroke-width="2"/>
+  <text x="310" y="212" text-anchor="middle" font-size="11" font-weight="700" fill="#7c3aed">最抽象的瓶頸</text>
+  <!-- 解碼器(右,往上) -->
+  <text x="500" y="30" text-anchor="middle" font-size="12.5" font-weight="800" fill="#b4541f">解碼器(上採樣,還原)</text>
+  <rect x="440" y="46" width="120" height="30" fill="#f6e7dd" stroke="#b4541f"/>
+  <rect x="454" y="92" width="92" height="30" fill="#f6e7dd" stroke="#b4541f"/>
+  <rect x="468" y="138" width="64" height="30" fill="#f6e7dd" stroke="#b4541f"/>
+  <!-- 下行箭頭 -->
+  <g stroke="#8a929b" stroke-width="1.8">
+    <line x1="120" y1="76" x2="120" y2="90" marker-end="url(#un)"/>
+    <line x1="120" y1="122" x2="120" y2="136" marker-end="url(#un)"/>
+    <line x1="120" y1="168" x2="290" y2="190" marker-end="url(#un)"/>
+    <line x1="330" y1="190" x2="500" y2="168" marker-end="url(#un)"/>
+    <line x1="500" y1="138" x2="500" y2="124" marker-end="url(#un)"/>
+    <line x1="500" y1="92" x2="500" y2="78" marker-end="url(#un)"/>
+  </g>
+  <!-- skip connections -->
+  <g stroke="#8b5cf6" stroke-width="2" stroke-dasharray="5 3">
+    <line x1="180" y1="61" x2="440" y2="61" marker-end="url(#sk)"/>
+    <line x1="166" y1="107" x2="454" y2="107" marker-end="url(#sk)"/>
+    <line x1="152" y1="153" x2="468" y2="153" marker-end="url(#sk)"/>
+  </g>
+  <text x="310" y="56" text-anchor="middle" font-size="11" font-weight="700" fill="#7c3aed">skip connection(把細節接過去)</text>
+  <text x="560" y="190" text-anchor="end" font-size="11" fill="#4a5159">輸出:和輸入同尺寸的「每像素類別圖」</text>
+</svg>
+        <figcaption>圖 67-10:U-Net 編碼-解碼結構。左邊<strong>編碼器</strong>一路下採樣、把圖壓小抽象(理解「是什麼」);右邊<strong>解碼器</strong>一路上採樣、把解析度還原(定位「在哪裡」)。關鍵是中間那些紫色的 <strong>skip connection</strong>:把編碼器同層的細節「抄捷徑」接到解碼器,補回下採樣丟失的邊緣細節,讓輸出輪廓精準。</figcaption>
+      </div>
+      <p>
+        現成的實例分割同樣一行就能跑(YOLO 的分割版,檔名多個 <code>-seg</code>):
+      </p>
+      <pre><code class="language-python">from ultralytics import YOLO
+
+seg = YOLO('yolov8n-seg.pt')   # 分割版模型
+r = seg('street.jpg')
+r[0].show()                    # 框 + 半透明遮罩疊上去
+masks = r[0].masks             # 取出每個實例的遮罩</code></pre>
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">SAM:點一下,就切出來</span>
+          <p><strong>SAM(Segment Anything Model)</strong>是 Meta 推出的「萬物分割」基礎模型。它最神的地方是<strong>提示式、零訓練</strong>:
+          你只要<strong>給一個點或一個框當提示</strong>,它就切出那個物件,泛化能力極強,連沒見過的東西也切得乾淨。
+          這讓它成了「精準去背工具」與「加速標註」的利器——比起第 65、66 章靠顏色/邊緣去背,SAM 靠的是<em>語意</em>,複雜背景也難不倒它。</p>
+        </div>
+      </div>
+
+      <h2>人臉與姿態:從整張圖,聚焦到關鍵點</h2>
+      <p>
+        前面都在處理「整張圖有什麼」。但很多最貼近生活的應用,聚焦在特定目標的<strong>關鍵點(landmark)</strong>上:
+        刷臉門禁、AR 美顏濾鏡、健身動作計數、駕駛疲勞偵測。這一節把人臉與人體一起講。
+      </p>
+
+      <h3>人臉:偵測 vs 辨識</h3>
+      <p>這是兩件常被混為一談、其實截然不同的事:</p>
+      <ul>
+        <li><strong>人臉偵測(detection)</strong>:回答「<em>有沒有臉、在哪</em>」。傳統的 Haar 級聯、或現代 CNN 都能做。</li>
+        <li><strong>人臉辨識(recognition)</strong>:回答「<em>這是誰</em>」。這才是難點,而它的解法非常優雅。</li>
+      </ul>
+      <p>
+        辨識的核心觀念是 <strong>embedding(嵌入向量)</strong>:用一個 CNN,把每張臉<strong>編碼成一個向量</strong>(例如 128 個數字)。
+        模型訓練的目標是讓<strong>同一個人的向量彼此靠近、不同人的向量彼此遠離</strong>。於是「這兩張是不是同一人」,
+        就化簡成一個簡單的幾何問題:<strong>算兩個向量的距離</strong>,小於某個門檻就判定同一人。
+      </p>
+      <pre><code class="language-python">import face_recognition
+
+known = face_recognition.face_encodings(known_rgb)[0]   # 已註冊者的 128 維向量
+enc   = face_recognition.face_encodings(new_rgb)[0]      # 新來的臉,也編成 128 維
+dist  = face_recognition.face_distance([known], enc)[0]  # 算距離,越小越像
+print('同一人' if dist &lt; 0.6 else '不同人')              # 門檻 0.6:太鬆會誤認,太嚴會拒認</code></pre>
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">辨識 = 比向量,不是比圖</span>
+          <p>人臉辨識的精髓:<strong>不是逐像素比對兩張照片像不像</strong>(那會被光照、角度、表情輕易騙過),
+          而是把臉<strong>濃縮成一個向量</strong>,再比<em>向量</em>的距離。這個「把複雜物件變成一個向量、用距離衡量相似度」的思想,
+          是現代 AI 的通用招式——它和<a href="54-linear-algebra.html">第 54 章</a>的向量空間、以及大型語言模型用的「文字 embedding」,是同一套數學。一個「考勤系統」,就是事先存好每人的 embedding,到場時偵測→編碼→找最近且小於門檻者。</p>
+        </div>
+      </div>
+
+      <h3>關鍵點與 MediaPipe</h3>
+      <p>
+        Google 的 <strong>MediaPipe</strong> 能即時吐出密集的關鍵點:臉部 <strong>468 點</strong>、人體 <strong>33 點</strong>、單手 <strong>21 點</strong>。
+        有了這些座標,就能對齊貼圖、判斷表情、偵測眨眼、分析姿勢。用法簡單,但有<strong>兩個經典坑</strong>:
+      </p>
+      <pre><code class="language-python">import mediapipe as mp
+import cv2
+
+pose = mp.solutions.pose.Pose()
+# 坑#1:MediaPipe 吃 RGB,但 OpenCV 是 BGR,一定要先轉!
+res = pose.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+
+if res.pose_landmarks:
+    for lm in res.pose_landmarks.landmark:
+        # 坑#2:lm.x / lm.y 是 0~1 的「歸一化」座標,要乘上影像寬高才是像素!
+        px, py = int(lm.x * W), int(lm.y * H)
+        # lm.visibility 是信心度,太低的點應該過濾掉再用</code></pre>
+
+      <h3>姿態估計與「健身動作計數器」</h3>
+      <p>
+        有了人體 33 個關鍵點,就能做一個漂亮的旗艦專題:<strong>自動數深蹲/二頭彎舉次數的計數器</strong>。原理拆成兩步,
+        都不需要再訓練模型,純粹是<strong>幾何 + 邏輯</strong>:
+      </p>
+      <p>
+        <strong>第一步:用三點算夾角。</strong>例如二頭彎舉,看「肩-肘-腕」三點構成的手肘角度。這就是國中的餘弦定理變成程式
+        (用<a href="54-linear-algebra.html">向量內積</a>):
+      </p>
+      <pre><code class="language-python">import numpy as np
+
+def angle(a, b, c):                       # b 是頂點(如手肘)
+    ba, bc = a - b, c - b                 # 從頂點指向兩端的向量
+    cos = np.dot(ba, bc) / (np.linalg.norm(ba) * np.linalg.norm(bc) + 1e-6)
+    return np.degrees(np.arccos(np.clip(cos, -1, 1)))   # clip 防浮點誤差讓 arccos 變 NaN</code></pre>
+      <p>
+        <strong>第二步:用狀態機數次數。</strong>角度低於下限(手臂彎起)→ 進入「下」狀態;角度回到上限以上(手臂打直)→
+        完成一次,計數 +1。關鍵是用<strong>不同的上下門檻(遲滯,hysteresis)</strong>避免角度在門檻附近抖動造成重複計數:
+      </p>
+      <div class="diagram">
+<svg viewBox="0 0 640 230" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="sm" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#2f6f6a"/></marker>
+  </defs>
+  <!-- 手臂三點示意 -->
+  <g>
+    <line x1="60" y1="50" x2="110" y2="110" stroke="#b4541f" stroke-width="6" stroke-linecap="round"/>
+    <line x1="110" y1="110" x2="80" y2="180" stroke="#b4541f" stroke-width="6" stroke-linecap="round"/>
+    <circle cx="60" cy="50" r="7" fill="#2f6f6a"/><text x="42" y="46" font-size="10" fill="#2f6f6a">肩</text>
+    <circle cx="110" cy="110" r="7" fill="#1f2328"/><text x="118" y="112" font-size="10" fill="#1f2328">肘</text>
+    <circle cx="80" cy="180" r="7" fill="#2f6f6a"/><text x="56" y="196" font-size="10" fill="#2f6f6a">腕</text>
+    <path d="M 95 128 A 24 24 0 0 1 128 122" fill="none" stroke="#8b5cf6" stroke-width="2"/>
+    <text x="128" y="150" font-size="11" font-weight="700" fill="#7c3aed">θ</text>
+  </g>
+  <!-- 狀態機 -->
+  <ellipse cx="300" cy="115" rx="74" ry="42" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="300" y="110" text-anchor="middle" font-size="13" font-weight="800" fill="#2f6f6a">「上」狀態</text>
+  <text x="300" y="130" text-anchor="middle" font-size="10.5" fill="#4a5159">手臂打直 θ&gt;160°</text>
+  <ellipse cx="520" cy="115" rx="74" ry="42" fill="#f6e7dd" stroke="#b4541f" stroke-width="2"/>
+  <text x="520" y="110" text-anchor="middle" font-size="13" font-weight="800" fill="#b4541f">「下」狀態</text>
+  <text x="520" y="130" text-anchor="middle" font-size="10.5" fill="#4a5159">手臂彎起 θ&lt;40°</text>
+  <path d="M 372 95 Q 446 60 448 95" fill="none" stroke="#2f6f6a" stroke-width="2" marker-end="url(#sm)"/>
+  <text x="410" y="58" text-anchor="middle" font-size="10.5" fill="#2f6f6a">彎下:θ&lt;40°</text>
+  <path d="M 448 138 Q 410 175 372 138" fill="none" stroke="#b4541f" stroke-width="2" marker-end="url(#sm)"/>
+  <text x="410" y="192" text-anchor="middle" font-size="10.5" fill="#b4541f">打直:θ&gt;160° → 計數 +1 🎉</text>
+</svg>
+        <figcaption>圖 67-11:健身計數器的狀態機。用「肩-肘-腕」算出手肘角度 θ,在「上(打直)」與「下(彎起)」兩狀態間切換。<strong>上下門檻不同(160° 與 40°)</strong>就是「遲滯」設計——它讓角度在邊界附近的小抖動,不會被誤判成一次次的重複動作。每完成一個「下→上」循環,計數加一。</figcaption>
+      </div>
+
+      <h2>OCR:把影像裡的文字變成字串</h2>
+      <p>
+        還有一類辨識,目標既不是物件也不是人,而是<strong>文字</strong>:車牌、發票、名片、路標。
+        <strong>OCR(光學文字辨識,Optical Character Recognition)</strong>把影像中的文字變成可用的字串,通常分<strong>兩階段</strong>:
+      </p>
+      <ul>
+        <li><strong>文字偵測(detection)</strong>:找出文字區域在哪裡(框出來)——這其實就是物件偵測。</li>
+        <li><strong>文字辨識(recognition)</strong>:把框內的影像轉成字串。這是個<strong>序列</strong>問題(一個框裡有好幾個字、長度不定),常用 CTC 之類的序列模型解。</li>
+      </ul>
+      <p>
+        實務上不必自己造輪子,現成的 OCR 引擎很強。<strong>PaddleOCR</strong> 一行幫你做完兩階段、中英都認;
+        <strong>Tesseract</strong> 則適合乾淨的印刷體:
+      </p>
+      <pre><code class="language-python">from paddleocr import PaddleOCR
+
+ocr = PaddleOCR(use_angle_cls=True, lang='ch')   # use_angle_cls 自動校正方向;lang='ch' 中英都認
+result = ocr.ocr('invoice.jpg')                  # 回傳每塊文字的 [框座標, (文字, 信心)]
+# 注意:lang 沒設對(如忘了中文)會只認英數字!
+
+# 另一選擇:Tesseract(適合乾淨印刷體,需另裝引擎與語言包)
+# text = pytesseract.image_to_string(img, lang='chi_tra+eng')</code></pre>
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">OCR 的勝負,常在「前處理」而非「換更強的模型」</span>
+          <p>歪斜、低對比、雜訊、字太小,都會讓辨識率崩盤。一套標準前處理往往比換模型更有效,而且全是第 65 章的舊招組合:
+          <strong>放大(小字放大筆畫才清楚)→ 去噪(保住邊)→ 自適應二值化(變成乾淨的白底黑字,OCR 最愛)→ 透視校正(把斜拍的車牌/文件拉正)</strong>。
+          最後再用<strong>格式規則做後處理</strong>(車牌樣式、發票統編 8 碼、日期格式)校正並過濾低信心結果。經典專題「車牌辨識(ANPR)」,
+          就是「YOLO 定位車牌 → 透視校正 → 二值化 → OCR 讀字 → 格式校正 → 去重紀錄」一條龍。</p>
+        </div>
+      </div>
+
+      <h2>從 Notebook 到產品:即時部署與最佳化</h2>
+      <p>
+        最後一哩路,也是最被初學者低估的一哩:<strong>模型在 notebook 跑得動,不等於能用</strong>。
+        要變成「別人能用的產品」,你得面對延遲、掉幀、記憶體、跨機器執行、以及給非技術者操作的介面。這是工程化的功夫。
+      </p>
+
+      <h3>讓推論更快:量化、半精度、ONNX</h3>
+      <p>
+        即時應用要追求高 <strong>FPS(每秒幀數)</strong>。幾個常用手段:
+      </p>
+      <ul>
+        <li><strong>量化(quantization)與半精度(fp16)</strong>:模型權重原本用 32 位元浮點數存。改用 16 位元(fp16)甚至 8 位元整數(int8),模型更小、跑更快,但<strong>準確率會略降</strong>——所以轉完<em>一定要回頭驗證掉了多少精度</em>,不能只看變快。</li>
+        <li><strong>ONNX</strong>:一種<strong>通用模型格式</strong>。把訓練好的模型轉成 ONNX 後,可被各種更快的推論引擎(ONNX Runtime、TensorRT)載入,也方便跨框架、跨平台部署。</li>
+        <li><strong>架構層面</strong>:縮小輸入解析度、<strong>跳幀推論</strong>(不是每幀都偵測,中間用第 65 章的物件追蹤補)、用執行緒把「擷取」和「推論」分離,避免互相卡住。</li>
+      </ul>
+      <pre><code class="language-python">from ultralytics import YOLO
+
+YOLO('best.pt').export(format='onnx')   # 把訓練好的 .pt 轉成通用的 ONNX 格式</code></pre>
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">為什麼 GPU 讓深度學習快得驚人?</span>
+          <p>CNN 的前向與反向傳播,骨子裡全是<strong>大量的矩陣乘法</strong>。CPU 擅長「一件接一件做」,而 <strong>GPU</strong> 有數千個核心,
+          擅長「同一個運算對成千上萬筆資料<em>同時</em>做」——正中矩陣運算的下懷。這正是<a href="43-parallel.html">第 43 章</a>講的<strong>資料平行(data parallelism)</strong>,
+          也呼應<a href="48-computer-architecture.html">第 48 章</a>的硬體觀念。深度學習近年爆發,「算力」(GPU)正是三大功臣之一。
+          要部署到樹莓派、Jetson 這類<strong>邊緣裝置</strong>時,則反過來:選最小的模型(如 yolov8n)、降解析度與幀率,在有限算力下換取可用的即時性。</p>
+        </div>
+      </div>
+
+      <h3>用 Streamlit / Gradio 做一個 demo</h3>
+      <p>
+        把模型變成「能上傳圖、按按鈕」的網頁,最快的路是 <strong>Streamlit</strong> 或 <strong>Gradio</strong>——用<em>純 Python</em>就生出網頁介面,
+        非技術者也能操作。這是「產品化」最有成就感的一步:
+      </p>
+      <pre><code class="language-python">import streamlit as st
+from ultralytics import YOLO
+
+@st.cache_resource          # 讓模型只載入一次,不要每次互動都重載
+def load_model():
+    return YOLO('best.pt')
+
+model = load_model()
+img = st.file_uploader('上傳圖片')   # 自動生出「上傳檔案」按鈕
+if img:                             # 有上傳才處理
+    res = model(read_image(img))
+    st.image(res[0].plot(), channels='BGR')  # channels='BGR':OpenCV 是 BGR,網頁預期 RGB</code></pre>
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">Streamlit 的兩個小陷阱</span>
+          <p>(1) <strong>啟動方式不同</strong>:要用 <code>streamlit run app.py</code>,<em>不是</em> <code>python app.py</code>。
+          (2) Streamlit 的執行模型是「使用者每次互動,就由上往下把整個檔重跑一遍」——所以「重的東西」(載模型)務必用 <code>@st.cache_resource</code> 快取起來,否則每點一下都重載模型,慢到不能用。
+          別忘了處理<strong>例外輸入</strong>(壞檔、沒偵測到物件),demo 才不會當場崩給人看。</p>
+        </div>
+      </div>
+
+      <h2>當機器開始「看人」:電腦視覺的倫理</h2>
+      <p>
+        這一章教你打造了威力強大的工具。但和<a href="38-machine-learning.html">第 38 章</a>結尾說的一樣——
+        <strong>技術能力越強,責任越重</strong>。電腦視覺直接作用在「人」身上,它的倫理風險特別具體、特別貼身:
+      </p>
+      <ul>
+        <li><strong>隱私</strong>:人臉是最敏感的生物特徵之一。蒐集、儲存、比對人臉資料,必須取得<strong>當事人同意</strong>、妥善保管、明確用途。沒有同意的大規模臉部監控,是嚴重的隱私侵害。</li>
+        <li><strong>偏見與公平性</strong>:這呼應第 38 章。研究反覆發現,許多商用人臉辨識系統對<strong>深膚色族群、女性的錯誤率明顯偏高</strong>——因為訓練資料以特定族群為主。這種偏差一旦用於門禁、執法,會讓特定族群系統性地被誤認、被冤枉,後果由真實的人承擔。</li>
+        <li><strong>深偽(deepfake)</strong>:同一套生成式技術,能合成以假亂真的人臉影片。它可以用於電影特效,也可以用於詐騙、假新聞、未經同意的偽造影像。這讓「眼見為憑」這個人類數千年的信任基礎開始動搖,是這個時代最棘手的資訊倫理難題之一。</li>
+      </ul>
+      <p>
+        這些議題的完整討論,留給<a href="41-ethics.html">第 41 章(科技倫理)</a>。此刻請把一句話刻進心裡:
+        <strong>你做的每一個視覺系統,鏡頭對準的都是活生生的人。</strong>該不該做、資料怎麼來、誤判誰來承擔——
+        這些問題,和「mAP 多少」一樣,是工程師職責的一部分。
+      </p>
+
+      <h2>練習</h2>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 67.1 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>用 PyTorch 定義一個小 CNN,吃 1 通道的 28×28 灰階圖(如 MNIST 手寫數字),輸出 10 類。
+          要求:兩層卷積(各接 ReLU 與 2×2 池化),最後接一層全連接。請寫出 <code>nn.Module</code>,並算出全連接層的輸入維度。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>關鍵是追蹤空間尺寸:28 →(池化)→ 14 →(池化)→ 7。第二層卷積輸出 32 通道,所以攤平後是 $32 \times 7 \times 7 = 1568$:</p>
+              <pre><code class="language-python">import torch.nn as nn
+import torch.nn.functional as F
+
+class SmallCNN(nn.Module):
+    def __init__(self, n_cls=10):
+        super().__init__()
+        self.c1 = nn.Conv2d(1, 16, 3, padding=1)   # 1→16 通道,3×3 核
+        self.c2 = nn.Conv2d(16, 32, 3, padding=1)  # 16→32 通道
+        self.fc = nn.Linear(32 * 7 * 7, n_cls)     # 28→14→7,故 32*7*7=1568
+
+    def forward(self, x):
+        x = F.max_pool2d(F.relu(self.c1(x)), 2)    # 28×28 → 14×14
+        x = F.max_pool2d(F.relu(self.c2(x)), 2)    # 14×14 → 7×7
+        return self.fc(x.flatten(1))               # 攤平 → 10 類分數</code></pre>
+              <p>檢查維度的好習慣:在 <code>forward</code> 裡暫時 <code>print(x.shape)</code>,跑一筆假資料 <code>model(torch.randn(1,1,28,28))</code> 看尺寸對不對。
+              算錯全連接的輸入維度,是新手最常見的報錯來源之一。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 67.2 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>用你自己的話解釋:<strong>卷積層是怎麼「學特徵」的?</strong>請涵蓋三點:(a) 卷積層的「核」和第 65 章影像處理的「核」有什麼相同、什麼不同?
+          (b) 為什麼把卷積層疊深,網路能從「邊緣」一路學到「物件」?(c) 「參數共享」是什麼,它帶來哪兩個好處?</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>(a)</strong> <em>相同</em>:兩者都是「拿一個小核在影像上滑動,逐元素相乘相加,產生特徵圖」這個運算,一模一樣。
+              <em>不同</em>:第 65 章的核(如 Sobel、高斯)是<strong>人手工設計、固定不變</strong>的;CNN 的核裡那些數字是<strong>參數,由訓練(梯度下降)自動學出來</strong>。
+              網路會學出「對我的任務最有用」的核,而不是人事先想好的。</p>
+              <p><strong>(b)</strong> 因為一層的輸出(特徵圖)是下一層的輸入。淺層的核在原始像素上偵測<strong>邊緣</strong>;中層的核在「邊緣圖」上操作,
+              就能把邊緣<strong>組合成紋理、角點</strong>;再深一層把紋理組合成<strong>部件</strong>(眼睛、輪子);最深層把部件組合成<strong>完整物件</strong>。
+              「組合更簡單的特徵成更複雜的概念」這個能力,隨層數加深而自然湧現——這是單一手工特徵(只能停在邊緣那層)永遠做不到的。</p>
+              <p><strong>(c)</strong> 參數共享 = <strong>同一個核(同一組權重)走遍整張圖的每個位置</strong>,而不是每個位置各有一組權重。
+              兩個好處:(1) <strong>參數量暴減</strong>(一個 3×3 核只有 9 個權重,卻能掃全圖),省記憶體又抗過擬合;
+              (2) <strong>位移不變性</strong>——「貓的特徵」不管出現在左上還右下,都用同一個核就能偵測到,網路不必為每個位置重學一次。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 67.3 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>你的農場只蒐到 5 種病蟲害、每類約 80 張照片。請(a) 說明為什麼<strong>不該從零訓練</strong>一個 CNN;
+          (b) 用 PyTorch 寫出<strong>遷移學習</strong>的程式骨架:載入預訓練 ResNet18、凍結骨幹、換掉分類層;
+          (c) 列出兩個你會採取的、對付小資料過擬合的具體措施。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>(a)</strong> 400 張圖,對一個幾百萬參數的 CNN 來說太少,從零訓練幾乎必然<strong>嚴重過擬合</strong>(背下這 400 張、學不到能泛化的規律)。
+              而通用的視覺特徵(邊緣、紋理)在任何任務都共通,沒理由用這麼點資料從頭重學。</p>
+              <pre><code class="language-python">import torch.nn as nn
+from torchvision import models
+
+m = models.resnet18(weights='IMAGENET1K_V1')   # 載入預訓練權重
+for p in m.parameters():
+    p.requires_grad = False                     # 凍結骨幹,保住通用特徵
+m.fc = nn.Linear(m.fc.in_features, 5)           # 換成 5 類的新分類層(只有它會被訓練)
+
+# 之後只把「需要梯度」的參數丟給最佳化器
+opt = torch.optim.Adam([p for p in m.parameters() if p.requires_grad], lr=1e-3)</code></pre>
+              <p><strong>(c)</strong> 任選兩個以上:① <strong>資料增強</strong>(隨機裁切/翻轉/調色,只給訓練集);② <strong>遷移學習</strong>本身(已用,大幅降低過擬合);
+              ③ Dropout 或<strong>權重衰減(L2 正則化)</strong>;④ <strong>提早停止</strong>(盯驗證誤差);⑤ 先只訓尾端、再用<strong>很小的學習率</strong>解凍微調,別一開始就大 lr 全解凍把預訓練特徵洗掉。
+              另外記得:預訓練模型的<strong>正規化 mean/std 要對齊</strong>。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 67.4 <span class="badge">計算</span></div>
+        <div class="ex-body">
+          <p>有兩個邊界框(以左上、右下角座標表示):正解框 A = (10, 10, 50, 50),預測框 B = (30, 30, 70, 70)。
+          (a) 手算它們的 IoU。(b) 這次偵測算「命中」嗎(門檻 0.5)?(c) 寫一個 <code>iou(boxA, boxB)</code> 函式驗證你的答案。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>(a) 手算:</strong></p>
+              <ul>
+                <li>交集的左上角 = (max(10,30), max(10,30)) = (30, 30);右下角 = (min(50,70), min(50,70)) = (50, 50)。</li>
+                <li>交集寬高 = (50−30)×(50−30) = 20×20 = <strong>400</strong>。</li>
+                <li>各框面積:A = 40×40 = 1600,B = 40×40 = 1600。</li>
+                <li>聯集 = 1600 + 1600 − 400 = <strong>2800</strong>。</li>
+                <li>IoU = 400 / 2800 ≈ <strong>0.143</strong>。</li>
+              </ul>
+              <p><strong>(b)</strong> 0.143 &lt; 0.5,所以<strong>不算命中</strong>——框雖然有重疊,但偏太多。</p>
+              <pre><code class="language-python">def iou(a, b):
+    ax1, ay1, ax2, ay2 = a
+    bx1, by1, bx2, by2 = b
+    # 交集矩形
+    ix1, iy1 = max(ax1, bx1), max(ay1, by1)
+    ix2, iy2 = min(ax2, bx2), min(ay2, by2)
+    iw, ih = max(0, ix2 - ix1), max(0, iy2 - iy1)   # max(0,..) 防無重疊變負
+    inter = iw * ih
+    area_a = (ax2 - ax1) * (ay2 - ay1)
+    area_b = (bx2 - bx1) * (by2 - by1)
+    union = area_a + area_b - inter
+    return inter / union if union &gt; 0 else 0.0
+
+print(iou((10,10,50,50), (30,30,70,70)))   # 0.142857...</code></pre>
+              <p>易錯點:(1) 兩框完全不重疊時,<code>ix2 - ix1</code> 會是負的,務必用 <code>max(0, ...)</code> 夾住,否則會算出假的正交集面積;
+              (2) 聯集要<strong>減掉</strong>交集,別重複計算那塊。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 67.5 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>用 Ultralytics YOLO 寫一段推論程式骨架:載入預訓練模型、對一張圖偵測,然後<strong>只印出信心 ≥ 0.5 的框</strong>的類別名稱與信心分數。
+          (不需要真的執行,寫出正確結構即可。)</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">from ultralytics import YOLO
+
+model = YOLO('yolov8n.pt')          # 預訓練(COCO 80 類);首次自動下載
+results = model('street.jpg')        # 也可丟資料夾/影片/網址/攝影機(source=0)
+
+r = results[0]
+names = r.names                      # 類別編號 → 名稱 的對照表
+for box in r.boxes:
+    conf = float(box.conf)
+    if conf &gt;= 0.5:                  # 只看夠有把握的框
+        cls_id = int(box.cls)
+        x1, y1, x2, y2 = box.xyxy[0].tolist()   # 框座標(左上、右下)
+        print(f"{names[cls_id]}: {conf:.2f}  box=({x1:.0f},{y1:.0f},{x2:.0f},{y2:.0f})")</code></pre>
+              <p>重點:<code>r.boxes</code> 可逐框走訪,每個 <code>box</code> 有 <code>.conf</code>(信心)、<code>.cls</code>(類別編號)、<code>.xyxy</code>(座標);
+              <code>r.names</code> 把編號翻成可讀名稱。要接攝影機即時,把 <code>model(...)</code> 換成 <code>model.predict(source=0, stream=True)</code> 並用 <code>for r in ...</code> 逐幀處理。
+              提醒:YOLO 內部已經幫你做完 NMS,所以你拿到的框已經是去重後的乾淨結果。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 67.6 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>(呼應第 38 章)請設計一個<strong>不會資料洩漏</strong>的影像分類訓練流程,從一個「每個類別一個資料夾」的圖片集出發。
+          列出步驟,並特別指出影像任務中<strong>三個</strong>容易造成洩漏的陷阱,以及如何避免。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>正確流程:</strong></p>
+              <ol>
+                <li><strong>先切分</strong>:把資料切成 train / val / test 三份,<strong>測試集立刻鎖進保險箱</strong>,整個開發過程只在最後用一次。</li>
+                <li><strong>只在訓練集上「學」前處理</strong>:資料增強只套用到訓練集;正規化的 mean/std 只用訓練集統計量,再套到 val/test。</li>
+                <li>用訓練集訓練、用<strong>驗證集</strong>挑超參數(學習率、epoch、是否解凍微調)與偵測過擬合。</li>
+                <li>定案後,才用測試集做<strong>唯一一次</strong>誠實評估。類別不平衡時,別只看準確率,看 F1 / 各類 recall。</li>
+              </ol>
+              <p><strong>影像任務特有的三個洩漏陷阱:</strong></p>
+              <ul>
+                <li><strong>① 同一物件/同一場景跨集。</strong>例如「同一個瑕疵品從不同角度拍的多張照」被分散到 train 和 test,或同一段影片的相鄰幀跨集——它們幾乎相同,等於讓模型「考過考古題」。<em>避免</em>:以「物件/場景/影片」為單位整組切分,不要以「單張圖」為單位。</li>
+                <li><strong>② 對全部資料做增強/正規化後才切分。</strong>這會把測試集的統計資訊洩漏進訓練。<em>避免</em>:永遠「先切分,再 fit 前處理」,而且增強只給訓練集。</li>
+                <li><strong>③ 反覆用測試集調參。</strong>每調一次參數就偷看一次測試集,等於慢慢對測試集過擬合,測試分數失去意義。<em>避免</em>:調參只准用驗證集;測試集從頭到尾碰一次。</li>
+              </ul>
+              <p>核心心法和第 38 章完全一致:<strong>任何「向資料學習」的步驟,都只能用訓練集去 fit,再套用到 val/test。</strong>違反一次,做出來的高分都是自欺欺人。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 67.7 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>承上,你要把訓練好的健身計數器模型部署成一個能即時數二頭彎舉的 demo。
+          (a) 用「肩-肘-腕」三點 + 狀態機,寫出計數的核心邏輯(用前面的 <code>angle</code> 函式)。
+          (b) 說明你為什麼用「不同的上下門檻」,以及它防止了什麼問題。
+          (c) 若即時 FPS 太低、畫面卡頓,提出兩個最佳化方向。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">stage = 'up'      # 初始假設手臂打直
+count = 0
+
+# 每一幀:由 MediaPipe Pose 取得 肩 sh、肘 el、腕 wr 三點(已轉成像素座標的向量)
+theta = angle(sh, el, wr)            # 手肘角度
+
+if theta &lt; 40 and stage == 'up':    # 從打直 → 彎到夠低
+    stage = 'down'
+elif theta &gt; 160 and stage == 'down':  # 從彎起 → 完全打直,完成一次
+    stage = 'up'
+    count += 1
+    print('完成第', count, '下')</code></pre>
+              <p><strong>(b)</strong> 用兩個不同門檻(40° 進「下」、160° 才回「上」)是<strong>遲滯(hysteresis)</strong>設計。
+              若只用單一門檻(如 90°),當角度在 90° 附近<strong>抖動</strong>(關鍵點本就有雜訊),狀態會反覆橫跳、瘋狂誤計數。
+              拉開上下門檻,角度必須「真的彎下去、又真的打直」才切換一次,計數才穩定、不漏不重。</p>
+              <p><strong>(c)</strong> 任選兩個:① <strong>降低輸入解析度</strong>或選更輕的模型;② <strong>跳幀</strong>(不是每幀都跑姿態估計,中間用上一幀結果);
+              ③ 用<strong>執行緒分離</strong>擷取與推論,避免互相等待;④ 過濾低 <code>visibility</code> 的關鍵點、對角度做<strong>平滑</strong>(移動平均)減少抖動,順帶減少誤計數。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>把這一章串起來</h2>
+      <p>我們從「相機只認得像素、認不得意義」出發,一路走到能偵測、分割、辨識人臉、讀文字、並把模型變成產品。回顧這趟旅程的路標:</p>
+      <ul>
+        <li><strong>核心翻轉</strong>:從「人手工設計特徵(HOG)+ 分類器(SVM)」,翻轉成 CNN 的<strong>端到端</strong>學習——連「該抽什麼特徵」都讓機器自己學。第 65、66 章那種人設計的「核」,變成了訓練學出來的核。</li>
+        <li><strong>CNN</strong> 靠卷積的三個點子適配影像:<strong>局部連接、參數共享、層層抽象</strong>(邊緣→紋理→部件→物件)。用 PyTorch 寫出 <code>nn.Module</code> 與訓練迴圈四步,而 <code>loss.backward()</code> 背後就是第 12、38 章的<strong>鏈鎖法則 + 梯度下降</strong>。</li>
+        <li><strong>遷移學習</strong>是小資料落地的關鍵:凍結預訓練骨幹、只換尾端;搭配資料增強。資料洩漏的鐵律(第 38 章)在影像上化身為「增強只給訓練集、同物件別跨集」。</li>
+        <li><strong>物件偵測</strong>:分類/偵測/分割的層級;YOLO「一次看全圖、格點預測」的單階段思想;以及 IoU、NMS、mAP 三個必懂指標。</li>
+        <li><strong>影像分割</strong>:語意 vs 實例;U-Net 用編碼-解碼 + skip connection 兼顧「理解」與「定位」;SAM 點一下就切。評估用 IoU/Dice 而非準確率。</li>
+        <li><strong>人臉與姿態</strong>:辨識 = 比 embedding 向量的距離(呼應第 54 章);MediaPipe 的關鍵點(注意 BGR/RGB 與歸一化座標兩坑);健身計數器 = 三點算角度 + 帶遲滯的狀態機。</li>
+        <li><strong>OCR</strong> 的偵測+辨識兩階段,以及「前處理常比換模型更有效」。</li>
+        <li><strong>部署</strong>:量化、半精度、ONNX 加速;GPU 之所以快是因為矩陣運算的資料平行(第 43、48 章);用 Streamlit/Gradio 做 demo。</li>
+        <li><strong>倫理</strong>:人臉的隱私與偏見、深偽——鏡頭對準的是真實的人(第 41 章)。</li>
+      </ul>
+      <p>
+        如果你讀完<a href="38-machine-learning.html">第 38 章</a>再讀完這一章,應該會有一個踏實的領悟:
+        <strong>影像辨識不是另一門新魔法,它就是機器學習,只是換上了適合影像的零件(卷積)</strong>。
+        假設函數、損失、梯度下降、泛化、過擬合、資料洩漏——這些第 38 章的血脈,在這裡一條都沒少,只是流過了一個更深、更專為影像而生的網路。
+        掌握了這層理解,你面對任何視覺模型,都不再是看魔術的觀眾,而是知道引擎怎麼轉、也知道何時該為它的決定負責的工程師。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">📚</div>
+        <div class="body">
+          <span class="c-title">想更深入?延伸資源</span>
+          <p>本章的 PyTorch 部分,最好的起點是 <a href="https://pytorch.org/tutorials/">PyTorch 官方教學</a>(尤其 "Deep Learning with PyTorch: A 60 Minute Blitz" 與 CIFAR-10 影像分類教學)。
+          物件偵測與分割,直接讀 <a href="https://docs.ultralytics.com/">Ultralytics YOLO 官方文件</a>——它把推論、訓練自訂資料、匯出 ONNX 一條龍都寫得清楚好上手。
+          想把理論底子打厚,史丹佛的 <a href="https://cs231n.stanford.edu/">CS231n:Convolutional Neural Networks for Visual Recognition</a> 是公認的經典課程,把 CNN、反向傳播、各種架構講得既深又清楚。
+          本章用到的微積分(梯度下降、鏈鎖法則)在<a href="12-calculus.html">第 12 章</a>、機器學習基礎(損失、過擬合、評估、資料洩漏)在<a href="38-machine-learning.html">第 38 章</a>、
+          向量與線性代數(embedding)在<a href="54-linear-algebra.html">第 54 章</a>、平行與 GPU 在<a href="43-parallel.html">第 43 章</a>、倫理在<a href="41-ethics.html">第 41 章</a>——它們是讓你把視覺學「深」的真正地基。
+          最後,本章的精神承襲一套「成果驅動」的影像辨識課程:每個模組都以一個能跑、能展示的旗艦專題收尾(手寫數字分類、自訂偵測器、健身計數器、車牌辨識、可分享的 Web App)——學視覺,動手做出東西,才是真的學會。</p>
+        </div>
+      </div>
+
+    

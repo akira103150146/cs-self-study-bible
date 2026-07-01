@@ -1,0 +1,1072 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>手刻最小 RAG · CS 自學聖經</title>
+<meta name="description" content="從零打造最小 RAG(檢索增強生成)系統:切塊、嵌入、餘弦相似度搜尋、手刻 in-memory VectorStore 與 rag_answer,讓你的 agent 能檢索私有文件、給出帶引用的誠實回答。">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;700&family=Noto+Sans+TC:wght@400;700&family=Lora:ital,wght@0,400;0,600;0,700;1,400&family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <main class="main">
+    <article class="content">
+      <div class="eyebrow">第二二部 · 動手打造 LLM Agent</div>
+      <h1>手刻最小 RAG</h1>
+      <p class="subtitle">LLM 不知道你的私有資料、也不知道昨天發生的事——而且它還可能用充滿自信的語氣告訴你假答案。RAG(Retrieval-Augmented Generation,檢索增強生成)是讓 AI 先「查書」再「開口」的工程解法。這一章,我們從零手刻它。</p>
+      <div class="byline">
+        <span class="tag">第 96 章</span>
+        <span>閱讀時間 ≈ 65 分鐘</span>
+        <span>難度:★★★★☆</span>
+      </div>
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>RAG(檢索增強生成)解決了 LLM 的哪些根本限制,以及它的三個核心步驟</li>
+          <li>嵌入(embedding)如何把文字變成高維向量,以及如何用 Ollama 在本地取得嵌入</li>
+          <li>餘弦相似度(cosine similarity)如何衡量語意接近度,以及在 numpy 裡最小的計算方式</li>
+          <li>切塊(chunking)策略——為何要切、切多大、重疊(overlap)的作用</li>
+          <li>從零手刻 in-memory <code>VectorStore</code>:定義 <code>add(text, metadata)</code> 與 <code>search(query, k) -&gt; list</code> 介面</li>
+          <li>從零手刻 <code>rag_answer(client, store, query) -&gt; str</code>:retrieve → augment → generate,附帶引用</li>
+          <li>RAG 的誠實邊界:能改善準確率,但無法完全消除 LLM 幻覺</li>
+        </ul>
+      </div>
+
+      <h2>LLM 的盲區:私有資料與「一本正經的幻覺」</h2>
+      <p>
+        假設你正在寫一個幫同事查公司內部文件的 agent。你心想:「直接問 LLM 就好了吧?」
+        然後你測了一下——模型給了一個聽起來完全合理的答案,卻和你的內部規定完全不符。
+        它沒有說「我不知道」,它說的是「根據業界標準做法……」。
+      </p>
+      <p>
+        這就是 LLM 的兩個根本限制在同一句話裡同時發生:
+      </p>
+      <ul>
+        <li><strong>知識截止(knowledge cutoff)</strong>:模型只知道訓練資料截止日前的資訊。
+        你的公司內部規範、昨天的新聞、上週才更新的 API 文件——它統統不知道。</li>
+        <li><strong>幻覺(hallucination)</strong>:在不確定時,模型不會說「我不知道」,
+        而是「預測最像樣的下一個 token」——這往往是一個聽起來自信但其實是虛構的答案。
+        (這個機制在第 93 章《從零打造 GPT》裡有完整說明。)</li>
+      </ul>
+      <p>
+        RAG(Retrieval-Augmented Generation,檢索增強生成)是目前業界最廣泛使用的補救方案。
+        它的核心點子很簡單:在你向 LLM 提問之前,先從你的文件庫裡找出最相關的幾段文字,
+        然後把這些文字塞進提示裡,讓 LLM「依據這些資料回答」——而不是憑空猜測。
+      </p>
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">RAG 的根本邏輯</span>
+          <p>RAG 不是讓 LLM 「記住更多東西」——而是在每次呼叫前,動態地把相關知識放進它的 context window,
+          讓它有「依據」可以回答。這是一種工程補丁,不是讓模型變聰明的方法。</p>
+        </div>
+      </div>
+
+      <h2>RAG 的核心點子:先檢索,再增強,最後生成</h2>
+      <p>
+        RAG 的完整流程只有三個步驟,縮寫就是它的名字本身:
+      </p>
+      <ol>
+        <li><strong>Retrieval(檢索)</strong>:拿使用者的問題去向量資料庫搜尋,找出語意最相近的 k 個文件片段。</li>
+        <li><strong>Augmentation(增強)</strong>:把這些片段拼接成「參考資料」,連同原本的問題一起放進提示。</li>
+        <li><strong>Generation(生成)</strong>:把增強後的提示送給 LLM,讓它「依據資料」生成答案。</li>
+      </ol>
+      <p>
+        但在能夠「檢索」之前,你需要先把文件庫「索引化」——也就是把所有文件切成片段、算出嵌入向量、存進向量資料庫。
+        下面的圖把完整流程分成「離線索引」與「線上查詢」兩個階段:
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 760 380" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="arr" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#8a929b"/>
+    </marker>
+    <marker id="arr-teal" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#2f6f6a"/>
+    </marker>
+    <marker id="arr-purple" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#8b5cf6"/>
+    </marker>
+  </defs>
+
+  <!-- 離線索引區 -->
+  <rect x="10" y="10" width="360" height="160" rx="12" fill="#f0f9f8" stroke="#2f6f6a" stroke-width="1.5" stroke-dasharray="6,3"/>
+  <text x="190" y="32" text-anchor="middle" font-size="12" fill="#2f6f6a" font-weight="700">離線索引(Index,只跑一次或定期更新)</text>
+
+  <!-- 文件 -->
+  <rect x="28" y="50" width="90" height="50" rx="8" fill="#e3efed" stroke="#2f6f6a" stroke-width="1.5"/>
+  <text x="73" y="73" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">私有文件</text>
+  <text x="73" y="90" text-anchor="middle" font-size="10" fill="#4a5159">PDF / Markdown</text>
+
+  <line x1="118" y1="75" x2="148" y2="75" stroke="#8a929b" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- 切塊 -->
+  <rect x="150" y="50" width="80" height="50" rx="8" fill="#fff3e8" stroke="#b4541f" stroke-width="1.5"/>
+  <text x="190" y="73" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">Chunking</text>
+  <text x="190" y="90" text-anchor="middle" font-size="10" fill="#4a5159">切塊</text>
+
+  <line x1="230" y1="75" x2="260" y2="75" stroke="#8a929b" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- 嵌入 -->
+  <rect x="262" y="50" width="88" height="50" rx="8" fill="#ede4fb" stroke="#8b5cf6" stroke-width="1.5"/>
+  <text x="306" y="73" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">Embedding</text>
+  <text x="306" y="90" text-anchor="middle" font-size="10" fill="#4a5159">向量化</text>
+
+  <line x1="306" y1="100" x2="306" y2="128" stroke="#8a929b" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- 向量資料庫 -->
+  <rect x="140" y="130" width="200" height="30" rx="8" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="240" y="150" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">VectorStore(向量資料庫)</text>
+
+  <!-- 線上查詢區 -->
+  <rect x="390" y="10" width="360" height="350" rx="12" fill="#fdf5ff" stroke="#8b5cf6" stroke-width="1.5" stroke-dasharray="6,3"/>
+  <text x="570" y="32" text-anchor="middle" font-size="12" fill="#8b5cf6" font-weight="700">線上查詢(每次使用者提問)</text>
+
+  <!-- 使用者查詢 -->
+  <rect x="408" y="50" width="90" height="40" rx="8" fill="#ede4fb" stroke="#8b5cf6" stroke-width="1.5"/>
+  <text x="453" y="68" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2328">使用者查詢</text>
+  <text x="453" y="83" text-anchor="middle" font-size="10" fill="#4a5159">query</text>
+
+  <line x1="498" y1="70" x2="528" y2="70" stroke="#8b5cf6" stroke-width="1.5" marker-end="url(#arr-purple)"/>
+
+  <!-- 嵌入查詢 -->
+  <rect x="530" y="50" width="80" height="40" rx="8" fill="#ede4fb" stroke="#8b5cf6" stroke-width="1.5"/>
+  <text x="570" y="68" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2328">Embedding</text>
+  <text x="570" y="83" text-anchor="middle" font-size="10" fill="#4a5159">查詢向量化</text>
+
+  <line x1="570" y1="90" x2="570" y2="118" stroke="#8b5cf6" stroke-width="1.5" marker-end="url(#arr-purple)"/>
+
+  <!-- 相似度搜尋 -->
+  <rect x="490" y="120" width="160" height="40" rx="8" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="570" y="138" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2328">餘弦相似度搜尋</text>
+  <text x="570" y="153" text-anchor="middle" font-size="10" fill="#4a5159">取 top-k 相關片段</text>
+
+  <line x1="570" y1="160" x2="570" y2="188" stroke="#2f6f6a" stroke-width="1.5" marker-end="url(#arr-teal)"/>
+
+  <!-- 增強提示 -->
+  <rect x="460" y="190" width="220" height="50" rx="8" fill="#fff3e8" stroke="#b4541f" stroke-width="1.5"/>
+  <text x="570" y="212" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2328">Augmented Prompt</text>
+  <text x="570" y="228" text-anchor="middle" font-size="10" fill="#4a5159">「參考資料: ... 問題: query」</text>
+
+  <line x1="570" y1="240" x2="570" y2="268" stroke="#b4541f" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- LLM -->
+  <rect x="490" y="270" width="160" height="40" rx="8" fill="#ffeaea" stroke="#c0392b" stroke-width="1.5"/>
+  <text x="570" y="292" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">LLMClient.chat()</text>
+  <text x="570" y="307" text-anchor="middle" font-size="10" fill="#4a5159">第 94 章介面</text>
+
+  <line x1="570" y1="310" x2="570" y2="338" stroke="#c0392b" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- 答案 -->
+  <rect x="480" y="340" width="180" height="0" rx="0" fill="none"/>
+  <text x="570" y="355" text-anchor="middle" font-size="12" font-weight="700" fill="#2f6f6a">帶引用來源的答案</text>
+
+  <!-- 連接向量資料庫到相似度搜尋 -->
+  <line x1="370" y1="145" x2="490" y2="145" stroke="#2f6f6a" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arr-teal)"/>
+</svg>
+        <figcaption>圖 96-1:RAG 完整流程。左側「離線索引」只需跑一次(或定期更新);右側「線上查詢」在每次使用者提問時執行——先嵌入查詢、搜尋向量資料庫、組增強提示、呼叫 LLM。</figcaption>
+      </div>
+
+      <h2>嵌入(Embedding):把文字變成可搜尋的向量</h2>
+      <p>
+        要做語意搜尋,你需要把文字轉成數字——而且是一種「語意相近的文字,向量也相近」的數字。
+        這就是<strong>嵌入向量(embedding vector)</strong>:把一段文字壓縮成一個高維實數向量(通常 768 到 4096 維)。
+        語意相近的文字,嵌入向量的方向也相近;語意無關的文字,向量方向大相徑庭。
+      </p>
+      <p>
+        第 94 章《手刻你的 LLM client》裡提到 embedding 是 LLM 的另一個能力——
+        這一章我們就正式用上它。取得嵌入最簡單的本地方式,是讓 Ollama 跑一個專門的嵌入模型:
+      </p>
+      <pre><code class="language-bash"># 下載嵌入模型(nomic-embed-text,384 維,輕量快速)
+ollama pull nomic-embed-text</code></pre>
+      <p>
+        Ollama 的嵌入 API 端點是 <code>/api/embed</code>:
+      </p>
+      <pre><code class="language-python">import requests
+import numpy as np
+
+def get_embedding(text: str,
+                  model: str = "nomic-embed-text",
+                  base_url: str = "http://localhost:11434") -&gt; list[float]:
+    """呼叫 Ollama /api/embed 取得文字的嵌入向量。
+    前提:ollama serve 執行中,且已 ollama pull nomic-embed-text。
+    回傳:長度 384 的 float 串列(nomic-embed-text 的向量維度)。
+    """
+    resp = requests.post(
+        f"{base_url}/api/embed",
+        json={"model": model, "input": text},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    # Ollama /api/embed 回傳 {"embeddings": [[...]]},取第一個
+    return resp.json()["embeddings"][0]
+
+
+# 快速測試
+if __name__ == "__main__":
+    v = get_embedding("台灣的首都")
+    print(f"向量維度:{len(v)}")   # 384
+    print(f"前 5 個元素:{v[:5]}")</code></pre>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">嵌入模型 vs 生成模型</span>
+          <p>嵌入模型(如 <code>nomic-embed-text</code>)和生成模型(如 <code>llama3.2</code>)是不同的模型。
+          嵌入模型只做「文字 → 向量」,速度快、耗資源少;生成模型做「提示 → 文字」,能力強但較重。
+          RAG 系統通常兩者都需要:嵌入模型負責索引與搜尋,生成模型負責最後的回答。</p>
+        </div>
+      </div>
+
+      <h2>餘弦相似度:衡量語意接近度</h2>
+      <p>
+        有了嵌入向量,我們需要一個「兩個向量有多像」的衡量標準。
+        常見的選擇是<strong>餘弦相似度(cosine similarity)</strong>——它衡量的是兩個向量之間的<em>角度</em>,
+        而不是距離。向量方向完全一致時,餘弦相似度為 1;正交(無關)時為 0;方向相反時為 -1。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">餘弦相似度在第 54 章已教</span>
+          <p>點積、向量範數、餘弦相似度的數學定義與幾何直覺在
+          <a href="54-linear-algebra.html">第 54 章《線性代數》</a>有完整推導。
+          這裡我們直接使用公式,只給最小程式碼實作。</p>
+        </div>
+      </div>
+
+      <p>
+        餘弦相似度公式:
+      </p>
+      $$\text{cosine\_similarity}(\mathbf{a}, \mathbf{b}) = \frac{\mathbf{a} \cdot \mathbf{b}}{\|\mathbf{a}\|\|\mathbf{b}\|}$$
+      <p>
+        用 numpy 實作只需幾行:
+      </p>
+      <pre><code class="language-python">import numpy as np
+
+def cosine_similarity(a: list[float], b: list[float]) -&gt; float:
+    """計算兩個向量的餘弦相似度,回傳 -1.0 到 1.0 之間的浮點數。"""
+    va = np.array(a, dtype=np.float32)
+    vb = np.array(b, dtype=np.float32)
+    norm_a = np.linalg.norm(va)
+    norm_b = np.linalg.norm(vb)
+    if norm_a == 0.0 or norm_b == 0.0:
+        return 0.0                      # 零向量無法計算相似度
+    return float(va @ vb / (norm_a * norm_b))   # @ 是矩陣/向量乘法(點積)
+
+
+# 直覺驗證:語意相同的句子,相似度應接近 1
+if __name__ == "__main__":
+    emb_fn = get_embedding
+    v1 = emb_fn("台灣的首都在哪裡")
+    v2 = emb_fn("台北是台灣的首都嗎")
+    v3 = emb_fn("如何煮出完美的義大利麵")
+    print(f"相似問題:{cosine_similarity(v1, v2):.4f}")   # 預期 &gt; 0.8
+    print(f"不相關:{cosine_similarity(v1, v3):.4f}")      # 預期 &lt; 0.4</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">為何用餘弦,不用歐氏距離?</span>
+          <p>嵌入向量的「長度」(norm)和語意無關——同一段文字加了幾個標點符號,向量長度可能不同,
+          但語意不變。餘弦相似度只看<em>方向</em>不看長度,因此對文字長短更穩健。
+          這也是為什麼向量資料庫幾乎都預設用餘弦相似度(或等效的內積搜尋)。</p>
+        </div>
+      </div>
+
+      <h2>切塊(Chunking):讓長文件變得可搜尋</h2>
+      <p>
+        你不能把一整份 100 頁的 PDF 算成一個嵌入向量——這樣的向量是對所有內容的「平均」,
+        搜尋時幾乎找不到特定細節。正確的做法是先把長文件<strong>切塊(chunk)</strong>:
+        把它分成一個個小片段,每個片段獨立算嵌入、獨立存進向量資料庫。
+      </p>
+      <p>
+        切塊的幾個關鍵參數:
+      </p>
+      <ul>
+        <li><strong>chunk_size(塊大小)</strong>:每個片段的目標長度。太短 → 上下文不足,LLM 看不懂;
+        太長 → 向量「平均掉」了細節,搜尋準確度下降。實務上常用 200–500 字元(或 100–200 tokens)。</li>
+        <li><strong>overlap(重疊)</strong>:相鄰兩塊共享多少字元。沒有重疊,跨塊的概念可能被切斷;
+        有重疊(通常 10–20% 的 chunk_size),讓邊界附近的資訊仍能被找到。</li>
+      </ul>
+      <p>
+        最簡單的切塊方法是按固定字元數切、帶重疊:
+      </p>
+      <pre><code class="language-python">def chunk_text(text: str,
+               chunk_size: int = 300,
+               overlap: int = 50) -&gt; list[str]:
+    """把長文字切成帶重疊的固定大小塊。
+    chunk_size: 每塊最大字元數
+    overlap:    前後兩塊重疊的字元數(避免切斷邊界概念)
+    """
+    chunks = []
+    start = 0
+    while start &lt; len(text):
+        end = start + chunk_size
+        chunks.append(text[start:end])
+        start += chunk_size - overlap   # 往前推 chunk_size - overlap
+    return chunks
+
+
+# 使用範例
+sample = "Python 是一種直譯式、高階、通用的程式語言…(接下去很長的文章)" * 10
+pieces = chunk_text(sample, chunk_size=200, overlap=40)
+print(f"共切出 {len(pieces)} 塊,各塊長度:{[len(p) for p in pieces]}")</code></pre>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">按字元切不一定對齊語意邊界</span>
+          <p>固定字元切塊簡單好實作,但可能把一個段落或一句話切斷在中間。
+          更進階的做法是「按段落 / 句子切」或「遞迴分割」(先試大塊、太長再切小)。
+          本章先掌握最小可用版本;真實系統可考慮 LangChain 的 <code>RecursiveCharacterTextSplitter</code> 或
+          Llama-Index 的 <code>SentenceSplitter</code>。</p>
+        </div>
+      </div>
+
+      <h2>手刻 VectorStore:in-memory 向量資料庫</h2>
+      <p>
+        現在我們有了嵌入函式和切塊函式,可以開始手刻這一章的核心產物:
+        一個最小的 in-memory <strong>向量資料庫(VectorStore)</strong>。
+        它只需要兩個方法:
+      </p>
+      <ul>
+        <li><code>add(text, metadata)</code>:把一段文字加進資料庫——自動算嵌入、連同 metadata 一起存。</li>
+        <li><code>search(query, k) -&gt; list</code>:用查詢字串搜尋——自動算查詢的嵌入,再算所有文件的餘弦相似度,回傳 top-k 結果。</li>
+      </ul>
+
+      <div class="diagram">
+<svg viewBox="0 0 700 300" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="arr2" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#8a929b"/>
+    </marker>
+    <marker id="arr-teal2" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#2f6f6a"/>
+    </marker>
+  </defs>
+
+  <!-- 標題 -->
+  <text x="350" y="25" text-anchor="middle" font-size="14" font-weight="700" fill="#1f2328">向量空間:餘弦相似度 top-k 搜尋示意</text>
+
+  <!-- 坐標軸 -->
+  <line x1="120" y1="240" x2="480" y2="240" stroke="#c0c8d0" stroke-width="1.5"/>
+  <line x1="300" y1="60" x2="300" y2="260" stroke="#c0c8d0" stroke-width="1.5"/>
+  <text x="490" y="244" font-size="10" fill="#8a929b">dim 1</text>
+  <text x="302" y="55" font-size="10" fill="#8a929b">dim 2</text>
+  <text x="300" y="257" text-anchor="middle" font-size="9" fill="#c0c8d0">原點</text>
+
+  <!-- 文件向量 d1 (最近) -->
+  <line x1="300" y1="240" x2="420" y2="110" stroke="#2f6f6a" stroke-width="2" marker-end="url(#arr-teal2)"/>
+  <text x="430" y="105" font-size="11" fill="#2f6f6a" font-weight="700">d1 ★</text>
+  <text x="430" y="120" font-size="9" fill="#2f6f6a">cos≈0.95</text>
+
+  <!-- 文件向量 d2 (次近) -->
+  <line x1="300" y1="240" x2="400" y2="145" stroke="#2f6f6a" stroke-width="2" marker-end="url(#arr-teal2)"/>
+  <text x="408" y="142" font-size="11" fill="#2f6f6a" font-weight="700">d2 ★</text>
+  <text x="408" y="156" font-size="9" fill="#2f6f6a">cos≈0.88</text>
+
+  <!-- 文件向量 d3 (較遠) -->
+  <line x1="300" y1="240" x2="220" y2="105" stroke="#8a929b" stroke-width="1.5" marker-end="url(#arr2)"/>
+  <text x="200" y="100" font-size="11" fill="#8a929b">d3</text>
+  <text x="165" y="114" font-size="9" fill="#8a929b">cos≈0.31</text>
+
+  <!-- 文件向量 d4 (不相關) -->
+  <line x1="300" y1="240" x2="170" y2="200" stroke="#c0c8d0" stroke-width="1.5" marker-end="url(#arr2)"/>
+  <text x="150" y="196" font-size="11" fill="#c0c8d0">d4</text>
+  <text x="130" y="210" font-size="9" fill="#c0c8d0">cos≈0.12</text>
+
+  <!-- 查詢向量 -->
+  <line x1="300" y1="240" x2="450" y2="90" stroke="#b4541f" stroke-width="2.5" stroke-dasharray="5,3" marker-end="url(#arr2)"/>
+  <text x="455" y="87" font-size="12" font-weight="700" fill="#b4541f">query</text>
+
+  <!-- 角度弧線(query 與 d1) -->
+  <path d="M 380 155 A 60 60 0 0 0 410 130" fill="none" stroke="#b4541f" stroke-width="1" stroke-dasharray="3,2"/>
+  <text x="395" y="148" font-size="9" fill="#b4541f">θ₁ 小</text>
+
+  <!-- 圖例 -->
+  <rect x="530" y="80" width="140" height="90" rx="6" fill="#f8f9fa" stroke="#c0c8d0" stroke-width="1"/>
+  <line x1="545" y1="100" x2="575" y2="100" stroke="#b4541f" stroke-width="2" stroke-dasharray="5,3"/>
+  <text x="582" y="104" font-size="10" fill="#1f2328">查詢向量</text>
+  <line x1="545" y1="118" x2="575" y2="118" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="582" y="122" font-size="10" fill="#1f2328">top-k 結果(★)</text>
+  <line x1="545" y1="136" x2="575" y2="136" stroke="#8a929b" stroke-width="1.5"/>
+  <text x="582" y="140" font-size="10" fill="#1f2328">低相似度文件</text>
+  <text x="540" y="162" font-size="9" fill="#4a5159">餘弦越大=角度越小=越相近</text>
+</svg>
+        <figcaption>圖 96-2:向量空間示意。query 向量(橘虛線)與 d1、d2 的角度最小(餘弦相似度最高),因此被 top-k 搜尋選中(★)。d3、d4 方向差距較大,相似度低。注意:真實嵌入是 384–4096 維,這裡用 2D 示意。</figcaption>
+      </div>
+
+      <pre><code class="language-python">from __future__ import annotations
+import numpy as np
+import requests
+
+
+# ── 嵌入函式(連接 Ollama) ─────────────────────────────────────────────────────
+
+def get_embedding(text: str,
+                  model: str = "nomic-embed-text",
+                  base_url: str = "http://localhost:11434") -&gt; list[float]:
+    """呼叫 Ollama /api/embed 取得嵌入向量。"""
+    resp = requests.post(
+        f"{base_url}/api/embed",
+        json={"model": model, "input": text},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    return resp.json()["embeddings"][0]
+
+
+# ── 餘弦相似度 ────────────────────────────────────────────────────────────────
+
+def cosine_similarity(a: list[float], b: list[float]) -&gt; float:
+    """計算兩向量的餘弦相似度(值域 -1 到 1)。"""
+    va = np.array(a, dtype=np.float32)
+    vb = np.array(b, dtype=np.float32)
+    norm_a = np.linalg.norm(va)
+    norm_b = np.linalg.norm(vb)
+    if norm_a == 0.0 or norm_b == 0.0:
+        return 0.0
+    return float(va @ vb / (norm_a * norm_b))
+
+
+# ── VectorStore ───────────────────────────────────────────────────────────────
+
+class VectorStore:
+    """最小 in-memory 向量資料庫。
+    介面契約(後續章節可依賴):
+      add(text: str, metadata: dict | None = None) -&gt; None
+      search(query: str, k: int = 3) -&gt; list[dict]
+         回傳 list of {"text": str, "score": float, "metadata": dict}
+         按 score 遞減排序,最多 k 個。
+    """
+
+    def __init__(self, embed_fn=get_embedding):
+        self._docs: list[tuple[str, list[float], dict]] = []
+        # _docs 每個元素是 (text, embedding, metadata)
+        self._embed = embed_fn
+
+    def add(self, text: str, metadata: dict | None = None) -&gt; None:
+        """新增一筆文字到向量資料庫。
+        自動計算嵌入向量並存入記憶體。
+        metadata 可存任意資訊(例如來源檔名、頁碼)。
+        """
+        emb = self._embed(text)
+        self._docs.append((text, emb, metadata or {}))
+
+    def search(self, query: str, k: int = 3) -&gt; list[dict]:
+        """語意搜尋:回傳與 query 最相似的 top-k 文件片段。
+        回傳格式:list of {"text": str, "score": float, "metadata": dict}
+        """
+        if not self._docs:
+            return []
+        q_emb = self._embed(query)
+        scored = []
+        for text, emb, meta in self._docs:
+            score = cosine_similarity(q_emb, emb)
+            scored.append({"text": text, "score": score, "metadata": meta})
+        # 按相似度遞減排序,取前 k 個
+        scored.sort(key=lambda x: x["score"], reverse=True)
+        return scored[:k]
+
+    def __len__(self) -&gt; int:
+        return len(self._docs)
+
+
+# ── 端對端使用範例 ────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    store = VectorStore()
+
+    # 把幾段文字加進向量資料庫
+    docs = [
+        ("Python 的 GIL(全局直譯器鎖)限制了多執行緒的真正並行。", {"source": "python_faq.md"}),
+        ("asyncio 是 Python 的非同步 I/O 框架,用於高並發 I/O 密集型任務。", {"source": "python_faq.md"}),
+        ("機器學習模型訓練時需要大量 GPU 記憶體。", {"source": "ml_notes.md"}),
+    ]
+    for text, meta in docs:
+        store.add(text, meta)
+
+    print(f"已存入 {len(store)} 筆文件")
+
+    # 查詢
+    results = store.search("Python 並發程式設計", k=2)
+    for r in results:
+        print(f"  [score={r['score']:.4f}] {r['text'][:40]}…")</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">VectorStore 介面契約(後續章節依賴此定義)</span>
+          <p><code>VectorStore.add(text: str, metadata: dict | None = None) -&gt; None</code>:把文字加進向量庫,自動計算並存嵌入。<br>
+          <code>VectorStore.search(query: str, k: int = 3) -&gt; list[dict]</code>:語意搜尋,回傳按相似度排序的 top-k 結果,每筆含 <code>text</code>、<code>score</code>、<code>metadata</code>。</p>
+        </div>
+      </div>
+
+      <h2>升級儲存:SQLite 持久化與 FAISS 加速</h2>
+      <p>
+        上面的 <code>VectorStore</code> 用 Python 串列存在記憶體裡——程式一關,所有資料就消失了。
+        而且 <code>search</code> 是線性掃描(每次都算所有文件的相似度),文件多了就很慢。
+        這一節介紹兩個升級方向:
+      </p>
+
+      <h3>SQLite 持久化向量庫</h3>
+      <p>
+        把嵌入向量序列化成 JSON 存進 SQLite,就能跨執行持久保存。
+        對幾千筆以下的文件,這個方法完全夠用:
+      </p>
+      <pre><code class="language-python">import sqlite3
+import json
+
+class SQLiteVectorStore(VectorStore):
+    """基於 SQLite 的持久化向量資料庫(適合小到中等規模)。
+    繼承 VectorStore,覆寫 add/search,在磁碟上保存嵌入向量。
+    """
+
+    def __init__(self, db_path: str = "vector_store.db", embed_fn=get_embedding):
+        # 不呼叫父類別 __init__,因為儲存後端完全不同
+        self._embed = embed_fn
+        self.conn = sqlite3.connect(db_path)
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS docs (
+                id       INTEGER PRIMARY KEY AUTOINCREMENT,
+                text     TEXT    NOT NULL,
+                embedding TEXT   NOT NULL,
+                metadata TEXT    NOT NULL DEFAULT '{}'
+            )
+        """)
+        self.conn.commit()
+
+    def add(self, text: str, metadata: dict | None = None) -&gt; None:
+        emb = self._embed(text)
+        self.conn.execute(
+            "INSERT INTO docs (text, embedding, metadata) VALUES (?, ?, ?)",
+            (text, json.dumps(emb), json.dumps(metadata or {})),
+        )
+        self.conn.commit()
+
+    def search(self, query: str, k: int = 3) -&gt; list[dict]:
+        q_emb = self._embed(query)
+        rows = self.conn.execute(
+            "SELECT text, embedding, metadata FROM docs"
+        ).fetchall()
+        scored = []
+        for text, emb_json, meta_json in rows:
+            emb = json.loads(emb_json)
+            score = cosine_similarity(q_emb, emb)
+            scored.append({
+                "text": text,
+                "score": score,
+                "metadata": json.loads(meta_json),
+            })
+        scored.sort(key=lambda x: x["score"], reverse=True)
+        return scored[:k]
+
+    def __len__(self) -&gt; int:
+        return self.conn.execute("SELECT COUNT(*) FROM docs").fetchone()[0]</code></pre>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">向量檢索 vs 結構化 SQL 查詢</span>
+          <p><a href="37-databases.html">第 37 章《資料庫系統》</a>介紹的 SQL 是「精確匹配與結構化篩選」——
+          你問的是「找出所有 price &lt; 100 的商品」,回答是確定性的。
+          向量搜尋問的是「找出語意最接近『便宜商品』的文件」——回答是統計性的、有誤差的。
+          兩者互補:向量搜尋找「語意相近」,SQL 過濾「精確條件」。
+          真實 RAG 系統常用「混合搜尋」:先用向量搜尋召回候選,再用 SQL / 元資料條件過濾。</p>
+        </div>
+      </div>
+
+      <h3>FAISS:近似最近鄰(ANN)加速</h3>
+      <p>
+        當文件數量達到幾十萬、幾百萬時,線性掃描就太慢了。
+        <strong>FAISS</strong>(Facebook AI Similarity Search)是一個高效能的
+        <strong>近似最近鄰(Approximate Nearest Neighbor,ANN)</strong>搜尋函式庫,
+        能在亞線性時間內找到「幾乎最近」的向量。
+      </p>
+      <pre><code class="language-bash"># 安裝 FAISS(CPU 版)
+pip install faiss-cpu</code></pre>
+      <pre><code class="language-python">import faiss
+import numpy as np
+
+class FAISSVectorStore:
+    """用 FAISS 加速的向量資料庫骨架(概觀示意,非完整實作)。"""
+
+    def __init__(self, dim: int = 384, embed_fn=get_embedding):
+        self._embed = embed_fn
+        self._texts: list[str] = []
+        self._metas: list[dict] = []
+        # IndexFlatIP:內積索引(對 L2 正規化後的向量,內積 == 餘弦相似度)
+        self._index = faiss.IndexFlatIP(dim)
+
+    def add(self, text: str, metadata: dict | None = None) -&gt; None:
+        emb = self._embed(text)
+        vec = np.array([emb], dtype=np.float32)
+        faiss.normalize_L2(vec)         # 正規化 → 內積等同餘弦相似度
+        self._index.add(vec)
+        self._texts.append(text)
+        self._metas.append(metadata or {})
+
+    def search(self, query: str, k: int = 3) -&gt; list[dict]:
+        q_emb = np.array([self._embed(query)], dtype=np.float32)
+        faiss.normalize_L2(q_emb)
+        scores, indices = self._index.search(q_emb, k)  # 回傳 shape (1, k)
+        results = []
+        for score, idx in zip(scores[0], indices[0]):
+            if idx &lt; 0:              # FAISS 找不到時回傳 -1
+                continue
+            results.append({
+                "text":     self._texts[idx],
+                "score":    float(score),
+                "metadata": self._metas[idx],
+            })
+        return results</code></pre>
+      <p>
+        FAISS 的 <code>IndexFlatIP</code> 是精確搜尋;更進階的索引(如 <code>IndexIVFFlat</code>)才是真正的 ANN,
+        能用少量精度損失換來大幅加速。本章不深入 FAISS 內部原理——重點是掌握「向量搜尋的介面是什麼」,
+        底層索引可以換插。
+      </p>
+
+      <h2>手刻 rag_answer:三步走的完整 RAG 函式</h2>
+      <p>
+        現在所有積木都齊了。最後一步:把「第 94 章的 LLMClient」和「這一章的 VectorStore」
+        拼在一起,實作 <code>rag_answer</code>——這一章最重要的對外介面。
+      </p>
+
+      <h3>完整 rag_answer 實作</h3>
+      <pre><code class="language-python">from llm_client import LLMClient, get_client   # 第 94 章的介面
+
+def rag_answer(client: LLMClient,
+               store: VectorStore,
+               query: str,
+               k: int = 3) -&gt; str:
+    """RAG 主函式:retrieve → augment → generate。
+    介面契約(後續章節可依賴):
+      client : LLMClient(第 94 章定義)
+      store  : VectorStore(本章定義)
+      query  : 使用者的問題字串
+      k      : 要檢索的文件片段數量
+      回傳   : 帶引用來源標記的回答字串
+    """
+    # Step 1: Retrieve — 語意搜尋,取 top-k 相關片段
+    docs = store.search(query, k=k)
+
+    if not docs:
+        # 向量庫是空的,降級為純 LLM 回答(並加警告)
+        return client.complete(
+            f"{query}\n\n(注意:知識庫為空,以下為模型自身知識的回答,可能不準確。)"
+        )
+
+    # Step 2: Augment — 把檢索到的片段拼成「參考資料」塊
+    context_parts = []
+    for i, doc in enumerate(docs, 1):
+        source = doc["metadata"].get("source", f"文件{i}")
+        context_parts.append(f"[來源 {i} — {source}]\n{doc['text']}")
+    context = "\n\n".join(context_parts)
+
+    augmented_prompt = f"""請根據以下參考資料回答問題。
+如果參考資料中沒有足夠資訊,請如實說明「資料中未提及」,不要憑空推測。
+在回答中請標明你引用的來源編號(例如「根據來源 1」)。
+
+=== 參考資料 ===
+{context}
+
+=== 問題 ===
+{query}"""
+
+    # Step 3: Generate — 呼叫 LLMClient 生成帶引用的回答
+    return client.chat([{"role": "user", "content": augmented_prompt}])
+
+
+# ── 端對端示範 ─────────────────────────────────────────────────────────────────
+
+def demo():
+    """把幾段技術文件加進 VectorStore,然後用 rag_answer 回答問題。"""
+    store = VectorStore()
+
+    # 模擬一個小型知識庫(實際使用時從檔案讀取並切塊)
+    knowledge = [
+        ("Python 的 asyncio 模組提供事件迴圈(event loop),適合 I/O 密集型並發任務。"
+         "它使用 async/await 語法,讓非同步程式碼看起來像同步。",
+         {"source": "python-async.md", "page": 1}),
+
+        ("Python 的 multiprocessing 模組繞過 GIL,讓 CPU 密集型任務真正並行執行。"
+         "每個 Process 有獨立的記憶體空間,資料需透過 Queue 或 Pipe 傳遞。",
+         {"source": "python-async.md", "page": 2}),
+
+        ("FastAPI 是一個現代的 Python Web 框架,基於 asyncio 與 Starlette 建置,"
+         "支援自動生成 OpenAPI 文件,效能接近 Node.js。",
+         {"source": "web-frameworks.md", "page": 5}),
+
+        ("Rust 的所有權(ownership)系統在編譯期消除資料競爭,不需要 GIL 或垃圾回收器。",
+         {"source": "rust-vs-python.md", "page": 1}),
+    ]
+
+    for text, meta in knowledge:
+        store.add(text, meta)
+
+    client = get_client()   # 第 94 章:有 ANTHROPIC_API_KEY 用 Claude,否則用 Ollama
+
+    questions = [
+        "Python 如何處理 CPU 密集型並行任務?",
+        "asyncio 適合什麼類型的任務?",
+    ]
+    for q in questions:
+        print(f"\n問題:{q}")
+        print(f"回答:{rag_answer(client, store, q, k=2)}")
+        print("-" * 60)
+
+if __name__ == "__main__":
+    demo()</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">rag_answer 介面契約(後續章節依賴此定義)</span>
+          <p><code>rag_answer(client: LLMClient, store: VectorStore, query: str, k: int = 3) -&gt; str</code>:<br>
+          輸入第 94 章的 LLMClient、本章的 VectorStore 與使用者查詢字串;<br>
+          回傳帶引用來源標記的回答字串。
+          內部固定走三步:retrieve → augment → generate。</p>
+        </div>
+      </div>
+
+      <h3>短期記憶 vs 長期記憶</h3>
+      <p>
+        RAG 的 VectorStore 可以扮演 agent 的<strong>長期記憶(long-term memory)</strong>:
+        把知識文件、歷史對話、工具執行結果都 <code>add</code> 進去,下次問問題時就能「想起來」。
+        相對地,LLM 的 context window 是<strong>短期記憶</strong>——只在單次呼叫中有效。
+        把「有意義的長期記憶寫進 VectorStore」,是讓 agent 具備「記憶感」的核心技術。
+      </p>
+      <pre><code class="language-python">def log_to_memory(store: VectorStore,
+                  user_query: str,
+                  assistant_reply: str) -&gt; None:
+    """把這一輪對話存進 VectorStore 作為長期記憶。"""
+    summary = f"用戶問:「{user_query}」,助理回答:「{assistant_reply[:200]}…」"
+    store.add(summary, metadata={"type": "conversation_log"})</code></pre>
+
+      <h2>進階概念:混合檢索、Rerank 與 GraphRAG</h2>
+      <p>
+        最小 RAG 跑起來了。但真實系統常常需要更多:
+      </p>
+      <h3>混合檢索(Hybrid Search):關鍵字 + 向量</h3>
+      <p>
+        純向量搜尋有時會漏掉明確的關鍵字(例如「找所有包含『條款 7.2』的段落」)。
+        <strong>混合檢索</strong>結合傳統關鍵字搜尋(BM25)與向量語意搜尋,再用加權融合算最終分數。
+        Elasticsearch、OpenSearch、Weaviate 等都支援這個模式。
+      </p>
+      <h3>Rerank(重排):讓精準度更高</h3>
+      <p>
+        向量搜尋召回的 top-k 結果有時「看起來相關」但「其實不準」。
+        <strong>Rerank(重排)</strong>在 vector search 之後加一個更精準但較慢的模型,
+        對候選結果重新評分排序。常用工具:Cohere Rerank API、FlashRank(本地)。
+        典型的 RAG pipeline 變成:vector search(top 20) → rerank → top 5 → LLM。
+      </p>
+      <h3>GraphRAG:用知識圖譜加強關聯推理</h3>
+      <p>
+        標準 RAG 把文件當作獨立的「片段」——但如果你的問題需要跨文件推理
+        (「A 與 B 有什麼關係?」「為什麼 X 導致了 Y?」),純向量搜尋就力有未逮。
+        <strong>GraphRAG</strong>(微軟提出)先用 LLM 從文件中抽取「實體 - 關係 - 實體」三元組,
+        建成知識圖譜(knowledge graph),然後圍繞相關節點做圖遍歷再送 LLM。
+        適合需要多跳推理的複雜問答場景,但建置成本也顯著更高。
+      </p>
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">什麼時候需要進階技術?</span>
+          <p>對多數的私有文件問答場景,最小 RAG(本章)就夠用了。
+          只有當你發現「明明文件裡有答案,但 RAG 找不到」或「需要多文件推理」時,才考慮混合檢索或 GraphRAG。
+          優先把基礎做好:選對切塊大小、確認嵌入模型語意對得上查詢、過濾無關文件。</p>
+        </div>
+      </div>
+
+      <h2>RAG 的誠實邊界:能做什麼,不能做什麼</h2>
+      <p>
+        RAG 是非常有用的技術,但業界對它有許多常見的誤解,值得在這裡誠實說清楚。
+      </p>
+      <h3>RAG 能做的</h3>
+      <ul>
+        <li>讓 LLM <strong>依據你的文件</strong>回答問題,而不是憑空猜測。</li>
+        <li>注入<strong>最新資訊</strong>:截止日後的新聞、API 更新都能即時加進向量庫。</li>
+        <li>提供<strong>引用來源</strong>:每個答案都能附上「這段話來自哪裡」的可查證資訊。</li>
+        <li>顯著<strong>降低幻覺率</strong>——在有相關文件的問題上。</li>
+      </ul>
+      <h3>RAG 做不到的</h3>
+      <ul>
+        <li><strong>RAG 無法完全消除幻覺。</strong>如果相關文件沒有被檢索到(切塊太大?語意不匹配?),
+        LLM 仍然可能幻覺。即使文件被找到,LLM 還是可能曲解、斷章取義。
+        「提供了參考資料」≠「答案一定正確」。</li>
+        <li><strong>RAG 依賴嵌入品質。</strong>如果嵌入模型對你的領域語言(法律、醫療、台灣在地用語)
+        語意捕捉不夠好,搜尋結果就會不準確。</li>
+        <li><strong>切塊不當會讓搜尋失效。</strong>塊太大(語意被稀釋)或太小(上下文不足)都會讓 retrieval 效果大打折扣。</li>
+        <li><strong>RAG 不是向量資料庫的萬靈丹。</strong>結構化查詢(「找出所有 2025 年的訂單」)還是用 SQL 更精確。</li>
+      </ul>
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">常見的 RAG 錯誤期待</span>
+          <p>「加了 RAG 就不會幻覺了」——這是錯的。RAG 降低了特定類型的幻覺,但沒有消滅它。
+          你的系統仍然需要對答案做驗證(在關鍵決策場景尤其重要)。
+          誠實地告訴使用者「以下回答基於這幾段文件」,並讓他們能點開查原文,比「相信 AI 說的」更安全。</p>
+        </div>
+      </div>
+
+      <h2>練習</h2>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 96.1 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>
+            修改 <code>chunk_text</code> 函式,讓它接受一個額外的參數 <code>by_sentence: bool = False</code>。
+            當 <code>by_sentence=True</code> 時,改用句子邊界(中文句號 <code>。</code> 或英文 <code>.</code>)切塊,
+            而不是固定字元數。切出來的塊不要超過 <code>chunk_size</code> 個字元;如果單句就超過,則單獨成一塊。
+            然後把同樣一段文字分別用「固定字元切」和「按句子切」兩種方式各切一次,比較哪種方式的切塊邊界更乾淨。
+          </p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">import re
+
+def chunk_text(text: str,
+               chunk_size: int = 300,
+               overlap: int = 50,
+               by_sentence: bool = False) -&gt; list[str]:
+    """切塊函式,支援固定字元與按句子兩種模式。"""
+    if not by_sentence:
+        # 原本的固定字元切法
+        chunks = []
+        start = 0
+        while start &lt; len(text):
+            end = start + chunk_size
+            chunks.append(text[start:end])
+            start += chunk_size - overlap
+        return chunks
+
+    # 按句子切:先拆成句子,再貪婪合併直到超過 chunk_size
+    sentence_endings = re.compile(r"(?&lt;=[。！？.!?])\s*")
+    sentences = sentence_endings.split(text)
+    sentences = [s.strip() for s in sentences if s.strip()]
+
+    chunks = []
+    current = ""
+    for sent in sentences:
+        if len(current) + len(sent) &lt;= chunk_size:
+            current += sent
+        else:
+            if current:
+                chunks.append(current)
+            # 單句超過 chunk_size 時單獨成塊
+            current = sent
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+# 比較兩種切法
+sample = ("Python 的 asyncio 讓你寫出非同步程式碼。"
+          "它基於事件迴圈(event loop)運作。"
+          "當你 await 一個 coroutine,控制權會回到事件迴圈,讓其他任務執行。"
+          "這對 I/O 密集型任務非常有效,例如爬蟲或 API 呼叫。")
+
+fixed  = chunk_text(sample, chunk_size=50, overlap=10, by_sentence=False)
+by_sent = chunk_text(sample, chunk_size=50, overlap=0, by_sentence=True)
+print("固定字元切:", fixed)
+print("按句子切:", by_sent)</code></pre>
+              <p>
+                按句子切的好處:每個塊都是完整的句子,語意不會在句中截斷,嵌入向量更能代表這個句子的意思。
+                代價:塊大小不均勻,有時一塊很短(單句很短)、有時接近 chunk_size(單句很長)。
+                實務上,大多數成熟的框架用「遞迴切塊」:先試按段落切,太長再試按句子切,再太長才按字元切。
+              </p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 96.2 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>
+            為 <code>rag_answer</code> 加上「來源引用標註」的後處理:
+            在函式回傳的字串後面,自動附加一個「--- 參考來源 ---」區塊,
+            列出這次 retrieve 到的所有文件的來源(從 <code>metadata["source"]</code> 取)與相似度分數(保留 4 位小數)。
+            不要改動 LLM 生成的部分,只在結尾附加這個區塊。
+          </p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">def rag_answer_with_citations(client: LLMClient,
+                               store: VectorStore,
+                               query: str,
+                               k: int = 3) -&gt; str:
+    """rag_answer 的加強版:在答案結尾附帶引用來源清單。"""
+    docs = store.search(query, k=k)
+
+    if not docs:
+        answer = client.complete(
+            f"{query}\n\n(注意:知識庫為空,以下為模型自身知識的回答。)"
+        )
+        return answer + "\n\n--- 參考來源 ---\n(無:知識庫為空)"
+
+    context_parts = []
+    for i, doc in enumerate(docs, 1):
+        source = doc["metadata"].get("source", f"未知來源{i}")
+        context_parts.append(f"[來源 {i} — {source}]\n{doc['text']}")
+    context = "\n\n".join(context_parts)
+
+    augmented_prompt = f"""請根據以下參考資料回答問題。
+如果資料中沒有足夠資訊,請如實說明,不要憑空推測。
+請在回答中標明引用的來源編號(例如「根據來源 1」)。
+
+=== 參考資料 ===
+{context}
+
+=== 問題 ===
+{query}"""
+
+    answer = client.chat([{"role": "user", "content": augmented_prompt}])
+
+    # 後處理:附加引用區塊
+    citation_lines = ["", "--- 參考來源 ---"]
+    for i, doc in enumerate(docs, 1):
+        source = doc["metadata"].get("source", f"未知來源{i}")
+        score  = doc["score"]
+        citation_lines.append(f"  [{i}] {source}  (相似度: {score:.4f})")
+    citation_block = "\n".join(citation_lines)
+
+    return answer + citation_block</code></pre>
+              <p>
+                這個模式在真實 RAG 系統中非常重要——使用者能看到「這個答案是根據哪些文件得出的」,
+                就能自行驗證正確性,而不是盲目相信 AI。
+                相似度分數也提示了「這次找到的文件有多相關」——如果 top-1 的分數很低(例如 0.3 以下),
+                通常代表向量庫裡沒有真正相關的文件,LLM 可能在胡說。
+              </p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 96.3 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>
+            實作一個簡單的<strong>關鍵字 + 向量混合搜尋</strong>。
+            為 <code>VectorStore</code> 加一個方法 <code>hybrid_search(query, k=3, alpha=0.5)</code>,
+            其中 <code>alpha</code> 控制向量相似度的權重(1-alpha 給關鍵字分數)。
+            關鍵字分數的簡單定義:查詢中的詞在文件中出現幾個就得幾分,再除以文件長度正規化。
+            最後把 <code>alpha * cosine_score + (1-alpha) * keyword_score</code> 作為混合分數排序。
+            用一個例子說明什麼情況下混合搜尋的結果比純向量搜尋更準確。
+          </p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">class HybridVectorStore(VectorStore):
+    """支援關鍵字 + 向量混合搜尋的 VectorStore。"""
+
+    def _keyword_score(self, query: str, text: str) -&gt; float:
+        """簡單關鍵字分數:查詢詞在文件中出現的頻率。"""
+        query_terms = set(query.lower().split())
+        text_lower  = text.lower()
+        hit_count   = sum(1 for t in query_terms if t in text_lower)
+        # 正規化:避免長文件因有更多詞而佔便宜
+        return hit_count / (len(query_terms) + 1e-9)
+
+    def hybrid_search(self,
+                      query: str,
+                      k: int = 3,
+                      alpha: float = 0.5) -&gt; list[dict]:
+        """alpha=1.0 → 純向量; alpha=0.0 → 純關鍵字; 0.5 → 各半。"""
+        if not self._docs:
+            return []
+        q_emb = self._embed(query)
+        results = []
+        for text, emb, meta in self._docs:
+            vec_score = cosine_similarity(q_emb, emb)
+            kw_score  = self._keyword_score(query, text)
+            combined  = alpha * vec_score + (1 - alpha) * kw_score
+            results.append({
+                "text": text,
+                "score": combined,
+                "vec_score": vec_score,
+                "kw_score": kw_score,
+                "metadata": meta,
+            })
+        results.sort(key=lambda x: x["score"], reverse=True)
+        return results[:k]
+
+
+# 混合搜尋更準確的場景示範
+store = HybridVectorStore()
+store.add("Python GIL 限制多執行緒並行", {"source": "a"})
+store.add("條款 7.2:合約終止須提前 30 天書面通知", {"source": "b"})
+store.add("條款 3.1:服務費用每月自動扣款", {"source": "c"})
+
+# 純向量可能找到語意相近但不含「7.2」的段落
+# 混合搜尋能保證「條款 7.2」的精確詞出現優先
+results = store.hybrid_search("條款 7.2 是什麼", k=2, alpha=0.3)
+for r in results:
+    print(f"[{r['score']:.3f}] {r['text'][:50]}")</code></pre>
+              <p>
+                這個例子說明混合搜尋的典型使用場景:當查詢包含<strong>專有名詞、合約編號、版本號</strong>等精確標識符時,
+                純向量搜尋可能因語意向量無法區分「條款 7.2」和「條款 3.1」而搜到錯的段落;
+                但加入關鍵字分數,含有精確字串「7.2」的段落就能得到更高的總分。
+                <code>alpha</code> 值可依業務場景調整:法律/技術文件用較低 alpha(重關鍵字);
+                一般問答用較高 alpha(重語意)。
+              </p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>把這一章串起來</h2>
+      <p>
+        這一章我們從零手刻了一個完整的最小 RAG 系統。回顧核心產物:
+      </p>
+      <ul>
+        <li><strong>嵌入函式</strong>:<code>get_embedding(text) -&gt; list[float]</code>——呼叫 Ollama <code>/api/embed</code> 取得語意向量。</li>
+        <li><strong>餘弦相似度</strong>:<code>cosine_similarity(a, b) -&gt; float</code>——用 <code>numpy</code> 的 <code>@</code>(點積)與 <code>np.linalg.norm</code> 計算,只看向量角度不看長度(連回<a href="54-linear-algebra.html">第 54 章</a>)。</li>
+        <li><strong>切塊</strong>:<code>chunk_text(text, chunk_size, overlap)</code>——把長文件切成帶重疊的小片段,讓每段都能被語意搜尋到。</li>
+        <li><strong>VectorStore</strong>(本章核心產物):
+          <ul>
+            <li><code>add(text, metadata) -&gt; None</code>:自動算嵌入、存進記憶體(或 SQLite)。</li>
+            <li><code>search(query, k) -&gt; list[dict]</code>:語意搜尋,回傳按餘弦相似度排序的 top-k 結果。</li>
+          </ul>
+        </li>
+        <li><strong>rag_answer</strong>(本章核心產物):
+          <code>rag_answer(client, store, query) -&gt; str</code>——把<a href="100-llm-client.html">第 94 章的 LLMClient</a> 和 VectorStore 接起來,固定走「retrieve → augment → generate」三步,回傳帶引用的答案。</li>
+        <li><strong>誠實認知</strong>:RAG 顯著降低幻覺率,但不能完全消除。切塊品質、嵌入模型選擇、k 值設定都影響準確率。對 SQL 精確查詢需求(如<a href="37-databases.html">第 37 章</a>所述),向量搜尋不能取代結構化查詢。</li>
+      </ul>
+      <p>
+        有了 <code>VectorStore</code> 和 <code>rag_answer</code>,你的 agent 現在有了「長期記憶與知識檢索」的能力。
+        <a href="101-tool-react.html">第 95 章</a>《工具呼叫與 ReAct》讓 agent 能執行工具;這一章讓它能查閱知識。
+        下一章(第 97 章)我們要把這些工具的定義與資料源存取<strong>標準化</strong>——用 MCP(Model Context Protocol)讓 agent 與工具的接口變成可插拔、可組合的生態系。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">📚</div>
+        <div class="body">
+          <span class="c-title">延伸資源</span>
+          <p><strong>RAG_Techniques</strong>:
+          <a href="https://github.com/NirDiamant/RAG_Techniques">github.com/NirDiamant/RAG_Techniques</a>
+          ——系統整理了各種 RAG 進階技術(混合檢索、rerank、self-RAG、RAPTOR 等)的程式碼範例,是深入學習的好起點。</p>
+          <p><strong>microsoft/graphrag</strong>:
+          <a href="https://github.com/microsoft/graphrag">github.com/microsoft/graphrag</a>
+          ——GraphRAG 的官方實作,有完整的 pipeline 與評估工具。</p>
+          <p><strong>FAISS 官方文件</strong>:
+          <a href="https://faiss.ai">faiss.ai</a>
+          ——包含各種索引類型的比較(精確 vs ANN)與效能調校指南。</p>
+          <p><strong>Ollama 嵌入 API</strong>:
+          <a href="https://github.com/ollama/ollama/blob/main/docs/api.md">github.com/ollama/ollama — api.md</a>
+          ——<code>/api/embed</code> 端點的完整說明與支援的嵌入模型清單。</p>
+          <p>餘弦相似度的數學基礎在<a href="54-linear-algebra.html">第 54 章《線性代數》</a>;資料庫結構化查詢在<a href="37-databases.html">第 37 章《資料庫系統》</a>;LLMClient 介面定義在<a href="100-llm-client.html">第 94 章《手刻你的 LLM client》</a>。</p>
+        </div>
+      </div>
+</article>
+  </main>
+</div>
+<script src="../assets/book.js"></script>
+</body>
+</html>

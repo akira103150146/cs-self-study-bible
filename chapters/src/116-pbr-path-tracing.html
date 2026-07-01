@@ -1,0 +1,900 @@
+<!--meta
+title: 物理渲染 PBR 與路徑追蹤
+description: 從 Phong 的缺陷出發，推導渲染方程式、BRDF、Cook-Torrance 微表面模型，再用蒙地卡羅積分實作路徑追蹤，最終獲得全域光照——照片級渲染背後的物理與數學。
+-->
+
+      <div class="eyebrow">第二五部 · 進階電腦圖學</div>
+      <h1>物理渲染 PBR 與路徑追蹤</h1>
+      <p class="subtitle">Phong 光照讓球看起來有光澤，路徑追蹤讓它看起來真實——兩者之間隔著一整套光的物理學、隨機積分，以及一個能拍出電影海報的演算法。</p>
+      <div class="byline">
+        <span class="tag">第 110 章</span>
+        <span>閱讀時間 ≈ 90 分鐘</span>
+        <span>難度:★★★★★</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>Phong 模型為何「看起來假」:缺乏能量守恆、忽略光的物理本質</li>
+          <li><strong>輻射度量學(radiometry)</strong>的核心概念:輻射率、立體角、半球積分</li>
+          <li><strong>渲染方程式(rendering equation)</strong>:光傳輸的統一數學框架 $L_o = L_e + \int f_r L_i \cos\theta_i \, d\omega_i$</li>
+          <li><strong>BRDF</strong> 是什麼,以及 <strong>Cook-Torrance 微表面模型</strong>的三個分項:法線分佈 D、幾何遮蔽 G、菲涅耳反射 F</li>
+          <li>如何用<strong>蒙地卡羅積分(Monte Carlo integration)</strong>估計渲染方程式,以及為何誤差以 $1/\sqrt{N}$ 收斂</li>
+          <li><strong>路徑追蹤(path tracing)</strong>的遞迴結構、俄羅斯輪盤終止、重要性採樣</li>
+          <li><strong>全域光照(global illumination)</strong>如何讓間接光、色彩溢出、軟陰影自然浮現</li>
+          <li>親手讀懂一個極簡路徑追蹤器骨架,並知道如何從此延伸到 PBRT</li>
+        </ul>
+      </div>
+
+      <!-- ===== §1 ===== -->
+      <h2>Phong 為什麼「看起來假」?</h2>
+
+      <p>
+        在<a href="39-computer-graphics.html">第 39 章〈計算機圖學〉</a>，你親手實作了一個能跑的光線追蹤器，
+        用 Phong 模型計算光照:環境光 + 漫反射 + 高光鏡面，三項相加，球就有了光澤。
+        它運作良好——但總有一種「<em>像是玩具</em>」的感覺。旁邊的 Pixar 電影截圖，光打在布料上的那種柔和，
+        玻璃折射後地板上的焦散光斑，金屬邊緣的菲涅耳反光——這些 Phong 完全做不出來。
+      </p>
+      <p>
+        問題出在哪裡？Phong 是一個<strong>經驗公式(empirical formula)</strong>:它長得像有道理，
+        但它的各項係數（環境光強度 $k_a$、漫反射係數 $k_d$、鏡面係數 $k_s$）是美術師用直覺調出來的數字，
+        沒有任何物理意義支撐。更嚴重的是：
+      </p>
+      <ul>
+        <li><strong>能量不守恆</strong>：反射出去的光能總量可以超過入射光能——這在物理上是不可能的。</li>
+        <li><strong>忽略間接光</strong>：真實場景中，牆壁把光彈給桌面，桌面又彈給天花板——Phong 只算從光源直接打到物體的「第一跳」。</li>
+        <li><strong>材質無法精確表達</strong>：Phong 的「鏡面」概念無法區分磨砂金屬、水面、粗布——但真實世界每種材質散射光的方式都截然不同。</li>
+        <li><strong>無陰影細節</strong>：Phong 沒有軟陰影，陰影邊緣一刀切，與真實的漸層完全不同。</li>
+      </ul>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">Phong vs PBR 的根本差異</span>
+          <p>
+            Phong 問「<em>怎麼讓它看起來漂亮</em>」；PBR 問「<em>光在物理上怎麼運作</em>」。
+            <strong>物理渲染(Physically-Based Rendering, PBR)</strong>的核心承諾是：
+            用真實的物理量描述材質與光，計算結果自然就是正確的畫面——不需要反覆調「魔法係數」。
+          </p>
+        </div>
+      </div>
+
+      <p>
+        那麼，光在物理上怎麼運作？我們從最基礎的量測單位開始。
+      </p>
+
+      <!-- ===== §2 ===== -->
+      <h2>輻射度量學：光的物理語言</h2>
+
+      <p>
+        要做物理正確的渲染，首先要有精確的語言描述光的「量」。這套語言叫做<strong>輻射度量學(radiometry)</strong>。
+        幸好你不需要記住所有物理量——本章只用三個核心概念。
+      </p>
+
+      <h3>立體角(Solid Angle)</h3>
+      <p>
+        平面上「角度」用弧度衡量：弧長除以半徑，整個圓是 $2\pi$。
+        立體角是它在三維的類比：在以某點為球心的單位球上，一個方向區域所「蓋住」的球面面積，就是該區域的立體角，單位是<strong>球面度(steradian, sr)</strong>。
+        整個球面的立體角是 $4\pi$ sr；一個半球是 $2\pi$ sr。
+      </p>
+      <p>
+        我們用 $\omega$ 表示一個<strong>方向</strong>(可以想成單位球面上的一個點)，
+        $d\omega$ 表示圍繞該方向的無窮小立體角微元。
+        在球面座標中，$d\omega = \sin\theta\,d\theta\,d\phi$，其中 $\theta$ 是與法線的夾角（天頂角），$\phi$ 是方位角。
+      </p>
+
+      <h3>輻射率(Radiance, $L$)</h3>
+      <p>
+        <strong>輻射率(radiance)</strong>是渲染最核心的物理量，直覺上就是「某方向射來的光有多亮」。
+        精確定義：從面積微元 $dA$ 沿方向 $\omega$ 射出的功率，除以面積投影 $dA\cos\theta$ 再除以立體角微元 $d\omega$：
+      </p>
+      <p>$$L(\mathbf{x}, \omega) = \frac{d^2\Phi}{dA\cos\theta \, d\omega}$$</p>
+      <p>
+        輻射率有個很好的性質：<strong>在真空中沿光路傳播時，輻射率不衰減</strong>。
+        這讓它成為光追的天然計算單位：攝影機感應器量到的，就是從像素方向射來的輻射率。
+      </p>
+
+      <h3>半球積分與能量守恆</h3>
+      <p>
+        一個表面點 $\mathbf{x}$ 接收到的輻照度(irradiance)，等於對<strong>上半球</strong> $\Omega^+$ 的所有入射輻射率做加權積分：
+      </p>
+      <p>$$E(\mathbf{x}) = \int_{\Omega^+} L_i(\mathbf{x}, \omega_i) \cos\theta_i \, d\omega_i$$</p>
+      <p>
+        $\cos\theta_i$ 那個因子來自「斜射的光，照到的面積更大、因此每單位面積的能量更少」——就像正午陽光 vs 傍晚斜射。
+        這個積分是渲染方程式的靈魂，我們馬上會看到它。
+      </p>
+
+      <!-- ===== §3 ===== -->
+      <h2>渲染方程式：光傳輸的總綱</h2>
+
+      <p>
+        1986 年，James Kajiya 在他的開創性論文中提出了一個優雅的問題：
+        「我們能不能用一個方程式，描述光在場景中所有可能的行為？」
+        他的答案就是<strong>渲染方程式(rendering equation)</strong>：
+      </p>
+
+      <p>$$\boxed{L_o(\mathbf{x}, \omega_o) = L_e(\mathbf{x}, \omega_o) + \int_{\Omega^+} f_r(\mathbf{x}, \omega_i, \omega_o)\, L_i(\mathbf{x}, \omega_i)\, \cos\theta_i \, d\omega_i}$$</p>
+
+      <p>把每一項拆開讀：</p>
+      <ul>
+        <li>$L_o(\mathbf{x}, \omega_o)$：表面點 $\mathbf{x}$ 往方向 $\omega_o$（通常是攝影機方向）射出的輻射率——就是我們要求的「這個像素的顏色」。</li>
+        <li>$L_e(\mathbf{x}, \omega_o)$：<strong>自發光(emission)</strong>。如果這個點本身是光源，它會自己發光；否則為零。</li>
+        <li>$\int_{\Omega^+} \cdots d\omega_i$：對整個上半球積分——「從所有方向射來的光，加在一起的貢獻」。</li>
+        <li>$f_r(\mathbf{x}, \omega_i, \omega_o)$：<strong>BRDF</strong>，描述材質如何把 $\omega_i$ 方向的入射光散射到 $\omega_o$ 方向（下一節深入）。</li>
+        <li>$L_i(\mathbf{x}, \omega_i)$：從 $\omega_i$ 方向射來的入射輻射率——它本身又是另一個點的 $L_o$，遞迴開始了。</li>
+        <li>$\cos\theta_i$：Lambert 因子，斜射光的面積加權。</li>
+      </ul>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">為什麼說它是「總綱」</span>
+          <p>
+            渲染方程式把場景中所有光的傳輸——直接光、鏡面反射、漫反射、折射、焦散、間接照明——全部塞進這一個式子。
+            Phong 只是它在「忽略積分、只算一個光源、用魔法係數」時的極度簡化特例。
+            一切正確渲染演算法，都是在嘗試<strong>精確或近似地計算這個積分</strong>。
+          </p>
+        </div>
+      </div>
+
+      <div class="diagram">
+<svg viewBox="0 0 680 320" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="arr-teal" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <path d="M0,0 L9,3.5 L0,7 Z" fill="#2f6f6a"/>
+    </marker>
+    <marker id="arr-brick" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <path d="M0,0 L9,3.5 L0,7 Z" fill="#b4541f"/>
+    </marker>
+    <marker id="arr-purple" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <path d="M0,0 L9,3.5 L0,7 Z" fill="#8b5cf6"/>
+    </marker>
+    <marker id="arr-gray" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <path d="M0,0 L9,3.5 L0,7 Z" fill="#8a929b"/>
+    </marker>
+  </defs>
+
+  <!-- 背景 -->
+  <rect x="0" y="0" width="680" height="320" fill="#f9fbfc" rx="8"/>
+
+  <!-- 地面 -->
+  <rect x="60" y="230" width="560" height="18" fill="#d8e8e6" rx="3"/>
+  <text x="340" y="264" text-anchor="middle" font-size="12" fill="#5a6470">表面(surface)</text>
+
+  <!-- 表面點 x -->
+  <circle cx="300" cy="230" r="5" fill="#1f2328"/>
+  <text x="308" y="248" font-size="12" fill="#1f2328" font-weight="700">x</text>
+
+  <!-- 法線 n -->
+  <line x1="300" y1="230" x2="300" y2="100" stroke="#8a929b" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#arr-gray)"/>
+  <text x="308" y="112" font-size="13" fill="#8a929b" font-weight="600">n</text>
+
+  <!-- 半球弧線 -->
+  <path d="M 130,230 A 170,170 0 0,1 470,230" fill="none" stroke="#2f6f6a" stroke-width="1.5" stroke-dasharray="6 3" opacity="0.6"/>
+  <text x="340" y="70" text-anchor="middle" font-size="12" fill="#2f6f6a" opacity="0.8">Ω⁺（上半球）</text>
+
+  <!-- 入射方向 ω_i 1 (從左上方的光源) -->
+  <circle cx="155" cy="110" r="12" fill="#f5c842" stroke="#e0a800" stroke-width="1.5" opacity="0.9"/>
+  <text x="149" y="115" font-size="11" fill="#7a5800" font-weight="700">💡</text>
+  <line x1="165" y1="117" x2="292" y2="225" stroke="#b4541f" stroke-width="2" marker-end="url(#arr-brick)"/>
+  <text x="175" y="153" font-size="12" fill="#b4541f" font-weight="600">ω_i</text>
+  <!-- θ_i angle arc -->
+  <path d="M 300,185 A 45,45 0 0,0 270,197" fill="none" stroke="#b4541f" stroke-width="1.2"/>
+  <text x="257" y="195" font-size="11" fill="#b4541f">θᵢ</text>
+
+  <!-- 入射方向 ω_i 2 (從右上) -->
+  <line x1="432" y1="128" x2="306" y2="226" stroke="#b4541f" stroke-width="1.5" stroke-dasharray="3 2" marker-end="url(#arr-brick)" opacity="0.5"/>
+
+  <!-- 入射方向 ω_i 3 (幾乎垂直) -->
+  <line x1="315" y1="95" x2="302" y2="222" stroke="#b4541f" stroke-width="1.5" stroke-dasharray="3 2" marker-end="url(#arr-brick)" opacity="0.5"/>
+  <text x="326" y="143" font-size="11" fill="#b4541f" opacity="0.7">L_i</text>
+
+  <!-- 出射方向 ω_o -->
+  <line x1="300" y1="230" x2="510" y2="118" stroke="#2f6f6a" stroke-width="2.5" marker-end="url(#arr-teal)"/>
+  <text x="430" y="150" font-size="13" fill="#2f6f6a" font-weight="700">ω_o</text>
+  <text x="480" y="100" font-size="13" fill="#2f6f6a" font-weight="700">L_o (→攝影機)</text>
+
+  <!-- 積分符號說明 -->
+  <rect x="476" y="235" width="190" height="72" rx="6" fill="#e3efed" opacity="0.85"/>
+  <text x="571" y="253" text-anchor="middle" font-size="11" fill="#2f6f6a" font-weight="700">渲染方程式</text>
+  <text x="486" y="270" font-size="10.5" fill="#1f2328">L_o = L_e + ∫ f_r · L_i · cosθᵢ dω_i</text>
+  <text x="486" y="288" font-size="10" fill="#5a6470">對所有入射方向 ω_i ∈ Ω⁺ 積分</text>
+  <text x="486" y="302" font-size="10" fill="#5a6470">f_r = BRDF（材質散射函數）</text>
+</svg>
+        <figcaption>圖 110-1：渲染方程式的幾何直覺。表面點 x 的出射輻射率 $L_o$（往 $\omega_o$ 方向）等於自發光加上對整個上半球所有入射方向 $\omega_i$ 的積分——每個方向的貢獻由 BRDF $f_r$、入射輻射率 $L_i$、以及餘弦加權 $\cos\theta_i$ 共同決定。</figcaption>
+      </div>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">遞迴的本質</span>
+          <p>
+            注意：積分裡的 $L_i(\mathbf{x}, \omega_i)$ 本身，就是「另一個表面點 $\mathbf{x}'$ 往 $-\omega_i$ 方向射出的 $L_o$」。
+            所以渲染方程式是<strong>遞迴的</strong>——光在場景中每次反射，都需要再解一次方程式。
+            這個遞迴沒有解析封閉解，必須用數值方法（例如路徑追蹤）近似計算。
+          </p>
+        </div>
+      </div>
+
+      <!-- ===== §4 ===== -->
+      <h2>BRDF：材質如何散射光</h2>
+
+      <p>
+        渲染方程式中的 $f_r(\mathbf{x}, \omega_i, \omega_o)$ 叫做<strong>雙向反射率分佈函數
+        (Bidirectional Reflectance Distribution Function, BRDF)</strong>。
+        它描述的是：從方向 $\omega_i$ 射入的光，有多少比例（以及怎樣分布）地被反射到方向 $\omega_o$？
+        單位是 $\text{sr}^{-1}$（每球面度）。
+      </p>
+
+      <p>一個物理上合法的 BRDF 需要滿足兩個條件：</p>
+      <ol>
+        <li><strong>亥姆霍茲互換性(Helmholtz reciprocity)</strong>：$f_r(\omega_i, \omega_o) = f_r(\omega_o, \omega_i)$ ——入射與出射互換，值不變。這源自光路的時間反演對稱。</li>
+        <li><strong>能量守恆(energy conservation)</strong>：$\int_{\Omega^+} f_r(\omega_i, \omega_o) \cos\theta_o \, d\omega_o \leq 1$ ——對所有入射方向，反射的總能量不能超過入射能量。</li>
+      </ol>
+
+      <h3>兩個最基本的 BRDF</h3>
+
+      <p>
+        <strong>完美漫反射(Lambertian BRDF)</strong>：光向所有方向均勻散射，就像粗糙的石膏牆。
+        BRDF 是常數 $f_r = c_\text{diff} / \pi$，其中 $c_\text{diff}$ 是表面顏色（反照率，albedo）。
+        $\pi$ 那個除法是為了讓能量守恆成立。
+      </p>
+      <p>
+        <strong>完美鏡面反射(perfect mirror)</strong>：只有在鏡面反射方向 $\omega_r = 2(\mathbf{n}\cdot\omega_o)\mathbf{n} - \omega_o$ 才有非零值，數學上是 Dirac delta 函數——光只往一個方向。
+      </p>
+      <p>
+        真實材質介於兩者之間：磨砂金屬接近分布寬廣的鏡面、粗絨布接近漫反射。
+        描述這個「中間地帶」的，是<strong>微表面模型</strong>。
+      </p>
+
+      <!-- ===== §5 ===== -->
+      <h2>Cook-Torrance 微表面模型</h2>
+
+      <p>
+        1982 年，Robert Cook 與 Kenneth Torrance 提出了一個改變渲染史的模型：把材質表面想像成由無數個<strong>微小鏡面(microfacet)</strong>組成，每個微面的法向量（叫做<em>半角向量 $\mathbf{h}$</em>，即 $\omega_i$ 與 $\omega_o$ 的中間方向）可能與宏觀法線 $\mathbf{n}$ 偏離。
+        粗糙材質的微面法線分佈寬廣，光散射到四面八方；光滑材質的微面幾乎對齊，光集中反射到一個方向。
+      </p>
+
+      <p>Cook-Torrance 的鏡面 BRDF 為：</p>
+      <p>$$f_r^{\text{spec}}(\omega_i, \omega_o) = \frac{D(\mathbf{h})\, G(\omega_i, \omega_o)\, F(\omega_i, \mathbf{h})}{4\,(\mathbf{n}\cdot\omega_i)\,(\mathbf{n}\cdot\omega_o)}$$</p>
+
+      <p>三個分項各有物理意義：</p>
+
+      <h3>D — 法線分佈函數(Normal Distribution Function)</h3>
+      <p>
+        $D(\mathbf{h})$ 描述微面中有多少比例的法線朝向 $\mathbf{h}$ 方向。粗糙度參數 $\alpha$（通常 $\alpha = \text{roughness}^2$）控制分佈寬窄。
+        現代 PBR 最常用 <strong>GGX(Trowbridge-Reitz)</strong> 分佈：
+      </p>
+      <p>$$D_\text{GGX}(\mathbf{h}) = \frac{\alpha^2}{\pi\,\bigl[(\mathbf{n}\cdot\mathbf{h})^2(\alpha^2 - 1) + 1\bigr]^2}$$</p>
+      <p>GGX 比舊的 Phong-based 分佈在掠射角有更長的「尾巴」，金屬高光邊緣更自然。</p>
+
+      <h3>G — 幾何遮蔽函數(Geometry/Shadowing-Masking)</h3>
+      <p>
+        $G(\omega_i, \omega_o)$ 描述微面之間互相遮蔽與遮光的比例。
+        Schlick-GGX 近似（Smith 形式）把入射與出射兩側分別計算再相乘：
+      </p>
+      <p>$$G_\text{Smith}(\omega_i, \omega_o) = G_1(\omega_i) \cdot G_1(\omega_o), \quad G_1(\omega) = \frac{\mathbf{n}\cdot\omega}{(\mathbf{n}\cdot\omega)(1-k) + k},\quad k = \frac{(\alpha+1)^2}{8}$$</p>
+
+      <h3>F — 菲涅耳反射率(Fresnel Reflectance)</h3>
+      <p>
+        $F(\omega_i, \mathbf{h})$ 描述光在介面上反射 vs 折射的比例。你一定觀察過：水面在正上方看幾乎透明，在接近水平方向看幾乎像鏡子——這就是菲涅耳效應。
+        Schlick 近似公式（誤差極小、計算快）：
+      </p>
+      <p>$$F(\omega_i, \mathbf{h}) = F_0 + (1 - F_0)(1 - \mathbf{h}\cdot\omega_i)^5$$</p>
+      <p>
+        $F_0$ 是法線入射時的基礎反射率：對非金屬(dielectric)通常約 0.04，
+        對金屬(conductor)則是材質的顏色（金的 $F_0 \approx (1.0, 0.71, 0.29)$ 呈金黃色）。
+      </p>
+
+      <h3>完整的 PBR BRDF</h3>
+      <p>
+        把漫反射和鏡面合在一起，並用<strong>金屬度(metallic)</strong>參數混合：
+      </p>
+      <p>$$f_r = (1 - \text{metallic}) \cdot \frac{c_\text{base}}{\pi} + f_r^{\text{spec}}$$</p>
+      <p>
+        金屬材質的漫反射幾乎為零（自由電子會立刻重新輻射光，沒有漫透射）；
+        非金屬則兩者都有。這就是現代遊戲引擎（Unreal、Unity 的 Standard Shader、Filament）
+        「金屬度/粗糙度工作流(metallic-roughness workflow)」的物理依據。
+      </p>
+
+      <pre><code class="language-python">import math
+
+# Cook-Torrance BRDF 三個分項（教學版，純 Python，無向量庫）
+
+def D_GGX(n_dot_h: float, alpha: float) -&gt; float:
+    """GGX 法線分佈函數。n_dot_h = cos(θ_h)，alpha = roughness²"""
+    a2 = alpha * alpha
+    denom = (n_dot_h * n_dot_h * (a2 - 1.0) + 1.0) ** 2
+    return a2 / (math.pi * denom)
+
+def G_schlick_ggx(n_dot_v: float, alpha: float) -&gt; float:
+    """單側幾何遮蔽 G1（Schlick-GGX 近似）"""
+    k = (alpha + 1.0) ** 2 / 8.0
+    return n_dot_v / (n_dot_v * (1.0 - k) + k)
+
+def G_smith(n_dot_l: float, n_dot_v: float, alpha: float) -&gt; float:
+    """Smith 幾何函數 = G1(入射) × G1(出射)"""
+    return G_schlick_ggx(n_dot_l, alpha) * G_schlick_ggx(n_dot_v, alpha)
+
+def F_schlick(h_dot_v: float, F0: tuple) -&gt; tuple:
+    """Schlick 菲涅耳近似，F0 為三通道基礎反射率 (r,g,b)"""
+    t = (1.0 - h_dot_v) ** 5
+    return tuple(F0[c] + (1.0 - F0[c]) * t for c in range(3))
+
+def cook_torrance_spec(n_dot_l, n_dot_v, n_dot_h, h_dot_v, alpha, F0):
+    """Cook-Torrance 鏡面 BRDF 三通道值（教學版）"""
+    D = D_GGX(n_dot_h, alpha)
+    G = G_smith(n_dot_l, n_dot_v, alpha)
+    F = F_schlick(h_dot_v, F0)
+    denom = 4.0 * n_dot_l * n_dot_v + 1e-7  # 防除零
+    return tuple(D * G * F[c] / denom for c in range(3))
+
+# 範例：光滑鐵(F0 ≈ 0.56,0.57,0.58)，粗糙度 0.3
+# 設定各方向夾角（簡化示意）
+n_dot_l = math.cos(math.radians(30))   # 光源 30° 入射
+n_dot_v = math.cos(math.radians(10))   # 視線 10° 出射
+n_dot_h = math.cos(math.radians(20))   # 半角向量
+h_dot_v  = math.cos(math.radians(20))
+alpha = 0.3 ** 2                        # roughness = 0.3
+F0 = (0.56, 0.57, 0.58)
+
+spec = cook_torrance_spec(n_dot_l, n_dot_v, n_dot_h, h_dot_v, alpha, F0)
+print(f"鏡面 BRDF (R,G,B) = ({spec[0]:.4f}, {spec[1]:.4f}, {spec[2]:.4f})")
+</code></pre>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">為什麼分母有 4(n·ωᵢ)(n·ωₒ)?</span>
+          <p>
+            Cook-Torrance 公式的分母是微表面模型推導時，把微面的投影面積對應到宏觀面積的幾何修正因子。
+            它確保了 BRDF 在各種入射角都能正確地保持能量守恆——這是 Phong 模型缺少的。
+          </p>
+        </div>
+      </div>
+
+      <!-- ===== §6 ===== -->
+      <h2>蒙地卡羅積分：用隨機取樣估計積分</h2>
+
+      <p>
+        渲染方程式是個積分，而且積分域（整個上半球）加上遞迴（$L_i$ 本身也是積分）讓它幾乎沒有解析解。
+        怎麼辦？用<a href="57-probability.html">第 57 章〈機率〉</a>介紹過的<strong>蒙地卡羅方法(Monte Carlo method)</strong>。
+      </p>
+
+      <h3>蒙地卡羅估計量</h3>
+      <p>
+        若要計算 $I = \int_a^b f(x)\,dx$，從機率分佈 $p(x)$ 取樣 $N$ 個點 $x_1, \ldots, x_N$，
+        則估計量為：
+      </p>
+      <p>$$\hat{I}_N = \frac{1}{N}\sum_{k=1}^{N} \frac{f(x_k)}{p(x_k)}$$</p>
+      <p>
+        由<strong>大數法則</strong>，當 $N \to \infty$，$\hat{I}_N \to I$（依機率）。
+        估計量的方差(variance)為：
+      </p>
+      <p>$$\text{Var}(\hat{I}_N) = \frac{1}{N}\,\text{Var}\!\left(\frac{f(X)}{p(X)}\right) = \frac{\sigma^2}{N}$$</p>
+      <p>
+        因此標準差（即「雜訊的大小」）以 $1/\sqrt{N}$ 的速度收斂。
+        這意味著：要讓雜訊減半，需要<strong>四倍</strong>的取樣數。這正是為什麼路徑追蹤渲染高品質圖像如此耗時。
+      </p>
+
+      <h3>應用到渲染方程式</h3>
+      <p>
+        對渲染方程式的積分，若從上半球均勻取樣方向（$p(\omega_i) = 1/(2\pi)$，因為半球立體角為 $2\pi$），則每次 bounce 的估計量為：
+      </p>
+      <p>$$\hat{L}_o = L_e + \frac{2\pi}{N}\sum_{k=1}^N f_r(\omega_k, \omega_o)\, L_i(\omega_k)\, \cos\theta_k$$</p>
+      <p>
+        路徑追蹤通常每像素只取 $N=1$ 的樣本（然後遞迴多次反彈），再對多個獨立路徑取平均——
+        也就是每像素取樣數(samples per pixel, SPP)。SPP 越多，畫面越乾淨。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 680 300" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <rect x="0" y="0" width="680" height="300" fill="#f9fbfc" rx="8"/>
+
+  <!-- 標題 -->
+  <text x="340" y="28" text-anchor="middle" font-size="13" font-weight="700" fill="#1f2328">蒙地卡羅收斂：取樣數 N 與誤差的關係</text>
+
+  <!-- 座標系 -->
+  <line x1="70" y1="240" x2="630" y2="240" stroke="#8a929b" stroke-width="1.5"/>
+  <line x1="70" y1="50" x2="70" y2="245" stroke="#8a929b" stroke-width="1.5"/>
+
+  <!-- x 軸標籤 -->
+  <text x="340" y="275" text-anchor="middle" font-size="12" fill="#5a6470">取樣數 N（對數座標）</text>
+  <text x="120" y="258" text-anchor="middle" font-size="11" fill="#5a6470">1</text>
+  <text x="210" y="258" text-anchor="middle" font-size="11" fill="#5a6470">4</text>
+  <text x="300" y="258" text-anchor="middle" font-size="11" fill="#5a6470">16</text>
+  <text x="390" y="258" text-anchor="middle" font-size="11" fill="#5a6470">64</text>
+  <text x="480" y="258" text-anchor="middle" font-size="11" fill="#5a6470">256</text>
+  <text x="570" y="258" text-anchor="middle" font-size="11" fill="#5a6470">1024</text>
+
+  <!-- y 軸標籤 -->
+  <text x="60" y="145" text-anchor="end" font-size="11" fill="#5a6470">估計值</text>
+  <text x="60" y="100" text-anchor="end" font-size="11" fill="#5a6470">高</text>
+  <text x="60" y="195" text-anchor="end" font-size="11" fill="#5a6470">低</text>
+
+  <!-- 真實值（dashed line） -->
+  <line x1="70" y1="145" x2="630" y2="145" stroke="#2f6f6a" stroke-width="2" stroke-dasharray="8 4"/>
+  <text x="636" y="149" font-size="11" fill="#2f6f6a" font-weight="700">真實值 I</text>
+
+  <!-- 誤差帶（逐漸收窄的漸層帶） -->
+  <polygon points="70,50 70,240 120,185 210,167 300,157 390,151 480,148 570,146 630,145 630,145 570,144 480,142 390,139 300,133 210,123 120,105 70,50"
+           fill="#2f6f6a" fill-opacity="0.10"/>
+  <!-- 上邊界 1/√N -->
+  <polyline points="70,50 120,105 210,123 300,133 390,139 480,142 570,144 630,145"
+            fill="none" stroke="#2f6f6a" stroke-width="1.5" stroke-dasharray="4 3" opacity="0.6"/>
+  <!-- 下邊界 -->
+  <polyline points="70,240 120,185 210,167 300,157 390,151 480,148 570,146 630,145"
+            fill="none" stroke="#2f6f6a" stroke-width="1.5" stroke-dasharray="4 3" opacity="0.6"/>
+
+  <!-- 取樣點（模擬估計值散佈） -->
+  <circle cx="120" cy="92"  r="4" fill="#b4541f"/>
+  <circle cx="120" cy="195" r="4" fill="#b4541f"/>
+  <circle cx="120" cy="155" r="4" fill="#b4541f"/>
+  <circle cx="210" cy="120" r="4" fill="#b4541f"/>
+  <circle cx="210" cy="165" r="4" fill="#b4541f"/>
+  <circle cx="210" cy="138" r="4" fill="#b4541f"/>
+  <circle cx="300" cy="140" r="4" fill="#b4541f"/>
+  <circle cx="300" cy="152" r="4" fill="#b4541f"/>
+  <circle cx="390" cy="143" r="4" fill="#b4541f"/>
+  <circle cx="390" cy="148" r="4" fill="#b4541f"/>
+  <circle cx="480" cy="144" r="4" fill="#b4541f"/>
+  <circle cx="570" cy="145" r="4" fill="#b4541f"/>
+
+  <!-- 標注 -->
+  <text x="155" y="80" font-size="11" fill="#b4541f">N=1: 波動很大</text>
+  <line x1="120" y1="92" x2="150" y2="84" stroke="#b4541f" stroke-width="1"/>
+  <text x="580" y="130" font-size="11" fill="#2f6f6a" text-anchor="end">誤差 ∝ 1/√N</text>
+  <text x="390" y="115" font-size="11" fill="#2f6f6a" opacity="0.8">N=1024: 幾乎收斂</text>
+</svg>
+        <figcaption>圖 110-2：蒙地卡羅估計的收斂行為。每個紅點是一次獨立估計，綠色帶是 $\pm 1/\sqrt{N}$ 的理論誤差範圍。取樣數增加，誤差帶指數收窄，但收斂慢（誤差減半需要 4 倍取樣數）。</figcaption>
+      </div>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">蒙地卡羅的收斂速度與維度無關</span>
+          <p>
+            傳統數值積分（如梯形法則）在一維有 $O(1/N^2)$ 的收斂，但在 $d$ 維變成 $O(N^{-2/d})$——
+            維度越高越慢（「維度詛咒」）。蒙地卡羅的 $O(1/\sqrt{N})$ 收斂不受維度影響，這讓它成為高維積分（如光追的多次反彈）的唯一可行方法。
+            詳見<a href="55-numerical-methods.html">第 55 章〈數值方法〉</a>的積分一節。
+          </p>
+        </div>
+      </div>
+
+      <!-- ===== §7 ===== -->
+      <h2>路徑追蹤：蒙地卡羅 × 遞迴光追</h2>
+
+      <p>
+        把蒙地卡羅積分套進渲染方程式的遞迴，就得到了<strong>路徑追蹤(path tracing)</strong>。
+        想像從攝影機射出一條光線，打到某個表面點 $\mathbf{x}_1$：
+      </p>
+      <ol>
+        <li>按 BRDF 的機率分佈，隨機選一個反彈方向 $\omega_1$。</li>
+        <li>新的光線沿 $\omega_1$ 飛去，打到 $\mathbf{x}_2$，再次隨機選方向 $\omega_2$……</li>
+        <li>每次 bounce，把 $f_r \cdot \cos\theta / p(\omega)$ 累乘到「throughput（吞吐量）」上。</li>
+        <li>最終打到光源（或天空）時，回傳 $L_e \times \text{throughput}$。</li>
+        <li>重複多條路徑，取平均——就是對渲染方程式的蒙地卡羅估計。</li>
+      </ol>
+
+      <h3>俄羅斯輪盤終止(Russian Roulette)</h3>
+      <p>
+        光線理論上可以無限反彈，必須有終止條件。最常見的方法是<strong>俄羅斯輪盤(Russian Roulette)</strong>：
+        以機率 $q$（例如 $1 - $ throughput 的最大通道值）隨機終止路徑；若沒被終止，則把結果除以 $(1-q)$ 補償——這保持了估計量的無偏性。
+      </p>
+      <p>$$L = \begin{cases} 0 & \text{以機率 } q \text{ 終止} \\ \dfrac{L_\text{next}}{1-q} & \text{以機率 } 1-q \text{ 繼續} \end{cases}$$</p>
+
+      <h3>重要性採樣(Importance Sampling)</h3>
+      <p>
+        均勻取樣半球方向是「公平但低效」的。如果我們改用與 BRDF 或光源位置成正比的機率分佈 $p(\omega_i) \propto f_r \cos\theta_i$ 取樣，估計量的方差會大幅下降——同樣的取樣數，畫面更乾淨。
+      </p>
+      <p>
+        這叫<strong>重要性採樣(importance sampling)</strong>：把更多取樣「放在貢獻大的地方」。
+        例如 Lambertian 漫反射的最佳取樣分佈是餘弦加權半球分佈（cosine-weighted hemisphere）；
+        GGX 的重要性採樣方向則對應 $D(\mathbf{h})$ 的機率分佈。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">路徑追蹤的核心循環</span>
+          <p>
+            攝影機射出光線 → 找最近交點 → 按 BRDF 取樣新方向 → 遞迴 → 打到光源時回傳輻射率 × 累積 throughput。
+            重複 SPP 次，取平均。這個過程自然包含了所有的光傳輸：直接光、間接光、鏡面、漫反射、全部。
+          </p>
+        </div>
+      </div>
+
+      <!-- ===== §8 ===== -->
+      <h2>全域光照：為什麼路徑追蹤能「自然」得到它</h2>
+
+      <p>
+        「全域光照(Global Illumination, GI)」這個詞聽起來神秘，其實它只是說：
+        光在到達你眼睛之前，可能反彈了不止一次——直接光以外，所有間接光的貢獻都算進去。
+      </p>
+
+      <h3>直接光 vs 間接光</h3>
+      <p>
+        <strong>直接光(direct illumination)</strong>：從光源 → 一次反射 → 攝影機。Phong 只做這個。
+      </p>
+      <p>
+        <strong>間接光(indirect illumination)</strong>：光源 → 牆壁 → 桌子 → 攝影機。路徑追蹤靠遞迴自然包含了任意多次反彈。
+        這帶來了三個 Phong 完全做不到的效果：
+      </p>
+
+      <ul>
+        <li>
+          <strong>色彩溢出(color bleeding)</strong>：紅色牆壁把紅色光「染」到相鄰的白色物體上。
+          路徑追蹤中，從白色物體表面追光到紅牆，紅牆的 albedo 被乘入 throughput，自然出現色溢。
+        </li>
+        <li>
+          <strong>軟陰影(soft shadows)</strong>：面光源（有面積的燈）會在物體邊緣形成漸層的半影區(penumbra)。
+          路徑追蹤在光源取樣時對面光源的不同點做隨機取樣，多條路徑取平均就得到平滑的陰影漸層。
+        </li>
+        <li>
+          <strong>焦散(caustics)</strong>：玻璃球把光聚焦成亮斑。路徑追蹤的光線能穿越折射面、在地板上打出亮斑。
+          （標準路徑追蹤收斂慢，工業上用 photon mapping 或 BDPT 加速。）
+        </li>
+      </ul>
+
+      <div class="callout history">
+        <div class="ico">📜</div>
+        <div class="body">
+          <span class="c-title">全域光照的演化</span>
+          <p>
+            1986 年 Kajiya 提出渲染方程式與路徑追蹤；同年，Goral 等人提出輻射度(radiosity)法處理漫反射間接光。
+            1997 年 Jensen 提出 Photon Mapping 解決焦散；2001 年 Veach 的重要性採樣理論大幅降低方差。
+            2010 年代 GPU 算力提升讓即時路徑追蹤浮現，NVIDIA RTX 的 BVH 硬體加速（2018 年）終於讓遊戲級即時 GI 成為現實。
+          </p>
+        </div>
+      </div>
+
+      <!-- ===== §9 ===== -->
+      <h2>手刻最小路徑追蹤器：從玩具光追到 PBR</h2>
+
+      <p>
+        在<a href="39-computer-graphics.html">第 39 章</a>你已經寫了一個能追球的光線追蹤器——它用 Phong 算顏色，沒有遞迴反彈。
+        現在我們把它升級成一個<strong>最小路徑追蹤器(minimal path tracer)</strong>：Lambertian 漫反射 + 面光源 + 蒙地卡羅。
+        這只是教學骨架，請誠實對待它的限制（低解析度、無加速結構、僅漫反射）。
+      </p>
+
+      <pre><code class="language-python">"""
+極簡路徑追蹤器 ── 教學最小版（★標記處為核心邏輯）
+材質：Lambertian 漫反射（albedo）
+光源：天空光（漸層）
+終止：固定最大深度（簡化版俄羅斯輪盤）
+限制：無 BVH、無面光源直接取樣、無鏡面 BRDF
+參考：PBRT-v4、Ray Tracing in One Weekend（Shirley）
+"""
+import math, random
+
+# ── 向量工具 ─────────────────────────────────────
+class V3:
+    __slots__ = ('x','y','z')
+    def __init__(self, x, y, z): self.x=x; self.y=y; self.z=z
+    def __add__(self, v): return V3(self.x+v.x, self.y+v.y, self.z+v.z)
+    def __sub__(self, v): return V3(self.x-v.x, self.y-v.y, self.z-v.z)
+    def __mul__(self, t):
+        if isinstance(t, V3): return V3(self.x*t.x, self.y*t.y, self.z*t.z)  # 逐元
+        return V3(self.x*t, self.y*t, self.z*t)
+    def dot(self, v): return self.x*v.x + self.y*v.y + self.z*v.z
+    def len2(self): return self.dot(self)
+    def unit(self): l=math.sqrt(self.len2()); return V3(self.x/l, self.y/l, self.z/l)
+
+def rand_unit_on_hemisphere(n: V3) -&gt; V3:
+    """★ 在法線 n 定義的上半球均勻取樣（拒絕採樣法）"""
+    while True:
+        v = V3(random.uniform(-1,1), random.uniform(-1,1), random.uniform(-1,1))
+        if v.len2() &lt; 1.0 and v.len2() &gt; 1e-8:
+            v = v.unit()
+            return v if v.dot(n) &gt; 0 else V3(-v.x, -v.y, -v.z)
+
+def cosine_weighted_hemisphere(n: V3) -&gt; V3:
+    """★ 餘弦加權取樣（重要性採樣最佳漫反射方向）"""
+    # Malley 方法：在單位圓盤上均勻採樣，再投影到半球
+    while True:
+        rx, ry = random.uniform(-1,1), random.uniform(-1,1)
+        if rx*rx + ry*ry &lt;= 1.0: break
+    rz = math.sqrt(max(0.0, 1.0 - rx*rx - ry*ry))
+    # 建立以 n 為 z 軸的正交基底
+    up = V3(0,1,0) if abs(n.y) &lt; 0.9 else V3(1,0,0)
+    t = V3(n.y*up.z - n.z*up.y,
+           n.z*up.x - n.x*up.z,
+           n.x*up.y - n.y*up.x).unit()           # tangent
+    b = V3(n.y*t.z - n.z*t.y,
+           n.z*t.x - n.x*t.z,
+           n.x*t.y - n.y*t.x)                    # bitangent
+    return t*rx + b*ry + n*rz                     # 轉回世界座標
+
+# ── 場景物件 ─────────────────────────────────────
+class Sphere:
+    def __init__(self, c: V3, r: float, albedo: V3):
+        self.c, self.r, self.albedo = c, r, albedo
+
+    def hit(self, ro: V3, rd: V3, t_min=1e-4, t_max=1e10):
+        """回傳 (t, 交點, 法線) 或 None"""
+        oc = ro - self.c
+        a = rd.dot(rd)
+        hb = oc.dot(rd)
+        disc = hb*hb - a*(oc.dot(oc) - self.r*self.r)
+        if disc &lt; 0: return None
+        sq = math.sqrt(disc)
+        for t in ((-hb - sq)/a, (-hb + sq)/a):
+            if t_min &lt; t &lt; t_max:
+                p = ro + rd*t
+                return t, p, (p - self.c).unit()
+        return None
+
+# ── 路徑追蹤核心 ─────────────────────────────────
+def sky_color(rd: V3) -&gt; V3:
+    """天空背景光：從白色(下)到淺藍(上)漸層"""
+    t = 0.5*(rd.unit().y + 1.0)
+    return V3(1,1,1)*(1-t) + V3(0.5,0.7,1.0)*t
+
+def radiance(ro: V3, rd: V3, scene: list, depth=0) -&gt; V3:
+    """★ 遞迴追蹤路徑，回傳輻射率估計值"""
+    if depth &gt;= 8:              # 簡化終止（實作中應用俄羅斯輪盤）
+        return V3(0,0,0)
+
+    # 找最近交點
+    best, hit_obj = None, None
+    for obj in scene:
+        res = obj.hit(ro, rd)
+        if res and (best is None or res[0] &lt; best[0]):
+            best, hit_obj = res, obj
+
+    if best is None:
+        return sky_color(rd)   # 沒打到物體 → 天空光
+
+    _, p, n = best
+
+    # ★ Lambertian 漫反射：按餘弦加權取樣反彈方向
+    new_dir = cosine_weighted_hemisphere(n)
+
+    # ★ 蒙地卡羅估計（餘弦重要性採樣時，f_r*cosθ/pdf = albedo，因此 throughput = albedo）
+    incoming = radiance(p, new_dir, scene, depth+1)
+    return incoming * hit_obj.albedo   # ← 每次 bounce 乘上 albedo
+
+# ── 主渲染循環 ────────────────────────────────────
+W, H, SPP = 160, 80, 64  # 教學用低解析度；SPP=64 可見明顯噪點
+
+scene = [
+    Sphere(V3( 0.0, -100.5, -3), 100.0, V3(0.5, 0.8, 0.5)),  # 地板
+    Sphere(V3( 0.0,  0.0,  -3),   0.5,  V3(0.8, 0.3, 0.3)),  # 紅球
+    Sphere(V3( 1.2,  0.0,  -3),   0.5,  V3(0.3, 0.5, 0.8)),  # 藍球
+    Sphere(V3(-1.2,  0.0,  -3),   0.5,  V3(0.8, 0.7, 0.2)),  # 黃球
+]
+
+cam_o = V3(0, 0.3, 0)
+pixels = []
+for j in range(H-1, -1, -1):
+    row = []
+    for i in range(W):
+        acc = V3(0,0,0)
+        for _ in range(SPP):
+            # 抗鋸齒：加隨機偏移 [0,1)
+            u = (i + random.random()) / (W - 1)
+            v = (j + random.random()) / (H - 1)
+            rd = V3(u*3.2 - 1.6, v*1.6 - 0.8, -1.0).unit()
+            acc = acc + radiance(cam_o, rd, scene)
+        # Gamma 校正（γ=2.0 近似：取平方根）
+        avg = acc * (1.0/SPP)
+        row.append((math.sqrt(max(avg.x,0)), math.sqrt(max(avg.y,0)), math.sqrt(max(avg.z,0))))
+    pixels.append(row)
+    if (H-1-j) % 10 == 0:
+        print(f"  行 {H-1-j}/{H} 完成…")
+
+print(f"渲染完成（{W}×{H}, SPP={SPP}）。可輸出 PPM 或用 Pillow 存 PNG。")
+# 輸出 PPM（可直接用 GIMP/Photoshop 開啟）
+with open("output.ppm", "w") as f:
+    f.write(f"P3\n{W} {H}\n255\n")
+    for row in pixels:
+        for (r,g,b) in row:
+            f.write(f"{int(r*255)} {int(g*255)} {int(b*255)} ")
+        f.write("\n")
+print("已寫入 output.ppm")
+</code></pre>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">教學最小版的誠實說明</span>
+          <p>
+            上面這個程式<strong>不適合生產使用</strong>：無 BVH 加速結構（場景大了就慢）、無面光源直接取樣（光源小時收斂極慢）、遞迴可能棧溢出、無鏡面 BRDF。
+            它的目的是讓你親眼看到「隨機取樣 + 遞迴追蹤 + 蒙地卡羅平均」如何從物理原理自然產出有間接光的畫面。
+            進階版本請看 <em>Ray Tracing in One Weekend</em>（免費線上）與 <em>PBRT-v4</em>。
+          </p>
+        </div>
+      </div>
+
+      <!-- ===== §10 ===== -->
+      <h2>即時 vs 離線：PBR 的實務一覽</h2>
+
+      <p>
+        路徑追蹤在理論上完美，但 SPP=4096 才能產出乾淨的靜態圖，遊戲需要每秒 60 格。
+        工業界因此在「真實」與「即時」之間發展出各種取捨策略。
+      </p>
+
+      <h3>即時 PBR（遊戲引擎）</h3>
+      <p>
+        Unreal Engine 5 的 Lumen、Unity 的 HDRP 等，採用「<strong>混合渲染(hybrid rendering)</strong>」：
+        直接光 + 陰影仍用光柵化；間接光用 Screen Space Global Illumination、Irradiance Cache 或少量的光線追蹤 probe 補充。
+        BRDF 用的正是本章的 Cook-Torrance（或其近似）——只是積分不用蒙地卡羅全算，而是預先計算 IBL（Image-Based Lighting）的 split-sum 近似。
+      </p>
+      <p>
+        <strong>Filament</strong>（Google 開源的手機 PBR 引擎）把 Cook-Torrance 公式手動展開並做了一系列近似，讓移動裝置能即時渲染物理正確的材質。
+      </p>
+
+      <h3>NVIDIA RTX 硬體加速</h3>
+      <p>
+        2018 年，NVIDIA 在 Turing 架構加入 RT Core——專門做<strong>射線與 BVH 包圍盒求交</strong>的固定功能硬體。
+        這讓每秒可處理的光線數提升約 10×，使得每像素 1–4 條光線的即時路徑追蹤（搭配 AI 降噪）成為可能。
+      </p>
+
+      <h3>AI 降噪(Denoiser)</h3>
+      <p>
+        即時路徑追蹤每像素只能打 1–4 條光線，畫面充滿雜訊。
+        NVIDIA DLSS、Intel Open Image Denoise（OIDN）等，用<strong>卷積神經網路(CNN)</strong>在低 SPP 有雜訊的圖像上推斷出乾淨的結果——
+        學習的是「雜訊的統計特性」，不是場景本身。
+        結合 G-Buffer（法線、深度、albedo）作為輔助輸入，降噪器能在幾毫秒內把 SPP=4 的噪訊圖轉為 SPP≈4096 水準的品質。
+      </p>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>方法</th><th>典型 SPP</th><th>GI 品質</th><th>速度</th><th>用途</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>Phong 光柵化</td><td>—</td><td>無 GI</td><td>極快（GPU 最佳化）</td><td>老遊戲、低階渲染</td></tr>
+            <tr><td>即時 PBR（混合）</td><td>—</td><td>近似 GI</td><td>60+ fps</td><td>現代遊戲</td></tr>
+            <tr><td>RTX 混合路徑追蹤</td><td>1–4</td><td>有限 GI</td><td>30–60 fps + 降噪</td><td>下世代遊戲</td></tr>
+            <tr><td>離線路徑追蹤</td><td>1000–8192</td><td>完整 GI</td><td>分/小時/幀</td><td>電影特效、建築可視化</td></tr>
+            <tr><td>PBRT / Arnold</td><td>256–4096</td><td>完整 GI + 焦散</td><td>離線</td><td>皮克斯、工業光魔</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- ===== 練習 ===== -->
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 110.1 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>
+            蒙地卡羅積分的誤差以 $1/\sqrt{N}$ 收斂。若你目前用 64 SPP 渲染，雜訊的標準差為 $\sigma$。
+            要把標準差降為 $\sigma/4$（即雜訊視覺上減少到四分之一），需要多少 SPP？
+          </p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p>由 $\text{std dev} = \sigma_0 / \sqrt{N}$，若目前 $N_0 = 64$，標準差為 $\sigma = \sigma_0/\sqrt{64} = \sigma_0/8$。</p>
+              <p>要讓標準差降為 $\sigma/4 = \sigma_0/32$，需要：</p>
+              <p>$$\frac{\sigma_0}{\sqrt{N}} = \frac{\sigma_0}{32} \implies \sqrt{N} = 32 \implies N = 1024 \text{ SPP}$$</p>
+              <p>即需要 $1024/64 = 16$ 倍的取樣數——這就是為什麼路徑追蹤「去噪」如此耗費算力。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 110.2 <span class="badge">思考 + 計算</span></div>
+        <div class="ex-body">
+          <p>
+            Lambertian 漫反射材質（albedo $= 0.8$，即吸收 20% 的光）。
+            考慮一個點光源以 $\theta_i = 60°$ 照射，入射輻射率 $L_i = 10 \, \text{W/m}^2\text{sr}$。
+            用 Lambertian BRDF $f_r = c/\pi$ 計算該點往法線方向的出射輻射率 $L_o$（忽略其他光源，只算直接光）。
+          </p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p>Lambertian BRDF：$f_r = c_\text{diff}/\pi = 0.8/\pi$。</p>
+              <p>渲染方程式（單光源，點光源，$\omega_o$ 為法線方向，$\theta_o = 0°$）：</p>
+              <p>$$L_o = f_r \cdot L_i \cdot \cos\theta_i = \frac{0.8}{\pi} \cdot 10 \cdot \cos 60°$$</p>
+              <p>$$= \frac{0.8}{\pi} \cdot 10 \cdot 0.5 = \frac{4}{\pi} \approx 1.27 \, \text{W/m}^2\text{sr}$$</p>
+              <p>注意：結果與 $\omega_o$ 無關（漫反射各向同性）。$\cos\theta_i$ 因子是 Lambert 定律（斜射光能量稀釋）。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 110.3 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>
+            修改本章的極簡路徑追蹤器，加入一個<strong>自發光球</strong>（面光源）：
+            在 scene 中加一顆 <code>Sphere(V3(0, 3, -3), 0.8, V3(0,0,0))</code>，
+            並讓它的 <code>emission</code> 欄位為 <code>V3(10, 10, 8)</code>（暖白光）。
+            修改 <code>radiance</code> 函式：當打到有 emission 的物體時，回傳 emission × throughput。
+            觀察 SPP=16 vs SPP=256 下地板上陰影與照明的差異。
+          </p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p>關鍵修改：</p>
+              <pre><code class="language-python">class Sphere:
+    def __init__(self, c, r, albedo, emission=None):
+        self.c, self.r, self.albedo = c, r, albedo
+        self.emission = emission or V3(0,0,0)
+
+def radiance(ro, rd, scene, depth=0):
+    if depth &gt;= 8: return V3(0,0,0)
+    best, hit_obj = None, None
+    for obj in scene:
+        res = obj.hit(ro, rd)
+        if res and (best is None or res[0] &lt; best[0]):
+            best, hit_obj = res, obj
+    if best is None: return sky_color(rd)
+    _, p, n = best
+    # ★ 若打到發光物體，直接回傳 emission（第一個反射就找到光源）
+    if hit_obj.emission.len2() &gt; 0:
+        return hit_obj.emission
+    new_dir = cosine_weighted_hemisphere(n)
+    incoming = radiance(p, new_dir, scene, depth+1)
+    return incoming * hit_obj.albedo + hit_obj.emission
+</code></pre>
+              <p>加入面光源後，路徑只要打到發光球就能得到直接光照，大幅減少早期反彈的噪訊。
+              SPP=16 時面光源附近的地板已有平滑照明；SPP=256 時全局光效清晰可見。
+              這也說明為什麼「直接光取樣(next event estimation)」在實際引擎中如此重要。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 110.4 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>
+            Cook-Torrance BRDF 的能量守恆要求：$\int_{\Omega^+} f_r^{\text{spec}}(\omega_i, \omega_o) \cos\theta_o \, d\omega_o \leq 1$。
+            用數值積分（蒙地卡羅，$N=10000$）驗證：對固定入射方向 $\omega_i$（法線入射，即 $\theta_i=0$），
+            $\alpha=0.5$，$F_0=0.04$，積分值是否 $\leq 1$？若把 $F_0$ 改成 1.0（完美鏡子），結果如何？
+          </p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p>概念提示：本題要求用蒙地卡羅估計鏡面 BRDF 的積分，驗證能量守恆。</p>
+              <p>對 $F_0=0.04$（非金屬），積分值通常在 0.02–0.10 之間（鏡面反射只佔一小部分）；
+              加上漫反射的 albedo/π 積分（≈ albedo），總和應 ≤ 1。</p>
+              <p>對 $F_0=1.0$（完美鏡面），F 項恆為 1，鏡面積分趨近 1，漫反射應設為 0——
+              物理上金屬沒有漫反射，這正是 metallic=1 時捨棄漫反射項的原因。</p>
+              <p>此練習驗證了 Cook-Torrance 模型的物理正確性，也說明為什麼美術師不能讓 metallic 材質同時有高 albedo 和高 metallic。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ===== §11 ===== -->
+      <h2>把這一章串起來</h2>
+
+      <p>
+        讓我們把這一路走過的思路收攏：
+      </p>
+      <ol>
+        <li><strong>Phong 的問題</strong>是它是「看起來合理」的經驗公式，缺乏能量守恆，沒有間接光。</li>
+        <li><strong>輻射度量學</strong>給了我們精確的語言：輻射率 $L$、立體角 $d\omega$、半球積分。</li>
+        <li><strong>渲染方程式</strong>把所有光傳輸壓進一個遞迴積分：$L_o = L_e + \int f_r L_i \cos\theta_i \, d\omega_i$。</li>
+        <li><strong>BRDF 與 Cook-Torrance</strong>用 D/G/F 三個物理量精確描述材質，能量守恆有保障。</li>
+        <li><strong>蒙地卡羅積分</strong>讓我們用隨機取樣估計高維積分，誤差以 $1/\sqrt{N}$ 收斂。</li>
+        <li><strong>路徑追蹤</strong>把蒙地卡羅套進渲染方程式的遞迴，遞迴終止用俄羅斯輪盤，取樣降方差用重要性採樣。</li>
+        <li><strong>全域光照</strong>是路徑追蹤的自然產物——間接光、色溢、軟陰影，不需要額外的「特效」，只需足夠的 SPP。</li>
+        <li><strong>實務</strong>中，遊戲用混合渲染近似 GI；電影用離線路徑追蹤；AI 降噪讓低 SPP 也能看起來乾淨。</li>
+      </ol>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">最重要的一件事</span>
+          <p>
+            渲染方程式是「正確答案的定義」；路徑追蹤是「計算這個正確答案的演算法」；
+            PBR 材質是「讓物理量有意義的參數化方式」。三者合在一起，才有照片級渲染。
+          </p>
+        </div>
+      </div>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">延伸學習資源</span>
+          <ul>
+            <li><strong>Ray Tracing in One Weekend</strong>（Peter Shirley，線上免費）— 從零實作路徑追蹤器，程式碼乾淨，是本章的直接延伸。</li>
+            <li><strong>PBRT-v4 書 + 原始碼</strong>（pbr-book.org）— 業界聖經，完整實作的生產級路徑追蹤器，程式碼完全開源。</li>
+            <li><strong>LearnOpenGL — PBR 章節</strong>（learnopengl.com/PBR）— 即時 PBR 實作，GLSL 著色器，Cook-Torrance 完整範例。</li>
+            <li><strong>Filament 文件</strong>（google.github.io/filament）— Google 的 PBR 技術白皮書，工業實務細節豐富。</li>
+            <li><strong>《全球光照技術》</strong>（王鍀然，PBRT 中文社群）— 中文讀者入門全域光照的好選擇。</li>
+          </ul>
+        </div>
+      </div>

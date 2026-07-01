@@ -1,0 +1,629 @@
+<!--meta
+title: 虛擬化全景:行程隔離到 VM 與容器
+description: 從作業系統的行程隔離出發,走過容器、虛擬機到 unikernel,建立虛擬化光譜的完整心智地圖,讀懂 VM 與容器的本質差異與取捨。
+-->
+
+      <div class="eyebrow">第二一部 · 容器、虛擬化與雲原生底層</div>
+      <h1>虛擬化全景:行程隔離到 VM 與容器</h1>
+      <p class="subtitle">「讓每個程式都以為自己獨佔整台電腦」——這句話說來輕鬆,背後卻藏著幾十年的工程智慧與一條不斷延伸的光譜。</p>
+      <div class="byline">
+        <span class="tag">第 85 章</span>
+        <span>閱讀時間 ≈ 40 分鐘</span>
+        <span>難度:★★★☆☆</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>為什麼「隔離(isolation)」是現代計算基礎建設的核心需求</li>
+          <li>虛擬化(virtualization)光譜:從行程隔離→容器→虛擬機→unikernel</li>
+          <li>虛擬機(virtual machine, VM)的本質:在硬體之上再跑一整個作業系統</li>
+          <li>容器(container)的本質:共享主機核心、只隔離「視圖」</li>
+          <li>VM 與容器的核心架構差異,以及各自的取捨</li>
+          <li>現代生態一覽:KVM、Docker、Firecracker、gVisor、WASM、unikernel 各自定位</li>
+        </ul>
+      </div>
+
+      <!-- ==================== h2 ① ==================== -->
+      <h2>為什麼一個程式需要「以為自己獨佔整台電腦」?</h2>
+
+      <p>
+        想像你在一間共用辦公室裡工作。桌子是共用的、印表機是共用的、網路也是共用的。
+        這本來沒問題——直到某天隔壁的人把你的文件蓋掉、用光了所有印紙、又把網路塞滿了。
+        你開始懷念擁有自己辦公室的日子:有了私人空間,你才能不受干擾地工作,
+        也不必擔心把隔壁的文件搞砸。
+      </p>
+      <p>
+        電腦世界裡的「行程(process)」面臨同樣的處境。一台伺服器同時跑著資料庫、
+        Web 應用程式、背景任務……它們共用 CPU、記憶體和磁碟。若沒有任何隔離機制,
+        任一程式的 bug 就可能破壞其他程式的記憶體、讀到機密資料,甚至讓整台機器崩潰。
+      </p>
+      <p>
+        「<strong>隔離(isolation)</strong>」正是對抗這種混亂的答案。而「<strong>虛擬化(virtualization)</strong>」
+        則是實現隔離的技術手段——讓每個工作負載都活在自己的「幻境」裡,以為自己是唯一的主人。
+        這個幻境可以很薄(行程隔離),可以很厚(完整的虛擬機),也可以只做到剛好夠用(容器)。
+        這一章,我們就來把這條光譜從頭走到尾。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">隔離的兩個維度</span>
+          <p>隔離通常在兩個維度上討論:<strong>故障隔離(fault isolation)</strong>——一個元件崩潰不拖累其他元件;
+          以及<strong>安全隔離(security isolation)</strong>——一個元件無法讀寫、干擾其他元件的資源。
+          不同的虛擬化技術在這兩個維度上提供的保證強度各不相同。</p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ② ==================== -->
+      <h2>從作業系統的行程隔離說起</h2>
+
+      <p>
+        在深入容器和虛擬機之前,先回到我們已經熟悉的地基。
+        在<a href="24-operating-system.html">第 24 章</a>裡,你看到作業系統(OS)
+        如何用兩個關鍵抽象來隔離每個程式:
+      </p>
+      <ul>
+        <li>
+          <strong>行程(process)</strong>:每個執行中的程式都活在自己的行程裡,
+          有獨立的執行緒、開啟的檔案描述符,以及——最關鍵的——獨立的<strong>位址空間(address space)</strong>。
+        </li>
+        <li>
+          <strong>虛擬記憶體(virtual memory)</strong>:每個行程看到的記憶體位址都是虛擬的,
+          作業系統與 CPU 的 MMU(Memory Management Unit)負責在背後把虛擬位址翻譯成實體位址。
+          行程 A 的 <code>0x1000</code> 和行程 B 的 <code>0x1000</code> 指向完全不同的實體位置——
+          它們根本不可能互相干擾。
+        </li>
+      </ul>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">行程:最基本的虛擬化</span>
+          <p>行程隔離本身就是一種虛擬化——每個行程都有「自己的 CPU」(輪流排程的幻象)
+          和「自己的記憶體」(虛擬位址空間)。從這個角度看,作業系統早在容器和 VM 出現之前,
+          就已經是一個虛擬化引擎了。</p>
+        </div>
+      </div>
+
+      <p>
+        那為什麼還需要容器和 VM?因為行程隔離有它的邊界:
+      </p>
+      <ul>
+        <li>多個行程<strong>共用同一個 OS 核心(kernel)</strong>。若核心有漏洞,所有行程都暴露。</li>
+        <li>它們共用相同的<strong>系統程式庫版本</strong>、相同的網路設定、相同的主機名稱。
+            「這個程式需要 Python 3.9,那個需要 Python 3.12」——用純行程隔離很難乾淨地解決。</li>
+        <li>行程隔離的<strong>安全邊界</strong>依賴核心的正確性。若攻擊者能利用系統呼叫漏洞逃逸,
+            就能影響同主機的所有行程。</li>
+      </ul>
+      <p>
+        容器和 VM 都是為了突破這些邊界而誕生的——只是它們選擇了不同的突破路徑。
+      </p>
+
+      <!-- ==================== h2 ③ ==================== -->
+      <h2>虛擬化光譜:從行程到 unikernel</h2>
+
+      <p>
+        把各種隔離技術放在同一條軸線上,你會看到一個清晰的光譜:
+        隔離強度越強,開銷通常也越大;越輕量,隔離邊界就越薄。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 320" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- 背景 -->
+  <rect width="720" height="320" fill="#f8fafb" rx="12"/>
+
+  <!-- 標題 -->
+  <text x="360" y="28" text-anchor="middle" font-size="14" font-weight="700" fill="#1f2328">虛擬化光譜</text>
+
+  <!-- 光譜主軸 -->
+  <line x1="60" y1="80" x2="660" y2="80" stroke="#8a929b" stroke-width="2.5"/>
+  <!-- 箭頭 -->
+  <polygon points="660,74 672,80 660,86" fill="#8a929b"/>
+
+  <!-- 隔離強度標籤 -->
+  <text x="60" y="65" text-anchor="middle" font-size="11" fill="#8a929b">隔離弱</text>
+  <text x="645" y="65" text-anchor="middle" font-size="11" fill="#8a929b">隔離強</text>
+
+  <!-- 節點 1: 行程 -->
+  <circle cx="120" cy="80" r="10" fill="#2f6f6a"/>
+  <text x="120" y="108" text-anchor="middle" font-size="13" font-weight="700" fill="#2f6f6a">行程</text>
+  <text x="120" y="124" text-anchor="middle" font-size="11" fill="#4a5159">Process</text>
+  <rect x="60" y="140" width="120" height="64" rx="8" fill="#e3efed" stroke="#2f6f6a" stroke-width="1.5"/>
+  <text x="120" y="158" text-anchor="middle" font-size="10" fill="#1f2328">共用 OS 核心</text>
+  <text x="120" y="172" text-anchor="middle" font-size="10" fill="#1f2328">獨立位址空間</text>
+  <text x="120" y="186" text-anchor="middle" font-size="10" fill="#b4541f">開銷:極低</text>
+
+  <!-- 節點 2: 容器 -->
+  <circle cx="280" cy="80" r="10" fill="#8b5cf6"/>
+  <text x="280" y="108" text-anchor="middle" font-size="13" font-weight="700" fill="#8b5cf6">容器</text>
+  <text x="280" y="124" text-anchor="middle" font-size="11" fill="#4a5159">Container</text>
+  <rect x="220" y="140" width="120" height="64" rx="8" fill="#ede9fe" stroke="#8b5cf6" stroke-width="1.5"/>
+  <text x="280" y="158" text-anchor="middle" font-size="10" fill="#1f2328">共用 OS 核心</text>
+  <text x="280" y="172" text-anchor="middle" font-size="10" fill="#1f2328">獨立 namespace</text>
+  <text x="280" y="186" text-anchor="middle" font-size="10" fill="#b4541f">開銷:低</text>
+
+  <!-- 節點 3: VM -->
+  <circle cx="460" cy="80" r="10" fill="#b4541f"/>
+  <text x="460" y="108" text-anchor="middle" font-size="13" font-weight="700" fill="#b4541f">虛擬機</text>
+  <text x="460" y="124" text-anchor="middle" font-size="11" fill="#4a5159">VM</text>
+  <rect x="400" y="140" width="120" height="64" rx="8" fill="#fde8dd" stroke="#b4541f" stroke-width="1.5"/>
+  <text x="460" y="158" text-anchor="middle" font-size="10" fill="#1f2328">獨立 Guest OS</text>
+  <text x="460" y="172" text-anchor="middle" font-size="10" fill="#1f2328">Hypervisor 虛擬硬體</text>
+  <text x="460" y="186" text-anchor="middle" font-size="10" fill="#b4541f">開銷:較高</text>
+
+  <!-- 節點 4: Unikernel -->
+  <circle cx="620" cy="80" r="10" fill="#1f2328"/>
+  <text x="620" y="108" text-anchor="middle" font-size="13" font-weight="700" fill="#1f2328">Unikernel</text>
+  <text x="620" y="124" text-anchor="middle" font-size="11" fill="#4a5159">Unikernel</text>
+  <rect x="560" y="140" width="120" height="64" rx="8" fill="#e8e8e8" stroke="#1f2328" stroke-width="1.5"/>
+  <text x="620" y="158" text-anchor="middle" font-size="10" fill="#1f2328">OS 函式庫化</text>
+  <text x="620" y="172" text-anchor="middle" font-size="10" fill="#1f2328">單一用途映像</text>
+  <text x="620" y="186" text-anchor="middle" font-size="10" fill="#b4541f">開銷:極低+強隔離</text>
+
+  <!-- 底部說明 -->
+  <text x="360" y="240" text-anchor="middle" font-size="11" fill="#8a929b">← 輕量、啟動快、密度高</text>
+  <text x="360" y="256" text-anchor="middle" font-size="11" fill="#8a929b">強隔離、安全邊界寬、可跑不同 OS →</text>
+
+  <!-- 圖說 -->
+  <text x="360" y="290" text-anchor="middle" font-size="10" fill="#8a929b">隔離強度與開銷通常正相關——但 unikernel 是例外:它透過縮小攻擊面同時達到輕量與高隔離</text>
+</svg>
+        <figcaption>圖 85-1:虛擬化光譜。從左到右,隔離強度遞增,傳統開銷也遞增;Unikernel 是特例,以「縮小系統表面」換取兼顧輕量與高隔離。</figcaption>
+      </div>
+
+      <p>
+        這條光譜並不是線性的「越強越好」——每個位置都有它最適合的場景。
+        接下來,我們依序把光譜上的幾個關鍵節點說清楚。
+      </p>
+
+      <!-- ==================== h2 ④ ==================== -->
+      <h2>虛擬機(VM):在硬體之上再跑一整個 OS</h2>
+
+      <p>
+        虛擬機(Virtual Machine,VM)的想法很直接:與其讓多個應用程式共用同一個作業系統,
+        何不讓每個工作負載都有<strong>自己的完整作業系統</strong>?
+      </p>
+      <p>
+        這件事靠<strong>虛擬機監控器(Hypervisor,也稱 VMM, Virtual Machine Monitor)</strong>實現。
+        Hypervisor 坐在硬體之上,把實體 CPU、記憶體、磁碟、網路卡等硬體資源「切割」成一份份
+        虛擬硬體,分給每個 VM。每個 VM 裡跑的作業系統稱為<strong>客端作業系統(Guest OS)</strong>,
+        它完全不知道自己在一台虛擬機上——它以為自己有獨享的 CPU 和記憶體。
+      </p>
+
+      <div class="callout history">
+        <div class="ico">📜</div>
+        <div class="body">
+          <span class="c-title">VM 的誕生:IBM 的 1960 年代</span>
+          <p>虛擬機的概念可以追溯到 1960 年代的 IBM System/360,當時是為了讓大型主機能同時服務多個「互不干擾」的用戶。
+          第一個廣泛使用的現代 Hypervisor 是 VMware(1998 年創立)帶進 x86 世界的。
+          2003 年,英國劍橋大學發表開源的 <strong>Xen</strong> Hypervisor,拉開了雲端虛擬化的序幕。
+          Amazon EC2(2006 年)一開始就是建立在 Xen 之上的。</p>
+        </div>
+      </div>
+
+      <p>
+        Hypervisor 有兩種主要類型:
+      </p>
+      <ul>
+        <li>
+          <strong>Type 1(裸機型,Bare-metal)</strong>:直接跑在硬體上,沒有底層 OS。
+          例子:VMware ESXi、Microsoft Hyper-V、開源的 KVM(Linux 核心內建)、Xen。
+          大多數雲端提供商的底層都是 Type 1。
+        </li>
+        <li>
+          <strong>Type 2(宿主型,Hosted)</strong>:跑在一個現有 OS 之上,是一般應用程式。
+          例子:VirtualBox、VMware Workstation。適合開發者在自己筆電上測試。
+        </li>
+      </ul>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">KVM 的特殊身份</span>
+          <p>KVM(Kernel-based Virtual Machine)嚴格說來是 Type 1 和 Type 2 的混血:它是 Linux 核心的一個模組,
+          把 Linux 本身變成 Hypervisor。因此 KVM 直接利用 Linux 的排程器與記憶體管理,效能接近裸機型,
+          但管理上像個宿主型。它是目前 Linux 伺服器虛擬化的主流選擇,也是 AWS、GCP 等雲端平台的核心技術之一。</p>
+        </div>
+      </div>
+
+      <p>
+        VM 的最大優點是<strong>完全的 OS 層隔離</strong>:Guest OS 可以是 Windows、Linux、FreeBSD 任意組合,
+        且 Guest OS 的崩潰不影響 Host 或其他 VM。這讓 VM 成為「多租戶雲端」的首選技術。
+        後續的第 86 章(虛擬機與 Hypervisor 底層)將深入 Hypervisor 的實作細節——包括 Intel VT-x / AMD-V 硬體輔助、
+        記憶體影子頁表與 EPT,以及 I/O 虛擬化。
+      </p>
+
+      <!-- ==================== h2 ⑤ ==================== -->
+      <h2>容器(Container):共享核心、只隔離視圖</h2>
+
+      <p>
+        VM 的隔離很強,但代價是整個 Guest OS 都要跑起來。有時候你只是想讓兩個應用程式
+        「看起來」住在不同的世界——它們可以共用同一個 Linux 核心,只要各自看到不同的
+        檔案系統、不同的行程樹、不同的網路介面就夠了。
+      </p>
+      <p>
+        容器就是這樣的東西。它利用 Linux 核心的兩個關鍵特性實現隔離:
+      </p>
+      <ul>
+        <li>
+          <strong>命名空間(namespace)</strong>:讓每個容器擁有獨立的「視圖」——
+          自己的行程 ID 命名空間(PID namespace)、網路介面(net namespace)、
+          掛載點(mnt namespace)、主機名稱(UTS namespace)等。
+          容器裡的行程看到的 PID 1 就是容器自己的 init 行程,而非 Host 的真正 init。
+        </li>
+        <li>
+          <strong>控制群組(cgroup, control group)</strong>:限制每個容器能使用的
+          CPU 時間、記憶體上限、磁碟 I/O 速率等資源,防止某個容器把 Host 的資源耗光。
+        </li>
+      </ul>
+      <p>
+        在這之上,容器映像(image)通常使用<strong>聯合掛載(Union Mount)</strong>技術
+        (如 OverlayFS)分層疊加檔案系統,讓多個容器共用相同的基底層而不互相汙染。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">容器 ≠ 虛擬機</span>
+          <p>容器不是「輕量的 VM」。容器<strong>沒有自己的 OS 核心</strong>——它只是 Host 核心上
+          用 namespace + cgroup 圍起來的一組行程。這意味著容器裡跑的程式仍然在直接呼叫 Host 的 Linux 核心系統呼叫。
+          VM 則有完整獨立的 Guest OS 核心,與 Host 核心完全分離。</p>
+        </div>
+      </div>
+
+      <p>
+        Docker(2013 年發布)讓容器技術從 Linux 專家的工具變成每個開發者都能用的東西:
+        透過 Dockerfile 描述映像、透過映像倉庫(registry)分發、透過統一的 CLI 管理。
+        現在雲原生生態的底層容器執行時主要是 <strong>containerd</strong>(由 Docker 貢獻給 CNCF),
+        以及 CRI-O 等符合 OCI(Open Container Initiative)標準的執行環境。
+        後續的第 87 章將深入 namespace、cgroup、OverlayFS 的實作,第 88 章則會帶你親手寫一個迷你 Docker。
+      </p>
+
+      <!-- ==================== h2 ⑥ ==================== -->
+      <h2>VM vs 容器:架構對比</h2>
+
+      <p>
+        用一張圖把兩者的架構堆疊並排,差異一目了然:
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 400" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <rect width="720" height="400" fill="#f8fafb" rx="12"/>
+
+  <!-- ===== 左半:VM 架構 ===== -->
+  <text x="185" y="28" text-anchor="middle" font-size="14" font-weight="700" fill="#b4541f">虛擬機架構</text>
+
+  <!-- 硬體 -->
+  <rect x="30" y="340" width="310" height="36" rx="6" fill="#8a929b"/>
+  <text x="185" y="363" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">實體硬體 (Physical Hardware)</text>
+
+  <!-- Hypervisor -->
+  <rect x="30" y="296" width="310" height="36" rx="6" fill="#b4541f"/>
+  <text x="185" y="319" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">Hypervisor (Type 1 / KVM)</text>
+
+  <!-- VM 1 -->
+  <rect x="36" y="42" width="134" height="246" rx="8" fill="#fde8dd" stroke="#b4541f" stroke-width="2"/>
+  <text x="103" y="62" text-anchor="middle" font-size="12" font-weight="700" fill="#b4541f">VM 1</text>
+  <rect x="48" y="70" width="110" height="32" rx="5" fill="#f9c8b0"/>
+  <text x="103" y="91" text-anchor="middle" font-size="11" fill="#1f2328">App A</text>
+  <rect x="48" y="110" width="110" height="32" rx="5" fill="#f9c8b0"/>
+  <text x="103" y="131" text-anchor="middle" font-size="11" fill="#1f2328">App B</text>
+  <rect x="48" y="150" width="110" height="32" rx="5" fill="#f6b090"/>
+  <text x="103" y="171" text-anchor="middle" font-size="11" fill="#1f2328">Guest OS Libs</text>
+  <rect x="48" y="190" width="110" height="40" rx="5" fill="#e8805a"/>
+  <text x="103" y="208" text-anchor="middle" font-size="12" font-weight="700" fill="#fff">Guest OS</text>
+  <text x="103" y="224" text-anchor="middle" font-size="10" fill="#ffe0d0">Kernel</text>
+
+  <!-- VM 2 -->
+  <rect x="200" y="42" width="134" height="246" rx="8" fill="#fde8dd" stroke="#b4541f" stroke-width="2"/>
+  <text x="267" y="62" text-anchor="middle" font-size="12" font-weight="700" fill="#b4541f">VM 2</text>
+  <rect x="212" y="70" width="110" height="32" rx="5" fill="#f9c8b0"/>
+  <text x="267" y="91" text-anchor="middle" font-size="11" fill="#1f2328">App C</text>
+  <rect x="212" y="110" width="110" height="32" rx="5" fill="#f9c8b0"/>
+  <text x="267" y="131" text-anchor="middle" font-size="11" fill="#1f2328">App D</text>
+  <rect x="212" y="150" width="110" height="32" rx="5" fill="#f6b090"/>
+  <text x="267" y="171" text-anchor="middle" font-size="11" fill="#1f2328">Guest OS Libs</text>
+  <rect x="212" y="190" width="110" height="40" rx="5" fill="#e8805a"/>
+  <text x="267" y="208" text-anchor="middle" font-size="12" font-weight="700" fill="#fff">Guest OS</text>
+  <text x="267" y="224" text-anchor="middle" font-size="10" fill="#ffe0d0">Kernel</text>
+
+  <!-- ===== 右半:容器架構 ===== -->
+  <text x="545" y="28" text-anchor="middle" font-size="14" font-weight="700" fill="#8b5cf6">容器架構</text>
+
+  <!-- 硬體 -->
+  <rect x="390" y="340" width="300" height="36" rx="6" fill="#8a929b"/>
+  <text x="540" y="363" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">實體硬體 (Physical Hardware)</text>
+
+  <!-- Host OS -->
+  <rect x="390" y="280" width="300" height="52" rx="6" fill="#8b5cf6"/>
+  <text x="540" y="301" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">Host OS (Linux Kernel)</text>
+  <text x="540" y="320" text-anchor="middle" font-size="11" fill="#ddd8fe">namespace + cgroup</text>
+
+  <!-- Container Runtime -->
+  <rect x="390" y="248" width="300" height="24" rx="5" fill="#6d28d9"/>
+  <text x="540" y="264" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">Container Runtime (containerd)</text>
+
+  <!-- Container 1 -->
+  <rect x="396" y="42" width="130" height="198" rx="8" fill="#ede9fe" stroke="#8b5cf6" stroke-width="2"/>
+  <text x="461" y="62" text-anchor="middle" font-size="12" font-weight="700" fill="#8b5cf6">Container 1</text>
+  <rect x="408" y="70" width="106" height="32" rx="5" fill="#ddd6fe"/>
+  <text x="461" y="91" text-anchor="middle" font-size="11" fill="#1f2328">App A</text>
+  <rect x="408" y="110" width="106" height="32" rx="5" fill="#ddd6fe"/>
+  <text x="461" y="131" text-anchor="middle" font-size="11" fill="#1f2328">App B</text>
+  <rect x="408" y="150" width="106" height="32" rx="5" fill="#c4b5fd"/>
+  <text x="461" y="171" text-anchor="middle" font-size="11" fill="#1f2328">App Libs</text>
+
+  <!-- Container 2 -->
+  <rect x="554" y="42" width="130" height="198" rx="8" fill="#ede9fe" stroke="#8b5cf6" stroke-width="2"/>
+  <text x="619" y="62" text-anchor="middle" font-size="12" font-weight="700" fill="#8b5cf6">Container 2</text>
+  <rect x="566" y="70" width="106" height="32" rx="5" fill="#ddd6fe"/>
+  <text x="619" y="91" text-anchor="middle" font-size="11" fill="#1f2328">App C</text>
+  <rect x="566" y="110" width="106" height="32" rx="5" fill="#ddd6fe"/>
+  <text x="619" y="131" text-anchor="middle" font-size="11" fill="#1f2328">App D</text>
+  <rect x="566" y="150" width="106" height="32" rx="5" fill="#c4b5fd"/>
+  <text x="619" y="171" text-anchor="middle" font-size="11" fill="#1f2328">App Libs</text>
+</svg>
+        <figcaption>圖 85-2:VM 架構(左)與容器架構(右)的堆疊對比。VM 每一個都跑獨立的 Guest OS Kernel;容器則共用 Host OS 的 Linux Kernel,只用 namespace/cgroup 隔離「視圖」。</figcaption>
+      </div>
+
+      <p>
+        從圖中可以清楚看出:VM 架構中每個 VM 都有完整的 Guest OS(通常佔用幾百 MB 到幾 GB 的記憶體),
+        而容器架構中所有容器共用同一個 Host Kernel,每個容器只需要打包自己的應用程式與相依程式庫。
+        這個差異直接決定了兩者的資源開銷與啟動特性。
+      </p>
+
+      <!-- ==================== h2 ⑦ ==================== -->
+      <h2>取捨矩陣:你該選 VM 還是容器?</h2>
+
+      <p>
+        沒有絕對的好壞,只有「是否適合這個場景」。以下是幾個關鍵維度的比較:
+      </p>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>維度</th>
+              <th>行程(OS 原生)</th>
+              <th>容器</th>
+              <th>虛擬機(VM)</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>啟動速度</strong></td>
+              <td>毫秒級(幾乎即時)</td>
+              <td>毫秒至秒級(啟動容器 runtime)</td>
+              <td>秒至數十秒(需啟動完整 Guest OS)</td>
+            </tr>
+            <tr>
+              <td><strong>記憶體開銷</strong></td>
+              <td>極低</td>
+              <td>低(共用核心)</td>
+              <td>較高(每個 VM 有獨立 OS 記憶體佔用)</td>
+            </tr>
+            <tr>
+              <td><strong>部署密度</strong></td>
+              <td>最高</td>
+              <td>高</td>
+              <td>相對較低</td>
+            </tr>
+            <tr>
+              <td><strong>隔離強度</strong></td>
+              <td>低(共用核心、共用 syscall 介面)</td>
+              <td>中(共用核心,依賴核心安全)</td>
+              <td>高(獨立 Guest OS,Hypervisor 邊界)</td>
+            </tr>
+            <tr>
+              <td><strong>安全邊界</strong></td>
+              <td>核心漏洞即全面暴露</td>
+              <td>核心漏洞可能影響所有容器</td>
+              <td>Guest OS 崩潰不影響 Host 或其他 VM</td>
+            </tr>
+            <tr>
+              <td><strong>OS 多樣性</strong></td>
+              <td>無(同 Host OS)</td>
+              <td>無(同 Host 核心;可用不同發行版 rootfs)</td>
+              <td>可跑不同 OS(Windows、Linux、FreeBSD)</td>
+            </tr>
+            <tr>
+              <td><strong>可移植性</strong></td>
+              <td>依賴 Host OS</td>
+              <td>高(OCI 映像格式跨平台)</td>
+              <td>中(VM 映像格式有標準,但體積較大)</td>
+            </tr>
+            <tr>
+              <td><strong>典型場景</strong></td>
+              <td>同主機的多工任務</td>
+              <td>微服務、CI/CD、雲原生應用</td>
+              <td>多租戶雲端、需要不同 OS、高安全需求</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">「容器比 VM 快」的正確理解</span>
+          <p>容器啟動速度快,是因為它<strong>不需要啟動 Guest OS</strong>,只是在現有核心上建立新的 namespace。
+          但這不代表容器裡的應用程式執行速度比 VM 裡的快——兩者的應用層效能差異通常可以忽略不計。
+          關鍵差異在於<strong>資源開銷與啟動延遲</strong>,不是執行時的計算速度。
+          實際的啟動時間差異取決於具體環境、映像大小、系統負載等因素,難以給出精確的通用數字。</p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 85.1 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>你是一家金融公司的架構師,需要在同一台伺服器上同時跑:
+          (A) 一個高合規需求的核心交易系統,需要強安全隔離且使用 Windows Server;
+          (B) 幾十個輕量的 Python 微服務 API,每個都很小,需要能快速橫向擴展。
+          你會如何搭配使用 VM 和容器?說明你的理由。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>交易系統(A)</strong>適合放在 VM 裡。理由:需要 Windows Server(容器在 Linux Host 上無法直接跑 Windows 核心應用);高合規需求需要強隔離(Hypervisor 邊界比 namespace 邊界更難突破);崩潰或安全事件不應影響同主機其他服務。</p>
+              <p><strong>Python 微服務(B)</strong>適合用容器部署,並透過 Kubernetes 等編排系統管理。理由:需要快速啟動與橫向擴展(容器啟動快、資源開銷低,同一台機器可以跑更多副本);OCI 映像格式讓開發/測試/生產環境一致;透過 cgroup 限制每個服務的資源用量,防止某個服務拖垮整台機器。</p>
+              <p>這種「VM 跑 Host OS + 容器在 Host OS 上」的組合在現實中很常見:雲端 VM 本身就是跑在 Hypervisor 之上的,而 VM 裡再用容器部署應用——兩層隔離各司其職。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 85.2 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>為什麼容器的啟動速度比 VM 快?請從技術原理的角度解釋,而不只是說「因為容器比較輕量」。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>容器啟動快的根本原因是<strong>它不需要啟動 OS 核心</strong>。VM 啟動時需要:BIOS/UEFI 初始化、Hypervisor 建立虛擬硬體、Guest OS bootloader 執行、Guest OS 核心載入與初始化(驅動程式、子系統、服務)——這些步驟合計需要數秒到數十秒。</p>
+              <p>容器啟動時,Host OS 核心已經在執行中。Container Runtime 只需要:建立新的 namespace(幾個系統呼叫)、設定 cgroup 限制、掛載 rootfs(OverlayFS 分層)、啟動容器內的第一個行程(PID 1)。這些操作在核心層面極為輕量,通常在毫秒至秒的量級內完成。</p>
+              <p>總結:容器快是因為「省掉了 Guest OS 的整個啟動流程」,而非應用程式本身執行更快。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑧ ==================== -->
+      <h2>現代生態一覽:各技術的定位</h2>
+
+      <p>
+        光有 VM 和容器的概念還不夠——現代生態裡還有幾個值得認識的角色,
+        填補了光譜上的各種空隙:
+      </p>
+
+      <h3>虛擬機層</h3>
+      <ul>
+        <li><strong>KVM(Kernel-based Virtual Machine)</strong>:Linux 核心內建的 Type 1 Hypervisor。
+            是 OpenStack、AWS(早期)等主流雲端平台的基礎。</li>
+        <li><strong>VMware ESXi / vSphere</strong>:企業市場的 Type 1 Hypervisor,管理介面成熟,
+            廣泛用於私有雲與企業資料中心。</li>
+        <li><strong>QEMU</strong>:開源的完整機器模擬器,常與 KVM 搭配(QEMU-KVM):
+            QEMU 提供設備模擬,KVM 提供硬體加速的 CPU/記憶體虛擬化。</li>
+      </ul>
+
+      <h3>容器層</h3>
+      <ul>
+        <li><strong>Docker</strong>:讓容器技術普及的先驅,提供完整的開發工作流程(build/ship/run)。
+            底層執行時已換為 containerd。</li>
+        <li><strong>containerd</strong>:業界標準的容器執行時(container runtime),
+            符合 OCI 標準,是 Kubernetes 的預設 CRI 實作。</li>
+        <li><strong>Podman</strong>:Red Hat 主導的無守護行程(daemonless)容器工具,
+            設計上相容 Docker CLI,適合需要無 root 執行的場景。</li>
+      </ul>
+
+      <h3>輕量虛擬化:兩全其美的嘗試</h3>
+      <p>
+        容器的隔離不夠強?VM 的開銷又太高?有幾個專案試圖在中間找到平衡:
+      </p>
+      <ul>
+        <li>
+          <strong>Firecracker</strong>(AWS 開源):一個極簡的 microVM VMM,
+          使用 KVM 提供硬體層隔離,但刻意省去傳統 VM 的大量設備模擬,
+          因此能在極短時間內啟動一個有獨立核心的微型 VM。
+          AWS Lambda 和 Fargate 背後就是 Firecracker。它試圖同時達到 VM 的安全隔離和容器的輕量啟動。
+        </li>
+        <li>
+          <strong>gVisor</strong>(Google 開源):在用戶空間實作了一個 Linux 系統呼叫的沙箱層(Sentry),
+          攔截容器的 syscall,讓它們不直接落到 Host 核心。
+          犧牲一些效能換取更強的安全隔離。Google Cloud Run 背後使用了 gVisor。
+        </li>
+        <li>
+          <strong>kata-containers</strong>:把 OCI 容器標準和輕量 VM 結合,
+          讓每個「容器」實際上跑在一個輕量 VM 裡,兼顧容器的使用者體驗與 VM 的隔離邊界。
+        </li>
+      </ul>
+
+      <h3>Unikernel:把 OS 縮進應用程式</h3>
+      <p>
+        <strong>Unikernel</strong> 走的是一條更激進的路:把應用程式與它所需的 OS 功能
+        (網路、儲存、記憶體管理等)編譯成<strong>單一可執行映像</strong>,
+        直接跑在 Hypervisor 之上(或裸機)。沒有多餘的 OS 程式庫、沒有 shell、
+        沒有你用不到的核心子系統——攻擊面極小。
+      </p>
+      <p>
+        代表專案有 MirageOS(OCaml)、IncludeOS(C++)、Nanos 等。
+        Unikernel 的缺點是開發與除錯比傳統 OS 困難得多,生態系也相對小眾。
+        它目前主要應用在網路功能虛擬化(NFV)、嵌入式系統,以及對安全性有極端要求的場景。
+      </p>
+
+      <h3>WebAssembly(WASM):沙箱的另一個維度</h3>
+      <p>
+        <strong>WebAssembly(WASM)</strong> 原本是為瀏覽器設計的沙箱執行環境,
+        但近年來 WASM Runtime(如 Wasmtime、WasmEdge)讓它在伺服器端也能作為輕量隔離單元。
+        WASM 在語言無關、啟動極快、細粒度安全控制上有獨特優勢,
+        是 Serverless 和邊緣運算場景的新興選項。Cloudflare Workers 便是基於 V8 Isolate(概念上類似 WASM 沙箱)。
+      </p>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">想親眼看 Linux 在瀏覽器裡跑?</span>
+          <p><a href="https://webvm.io/" target="_blank" rel="noopener">WebVM.io</a> 用 WebAssembly 在瀏覽器裡執行了一個完整的 Linux 環境(x86 虛擬化)。
+          打開它,你可以在瀏覽器的 Terminal 裡跑 Bash、Python、gcc——完全在你的瀏覽器沙箱內,不需要後端伺服器。
+          這是虛擬化技術的一個很酷的現場示範。</p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 85.3 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>Unikernel 宣稱同時達到「輕量」與「高安全隔離」。但在光譜圖(圖 85-1)中,它被放在「隔離強」的右端。這兩個說法矛盾嗎?Unikernel 是用什麼方法在不增加傳統開銷的情況下達到高隔離的?它最適合什麼樣的場景?</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>不矛盾,但需要釐清「輕量」與「隔離」的含義。</p>
+              <p><strong>Unikernel 的「輕量」</strong>:映像體積小(只包含用到的 OS 功能)、啟動快(沒有龐大的 OS 初始化)、記憶體用量少。這些與「傳統 VM 跑完整 Guest OS」相比確實輕量。</p>
+              <p><strong>Unikernel 的「高隔離」</strong>:它不是靠 namespace 或 cgroup(那是容器的方法),而是靠<strong>縮小攻擊面</strong>——每個 Unikernel 只有一個應用程式,沒有 shell、沒有多餘的系統工具、沒有動態連結的通用程式庫。攻擊者即使找到漏洞,能利用的東西極少。此外,Unikernel 通常跑在 Hypervisor 之上,仍有硬體層隔離。</p>
+              <p><strong>最適場景</strong>:功能單一、定義明確的服務——例如 DNS 伺服器、TLS 終端點、NFV(網路功能虛擬化)中的防火牆或路由器、以及對安全性與啟動速度要求都極高的 Serverless 函式。不適合需要豐富 OS 生態系(開發工具、偵錯器)的通用應用。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑨ ==================== -->
+      <h2>把這一章串起來</h2>
+
+      <p>
+        我們從一個核心問題出發——「為什麼程式需要以為自己獨佔整台電腦?」——走過了整條虛擬化光譜。
+        幾個值得帶走的關鍵觀念:
+      </p>
+      <ul>
+        <li><strong>行程隔離是最基本的虛擬化</strong>:虛擬 CPU(排程)+ 虛擬記憶體(位址空間)是作業系統送給每個程式的「獨佔幻象」。但它共用核心,安全邊界有限。</li>
+        <li><strong>容器 = 共用核心 + 隔離視圖</strong>:namespace 切割資源視圖,cgroup 限制資源用量。輕量、啟動快、部署密度高,是雲原生應用的首選。但安全隔離邊界就是 Host 核心——核心漏洞是共同風險。</li>
+        <li><strong>VM = 獨立 Guest OS + Hypervisor 虛擬硬體</strong>:提供最強的 OS 層隔離,可跑不同 OS。代價是每個 VM 都要跑一整個 OS,資源開銷較高、啟動較慢。</li>
+        <li><strong>光譜沒有唯一答案</strong>:Firecracker 試圖在 VM 安全與容器速度之間找到折衷;gVisor 用用戶空間 syscall 攔截加固容器;Unikernel 以極致縮小系統表面同時達到輕量與高隔離;WASM 則從語言虛擬機角度提供沙箱。</li>
+        <li><strong>現實中兩者常常同時使用</strong>:雲端 VM 跑在 Hypervisor 之上,VM 裡再用容器部署應用——兩層隔離各司其職。</li>
+      </ul>
+
+      <h3>第二一部地圖:接下來的旅程</h3>
+      <p>
+        這一章是整個第二一部的開場導覽。接下來的各章將逐層深入:
+      </p>
+      <ul>
+        <li><strong>第 86 章:虛擬機與 Hypervisor 底層</strong>——Intel VT-x/AMD-V 硬體輔助虛擬化、EPT 記憶體虛擬化、I/O 虛擬化技術。</li>
+        <li><strong>第 87 章:容器的真相</strong>——Linux namespace 與 cgroup 的完整實作、OverlayFS 聯合掛載、OCI 標準。</li>
+        <li><strong>第 88 章:手寫迷你 Docker</strong>——動手用 C 呼叫 clone()/unshare() 建立自己的簡易容器 runtime。</li>
+        <li>後續章節將涵蓋 Kubernetes 編排、eBPF 可觀測性、服務網格、分散式儲存等雲原生底層技術。</li>
+      </ul>
+
+      <div class="callout note">
+        <div class="ico">📚</div>
+        <div class="body">
+          <span class="c-title">延伸閱讀</span>
+          <p>
+            <strong>動手體驗</strong>:<a href="https://webvm.io/" target="_blank" rel="noopener">WebVM.io</a> 可以在瀏覽器裡現場體驗 Linux VM,
+            感受「瀏覽器沙箱裡的 Linux」這件事本身就是虛擬化的精彩演示。<br><br>
+            <strong>理論深度</strong>:《<a href="https://pages.cs.wisc.edu/~remzi/OSTEP/" target="_blank" rel="noopener">Operating Systems: Three Easy Pieces(OSTEP)</a>》
+            第一部「虛擬化」章節對行程與記憶體虛擬化有深入且平易近人的說明,免費在線閱讀。<br><br>
+            <strong>容器技術</strong>:Ivan Velichko 的
+            <a href="https://iximiuz.com/en/posts/container-learning-path/" target="_blank" rel="noopener">Container Learning Path</a>
+            以圖文並茂的方式從 namespace、cgroup 到 OCI 逐步拆解容器原理,是少數能把底層講清楚的資源。<br><br>
+            <strong>雲原生全景</strong>:<a href="https://landscape.cncf.io/" target="_blank" rel="noopener">CNCF Landscape</a>
+            提供了現代雲原生生態的全景地圖,看完本部各章後回來看這張圖,很多名詞都會豁然開朗。
+          </p>
+        </div>
+      </div>
+

@@ -1,0 +1,958 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WebAssembly(WASM/WASI) · CS 自學聖經</title>
+<meta name="description" content="從堆疊式虛擬機位元組碼、線性記憶體到 WAT 文字格式，理解 WebAssembly 如何在瀏覽器、伺服器與邊緣運算中提供近原生速度與能力安全沙箱；並探索 WASI 讓 WASM 跑出瀏覽器的機制。">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;700&family=Noto+Sans+TC:wght@400;700&family=Lora:ital,wght@0,400;0,600;0,700;1,400&family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <main class="main">
+    <article class="content">
+      <div class="eyebrow">第二六部 · 高效能運算、GPU 與 WASM</div>
+      <h1>WebAssembly(WASM/WASI)</h1>
+      <p class="subtitle">你在 Figma 裡即時渲染幾十層向量圖、在瀏覽器裡跑 Python 直譯器、在 Cloudflare Workers 裡於全球 300 個節點以微秒冷啟動函式——這些全都靠同一個祕密武器。</p>
+      <div class="byline">
+        <span class="tag">第 114 章</span>
+        <span>閱讀時間 ≈ 60 分鐘</span>
+        <span>難度:★★★★☆</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>WebAssembly 的定位:可移植的<strong>堆疊式虛擬機(stack-based VM)</strong>位元組碼,以及它為何能達到近原生速度</li>
+          <li>WASM 模組的四大組成:函式、<strong>線性記憶體(linear memory)</strong>、表(table)、import/export</li>
+          <li>WAT(WebAssembly 文字格式)怎麼讀寫,以及 .wat 與 .wasm 二進位格式的關係</li>
+          <li>C / Rust / Go 如何編譯到 WASM,以及 Emscripten、wasm-pack、wasm-bindgen 工具鏈</li>
+          <li>JavaScript 如何載入、實例化並呼叫 WASM 模組,以及 JS↔WASM 互通的記憶體邊界</li>
+          <li>WASM 的<strong>能力安全(capability-based security)</strong>沙箱:預設無 I/O、線性記憶體隔離</li>
+          <li><strong>WASI</strong>(WebAssembly System Interface):讓 WASM 在瀏覽器外(伺服器、邊緣)執行的系統介面標準</li>
+          <li>WASM 元件模型(Component Model)、SIMD、執行緒與 WebGPU 協作的前沿方向</li>
+        </ul>
+      </div>
+
+      <!-- ==================== §1 ==================== -->
+      <h2>一份程式,一個承諾</h2>
+
+      <p>
+        想像三個場景。
+      </p>
+      <p>
+        <strong>場景一</strong>:你在瀏覽器裡開啟 Figma。幾百個向量物件即時拖拉、路徑計算、畫布縮放——
+        完全在瀏覽器沙箱裡,速度媲美桌面原生應用。
+        秘密在於:Figma 的核心渲染引擎是用 C++ 寫的,然後編譯成了一種叫
+        <strong>WebAssembly(縮寫 WASM)</strong>的格式丟進瀏覽器執行。
+      </p>
+      <p>
+        <strong>場景二</strong>:你在瀏覽器裡打開 <a href="https://pyodide.org" target="_blank" rel="noopener">Pyodide</a>,
+        在網頁上直接跑 Python 並執行 NumPy 矩陣運算——沒有後端伺服器。
+        同樣的答案:CPython 直譯器被 Emscripten 編譯成了 WASM。
+      </p>
+      <p>
+        <strong>場景三</strong>:Cloudflare Workers 在全球 300 個邊緣節點執行你的函式,
+        冷啟動時間不到一毫秒——比 Docker 容器快一千倍。
+        秘密是 V8 Isolate 技術:邊緣平台能微秒級冷啟動,靠的是隔離的 JS 執行環境;而 WASM 讓你也能在這類沙箱裡跑接近原生速度的非 JS 程式碼。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">WASM 的三個承諾</span>
+          <p>
+            (1) <strong>可移植</strong>:一份 .wasm 二進位,在瀏覽器、伺服器、嵌入式、邊緣節點都能跑。<br>
+            (2) <strong>近原生速度</strong>:JIT/AOT 編譯到機器碼,數值計算只比 C 慢 5–20%。<br>
+            (3) <strong>安全沙箱</strong>:預設沒有任何 I/O 權限,只能做你明確授予的事。
+          </p>
+        </div>
+      </div>
+
+      <p>
+        這三個承諾是相互勾連的:可移植要求有一個統一的中間格式;近原生速度要求這個格式設計得夠簡單、讓編譯器好優化;
+        安全沙箱則要求格式本身有強邊界——而 WebAssembly 就是在這三個約束下取交集設計出來的。
+        這一章,我們從底層剖開它。
+      </p>
+
+      <!-- ==================== §2 ==================== -->
+      <h2>WASM 是什麼:可移植的堆疊式虛擬機</h2>
+
+      <p>
+        WebAssembly 的第一個直覺陷阱:它雖然叫「Assembly」,卻<strong>不是</strong>任何一款 CPU 的真正組合語言。
+        x86 組合語言只能跑在 x86 晶片上;ARM 組合語言只能跑在 ARM 晶片上。
+        WASM 是一種<strong>可移植的位元組碼(portable bytecode)</strong>,
+        它的目標機器是一個「虛構的」虛擬機——就像我們在
+        <a href="23-vm-compiler.html">第 23 章</a>討論的 JVM、CLR 那樣的中間層思想。
+      </p>
+      <p>
+        這個虛構的機器採用<strong>堆疊式(stack-based)</strong>架構:沒有通用暫存器,
+        所有的中間值都放在一個操作堆疊(operand stack)上。
+        執行 <code>i32.add</code> 時,它從堆疊彈出(pop)兩個 32 位元整數,相加後把結果推回(push)堆疊——
+        這和我們在第 23 章看到的 Hack VM 堆疊機概念完全一致。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">WASM vs JVM</span>
+          <p>
+            WASM 與 JVM 都是堆疊式 VM 位元組碼。主要差異在:JVM 有 GC、class 物件模型、執行緒模型,
+            為 Java 生態而生;WASM 刻意做得更<strong>小而正交</strong>——沒有 GC(預設)、沒有物件模型,
+            目的是讓任何語言都能把它當編譯目標,而不只服務某一個語言家族。
+          </p>
+        </div>
+      </div>
+
+      <h3>為何近原生速度</h3>
+      <p>JavaScript 之所以快起來花了好幾年,是因為它需要動態型別推斷(JIT)才能優化。
+        WASM 的型別系統是<strong>靜態的</strong>:每個函式的參數與回傳型別都在二進位裡寫死,
+        瀏覽器的 JIT 引擎(V8、SpiderMonkey、JavaScriptCore)能直接為每個函式
+        <em>預先編譯</em>出機器碼,不需要先「熱身」。
+        加上 WASM 指令集刻意設計為容易映射到 x86 / ARM 原生指令,
+        實測數值密集(加解密、壓縮、影像處理)的 WASM 程式通常只比原生 C 慢 5–20%。</p>
+
+      <h3>四種基本型別</h3>
+      <p>WASM 的基本數值型別只有四種(加上後來的 SIMD 擴充):</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>型別</th><th>說明</th><th>常見用途</th></tr></thead>
+          <tbody>
+            <tr><td><code>i32</code></td><td>32 位元整數</td><td>指標、布林、一般整數</td></tr>
+            <tr><td><code>i64</code></td><td>64 位元整數</td><td>大整數計算</td></tr>
+            <tr><td><code>f32</code></td><td>32 位元 IEEE 754 浮點</td><td>圖形運算</td></tr>
+            <tr><td><code>f64</code></td><td>64 位元 IEEE 754 浮點</td><td>科學計算</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>字串、陣列不是 WASM 的原生型別——它們住在<strong>線性記憶體</strong>裡,我們下一節就會看到。</p>
+
+      <!-- ==================== §3 ==================== -->
+      <h2>模組解剖:函式、線性記憶體與 WAT</h2>
+
+      <p>
+        一個 WASM 模組(module)是 .wasm 二進位的基本單位。它由若干個「節(section)」組成;
+        最重要的四個概念是:
+      </p>
+      <ul>
+        <li><strong>函式(function)</strong>:WASM 程式的最小執行單元,有靜態型別簽名。</li>
+        <li><strong>線性記憶體(linear memory)</strong>:一塊連續的、可讀可寫的位元組陣列——WASM 的「RAM」。</li>
+        <li><strong>表(table)</strong>:函式指標的陣列,用於間接呼叫(類似 C 的函式指標陣列)。</li>
+        <li><strong>import / export</strong>:模組的公開介面——從外部(JS)匯入函式或記憶體、向外部匯出函式或記憶體。</li>
+      </ul>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 380" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif" font-size="13">
+  <defs>
+    <marker id="arr1" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#2f6f6a"/>
+    </marker>
+    <marker id="arr2" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#b4541f"/>
+    </marker>
+  </defs>
+
+  <!-- Module outer box -->
+  <rect x="20" y="20" width="460" height="340" rx="14" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="250" y="48" text-anchor="middle" font-weight="700" font-size="15" fill="#2f6f6a">WASM 模組(.wasm)</text>
+
+  <!-- Type section -->
+  <rect x="40" y="60" width="200" height="50" rx="8" fill="#2f6f6a"/>
+  <text x="140" y="82" text-anchor="middle" fill="#fff" font-weight="600">Type Section</text>
+  <text x="140" y="99" text-anchor="middle" fill="#cfe6e2" font-size="11">(fn 的型別簽名)</text>
+
+  <!-- Function section -->
+  <rect x="260" y="60" width="200" height="50" rx="8" fill="#2f6f6a"/>
+  <text x="360" y="82" text-anchor="middle" fill="#fff" font-weight="600">Function Section</text>
+  <text x="360" y="99" text-anchor="middle" fill="#cfe6e2" font-size="11">(fn 索引 → 型別)</text>
+
+  <!-- Code section -->
+  <rect x="40" y="130" width="200" height="50" rx="8" fill="#8b5cf6"/>
+  <text x="140" y="152" text-anchor="middle" fill="#fff" font-weight="600">Code Section</text>
+  <text x="140" y="169" text-anchor="middle" fill="#ece5ff" font-size="11">(位元組碼指令)</text>
+
+  <!-- Memory section -->
+  <rect x="260" y="130" width="200" height="50" rx="8" fill="#8b5cf6"/>
+  <text x="360" y="152" text-anchor="middle" fill="#fff" font-weight="600">Memory Section</text>
+  <text x="360" y="169" text-anchor="middle" fill="#ece5ff" font-size="11">(宣告線性記憶體大小)</text>
+
+  <!-- Import / Export -->
+  <rect x="40" y="200" width="200" height="50" rx="8" fill="#b4541f"/>
+  <text x="140" y="222" text-anchor="middle" fill="#fff" font-weight="600">Import Section</text>
+  <text x="140" y="239" text-anchor="middle" fill="#f6e7dd" font-size="11">(從宿主匯入 fn / mem)</text>
+
+  <rect x="260" y="200" width="200" height="50" rx="8" fill="#b4541f"/>
+  <text x="360" y="222" text-anchor="middle" fill="#fff" font-weight="600">Export Section</text>
+  <text x="360" y="239" text-anchor="middle" fill="#f6e7dd" font-size="11">(向宿主暴露 fn / mem)</text>
+
+  <!-- Linear Memory visualization -->
+  <text x="140" y="287" text-anchor="middle" fill="#2f6f6a" font-weight="600">線性記憶體(64 KB/頁)</text>
+  <rect x="40" y="295" width="420" height="30" rx="4" fill="#fff" stroke="#2f6f6a" stroke-width="1.5"/>
+  <line x1="110" y1="295" x2="110" y2="325" stroke="#8a929b" stroke-width="1"/>
+  <line x1="200" y1="295" x2="200" y2="325" stroke="#8a929b" stroke-width="1"/>
+  <line x1="290" y1="295" x2="290" y2="325" stroke="#8a929b" stroke-width="1"/>
+  <line x1="380" y1="295" x2="380" y2="325" stroke="#8a929b" stroke-width="1"/>
+  <text x="75"  y="314" text-anchor="middle" fill="#8a929b" font-size="10">offset 0</text>
+  <text x="155" y="314" text-anchor="middle" fill="#8a929b" font-size="10">offset N</text>
+  <text x="245" y="314" text-anchor="middle" fill="#8a929b" font-size="10">…</text>
+  <text x="335" y="314" text-anchor="middle" fill="#8a929b" font-size="10">…</text>
+  <text x="420" y="314" text-anchor="middle" fill="#8a929b" font-size="10">max 4 GB</text>
+
+  <!-- JS Host box -->
+  <rect x="510" y="100" width="190" height="150" rx="12" fill="#fff" stroke="#b4541f" stroke-width="2"/>
+  <text x="605" y="125" text-anchor="middle" font-weight="700" fill="#b4541f">JavaScript 宿主</text>
+  <text x="605" y="148" text-anchor="middle" fill="#555" font-size="12">WebAssembly</text>
+  <text x="605" y="164" text-anchor="middle" fill="#555" font-size="12">.instantiate()</text>
+  <text x="605" y="190" text-anchor="middle" fill="#555" font-size="12">instance.exports</text>
+  <text x="605" y="206" text-anchor="middle" fill="#555" font-size="12">.add(3, 4)</text>
+  <text x="605" y="230" text-anchor="middle" fill="#555" font-size="12">→ 7</text>
+
+  <!-- Arrows -->
+  <line x1="460" y1="220" x2="508" y2="185" stroke="#b4541f" stroke-width="2" marker-end="url(#arr2)"/>
+  <line x1="508" y1="165" x2="460" y2="145" stroke="#2f6f6a" stroke-width="2" marker-end="url(#arr1)"/>
+  <text x="490" y="210" fill="#b4541f" font-size="11">export</text>
+  <text x="465" y="150" fill="#2f6f6a" font-size="11">import</text>
+</svg>
+        <figcaption>圖 114-1:WASM 模組的節結構與 JS 宿主的互動關係。線性記憶體是一塊從 offset 0 開始的連續位元組陣列,以 64 KB 為一頁;Import/Export 節定義模組與外部世界的交換介面。</figcaption>
+      </div>
+
+      <h3>WAT — 讓人讀得懂的文字格式</h3>
+      <p>
+        .wasm 是二進位,機器吃的,人看了頭痛。
+        WebAssembly 同時定義了一種對應的<strong>文字格式 WAT(WebAssembly Text Format)</strong>,
+        語法是 S-expression(你在 <a href="80-sicp-scheme.html">第 74 章</a> Scheme 裡看過這種括號嵌套風格)。
+        WAT 和 .wasm 是<strong>一一對應</strong>的:工具 <code>wat2wasm</code> / <code>wasm2wat</code> 可以互相轉換。
+      </p>
+      <p>
+        下面是一個完整的小例子——一個 WASM 模組,宣告一個 <code>add</code> 函式並匯出它:
+      </p>
+
+      <pre><code class="language-text">;; add.wat — 一個最小的 WASM 模組(WAT 文字格式)
+(module
+  ;; 宣告函式:接收兩個 i32 參數,回傳一個 i32
+  (func $add (export "add") (param $a i32) (param $b i32) (result i32)
+    local.get $a   ;; 把 $a 推到操作堆疊
+    local.get $b   ;; 把 $b 推到操作堆疊
+    i32.add        ;; 彈出兩個值、相加、結果推回堆疊
+  )               ;; 堆疊頂端的值就是回傳值
+)</code></pre>
+
+      <p>
+        注意執行模型:每一條指令都從堆疊彈值(或推值),沒有「暫存器 R1 = R2 + R3」那樣的概念。
+        這種設計讓位元組碼非常緊湊——大多數指令只需要 1 個 opcode 位元組。
+      </p>
+
+      <p>下面再看一個帶有線性記憶體的例子,示範如何從記憶體讀寫整數:</p>
+
+      <pre><code class="language-text">;; memory_rw.wat
+(module
+  (memory (export "mem") 1)         ;; 宣告 1 頁 (64 KB) 的線性記憶體並匯出
+
+  ;; 把 val 寫到 offset 位置
+  (func (export "store32") (param $offset i32) (param $val i32)
+    local.get $offset
+    local.get $val
+    i32.store           ;; 從堆疊彈出 val 再彈出 offset,把 val 寫入 mem[offset]
+  )
+
+  ;; 從 offset 讀取 i32
+  (func (export "load32") (param $offset i32) (result i32)
+    local.get $offset
+    i32.load            ;; 從堆疊彈出 offset,讀取 mem[offset],結果推回堆疊
+  )
+)</code></pre>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">線性記憶體與 JS 的共用邊界</span>
+          <p>
+            WASM 的線性記憶體可以被 JS 以 <code>TypedArray</code> 的方式直接讀寫,
+            這是 JS 傳送字串、陣列給 WASM 的主要管道。但要注意:<strong>WASM 只能存取自己宣告的線性記憶體,
+            無法存取 JS 堆積(heap)或其他 WASM 模組的記憶體</strong>——這就是沙箱邊界。
+          </p>
+        </div>
+      </div>
+
+      <!-- ==================== §4 ==================== -->
+      <h2>從 C、Rust、Go 編譯到 WASM</h2>
+
+      <p>
+        沒有人真的用手寫 WAT(就像沒有人用手寫 JVM 位元組碼一樣)。
+        實際工作流程是:用你熟悉的語言寫程式,然後讓工具鏈幫你編出 .wasm。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 700 220" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif" font-size="13">
+  <defs>
+    <marker id="arr3" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/>
+    </marker>
+  </defs>
+
+  <!-- Source languages -->
+  <rect x="10"  y="80" width="100" height="44" rx="8" fill="#b4541f"/>
+  <text x="60"  y="99" text-anchor="middle" fill="#fff" font-weight="600">C / C++</text>
+  <text x="60"  y="116" text-anchor="middle" fill="#f6e7dd" font-size="11">Emscripten</text>
+
+  <rect x="10"  y="140" width="100" height="44" rx="8" fill="#2f6f6a"/>
+  <text x="60"  y="159" text-anchor="middle" fill="#fff" font-weight="600">Rust</text>
+  <text x="60"  y="176" text-anchor="middle" fill="#cfe6e2" font-size="11">wasm-pack</text>
+
+  <rect x="10"  y="20" width="100" height="44" rx="8" fill="#8b5cf6"/>
+  <text x="60"  y="39" text-anchor="middle" fill="#fff" font-weight="600">Go / TinyGo</text>
+  <text x="60"  y="56" text-anchor="middle" fill="#ece5ff" font-size="11">GOOS=wasip1</text>
+
+  <!-- Arrows to .wasm -->
+  <line x1="110" y1="42"  x2="228" y2="100" stroke="#8a929b" stroke-width="1.5" marker-end="url(#arr3)"/>
+  <line x1="110" y1="102" x2="228" y2="108" stroke="#8a929b" stroke-width="1.5" marker-end="url(#arr3)"/>
+  <line x1="110" y1="162" x2="228" y2="116" stroke="#8a929b" stroke-width="1.5" marker-end="url(#arr3)"/>
+
+  <!-- .wasm binary -->
+  <rect x="230" y="80" width="130" height="60" rx="10" fill="#2f6f6a"/>
+  <text x="295" y="106" text-anchor="middle" fill="#fff" font-weight="700" font-size="15">.wasm</text>
+  <text x="295" y="126" text-anchor="middle" fill="#cfe6e2" font-size="11">位元組碼</text>
+
+  <!-- Arrow to runtimes -->
+  <line x1="360" y1="110" x2="428" y2="60"  stroke="#8a929b" stroke-width="1.5" marker-end="url(#arr3)"/>
+  <line x1="360" y1="110" x2="428" y2="110" stroke="#8a929b" stroke-width="1.5" marker-end="url(#arr3)"/>
+  <line x1="360" y1="110" x2="428" y2="160" stroke="#8a929b" stroke-width="1.5" marker-end="url(#arr3)"/>
+
+  <!-- Runtimes -->
+  <rect x="430" y="30"  width="120" height="44" rx="8" fill="#b4541f"/>
+  <text x="490" y="49" text-anchor="middle" fill="#fff" font-weight="600">瀏覽器</text>
+  <text x="490" y="66" text-anchor="middle" fill="#f6e7dd" font-size="11">V8 / SpiderMonkey</text>
+
+  <rect x="430" y="90"  width="120" height="44" rx="8" fill="#b4541f"/>
+  <text x="490" y="109" text-anchor="middle" fill="#fff" font-weight="600">Wasmtime</text>
+  <text x="490" y="126" text-anchor="middle" fill="#f6e7dd" font-size="11">伺服器 / WASI</text>
+
+  <rect x="430" y="150" width="120" height="44" rx="8" fill="#b4541f"/>
+  <text x="490" y="169" text-anchor="middle" fill="#fff" font-weight="600">WasmEdge</text>
+  <text x="490" y="186" text-anchor="middle" fill="#f6e7dd" font-size="11">邊緣 / AI 推論</text>
+
+  <!-- Arrow to native -->
+  <line x1="550" y1="110" x2="618" y2="110" stroke="#8a929b" stroke-width="1.5" marker-end="url(#arr3)"/>
+  <rect x="620" y="90"  width="70" height="44" rx="8" fill="#16a34a"/>
+  <text x="655" y="109" text-anchor="middle" fill="#fff" font-weight="600">原生</text>
+  <text x="655" y="126" text-anchor="middle" fill="#e0f7e0" font-size="11">機器碼</text>
+</svg>
+        <figcaption>圖 114-2:從各種語言編譯到 .wasm,再由不同 Runtime 執行的流程。.wasm 二進位是唯一的中間格式;Runtime 負責 JIT/AOT 到原生機器碼。</figcaption>
+      </div>
+
+      <h3>C / C++ — Emscripten</h3>
+      <p>
+        <strong>Emscripten</strong> 是最老牌的 WASM 工具鏈,基於 Clang/LLVM。
+        它不只是個編譯器——它還提供一套 C 標準函式庫的 WASM 實作,以及讓 WASM 與瀏覽器互通的
+        JavaScript 膠水(glue code)。
+      </p>
+
+      <pre><code class="language-c">/* fib.c:計算第 n 個費波那契數 */
+#include &lt;emscripten/emscripten.h&gt;
+
+EMSCRIPTEN_KEEPALIVE
+int fib(int n) {
+    if (n &lt;= 1) return n;
+    return fib(n - 1) + fib(n - 2);
+}</code></pre>
+
+      <pre><code class="language-bash">emcc fib.c -o fib.js \
+  -s EXPORTED_FUNCTIONS='["_fib"]' \
+  -s EXPORTED_RUNTIME_METHODS='["cwrap"]'
+# 產生 fib.wasm + fib.js(膠水程式碼)</code></pre>
+
+      <h3>Rust — wasm-pack 與 wasm-bindgen</h3>
+      <p>
+        Rust 對 WASM 的支援是一流的(我們在
+        <a href="89-rust-project.html">第 83 章</a>與
+        <a href="90-rust-os-kernel.html">第 84 章</a>討論過 Rust 的系統程式設計能力)。
+        <code>wasm-bindgen</code> 讓 Rust 的 struct、method 能自動生成 JS 綁定;
+        <code>wasm-pack</code> 則把整個「編譯 → 產生 JS 綁定 → 打包成 npm 套件」的流程一條命令搞定。
+      </p>
+
+      <pre><code class="language-rust">// src/lib.rs
+use wasm_bindgen::prelude::*;
+
+/// 計算第 n 個費波那契數(匯出給 JS 呼叫)
+#[wasm_bindgen]
+pub fn fib(n: u32) -&gt; u32 {
+    match n {
+        0 | 1 =&gt; n,
+        _ =&gt; fib(n - 1) + fib(n - 2),
+    }
+}
+
+/// 傳入字串、回傳字串(透過線性記憶體傳值)
+#[wasm_bindgen]
+pub fn greet(name: &amp;str) -&gt; String {
+    format!("Hello, {}! (from WASM)", name)
+}</code></pre>
+
+      <pre><code class="language-bash"># Cargo.toml 需加: [lib] crate-type = ["cdylib"]
+# 以及 dependencies: wasm-bindgen = "0.2"
+wasm-pack build --target web
+# 在 pkg/ 目錄產生 .wasm + .js 綁定 + TypeScript 型別宣告</code></pre>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">純 Rust → WASM 不需要 wasm-bindgen</span>
+          <p>
+            如果你只傳數值(i32/f64),不需要字串或 JS 物件,用 <code>--target wasm32-unknown-unknown</code>
+            直接編譯就好。<code>wasm-bindgen</code> 是為了讓複雜資料型別(字串、陣列、JS 物件)
+            能方便地跨越 JS↔WASM 邊界而存在的。
+          </p>
+        </div>
+      </div>
+
+      <h3>Go / TinyGo</h3>
+      <p>
+        標準 Go 支援 <code>GOOS=js GOARCH=wasm</code>(以及較新的 <code>GOOS=wasip1</code> for WASI);
+        <strong>TinyGo</strong> 是一個針對嵌入式與 WASM 的精簡 Go 編譯器,產生的 .wasm 比標準 Go 小很多,
+        適合在邊緣節點部署。
+      </p>
+
+      <!-- ==================== §5 ==================== -->
+      <h2>在瀏覽器執行:JS 載入與互通</h2>
+
+      <p>
+        有了 .wasm 檔,下一步是讓 JavaScript 載入並呼叫它。WebAssembly 的 JS API 設計得很乾淨:
+      </p>
+
+      <pre><code class="language-text">// 最簡單的 WASM 載入(await 語法)
+const { instance } = await WebAssembly.instantiateStreaming(
+  fetch('math.wasm')      // 網路串流直接餵給 WASM 引擎
+);
+
+// 呼叫匯出的函式
+const result = instance.exports.add(3, 4);
+console.log(result);  // 7
+
+// 讀取匯出的線性記憶體(作為 Uint8Array 視圖)
+const mem = new Uint8Array(instance.exports.mem.buffer);</code></pre>
+
+      <p>
+        <code>WebAssembly.instantiateStreaming</code> 是最推薦的載入方式——
+        它邊下載 .wasm 邊讓引擎開始編譯(串流編譯,streaming compilation),不需要等到完整下載才開始。
+      </p>
+
+      <h3>JS ↔ WASM 的資料傳遞</h3>
+      <p>
+        數值(i32/i64/f32/f64)可以直接作為函式引數和回傳值傳遞,零成本。
+        但字串和陣列不是 WASM 的原生型別,傳遞時需要透過<strong>共享線性記憶體</strong>:
+      </p>
+
+      <ol>
+        <li>JS 把字串的 UTF-8 編碼<strong>寫入</strong> WASM 的線性記憶體(透過 <code>TextEncoder</code>)。</li>
+        <li>JS 把記憶體中字串的<strong>起始偏移量與長度</strong>作為 i32 傳給 WASM 函式。</li>
+        <li>WASM 函式在線性記憶體中讀取字串並處理。</li>
+        <li>若有回傳字串,WASM 把結果寫回記憶體,回傳指標與長度給 JS。</li>
+        <li>JS 用 <code>TextDecoder</code> 從記憶體讀回字串。</li>
+      </ol>
+
+      <p>這個過程繁瑣,<code>wasm-bindgen</code> 正是為了自動化這些步驟而生的。</p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">WASM 為何適合計算密集任務</span>
+          <p>
+            影像處理、加解密、音訊編解碼、遊戲物理——這些任務的共同特徵是:
+            大量的數值運算在一塊連續記憶體上進行。WASM 的靜態型別讓 JIT 省去推斷開銷;
+            線性記憶體的存取模式對 CPU 快取非常友善;
+            這兩點加在一起,讓 WASM 在這類任務上遠超 JS。
+          </p>
+        </div>
+      </div>
+
+      <!-- ==================== §6 ==================== -->
+      <h2>沙箱與能力安全模型</h2>
+
+      <p>
+        WASM 最常被忽視、卻最重要的特性是它的安全模型。
+        讓我們從一個對比開始:
+      </p>
+      <blockquote>
+        當你在 Linux 上執行一支原生程式(ELF binary),它<em>預設</em>就擁有執行者的所有權限——
+        可以讀任何你能讀的檔案、可以發動網路連線、可以 fork 子行程。<br>
+        當你在 WASM 執行環境裡執行同一份程式的 .wasm 版本,它<em>預設</em>什麼都不能做——
+        不能讀檔案、不能開網路、甚至不能取得系統時間。
+      </blockquote>
+
+      <p>
+        這不是意外,而是刻意的設計哲學:
+        <strong>能力安全(capability-based security)</strong>。
+      </p>
+
+      <h3>能力安全是什麼</h3>
+      <p>
+        傳統的 UNIX 安全模型基於「身份(identity)」——你是誰,就擁有對應角色的全部權限。
+        能力安全基於「能力(capability)」——你手上有什麼「票」,才能做什麼事。
+        WASM 完整落實了能力安全:
+      </p>
+      <ul>
+        <li>WASM 模組只能呼叫它在 <strong>Import Section</strong> 裡明確宣告要從宿主匯入的函式。</li>
+        <li>宿主(JS 或 WASI runtime)決定要不要提供那個函式——若不提供,實例化就會失敗。</li>
+        <li>WASM 只能存取自己宣告的線性記憶體;它無法讀取宿主的記憶體、其他模組的記憶體,或 JS 的 GC 堆積。</li>
+      </ul>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">WASM 的安全保證來自格式本身</span>
+          <p>
+            WASM 的沙箱不靠作業系統的 <code>seccomp</code> 或 Linux namespace(雖然 runtime 可能額外加這些),
+            而是靠<strong>位元組碼格式的設計</strong>:WASM 沒有可以跳出沙箱的指令。
+            沒有「讀任意記憶體位址」指令、沒有「呼叫任意函式指標」指令(table 呼叫有型別檢查)、
+            沒有「系統呼叫」指令。這讓 WASM 的安全邊界分析比容器更嚴格。
+          </p>
+        </div>
+      </div>
+
+      <h3>與容器隔離的比較</h3>
+      <p>
+        在<a href="91-virt-landscape.html">第 85 章</a>我們建立了虛擬化的光譜概念。
+        WASM 是這個光譜上一個特殊的點:
+      </p>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>面向</th><th>Linux 容器</th><th>WASM 沙箱</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>隔離層次</td><td>OS namespace/cgroup</td><td>語言 VM 位元組碼邊界</td></tr>
+            <tr><td>信任基礎</td><td>Linux 核心</td><td>WASM spec + runtime 正確性</td></tr>
+            <tr><td>冷啟動時間</td><td>數十~數百毫秒</td><td>微秒~數毫秒</td></tr>
+            <tr><td>記憶體用量</td><td>數十 MB(OS 映像)</td><td>數 KB~數 MB(模組本身)</td></tr>
+            <tr><td>語言無關</td><td>是(執行任意原生碼)</td><td>是(任何能編譯到 WASM 的語言)</td></tr>
+            <tr><td>系統呼叫可見性</td><td>共用宿主核心</td><td>無系統呼叫;需透過 WASI API</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>
+        從<a href="34-security-fundamentals.html">第 34 章</a>學到的威脅模型角度看:
+        容器的攻擊面包括核心的所有系統呼叫;WASM 的攻擊面幾乎只有「runtime 實作的正確性」。
+        但容器可以跑任意現有的二進位(不需要重新編譯);WASM 需要重新編譯目標程式。
+        兩者各有適合的場景。
+      </p>
+
+      <!-- ==================== §7 ==================== -->
+      <h2>WASI:讓 WASM 跑出瀏覽器</h2>
+
+      <p>
+        WASM 最初是為瀏覽器設計的,JS 扮演宿主的角色。
+        但工程師很快發現:如果 WASM 能在瀏覽器外執行,它就是一個輕量的通用沙箱執行環境。
+        問題在於——瀏覽器外沒有 JS,那誰來扮演宿主?誰來提供「讀檔案」、「開網路」這些能力?
+      </p>
+      <p>
+        2019 年,Mozilla 工程師 Lin Clark 等人提出了
+        <strong>WASI(WebAssembly System Interface)</strong>——一套標準化的、模組化的「系統能力 API」,
+        讓 WASM 在任何 WASI 相容的 runtime 上都能以相同方式存取(被授權的)系統資源。
+      </p>
+
+      <div class="callout history">
+        <div class="ico">📜</div>
+        <div class="body">
+          <span class="c-title">那條著名的推文</span>
+          <p>
+            2019 年,Docker 創辦人 Solomon Hykes 在推文寫道:
+            「如果 WASM + WASI 在 2008 年就存在,我們根本不需要創造 Docker。」
+            這句話簡潔地說明了 WASI 的野心:成為一個比容器更輕量、更安全的跨平台沙箱標準。
+          </p>
+        </div>
+      </div>
+
+      <h3>WASI 的設計哲學:能力即介面</h3>
+      <p>
+        WASI 的每一個「介面(interface)」都是一組函式,由 runtime 提供給 WASM 模組:
+      </p>
+      <ul>
+        <li><code>wasi:filesystem</code>:讀寫特定(被授權的)目錄下的檔案。</li>
+        <li><code>wasi:sockets</code>:開啟特定(被授權的)網路連線。</li>
+        <li><code>wasi:clocks</code>:取得時間。</li>
+        <li><code>wasi:random</code>:取得隨機數。</li>
+      </ul>
+      <p>
+        重點在<strong>「被授權的」</strong>:WASI runtime 在啟動模組時,明確地把「這個目錄的 handle」傳給模組。
+        模組拿到 handle 才能操作該目錄——它無法「猜測」或「暴力搜尋」出其他目錄的 handle。
+        這是能力安全哲學在系統呼叫層面的直接實現。
+      </p>
+
+      <pre><code class="language-bash"># 用 Wasmtime 執行一個 WASI 模組
+# --dir=. 明確授予「目前目錄」的讀寫能力;其他目錄無法存取
+wasmtime run --dir=. my_app.wasm
+
+# 若不給 --dir,模組執行期間讀檔就會拿到「權限拒絕」錯誤
+wasmtime run my_app.wasm  # 無任何 filesystem 能力</code></pre>
+
+      <h3>邊緣運算與 Serverless</h3>
+      <p>
+        WASI 把 WASM 帶出了瀏覽器,讓它成為<strong>邊緣運算(edge computing)</strong>的核心技術:
+      </p>
+      <ul>
+        <li>
+          <strong>Cloudflare Workers</strong>:每個 Worker 是一個 WASM 模組(或 JS 模組),
+          跑在全球 300+ 個 PoP(Point of Presence)節點上。
+          冷啟動用的是 V8 Isolate 技術(概念上類似 WASM 沙箱);
+          Cloudflare 也直接支援用 Rust/C 編譯的 WASM。
+        </li>
+        <li>
+          <strong>Fastly Compute</strong>:直接用 Wasmtime 執行 WASM 模組,
+          冷啟動 ~50 微秒,遠快於任何容器技術。
+        </li>
+        <li>
+          <strong>Fermyon Spin</strong>:WASI 原生的 Serverless 框架,
+          讓你用 Rust/Go/Python 寫 HTTP handler,編成 WASM,部署在任何 WASI runtime 上。
+        </li>
+      </ul>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">WASI Preview 2 與元件模型</span>
+          <p>
+            2024 年穩定的 WASI 0.2.0(Preview 2)帶來了<strong>元件模型(Component Model)</strong>的基礎支援,
+            讓 WASM 模組之間能用強型別介面相互組合——我們在下一節詳談。
+          </p>
+        </div>
+      </div>
+
+      <!-- ==================== §8 ==================== -->
+      <h2>進階:元件模型、SIMD、執行緒與 WebGPU</h2>
+
+      <h3>元件模型(Component Model)</h3>
+      <p>
+        傳統 WASM 模組之間的互動只能透過數值和線性記憶體——傳遞字串都很麻煩,更別說結構化資料。
+        <strong>元件模型(WebAssembly Component Model)</strong>是 W3C WebAssembly 工作組的下一個大賭注:
+        它定義了一套 IDL 叫 <strong>WIT(WebAssembly Interface Types)</strong>,
+        讓你用強型別描述元件之間的介面:字串、列表、記錄、列舉……都是一等公民。
+      </p>
+
+      <pre><code class="language-text">// math.wit — WIT 介面定義
+package example:math;
+
+interface calculator {
+  add: func(a: s32, b: s32) -&gt; s32;
+  greet: func(name: string) -&gt; string;
+}
+
+world math-world {
+  export calculator;
+}</code></pre>
+
+      <p>
+        <code>wit-bindgen</code> 工具根據 WIT 定義自動生成 Rust/C/Go 的綁定程式碼。
+        這讓「用 Rust 寫的元件」能直接被「用 Python 寫的元件」呼叫,
+        中間不需要共享記憶體或手動序列化——元件模型的 runtime 負責翻譯。
+      </p>
+
+      <h3>WASM SIMD</h3>
+      <p>
+        WASM 的 SIMD 擴充(已標準化並在所有主流瀏覽器中可用)引入了 <code>v128</code> 型別——
+        128 位元的 SIMD 暫存器,可以同時處理 4 個 f32、2 個 f64、16 個 i8 等等。
+        在影像處理、音訊編解碼、ML 推論這類任務上,SIMD 可以帶來 2–8x 的加速。
+        Rust 的 <code>std::arch</code> 模組和 C 的 SSE/NEON intrinsics 都能透過 LLVM 映射到 WASM SIMD。
+      </p>
+
+      <h3>執行緒</h3>
+      <p>
+        WASM 執行緒(Threads)擴充允許多個 WebWorker 共享同一塊 WASM 線性記憶體
+        (底層靠 <code>SharedArrayBuffer</code>),並用 <code>i32.atomic.wait</code>、
+        <code>i32.atomic.notify</code> 等原子操作同步——這本質上是 POSIX threads 的 WASM 版本。
+        對 Emscripten 編譯的多執行緒 C 程式而言,這讓原本需要改寫的 <code>pthread</code>
+        程式碼幾乎不動就能跑在瀏覽器裡。
+      </p>
+
+      <h3>WebGPU 與 WASM</h3>
+      <p>
+        在<a href="117-gpu-shaders.html">第 111 章</a>我們討論了 GPU 著色器。
+        WebGPU 是下一代的瀏覽器 GPU API(取代 WebGL),它和 WASM 的組合正成為高效能 Web 計算的新標準:
+      </p>
+      <ul>
+        <li>Rust 的 <strong>wgpu</strong> crate 可以同時編譯到原生(Vulkan/Metal/DX12)和 WASM+WebGPU,
+            讓同一套 GPU 計算程式碼跨平台執行。</li>
+        <li>ML 框架(如 Google 的 MediaPipe Web)用 WASM 跑 CPU 邏輯、用 WebGPU 跑 GPU 加速——
+            兩者透過共享 ArrayBuffer 傳遞資料。</li>
+        <li>遊戲引擎 Bevy 已有 WASM 編譯目標,讓 Rust 寫的遊戲能直接跑在瀏覽器裡。</li>
+      </ul>
+
+      <h3>WASM 作為外掛沙箱</h3>
+      <p>
+        WASM 的沙箱特性讓它非常適合作為<strong>外掛(plugin)系統</strong>的執行環境——
+        讓不受信任的第三方程式碼在宿主應用中安全執行:
+      </p>
+      <ul>
+        <li><strong>Envoy Proxy</strong>(雲原生 L7 代理):外掛用任意語言寫、編成 WASM,在 Envoy 裡執行。</li>
+        <li><strong>OPA(Open Policy Agent)</strong>:政策規則可以編譯成 WASM 執行。</li>
+        <li><strong>Shopify Functions</strong>:商家的自訂商業邏輯以 WASM 形式跑在 Shopify 的基礎設施上。</li>
+        <li>各種資料庫(ClickHouse、ScyllaDB)也在探索讓使用者定義函式(UDF)以 WASM 形式執行。</li>
+      </ul>
+
+      <!-- ==================== §9 Exercise ==================== -->
+      <h2>動手練習:讀懂 WAT、分析安全模型、比較隔離技術</h2>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 114.1 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>閱讀下面這段 WAT,不查任何工具,純用紙筆追蹤堆疊狀態,回答:
+            函式 <code>max</code> 計算的是什麼?執行 <code>max(5, 3)</code> 時,
+            操作堆疊在每一條指令後的狀態是什麼?</p>
+          <pre><code class="language-text">(module
+  (func (export "max") (param $a i32) (param $b i32) (result i32)
+    local.get $a
+    local.get $b
+    i32.gt_s       ;; 有符號比較:若 $a &gt; $b 則推入 1,否則 0
+    if (result i32)
+      local.get $a
+    else
+      local.get $b
+    end
+  )
+)</code></pre>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>這個函式計算兩個 i32 的最大值。</strong></p>
+              <p>追蹤 <code>max(5, 3)</code> 時的堆疊狀態(初始堆疊為空,<code>$a=5</code>,<code>$b=3</code>):</p>
+              <ol>
+                <li><code>local.get $a</code> → 堆疊:<code>[5]</code></li>
+                <li><code>local.get $b</code> → 堆疊:<code>[5, 3]</code></li>
+                <li><code>i32.gt_s</code> → 彈出 3 和 5,比較 5 &gt; 3 為真,推入 1 → 堆疊:<code>[1]</code></li>
+                <li><code>if (result i32)</code> → 彈出 1(條件為真),進入 if 分支</li>
+                <li><code>local.get $a</code> → 堆疊:<code>[5]</code></li>
+                <li><code>end</code> → 結束 if/else,堆疊頂端的 <code>5</code> 就是回傳值</li>
+              </ol>
+              <p>結果:<code>max(5, 3) = 5</code>。</p>
+              <p>
+                注意 WASM 的 <code>if/else/end</code> 是<strong>結構化控制流(structured control flow)</strong>——
+                不是任意 jump,而是像高階語言的 if-else 那樣有明確的開始和結束。
+                這讓 WASM 不可能有「跳到任意位址」的攻擊面,是安全設計的一部分。
+              </p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 114.2 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>
+            下面的說法哪些正確?哪些錯誤?請逐一說明理由:
+          </p>
+          <ol type="a">
+            <li>WASM 比 JavaScript 快,是因為 WASM 直接跑在 CPU 上,不需要任何中介。</li>
+            <li>WASM 是安全的,因為它在沙箱裡,所以瀏覽器 WASM 程式完全無法讀取使用者的資料。</li>
+            <li>同一份 .wasm 檔案可以在 Chrome、Firefox 和 Wasmtime 上都能執行,不需要任何修改。</li>
+            <li>WASM 沒有字串型別,所以 WASM 程式完全無法處理文字。</li>
+          </ol>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <ol type="a">
+                <li>
+                  <strong>部分正確但說法不精確。</strong>WASM 並非直接跑在 CPU 上——它由 WASM runtime
+                  (V8、SpiderMonkey 等)JIT/AOT 編譯成原生機器碼後執行。
+                  WASM 比 JS 快的真正原因是:<em>靜態型別讓 JIT 省去動態型別推斷的開銷</em>,
+                  以及<em>更緊湊的位元組碼讓解碼更快</em>。
+                </li>
+                <li>
+                  <strong>錯誤(有誤導性)。</strong>WASM 的沙箱保護的是<em>宿主系統</em>不被 WASM 侵犯,
+                  而不是保護使用者的「瀏覽器資料」不被網頁讀取。
+                  如果 JS 把使用者的 cookie 傳進 WASM 的線性記憶體,WASM 當然能讀到。
+                  WASM 的安全性是「它不能做超出宿主授權範圍的事」,不是「它不能存取頁面上的資料」。
+                </li>
+                <li>
+                  <strong>正確。</strong>這正是 WASM 的核心承諾——可移植性。
+                  .wasm 二進位格式由 W3C 標準化,所有相容 runtime 的行為由規格決定。
+                  這就是「一份程式,跑在任何地方」的意義。
+                </li>
+                <li>
+                  <strong>錯誤。</strong>WASM 沒有內建的字串型別是事實,
+                  但字串可以存放在<em>線性記憶體</em>裡(作為 UTF-8 位元組陣列),
+                  WASM 完全可以對它們進行各種處理。<code>wasm-bindgen</code>
+                  等工具自動化了 JS 字串與 WASM 線性記憶體之間的轉換。
+                </li>
+              </ol>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 114.3 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>
+            你是一家公司的架構師。有一個場景:你的 SaaS 平台需要讓第三方開發者上傳「自訂處理邏輯」,
+            這些邏輯會在你的伺服器上針對每一筆使用者資料執行。
+            你有三個選擇:
+          </p>
+          <ol>
+            <li>讓開發者上傳 Python 腳本,用 <code>subprocess</code> 執行。</li>
+            <li>讓開發者上傳 Docker 映像,用容器執行。</li>
+            <li>讓開發者上傳 .wasm 模組,用 WASI runtime(如 Wasmtime)執行。</li>
+          </ol>
+          <p>從<strong>安全性</strong>、<strong>效能</strong>、<strong>開發者體驗</strong>三個維度分析三個方案的取捨。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>方案 1:Python + subprocess</strong></p>
+              <ul>
+                <li>安全性:極差。<code>subprocess</code> 沒有資源隔離,腳本可以 import 任何 Python 套件,
+                    輕易存取伺服器檔案、發動網路請求、消耗任意資源。即使加上 <code>seccomp</code>/cgroup 也很難做到足夠精細。</li>
+                <li>效能:Python 本身有 GIL,多租戶並發差。</li>
+                <li>開發者體驗:最佳,無需任何工具鏈。</li>
+              </ul>
+              <p><strong>方案 2:Docker 容器</strong></p>
+              <ul>
+                <li>安全性:良好。namespace/cgroup 提供 OS 層隔離。但核心漏洞是共同風險;
+                    容器鏡像若包含惡意程式可能在啟動時造成問題。</li>
+                <li>效能:冷啟動數十~數百毫秒;每個租戶的容器佔用數十 MB 記憶體。</li>
+                <li>開發者體驗:良好,但需要學習 Dockerfile。</li>
+              </ul>
+              <p><strong>方案 3:WASM + WASI</strong></p>
+              <ul>
+                <li>安全性:優秀。能力安全確保模組只能存取你明確授予的資源
+                    (例如只能讀特定輸入、不能開網路)。安全邊界由位元組碼格式保證。</li>
+                <li>效能:冷啟動微秒級;記憶體用量極小;可以每請求啟動一個新模組實例。</li>
+                <li>開發者體驗:需要編譯到 WASM 目標;Rust/C/Go 工具鏈完整,Python 透過 Pyodide
+                    也可行但有一些限制。</li>
+              </ul>
+              <p>
+                <strong>結論</strong>:對於「不信任的第三方程式碼」這個使用場景,方案 3 是最佳選擇。
+                Shopify Functions、Cloudflare Workers 都採用這個模式。
+                若開發者體驗是首要考量且安全要求較低,方案 2 是實際的折衷。
+                方案 1 在生產環境裡不應使用。
+              </p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 114.4 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>
+            用 Rust 寫一個 WASM 函式,接受一個整數陣列(透過線性記憶體)和陣列長度,
+            回傳陣列中的最大值。不使用 <code>wasm-bindgen</code>,只用 <code>wasm32-unknown-unknown</code> target。
+            提示:需要在 Rust 裡直接操作原始指標讀取線性記憶體。
+          </p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-rust">// src/lib.rs
+// 不使用 wasm-bindgen,直接操作原始記憶體
+
+#[no_mangle]
+pub unsafe extern "C" fn max_in_array(ptr: *const i32, len: usize) -&gt; i32 {
+    if len == 0 {
+        return i32::MIN;
+    }
+    let slice = std::slice::from_raw_parts(ptr, len);
+    *slice.iter().max().unwrap()
+}
+
+// 配置函式:讓 JS 可以分配 WASM 線性記憶體
+#[no_mangle]
+pub unsafe extern "C" fn alloc(size: usize) -&gt; *mut u8 {
+    let layout = std::alloc::Layout::from_size_align(size, 1).unwrap();
+    std::alloc::alloc(layout)
+}</code></pre>
+              <pre><code class="language-bash">cargo build --target wasm32-unknown-unknown --release</code></pre>
+              <pre><code class="language-text">// 在 JS 中使用:
+const { instance } = await WebAssembly.instantiateStreaming(fetch('max.wasm'));
+const { max_in_array, alloc, memory } = instance.exports;
+
+const arr = [3, 1, 4, 1, 5, 9, 2, 6];
+const ptr = alloc(arr.length * 4);          // 配置 i32 陣列空間
+const view = new Int32Array(memory.buffer, ptr, arr.length);
+view.set(arr);                               // 把 JS 陣列寫入 WASM 線性記憶體
+const result = max_in_array(ptr, arr.length);
+console.log(result);  // 9</code></pre>
+              <p>這個範例展示了 JS↔WASM 記憶體互動的完整流程:
+                JS 請求 WASM 分配記憶體 → JS 把資料寫入 → WASM 在自己的線性記憶體中處理 → 回傳結果給 JS。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ==================== §10: Wrap-up ==================== -->
+      <h2>把這一章串起來</h2>
+
+      <p>
+        讓我們沿著這本書的脈絡,找出 WASM 在整個 CS 故事中的位置。
+      </p>
+
+      <p>
+        在<a href="23-vm-compiler.html">第 23 章</a>,我們看到「M×N 惡夢」——
+        M 種語言要編譯到 N 種 CPU,就需要 M×N 個編譯器。
+        解法是插入一個中間層:先編譯到虛擬機位元組碼(JVM、CLR),再由 runtime 翻到各種 CPU。
+        WebAssembly 是這個思想的現代實現,但目標更雄心勃勃:
+        <em>不只讓語言可移植,還讓安全模型也可移植。</em>
+      </p>
+
+      <p>
+        在<a href="91-virt-landscape.html">第 85 章</a>,我們走過了虛擬化的光譜——
+        從行程隔離、容器到完整 VM。WASM 是這個光譜上一個全新的維度:
+        不依賴 OS namespace,不需要 hypervisor,安全邊界由位元組碼格式本身保證。
+        它讓「沙箱」這件事從基礎設施層下沉到了語言 VM 層。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">WASM 是「從 NAND 到雲」故事的第三條主線</span>
+          <p>
+            本書有一條主軸:從 NAND 閘組出 CPU,CPU 跑機器碼,機器碼被編譯器翻譯自高階語言,
+            高階語言跑在作業系統上,作業系統跑在容器/VM 裡,容器跑在雲上。
+            WebAssembly 是這條故事線上一個平行分支:
+            <strong>高階語言 → WASM 位元組碼 → 任何 runtime → 任何平台</strong>——
+            可移植性和安全性在這裡以優雅的方式合而為一。
+          </p>
+        </div>
+      </div>
+
+      <p>本章的核心要點:</p>
+      <ul>
+        <li><strong>堆疊式 VM 位元組碼</strong>:WASM 是一種可移植的二進位格式,不是真正的組合語言,
+            靠 JIT/AOT 達到近原生速度。</li>
+        <li><strong>線性記憶體</strong>:WASM 的「RAM」是一塊平坦的位元組陣列,JS 與 WASM 可共享讀寫,
+            但 WASM 無法存取這塊記憶體之外的任何東西。</li>
+        <li><strong>WAT</strong>:WASM 的人可讀文字格式,S-expression 語法,與 .wasm 一一對應。</li>
+        <li><strong>能力安全沙箱</strong>:預設無 I/O,只能呼叫宿主明確匯入的函式——這是設計上的安全,不是事後補丁。</li>
+        <li><strong>WASI</strong>:讓 WASM 在瀏覽器外以能力安全的方式存取系統資源,
+            是邊緣運算與 serverless 的新引擎。</li>
+        <li><strong>前沿方向</strong>:元件模型讓 WASM 模組之間強型別互通;SIMD 與執行緒帶來並行計算能力;
+            WebGPU 的整合讓 WASM 也能駕馭 GPU。</li>
+      </ul>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">延伸學習</span>
+          <p>
+            <strong>官方規格與教學</strong>:<a href="https://webassembly.org/" target="_blank" rel="noopener">webassembly.org</a>
+            是規格的入口;<a href="https://developer.mozilla.org/en-US/docs/WebAssembly" target="_blank" rel="noopener">MDN WebAssembly</a>
+            有最完整的 JS API 文件與入門教學。
+            <strong>互動體驗</strong>:<a href="https://webassembly.github.io/wabt/demo/wat2wasm/" target="_blank" rel="noopener">WebAssembly Binary Toolkit(WABT)線上工具</a>
+            讓你直接在瀏覽器裡編輯 WAT 並看到對應的位元組碼。
+            <strong>在瀏覽器裡跑 Linux</strong>:<a href="https://webvm.io/" target="_blank" rel="noopener">WebVM.io</a>
+            用 WASM 在瀏覽器裡跑了一個完整的 x86 Linux 環境——這是虛擬化與 WASM 結合的最好示範。
+            <strong>Rust + WASM 完整教程</strong>:<a href="https://rustwasm.github.io/docs/book/" target="_blank" rel="noopener">The Rust and WebAssembly Book</a>
+            帶你從零開始用 Rust 建構一個 Game of Life 的 WASM 版本。
+            <strong>Bytecode Alliance</strong>:<a href="https://bytecodealliance.org/" target="_blank" rel="noopener">bytecodealliance.org</a>
+            是推動 WASI 與 Wasmtime 的標準化組織,由 Mozilla、Fastly、Intel、Microsoft 等共同創立。
+          </p>
+        </div>
+      </div>
+</article>
+  </main>
+</div>
+<script src="../assets/book.js"></script>
+</body>
+</html>

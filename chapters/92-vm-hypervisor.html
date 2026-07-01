@@ -1,0 +1,851 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>虛擬機與 Hypervisor 底層 · CS 自學聖經</title>
+<meta name="description" content="深入 Hypervisor 實作:Type-1/2 架構差異、硬體輔助虛擬化 VT-x/AMD-V 的 root/non-root 模式與 VMCS、從影子分頁到 EPT/NPT 的二級位址轉換、virtio 半虛擬化 I/O,以及 KVM 與 QEMU 的分工。">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;700&family=Noto+Sans+TC:wght@400;700&family=Lora:ital,wght@0,400;0,600;0,700;1,400&family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <main class="main">
+    <article class="content">
+      <div class="eyebrow">第二一部 · 容器、虛擬化與雲原生底層</div>
+      <h1>虛擬機與 Hypervisor 底層</h1>
+      <p class="subtitle">「讓一整個作業系統以為自己獨佔整台電腦」——這不是幻術,而是幾十年工程師與 CPU 設計師合力攻克的硬體軟體聯合工程。現在,我們打開黑盒子。</p>
+      <div class="byline">
+        <span class="tag">第 86 章</span>
+        <span>閱讀時間 ≈ 55 分鐘</span>
+        <span>難度:★★★★☆</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>Type-1(裸機型)與 Type-2(宿主型)Hypervisor 在架構堆疊上的本質差異</li>
+          <li>純軟體虛擬化為何在 x86 上困難:特權指令問題與 Popek-Goldberg 定理</li>
+          <li><strong>Intel VT-x</strong> 與 AMD-V 如何用硬體解決這個問題:VMX root/non-root 模式、VMCS、VM exit/entry</li>
+          <li>記憶體虛擬化的演進:從影子分頁(shadow paging)到二級位址轉換(EPT/NPT)的 GVA→GPA→HPA 三層映射</li>
+          <li>I/O 虛擬化的三種策略:全模擬、半虛擬化(virtio)、設備直通(VFIO/SR-IOV)</li>
+          <li>KVM 與 QEMU 如何分工:哪些在核心、哪些在用戶空間</li>
+          <li>Firecracker microVM 與 gVisor 如何在安全與輕量之間找到新的折衷點</li>
+        </ul>
+      </div>
+
+      <!-- ==================== h2 ① ==================== -->
+      <h2>VM 是怎麼「騙過」一整個 OS 的?</h2>
+
+      <p>
+        想像你是一個 OS。你以為自己跑在真實的 CPU 上:你向硬體發出指令、管理記憶體頁表、控制中斷、
+        操作 I/O 設備。你渾然不知——其實你下面還有另一層軟體在監視你的每一個動作,
+        攔截你認為在直接對硬體說話的那些指令,用模擬的結果回應你,讓你繼續以為一切正常。
+      </p>
+      <p>
+        這一層軟體,就是<strong>虛擬機監控器(Virtual Machine Monitor,VMM)</strong>,
+        俗稱 <strong>Hypervisor</strong>。它的工作是在「Guest OS 需要獨佔硬體的錯覺」和
+        「實體硬體被多個 VM 共用的現實」之間架起橋樑。
+      </p>
+      <p>
+        要讓這個欺騙可信、高效且安全,Hypervisor 必須解決三個核心問題:
+      </p>
+      <ul>
+        <li><strong>CPU 虛擬化</strong>:Guest OS 以為自己在 ring 0 執行特權指令,但實際上被隔離在沙箱中。</li>
+        <li><strong>記憶體虛擬化</strong>:Guest OS 有自己的「實體位址空間」幻象,但這個幻象又需要映射到真正的實體記憶體。</li>
+        <li><strong>I/O 虛擬化</strong>:Guest OS 認為自己有獨享的磁碟、網卡、USB——但這些設備其實被多個 VM 共用或模擬。</li>
+      </ul>
+      <p>
+        這一章,我們就從 Hypervisor 的架構分類出發,逐一拆解這三個問題的現代解法。
+        在<a href="91-virt-landscape.html">第 85 章</a>我們已看過虛擬化的全景光譜;
+        這裡我們深入 VM 那一層的實作底層。
+      </p>
+
+      <!-- ==================== h2 ② ==================== -->
+      <h2>Type-1 vs Type-2 Hypervisor:誰坐在哪一層?</h2>
+
+      <p>
+        Hypervisor 最常見的分類方式,是看它「住」在軟體堆疊的哪一層:
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 740 420" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <rect width="740" height="420" fill="#f8fafb" rx="12"/>
+
+  <!-- ===== 左半:Type-1 ===== -->
+  <text x="185" y="28" text-anchor="middle" font-size="14" font-weight="700" fill="#b4541f">Type-1 裸機型(Bare-metal)</text>
+  <text x="185" y="46" text-anchor="middle" font-size="11" fill="#8a929b">KVM · ESXi · Xen · Hyper-V</text>
+
+  <!-- 硬體 -->
+  <rect x="30" y="364" width="310" height="36" rx="6" fill="#8a929b"/>
+  <text x="185" y="387" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">實體硬體 (CPU / RAM / NIC / Disk)</text>
+
+  <!-- Hypervisor -->
+  <rect x="30" y="312" width="310" height="44" rx="6" fill="#b4541f"/>
+  <text x="185" y="332" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">Hypervisor (Type 1)</text>
+  <text x="185" y="350" text-anchor="middle" font-size="11" fill="#fde8dd">直接跑在硬體上,握有最高特權</text>
+
+  <!-- VM 1 -->
+  <rect x="36" y="62" width="130" height="242" rx="8" fill="#fde8dd" stroke="#b4541f" stroke-width="2"/>
+  <text x="101" y="82" text-anchor="middle" font-size="12" font-weight="700" fill="#b4541f">VM 1</text>
+  <rect x="48" y="90" width="106" height="28" rx="5" fill="#f9c8b0"/>
+  <text x="101" y="109" text-anchor="middle" font-size="11" fill="#1f2328">App A</text>
+  <rect x="48" y="124" width="106" height="28" rx="5" fill="#f9c8b0"/>
+  <text x="101" y="143" text-anchor="middle" font-size="11" fill="#1f2328">App B</text>
+  <rect x="48" y="158" width="106" height="28" rx="5" fill="#f6b090"/>
+  <text x="101" y="177" text-anchor="middle" font-size="11" fill="#1f2328">Guest Libs</text>
+  <rect x="48" y="192" width="106" height="42" rx="5" fill="#e8805a"/>
+  <text x="101" y="211" text-anchor="middle" font-size="12" font-weight="700" fill="#fff">Guest OS</text>
+  <text x="101" y="227" text-anchor="middle" font-size="10" fill="#ffe0d0">Kernel (虛擬 ring 0)</text>
+  <rect x="48" y="242" width="106" height="28" rx="5" fill="#f9c8b0" stroke="#b4541f" stroke-dasharray="3,2"/>
+  <text x="101" y="261" text-anchor="middle" font-size="10" fill="#b4541f">虛擬 CPU/RAM</text>
+
+  <!-- VM 2 -->
+  <rect x="210" y="62" width="124" height="242" rx="8" fill="#fde8dd" stroke="#b4541f" stroke-width="2"/>
+  <text x="272" y="82" text-anchor="middle" font-size="12" font-weight="700" fill="#b4541f">VM 2</text>
+  <rect x="222" y="90" width="100" height="28" rx="5" fill="#f9c8b0"/>
+  <text x="272" y="109" text-anchor="middle" font-size="11" fill="#1f2328">App C</text>
+  <rect x="222" y="124" width="100" height="28" rx="5" fill="#f9c8b0"/>
+  <text x="272" y="143" text-anchor="middle" font-size="11" fill="#1f2328">App D</text>
+  <rect x="222" y="158" width="100" height="28" rx="5" fill="#f6b090"/>
+  <text x="272" y="177" text-anchor="middle" font-size="11" fill="#1f2328">Guest Libs</text>
+  <rect x="222" y="192" width="100" height="42" rx="5" fill="#e8805a"/>
+  <text x="272" y="211" text-anchor="middle" font-size="12" font-weight="700" fill="#fff">Guest OS</text>
+  <text x="272" y="227" text-anchor="middle" font-size="10" fill="#ffe0d0">Kernel (虛擬 ring 0)</text>
+  <rect x="222" y="242" width="100" height="28" rx="5" fill="#f9c8b0" stroke="#b4541f" stroke-dasharray="3,2"/>
+  <text x="272" y="261" text-anchor="middle" font-size="10" fill="#b4541f">虛擬 CPU/RAM</text>
+
+  <!-- 分隔線 -->
+  <line x1="376" y1="10" x2="376" y2="410" stroke="#d0d7de" stroke-width="1.5" stroke-dasharray="6,4"/>
+
+  <!-- ===== 右半:Type-2 ===== -->
+  <text x="558" y="28" text-anchor="middle" font-size="14" font-weight="700" fill="#2f6f6a">Type-2 宿主型(Hosted)</text>
+  <text x="558" y="46" text-anchor="middle" font-size="11" fill="#8a929b">VirtualBox · VMware Workstation</text>
+
+  <!-- 硬體 -->
+  <rect x="400" y="364" width="320" height="36" rx="6" fill="#8a929b"/>
+  <text x="560" y="387" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">實體硬體 (CPU / RAM / NIC / Disk)</text>
+
+  <!-- Host OS -->
+  <rect x="400" y="298" width="320" height="58" rx="6" fill="#2f6f6a"/>
+  <text x="560" y="320" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">Host OS (Windows / Linux / macOS)</text>
+  <text x="560" y="340" text-anchor="middle" font-size="11" fill="#b8ddd9">Host OS Kernel 管理實體硬體</text>
+
+  <!-- Hypervisor/App layer -->
+  <rect x="400" y="256" width="320" height="34" rx="5" fill="#1a5c57"/>
+  <text x="560" y="278" text-anchor="middle" font-size="12" font-weight="700" fill="#fff">Hypervisor App (Type 2,跑在 Host OS 上)</text>
+
+  <!-- VM in Type-2 -->
+  <rect x="410" y="62" width="135" height="186" rx="8" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="477" y="82" text-anchor="middle" font-size="12" font-weight="700" fill="#2f6f6a">VM 1</text>
+  <rect x="422" y="90" width="111" height="26" rx="5" fill="#b8ddd9"/>
+  <text x="477" y="108" text-anchor="middle" font-size="11" fill="#1f2328">App A</text>
+  <rect x="422" y="122" width="111" height="26" rx="5" fill="#b8ddd9"/>
+  <text x="477" y="140" text-anchor="middle" font-size="11" fill="#1f2328">App B</text>
+  <rect x="422" y="154" width="111" height="24" rx="5" fill="#8ecfc9"/>
+  <text x="477" y="170" text-anchor="middle" font-size="11" fill="#1f2328">Guest Libs</text>
+  <rect x="422" y="184" width="111" height="36" rx="5" fill="#2f6f6a"/>
+  <text x="477" y="200" text-anchor="middle" font-size="12" font-weight="700" fill="#fff">Guest OS</text>
+  <text x="477" y="214" text-anchor="middle" font-size="10" fill="#cce6e3">Kernel</text>
+
+  <rect x="555" y="62" width="155" height="186" rx="8" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="632" y="82" text-anchor="middle" font-size="12" font-weight="700" fill="#2f6f6a">VM 2</text>
+  <rect x="567" y="90" width="131" height="26" rx="5" fill="#b8ddd9"/>
+  <text x="632" y="108" text-anchor="middle" font-size="11" fill="#1f2328">App C</text>
+  <rect x="567" y="122" width="131" height="26" rx="5" fill="#b8ddd9"/>
+  <text x="632" y="140" text-anchor="middle" font-size="11" fill="#1f2328">App D</text>
+  <rect x="567" y="154" width="131" height="24" rx="5" fill="#8ecfc9"/>
+  <text x="632" y="170" text-anchor="middle" font-size="11" fill="#1f2328">Guest Libs</text>
+  <rect x="567" y="184" width="131" height="36" rx="5" fill="#2f6f6a"/>
+  <text x="632" y="200" text-anchor="middle" font-size="12" font-weight="700" fill="#fff">Guest OS</text>
+  <text x="632" y="214" text-anchor="middle" font-size="10" fill="#cce6e3">Kernel</text>
+</svg>
+        <figcaption>圖 86-1:Type-1 裸機型(左)與 Type-2 宿主型(右)Hypervisor 的架構堆疊。Type-1 直接坐在硬體上,沒有底層 Host OS;Type-2 作為普通應用程式跑在 Host OS 之上。</figcaption>
+      </div>
+
+      <h3>Type-1:裸機型(Bare-metal)</h3>
+      <p>
+        Type-1 Hypervisor 直接跑在硬體上,底下沒有任何 Host OS。它自己就是最高特權層,
+        負責排程多個 Guest OS 的 CPU 時間、管理實體記憶體分配、以及設備存取。
+        代表例子:
+      </p>
+      <ul>
+        <li><strong>KVM(Kernel-based Virtual Machine)</strong>:Linux 核心模組,把 Linux 本身變成 Hypervisor。是 AWS、GCP、Azure(部分)等雲端的主流基礎。</li>
+        <li><strong>VMware ESXi</strong>:企業資料中心最廣泛部署的商業 Type-1 Hypervisor。</li>
+        <li><strong>Xen</strong>:2003 年英國劍橋大學發表的開源 Type-1,早期 AWS EC2 就建在 Xen 之上。</li>
+        <li><strong>Microsoft Hyper-V</strong>:Windows Server 內建的 Type-1 Hypervisor。</li>
+      </ul>
+
+      <h3>Type-2:宿主型(Hosted)</h3>
+      <p>
+        Type-2 Hypervisor 作為一般應用程式跑在現有的 Host OS 之上。它透過 Host OS 提供的 API
+        與驅動程式來存取硬體,因此有額外的間接層。代表例子:
+      </p>
+      <ul>
+        <li><strong>VirtualBox</strong>:Oracle 維護的免費開源跨平台虛擬化工具。</li>
+        <li><strong>VMware Workstation / Fusion</strong>:適合開發者在 Windows/macOS 筆電上跑 VM。</li>
+        <li><strong>QEMU(無 KVM 模式)</strong>:純軟體 CPU 模擬,可在任何 Host 上模擬不同架構的 Guest。</li>
+      </ul>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">KVM 的特殊地位</span>
+          <p>KVM 嚴格說來是 Type-1 和 Type-2 的混合體。它是 Linux 核心模組(kvm.ko + kvm-intel.ko / kvm-amd.ko),把 Linux 本身升格為 Hypervisor——Linux 的排程器直接排程 vCPU,Linux 的記憶體管理直接服務 VM。因此效能接近裸機型,管理介面卻像宿主型應用程式。</p>
+        </div>
+      </div>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">Type-1 不一定比 Type-2 快</span>
+          <p>Type-1 的優勢在於「沒有 Host OS 的間接層」帶來較低的排程延遲與記憶體管理開銷。但在現代 Linux 上用 KVM 時,Host OS 的間接層幾乎可忽略不計——KVM 利用的就是 Linux 核心本身。Type-2 的真正代價不是效能,而是 Host OS 的額外攻擊面和資源佔用。</p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ③ ==================== -->
+      <h2>為何純軟體虛擬化困難:特權指令與 x86 的麻煩</h2>
+
+      <p>
+        在硬體虛擬化輔助出現之前,工程師得靠純軟體實現「讓 Guest OS 以為自己在 ring 0 執行」——
+        這比想像中難得多。
+      </p>
+      <p>
+        一個 OS 核心以為自己在 ring 0 執行時,它會發出<strong>特權指令(privileged instructions)</strong>——
+        那些只有在最高特權等級才能執行、否則 CPU 會產生 trap(陷入)的指令。
+        Hypervisor 的理想策略是<strong>陷入並模擬(trap-and-emulate)</strong>:
+        讓 Guest OS 的特權指令觸發 trap,CPU 跳轉到 Hypervisor,Hypervisor 檢查這個指令、
+        模擬它的效果,再把控制權還給 Guest。這樣 Guest OS 完全不知道自己被攔截了。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">Popek-Goldberg 定理</span>
+          <p>1974 年,Gerald Popek 與 Robert Goldberg 發表了一個形式化定理:一個指令集架構可以被有效虛擬化,當且僅當所有<strong>敏感指令(sensitive instructions)</strong>都是<strong>特權指令</strong>。敏感指令是指「行為依賴當前特權等級或硬體狀態、若在虛擬機中不攔截會洩漏硬體真實狀態」的指令。</p>
+        </div>
+      </div>
+
+      <h3>x86 的原罪:17 條「安靜敏感」指令(依 Robin &amp; Irvine 2000 年對 IA-32 的分析)</h3>
+      <p>
+        x86 架構在設計時並未考慮到虛擬化。它有一個致命缺陷:有幾條指令是<strong>敏感</strong>的
+        (行為依賴特權等級),但卻<strong>不是特權指令</strong>——在 ring 3 執行它們
+        <em>不會</em>產生 trap,而是靜靜地執行「ring 3 版本」的行為。
+        1974 年的 Popek-Goldberg 定理告訴我們,這樣的架構無法被乾淨地虛擬化。
+      </p>
+      <p>
+        最著名的例子是 <code>POPF</code>(彈出 flags 暫存器)與 <code>SGDT</code>(儲存 GDT 描述符)。
+        <code>SGDT</code> 在 ring 3 執行時不會 trap,但它會讀出<em>真實</em>的 GDTR 值——
+        暴露了 Hypervisor 的底層狀態。早期的純軟體 VMware 用
+        <strong>二進制翻譯(binary translation,BT)</strong>繞過這個問題:
+        在 Guest OS 的程式碼執行前動態掃描、把那些問題指令替換成安全的等效序列。
+        這個方法可行,但有顯著的效能開銷與維護複雜度。
+      </p>
+
+      <!-- ==================== h2 ④ ==================== -->
+      <h2>硬體輔助虛擬化:Intel VT-x 與 AMD-V</h2>
+
+      <p>
+        2005–2006 年,Intel 推出 <strong>VT-x(Virtualization Technology for IA-32/64)</strong>,
+        AMD 推出 <strong>AMD-V(也稱 SVM, Secure Virtual Machine)</strong>,
+        從根本解決了 x86 虛擬化漏洞。核心思路是增加一個新的 CPU 執行模式。
+      </p>
+
+      <h3>VMX root 與 non-root 模式</h3>
+      <p>
+        VT-x 引入了<strong>VMX 操作(VMX operation)</strong>概念,把 CPU 的執行上下文一分為二:
+      </p>
+      <ul>
+        <li>
+          <strong>VMX root 模式</strong>:Hypervisor 執行的環境。有完整的硬體控制權(包括 ring 0–3),
+          傳統的特權指令在這裡照常運作。Hypervisor 在這裡執行初始化、設定策略、處理 VM exit。
+        </li>
+        <li>
+          <strong>VMX non-root 模式</strong>:Guest OS 執行的受限環境。同樣有 ring 0–3 的分層,
+          但某些指令的行為被 VMCS 的配置攔截——即使 Guest OS 以為自己在 ring 0,
+          試圖執行那些指令時 CPU 會自動 VM exit,跳回 Hypervisor 處理。
+        </li>
+      </ul>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">根本改變:Guest OS 真的跑在 ring 0</span>
+          <p>有了 VT-x,Guest OS 不再需要「偽裝成 ring 1/3」——它真的跑在 ring 0,但在 non-root 模式的沙箱裡。所有原本「安靜敏感」的指令現在都會自動觸發 VM exit,Hypervisor 可以攔截。x86 的虛擬化漏洞從根本上被修補。</p>
+        </div>
+      </div>
+
+      <h3>VMCS:VM 的控制神經中樞</h3>
+      <p>
+        VT-x 引入了<strong>虛擬機控制結構(Virtual Machine Control Structure,VMCS)</strong>——
+        一個記憶體中的資料結構,描述一個 vCPU 的完整狀態與控制策略。
+        每個 vCPU 都有自己的 VMCS,包含三大區域:
+      </p>
+      <ul>
+        <li>
+          <strong>Guest-state area</strong>:Guest OS 被暫停時的 CPU 狀態——所有通用暫存器、
+          段暫存器(CS/DS/SS/ES)、控制暫存器(CR0/CR3/CR4)、RFLAGS、RIP 等。
+          VM entry 時 CPU 從這裡恢復狀態;VM exit 時 CPU 把目前狀態儲存到這裡。
+        </li>
+        <li>
+          <strong>Host-state area</strong>:Hypervisor 的 CPU 狀態。VM exit 後 CPU 從這裡恢復 Hypervisor 的執行環境。
+        </li>
+        <li>
+          <strong>VM-execution control fields</strong>:策略配置——哪些指令或事件應觸發 VM exit
+          (例如:<code>RDTSC</code>、特定 MSR 存取、I/O 埠存取、EPT violation 等)。
+        </li>
+      </ul>
+
+      <h3>VM exit / VM entry:兩個世界的切換</h3>
+      <p>
+        Guest OS 與 Hypervisor 之間的切換靠兩個操作:
+      </p>
+      <ul>
+        <li>
+          <strong>VM exit</strong>:Guest OS 觸發了需要 Hypervisor 介入的事件——
+          執行了被配置為需要攔截的指令、發生中斷、EPT page fault 等。
+          CPU 自動把 Guest 狀態存入 VMCS 的 guest-state area、載入 host-state area 的 Hypervisor 狀態、
+          並把 VM exit 的原因寫入 VMCS 的 exit-reason 欄位,然後跳至 Hypervisor 的 VM exit handler。
+        </li>
+        <li>
+          <strong>VM entry</strong>:Hypervisor 處理完畢,執行 <code>VMRESUME</code>(或首次啟動執行 <code>VMLAUNCH</code>)。
+          CPU 從 VMCS 的 guest-state area 恢復 Guest OS 的狀態,跳回 Guest 中斷的那個位址繼續執行。
+          從 Guest 的視角看,它就像什麼都沒發生——只是那個「特權指令」被靜靜地模擬了。
+        </li>
+      </ul>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">AMD-V / SVM 的對應概念</span>
+          <p>AMD-V 的設計思路與 VT-x 相似,但術語不同。AMD-V 的 Host/Guest 模式切換靠 <code>VMRUN</code> 指令啟動 Guest、VM exit 稱為「#VMEXIT」。AMD-V 用<strong>虛擬機控制區塊(Virtual Machine Control Block,VMCB)</strong>取代 Intel 的 VMCS,同樣包含 Guest 狀態儲存、Host 狀態儲存、以及控制欄位三區。AMD-V 的等效二級位址轉換稱為 NPT(Nested Page Tables),功能上與 Intel EPT 相同。</p>
+        </div>
+      </div>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">VM exit 有效能代價</span>
+          <p>每次 VM exit/entry 都需要儲存和恢復大量 CPU 狀態(通用暫存器、段暫存器、控制暫存器等),代價約 1000–10000 個 CPU 週期。因此 Hypervisor 的設計目標之一就是<strong>減少 VM exit 的頻率</strong>——透過 EPT 避免頁表修改觸發 exit、透過虛擬 APIC 讓大多數中斷交付不需 exit 等。</p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑤ ==================== -->
+      <h2>記憶體虛擬化:從影子分頁到 EPT/NPT</h2>
+
+      <p>
+        記憶體虛擬化是 Hypervisor 最複雜的部分之一。問題的根源在於:
+        在<a href="24-operating-system.html">第 24 章</a>我們看到,OS 用分頁(paging)把
+        <strong>虛擬位址(Virtual Address,VA)</strong>對應到<strong>實體位址(Physical Address,PA)</strong>。
+        但在 VM 中,「Guest OS 的實體位址」其實是個幻象——它並不是真正的硬體實體位址,
+        而是 Hypervisor 分配給這個 VM 的「假實體記憶體」。
+      </p>
+      <p>
+        為了區別,我們引入三層位址的術語:
+      </p>
+      <ul>
+        <li><strong>GVA(Guest Virtual Address,客端虛擬位址)</strong>:Guest OS 裡的行程所看到的虛擬位址。</li>
+        <li><strong>GPA(Guest Physical Address,客端實體位址)</strong>:Guest OS「以為」自己擁有的實體記憶體位址。</li>
+        <li><strong>HPA(Host Physical Address,主機實體位址)</strong>:真正的實體記憶體位址。</li>
+      </ul>
+      <p>
+        CPU 的 MMU 只認識一種頁表——從虛擬位址到實體位址的對應。
+        問題來了:Guest OS 的頁表記錄的是 GVA→GPA 的對應,但 MMU 需要的是最終的實體位址(HPA)。
+        這個問題有兩種歷史解法:影子分頁與二級位址轉換。
+      </p>
+
+      <h3>影子分頁(Shadow Paging)</h3>
+      <p>
+        在硬體 EPT/NPT 出現前,Hypervisor 用軟體方式解決這個問題:
+        替每個 Guest OS 的每個行程,額外維護一份<strong>影子頁表(Shadow Page Table,SPT)</strong>。
+        這份影子頁表直接記錄 GVA→HPA 的對應,Hypervisor 把它載入到 CR3(頁表基底暫存器)——
+        於是 MMU 直接使用影子頁表,GVA→HPA 一步完成。
+      </p>
+      <p>
+        但 Hypervisor 必須<strong>把影子頁表與 Guest 頁表的修改保持同步</strong>。做法是:
+        把 Guest 頁表的記憶體頁設為唯讀;當 Guest OS 試圖修改頁表時,觸發 page fault,
+        VM exit 到 Hypervisor,Hypervisor 檢查修改、更新影子頁表、再恢復 Guest。
+        這個同步機制帶來的 VM exit 頻率相當高,尤其在 Guest OS 頻繁建立/銷毀行程時代價很大。
+      </p>
+      <p>
+        此外,每次 Guest OS 切換行程(TLB flush、換 CR3),Hypervisor 都要切換對應的影子頁表,
+        且要flush TLB。影子頁表本身的記憶體開銷也不小。
+      </p>
+
+      <h3>二級位址轉換:EPT(Extended Page Tables)</h3>
+      <p>
+        Intel 在 2008 年的 Nehalem 架構引入了 <strong>EPT(Extended Page Tables)</strong>——
+        也叫<strong>第二層位址轉換(Second Level Address Translation,SLAT)</strong>。
+        AMD 的等效版本叫 NPT(Nested Page Tables)。它們從根本上改變了記憶體虛擬化的方式:
+        由<strong>硬體</strong>自動完成兩層頁表的走訪。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 740 480" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <rect width="740" height="480" fill="#f8fafb" rx="12"/>
+  <text x="370" y="28" text-anchor="middle" font-size="15" font-weight="700" fill="#1f2328">EPT 二級位址轉換:GVA → GPA → HPA</text>
+
+  <!-- ===== 第一層:GVA → GPA (Guest 頁表) ===== -->
+
+  <!-- GVA box -->
+  <rect x="30" y="60" width="130" height="56" rx="8" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="95" y="84" text-anchor="middle" font-size="12" font-weight="700" fill="#2f6f6a">GVA</text>
+  <text x="95" y="102" text-anchor="middle" font-size="10" fill="#4a5159">Guest 虛擬位址</text>
+
+  <!-- Arrow to Guest PT -->
+  <line x1="160" y1="88" x2="220" y2="88" stroke="#2f6f6a" stroke-width="2"/>
+  <polygon points="220,83 232,88 220,93" fill="#2f6f6a"/>
+  <text x="190" y="80" text-anchor="middle" font-size="10" fill="#2f6f6a">CR3</text>
+
+  <!-- Guest Page Table -->
+  <rect x="232" y="60" width="160" height="56" rx="8" fill="#b8ddd9" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="312" y="82" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">Guest 頁表</text>
+  <text x="312" y="98" text-anchor="middle" font-size="10" fill="#1f2328">由 Guest OS 維護</text>
+  <text x="312" y="111" text-anchor="middle" font-size="9" fill="#4a5159">(每個行程一份)</text>
+
+  <!-- Arrow to GPA -->
+  <line x1="392" y1="88" x2="450" y2="88" stroke="#2f6f6a" stroke-width="2"/>
+  <polygon points="450,83 462,88 450,93" fill="#2f6f6a"/>
+
+  <!-- GPA box -->
+  <rect x="462" y="60" width="130" height="56" rx="8" fill="#fde8dd" stroke="#b4541f" stroke-width="2"/>
+  <text x="527" y="84" text-anchor="middle" font-size="12" font-weight="700" fill="#b4541f">GPA</text>
+  <text x="527" y="102" text-anchor="middle" font-size="10" fill="#4a5159">Guest 實體位址</text>
+
+  <!-- Label for layer 1 -->
+  <text x="370" y="148" text-anchor="middle" font-size="11" font-weight="700" fill="#2f6f6a">【第一層】Guest 頁表走訪(硬體自動完成)</text>
+
+  <!-- Divider -->
+  <line x1="30" y1="160" x2="710" y2="160" stroke="#d0d7de" stroke-width="1" stroke-dasharray="5,4"/>
+
+  <!-- ===== 第二層:GPA → HPA (EPT 頁表) ===== -->
+
+  <!-- GPA box 2 -->
+  <rect x="30" y="180" width="130" height="56" rx="8" fill="#fde8dd" stroke="#b4541f" stroke-width="2"/>
+  <text x="95" y="204" text-anchor="middle" font-size="12" font-weight="700" fill="#b4541f">GPA</text>
+  <text x="95" y="222" text-anchor="middle" font-size="10" fill="#4a5159">Guest 實體位址</text>
+
+  <!-- Arrow to EPT -->
+  <line x1="160" y1="208" x2="220" y2="208" stroke="#b4541f" stroke-width="2"/>
+  <polygon points="220,203 232,208 220,213" fill="#b4541f"/>
+  <text x="190" y="200" text-anchor="middle" font-size="10" fill="#b4541f">EPTP</text>
+
+  <!-- EPT -->
+  <rect x="232" y="180" width="160" height="56" rx="8" fill="#f6b090" stroke="#b4541f" stroke-width="2"/>
+  <text x="312" y="202" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">EPT 頁表</text>
+  <text x="312" y="218" text-anchor="middle" font-size="10" fill="#1f2328">由 Hypervisor 維護</text>
+  <text x="312" y="231" text-anchor="middle" font-size="9" fill="#4a5159">(每個 VM 一份)</text>
+
+  <!-- Arrow to HPA -->
+  <line x1="392" y1="208" x2="450" y2="208" stroke="#b4541f" stroke-width="2"/>
+  <polygon points="450,203 462,208 450,213" fill="#b4541f"/>
+
+  <!-- HPA box -->
+  <rect x="462" y="180" width="130" height="56" rx="8" fill="#8a929b" stroke="#4a5159" stroke-width="2"/>
+  <text x="527" y="204" text-anchor="middle" font-size="12" font-weight="700" fill="#fff">HPA</text>
+  <text x="527" y="222" text-anchor="middle" font-size="10" fill="#ddd">真正的實體記憶體</text>
+
+  <!-- Physical RAM -->
+  <rect x="610" y="180" width="90" height="56" rx="8" fill="#4a5159"/>
+  <text x="655" y="201" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">實體 RAM</text>
+  <text x="655" y="219" text-anchor="middle" font-size="10" fill="#ccc">DIMM</text>
+  <line x1="592" y1="208" x2="610" y2="208" stroke="#4a5159" stroke-width="2"/>
+  <polygon points="610,203 622,208 610,213" fill="#4a5159"/>
+
+  <!-- Label for layer 2 -->
+  <text x="370" y="268" text-anchor="middle" font-size="11" font-weight="700" fill="#b4541f">【第二層】EPT 頁表走訪(硬體自動完成,無需 VM exit)</text>
+
+  <!-- Divider -->
+  <line x1="30" y1="280" x2="710" y2="280" stroke="#d0d7de" stroke-width="1" stroke-dasharray="5,4"/>
+
+  <!-- ===== 走訪代價說明 ===== -->
+  <text x="370" y="310" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">EPT walk 最差代價:最多 24 次記憶體存取((4+1)×(4+1)−1,4 級頁表)</text>
+
+  <!-- Walk visualization -->
+  <rect x="40" y="326" width="90" height="34" rx="5" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="85" y="341" text-anchor="middle" font-size="10" fill="#1f2328">Guest L4 PTE</text>
+  <text x="85" y="354" text-anchor="middle" font-size="9" fill="#8a929b">需 EPT 翻譯</text>
+
+  <text x="140" y="347" text-anchor="middle" font-size="16" fill="#8a929b">→</text>
+
+  <rect x="155" y="326" width="90" height="34" rx="5" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="200" y="341" text-anchor="middle" font-size="10" fill="#1f2328">Guest L3 PTE</text>
+  <text x="200" y="354" text-anchor="middle" font-size="9" fill="#8a929b">需 EPT 翻譯</text>
+
+  <text x="255" y="347" text-anchor="middle" font-size="16" fill="#8a929b">→</text>
+
+  <rect x="270" y="326" width="90" height="34" rx="5" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="315" y="341" text-anchor="middle" font-size="10" fill="#1f2328">Guest L2 PTE</text>
+  <text x="315" y="354" text-anchor="middle" font-size="9" fill="#8a929b">需 EPT 翻譯</text>
+
+  <text x="370" y="347" text-anchor="middle" font-size="16" fill="#8a929b">→</text>
+
+  <rect x="385" y="326" width="90" height="34" rx="5" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="430" y="341" text-anchor="middle" font-size="10" fill="#1f2328">Guest L1 PTE</text>
+  <text x="430" y="354" text-anchor="middle" font-size="9" fill="#8a929b">需 EPT 翻譯</text>
+
+  <text x="485" y="347" text-anchor="middle" font-size="16" fill="#8a929b">→</text>
+
+  <rect x="500" y="326" width="90" height="34" rx="5" fill="#8a929b" stroke="#4a5159"/>
+  <text x="545" y="341" text-anchor="middle" font-size="10" fill="#fff">最終 HPA</text>
+  <text x="545" y="354" text-anchor="middle" font-size="9" fill="#ddd">資料存取</text>
+
+  <!-- TLB note -->
+  <rect x="40" y="380" width="660" height="72" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>
+  <text x="60" y="402" font-size="11" font-weight="700" fill="#92400e">🔑 EPT TLB(也稱 TLB + EPT 快取):</text>
+  <text x="60" y="420" font-size="11" fill="#1f2328">實際上 CPU 會快取最近的 GVA→HPA 組合(TLB)與 GPA→HPA 組合(EPT TLB)。</text>
+  <text x="60" y="438" font-size="11" fill="#1f2328">TLB 命中時一次查詢即可;只有 TLB miss 才需要走訪頁表。比起影子分頁,EPT 消除了</text>
+  <text x="60" y="456" font-size="11" fill="#1f2328">頁表同步引發的 VM exit,代價轉移到 TLB miss 時的多次記憶體存取——這在現代 CPU 的代價通常更低。</text>
+</svg>
+        <figcaption>圖 86-2:EPT 二級位址轉換。第一層:CPU 走訪 Guest 頁表(GVA→GPA)。第二層:硬體自動走訪 EPT 頁表(GPA→HPA)。整個過程無需 VM exit,由 CPU MMU 自動完成。</figcaption>
+      </div>
+
+      <p>
+        有了 EPT,Hypervisor 只需在 VM 建立時設定好 EPT 頁表(記錄 GPA→HPA 的對應),
+        之後 Guest OS 可以自由修改自己的頁表(GVA→GPA),
+        CPU 的 MMU 硬體會自動串聯這兩層翻譯——完全不需要 VM exit。
+        與影子分頁相比,EPT 的最大優勢是<strong>大幅減少 VM exit 頻率</strong>:
+        頁表修改不再需要 Hypervisor 介入,代價轉移成 TLB miss 時的額外記憶體存取,
+        但現代 CPU 的記憶體延遲通常比 VM exit 代價(上千週期)低得多。
+      </p>
+      <p>
+        EPT 的缺點是<strong>頁表走訪代價更高</strong>:
+        對於 4 級頁表(x86-64 的預設),一次 TLB miss 最多需要
+        $(4+1)\times(4+1)-1 = 24$ 次記憶體存取(不含最後資料讀):每層 Guest PTE 的位址都要先經一輪 4 次 EPT walk 再讀取 PTE(1 次),4 層共 4×5 = 20 次,加上最終資料 GPA 的 4 次 EPT walk,合計 24 次。
+        這個代價靠 EPT TLB 與大分頁(2 MB / 1 GB 的 Huge Pages)緩解——
+        大分頁能大幅提升 TLB 覆蓋範圍,降低 miss 率。
+      </p>
+
+      <!-- ==================== h2 ⑥ ==================== -->
+      <h2>I/O 虛擬化:全模擬、virtio 與設備直通</h2>
+
+      <p>
+        解決了 CPU 和記憶體虛擬化之後,還剩下 I/O 設備的問題。
+        一個 Guest OS 以為自己有獨享的磁碟和網卡;Hypervisor 必須把這個幻象高效地實現出來。
+        主要有三種策略,效能與複雜度各有取捨。
+      </p>
+
+      <h3>策略一:全模擬(Full Emulation)</h3>
+      <p>
+        Hypervisor 完整模擬一個真實的硬體設備——例如 Intel e1000 網卡或 IDE 磁碟控制器。
+        Guest OS 使用對應的未修改驅動程式,透過 I/O 埠讀寫(in/out 指令)或 MMIO
+        (Memory-Mapped I/O)與「設備」溝通。每次 I/O 操作都觸發 VM exit,
+        Hypervisor 攔截並模擬設備行為。
+      </p>
+      <p>
+        優點:Guest OS 完全不知道自己在 VM 裡,相容性最強。
+        缺點:每個 I/O 操作都有 VM exit 代價,加上硬體暫存器模擬的複雜度,
+        效能開銷顯著——在 I/O 密集型工作負載(如資料庫、網路服務)上,
+        全模擬的開銷可能是非虛擬化環境的數倍。
+      </p>
+
+      <h3>策略二:半虛擬化 I/O——virtio</h3>
+      <p>
+        <strong>virtio</strong> 是一套<strong>半虛擬化(paravirtualized)I/O 框架</strong>。
+        它的核心思想是:讓 Guest OS 知道自己在虛擬機裡,使用<strong>效率最佳化的共享記憶體介面</strong>，
+        而不是模擬真實硬體的暫存器介面。
+      </p>
+      <p>
+        virtio 的核心抽象是 <strong>virtqueue(虛擬佇列)</strong>——
+        一個 Guest 與 Host 共用的環形緩衝區(ring buffer),由三個資料結構組成:
+      </p>
+      <ul>
+        <li><strong>Descriptor Table(描述符表)</strong>:記錄每個 I/O 緩衝區的位址、長度、讀寫方向,以及鏈結到下一個描述符的指標。</li>
+        <li><strong>Available Ring(可用環)</strong>:Guest Driver 把準備好的描述符索引寫入這裡,通知後端「有新請求」。</li>
+        <li><strong>Used Ring(已用環)</strong>:Host Backend 完成 I/O 後,把完成的描述符索引寫入這裡,通知 Guest 取結果。</li>
+      </ul>
+      <p>
+        Guest Driver 把 I/O 請求(例如:寫入 4 KB 資料到磁碟第 N 扇區)以描述符形式放進 Available Ring,
+        透過一次寫入通知暫存器(kick)告知 Host Backend;
+        Host Backend(在 QEMU 或 Host 核心中)取出請求、執行實際 I/O、把結果放入 Used Ring,
+        再觸發 Guest 的中斷通知。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">virtio 快的原因</span>
+          <p>全模擬每個 I/O 操作都需要 VM exit(因為 in/out 指令被攔截);virtio 的 kick 可以批次通知多個請求,且 virtqueue 共享記憶體避免了資料複製。更重要的是,Host Backend 可以實作為 in-kernel 的 vhost 模組(vhost-net、vhost-blk),讓資料路徑完全繞過 QEMU 用戶空間——大幅降低 context switch 次數。</p>
+        </div>
+      </div>
+
+      <p>
+        virtio 已成為 Linux KVM 生態的標準 I/O 介面。常見的 virtio 設備有:
+        <strong>virtio-net</strong>(網路)、<strong>virtio-blk</strong>(區塊設備/磁碟)、
+        <strong>virtio-scsi</strong>(SCSI 磁碟)、<strong>virtio-balloon</strong>(記憶體動態調整)。
+        Windows Guest 需安裝 VirtIO 驅動程式套件。
+      </p>
+
+      <h3>策略三:設備直通(Device Passthrough)——VFIO 與 SR-IOV</h3>
+      <p>
+        有時候,模擬任何中間層都嫌太慢——你想讓 Guest OS 直接控制實體設備。
+        <strong>VFIO(Virtual Function I/O)</strong> 框架允許把一個 PCI 設備(如 GPU、NVMe SSD、
+        高速網卡)直接分配給一個 VM,Guest OS 的設備驅動程式幾乎直接與硬體溝通。
+      </p>
+      <p>
+        安全性靠 <strong>IOMMU(Input-Output Memory Management Unit)</strong> 保證:
+        IOMMU 是一個硬體單元,類似 CPU 的 MMU 但服務 DMA 操作。
+        設備的 DMA(直接記憶體存取)地址通過 IOMMU 翻譯,
+        確保設備只能存取被允許的 GPA 範圍——防止惡意或有 bug 的設備存取其他 VM 的記憶體。
+      </p>
+      <p>
+        <strong>SR-IOV(Single Root I/O Virtualization)</strong> 是另一個設備直通方案,
+        它讓一個實體 PCIe 設備(Physical Function,PF)虛擬出多個獨立的
+        <strong>虛擬功能(Virtual Function,VF)</strong>,每個 VF 可以分配給不同的 VM。
+        常見於高速網卡(如 Mellanox InfiniBand、Intel X710)——每個 VM 獲得一個硬體加速的網路介面,
+        繞過 Hypervisor 軟體路徑,延遲接近裸機水準。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">三種策略的取捨</span>
+          <p><strong>全模擬</strong>:相容性最強(不需要修改 Guest OS 或 Driver),效能最差,適合舊版 OS 或簡單測試環境。<strong>virtio</strong>:效能優秀,是現代 Linux/Windows VM 的首選,需要安裝 virtio 驅動。<strong>VFIO/SR-IOV</strong>:效能最接近裸機,但每個設備只能分配給一個 VM(或有限數量的 VF),靈活性差,且 VM 遷移(live migration)時設備狀態難以轉移。</p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑦ ==================== -->
+      <h2>KVM 與 QEMU 如何分工</h2>
+
+      <p>
+        在 Linux 世界,「KVM + QEMU」是最常見的 VM 執行棧組合。
+        兩者各司其職,缺一不可——理解它們的分工能讓你對整個 VM 的執行流程豁然開朗。
+      </p>
+
+      <h3>KVM:核心模組,提供硬體加速</h3>
+      <p>
+        KVM 是 Linux 核心的一個可載入模組(kvm.ko + kvm-intel.ko 或 kvm-amd.ko)。
+        它的核心職責是:
+      </p>
+      <ul>
+        <li><strong>啟用 VMX/SVM 模式</strong>:Intel 執行 <code>VMXON</code>、AMD 設定 <code>EFER.SVME</code> 位,進入虛擬化操作模式(AMD 以 <code>VMRUN</code> 執行 guest)。</li>
+        <li><strong>管理 VMCS/VMCB</strong>:為每個 vCPU 維護 VMCS,處理 VM exit/entry。</li>
+        <li><strong>管理 EPT/NPT</strong>:設定二級位址轉換的頁表,映射 GPA→HPA。</li>
+        <li><strong>處理 fast path VM exit</strong>:某些 VM exit(如虛擬 APIC 中斷交付、部分 MSR 存取)可以在核心內直接處理,不需要通知用戶空間。</li>
+        <li><strong>提供 /dev/kvm 介面</strong>:透過 ioctl() 系統呼叫讓用戶空間程式(QEMU)建立 VM、建立 vCPU、設定記憶體對應、執行 vCPU。</li>
+      </ul>
+
+      <h3>QEMU:用戶空間,提供設備模擬</h3>
+      <p>
+        QEMU 是用戶空間的應用程式,透過 <code>/dev/kvm</code> 呼叫 KVM 的服務:
+      </p>
+      <ul>
+        <li><strong>建立 VM</strong>:<code>ioctl(KVM_CREATE_VM)</code> 建立一個 VM 實例。</li>
+        <li><strong>建立 vCPU</strong>:<code>ioctl(KVM_CREATE_VCPU)</code> 建立虛擬 CPU。</li>
+        <li><strong>設定記憶體</strong>:<code>ioctl(KVM_SET_USER_MEMORY_REGION)</code> 把 QEMU 行程的某段記憶體映射為 Guest 的 GPA 空間。</li>
+        <li><strong>執行 vCPU</strong>:<code>ioctl(KVM_RUN)</code> 啟動 Guest 執行;當 KVM 無法處理的 VM exit 發生時,<code>ioctl</code> 返回,QEMU 在用戶空間處理(如模擬 I/O 設備的暫存器讀寫)。</li>
+        <li><strong>設備模擬</strong>:模擬 BIOS/UEFI、虛擬磁碟控制器、虛擬網卡、USB 控制器、鍵盤、顯示等設備。</li>
+      </ul>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">KVM 負責快速路徑,QEMU 負責慢速路徑</span>
+          <p>Guest 的 CPU 執行與 EPT 記憶體翻譯完全在 KVM 核心空間完成,速度接近原生。只有 KVM 無法在核心內直接處理的 VM exit——主要是設備 I/O——才會浮出到 QEMU 用戶空間。核心設計目標就是讓這類「慢速路徑」發生的頻率盡量低。vhost(vhost-net、vhost-blk)是進一步優化:把 I/O 的資料路徑移回核心,徹底繞過 QEMU 用戶空間。</p>
+        </div>
+      </div>
+
+      <h3>執行流程一覽</h3>
+      <pre><code class="language-text">QEMU 用戶空間
+  └─ ioctl(KVM_RUN) → 進入 KVM 核心空間
+       └─ VMRESUME / VMLAUNCH → CPU 進入 VMX non-root 模式
+            └─ Guest OS 執行...
+                 VM exit(e.g., I/O 操作 / EPT violation / 中斷)
+                 ↓
+            KVM VM exit handler
+            ├─ 若是 fast path(虛擬 APIC、部分 MSR):核心直接處理 → 繼續 VMRESUME
+            └─ 若是 slow path(設備 I/O 模擬):return from ioctl(KVM_RUN)
+                 ↓
+      QEMU 用戶空間:讀取 kvm_run 結構體得知 exit reason
+      └─ 模擬設備暫存器行為、更新 Guest 記憶體
+      └─ 再次呼叫 ioctl(KVM_RUN) ──→ 循環</code></pre>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 86.1 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>解釋為什麼 EPT(二級位址轉換)通常比影子分頁(shadow paging)效能更好,
+          儘管 EPT 在 TLB miss 時需要更多次記憶體存取。請從「VM exit 頻率」與「每次 miss 代價」兩個維度分析。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>影子分頁的代價:</strong>Guest OS 修改頁表(例如建立行程、映射新記憶體)時,
+              Hypervisor 必須攔截並同步更新影子頁表。每次同步都需要 VM exit——而且現代 OS 頻繁修改頁表(每次 <code>fork()</code>、<code>mmap()</code>、<code>munmap()</code> 都會改頁表)。VM exit 的代價約 1000–10000 個 CPU 週期。在 I/O 密集、行程切換頻繁的場景,這些 VM exit 累積起來成為顯著瓶頸。</p>
+              <p><strong>EPT 的取捨:</strong>EPT 消除了頁表同步引發的 VM exit——Guest OS 可以自由修改自己的頁表,硬體自動完成兩層翻譯。代價轉移到 TLB miss 時:4 級 Guest 頁表 × 4 級 EPT = 最多 24 次記憶體存取(公式:(4+1)×(4+1)−1;每層 Guest PTE 先經 4 次 EPT walk 再讀取,4 層共 20 次,加上最終資料 GPA 的 4 次 EPT walk),相較於非虛擬化環境的 4 次多了 20 次。然而現代 CPU 有多層快取,記憶體存取延遲遠低於 VM exit 代價;加上 Large Pages(2 MB/1 GB)可大幅提升 TLB 覆蓋率降低 miss 率。</p>
+              <p><strong>結論:</strong>在一般工作負載下,減少 VM exit 頻率的收益 >> 偶爾的 EPT walk 額外代價。這就是為什麼有 EPT 硬體支援後,影子分頁幾乎被淘汰——EPT 不只是「稍微快一點」,而是在多行程、高 I/O 場景下的系統性改善。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 86.2 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>virtio 半虛擬化 I/O 為什麼比全模擬(full emulation)快?請從「VM exit 頻率」
+          和「資料路徑」兩個角度說明,並解釋 vhost-net 在這個優化鏈上的角色。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>VM exit 頻率:</strong>全模擬的 I/O——例如模擬 e1000 網卡——Guest 每次讀寫設備暫存器(透過 I/O port 或 MMIO)都觸發 VM exit,然後 QEMU 模擬暫存器行為。一個封包的收發可能需要數十次這樣的互動。virtio 把 I/O 請求打包成 virtqueue 的描述符,一次「kick」可以通知多個請求,大幅批次化——VM exit 次數從「每個暫存器操作一次」降到「每批次請求一次」。</p>
+              <p><strong>資料路徑:</strong>全模擬每次 I/O 都需要:Guest → KVM(VM exit)→ QEMU 用戶空間(模擬設備)→ Host OS 核心(真實 I/O)。virtio + QEMU 後端:Guest → KVM(VM exit)→ QEMU 用戶空間 → Host OS 核心,少了設備暫存器模擬的複雜度。</p>
+              <p><strong>vhost-net:</strong>進一步把網路資料路徑移入核心(vhost-net 核心模組直接讀取 virtqueue)。資料路徑縮短為:Guest → KVM(VM exit)→ vhost-net 核心模組 → Linux 網路棧。完全繞過 QEMU 用戶空間,省去了核心⟷用戶空間的 context switch,延遲和吞吐量都大幅改善。高效能場景(如雲端虛擬機的網路)幾乎都啟用 vhost-net。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑧ ==================== -->
+      <h2>輕量化趨勢:Firecracker、gVisor 與 WASM</h2>
+
+      <p>
+        傳統 KVM VM 提供了強大的隔離,但啟動一個完整 Guest OS 需要幾秒甚至更長;
+        容器啟動快但隔離邊界薄。
+        近年來幾個有趣的專案試圖在這兩個極端之間開出新的路徑。
+      </p>
+
+      <h3>Firecracker:Amazon 的極簡 microVM</h3>
+      <p>
+        <strong>Firecracker</strong> 是 Amazon 在 2018 年開源的虛擬機監控器,
+        為 AWS Lambda 與 AWS Fargate 等 Serverless 服務設計。
+        它基於 KVM,但刻意把虛擬設備數量縮到最少:
+        只模擬 virtio-net、virtio-blk、serial console 與少數必要設備,
+        完全省去 USB、PCI 匯流排模擬、BIOS 等傳統 VM 的「家具」。
+      </p>
+      <p>
+        結果:Firecracker microVM 可以在 <strong>125 毫秒內</strong>啟動(帶上精簡的 Guest Linux 核心),
+        記憶體開銷比完整 QEMU 小得多,同時保有 KVM 的硬體隔離邊界——
+        Guest 核心與 Host 核心是分離的,不像容器共用核心。
+        這讓它非常適合「每個函式呼叫都在獨立的 microVM 裡執行」的 FaaS(Function as a Service)場景。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">Kata Containers</span>
+          <p>Kata Containers 走類似的路線:把 OCI 容器介面與輕量 VM 結合。從 Kubernetes 的視角,每個 Pod 是一個 kata container;在底層,每個 Pod 實際上跑在一個輕量 VM 裡(可搭配 QEMU 或 Firecracker 作為 VMM)。用戶得到容器的使用體驗、VM 的隔離強度。</p>
+        </div>
+      </div>
+
+      <h3>gVisor:用戶空間的 Linux syscall 沙箱</h3>
+      <p>
+        <strong>gVisor</strong>(Google 開源)採用完全不同的思路。它不是一個 VM,而是一個
+        <strong>用戶空間的 OS 核心模擬層</strong>,叫做 <strong>Sentry</strong>。
+        容器裡的應用程式發出 syscall 時,不直接落到 Host Linux 核心,
+        而是被 Sentry 攔截並在用戶空間處理。Sentry 自己實作了大部分 Linux syscall 的語義,
+        只在必要時才真的呼叫底層的少數 Host syscall。
+      </p>
+      <p>
+        這樣的設計讓攻擊者難以透過 syscall 漏洞逃逸到 Host 核心——
+        攻擊者需要先打穿 Sentry 這一層用戶空間防護。代價是效能:
+        每個 syscall 多了一層用戶空間的攔截與處理,對 syscall 密集型應用(如資料庫)有顯著開銷。
+        Google Cloud Run 在幕後使用 gVisor。
+      </p>
+
+      <h3>WebAssembly(WASM):另一種「虛擬機」</h3>
+      <p>
+        <strong>WebAssembly</strong> 原本為瀏覽器設計的可攜式沙箱執行格式,
+        但近年 Wasmtime、WasmEdge 等 Runtime 讓它在伺服器端也能用作輕量隔離單元。
+        WASM 的隔離是語言層級的:每個模組有自己的線性記憶體,
+        只能透過明確匯出的函式介面與外部互動。
+        它的啟動時間極短(微秒級)、攻擊面小,在邊緣運算與 Serverless 場景有獨特優勢。
+        Cloudflare Workers 使用 V8 Isolate(概念上類似),WasmCloud 用 WASM 作為輕量服務單元。
+      </p>
+      <p>
+        從<a href="91-virt-landscape.html">第 85 章</a>的虛擬化光譜看:
+        Firecracker 是「縮小 VM」往容器方向走;gVisor 是「加固容器」往 VM 方向走;
+        WASM 則是從語言層面提供沙箱,是光譜上的另一個維度。
+        它們都是試圖打破「強隔離 = 高開銷」這個傳統取捨的工程嘗試。
+      </p>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">想看 Hypervisor 的層次?</span>
+          <p>在 Linux 上執行 <code>lscpu | grep -i virtual</code> 或 <code>systemd-detect-virt</code>,
+          可以告訴你目前這台機器是否跑在 VM 裡、以及是哪種虛擬化技術(kvm / xen / vmware / none)。
+          若你在雲端 VM(如 AWS EC2、GCP GCE)上執行,幾乎肯定會看到 <code>kvm</code>。</p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 86.3 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>比較 Type-1 vs Type-2 Hypervisor:在以下三個場景中,你會選哪種?說明理由。
+          (A) 公有雲提供商,需要在同一台伺服器上高密度部署數百個 VM,資源效率要最高。
+          (B) 開發者在自己的 macOS 筆電上跑 Ubuntu 20.04 做開發測試。
+          (C) 高頻交易公司,需要強大的安全隔離,且 Guest OS 必須是特定的 Linux 發行版。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>(A) 公有雲</strong>:毫無疑問選 Type-1(如 KVM + QEMU / VMware ESXi)。理由:Type-1 直接管理硬體,沒有 Host OS 的額外排程層;Hypervisor 可以把所有實體記憶體與 CPU 時間直接分配給 Guest,最大化密度與效能。額外的 Host OS 不只佔用記憶體,還增加了額外的系統負擔與潛在攻擊面。AWS 和 GCP 都選 KVM(後者搭配 Firecracker 用於 Lambda)。</p>
+              <p><strong>(B) 開發者筆電</strong>:Type-2(VirtualBox、VMware Fusion、或 macOS 的 HVF 加速 UTM/Parallels)是自然選擇。理由:開發者的日常工作在 Host OS(macOS)上進行,VM 只是偶爾需要的沙箱環境。Type-2 安裝方便、與 Host 桌面整合好(共用剪貼簿、檔案共享等)。效能因為現代 Apple Silicon 有硬體加速通常也夠用。沒有必要犧牲 Host OS 只為了跑 VM。</p>
+              <p><strong>(C) 高頻交易</strong>:偏向 Type-1(bare-metal KVM 或 ESXi)。理由:強安全隔離要求 Hypervisor 是唯一的最高特權層,Host OS 帶來額外攻擊面。此外高頻交易對延遲敏感,Type-1 少了 Host OS 的排程層,VM exit/entry 的延遲更可預期。可搭配 SR-IOV 網卡直通給 Guest,讓網路延遲接近裸機。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑨ ==================== -->
+      <h2>把這一章串起來</h2>
+
+      <p>
+        我們從「VM 如何騙過 OS」的問題出發,走過了一整條 Hypervisor 技術棧。幾個值得帶走的核心觀念:
+      </p>
+      <ul>
+        <li>
+          <strong>Type-1 vs Type-2</strong>:前者直接坐在硬體上,適合生產環境高密度部署;
+          後者跑在 Host OS 之上,適合開發測試。KVM 是 Linux 生態中的主流 Type-1,
+          搭配 QEMU 一起構成完整的 VM 執行棧。
+        </li>
+        <li>
+          <strong>VT-x / AMD-V 解決了 x86 虛擬化難題</strong>:引入 VMX root/non-root 模式,
+          讓 Guest OS 真正跑在 ring 0 但被沙箱化;VMCS 記錄 Guest/Host 狀態與控制策略;
+          VM exit/entry 實現兩個世界的切換。
+        </li>
+        <li>
+          <strong>EPT 是記憶體虛擬化的現代解</strong>:硬體自動完成 GVA→GPA→HPA 的三層位址轉換,
+          消除了影子分頁的高頻 VM exit 問題。代價是 TLB miss 時更多的記憶體存取,
+          靠 Large Pages 緩解。
+        </li>
+        <li>
+          <strong>I/O 虛擬化的三種策略</strong>:全模擬相容性強但慢;
+          virtio 用共享記憶體 virtqueue + 批次通知大幅提速,是現代 Linux VM 的標配;
+          VFIO/SR-IOV 設備直通提供接近裸機的效能但靈活性差。
+        </li>
+        <li>
+          <strong>輕量化不是退化,是重新取捨</strong>:Firecracker 用極簡 VMM 把 VM 啟動縮到 125 ms;
+          gVisor 用用戶空間 syscall 攔截加固容器;WASM 從語言層面提供細粒度沙箱。
+          這些都是在「強隔離 vs 低開銷」的傳統取捨曲線上找到新點的工程嘗試。
+        </li>
+      </ul>
+
+      <h3>與前後章節的連接</h3>
+      <p>
+        本章深入了第 85 章虛擬化光譜中「VM」那一層的底層實作。
+        若你想進一步了解容器那一層——namespace、cgroup、OverlayFS 的真實底層——
+        請繼續第 87 章。
+        關於 CPU 快取與 TLB 的更多背景,可以回到<a href="48-computer-architecture.html">第 48 章</a>；
+        分頁與虛擬記憶體的基礎在<a href="24-operating-system.html">第 24 章</a>。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">📚</div>
+        <div class="body">
+          <span class="c-title">延伸閱讀與資源</span>
+          <p>
+            <strong>深度技術文件</strong>:<a href="https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html" target="_blank" rel="noopener">Intel SDM(軟體開發者手冊)第 3B 卷</a>的 Chapter 23–34 是 VT-x / VMX 的完整規範,讀懂後對 Hypervisor 的理解會上升一個層次。<br><br>
+            <strong>KVM 深入</strong>:<a href="https://www.linux-kvm.org/page/Main_Page" target="_blank" rel="noopener">linux-kvm.org</a> 有 KVM API 文件與許多開發者筆記。KVM 的核心原始碼在 Linux 核心 <code>arch/x86/kvm/</code> 下。<br><br>
+            <strong>virtio 規範</strong>:<a href="https://docs.oasis-open.org/virtio/virtio/v1.2/virtio-v1.2.html" target="_blank" rel="noopener">OASIS virtio 1.2 規範</a>定義了所有 virtio 設備的協定細節。<br><br>
+            <strong>The ByteBook</strong>:<a href="https://tobybai.gitbook.io/thebytebook/" target="_blank" rel="noopener">theByteBook</a> 有幾篇關於 KVM 與容器底層的中文深度文章,圖文並茂,是這個領域少有的高品質中文資源。<br><br>
+            <strong>動手體驗</strong>:<a href="https://webvm.io/" target="_blank" rel="noopener">WebVM.io</a> 在瀏覽器裡執行 x86 Linux VM——這本身就是「在 WASM 沙箱裡跑一個 CPU 模擬器再跑 Linux」的絕佳示範。
+          </p>
+        </div>
+      </div>
+</article>
+  </main>
+</div>
+<script src="../assets/book.js"></script>
+</body>
+</html>

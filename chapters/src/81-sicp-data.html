@@ -1,0 +1,1432 @@
+<!--meta
+title: 用資料建立抽象:從抽象屏障到資料導向
+description: 從 cons/car/cdr 到資料導向程式設計——跟著 SICP 第二章理解抽象屏障、序列慣用介面、符號微分、標籤資料與 put/get dispatch table。
+-->
+
+
+      <div class="eyebrow">第十九部 · SICP:抽象的建構</div>
+      <h1>用資料建立抽象:從抽象屏障到資料導向</h1>
+      <p class="subtitle">程序抽象讓你藏起「如何做」;資料抽象更讓你藏起「是什麼」——而資料導向程式設計,讓你在不動任何舊程式碼的前提下,把全新的資料型別插進系統。</p>
+      <div class="byline">
+        <span class="tag">第 75 章</span>
+        <span>閱讀時間 ≈ 60 分鐘</span>
+        <span>難度:★★★★☆</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li><strong>序對(pair)</strong>:<code>cons</code>/<code>car</code>/<code>cdr</code> 如何成為 Scheme 所有複合資料的基礎磚</li>
+          <li><strong>抽象屏障(abstraction barrier)</strong>:以有理數為例,如何把「用什麼實作」與「怎麼用」徹底切開</li>
+          <li>用序對建構<strong>串列(list)</strong>與<strong>樹(tree)</strong>,以及<strong>封閉性質(closure property)</strong>的意義</li>
+          <li><strong>序列作為慣用介面</strong>:<code>map</code>/<code>filter</code>/<code>accumulate</code> 的訊號流思維,以及與函數式程式設計的連結</li>
+          <li><strong>符號資料與引用</strong>:<code>quote</code>、<code>eq?</code>,以及符號微分(<code>deriv</code>)的完整實作</li>
+          <li><strong>標籤資料(tagged data)</strong>:<code>attach-tag</code>/<code>type-tag</code>/<code>contents</code> 如何解決多重表示的衝突</li>
+          <li><strong>資料導向程式設計</strong>:<code>put</code>/<code>get</code> 操作表格與套件(package)系統的設計哲學</li>
+          <li><strong>型別塔(type tower)</strong>與強制轉型(coercion)如何支撐泛型算術</li>
+          <li>用 Python <code>dict</code> dispatch 與 <code>functools.singledispatch</code> 對照 Scheme 資料導向的思路</li>
+        </ul>
+      </div>
+
+      <!-- ==================== h2 ① ==================== -->
+      <h2>從一個序對開始:<code>cons</code>、<code>car</code>、<code>cdr</code></h2>
+      <p>
+        上一章(第 74 章)我們用程序來建立抽象——把「計算模式」本身參數化。但光有程序還不夠:
+        真實程式要操作<strong>複合資料(compound data)</strong>。有理數 $\frac{1}{3}$ 有分子和分母;
+        複數 $3 + 4i$ 有實部和虛部。我們不想只傳一個數字給程序,而是要把「一個有理數」當成一個整體傳來傳去。
+      </p>
+      <p>
+        SICP 第二章的起點極度簡單:Scheme 提供一個基本的「黏合劑」,叫做<strong>序對(pair)</strong>。
+        建造它只需三個原語:
+      </p>
+      <ul>
+        <li><code>cons</code>(construct):把兩個值黏成一個序對。</li>
+        <li><code>car</code>(Contents of the Address part of Register):取出序對的第一個元素。</li>
+        <li><code>cdr</code>(Contents of the Decrement part of Register):取出序對的第二個元素。</li>
+      </ul>
+      <pre><code class="language-scheme">; cons 把兩個值組成一個序對
+(cons 1 2)          ; → (1 . 2)    「點對」記法
+(cons "hello" #t)   ; → ("hello" . #t)
+
+; car 取第一個,cdr 取第二個
+(car (cons 1 2))    ; → 1
+(cdr (cons 1 2))    ; → 2
+
+; 序對可以裝序對——這是關鍵
+(define p (cons (cons 1 2) (cons 3 4)))
+(car p)             ; → (1 . 2)
+(cdr p)             ; → (3 . 4)
+(car (car p))       ; → 1
+(cdr (car p))       ; → 2</code></pre>
+      <p>
+        「序對可以裝序對」這句話看起來不起眼,但它是本章所有複雜結構的根源。
+        SICP 把這個性質叫做<strong>封閉性(closure property)</strong>:
+        組合子的輸出可以再作為組合子的輸入,因此你能用它建構任意複雜的層次結構。
+      </p>
+
+      <div class="callout history">
+        <div class="ico">📜</div>
+        <div class="body">
+          <span class="c-title">car 與 cdr 的名字從哪來?</span>
+          <p>
+            <code>car</code> 和 <code>cdr</code> 是 1950 年代 IBM 704 機器的指令名稱縮寫——
+            「暫存器位址部分的內容(Contents of the Address part of Register)」與
+            「暫存器減量部分的內容(Contents of the Decrement part of Register)」。
+            Lisp 最初用這兩個欄位存放配對的兩半。幾十年過去了,名字留下來了,機器早就不存在了。
+            今天許多 Scheme 實作提供別名:<code>first</code>/<code>rest</code>,或 <code>head</code>/<code>tail</code>。
+          </p>
+        </div>
+      </div>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">資料抽象的核心承諾</span>
+          <p>
+            資料抽象(data abstraction)的核心思想是:把資料物件如何<strong>使用</strong>的程式,
+            與資料物件如何<strong>表示</strong>的程式,用一道明確的<strong>屏障</strong>分開。
+            <code>cons</code>/<code>car</code>/<code>cdr</code> 是最底層的黏合劑,
+            但我們幾乎不會直接讓業務邏輯呼叫它們——我們總是把它們藏在一層更有意義的介面後面。
+          </p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ② ==================== -->
+      <h2>抽象屏障:以有理數為例</h2>
+      <p>
+        讓我們建立一套有理數算術。有理數(rational number)就是分數 $\frac{p}{q}$。
+        我們要能做加減乘除:
+        $\frac{a}{b} + \frac{c}{d} = \frac{ad + bc}{bd}$,
+        $\frac{a}{b} \times \frac{c}{d} = \frac{ac}{bd}$。
+      </p>
+      <p>
+        SICP 的策略是先<strong>假設</strong>我們有三個程序:
+        <code>make-rat</code>(建立一個有理數)、<code>numer</code>(取分子)、<code>denom</code>(取分母)。
+        用這三個程序,我們可以先把算術寫完:
+      </p>
+      <pre><code class="language-scheme">; 先寫算術:只依賴 make-rat / numer / denom,不管內部長什麼樣
+(define (add-rat x y)
+  (make-rat (+ (* (numer x) (denom y))
+               (* (numer y) (denom x)))
+            (* (denom x) (denom y))))
+
+(define (sub-rat x y)
+  (make-rat (- (* (numer x) (denom y))
+               (* (numer y) (denom x)))
+            (* (denom x) (denom y))))
+
+(define (mul-rat x y)
+  (make-rat (* (numer x) (numer y))
+            (* (denom x) (denom y))))
+
+(define (div-rat x y)
+  (make-rat (* (numer x) (denom y))
+            (* (denom x) (numer y))))
+
+(define (equal-rat? x y)
+  (= (* (numer x) (denom y))
+     (* (numer y) (denom x))))
+
+; 印出有理數
+(define (print-rat x)
+  (display (numer x))
+  (display "/")
+  (display (denom x))
+  (newline))</code></pre>
+      <p>
+        注意這段程式碼還不能跑——我們根本還沒定義 <code>make-rat</code>、<code>numer</code>、<code>denom</code>。
+        但它完整地表達了「有理數算術」的<em>邏輯</em>。現在,我們用序對來填入那三個空缺:
+      </p>
+      <pre><code class="language-scheme">; 最簡版:直接用 cons/car/cdr
+(define (make-rat n d) (cons n d))
+(define (numer x) (car x))
+(define (denom x) (cdr x))
+
+; 測試
+(define one-half (make-rat 1 2))
+(define one-third (make-rat 1 3))
+
+(print-rat (add-rat one-half one-third))   ; 5/6
+(print-rat (mul-rat one-half one-third))   ; 1/6</code></pre>
+      <p>
+        但這個版本有個問題:<code>(add-rat one-half one-third)</code> 給出 <code>5/6</code>,
+        但 <code>(add-rat one-third one-third)</code> 給出 <code>6/9</code> 而不是 <code>2/3</code>。
+        我們應該在建立有理數時就把它化到最簡分數。
+      </p>
+      <p>
+        關鍵在於:我們<strong>只需要改 <code>make-rat</code></strong>,不需要動算術程序:
+      </p>
+      <pre><code class="language-scheme">; 改進版:在構造時自動化簡
+(define (make-rat n d)
+  (if (&lt; d 0)                   ; 確保分母為正
+      (make-rat (- n) (- d))
+      (let ((g (gcd n d)))       ; 用最大公因數化簡
+        (cons (/ n g) (/ d g)))))
+
+; add-rat / sub-rat 等一字不改,卻自動得到化簡結果!
+(print-rat (add-rat one-third one-third))   ; 2/3  ✓</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">抽象屏障的三層結構</span>
+          <p>
+            這個有理數系統由三個清晰的層次組成:<br>
+            <strong>第三層(使用者)</strong>：<code>add-rat</code>、<code>sub-rat</code>、<code>mul-rat</code>、<code>div-rat</code><br>
+            ─── 抽象屏障:只透過 <code>make-rat</code>/<code>numer</code>/<code>denom</code> 溝通 ───<br>
+            <strong>第二層(介面)</strong>：<code>make-rat</code>、<code>numer</code>、<code>denom</code><br>
+            ─── 抽象屏障:只透過 <code>cons</code>/<code>car</code>/<code>cdr</code> 溝通 ───<br>
+            <strong>第一層(表示)</strong>：<code>cons</code>、<code>car</code>、<code>cdr</code>(序對)<br><br>
+            每一層只需要知道相鄰下一層的介面,完全不需要知道更底層的細節。
+            改變第一層的表示(例如把 cons 換成向量),只需要改第二層的三個程序,
+            第三層完全不受影響。這就是<strong>抽象屏障(abstraction barrier)</strong>的威力。
+          </p>
+        </div>
+      </div>
+
+      <p>
+        這裡有一個微妙但重要的問題值得深思:「什麼是資料?」
+        我們說「序對是由 <code>cons</code>/<code>car</code>/<code>cdr</code> 定義的資料」——
+        但這只是一個行為上的說法。SICP 在 2.1.3 節展示了一個驚人的事實:
+        我們可以完全<strong>不用任何資料結構</strong>,只用程序來實作序對:
+      </p>
+      <pre><code class="language-scheme">; 「程序版序對」:只用 lambda,不用任何具體資料結構
+(define (cons x y)
+  (lambda (m) (if (= m 0) x y)))
+(define (car z) (z 0))
+(define (cdr z) (z 1))
+
+; 測試:
+(car (cons 3 4))   ; → 3
+(cdr (cons 3 4))   ; → 4</code></pre>
+      <p>
+        這告訴我們:「資料」不是某種特殊的神秘存在,它可以純粹由<strong>行為</strong>來定義——
+        只要東西能被 <code>car</code> 和 <code>cdr</code> 正確操作,它就「是」一個序對。
+        這個哲學洞見在整個 SICP 裡反覆出現。
+      </p>
+
+      <!-- ==================== h2 ③ ==================== -->
+      <h2>用序對建構一切:串列、樹與封閉性質</h2>
+      <p>
+        有了 <code>cons</code>,我們能建構的不只是序對。把序對鏈起來,就是<strong>串列(list)</strong>。
+        在 Scheme 裡,串列是一個以「空串列 <code>'()</code>(nil)」結尾的序對鏈:
+      </p>
+      <pre><code class="language-scheme">; 手動建構串列 (1 2 3 4):
+(cons 1 (cons 2 (cons 3 (cons 4 '()))))
+; → (1 2 3 4)   (Scheme 自動用好看的記法顯示)
+
+; list 是語法糖
+(list 1 2 3 4)   ; → (1 2 3 4)  (完全等價)
+
+; 選擇器
+(car (list 1 2 3))   ; → 1        (第一個元素)
+(cdr (list 1 2 3))   ; → (2 3)    (其餘元素,仍是串列)
+
+; null? 檢查是否空串列
+(null? '())          ; → #t
+(null? (list 1 2))   ; → #f
+
+; 常見模式:遞迴走訪串列
+(define (my-length lst)
+  (if (null? lst)
+      0
+      (+ 1 (my-length (cdr lst)))))
+
+(my-length (list 1 2 3 4 5))   ; → 5
+
+; append:把兩個串列接在一起
+(define (my-append list1 list2)
+  (if (null? list1)
+      list2
+      (cons (car list1)
+            (my-append (cdr list1) list2))))
+
+(my-append '(1 2) '(3 4))   ; → (1 2 3 4)</code></pre>
+
+      <h3>box-and-pointer 圖:看見串列的真實結構</h3>
+      <p>
+        串列 <code>(1 2 3)</code> 在記憶體裡的樣子,SICP 用「box-and-pointer」圖來表示:
+        每個序對畫成兩格的盒子,左格(car)存值或指向子結構,右格(cdr)指向下一個序對。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 640 160" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="arr-b" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#2f6f6a"/>
+    </marker>
+    <marker id="arr-nil" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#8a929b"/>
+    </marker>
+  </defs>
+
+  <!-- Variable label -->
+  <text x="10" y="85" font-size="12" font-weight="700" fill="#1f2328">my-list</text>
+  <line x1="70" y1="80" x2="110" y2="80" stroke="#2f6f6a" stroke-width="2" marker-end="url(#arr-b)"/>
+
+  <!-- Pair 1: x=112, y=60, w=80, h=40 -->
+  <rect x="112" y="60" width="80" height="40" rx="0" fill="#e3efed" stroke="#2f6f6a" stroke-width="1.5"/>
+  <line x1="152" y1="60" x2="152" y2="100" stroke="#2f6f6a" stroke-width="1.5"/>
+  <text x="132" y="85" text-anchor="middle" font-size="14" font-weight="700" fill="#1f2328">1</text>
+  <!-- dot in cdr cell -->
+  <circle cx="172" cy="80" r="4" fill="#2f6f6a"/>
+  <line x1="176" y1="80" x2="220" y2="80" stroke="#2f6f6a" stroke-width="2" marker-end="url(#arr-b)"/>
+
+  <!-- Pair 2: x=222, y=60 -->
+  <rect x="222" y="60" width="80" height="40" rx="0" fill="#e3efed" stroke="#2f6f6a" stroke-width="1.5"/>
+  <line x1="262" y1="60" x2="262" y2="100" stroke="#2f6f6a" stroke-width="1.5"/>
+  <text x="242" y="85" text-anchor="middle" font-size="14" font-weight="700" fill="#1f2328">2</text>
+  <circle cx="282" cy="80" r="4" fill="#2f6f6a"/>
+  <line x1="286" y1="80" x2="330" y2="80" stroke="#2f6f6a" stroke-width="2" marker-end="url(#arr-b)"/>
+
+  <!-- Pair 3: x=332, y=60 -->
+  <rect x="332" y="60" width="80" height="40" rx="0" fill="#e3efed" stroke="#2f6f6a" stroke-width="1.5"/>
+  <line x1="372" y1="60" x2="372" y2="100" stroke="#2f6f6a" stroke-width="1.5"/>
+  <text x="352" y="85" text-anchor="middle" font-size="14" font-weight="700" fill="#1f2328">3</text>
+  <!-- nil marker: diagonal cross -->
+  <line x1="374" y1="62" x2="410" y2="98" stroke="#8a929b" stroke-width="2"/>
+  <line x1="374" y1="98" x2="410" y2="62" stroke="#8a929b" stroke-width="2"/>
+
+  <!-- car/cdr labels -->
+  <text x="132" y="53" text-anchor="middle" font-size="9" fill="#8a929b">car</text>
+  <text x="172" y="53" text-anchor="middle" font-size="9" fill="#8a929b">cdr</text>
+  <text x="242" y="53" text-anchor="middle" font-size="9" fill="#8a929b">car</text>
+  <text x="282" y="53" text-anchor="middle" font-size="9" fill="#8a929b">cdr</text>
+  <text x="352" y="53" text-anchor="middle" font-size="9" fill="#8a929b">car</text>
+  <text x="392" y="53" text-anchor="middle" font-size="9" fill="#8a929b">cdr</text>
+
+  <!-- nil label -->
+  <text x="392" y="120" text-anchor="middle" font-size="11" fill="#8a929b">'()</text>
+  <text x="392" y="133" text-anchor="middle" font-size="10" fill="#8a929b">nil</text>
+
+  <!-- Scheme notation below -->
+  <text x="262" y="148" text-anchor="middle" font-size="11" fill="#4a5159">Scheme 顯示為: (1 2 3)</text>
+</svg>
+        <figcaption>圖 75-1:串列 (1 2 3) 的 box-and-pointer 圖。每個序對用兩格盒子表示:左格(car)存值,右格(cdr)指向下一個序對。最後一個序對的 cdr 是 nil(空串列 '()),用交叉斜線標示。</figcaption>
+      </div>
+
+      <h3>樹:序對的巢狀結構</h3>
+      <p>
+        序對的 car 或 cdr 也可以是另一個串列,這就形成了<strong>樹(tree)</strong>。
+        串列 <code>((1 2) (3 4))</code> 就是一棵兩層的樹:
+      </p>
+      <pre><code class="language-scheme">; 巢狀串列即樹
+(define tree '((1 2) (3 4)))
+
+(car tree)          ; → (1 2)    (左子樹)
+(cdr tree)          ; → ((3 4))  (包含右子樹的串列)
+(car (car tree))    ; → 1        (左子樹的第一個葉)
+
+; 計算樹的葉子數(遞迴遍歷)
+(define (count-leaves tree)
+  (cond ((null? tree) 0)
+        ((not (pair? tree)) 1)       ; 葉子:非序對的值
+        (else
+         (+ (count-leaves (car tree))
+            (count-leaves (cdr tree))))))
+
+(count-leaves '((1 2) (3 (4 5))))   ; → 5
+
+; 把樹的所有葉子的平方蒐集成串列
+(define (square-tree tree)
+  (map (lambda (sub-tree)
+         (if (pair? sub-tree)
+             (square-tree sub-tree)
+             (* sub-tree sub-tree)))
+       tree))
+
+(square-tree '(1 (2 3) (4 (5 6))))
+; → (1 (4 9) (16 (25 36)))</code></pre>
+
+      <!-- Exercise 75.1 -->
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 75.1 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>
+            上面 <code>make-rat</code> 的改進版使用 <code>gcd</code> 化簡分數,並處理分母為負的情況。
+            但如果 <code>n</code> 是負數而 <code>d</code> 是負數呢?
+            驗證 <code>(make-rat -4 -6)</code> 應該給出 <code>2/3</code>(即正號、化簡後),
+            並解釋目前的實作是否正確處理此情況。
+            若有問題,請修正 <code>make-rat</code>。
+          </p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p>
+                當 <code>n = -4, d = -6</code> 時:由於 <code>(&lt; d 0)</code> 為真,
+                我們遞迴呼叫 <code>(make-rat 4 6)</code>。這次 d &gt; 0,
+                進入 let 分支:<code>(gcd 4 6) = 2</code>,得到 <code>(cons 2 3)</code>,印出 <code>2/3</code>。
+                所以目前實作已正確處理分子分母均為負的情況。
+              </p>
+              <p>邊界測試:讓我們也測試 <code>(make-rat 0 5)</code> 和 <code>(make-rat 4 0)</code>:</p>
+              <pre><code class="language-scheme">; (make-rat 0 5): d=5 &gt; 0,gcd(0,5)=5,得 (cons 0 1) → 0/1  ✓
+; (make-rat 4 0): gcd(4,0)=4,得 (cons 1 0) → 1/0  ← 分母為零!
+; 更嚴謹的版本應該在 make-rat 中檢查 d=0 並報錯:
+(define (make-rat n d)
+  (if (= d 0)
+      (error "make-rat: denominator cannot be zero")
+      (if (&lt; d 0)
+          (make-rat (- n) (- d))
+          (let ((g (gcd (abs n) d)))
+            (cons (/ n g) (/ d g))))))</code></pre>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ④ ==================== -->
+      <h2>序列作為慣用介面:<code>map</code>、<code>filter</code>、<code>accumulate</code></h2>
+      <p>
+        SICP 2.2.3 節引入一個非常優美的觀點:把串列看作「資料流過的管道」。
+        很多看起來不同的計算,其實都是同一種模式——先篩選(filter)、再轉換(map)、再合併(accumulate)。
+        把這個模式明確化,程式不只變短,而且變得更清晰。
+      </p>
+
+      <p>
+        先來實作這三個核心程序:
+      </p>
+      <pre><code class="language-scheme">; map:對串列每個元素套用 proc,收集結果
+(define (map proc items)
+  (if (null? items)
+      '()
+      (cons (proc (car items))
+            (map proc (cdr items)))))
+
+(map square '(1 2 3 4 5))    ; → (1 4 9 16 25)
+(map abs '(-1 2 -3 4 -5))    ; → (1 2 3 4 5)
+(map car '((1 2) (3 4) (5 6)))  ; → (1 3 5)
+
+; filter:只保留滿足 predicate 的元素
+(define (filter predicate sequence)
+  (cond ((null? sequence) '())
+        ((predicate (car sequence))
+         (cons (car sequence)
+               (filter predicate (cdr sequence))))
+        (else
+         (filter predicate (cdr sequence)))))
+
+(filter odd? '(1 2 3 4 5 6 7))    ; → (1 3 5 7)
+(filter even? '(1 2 3 4 5 6 7))   ; → (2 4 6)
+
+; accumulate:用 op 從右到左折疊串列
+(define (accumulate op initial sequence)
+  (if (null? sequence)
+      initial
+      (op (car sequence)
+          (accumulate op initial (cdr sequence)))))
+
+(accumulate + 0 '(1 2 3 4 5))    ; → 15  (sum)
+(accumulate * 1 '(1 2 3 4 5))    ; → 120 (product)
+(accumulate cons '() '(1 2 3))   ; → (1 2 3)  (複製串列)</code></pre>
+
+      <p>
+        現在看看這個「訊號流(signal flow)」的思維:計算「1 到 n 中所有奇數的平方和」——
+        我們先產生序列、然後篩選、然後轉換、然後折疊:
+      </p>
+      <pre><code class="language-scheme">; 產生 1 到 n 的整數序列
+(define (enumerate-interval low high)
+  (if (&gt; low high)
+      '()
+      (cons low (enumerate-interval (+ low 1) high))))
+
+(enumerate-interval 1 7)   ; → (1 2 3 4 5 6 7)
+
+; 訊號流:奇數平方和
+; (本章為求清楚改用 enumerate-interval 取區間;
+;  SICP 2.2.3 原版 sum-odd-squares 其實吃一棵「樹」、用 enumerate-tree
+;  把樹攤平成葉子序列,兩者的訊號流結構完全相同。)
+(define (sum-odd-squares n)
+  (accumulate +
+              0
+              (map square
+                   (filter odd?
+                           (enumerate-interval 1 n)))))
+
+(sum-odd-squares 7)   ; → (1 + 9 + 25 + 49) = 84
+
+; 或者:收集所有偶數 fibonacci 數(其值 &lt;= 某個上限)
+(define (even-fibs n)
+  (accumulate cons
+              '()
+              (filter even?
+                      (map fib
+                           (enumerate-interval 0 n)))))</code></pre>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 190" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="arr-flow" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#2f6f6a"/>
+    </marker>
+  </defs>
+
+  <!-- Title -->
+  <text x="360" y="18" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">訊號流:sum-odd-squares(7) 的計算管道</text>
+
+  <!-- Stage 0: enumerate -->
+  <rect x="10" y="68" width="100" height="44" rx="6" fill="#e3efed" stroke="#2f6f6a" stroke-width="1.5"/>
+  <text x="60" y="86" text-anchor="middle" font-size="10" font-weight="700" fill="#2f6f6a">enumerate</text>
+  <text x="60" y="100" text-anchor="middle" font-size="9" fill="#4a5159">interval 1..7</text>
+  <text x="60" y="55" text-anchor="middle" font-size="9" fill="#8a929b">輸入</text>
+  <text x="60" y="130" text-anchor="middle" font-size="9" fill="#4a5159">(1 2 3 4 5 6 7)</text>
+
+  <line x1="110" y1="90" x2="148" y2="90" stroke="#2f6f6a" stroke-width="2" marker-end="url(#arr-flow)"/>
+
+  <!-- Stage 1: filter -->
+  <rect x="150" y="68" width="100" height="44" rx="6" fill="#f6e7dd" stroke="#b4541f" stroke-width="1.5"/>
+  <text x="200" y="86" text-anchor="middle" font-size="10" font-weight="700" fill="#b4541f">filter</text>
+  <text x="200" y="100" text-anchor="middle" font-size="9" fill="#4a5159">odd?</text>
+  <text x="200" y="130" text-anchor="middle" font-size="9" fill="#4a5159">(1 3 5 7)</text>
+
+  <line x1="250" y1="90" x2="288" y2="90" stroke="#2f6f6a" stroke-width="2" marker-end="url(#arr-flow)"/>
+
+  <!-- Stage 2: map -->
+  <rect x="290" y="68" width="100" height="44" rx="6" fill="#ede9fe" stroke="#8b5cf6" stroke-width="1.5"/>
+  <text x="340" y="86" text-anchor="middle" font-size="10" font-weight="700" fill="#8b5cf6">map</text>
+  <text x="340" y="100" text-anchor="middle" font-size="9" fill="#4a5159">square</text>
+  <text x="340" y="130" text-anchor="middle" font-size="9" fill="#4a5159">(1 9 25 49)</text>
+
+  <line x1="390" y1="90" x2="428" y2="90" stroke="#2f6f6a" stroke-width="2" marker-end="url(#arr-flow)"/>
+
+  <!-- Stage 3: accumulate -->
+  <rect x="430" y="68" width="120" height="44" rx="6" fill="#e3efed" stroke="#2f6f6a" stroke-width="1.5"/>
+  <text x="490" y="86" text-anchor="middle" font-size="10" font-weight="700" fill="#2f6f6a">accumulate</text>
+  <text x="490" y="100" text-anchor="middle" font-size="9" fill="#4a5159">+ 0</text>
+  <text x="490" y="130" text-anchor="middle" font-size="9" fill="#4a5159">84</text>
+
+  <line x1="550" y1="90" x2="588" y2="90" stroke="#2f6f6a" stroke-width="2" marker-end="url(#arr-flow)"/>
+
+  <!-- Output -->
+  <rect x="590" y="74" width="60" height="32" rx="6" fill="#2f6f6a"/>
+  <text x="620" y="95" text-anchor="middle" font-size="14" font-weight="800" fill="#fff">84</text>
+
+  <!-- Horizontal connector labels -->
+  <text x="130" y="170" text-anchor="middle" font-size="9" fill="#8a929b">7 個</text>
+  <text x="270" y="170" text-anchor="middle" font-size="9" fill="#8a929b">4 個(奇數)</text>
+  <text x="412" y="170" text-anchor="middle" font-size="9" fill="#8a929b">4 個(平方)</text>
+  <text x="572" y="170" text-anchor="middle" font-size="9" fill="#8a929b">折疊成一個值</text>
+</svg>
+        <figcaption>圖 75-2:sum-odd-squares(7) 的訊號流圖。序列像資料流一樣從左到右流過 enumerate → filter → map → accumulate 四個「閥門」,每個閥門只做一件事,最終輸出 84。</figcaption>
+      </div>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">與函數式程式設計的連結</span>
+          <p>
+            你在<a href="06-functional-programming.html">第 6 章「函數式程式設計」</a>學過的 Python <code>map</code>、<code>filter</code>、<code>reduce</code>,
+            正是 SICP 這套訊號流思維的現代表達。SICP 的洞見在於:這不只是「方便的工具」,
+            而是一種<strong>建立更高層語言的方式</strong>——你用 <code>enumerate</code>/<code>filter</code>/<code>map</code>/<code>accumulate</code>
+            組合出的每個程序,都在為你的問題域建立一套更豐富的「詞彙表」。
+            Unix 管線(<code>|</code>)也源自同樣的哲學:讓小工具可以組合,而不是寫一個大怪獸程式。
+          </p>
+        </div>
+      </div>
+
+      <!-- Exercise 75.2 -->
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 75.2 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>
+            用 <code>accumulate</code> 重新實作 <code>map</code> 和 <code>filter</code>。
+            這個練習揭示了一個重要事實:map 和 filter 其實都是 accumulate 的特例。
+          </p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-scheme">; 用 accumulate 實作 map
+(define (my-map proc sequence)
+  (accumulate (lambda (x acc) (cons (proc x) acc))
+              '()
+              sequence))
+
+(my-map square '(1 2 3 4))   ; → (1 4 9 16)
+
+; 用 accumulate 實作 filter
+(define (my-filter predicate sequence)
+  (accumulate (lambda (x acc)
+                (if (predicate x)
+                    (cons x acc)
+                    acc))
+              '()
+              sequence))
+
+(my-filter odd? '(1 2 3 4 5))   ; → (1 3 5)</code></pre>
+              <p>
+                關鍵觀察:accumulate 從右到左處理序列,所以 <code>lambda (x acc)</code> 裡的 x 是目前元素、acc 是「右邊已處理完的累積值」。
+                map 時無條件 cons,filter 時條件 cons。
+              </p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑤ ==================== -->
+      <h2>符號資料與引用:<code>quote</code> 與符號微分</h2>
+      <p>
+        到目前為止,我們的 Scheme 程式都在操作<strong>數值</strong>。但 Lisp 最初的殺手應用是<strong>符號(symbol)</strong>處理——
+        把程式碼本身當作資料來操作。這需要一個新的概念:<strong>引用(quotation)</strong>。
+      </p>
+      <p>
+        通常,Scheme 看到一個名字就去查它的值。<code>x</code> 會查詢環境裡 x 的綁定。
+        但如果我們想要的是<strong>符號 <code>x</code> 本身</strong>——那個名字,而不是它的值——
+        怎麼辦?這就是 <code>quote</code> 的用途:
+      </p>
+      <pre><code class="language-scheme">; 沒有 quote:Scheme 嘗試查找 x 的值
+; (如果 x 未定義,會報錯)
+
+; 加上 quote:得到符號 x 本身
+(quote x)       ; → x   (這個符號)
+'x              ; → x   (縮寫,完全等價)
+'(a b c)        ; → (a b c)   (符號的串列)
+
+; 符號可以用 eq? 比較(比 equal? 更快)
+(eq? 'x 'x)       ; → #t
+(eq? 'x 'y)       ; → #f
+(eq? '+ '+)       ; → #t   (+ 在這裡是符號,不是加法程序)
+
+; 符號 vs 字串
+(symbol? 'hello)    ; → #t
+(string? "hello")   ; → #t
+(symbol? "hello")   ; → #f  (字串不是符號)</code></pre>
+
+      <h3>符號微分:deriv</h3>
+      <p>
+        有了符號,我們可以把數學運算式表示成串列,然後用程式來操作它們。
+        SICP 2.3.2 節的符號微分是一個經典範例——我們要實作一個 <code>deriv</code> 程序,
+        接受一個「運算式」(用串列表示的數學式)和一個變數符號,回傳對該變數的偏導數。
+      </p>
+      <p>
+        微分規則:
+        $\frac{d}{dx}(c) = 0$,
+        $\frac{d}{dx}(x) = 1$,
+        $\frac{d}{dx}(u+v) = \frac{du}{dx} + \frac{dv}{dx}$,
+        $\frac{d}{dx}(uv) = u\frac{dv}{dx} + v\frac{du}{dx}$
+      </p>
+      <pre><code class="language-scheme">; 輔助謂詞
+(define (variable? e) (symbol? e))
+(define (same-variable? v1 v2)
+  (and (variable? v1) (variable? v2) (eq? v1 v2)))
+(define (=number? exp num)
+  (and (number? exp) (= exp num)))
+
+; 加法運算式:判別、取值、建構
+(define (sum? e)     (and (pair? e) (eq? (car e) '+)))
+(define (addend e)   (cadr e))
+(define (augend e)   (caddr e))
+(define (make-sum a1 a2)
+  (cond ((=number? a1 0) a2)
+        ((=number? a2 0) a1)
+        ((and (number? a1) (number? a2)) (+ a1 a2))
+        (else (list '+ a1 a2))))
+
+; 乘法運算式:判別、取值、建構
+(define (product? e)      (and (pair? e) (eq? (car e) '*)))
+(define (multiplier e)    (cadr e))
+(define (multiplicand e)  (caddr e))
+(define (make-product m1 m2)
+  (cond ((or (=number? m1 0) (=number? m2 0)) 0)
+        ((=number? m1 1) m2)
+        ((=number? m2 1) m1)
+        ((and (number? m1) (number? m2)) (* m1 m2))
+        (else (list '* m1 m2))))
+
+; 核心:符號微分程序
+(define (deriv exp var)
+  (cond
+    ((number? exp) 0)
+    ((variable? exp)
+     (if (same-variable? exp var) 1 0))
+    ((sum? exp)
+     (make-sum (deriv (addend exp) var)
+               (deriv (augend exp) var)))
+    ((product? exp)
+     (make-sum
+      (make-product (multiplier exp)
+                    (deriv (multiplicand exp) var))
+      (make-product (deriv (multiplier exp) var)
+                    (multiplicand exp))))
+    (else (error "unknown expression type" exp))))
+
+; 測試
+(deriv '(+ x 3) 'x)
+; → 1     (d/dx[x + 3] = 1)
+
+(deriv '(* x y) 'x)
+; → y     (d/dx[xy] = y)
+
+(deriv '(* (* x y) (+ x 3)) 'x)
+; → (+ (* x y) (* y (+ x 3)))
+;    即 xy + y(x+3) = y(2x+3),化簡後正確</code></pre>
+      <p>
+        注意 <code>deriv</code> 的精妙:它沒有操作數值,而是在操作<strong>運算式的符號結構</strong>。
+        它把一個串列 <code>'(* x y)</code> 識別為「乘積」,分別取出 <code>'x</code> 和 <code>'y</code>,
+        套用乘積法則,再用 <code>make-sum</code> 和 <code>make-product</code> 把結果組回串列。
+        整個過程不需要任何數值計算。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">符號微分與自動微分</span>
+          <p>
+            <code>deriv</code> 展示的是<strong>符號微分(symbolic differentiation)</strong>——精確操作數學式的結構。
+            現代深度學習框架(PyTorch、JAX)用的是<strong>自動微分(automatic differentiation)</strong>,
+            計算的是數值梯度,但基本思路與 <code>deriv</code> 相通:都是對計算圖做鏈式法則的機械化應用。
+            本書<a href="12-calculus.html">第 12 章「微積分精要」</a>有更多關於微分規則的背景。
+          </p>
+        </div>
+      </div>
+
+      <!-- Exercise 75.3 -->
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 75.3 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>
+            擴充 <code>deriv</code>,使其支援<strong>指數運算</strong> <code>(** base exponent)</code>。
+            微分規則(冪次法則)為:$\frac{d}{dx}[u^n] = n \cdot u^{n-1} \cdot \frac{du}{dx}$。
+            例如 <code>(deriv '(** x 3) 'x)</code> 應得 <code>(* 3 (** x 2))</code>。
+          </p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-scheme">; 指數運算的輔助程序
+(define (exponentiation? e)
+  (and (pair? e) (eq? (car e) '**)))
+(define (base e) (cadr e))
+(define (exponent e) (caddr e))
+(define (make-exponentiation b e)
+  (cond ((=number? e 0) 1)
+        ((=number? e 1) b)
+        ((and (number? b) (number? e)) (expt b e))
+        (else (list '** b e))))
+
+; 在 deriv 的 cond 裡加入新分支:
+(define (deriv exp var)
+  (cond
+    ((number? exp) 0)
+    ((variable? exp)
+     (if (same-variable? exp var) 1 0))
+    ((sum? exp)
+     (make-sum (deriv (addend exp) var)
+               (deriv (augend exp) var)))
+    ((product? exp)
+     (make-sum
+      (make-product (multiplier exp)
+                    (deriv (multiplicand exp) var))
+      (make-product (deriv (multiplier exp) var)
+                    (multiplicand exp))))
+    ((exponentiation? exp)
+     (make-product
+      (make-product (exponent exp)
+                    (make-exponentiation (base exp)
+                                         (- (exponent exp) 1)))
+      (deriv (base exp) var)))
+    (else (error "unknown expression type" exp))))
+
+; 測試:
+(deriv '(** x 3) 'x)        ; → (* 3 (** x 2))   正確
+(deriv '(** x 1) 'x)        ; → 1
+(deriv '(** x 0) 'x)        ; → 0
+(deriv '(** (* 2 x) 3) 'x)  ; → (* (* 3 (** (* 2 x) 2)) 2)</code></pre>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑥ ==================== -->
+      <h2>多重表示與標籤資料</h2>
+      <p>
+        現在來面對一個現實世界中常見的問題。假設兩個開發者各自實作了複數算術:
+        Ben 用<strong>直角坐標(rectangular form)</strong> $z = x + yi$(儲存 real 和 imaginary part);
+        Alyssa 用<strong>極坐標(polar form)</strong> $z = re^{i\theta}$(儲存 magnitude 和 angle)。
+        兩種表示都是合法的,都可以做加法、乘法,只是計算方式不同:
+      </p>
+      <ul>
+        <li>加法:直角坐標比較好算。$(x_1 + x_2) + (y_1 + y_2)i$。</li>
+        <li>乘法:極坐標比較好算。$r_1 r_2 e^{i(\theta_1 + \theta_2)}$。</li>
+      </ul>
+      <pre><code class="language-scheme">; --- Ben 的版本(直角坐標) ---
+(define (real-part-rect z) (car z))
+(define (imag-part-rect z) (cdr z))
+(define (magnitude-rect z)
+  (sqrt (+ (square (real-part-rect z))
+           (square (imag-part-rect z)))))
+(define (angle-rect z)
+  (atan (imag-part-rect z) (real-part-rect z)))
+(define (make-from-real-imag-rect x y) (cons x y))
+
+; --- Alyssa 的版本(極坐標) ---
+(define (magnitude-polar z) (car z))
+(define (angle-polar z) (cdr z))
+(define (real-part-polar z)
+  (* (magnitude-polar z) (cos (angle-polar z))))
+(define (imag-part-polar z)
+  (* (magnitude-polar z) (sin (angle-polar z))))
+(define (make-from-mag-ang-polar r a) (cons r a))</code></pre>
+      <p>
+        問題來了:兩種表示都用 <code>cons</code> 儲存兩個數字,但意義完全不同。
+        一個 <code>(3 . 4)</code> 代表的是 <code>3 + 4i</code>(直角)還是 magnitude=3, angle=4(極坐標)?
+        我們需要一種方式讓程式<strong>在執行時知道一個複數是哪種表示</strong>。
+      </p>
+      <p>
+        SICP 的解法是<strong>標籤資料(tagged data)</strong>:在每個資料上貼一個「型別標籤」:
+      </p>
+      <pre><code class="language-scheme">; 標籤工具
+(define (attach-tag type-tag contents)
+  (cons type-tag contents))
+
+(define (type-tag datum)
+  (if (pair? datum)
+      (car datum)
+      (error "Bad tagged datum -- TYPE-TAG" datum)))
+
+(define (contents datum)
+  (if (pair? datum)
+      (cdr datum)
+      (error "Bad tagged datum -- CONTENTS" datum)))
+
+; 建立帶標籤的複數
+(define (make-from-real-imag x y)
+  (attach-tag 'rectangular (cons x y)))   ; 標籤: 'rectangular
+
+(define (make-from-mag-ang r a)
+  (attach-tag 'polar (cons r a)))          ; 標籤: 'polar
+
+; 判別型別
+(define (rectangular? z) (eq? (type-tag z) 'rectangular))
+(define (polar? z)        (eq? (type-tag z) 'polar))
+
+; 泛型選擇器:根據標籤分派
+(define (real-part z)
+  (cond ((rectangular? z) (real-part-rect (contents z)))
+        ((polar? z)        (real-part-polar (contents z)))
+        (else (error "Unknown type -- REAL-PART" z))))
+
+(define (imag-part z)
+  (cond ((rectangular? z) (imag-part-rect (contents z)))
+        ((polar? z)        (imag-part-polar (contents z)))
+        (else (error "Unknown type -- IMAG-PART" z))))
+
+(define (magnitude z)
+  (cond ((rectangular? z) (magnitude-rect (contents z)))
+        ((polar? z)        (magnitude-polar (contents z)))
+        (else (error "Unknown type -- MAGNITUDE" z))))
+
+(define (angle z)
+  (cond ((rectangular? z) (angle-rect (contents z)))
+        ((polar? z)        (angle-polar (contents z)))
+        (else (error "Unknown type -- ANGLE" z))))
+
+; 複數算術(不管底層表示)
+(define (add-complex z1 z2)
+  (make-from-real-imag (+ (real-part z1) (real-part z2))
+                       (+ (imag-part z1) (imag-part z2))))
+
+(define (mul-complex z1 z2)
+  (make-from-mag-ang (* (magnitude z1) (magnitude z2))
+                     (+ (angle z1) (angle z2))))</code></pre>
+      <p>
+        這個方法有效!但有個隱患——每次要增加新的複數表示(或任何新型別),
+        就必須修改<strong>所有的泛型選擇器</strong>(<code>real-part</code>、<code>imag-part</code>、<code>magnitude</code>、<code>angle</code>)。
+        這違反了<strong>開放封閉原則(Open-Closed Principle)</strong>:對擴展開放,但對修改封閉。
+        下一節我們會解決這個問題。
+      </p>
+
+      <!-- ==================== h2 ⑦ ==================== -->
+      <h2>資料導向程式設計與可加性 ★</h2>
+      <p>
+        SICP 2.4.3 節引入了本章最招牌的思想——<strong>資料導向程式設計(data-directed programming)</strong>。
+        問題的根源是:上一節的 <code>cond</code>-based 分派在一個地方「知道」所有型別。
+        每加一種新型別,就要找到所有這些地方並修改。
+      </p>
+      <p>
+        SICP 的解法:把「哪個型別用哪個程序」這個對應關係,放進一張<strong>二維表格</strong>裡。
+        縱軸是操作名稱(如 <code>'real-part</code>),橫軸是型別名稱(如 <code>'rectangular</code>),
+        表格裡存放具體的程序。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">操作表格:資料導向的靈魂</span>
+          <p>
+            資料導向程式設計的核心是一張<strong>操作表格(operation table)</strong>:
+            <br><code>(put '操作名 '型別名 程序)</code> — 登記一個實作
+            <br><code>(get '操作名 '型別名)</code> — 查詢實作
+            <br><br>
+            每個「套件(package)」自己呼叫 <code>put</code> 把自己的程序登記進去。
+            呼叫者用 <code>get</code> 查表,完全不需要知道有哪些套件。
+            <strong>新增型別=寫一個新套件+呼叫 put</strong>,不需要修改任何舊程式碼。
+            這就是「可加性(additivity)」。
+          </p>
+        </div>
+      </div>
+
+      <pre><code class="language-scheme">; 假設已有:
+; (put op type item)  — 在操作表格登記
+; (get op type)       — 從操作表格查詢
+
+; ======== 「直角坐標」套件 ========
+(define (install-rectangular-package)
+  ;; 套件內部程序(只操作 raw pair,不帶標籤)
+  (define (real-part z) (car z))
+  (define (imag-part z) (cdr z))
+  (define (make-from-real-imag x y) (cons x y))
+  (define (magnitude z)
+    (sqrt (+ (square (real-part z))
+             (square (imag-part z)))))
+  (define (angle z)
+    (atan (imag-part z) (real-part z)))
+  (define (make-from-mag-ang r a)
+    (cons (* r (cos a)) (* r (sin a))))
+  ;; 內部的 tag 函式
+  (define (tag x) (attach-tag 'rectangular x))
+  ;; 向操作表格登記
+  (put 'real-part '(rectangular) real-part)
+  (put 'imag-part '(rectangular) imag-part)
+  (put 'magnitude '(rectangular) magnitude)
+  (put 'angle     '(rectangular) angle)
+  (put 'make-from-real-imag 'rectangular
+       (lambda (x y) (tag (make-from-real-imag x y))))
+  (put 'make-from-mag-ang 'rectangular
+       (lambda (r a) (tag (make-from-mag-ang r a))))
+  'done)
+
+; ======== 「極坐標」套件 ========
+(define (install-polar-package)
+  (define (magnitude z) (car z))
+  (define (angle z) (cdr z))
+  (define (make-from-mag-ang r a) (cons r a))
+  (define (real-part z)
+    (* (magnitude z) (cos (angle z))))
+  (define (imag-part z)
+    (* (magnitude z) (sin (angle z))))
+  (define (make-from-real-imag x y)
+    (cons (sqrt (+ (square x) (square y)))
+          (atan y x)))
+  (define (tag x) (attach-tag 'polar x))
+  (put 'real-part '(polar) real-part)
+  (put 'imag-part '(polar) imag-part)
+  (put 'magnitude '(polar) magnitude)
+  (put 'angle     '(polar) angle)
+  (put 'make-from-real-imag 'polar
+       (lambda (x y) (tag (make-from-real-imag x y))))
+  (put 'make-from-mag-ang 'polar
+       (lambda (r a) (tag (make-from-mag-ang r a))))
+  'done)</code></pre>
+
+      <p>
+        每個套件是一個自包含的模組:它在內部定義自己的程序,然後用 <code>put</code> 把「能力」登記到全局表格。
+        兩個套件完全不互相依賴——Ben 可以寫直角坐標套件,Alyssa 寫極坐標套件,兩人各自 <code>install</code> 就好。
+      </p>
+      <p>
+        接下來是最關鍵的一個函式——<code>apply-generic</code>:它根據引數的型別標籤,自動從表格查出對應程序並呼叫。
+      </p>
+      <pre><code class="language-scheme">; apply-generic:泛型分派的核心引擎
+(define (apply-generic op . args)
+  (let ((type-tags (map type-tag args)))
+    (let ((proc (get op type-tags)))
+      (if proc
+          (apply proc (map contents args))
+          (error "No method for these types"
+                 (list op type-tags))))))
+
+; 泛型選擇器:完全不知道底層表示
+(define (real-part z) (apply-generic 'real-part z))
+(define (imag-part z) (apply-generic 'imag-part z))
+(define (magnitude z) (apply-generic 'magnitude z))
+(define (angle z)     (apply-generic 'angle z))
+
+; 工廠函式(使用者呼叫這些)
+(define (make-from-real-imag x y)
+  ((get 'make-from-real-imag 'rectangular) x y))
+(define (make-from-mag-ang r a)
+  ((get 'make-from-mag-ang 'polar) r a))
+
+; ======== 安裝套件並使用 ========
+(install-rectangular-package)
+(install-polar-package)
+
+(define z1 (make-from-real-imag 3 4))
+(magnitude z1)       ; → 5.0  (查表找到 rectangular 的 magnitude)
+(real-part z1)       ; → 3
+(imag-part z1)       ; → 4
+
+(define z2 (make-from-mag-ang 5 0))
+(real-part z2)       ; → 5.0  (查表找到 polar 的 real-part)
+(imag-part z2)       ; → 0.0</code></pre>
+
+      <p>
+        現在如果要增加第三種複數表示(例如 exponential form),只需要寫一個新的 <code>install-exponential-package</code>,
+        呼叫一次,<strong>完全不需要修改 <code>real-part</code>、<code>imag-part</code>、<code>apply-generic</code></strong>——
+        這就是「可加性」的意思。
+      </p>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">注意:名稱衝突的問題</span>
+          <p>
+            在套件內部,我們可以有多個程序都叫 <code>magnitude</code>——因為它們被 <code>define</code> 在各自的
+            <code>install-*-package</code> 函式的局部環境裡。只要透過 <code>put</code>/<code>get</code> 查表,
+            這些同名程序就能各安其位、互不干擾。這正是「套件(package)」這個模式的優雅之處。
+          </p>
+        </div>
+      </div>
+
+      <!-- Exercise 75.4 -->
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 75.4 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>
+            為資料導向複數系統增加一個<strong>「共軛複數(conjugate)」</strong>泛型運算:
+            直角坐標的共軛是 $(x, -y)$,極坐標的共軛是 $(r, -\theta)$。
+            請在 <code>install-rectangular-package</code> 和 <code>install-polar-package</code> 裡各加入 conjugate 的 <code>put</code>,
+            並在套件外定義泛型 <code>(define (conjugate z) (apply-generic 'conjugate z))</code>。
+          </p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-scheme">; 在 install-rectangular-package 裡加入:
+(define (conjugate z)
+  (tag (cons (real-part z) (- (imag-part z)))))
+(put 'conjugate '(rectangular) conjugate)
+
+; 在 install-polar-package 裡加入:
+(define (conjugate z)
+  (tag (cons (magnitude z) (- (angle z)))))
+(put 'conjugate '(polar) conjugate)
+
+; 套件外的泛型介面:
+(define (conjugate z) (apply-generic 'conjugate z))
+
+; 測試:
+(define z1 (make-from-real-imag 3 4))
+(conjugate z1)   ; → (rectangular 3 . -4)  即 3 - 4i
+
+(define z2 (make-from-mag-ang 5 1.0))
+(conjugate z2)   ; → (polar 5 . -1.0)  magnitude 不變,angle 取反</code></pre>
+              <p>
+                注意:套件內的 <code>conjugate</code> 只操作 raw pair(不帶標籤),最後用 <code>tag</code> 重新貼標籤。
+                這是套件設計的慣例:輸入是 <code>contents</code>(已剝標籤),輸出要重新貼標籤。
+              </p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑧ ==================== -->
+      <h2>帶泛型運算的系統:型別塔與強制轉型</h2>
+      <p>
+        有了 put/get 套件系統,我們能把「複數算術」整合進一個更大的<strong>泛型算術系統</strong>裡,
+        同時支援整數、有理數、實數、複數——而且 <code>(add 1 (make-from-real-imag 2 3))</code>
+        這樣的<strong>跨型別運算</strong>也要能正確計算。
+      </p>
+
+      <h3>建立泛型算術系統</h3>
+      <pre><code class="language-scheme">; 泛型算術:每個套件提供自己的 add/sub/mul/div
+(define (add x y) (apply-generic 'add x y))
+(define (sub x y) (apply-generic 'sub x y))
+(define (mul x y) (apply-generic 'mul x y))
+(define (div x y) (apply-generic 'div x y))
+
+; Scheme 普通數字套件(整數、浮點)
+(define (install-scheme-number-package)
+  (define (tag x) (attach-tag 'scheme-number x))
+  (put 'add '(scheme-number scheme-number)
+       (lambda (x y) (tag (+ x y))))
+  (put 'sub '(scheme-number scheme-number)
+       (lambda (x y) (tag (- x y))))
+  (put 'mul '(scheme-number scheme-number)
+       (lambda (x y) (tag (* x y))))
+  (put 'div '(scheme-number scheme-number)
+       (lambda (x y) (tag (/ x y))))
+  (put 'make 'scheme-number (lambda (x) (tag x)))
+  'done)
+
+; 有理數套件
+(define (install-rational-package)
+  ;; 內部用前面定義的 make-rat/numer/denom
+  (define (tag x) (attach-tag 'rational x))
+  (put 'add '(rational rational)
+       (lambda (x y) (tag (add-rat x y))))
+  (put 'mul '(rational rational)
+       (lambda (x y) (tag (mul-rat x y))))
+  ;; ... 其他運算類似 ...
+  (put 'make 'rational
+       (lambda (n d) (tag (make-rat n d))))
+  'done)
+
+; 建立各型別值的工廠函式
+(define (make-scheme-number n)
+  ((get 'make 'scheme-number) n))
+(define (make-rational n d)
+  ((get 'make 'rational) n d))
+(define (make-complex-from-real-imag x y)
+  ((get 'make-from-real-imag 'complex) x y))</code></pre>
+
+      <h3>型別塔(type tower)與強制轉型</h3>
+      <p>
+        問題來了:<code>(add (make-scheme-number 3) (make-rational 1 2))</code> 怎麼計算?
+        兩個引數型別不同,<code>apply-generic</code> 找不到對應項目。
+      </p>
+      <p>
+        SICP 的解法是建立一個<strong>型別塔(type tower)</strong>:
+      </p>
+      <blockquote>
+        整數(integer) → 有理數(rational) → 實數(real) → 複數(complex)
+      </blockquote>
+      <p>
+        塔的每一層都可以「提升(raise)」到上一層,而不損失任何資訊。
+        當遇到型別不匹配時,把較低層的值提升到較高層,再做運算:
+      </p>
+      <pre><code class="language-scheme">; 強制轉型(coercion)函式表格
+; (put-coercion 'from-type 'to-type proc)
+; (get-coercion 'from-type 'to-type)
+
+; 從整數提升為有理數:n → n/1
+(define (integer-&gt;rational n)
+  (make-rational (contents n) 1))
+
+; 從有理數提升為實數(浮點近似)
+(define (rational-&gt;real r)
+  (let ((rat (contents r)))
+    (make-real (/ (numer rat) (denom rat)))))
+
+; 從實數提升為複數:x → x + 0i
+(define (real-&gt;complex x)
+  (make-complex-from-real-imag (contents x) 0))
+
+(put-coercion 'integer  'rational  integer-&gt;rational)
+(put-coercion 'rational 'real      rational-&gt;real)
+(put-coercion 'real     'complex   real-&gt;complex)
+
+; 擴充的 apply-generic:遇型別不匹配就嘗試強制轉型
+(define (apply-generic op . args)
+  (let ((type-tags (map type-tag args)))
+    (let ((proc (get op type-tags)))
+      (if proc
+          (apply proc (map contents args))
+          ;; 嘗試找強制轉型
+          (if (= (length args) 2)
+              (let ((t1 (car type-tags))
+                    (t2 (cadr type-tags)))
+                (let ((t1-&gt;t2 (get-coercion t1 t2))
+                      (t2-&gt;t1 (get-coercion t2 t1)))
+                  (cond (t1-&gt;t2
+                         (apply-generic op (t1-&gt;t2 (car args)) (cadr args)))
+                        (t2-&gt;t1
+                         (apply-generic op (car args) (t2-&gt;t1 (cadr args))))
+                        (else
+                         (error "No method for these types"
+                                (list op type-tags))))))
+              (error "No method for these types"
+                     (list op type-tags)))))))</code></pre>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">型別塔的局限性</span>
+          <p>
+            型別塔看起來很優雅,但有幾個已知問題:
+            (1) 環形強制轉型可能導致無限遞迴;
+            (2) 「提升」後再做運算,結果可能需要「降低」回去(如兩個複數相加結果可能是實數),但這個「降低(project)」更難實作;
+            (3) 多重繼承或多個型別家族的情況型別塔就不夠用了。
+            這些問題在 SICP 習題 2.85–2.86 有深入探討。
+          </p>
+        </div>
+      </div>
+
+      <!-- Exercise 75.5 -->
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 75.5 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>
+            <strong>實作 raise 程序</strong>:設計一個 <code>(raise x)</code>,
+            把型別塔中的任意值提升一層。
+            提示:每個套件可以用 <code>(put 'raise '(型別) 程序)</code> 登記自己的「向上提升」方法。
+            然後泛型 <code>(define (raise x) (apply-generic 'raise x))</code>。
+            測試:連續對一個整數呼叫 raise 三次,應得到一個複數。
+          </p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-scheme">; 在各套件中登記 raise:
+; 整數(本章用 scheme-number 套件)→ 有理數:
+(put 'raise '(scheme-number)
+     (lambda (n) (make-rational n 1)))
+
+; 有理數 → 實數:
+(put 'raise '(rational)
+     (lambda (r) (make-real (/ (numer r) (denom r)))))
+
+; 實數 → 複數:
+(put 'raise '(real)
+     (lambda (x) (make-complex-from-real-imag x 0)))
+
+; 複數套件:無法再提升(或可提供錯誤訊息)
+(put 'raise '(complex)
+     (lambda (z) (error "Cannot raise complex further")))
+
+; 泛型 raise:
+(define (raise x) (apply-generic 'raise x))
+
+; 測試:整數 → 有理數 → 實數 → 複數
+(define n (make-scheme-number 5))
+(raise n)          ; → (rational 5 . 1)    即 5/1
+(raise (raise n))  ; → (real . 5.0)
+(raise (raise (raise n)))  ; → (complex rectangular 5.0 . 0)</code></pre>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑨ ==================== -->
+      <h2>Python 對照:dict dispatch 與 singledispatch</h2>
+      <p>
+        Scheme 的資料導向思想在 Python 裡有兩種自然的對照:一是手工維護的字典分派表(dict dispatch),
+        二是 Python 標準庫提供的 <code>functools.singledispatch</code>。
+      </p>
+
+      <h3>方法一:dict dispatch — 手工模擬操作表格</h3>
+      <pre><code class="language-python"># 模擬 Scheme 的 put/get 操作表格
+op_table = {}
+
+def put(op, type_tag, proc):
+    """在操作表格登記一個實作"""
+    op_table[(op, type_tag)] = proc
+
+def get(op, type_tag):
+    """從操作表格查詢實作"""
+    return op_table.get((op, type_tag))
+
+def attach_tag(type_tag, contents):
+    return (type_tag, contents)
+
+def type_tag(datum):
+    return datum[0]
+
+def contents(datum):
+    return datum[1]
+
+# 直角坐標套件
+def install_rectangular():
+    import math
+    def real_part(z):  return z[0]
+    def imag_part(z):  return z[1]
+    def magnitude(z):  return math.sqrt(z[0]**2 + z[1]**2)
+    def angle(z):      return math.atan2(z[1], z[0])
+    def make_ri(x, y): return attach_tag('rectangular', (x, y))
+    def make_ma(r, a): return attach_tag('rectangular',
+                                         (r * math.cos(a), r * math.sin(a)))
+    put('real-part',  'rectangular', real_part)
+    put('imag-part',  'rectangular', imag_part)
+    put('magnitude',  'rectangular', magnitude)
+    put('angle',      'rectangular', angle)
+    put('make-ri',    'rectangular', make_ri)
+
+# 泛型分派引擎
+def apply_generic(op, z):
+    proc = get(op, type_tag(z))
+    if proc:
+        return proc(contents(z))
+    raise ValueError(f"No method '{op}' for type '{type_tag(z)}'")
+
+# 泛型選擇器
+def real_part(z):  return apply_generic('real-part', z)
+def imag_part(z):  return apply_generic('imag-part', z)
+def magnitude(z):  return apply_generic('magnitude', z)
+
+# 安裝並使用
+install_rectangular()
+z = ('rectangular', (3, 4))
+print(magnitude(z))    # → 5.0
+print(real_part(z))    # → 3</code></pre>
+
+      <h3>方法二:<code>functools.singledispatch</code> — Pythonic 的多態分派</h3>
+      <p>
+        Python 標準庫的 <code>singledispatch</code> 讓你根據<strong>第一個引數的型別</strong>選擇實作,
+        是物件導向多態(polymorphism)的函數式版本:
+      </p>
+      <pre><code class="language-python">from functools import singledispatch
+import math
+
+# 兩種複數表示
+class Rectangular:
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+    def __repr__(self):
+        return f"Rect({self.x} + {self.y}i)"
+
+class Polar:
+    def __init__(self, r, theta):
+        self.r = r
+        self.theta = theta
+    def __repr__(self):
+        return f"Polar(r={self.r}, θ={self.theta:.3f})"
+
+# 泛型函式:以第一個引數型別分派
+@singledispatch
+def magnitude(z):
+    raise NotImplementedError(f"magnitude not defined for {type(z)}")
+
+@magnitude.register(Rectangular)
+def _(z):
+    return math.sqrt(z.x**2 + z.y**2)
+
+@magnitude.register(Polar)
+def _(z):
+    return z.r
+
+@singledispatch
+def real_part(z):
+    raise NotImplementedError
+
+@real_part.register(Rectangular)
+def _(z): return z.x
+
+@real_part.register(Polar)
+def _(z): return z.r * math.cos(z.theta)
+
+@singledispatch
+def imag_part(z):
+    raise NotImplementedError(f"imag_part 未定義:{type(z)}")
+
+@imag_part.register(Rectangular)
+def _(z): return z.y
+
+@imag_part.register(Polar)
+def _(z): return z.r * math.sin(z.theta)
+
+@singledispatch
+def add_complex(z1, z2):
+    raise NotImplementedError
+
+@add_complex.register(Rectangular)
+def _(z1, z2):
+    # 兩複數相加:實部加實部、虛部加虛部
+    return Rectangular(z1.x + real_part(z2), z1.y + imag_part(z2))
+
+# 測試
+z1 = Rectangular(3, 4)
+z2 = Polar(5, math.pi / 4)
+print(magnitude(z1))   # → 5.0
+print(magnitude(z2))   # → 5.0
+print(real_part(z1))   # → 3
+print(real_part(z2))   # → 3.535...
+
+# 新增型別:只需新增 register,不改 magnitude/real_part 定義
+class Exponential:
+    """z = r * e^(i*theta)"""
+    def __init__(self, r, theta):
+        self.r = r
+        self.theta = theta
+
+@magnitude.register(Exponential)
+def _(z): return z.r
+
+@real_part.register(Exponential)
+def _(z): return z.r * math.cos(z.theta)</code></pre>
+
+      <h3>比較:Scheme 資料導向 vs Python 的兩種方法</h3>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>特性</th><th>Scheme put/get</th><th>Python dict dispatch</th><th>Python singledispatch</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>型別識別方式</td><td>明確標籤 (attach-tag)</td><td>明確標籤 (tuple 第一元素)</td><td>Python 物件的 <code>type()</code></td></tr>
+            <tr><td>可加性</td><td>✓ 新套件獨立安裝</td><td>✓ 新 put 不破壞舊程式碼</td><td>✓ 新 register 不破壞舊程式碼</td></tr>
+            <tr><td>二維分派(op × type)</td><td>✓ 天然支援</td><td>✓ 以 (op, type) 為 key</td><td>✗ 只有 type 維度</td></tr>
+            <tr><td>多重分派(多個引數)</td><td>需擴充</td><td>需擴充</td><td>需用 <code>multipledispatch</code> 套件</td></tr>
+            <tr><td>語言原生支援</td><td>是(Scheme 慣例)</td><td>否(手工實作)</td><td>是(Python 3.4+ 標準庫)</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">Python 的「協議(protocol)」</span>
+          <p>
+            Python 還有第三種多態機制:讓物件實作「魔法方法」(dunder methods),如 <code>__add__</code>、<code>__len__</code>。
+            這和 Scheme 的泛型運算系統在精神上相通——都是讓不同型別以一致的介面參與計算。
+            <code>singledispatch</code> 是「函式式多態」,dunder method 是「物件導向多態」,
+            而 SICP 的 put/get 是「資料導向多態」:三種思路,同一個問題的不同切入角度。
+          </p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑩ ==================== -->
+      <h2>把這一章串起來</h2>
+      <p>
+        這一章跟著 SICP 第二章走了一趟完整的旅程,從最基本的序對黏合劑,到可以動態擴充的泛型算術系統。
+        讓我們把主線整理清楚:
+      </p>
+      <ul>
+        <li>
+          <strong><code>cons</code>/<code>car</code>/<code>cdr</code></strong>:Scheme 的「資料原子」。
+          三個程序、一個封閉性質,建構出所有複合資料結構——串列、樹、以及任意深度的巢狀結構。
+          「什麼是資料?」的答案是:任何能被正確存取的東西。
+        </li>
+        <li>
+          <strong>抽象屏障</strong>:有理數例子示範了三層屏障的力量。
+          改變第一層(如把 cons 換成向量)、只需改第二層(make-rat/numer/denom)、第三層(add-rat 等)完全不受影響。
+          屏障讓你能<strong>推遲設計決策</strong>——先把邏輯寫完,後決定怎麼存。
+        </li>
+        <li>
+          <strong>序列作為慣用介面</strong>:map/filter/accumulate 把「資料流過管道」的思維明確化。
+          enumerate → filter → map → accumulate 這個模式讓複雜計算變成可讀的管線。
+        </li>
+        <li>
+          <strong>符號資料與 deriv</strong>:<code>quote</code> 讓程式碼可以操作自己的語法結構。
+          符號微分是「程式即資料」哲學的直接體現——數學運算式是串列,微分是串列轉換。
+        </li>
+        <li>
+          <strong>標籤資料</strong>:用 attach-tag/type-tag/contents 讓不同表示和平共存。
+          但 cond-based 分派的可加性差——每加新型別就要改所有分派函式。
+        </li>
+        <li>
+          <strong>資料導向程式設計</strong>:put/get 操作表格把「哪個型別用哪個程序」外化成可修改的資料。
+          新型別=新套件=新 put,完全不觸碰舊程式碼。apply-generic 是整個系統的核心引擎。
+        </li>
+        <li>
+          <strong>型別塔與強制轉型</strong>:整數→有理數→實數→複數的提升鏈,讓跨型別運算有了系統性的解決方案。
+          但型別塔也有局限,SICP 習題 2.85–2.87 有更深的探討。
+        </li>
+      </ul>
+      <p>
+        如果這一章有一個核心洞見,那就是:
+        <strong>複雜性的管理取決於你在哪裡畫屏障</strong>——屏障畫得好,修改就局部;
+        屏障畫得差,改一處地方會引發連鎖反應。
+        資料導向程式設計是「把屏障的位置本身也參數化」的最終形式。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">資料導向 vs 策略模式</span>
+          <p>
+            如果你讀過<a href="10-design-patterns.html">第 10 章「設計模式與重構」</a>,
+            你可能發現 SICP 的資料導向程式設計和<strong>策略模式(Strategy Pattern)</strong>有異曲同工之妙——
+            兩者都把「做什麼」和「怎麼做」分開,讓算法或行為可以獨立替換。
+            差別在於:策略模式是物件導向的——把策略封裝成物件;
+            資料導向是函數式的——把策略放進一張表格,用資料本身的型別標籤來選擇。
+            這兩種思路都是對「開放封閉原則」的實踐,只是語言範式不同。
+          </p>
+        </div>
+      </div>
+
+      <div class="callout note">
+        <div class="ico">📚</div>
+        <div class="body">
+          <span class="c-title">延伸閱讀:SICP 第 2 章原著</span>
+          <p>
+            本章內容對應《計算機程式的構造與解釋》第二版第 2 章(Building Abstractions with Data),
+            涵蓋 2.1–2.5 節。第 2.3 節的符號微分、集合表示與霍夫曼編碼(Huffman encoding)
+            我們沒有完整涵蓋,強烈建議自行閱讀。
+            原著可在 <a href="https://mitpress.mit.edu/sites/default/files/sicp/full-text/book/book.html" target="_blank">MIT Press 網站免費閱讀</a>。
+            第 2 章有 97 道習題,其中 2.40–2.43(八皇后拼圖)、2.73–2.76(資料導向微分)、
+            2.85–2.87(型別塔運算)都是極好的深化練習。
+          </p>
+        </div>
+      </div>
+
+    

@@ -1,0 +1,802 @@
+<!--meta
+title: 電腦圖學、3D 與擴增實境
+description: 視覺是「從影像理解世界」,圖學是「把世界畫成影像」——兩者互為逆問題。這一章用 Python 把它們接起來:2D 生成藝術、MVP 渲染管線與線框立方體、自寫迷你光柵器(重心座標+z-buffer)、點雲與 3D 重建,最後用相機姿態 + ArUco 做出能把虛擬物件對齊真實世界的擴增實境。
+-->
+
+
+      <div class="eyebrow">第十七部 · 電腦視覺與影像辨識</div>
+      <h1>電腦圖學、3D 與擴增實境</h1>
+      <p class="subtitle">這一部前面教你怎麼「看」——讓電腦從影像裡讀出世界。這最後一章,我們把方向反過來:教電腦怎麼「畫」——把一個用數字描述的 3D 世界,算成一張影像。當「看」與「畫」在同一支程式裡握手的那一刻,虛擬的茶壺就會穩穩地站在你桌上的紙卡上——這就是擴增實境。</p>
+      <div class="byline">
+        <span class="tag">第 68 章</span>
+        <span>閱讀時間 ≈ 50 分鐘</span>
+        <span>難度:★★★★☆</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>為什麼「視覺」與「圖學」是<strong>一對逆問題</strong>,以及本章如何把它們在程式裡接起來</li>
+          <li>2D 圖學:用<strong>變換矩陣</strong>主動算出每個像素,做出<strong>生成藝術(generative art)</strong></li>
+          <li>完整的 <strong>MVP 渲染管線</strong>:模型 → 世界 → 視圖 → 投影 → 透視除法,並親手寫出<strong>線框立方體</strong></li>
+          <li>光柵化的兩個心臟:<strong>重心座標(barycentric coordinates)</strong>與 <strong>z-buffer</strong>,以及<strong>著色器(shader)</strong>是什麼</li>
+          <li>反過來:從多張影像或深度相機<strong>重建 3D</strong>——點雲(point cloud)、SfM 與 Open3D</li>
+          <li>重頭戲:<strong>擴增實境(AR)</strong>如何用相機姿態,把虛擬 3D 物件對齊真實世界</li>
+          <li>如何把整個第十七部的技術,串成一個完整、能展示的整合作品</li>
+        </ul>
+      </div>
+
+      <h2>視覺與圖學:一對逆問題</h2>
+      <p>
+        想像兩位工匠。第一位是<strong>偵探</strong>:你給他一張照片,他要從一片像素中推理出「這裡有一張桌子、桌上有顆蘋果、光從左邊來」。
+        第二位是<strong>畫家</strong>:你給他「桌子、蘋果、光從左邊來」這份劇本,他要把它畫成一張看起來真實的圖。
+        這兩位工匠做的,正好是<strong>相反方向</strong>的事。
+      </p>
+      <p>
+        偵探就是<strong>電腦視覺(computer vision)</strong>——這一部前面十幾章都在訓練他:邊緣、特徵、分類、偵測、多視幾何……
+        全都是「<em>從影像反推出世界</em>」。畫家則是<strong>電腦圖學(computer graphics)</strong>——也就是你在第 39 章讀過的主題:
+        用向量、矩陣、光照,把「<em>世界正向算成影像</em>」。一句話總結:
+      </p>
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">看與畫,互為逆問題</span>
+          <p><strong>視覺:影像 → 世界(分析、反推);圖學:世界 → 影像(合成、正算)。</strong>
+          它們處理的是同一套幾何(同樣的相機模型、同樣的投影、同樣的座標變換),只是走向相反。
+          正因如此,當你想把「虛擬的東西」無縫放進「真實的影像」裡(也就是 AR),你必須<em>同時</em>當偵探和畫家——
+          先看懂相機在哪、桌面在哪,再把虛擬物件畫到對的位置。這一章就是這場握手。</p>
+        </div>
+      </div>
+
+      <div class="diagram">
+<svg viewBox="0 0 700 250" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="iv-teal" markerWidth="11" markerHeight="11" refX="8" refY="3" orient="auto"><path d="M0,0 L9,3 L0,6 Z" fill="#2f6f6a"/></marker>
+    <marker id="iv-brick" markerWidth="11" markerHeight="11" refX="8" refY="3" orient="auto"><path d="M0,0 L9,3 L0,6 Z" fill="#b4541f"/></marker>
+  </defs>
+  <!-- 左:3D 世界 -->
+  <text x="120" y="40" text-anchor="middle" font-size="14" font-weight="800" fill="#1f2328">3D 世界(場景)</text>
+  <rect x="40" y="60" width="160" height="140" rx="10" fill="#eef4f3" stroke="#2f6f6a" stroke-width="1.6"/>
+  <!-- 簡單的茶壺/方塊場景 -->
+  <polygon points="90,160 150,160 165,130 105,130" fill="#cfe6e2" stroke="#2f6f6a" stroke-width="1.4"/>
+  <rect x="100" y="100" width="40" height="40" fill="#f6e7dd" stroke="#b4541f" stroke-width="1.4"/>
+  <circle cx="160" cy="85" r="9" fill="#facc15" stroke="#b4541f" stroke-width="1"/>
+  <text x="120" y="186" text-anchor="middle" font-size="10" fill="#4a5159">用數字描述:點、面、光</text>
+
+  <!-- 右:2D 影像 -->
+  <text x="580" y="40" text-anchor="middle" font-size="14" font-weight="800" fill="#1f2328">2D 影像(像素)</text>
+  <g stroke="#cdd5db" stroke-width="0.8">
+    <rect x="500" y="60" width="160" height="140" fill="#fff"/>
+    <line x1="500" y1="95" x2="660" y2="95"/><line x1="500" y1="130" x2="660" y2="130"/><line x1="500" y1="165" x2="660" y2="165"/>
+    <line x1="540" y1="60" x2="540" y2="200"/><line x1="580" y1="60" x2="580" y2="200"/><line x1="620" y1="60" x2="620" y2="200"/>
+  </g>
+  <g fill="#b4541f" fill-opacity="0.5"><rect x="540" y="95" width="40" height="35"/><rect x="540" y="130" width="40" height="35"/></g>
+  <g fill="#2f6f6a" fill-opacity="0.4"><rect x="500" y="165" width="120" height="35"/></g>
+  <text x="580" y="216" text-anchor="middle" font-size="10" fill="#4a5159">一格一格的顏色</text>
+
+  <!-- 兩個方向的箭頭 -->
+  <path d="M 210 100 C 330 75, 380 75, 495 100" fill="none" stroke="#b4541f" stroke-width="2.2" marker-end="url(#iv-brick)"/>
+  <text x="350" y="78" text-anchor="middle" font-size="12.5" font-weight="700" fill="#b4541f">圖學:世界 → 影像(畫)</text>
+  <path d="M 495 165 C 380 192, 330 192, 215 165" fill="none" stroke="#2f6f6a" stroke-width="2.2" marker-end="url(#iv-teal)"/>
+  <text x="352" y="208" text-anchor="middle" font-size="12.5" font-weight="700" fill="#2f6f6a">視覺:影像 → 世界(看)</text>
+</svg>
+        <figcaption>圖 68-1:視覺與圖學是一對逆問題。圖學(上,磚紅)把用數字描述的 3D 場景<strong>正向</strong>算成 2D 像素;視覺(下,藍綠)從 2D 像素<strong>反向</strong>推理出 3D 世界。兩者共用同一套相機與投影數學。擴增實境正是讓這兩個方向在同一支程式裡握手。</figcaption>
+      </div>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">這一章和第 39 章的分工</span>
+          <p>第 39 章<strong>計算機圖學</strong>把理論講透了(像素、向量、齊次座標、光柵化、光線追蹤)。
+          這一章是它的<strong>實作延伸</strong>:我們不重講理論,而是用 Python 動手把每一塊跑起來,並一路通往 3D 重建與 AR——
+          這是第 39 章沒走到、但對「視覺 × 圖學」最迷人的那一段路。遇到需要複習的理論,我會直接指你回第 39 章。</p>
+        </div>
+      </div>
+
+      <h2>2D 圖學:從「分析像素」到「算出像素」</h2>
+      <p>
+        這一部一路走來,你都在<strong>分析</strong>既有的像素(濾波、找邊、辨識)。2D 圖學是一個漂亮的轉折點:
+        現在換你<strong>主動算出</strong>每個像素該是什麼顏色。Illustrator 的向量圖、SVG、資料視覺化、字型渲染、遊戲場景,
+        底層都是 2D 圖學。
+      </p>
+
+      <h3>座標系與「畫一條線」一句話</h3>
+      <p>
+        先講一個常絆倒人的小東西:<strong>螢幕座標系</strong>。數學課的 $y$ 軸朝上,但影像的 $y$ 軸<strong>朝下</strong>——
+        原點 $(0,0)$ 在左上角,$y$ 越大越往下。這是因為螢幕是「一列一列」從上往下掃描出來的。所以你之後會常看到
+        <code>y</code> 要做一次翻轉,別被它咬到。
+      </p>
+      <p>
+        至於最底層的「怎麼把一條線、一個三角形真的填成像素」——這在第 39 章已經談過(Bresenham 畫線、掃描線填充)。
+        一句話帶過:<strong>畫線就是在離散網格上找出最接近這條理想直線的那一串像素;填充就是逐列找出多邊形的左右邊界、把中間塗滿。</strong>
+        實務上我們直接呼叫 <code>cv2.line</code>、<code>cv2.polylines</code> 當畫筆,把心力放在「畫什麼」而不是「怎麼點亮像素」。
+      </p>
+
+      <h3>變換矩陣:生成藝術的引擎</h3>
+      <p>
+        2D 圖學最好玩的入口是<strong>生成藝術(generative art)</strong>:用數學規則,而不是一筆一畫,生出對稱或碎形的圖案。
+        它的引擎就是你在第 39、54 章看過的<strong>齊次座標(homogeneous coordinates)</strong>變換矩陣——把 2D 點 $(x,y)$ 補成 $(x,y,1)$,
+        平移、旋轉、縮放就全部統一成 $3\times 3$ 矩陣乘法,還能用 <code>@</code> 自由<strong>串接</strong>:
+      </p>
+      <p>$$M = \underbrace{T(c_x,c_y)}_{\text{平移到中心}} \cdot \underbrace{R(\theta)}_{\text{旋轉}} \cdot \underbrace{S(s,s)}_{\text{縮放}}$$</p>
+      <p>
+        記住第 39 章的鐵律:矩陣相乘<strong>不可交換</strong>,作用在點上的順序是<strong>從右到左</strong>讀——上式是「<em>先</em>縮放、<em>再</em>旋轉、<em>最後</em>平移」。
+        我們把<strong>一片花瓣</strong>的幾個頂點,旋轉複製 12 份,就得到一朵對稱的曼陀羅:
+      </p>
+      <pre><code class="language-python">import numpy as np, cv2
+
+# 三個基本 2D 變換(齊次 3x3)
+def T(tx, ty): return np.array([[1, 0, tx], [0, 1, ty], [0, 0, 1.]])   # 平移
+def R(deg):                                                            # 旋轉
+    a = np.radians(deg); c, s = np.cos(a), np.sin(a)
+    return np.array([[c, -s, 0], [s, c, 0], [0, 0, 1.]])
+def S(sx, sy): return np.array([[sx, 0, 0], [0, sy, 0], [0, 0, 1.]])  # 縮放
+
+def apply(M, pts):
+    """對一群 (x,y) 點套變換:補齊次的 1 → 乘 M → 取回 (x,y)。"""
+    h = np.c_[pts, np.ones(len(pts))]      # 每點補一個 1 → (x, y, 1)
+    return (M @ h.T).T[:, :2]              # 乘上矩陣後丟掉最後一維
+
+img = np.zeros((500, 500, 3), np.uint8)
+petal = np.array([[0, 0], [40, -15], [70, 0], [40, 15]], np.float32)   # 一片花瓣
+for i in range(12):                        # 旋轉 12 份 → 對稱曼陀羅
+    M = T(250, 250) @ R(i * 30) @ S(1, 1)  # 右到左:先縮放 → 旋轉 → 平移到中心
+    pts = apply(M, petal).astype(np.int32)
+    cv2.polylines(img, [pts], True, (120, 200, 255), 2)
+cv2.imwrite("mandala.png", img)</code></pre>
+      <p>
+        把 <code>R(i * 30)</code> 換成隨機角、把 <code>petal</code> 換成更花俏的形狀、或把上面的迴圈改成<strong>遞迴</strong>(畫一段樹枝、再從末端分兩枝、每枝更短),
+        你就能長出一棵<strong>分形樹(fractal tree)</strong>。生成藝術的精神就在這裡:<strong>少少幾條規則 + 變換 + 重複/遞迴,長出複雜的美。</strong>
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 660 280" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- 左:螢幕座標系 + 一個圖形被變換 -->
+  <text x="150" y="30" text-anchor="middle" font-size="13" font-weight="700" fill="#1f2328">螢幕座標:原點左上,y 朝下</text>
+  <line x1="50" y1="60" x2="290" y2="60" stroke="#8a929b" stroke-width="1.4"/>
+  <line x1="50" y1="60" x2="50" y2="250" stroke="#8a929b" stroke-width="1.4"/>
+  <circle cx="50" cy="60" r="3.5" fill="#1f2328"/>
+  <text x="58" y="74" font-size="10" fill="#4a5159">(0,0)</text>
+  <text x="280" y="54" font-size="11" fill="#8a929b">x →</text>
+  <text x="30" y="240" font-size="11" fill="#8a929b">y ↓</text>
+  <!-- 原始三角形 -->
+  <polygon points="100,110 160,110 130,160" fill="#e3efed" stroke="#2f6f6a" stroke-width="1.8"/>
+  <text x="104" y="180" font-size="10.5" fill="#2f6f6a">原圖</text>
+  <!-- 旋轉縮放後 -->
+  <polygon points="190,150 245,170 200,210" fill="#f6e7dd" stroke="#b4541f" stroke-width="1.8"/>
+  <text x="200" y="232" font-size="10.5" fill="#b4541f">套 M = T·R·S 後</text>
+
+  <!-- 右:曼陀羅(花瓣旋轉複製) -->
+  <text x="500" y="30" text-anchor="middle" font-size="13" font-weight="700" fill="#1f2328">變換串接 → 生成藝術</text>
+  <g transform="translate(500,160)" fill="none" stroke="#2f6f6a" stroke-width="1.6">
+    <g><polygon points="0,0 40,-12 62,0 40,12" stroke="#2f6f6a"/></g>
+    <g transform="rotate(30)"><polygon points="0,0 40,-12 62,0 40,12" stroke="#3f8079"/></g>
+    <g transform="rotate(60)"><polygon points="0,0 40,-12 62,0 40,12" stroke="#2f6f6a"/></g>
+    <g transform="rotate(90)"><polygon points="0,0 40,-12 62,0 40,12" stroke="#3f8079"/></g>
+    <g transform="rotate(120)"><polygon points="0,0 40,-12 62,0 40,12" stroke="#2f6f6a"/></g>
+    <g transform="rotate(150)"><polygon points="0,0 40,-12 62,0 40,12" stroke="#3f8079"/></g>
+    <g transform="rotate(180)"><polygon points="0,0 40,-12 62,0 40,12" stroke="#2f6f6a"/></g>
+    <g transform="rotate(210)"><polygon points="0,0 40,-12 62,0 40,12" stroke="#3f8079"/></g>
+    <g transform="rotate(240)"><polygon points="0,0 40,-12 62,0 40,12" stroke="#2f6f6a"/></g>
+    <g transform="rotate(270)"><polygon points="0,0 40,-12 62,0 40,12" stroke="#3f8079"/></g>
+    <g transform="rotate(300)"><polygon points="0,0 40,-12 62,0 40,12" stroke="#2f6f6a"/></g>
+    <g transform="rotate(330)"><polygon points="0,0 40,-12 62,0 40,12" stroke="#3f8079"/></g>
+    <circle cx="0" cy="0" r="6" fill="#b4541f" stroke="none"/>
+  </g>
+  <text x="500" y="262" text-anchor="middle" font-size="10.5" fill="#4a5159">同一片花瓣 × 旋轉 12 份</text>
+</svg>
+        <figcaption>圖 68-2:2D 圖學從「分析」轉為「生成」。左:螢幕座標系原點在左上、$y$ 朝下;一個圖形乘上組合矩陣 $M = T\cdot R\cdot S$ 就被搬動、旋轉、縮放。右:把一片花瓣用旋轉矩陣複製 12 份,規則極簡卻長出對稱的曼陀羅——這就是生成藝術的核心手法。</figcaption>
+      </div>
+
+      <h2>3D 渲染管線:從模型座標到螢幕像素</h2>
+      <p>
+        現在升上 3D。一個 3D 物體要變成螢幕上的像素,要走一條固定的<strong>流水線</strong>,叫<strong>繪圖管線(graphics pipeline)</strong>。
+        第 39 章畫過它的全貌;這裡我們聚焦它的幾何骨架——也就是業界俗稱的 <strong>MVP</strong>——並親手把它寫出來。
+        每一次「換座標系」,本質上就是乘上一個 $4\times 4$ 齊次矩陣:
+      </p>
+      <p>$$\mathbf{p}_{\text{clip}} = \underbrace{P}_{\text{Projection 投影}} \cdot \underbrace{V}_{\text{View 視圖}} \cdot \underbrace{M}_{\text{Model 模型}} \cdot \mathbf{p}_{\text{local}}$$</p>
+      <ul>
+        <li><strong>Model(模型矩陣)</strong>:把物體從「<em>自己的座標</em>」(以茶壺中心為原點)擺進場景,變成<strong>世界座標</strong>。旋轉、縮放、移動物體就改這個。</li>
+        <li><strong>View(視圖矩陣)</strong>:用「攝影機在哪、朝哪看、哪邊是上」把整個世界轉成<strong>從鏡頭看出去</strong>的座標。等於「移動相機」。</li>
+        <li><strong>Projection(投影矩陣)</strong>:把 3D 壓扁成 2D,並製造「<strong>近大遠小</strong>」。這是最關鍵的一步。</li>
+      </ul>
+      <p>
+        投影矩陣的魔法藏在輸出的第四個分量 $w$:它和「離相機多遠」成正比。最後一步<strong>透視除法(perspective divide)</strong>把所有座標除以 $w$——
+        遠的東西 $w$ 大、除完就縮小,近的東西 $w$ 小、相對放大。這就是近大遠小的全部祕密:
+      </p>
+      <p>$$(x, y, z, w) \xrightarrow{\ \div\, w\ } \left(\tfrac{x}{w}, \tfrac{y}{w}, \tfrac{z}{w}\right) \quad\Longrightarrow\quad \text{得到 } [-1, 1]^3 \text{ 的標準座標(NDC)}$$</p>
+
+      <div class="diagram">
+<svg viewBox="0 0 740 200" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="mvp-ar" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#8a929b"/></marker>
+  </defs>
+  <g font-size="11">
+    <rect x="10"  y="62" width="92" height="56" rx="9" fill="#e3efed" stroke="#2f6f6a"/>
+    <text x="56" y="86" text-anchor="middle" font-weight="700" fill="#1f2328">模型座標</text>
+    <text x="56" y="104" text-anchor="middle" font-size="9.5" fill="#4a5159">物體自身</text>
+
+    <rect x="160" y="62" width="92" height="56" rx="9" fill="#e3efed" stroke="#2f6f6a"/>
+    <text x="206" y="86" text-anchor="middle" font-weight="700" fill="#1f2328">世界座標</text>
+    <text x="206" y="104" text-anchor="middle" font-size="9.5" fill="#4a5159">擺進場景</text>
+
+    <rect x="310" y="62" width="92" height="56" rx="9" fill="#e3efed" stroke="#2f6f6a"/>
+    <text x="356" y="86" text-anchor="middle" font-weight="700" fill="#1f2328">視圖座標</text>
+    <text x="356" y="104" text-anchor="middle" font-size="9.5" fill="#4a5159">相機視角</text>
+
+    <rect x="460" y="62" width="92" height="56" rx="9" fill="#ede7fb" stroke="#8b5cf6"/>
+    <text x="506" y="86" text-anchor="middle" font-weight="700" fill="#1f2328">裁切空間</text>
+    <text x="506" y="104" text-anchor="middle" font-size="9.5" fill="#4a5159">壓成 2D + w</text>
+
+    <rect x="628" y="62" width="100" height="56" rx="9" fill="#f6e7dd" stroke="#b4541f"/>
+    <text x="678" y="86" text-anchor="middle" font-weight="700" fill="#1f2328">螢幕像素</text>
+    <text x="678" y="104" text-anchor="middle" font-size="9.5" fill="#4a5159">NDC → 像素</text>
+  </g>
+  <g stroke="#8a929b" stroke-width="1.7">
+    <line x1="102" y1="90" x2="158" y2="90" marker-end="url(#mvp-ar)"/>
+    <line x1="252" y1="90" x2="308" y2="90" marker-end="url(#mvp-ar)"/>
+    <line x1="402" y1="90" x2="458" y2="90" marker-end="url(#mvp-ar)"/>
+    <line x1="552" y1="90" x2="626" y2="90" marker-end="url(#mvp-ar)"/>
+  </g>
+  <g font-size="11.5" font-weight="800" text-anchor="middle">
+    <text x="130" y="50" fill="#2f6f6a">× M</text>
+    <text x="280" y="50" fill="#2f6f6a">× V</text>
+    <text x="430" y="50" fill="#8b5cf6">× P</text>
+    <text x="589" y="50" fill="#b4541f">÷ w</text>
+  </g>
+  <text x="130" y="142" text-anchor="middle" font-size="9" fill="#8a929b">Model</text>
+  <text x="280" y="142" text-anchor="middle" font-size="9" fill="#8a929b">View</text>
+  <text x="430" y="142" text-anchor="middle" font-size="9" fill="#8a929b">Projection</text>
+  <text x="589" y="142" text-anchor="middle" font-size="9" fill="#8a929b">透視除法</text>
+  <text x="370" y="178" text-anchor="middle" font-size="11" fill="#4a5159">前半是矩陣變換(幾何),透視除法製造「近大遠小」,最後映射到像素</text>
+</svg>
+        <figcaption>圖 68-3:MVP 渲染管線。每個頂點依序乘上 Model、View、Projection 三個矩陣(可先相乘成一個總矩陣 $PVM$),再除以 $w$ 做透視除法,落進 $[-1,1]^3$ 的標準座標,最後線性拉到螢幕像素。自己寫一遍這條管線,就等於看懂了 GPU 在做什麼。</figcaption>
+      </div>
+
+      <h3>動手:用矩陣畫出旋轉的線框立方體</h3>
+      <p>
+        把上面整條管線寫成程式,就是 M23 的旗艦範例 <code>m23_wireframe</code>。我們定義立方體的 8 個頂點與 12 條邊,
+        每一影格給它一個旋轉的 Model 矩陣,跑完 MVP + 透視除法,再把每條邊用 <code>cv2.line</code> 連起來——一個會轉的<strong>線框(wireframe)</strong>立方體就誕生了:
+      </p>
+      <pre><code class="language-python">import numpy as np, cv2
+
+# 立方體 8 個頂點(每軸取 ±1 的所有組合)與 12 條邊
+V = np.array([[x, y, z] for x in (-1, 1) for y in (-1, 1) for z in (-1, 1)], float)
+E = [(0,1),(0,2),(0,4),(1,3),(1,5),(2,3),(2,6),(3,7),(4,5),(4,6),(5,7),(6,7)]
+
+def perspective(fov, aspect, n, f):
+    """透視投影矩陣:負責『近大遠小』(關鍵在輸出的 w)。"""
+    t = 1 / np.tan(np.radians(fov) / 2)
+    return np.array([[t/aspect, 0, 0, 0], [0, t, 0, 0],
+                     [0, 0, (f+n)/(n-f), 2*f*n/(n-f)], [0, 0, -1, 0]])
+
+def render(angle, W=400, H=400):
+    img = np.zeros((H, W, 3), np.uint8)
+    c, s = np.cos(angle), np.sin(angle)
+    model = np.array([[c,0,s,0],[0,1,0,0],[-s,0,c,0],[0,0,0,1.]])  # 繞 y 軸旋轉
+    view = np.eye(4); view[2, 3] = -5             # 相機沿 z 後退 5(才看得到)
+    proj = perspective(50, W/H, 0.1, 100)
+    mvp = proj @ view @ model                      # 串成一個總變換(右到左作用)
+    hom = np.c_[V, np.ones(len(V))]                # 頂點補齊次的 1
+    clip = (mvp @ hom.T).T                          # 套 MVP → 裁切空間
+    ndc = clip[:, :3] / clip[:, 3:4]               # ★透視除法:除以 w → 近大遠小
+    sx = ((ndc[:,0] + 1) / 2 * W).astype(int)      # x: [-1,1] → [0,W]
+    sy = ((1 - ndc[:,1]) / 2 * H).astype(int)      # y: 翻轉(螢幕 y 向下)
+    for a, b in E:
+        cv2.line(img, (sx[a], sy[a]), (sx[b], sy[b]), (120, 220, 255), 2)
+    return img
+
+cv2.imwrite("wireframe.png", render(0.6))</code></pre>
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">三個最常見的線框 bug</span>
+          <p>① <strong>忘了透視除法</strong>(沒除以 <code>w</code>)→ 變成正交投影,完全沒有遠近感。
+          ② <strong>螢幕 y 沒翻轉</strong> → 物體上下顛倒(NDC 的 $y$ 朝上,螢幕的 $y$ 朝下)。
+          ③ <strong>相機沒後退</strong>(忘了 <code>view[2,3] = -5</code>)→ 立方體卡在相機裡,看到一團亂線或全黑。</p>
+        </div>
+      </div>
+
+      <div class="diagram">
+<svg viewBox="0 0 560 280" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="280" y="28" text-anchor="middle" font-size="13" font-weight="700" fill="#1f2328">透視:近的面大,遠的面小</text>
+  <!-- 遠面(小,靠後) -->
+  <rect x="250" y="80" width="120" height="120" fill="none" stroke="#8a929b" stroke-width="1.6" stroke-dasharray="4 3"/>
+  <!-- 近面(大,靠前) -->
+  <rect x="160" y="120" width="180" height="180" transform="translate(0,-40)" fill="#e3efed" fill-opacity="0.5" stroke="#2f6f6a" stroke-width="2.2"/>
+  <!-- 連接四角(透視線) -->
+  <line x1="160" y1="80" x2="250" y2="80" stroke="#b4541f" stroke-width="1.6"/>
+  <line x1="340" y1="80" x2="370" y2="80" stroke="#b4541f" stroke-width="1.6"/>
+  <line x1="160" y1="260" x2="250" y2="200" stroke="#b4541f" stroke-width="1.6"/>
+  <line x1="340" y1="260" x2="370" y2="200" stroke="#b4541f" stroke-width="1.6"/>
+  <text x="195" y="175" font-size="11" font-weight="700" fill="#2f6f6a">近面(大)</text>
+  <text x="285" y="74" font-size="10.5" fill="#8a929b">遠面(小)</text>
+  <text x="280" y="272" text-anchor="middle" font-size="10.5" fill="#4a5159">同樣大小的兩個正方形,因深度不同投影出不同大小</text>
+</svg>
+        <figcaption>圖 68-4:線框立方體的透視效果。立方體前後兩個面在 3D 中一樣大,但經過「除以深度」後,離相機近的面投影較大、遠的面較小,四條稜邊向遠方收斂。這就是 <code>m23_wireframe</code> 跑出來、會「立體」的原因。</figcaption>
+      </div>
+
+      <h2>光柵化與著色器:把三角形填成有光的像素</h2>
+      <p>
+        線框只是骨架。要畫出<strong>實心、有明暗</strong>的面,接力棒交給<strong>光柵化(rasterization)</strong>:把每個三角形「填」成一格格像素。
+        為什麼基本圖元是三角形?因為三個點一定共面、一定是平的;任何複雜曲面都能用一堆小三角形(<strong>網格 mesh</strong>)拼出來。
+        光柵化要回答三個問題,我們逐一擊破。
+      </p>
+
+      <h3>問題一:哪些像素在三角形內?重心座標</h3>
+      <p>
+        圖學最愛的判定法是<strong>重心座標(barycentric coordinates)</strong>:把三角形內任一點 $\mathbf{p}$ 寫成三頂點的加權平均,
+      </p>
+      <p>$$\mathbf{p} = \alpha A + \beta B + \gamma C, \qquad \alpha + \beta + \gamma = 1$$</p>
+      <p>
+        <strong>當且僅當三個權重都 $\ge 0$ 時,點落在三角形內</strong>(任一個是負的,就在某條邊外面)。
+        這套權重還有超能力:同一組 $\alpha,\beta,\gamma$ 能把頂點上的屬性(顏色、深度、紋理座標)<strong>平滑內插</strong>到內部每個像素——
+        後面的上色與深度全靠它。
+      </p>
+
+      <h3>問題二:誰擋住誰?z-buffer</h3>
+      <p>
+        三角形會互相<strong>遮擋</strong>。關鍵觀念:<strong>不是「後畫的蓋先畫的」,而是「近的蓋遠的」。</strong>
+        做法是開一張和畫面一樣大的<strong>深度緩衝(z-buffer)</strong>,每像素先記「無限遠」。畫每個像素時用重心座標插出它的深度 $z = \alpha z_A + \beta z_B + \gamma z_C$,
+        <strong>比目前記錄更近($z$ 更小)才覆蓋顏色並更新深度,否則丟棄</strong>。這樣不管三角形以什麼順序送進來,最後留下的永遠是最靠近相機的那個。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 700 300" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- 左:重心座標判定 -->
+  <text x="180" y="28" text-anchor="middle" font-size="13" font-weight="700" fill="#1f2328">① 重心座標:點在三角形內?</text>
+  <g stroke="#dfe4e9" stroke-width="1">
+    <rect x="40" y="45" width="280" height="210" fill="#fff"/>
+    <line x1="40" y1="80" x2="320" y2="80"/><line x1="40" y1="115" x2="320" y2="115"/><line x1="40" y1="150" x2="320" y2="150"/><line x1="40" y1="185" x2="320" y2="185"/><line x1="40" y1="220" x2="320" y2="220"/>
+    <line x1="75" y1="45" x2="75" y2="255"/><line x1="110" y1="45" x2="110" y2="255"/><line x1="145" y1="45" x2="145" y2="255"/><line x1="180" y1="45" x2="180" y2="255"/><line x1="215" y1="45" x2="215" y2="255"/><line x1="250" y1="45" x2="250" y2="255"/><line x1="285" y1="45" x2="285" y2="255"/>
+  </g>
+  <!-- 被覆蓋像素 -->
+  <g fill="#2f6f6a" fill-opacity="0.18">
+    <rect x="110" y="80" width="35" height="35"/><rect x="110" y="115" width="70" height="35"/>
+    <rect x="110" y="150" width="105" height="35"/><rect x="145" y="185" width="105" height="35"/>
+  </g>
+  <polygon points="120,95 250,75 235,215" fill="none" stroke="#b4541f" stroke-width="2.2"/>
+  <circle cx="120" cy="95" r="4" fill="#b4541f"/><text x="100" y="92" font-size="11" font-weight="700" fill="#b4541f">A</text>
+  <circle cx="250" cy="75" r="4" fill="#b4541f"/><text x="256" y="72" font-size="11" font-weight="700" fill="#b4541f">B</text>
+  <circle cx="235" cy="215" r="4" fill="#b4541f"/><text x="240" y="230" font-size="11" font-weight="700" fill="#b4541f">C</text>
+  <circle cx="190" cy="130" r="4" fill="#8b5cf6"/>
+  <text x="120" y="280" font-size="10.5" fill="#4a5159">α,β,γ ≥ 0 → 內(上色);任一 &lt; 0 → 外(跳過)</text>
+
+  <!-- 右:z-buffer -->
+  <text x="520" y="28" text-anchor="middle" font-size="13" font-weight="700" fill="#1f2328">② z-buffer:近的蓋遠的</text>
+  <polygon points="400,90 520,75 450,210" fill="#b4541f" fill-opacity="0.5" stroke="#b4541f" stroke-width="1.5"/>
+  <polygon points="460,115 600,100 560,230" fill="#2f6f6a" fill-opacity="0.85" stroke="#2f6f6a" stroke-width="1.5"/>
+  <text x="412" y="120" font-size="10.5" fill="#b4541f">遠 z=9</text>
+  <text x="540" y="160" font-size="10.5" fill="#fff" font-weight="700">近 z=3</text>
+  <g font-size="10.5" fill="#4a5159">
+    <text x="400" y="262">重疊處比深度:</text>
+    <text x="400" y="280" font-size="10">3 &lt; 9 → 留下近的(綠);丟棄遠的(紅)</text>
+  </g>
+</svg>
+        <figcaption>圖 68-5:迷你光柵器的兩個心臟。① 用重心座標逐像素判斷「在不在三角形內」(三權重皆 $\ge 0$),同一組權重也用來內插顏色與深度。② 兩個三角形重疊時,z-buffer 比較深度,只留下離相機近的那個——不論它們的繪製順序。</figcaption>
+      </div>
+
+      <h3>動手:一個迷你軟體光柵器的核心</h3>
+      <p>
+        把這兩件事寫進雙重迴圈,就是 M24 旗艦範例 <code>m24_rasterizer</code> 的核心。為了看懂原理,這裡用最白話(也最慢)的逐像素寫法,
+        實務上會向量化或交給 GPU:
+      </p>
+      <pre><code class="language-python">import numpy as np
+
+def edge(ax, ay, bx, by, px, py):
+    """邊函數:點 (px,py) 在有向邊 a→b 的哪一側。"""
+    return (bx - ax) * (py - ay) - (by - ay) * (px - ax)
+
+def bary(P, A, B, C):
+    """回傳 P 對三角形 ABC 的重心座標 (α, β, γ)。"""
+    area = edge(*A, *B, C[0], C[1])
+    a = edge(*B, *C, P[0], P[1]) / area
+    b = edge(*C, *A, P[0], P[1]) / area
+    return a, b, 1 - a - b
+
+def fill(img, zbuf, tri, zs, cols):
+    A, B, C = tri                                  # 三頂點的螢幕座標 (x, y)
+    xs = [p[0] for p in tri]; ys = [p[1] for p in tri]
+    for y in range(int(min(ys)), int(max(ys)) + 1):       # 只掃外接矩形,省時間
+        for x in range(int(min(xs)), int(max(xs)) + 1):
+            a, b, g = bary((x, y), A, B, C)
+            if a &gt;= 0 and b &gt;= 0 and g &gt;= 0:             # 三權重皆 ≥0 → 在三角形內
+                z = a * zs[0] + b * zs[1] + g * zs[2]     # 重心插值深度
+                if z &lt; zbuf[y, x]:                        # 比現有更近才畫
+                    zbuf[y, x] = z
+                    img[y, x] = a*cols[0] + b*cols[1] + g*cols[2]   # 顏色也用重心插值</code></pre>
+
+      <h3>問題三:這個面該多亮?著色器與 Phong</h3>
+      <p>
+        最後是「上什麼顏色」。最經典的<strong>Phong 光照</strong>把一個面的顏色拆成三項相加:
+        <strong>環境光(ambient)</strong>給基本底亮度、<strong>漫反射(diffuse)</strong>讓「越正對光越亮」、<strong>鏡面反射(specular)</strong>給光滑表面的高光點:
+      </p>
+      <p>$$C = \underbrace{C_a}_{\text{環境}} + \underbrace{(\mathbf{N}\cdot\mathbf{L})\,C_d}_{\text{漫反射}} + \underbrace{(\mathbf{R}\cdot\mathbf{V})^{n}\,C_s}_{\text{鏡面}}$$</p>
+      <p>
+        漫反射項就是第 39 章說的「光照計算的心臟」——表面法線 $\mathbf{N}$ 與光線方向 $\mathbf{L}$ 的<strong>內積</strong>:面正對光時內積接近 1(最亮),側對時趨近 0(暗)。
+        <strong>切記法線一定要先正規化</strong>,否則亮度全錯。
+      </p>
+      <p>
+        在真實 GPU 上,這段「對每個像素算顏色」的程式叫<strong>片段著色器(fragment shader)</strong>。它最迷人的一點是:
+        GPU 會<strong>同時、平行</strong>地對幾百萬個像素各跑一次這段小程式——這正呼應第 43 章的<strong>平行運算</strong>與第 48 章的 <strong>GPU 架構</strong>。
+        下面這段 GLSL(語法像 C,跑在 GPU)就是上面漫反射項的硬體版:
+      </p>
+      <pre><code class="language-cpp">// 片段著色器(GLSL):GPU 對每個像素各跑一次,而且幾百萬個同時平行算
+#version 330
+in  vec3 v_normal;        // 從上一階段插值進來的「這個像素的法線」
+out vec4 f_color;         // 要輸出的顏色(RGBA)
+uniform vec3 light_dir;   // 所有像素共用的參數:光線方向(Python 端傳入)
+void main() {
+    float diff = max(dot(normalize(v_normal), normalize(light_dir)), 0.0);  // N·L,漫反射
+    f_color = vec4(vec3(0.1) + diff * vec3(0.2, 0.6, 1.0), 1.0);            // 環境光 + 漫反射
+}</code></pre>
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">shader 是什麼,一句話</span>
+          <p><strong>著色器(shader)是一段「對每個頂點或每個像素各跑一次、由 GPU 大規模平行執行」的小程式。</strong>
+          軟體光柵器(純 NumPy)讓你看懂「每個像素到底怎麼算」;GLSL 著色器則是把同一件事交給 GPU 平行做、快上千倍。
+          它和第 2 章卷積「對每個像素做運算」是同一種思想,只是搬上了 GPU。</p>
+        </div>
+      </div>
+
+      <h2>反過來:從影像重建 3D 與點雲</h2>
+      <p>
+        到這裡,我們都在做「<em>給定 3D,畫成 2D</em>」。M25 把箭頭反過來——這正是視覺與圖學的交會點:<strong>從真實照片或深度,重建出 3D 結構</strong>。
+        取得 3D 有兩條主要路徑:
+      </p>
+      <ul>
+        <li><strong>SfM / MVS(運動恢復結構)</strong>:拿好幾張<em>不同角度</em>的照片,用特徵匹配找出同一個點在各張照片的位置,再靠<strong>多視幾何</strong>(第 66 章)反推出每個點的 3D 座標。一邊也順便解出相機在哪——這和第 66 章的相機標定是同一套數學。常用工具:COLMAP。</li>
+        <li><strong>深度相機</strong>:RealSense、Kinect、LiDAR 直接給出每個像素的<em>深度</em>,一步到位變成 3D 點。</li>
+      </ul>
+      <p>
+        兩條路徑的產物都是<strong>點雲(point cloud)</strong>——一大堆帶 $(x,y,z)$ 的 3D 點。點雲通常又多又髒,要經過一條清理流水線,
+        再「包」成連續的表面網格,才能上色、量測、3D 列印。業界標準工具是 <strong>Open3D</strong>:
+      </p>
+      <pre><code class="language-python">import open3d as o3d
+
+pcd = o3d.io.read_point_cloud("scan.ply")           # 讀進點雲
+pcd = pcd.voxel_down_sample(0.005)                  # 體素降採樣:每小格只留一個代表點
+pcd, _ = pcd.remove_statistical_outlier(20, 2.0)    # 去離群點(看鄰居距離,太突出的當雜訊)
+pcd.estimate_normals()                              # 估每點法線(表面重建必需)
+mesh, _ = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(pcd, depth=9)  # Poisson 表面重建
+o3d.io.write_triangle_mesh("mesh.ply", mesh)        # 輸出網格</code></pre>
+      <p>
+        其中「體素降採樣」的原理一行就能說清楚:<strong>把空間切成小立方格,同一格內的點通通合併成一個平均點。</strong>
+        用純 NumPy 就能離線理解(這也是 <code>m25_pointcloud</code> 附的版本):
+      </p>
+      <pre><code class="language-python">import numpy as np
+
+def voxel_downsample(points, voxel=0.05):
+    keys = np.floor(points / voxel).astype(np.int64)   # 每點落在哪個立方格(整數座標)
+    _, inv = np.unique(keys, axis=0, return_inverse=True)  # inv:每點屬於第幾格
+    out = np.zeros((inv.max() + 1, 3)); cnt = np.zeros(inv.max() + 1)
+    np.add.at(out, inv, points)        # 同格座標累加
+    np.add.at(cnt, inv, 1)             # 數每格幾個點
+    return out / cnt[:, None]          # 總和 ÷ 個數 = 每格的平均點(代表點)</code></pre>
+      <p>
+        若有多次掃描(一次只能掃到一面),還要用 <strong>ICP(疊代最近點)</strong>把多片點雲<strong>配準(registration)</strong>對齊成完整模型——
+        反覆「找最近對應點 → 算出怎麼旋轉平移貼合 → 移動」直到收斂。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 280" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="sfm-ar" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/></marker>
+  </defs>
+  <text x="160" y="28" text-anchor="middle" font-size="13" font-weight="700" fill="#1f2328">多視幾何(SfM):多角度照片 → 3D</text>
+  <!-- 中央物體 -->
+  <polygon points="150,150 200,130 210,180 160,200" fill="#f6e7dd" stroke="#b4541f" stroke-width="1.6"/>
+  <text x="170" y="220" text-anchor="middle" font-size="10.5" fill="#b4541f">真實物體</text>
+  <!-- 相機們 -->
+  <g fill="#1f2328">
+    <rect x="40" y="70" width="22" height="16" rx="2"/><text x="38" y="65" font-size="9" fill="#4a5159">cam1</text>
+    <rect x="270" y="80" width="22" height="16" rx="2"/><text x="270" y="75" font-size="9" fill="#4a5159">cam2</text>
+    <rect x="55" y="200" width="22" height="16" rx="2"/><text x="40" y="232" font-size="9" fill="#4a5159">cam3</text>
+  </g>
+  <g stroke="#8a929b" stroke-width="1" stroke-dasharray="4 3">
+    <line x1="62" y1="82" x2="160" y2="155"/><line x1="280" y1="92" x2="195" y2="150"/><line x1="72" y1="205" x2="160" y2="180"/>
+  </g>
+  <text x="120" y="252" text-anchor="middle" font-size="10" fill="#4a5159">特徵匹配 + 多視幾何反推每點 3D</text>
+
+  <line x1="320" y1="150" x2="375" y2="150" stroke="#8a929b" stroke-width="1.8" marker-end="url(#sfm-ar)"/>
+
+  <!-- 點雲 -->
+  <text x="470" y="28" text-anchor="middle" font-size="13" font-weight="700" fill="#1f2328">點雲</text>
+  <g fill="#2f6f6a">
+    <circle cx="420" cy="90" r="2.2"/><circle cx="440" cy="80" r="2.2"/><circle cx="460" cy="95" r="2.2"/><circle cx="480" cy="82" r="2.2"/><circle cx="500" cy="100" r="2.2"/>
+    <circle cx="425" cy="115" r="2.2"/><circle cx="450" cy="120" r="2.2"/><circle cx="475" cy="112" r="2.2"/><circle cx="500" cy="125" r="2.2"/><circle cx="515" cy="118" r="2.2"/>
+    <circle cx="430" cy="145" r="2.2"/><circle cx="455" cy="150" r="2.2"/><circle cx="480" cy="142" r="2.2"/><circle cx="505" cy="152" r="2.2"/>
+    <circle cx="440" cy="172" r="2.2"/><circle cx="465" cy="178" r="2.2"/><circle cx="490" cy="170" r="2.2"/>
+  </g>
+  <text x="465" y="205" text-anchor="middle" font-size="10" fill="#4a5159">一堆 (x,y,z) 點</text>
+
+  <line x1="540" y1="150" x2="595" y2="150" stroke="#8a929b" stroke-width="1.8" marker-end="url(#sfm-ar)"/>
+
+  <!-- 網格 -->
+  <text x="660" y="28" text-anchor="middle" font-size="13" font-weight="700" fill="#1f2328">網格 mesh</text>
+  <g fill="#cfe6e2" stroke="#2f6f6a" stroke-width="1.1">
+    <polygon points="620,95 660,85 650,125"/><polygon points="660,85 700,100 650,125"/>
+    <polygon points="620,95 650,125 615,140"/><polygon points="650,125 700,100 685,150"/>
+    <polygon points="615,140 650,125 660,170"/><polygon points="650,125 685,150 660,170"/>
+  </g>
+  <text x="655" y="205" text-anchor="middle" font-size="10" fill="#4a5159">Poisson 重建表面</text>
+</svg>
+        <figcaption>圖 68-6:3D 重建流程。多張不同角度的照片(左)經特徵匹配與多視幾何(第 66 章),反推出每個點的 3D 座標,形成<strong>點雲</strong>(中);清理、估法線後,用 Poisson 重建「包」成連續的<strong>網格</strong>(右)。深度相機則可跳過前段,直接給出點雲。</figcaption>
+      </div>
+
+      <h2>擴增實境 AR:讓虛擬物站進真實世界</h2>
+      <p>
+        終於來到重頭戲。<strong>擴增實境(Augmented Reality, AR)</strong>是這整部書的會師點:它要把一個虛擬的 3D 物件,
+        以<strong>正確的位置、正確的姿態</strong>,疊到真實相機畫面上——IKEA 把沙發擺進你家、虛擬試戴眼鏡、AR 名片掃出 3D 模型,核心都是這件事。
+        為什麼它需要整部書?因為它必須<strong>同時當偵探和畫家</strong>:
+      </p>
+      <ol>
+        <li><strong>看(視覺)</strong>:在畫面裡找到一個「參考」(這裡用 <strong>ArUco 標記</strong>),偵測出它的四個角。</li>
+        <li><strong>算(多視幾何)</strong>:由四個角 + 相機內參 $K$(來自第 66 章的相機標定),反推出相機相對標記的<strong>姿態</strong>——也就是旋轉 $R$ 與平移 $t$。這一步在 OpenCV 裡叫 <code>solvePnP</code>。</li>
+        <li><strong>畫(圖學)</strong>:有了 $R, t, K$,就能用<strong>針孔相機模型</strong>把虛擬物件的 3D 頂點投影到畫面上的正確位置——這正是本章前半的渲染管線!</li>
+      </ol>
+      <p>
+        第三步的數學,就是把 3D 世界點 $\tilde{\mathbf{P}}$ 投影到 2D 影像點 $\tilde{\mathbf{p}}$ 的針孔相機公式——它其實就是 MVP 管線在真實相機上的具體化身:
+      </p>
+      <p>$$s\,\tilde{\mathbf{p}} = K\,[\,R \mid t\,]\,\tilde{\mathbf{P}}$$</p>
+      <p>
+        其中 $[R \mid t]$ 是「外參」(相機在世界中的姿態,對應 View 矩陣),$K$ 是「內參」(焦距、主點,對應 Projection)。
+        看出來了嗎?<strong>AR 的「畫」就是渲染管線,只是 View 與 Projection 矩陣不再是你隨手設的,而是從真實影像「看」出來的。</strong>這就是視覺與圖學握手的精確時刻。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 760 300" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="ar-ar" markerWidth="11" markerHeight="11" refX="8" refY="3" orient="auto"><path d="M0,0 L9,3 L0,6 Z" fill="#8a929b"/></marker>
+  </defs>
+
+  <!-- ① 偵測標記 -->
+  <text x="120" y="32" text-anchor="middle" font-size="13" font-weight="800" fill="#2f6f6a">① 偵測標記(看)</text>
+  <rect x="30" y="50" width="180" height="160" rx="6" fill="#1f2328"/>
+  <!-- ArUco marker -->
+  <rect x="70" y="85" width="100" height="100" fill="#000"/>
+  <g fill="#fff">
+    <rect x="82" y="97" width="19" height="19"/><rect x="120" y="97" width="19" height="19"/>
+    <rect x="101" y="116" width="19" height="19"/><rect x="139" y="116" width="19" height="19"/>
+    <rect x="82" y="135" width="19" height="19"/><rect x="139" y="135" width="19" height="19"/>
+    <rect x="120" y="154" width="19" height="19"/>
+  </g>
+  <!-- 角點高亮 -->
+  <g fill="none" stroke="#facc15" stroke-width="2.2">
+    <circle cx="70" cy="85" r="6"/><circle cx="170" cy="85" r="6"/><circle cx="170" cy="185" r="6"/><circle cx="70" cy="185" r="6"/>
+  </g>
+  <text x="120" y="230" text-anchor="middle" font-size="10.5" fill="#4a5159">找出黑白標記的四個角</text>
+
+  <line x1="222" y1="130" x2="262" y2="130" stroke="#8a929b" stroke-width="2" marker-end="url(#ar-ar)"/>
+
+  <!-- ② 估姿態 -->
+  <text x="380" y="32" text-anchor="middle" font-size="13" font-weight="800" fill="#8b5cf6">② 估相機姿態(算)</text>
+  <rect x="290" y="50" width="180" height="160" rx="6" fill="#f3f0fb" stroke="#8b5cf6" stroke-width="1.4"/>
+  <!-- 標記平面(透視) -->
+  <polygon points="320,150 420,135 440,180 335,200" fill="#fff" stroke="#8b5cf6" stroke-width="1.4"/>
+  <!-- 3D 座標軸 from corner -->
+  <g stroke-width="3">
+    <line x1="345" y1="178" x2="430" y2="172" stroke="#e23b3b"/><text x="434" y="172" font-size="11" font-weight="700" fill="#e23b3b">X</text>
+    <line x1="345" y1="178" x2="335" y2="120" stroke="#22a35a"/><text x="322" y="116" font-size="11" font-weight="700" fill="#22a35a">Y</text>
+    <line x1="345" y1="178" x2="375" y2="148" stroke="#2b6fe0"/><text x="378" y="146" font-size="11" font-weight="700" fill="#2b6fe0">Z</text>
+  </g>
+  <text x="380" y="230" text-anchor="middle" font-size="10.5" fill="#4a5159">由四角 + K 反推 R, t(solvePnP)</text>
+
+  <line x1="482" y1="130" x2="522" y2="130" stroke="#8a929b" stroke-width="2" marker-end="url(#ar-ar)"/>
+
+  <!-- ③ 疊加渲染 -->
+  <text x="640" y="32" text-anchor="middle" font-size="13" font-weight="800" fill="#b4541f">③ 疊加渲染(畫)</text>
+  <rect x="550" y="50" width="180" height="160" rx="6" fill="#1f2328"/>
+  <polygon points="580,150 680,135 700,180 595,200" fill="#3a3f46" stroke="#8a929b" stroke-width="1"/>
+  <!-- 虛擬立方體站在標記上 -->
+  <g stroke="#facc15" stroke-width="1.8" fill="#b4541f" fill-opacity="0.35">
+    <polygon points="600,150 655,142 670,160 615,170"/>
+    <polygon points="600,150 615,170 615,120 600,100"/>
+    <polygon points="615,170 670,160 670,110 615,120"/>
+    <polygon points="600,100 615,120 670,110 655,92"/>
+  </g>
+  <text x="640" y="230" text-anchor="middle" font-size="10.5" fill="#4a5159">用 R,t,K 投影虛擬 3D 物件</text>
+
+  <text x="380" y="270" text-anchor="middle" font-size="11.5" font-weight="700" fill="#1f2328">視覺(看) → 多視幾何(算) → 圖學(畫):整部書在此會師</text>
+</svg>
+        <figcaption>圖 68-7:AR 三段管線。① 視覺:偵測 ArUco 標記的四個角。② 多視幾何:由四角與相機內參 $K$ 反推相機姿態 $R,t$(<code>solvePnP</code>),在標記上畫出 3D 座標軸驗證。③ 圖學:用 $s\tilde{\mathbf p}=K[R\mid t]\tilde{\mathbf P}$ 把虛擬立方體投影、疊到畫面正確位置。看 → 算 → 畫,正是整個第十七部的縮影。</figcaption>
+      </div>
+
+      <h3>動手:把虛擬立方體釘在標記上</h3>
+      <p>
+        旗艦專題 <code>m26_aruco</code> 走「貼 2D 圖」的免標定路線(偵測四角 → 用單應性 warp 把圖貼上去),適合先玩起來。
+        而下面這段是「貼 3D 物件」的完整版——它需要第 66 章標定好的 $K$ 與畸變係數 <code>dist</code>,正是 AR 名片/桌面 AR 的骨架:
+      </p>
+      <pre><code class="language-python">import cv2, numpy as np
+aruco = cv2.aruco
+DICT = aruco.getPredefinedDictionary(aruco.DICT_4X4_50)
+# K, dist 來自第 66 章的相機標定;marker_len 是標記實際邊長(公尺),決定距離尺度
+K, dist, marker_len = K_calib, dist_calib, 0.05
+
+def draw_cube(frame, gray):
+    corners, ids, _ = aruco.detectMarkers(gray, DICT)              # ① 偵測標記四角
+    if ids is None:
+        return frame
+    rvecs, tvecs, _ = aruco.estimatePoseSingleMarkers(             # ② 估姿態 R, t
+        corners, marker_len, K, dist)
+    # ③ 一個立著的虛擬立方體的 8 個 3D 頂點(以標記中心為原點,單位:公尺)
+    h = marker_len / 2
+    cube = np.float32([[-h,-h,0],[h,-h,0],[h,h,0],[-h,h,0],
+                       [-h,-h,2*h],[h,-h,2*h],[h,h,2*h],[-h,h,2*h]])
+    edges = [(0,1),(1,2),(2,3),(3,0),(4,5),(5,6),(6,7),(7,4),(0,4),(1,5),(2,6),(3,7)]
+    for rvec, tvec in zip(rvecs, tvecs):
+        pts, _ = cv2.projectPoints(cube, rvec, tvec, K, dist)      # 3D → 2D:K[R|t]
+        pts = pts.reshape(-1, 2).astype(int)
+        for i, j in edges:
+            cv2.line(frame, tuple(pts[i]), tuple(pts[j]), (0, 255, 0), 2)
+    return frame</code></pre>
+      <p>
+        <code>cv2.projectPoints</code> 做的,正是把每個 3D 頂點丟進 $s\tilde{\mathbf p}=K[R\mid t]\tilde{\mathbf P}$ 算出 2D 像素位置——這就是你前面親手寫過的投影管線。
+        當你把標記在鏡頭前傾斜、移動,$R,t$ 隨之更新,立方體就會像被釘在紙卡上一樣,跟著轉、跟著走。
+      </p>
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">AR 對不準?先查這三件事</span>
+          <p>① <strong>沒先標定相機</strong>:$K$、<code>dist</code> 不對,姿態與疊合一定歪——務必先做第 66 章的標定。
+          ② <strong>標記邊長填錯</strong>:<code>marker_len</code> 是真實公尺數,填錯會讓物件大小/距離整個跑掉。
+          ③ <strong>抖動</strong>:每影格獨立估姿態會微微抖,對 $R,t$ 做時間平滑(或用更穩的標記板)會好很多。</p>
+        </div>
+      </div>
+
+      <h2>整合專題:把第十七部串成一個作品</h2>
+      <p>
+        走到這裡,你已經具備一條完整的能力鏈:<strong>影像前處理 → 辨識/分析 → 圖學呈現</strong>。M27 的整合專題(呼應第 58 章的畢業專案)就是把這條鏈,
+        針對一個<em>真實需求</em>,做成一個別人能實際操作的作品。給「程式還在長」的你三個務實心法:
+      </p>
+      <ul>
+        <li><strong>從最近的範例改起</strong>:別從白畫面開始。想做 AR 桌遊?從 <code>m26_aruco</code> 改;想做 3D 掃描?從 <code>m25_pointcloud</code> 改。有可動的骨架,就不會卡死。</li>
+        <li><strong>先能動,再求好</strong>:第一個里程碑只要求「把範例跑起來、換成自己的輸入」。能動之後再一點一點加功能。</li>
+        <li><strong>畫出你的資料流三段圖</strong>:輸入 → 處理(用到哪些章) → 輸出。每段都先 <code>print</code> 中間結果檢查,出錯能馬上定位是哪一段。</li>
+      </ul>
+      <p>幾個能把「視覺 + 圖學」漂亮串起來的跨主線專題點子:</p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>專題</th><th>串起的能力</th><th>一句話描述</th></tr></thead>
+        <tbody>
+          <tr><td><strong>AR 互動名片</strong></td><td>相機標定(66) + 標記偵測 + 圖學渲染(本章)</td><td>掃名片上的 ArUco,浮出可旋轉的 3D 模型或影片</td></tr>
+          <tr><td><strong>虛擬試戴</strong></td><td>人臉關鍵點 + 姿態 + 圖學疊合</td><td>把眼鏡/帽子貼到臉上,隨頭部姿態變化</td></tr>
+          <tr><td><strong>桌面 3D 掃描器</strong></td><td>多視幾何(66) + 點雲/重建(本章)</td><td>環繞拍一圈,重建出可下載的 3D 模型</td></tr>
+          <tr><td><strong>手勢控制的 3D 場景</strong></td><td>關鍵點偵測 + 即時渲染管線</td><td>用手勢旋轉/縮放一個你自己渲染的 3D 物件</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">展示時,誠實比高分重要</span>
+          <p>一個好的整合專題,README 要講清楚四件事:<strong>做了什麼、怎麼做、效果如何、有什麼限制</strong>。
+          能明確說出「我的系統在什麼情況下會失敗」(光線太暗、標記反光、點雲太稀疏),比虛報一個漂亮數字更能展現你真的懂。</p>
+        </div>
+      </div>
+
+      <h2>動手練習</h2>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 68.1 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>用矩陣對 3D 點做投影,畫出一個線框立方體。請定義立方體的 8 個頂點與 12 條邊,套上 Model(隨意旋轉)→ View(相機後退)→ Projection(透視),做透視除法後映射到螢幕,連出每一條邊。驗證「忘了除以 $w$」會發生什麼事。</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p>直接用本章 <code>render</code> 函式即可(見「動手:用矩陣畫出旋轉的線框立方體」)。關鍵三步:</p>
+              <pre><code class="language-python">hom = np.c_[V, np.ones(len(V))]        # 1) 補齊次的 1
+clip = (proj @ view @ model @ hom.T).T  # 2) 套 MVP(右到左作用)
+ndc = clip[:, :3] / clip[:, 3:4]        # 3) 透視除法:除以 w</code></pre>
+              <p>若把第 3 步改成 <code>ndc = clip[:, :3]</code>(不除 $w$),等於做<strong>正交投影</strong>——立方體前後面一樣大,完全沒有近大遠小的立體感。把 <code>w</code> 加回來,遠的面才會收縮、稜線才會向遠方聚攏。記得螢幕 $y$ 要翻轉(<code>1 - ndc[:,1]</code>),否則上下顛倒。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 68.2 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>有兩個三角形投影後在某些像素重疊。請解釋 z-buffer 如何保證「近的擋住遠的」,而且<strong>與繪製順序無關</strong>。如果不用 z-buffer,改成「先畫的會被後畫的蓋掉」,會出什麼錯?有沒有 z-buffer 也解決不了的情況?</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>z-buffer 的機制:</strong>除了顏色緩衝,再開一張同樣大小、初值為「無限遠」的深度緩衝。畫每個像素時,用重心座標插出它的深度 $z=\alpha z_A+\beta z_B+\gamma z_C$,只有當 <code>z &lt; zbuf[y,x]</code>(比目前記錄的更近)時,才覆蓋顏色並更新 <code>zbuf</code>;否則丟棄。因為每個像素永遠只留「目前看過最近的那個」,所以不管三角形以什麼順序送進來,結果都一樣——這就是與繪製順序無關的原因。</p>
+              <p><strong>不用 z-buffer 的後果:</strong>若採「後畫蓋先畫」,只要先畫近的、後畫遠的,遠的就會錯誤地蓋住近的(畫家演算法的失敗)。先排序「從遠到近」能救一部分,但遇到<strong>互相穿插</strong>的三角形(A 的一半在 B 前、另一半在 B 後)就無法排出正確順序。</p>
+              <p><strong>z-buffer 也搞不定的情況:</strong>半透明物體。z-buffer 是「非黑即白」地保留最近片元,但透明需要把前後顏色<em>混合</em>(alpha blending),這得另外把透明物排序後從後往前畫。此外深度精度有限(z-fighting),兩個非常接近的面會閃爍。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 68.3 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>用重心座標判斷一個點是否落在三角形內,並把三個頂點的顏色平滑內插上色。給定三角形 $A=(50,50)$、$B=(200,80)$、$C=(120,220)$,三頂點顏色分別為紅、綠、藍,請填出整個三角形(內部顏色應呈現平滑漸層)。</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p>用本章的 <code>edge</code> / <code>bary</code> 函式,逐像素判斷與上色:</p>
+              <pre><code class="language-python">import numpy as np
+
+def edge(ax, ay, bx, by, px, py):
+    return (bx-ax)*(py-ay) - (by-ay)*(px-ax)
+
+A, B, C = (50,50), (200,80), (120,220)
+cA, cB, cC = np.array([0,0,255]), np.array([0,255,0]), np.array([255,0,0])  # BGR
+img = np.zeros((260, 260, 3), np.uint8)
+area = edge(*A, *B, C[0], C[1])
+for y in range(260):
+    for x in range(260):
+        a = edge(*B, *C, x, y) / area
+        b = edge(*C, *A, x, y) / area
+        g = 1 - a - b
+        if a &gt;= 0 and b &gt;= 0 and g &gt;= 0:          # 三權重皆 ≥0 → 在三角形內
+            img[y, x] = (a*cA + b*cB + g*cC).astype(np.uint8)   # 顏色用重心插值
+import cv2; cv2.imwrite("tri.png", img)</code></pre>
+              <p>結果是一個從紅、綠、藍三個角各自漸層、在中心混成灰白的三角形。$\alpha,\beta,\gamma$ 同時扮演「在不在裡面」的判定器與「離各頂點多近」的權重——這就是光柵化又判定又插值的雙重威力。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 68.4 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>解釋 AR 如何用「相機姿態」把虛擬物件對齊真實世界。具體說明:從一張含標記的影像,到一個立方體穩穩站在標記上,中間經過哪幾步?式子 $s\,\tilde{\mathbf p}=K[R\mid t]\tilde{\mathbf P}$ 裡的每個符號代表什麼?它和本章前半的渲染管線是什麼關係?</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>三步:</strong>(1) <em>看</em>——偵測標記,取得它在影像上的四個角(已知它們對應標記平面上 $(\pm h,\pm h,0)$ 這些 3D 點)。(2) <em>算</em>——已知「3D 點 ↔ 2D 角」的對應與相機內參 $K$,用 <code>solvePnP</code> 解出相機相對標記的姿態:旋轉 $R$ 與平移 $t$。(3) <em>畫</em>——把虛擬立方體的 8 個 3D 頂點代入投影式,得到它們在畫面上的 2D 位置,連線疊上去。</p>
+              <p><strong>符號:</strong>$\tilde{\mathbf P}$ 是齊次的 3D 世界點;$[R\mid t]$ 是<strong>外參</strong>(相機姿態,把世界點轉到相機座標,對應 View 矩陣);$K$ 是<strong>內參</strong>(焦距、主點,把相機座標投影到像素,對應 Projection);$s$ 是因透視除法產生的尺度因子($\tilde{\mathbf p}$ 算完要除以最後一個分量)。</p>
+              <p><strong>關係:</strong>這就是渲染管線本身!差別在於:自己渲染時 View/Projection 是你隨手設的;AR 裡 $[R\mid t]$ 與 $K$ 是從<em>真實影像「看」出來</em>的(標定 + 姿態估計)。因為虛擬物件用的是「真實相機的眼睛」去投影,它才會和真實畫面對齊——這正是視覺與圖學握手的時刻。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 68.5 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>設計一個整合「視覺 + 圖學」的小專題。請寫出:① 要解決誰的什麼問題;② 資料流三段(輸入 → 處理用到哪些章 → 輸出);③ 最小可用版本(MVP)要先做到什麼;④ 用什麼指標評估、它在什麼情況下會失敗。</p>
+          <details class="solution"><summary>看參考範例</summary>
+            <div class="sol-body">
+              <p>以「<strong>AR 互動名片</strong>」為例:</p>
+              <ul>
+                <li><strong>① 問題</strong>:讓求職者的紙本名片,被手機掃到時浮出一個可旋轉的 3D 作品集模型,加深印象。成功標準:在一般室內光下,標記出現後 1 秒內穩定疊上模型,旋轉名片時抖動不明顯。</li>
+                <li><strong>② 資料流</strong>:輸入(webcam 影像)→ 處理〔灰階(M0)→ 偵測 ArUco 四角(本章)→ 相機標定 $K$/姿態 $R,t$(第 66 章 + 本章)→ 用 <code>projectPoints</code> 投影虛擬模型(本章渲染管線)〕→ 輸出(疊好虛擬物的即時畫面)。</li>
+                <li><strong>③ MVP</strong>:先從 <code>m26_aruco</code> 改起,做到「偵測到標記就在上面畫一個綠色線框立方體」。能動之後,再把立方體換成載入的 <code>.obj</code> 模型、加上時間平滑、做個切換多個模型的 UI。</li>
+                <li><strong>④ 評估與限制</strong>:指標用 FPS(是否即時)與對位誤差(座標軸是否貼齊標記)。誠實列出失敗情況:光線太暗或標記反光 → 偵測不穩;標記太小/太斜 → 姿態抖;沒重新標定就換相機 → 模型大小跑掉。</li>
+              </ul>
+              <p>(其他可行題目:虛擬試戴、桌面 3D 掃描器、手勢控制的 3D 場景——重點是<strong>至少串起兩條技術線</strong>,並且「先能動再求好」。)</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>把這一章串起來</h2>
+      <p>
+        這一章,我們替整個第十七部畫下句點——把「看」與「畫」接成了一個圓。回顧這趟路:
+      </p>
+      <ul>
+        <li><strong>視覺與圖學是一對逆問題</strong>:視覺從影像反推世界,圖學把世界正算成影像;兩者共用同一套相機與投影數學。</li>
+        <li><strong>2D 圖學</strong>讓你從「分析像素」轉為「算出像素」,用變換矩陣串接做出生成藝術。</li>
+        <li><strong>3D 渲染管線(MVP)</strong>:模型 → 世界 → 視圖 → 投影 → 透視除法,你親手寫出了會轉的線框立方體。</li>
+        <li><strong>光柵化</strong>的兩個心臟是重心座標(判定 + 內插)與 z-buffer(遮擋);<strong>著色器</strong>是 GPU 上每像素平行跑的小程式。</li>
+        <li><strong>3D 重建</strong>把箭頭反過來:從多張影像或深度相機,經點雲與表面重建,還原出 3D 世界。</li>
+        <li><strong>AR</strong> 是會師點:用視覺<em>看</em>出相機姿態、用多視幾何<em>算</em>出 $R,t$、再用圖學<em>畫</em>出對齊真實世界的虛擬物件。</li>
+      </ul>
+      <p>
+        最重要的一句話帶走:<strong>當你能同時當偵探(看)和畫家(畫),虛擬與真實的邊界就消失了。</strong>
+        這正是整個第十七部從第 65 章一路鋪陳到這裡的目的——不是會呼叫 API,而是真正懂得「影像 ↔ 世界」這座雙向橋,並能親手把一個視覺想法,做成一件可用、可展示的作品。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">📚</div>
+        <div class="body">
+          <span class="c-title">想更深入?延伸資源</span>
+          <p>理論基礎請回到第 39 章<strong>計算機圖學</strong>與第 54 章<strong>線性代數</strong>;多視幾何與相機標定見第 66 章。
+          動手實戰可往這幾個方向走:用 <strong>OpenGL / ModernGL</strong> 把本章的軟體光柵器升級成 GPU 著色器(把 <code>m24</code> 的純 NumPy 版改寫成 GLSL);
+          用 <strong>Open3D</strong>(<code>open3d.org</code>)做點雲處理與表面重建、用 <strong>COLMAP</strong> 做多照片 SfM 重建;AR 進一步可看 OpenCV 的 <code>aruco</code> 模組文件與 <code>solvePnP</code>。
+          OSSU 對應的入門課程是 UCSD 的 <em>Computer Graphics</em>(edX)。但這一部最珍貴的精神,是它 project-based 的初衷:<strong>找一個你真心想做的視覺作品,從最近的範例改起,先讓它動,再讓它好。</strong></p>
+        </div>
+      </div>
+
+    

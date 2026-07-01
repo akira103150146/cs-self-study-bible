@@ -1,0 +1,1166 @@
+<!--meta
+title: 貪婪演算法與最小生成樹
+description: 每一步都選「當下最好」的貪婪演算法:從找零錢的直覺出發,看它何時對、何時錯,如何用貪婪選擇性質與交換論證證明它正確。涵蓋活動選擇、分數背包、霍夫曼編碼,以及用 Prim 與 Kruskal 求最小生成樹,並看清 Dijkstra 也是一種貪婪。
+-->
+
+
+      <div class="eyebrow">第六部 · 演算法與資料結構</div>
+      <h1>貪婪演算法與最小生成樹</h1>
+      <p class="subtitle">人生不能重來,但有些問題,只要「每一步都選當下最好的」就能走到全域最佳。問題是——你怎麼知道哪些問題吃這一套?這一章,我們學會貪婪的威力,更要學會它的陷阱。</p>
+      <div class="byline">
+        <span class="tag">第 31 章</span>
+        <span>閱讀時間 ≈ 60 分鐘</span>
+        <span>難度:★★★★☆</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>什麼是貪婪演算法(greedy algorithm):每一步都做「當下看起來最好」的選擇,而且永不回頭</li>
+          <li>為什麼貪婪「找零錢」在某些幣值會出錯——以及這件事揭示的核心教訓:貪婪一定要證明</li>
+          <li>讓貪婪成立的兩個要件:貪婪選擇性質與最佳子結構,以及證明它們的利器「交換論證」</li>
+          <li>三個經典貪婪問題:活動選擇、分數背包、霍夫曼編碼(本章重頭戲),每個都附 Python 實作</li>
+          <li>最小生成樹(MST)是什麼,以及 Prim 與 Kruskal 兩種演算法如何用第 29 章的 heap 與 union-find 求出它</li>
+          <li>切割性質(cut property)如何一句話保證 Prim 與 Kruskal 都正確</li>
+          <li>為什麼第 30 章的 Dijkstra 其實也是貪婪,以及貪婪、動態規劃、分治三者該怎麼選</li>
+        </ul>
+      </div>
+
+      <h2>從找零錢說起</h2>
+      <p>
+        你在便利商店買了一瓶 33 元的飲料,給了店員一張一百元鈔票。店員要找你 67 元,她會怎麼做?
+        幾乎不用想:先抽一個 50 元硬幣、再一個 10 元、一個 5 元、最後兩個 1 元。
+        她在心裡執行的,是一個你我都會、卻從沒寫下來的演算法:
+      </p>
+      <blockquote>每次都拿出「不超過剩餘金額的最大面額」,拿到剩餘金額歸零為止。</blockquote>
+      <p>
+        這就是<strong>貪婪演算法(greedy algorithm)</strong>的精髓:面對一個要做一連串決定的問題,
+        在<em>每一步</em>都閉著眼睛選「當下看起來最划算」的那個選項,選了就不再反悔。
+        貪婪的英文 greedy 一點都沒有貶意——它形容的是這種「只顧眼前最大利益、絕不為了長遠而忍耐」的策略。
+      </p>
+      <p>
+        貪婪法之所以迷人,是因為它<strong>又快又簡單</strong>。它不像我們之後會學的動態規劃那樣,
+        要把所有可能性攤開來比較;它只是一路向前,做出一個個局部最優的選擇,
+        往往一次掃過資料(再加上一次排序)就解決問題。但這份簡單的背後,藏著一個危險的假設——
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">貪婪的賭注:局部最優 = 全域最優?</span>
+          <p>貪婪演算法賭的是一件事:<strong>一連串「當下最好」的選擇,加起來剛好就是「整體最好」的答案。</strong>
+          有時候這個賭注會贏(而且贏得漂亮),有時候卻會慘敗。一個合格的計算機科學家,
+          不只要會寫出貪婪解,更要能<strong>判斷這個賭注到底成不成立</strong>。這正是本章從頭到尾的主軸。</p>
+        </div>
+      </div>
+
+      <h2>貪婪不一定對:被找零錢出賣</h2>
+      <p>
+        我們先讓貪婪嘗一次敗績,而且就用開場那個「找零錢」的例子。先把店員的直覺寫成程式:
+      </p>
+      <pre><code class="language-python">def greedy_change(coins, amount):
+    coins = sorted(coins, reverse=True)   # 面額由大到小
+    result = []
+    for c in coins:
+        while amount &gt;= c:                 # 能塞就一直塞這個面額
+            amount -= c
+            result.append(c)
+    return result if amount == 0 else None
+
+print(greedy_change([1, 5, 10, 50], 67))   # [50, 10, 5, 1, 1] —— 5 枚,確實最佳
+print(greedy_change([1, 3, 4], 6))         # [4, 1, 1] —— 3 枚……真的最佳嗎?</code></pre>
+      <p>
+        第一行完全正確:用台幣的 1、5、10、50,要找 67 元,貪婪給出 5 枚硬幣,沒有更好的解。
+        但第二行,情況急轉直下。假設有一種貨幣只有 1、3、4 三種面額,要湊出 6 元。
+        貪婪先抓最大的 4,剩下 2;2 抓不到 3,只能抓兩個 1。結果是 <code>4 + 1 + 1</code>,三枚硬幣。
+        可是稍微想一下你就會發現:<code>3 + 3</code> 只要<strong>兩枚</strong>!貪婪輸了。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 520 230" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="260" y="26" font-size="14" font-weight="700" fill="#1f2328" text-anchor="middle">幣值 {1, 3, 4},要湊出 6 元</text>
+  <!-- greedy row -->
+  <text x="30" y="86" font-size="13" font-weight="700" fill="#b4541f">貪婪</text>
+  <circle cx="150" cy="80" r="26" fill="#f6e7dd" stroke="#b4541f" stroke-width="2"/><text x="150" y="86" font-size="16" font-weight="800" fill="#b4541f" text-anchor="middle">4</text>
+  <circle cx="215" cy="80" r="26" fill="#f6e7dd" stroke="#b4541f" stroke-width="2"/><text x="215" y="86" font-size="16" font-weight="800" fill="#b4541f" text-anchor="middle">1</text>
+  <circle cx="280" cy="80" r="26" fill="#f6e7dd" stroke="#b4541f" stroke-width="2"/><text x="280" y="86" font-size="16" font-weight="800" fill="#b4541f" text-anchor="middle">1</text>
+  <text x="360" y="86" font-size="14" font-weight="700" fill="#b4541f">= 3 枚 ✗</text>
+  <!-- optimal row -->
+  <text x="30" y="176" font-size="13" font-weight="700" fill="#2f6f6a">最佳</text>
+  <circle cx="150" cy="170" r="26" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/><text x="150" y="176" font-size="16" font-weight="800" fill="#2f6f6a" text-anchor="middle">3</text>
+  <circle cx="215" cy="170" r="26" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/><text x="215" y="176" font-size="16" font-weight="800" fill="#2f6f6a" text-anchor="middle">3</text>
+  <text x="360" y="176" font-size="14" font-weight="700" fill="#2f6f6a">= 2 枚 ✓</text>
+</svg>
+        <figcaption>圖 31-1:同一個問題,貪婪先搶最大面額 4,反而走進死路;真正的最佳解是兩個 3。貪婪的「當下最好」未必是「整體最好」。</figcaption>
+      </div>
+
+      <p>
+        有趣的是,台幣(以及美金、歐元等大多數真實貨幣)的面額是經過設計的,
+        貪婪在它們身上<em>永遠</em>正確;但 1、3、4 這種「非標準」幣值卻能讓它翻車。
+        這帶出本章最重要的一句話——
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">貪婪法的成敗,取決於問題本身,而非演算法本身</span>
+          <p>同一套「每步選最大」的策略,在某些幣值上是最佳解,在另一些幣值上卻錯得離譜。
+          所以你<strong>不能</strong>因為「貪婪解寫起來很順、跑起來很對」就相信它對。
+          每一個貪婪演算法,都<strong>必須</strong>附上一個「為什麼這樣選不會錯」的論證。
+          會寫貪婪解的人很多;能說清楚「為什麼這題可以貪婪」的人,才真正懂貪婪。</p>
+        </div>
+      </div>
+
+      <p>
+        順帶一提,那個「找零錢的真正最少硬幣數」其實是個典型的<strong>動態規劃</strong>問題——
+        因為貪婪靠不住,我們只好老老實實地把所有可能攤開來比較。這正是下一章(第 32 章)的主題。
+        這裡先給你一個能算出「真正最佳」的版本當對照,你會在第 32 章看懂它為什麼這樣寫:
+      </p>
+      <pre><code class="language-python">def min_coins(coins, amount):
+    INF = float("inf")
+    dp = [0] + [INF] * amount        # dp[x] = 湊出 x 元的最少硬幣數
+    for x in range(1, amount + 1):
+        for c in coins:
+            if c &lt;= x and dp[x - c] + 1 &lt; dp[x]:
+                dp[x] = dp[x - c] + 1
+    return dp[amount] if dp[amount] != INF else -1
+
+print(min_coins([1, 3, 4], 6))   # 2 (= 3 + 3),而貪婪卻給 3</code></pre>
+
+      <h2>貪婪為什麼會對?兩個要件</h2>
+      <p>
+        既然貪婪會錯,那我們得知道:一個問題要滿足什麼條件,貪婪才保證正確?
+        答案有兩個要件,缺一不可。它們聽起來抽象,但其實都很直覺。
+      </p>
+
+      <h3>要件一:貪婪選擇性質</h3>
+      <p>
+        <strong>貪婪選擇性質(greedy-choice property)</strong>是說:<em>存在一個最佳解,包含了我們的第一個貪婪選擇。</em>
+        換句話說,你大膽選下「當下最好」的那一步,不會因此把通往最佳解的路給堵死——
+        總有一個全域最佳解,願意「接納」你這個選擇。
+      </p>
+      <p>
+        這正是找零錢翻車的地方:在幣值 {1, 3, 4} 下,貪婪選了 4,但<strong>沒有任何</strong>湊出 6 的最佳解包含 4
+        (唯一的最佳解是 3 + 3)。貪婪選擇性質不成立,於是貪婪就錯了。
+      </p>
+
+      <h3>要件二:最佳子結構</h3>
+      <p>
+        <strong>最佳子結構(optimal substructure)</strong>是說:<em>一個問題的最佳解,內部包含了它子問題的最佳解。</em>
+        當你做完第一個貪婪選擇後,剩下的會變成一個「規模更小、長得一模一樣」的問題;
+        而只要你把這個小問題也解到最佳,接回去就是大問題的最佳解。
+      </p>
+      <p>
+        這個性質讓貪婪能夠「做一個選擇 → 縮小問題 → 再做一個選擇 → 再縮小……」一路遞推下去。
+        (你會發現,最佳子結構也是動態規劃的必要條件——兩種範式都靠它。差別在於:
+        貪婪<em>當機立斷</em>只試一個選擇,動態規劃則<em>謹慎地</em>把所有選擇都試過再挑最好。)
+      </p>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">交換論證:證明貪婪正確的萬用利器</span>
+          <p>要證明「貪婪選擇性質」成立,最常用的招式叫<strong>交換論證(exchange argument)</strong>,套路如下:</p>
+          <ul>
+            <li>假設有某個最佳解 $O$,而它<em>沒有</em>採用我們的貪婪選擇 $g$。</li>
+            <li>動手把 $O$ 裡的某個元素<strong>換成</strong> $g$,得到一個新解 $O'$。</li>
+            <li>證明這個交換<strong>不會讓答案變差</strong>($O'$ 至少和 $O$ 一樣好)。</li>
+          </ul>
+          <p>既然「把 $O$ 改成包含 $g$」不會變差,那「包含貪婪選擇」的解就至少和最佳解一樣好——
+          貪婪選擇性質於是成立。這套「拿任意最佳解來改造」的思路,接下來會在好幾個證明裡出現,請記住它。</p>
+        </div>
+      </div>
+
+      <h2>經典貪婪一:活動選擇</h2>
+      <p>
+        理論講完,該看貪婪<em>大顯身手</em>了。第一個經典問題,叫<strong>活動選擇(activity selection)</strong>,
+        又叫<strong>區間排程(interval scheduling)</strong>。
+      </p>
+      <p>
+        想像你管理一間只有一個的會議室,今天有一堆活動申請,每個活動都有固定的開始與結束時間。
+        同一時間只能辦一場,兩場時間若重疊就不能都接。你的目標是:<strong>排出最多場數的活動</strong>
+        (注意,是「場數」最多,不是「總時長」最多)。該怎麼選?
+      </p>
+      <p>
+        你或許會想到幾種貪婪策略:「先選最早開始的」?「先選時間最短的」?「先選衝突最少的」?
+        這些聽起來都有道理,但都可以被反例打敗。真正正確的策略簡單到不可思議:
+      </p>
+      <blockquote>把所有活動<strong>按結束時間由早到晚排序</strong>,每次都選「能接上、且結束最早」的那一個。</blockquote>
+
+      <div class="diagram">
+<svg viewBox="0 0 560 290" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="280" y="24" font-size="13" font-weight="700" fill="#1f2328" text-anchor="middle">六個活動,按結束時間排好(綠 = 選中,灰 = 因衝突跳過)</text>
+  <!-- bars: x(t)=60+t*50 -->
+  <!-- a[0,2] selected -->
+  <rect x="60" y="44" width="100" height="24" rx="5" fill="#2f6f6a"/><text x="110" y="61" font-size="12" fill="#fff" text-anchor="middle">a [0,2)</text>
+  <!-- c[3,4] selected -->
+  <rect x="210" y="78" width="50" height="24" rx="5" fill="#2f6f6a"/><text x="235" y="95" font-size="12" fill="#fff" text-anchor="middle">c [3,4)</text>
+  <!-- b[1,5] rejected -->
+  <rect x="110" y="112" width="200" height="24" rx="5" fill="#f0f1f3" stroke="#c8cdd3"/><text x="210" y="129" font-size="12" fill="#b5bcc4" text-anchor="middle">b [1,5) ✗</text>
+  <!-- d[3,6] rejected -->
+  <rect x="210" y="146" width="150" height="24" rx="5" fill="#f0f1f3" stroke="#c8cdd3"/><text x="285" y="163" font-size="12" fill="#b5bcc4" text-anchor="middle">d [3,6) ✗</text>
+  <!-- e[5,7] selected -->
+  <rect x="310" y="180" width="100" height="24" rx="5" fill="#2f6f6a"/><text x="360" y="197" font-size="12" fill="#fff" text-anchor="middle">e [5,7)</text>
+  <!-- f[7,9] selected -->
+  <rect x="410" y="214" width="100" height="24" rx="5" fill="#2f6f6a"/><text x="460" y="231" font-size="12" fill="#fff" text-anchor="middle">f [7,9)</text>
+  <!-- time axis -->
+  <line x1="60" y1="258" x2="510" y2="258" stroke="#8a929b" stroke-width="1.5"/>
+  <g font-size="11" fill="#8a929b" text-anchor="middle">
+    <text x="60" y="276">0</text><text x="110" y="276">1</text><text x="160" y="276">2</text>
+    <text x="210" y="276">3</text><text x="260" y="276">4</text><text x="310" y="276">5</text>
+    <text x="360" y="276">6</text><text x="410" y="276">7</text><text x="460" y="276">8</text><text x="510" y="276">9</text>
+  </g>
+</svg>
+        <figcaption>圖 31-2:活動選擇。按結束時間掃描,貪婪選下 a、c、e、f 共四場;b 與 d 因為和已選的活動重疊而被跳過。每次都「最早收工」,就替後面留下最多空檔。</figcaption>
+      </div>
+
+      <p>程式短得驚人——核心就是一次排序加一次掃描:</p>
+      <pre><code class="language-python">def activity_selection(activities):
+    # activities:[(開始, 結束), ...]
+    activities.sort(key=lambda a: a[1])   # 1. 按「結束時間」排序
+    selected = []
+    last_finish = float("-inf")
+    for start, finish in activities:
+        if start &gt;= last_finish:           # 不和上一個選中的重疊
+            selected.append((start, finish))
+            last_finish = finish           # 更新「目前最晚的結束時間」
+    return selected
+
+acts = [(0, 2), (1, 5), (3, 4), (3, 6), (5, 7), (7, 9)]
+print(activity_selection(acts))
+# [(0, 2), (3, 4), (5, 7), (7, 9)] —— 共 4 場</code></pre>
+      <p>
+        排序是 $O(n \log n)$,掃描是 $O(n)$,所以整體 $O(n \log n)$。但更值得問的是:
+        <strong>為什麼「最早結束」這個貪婪選擇是對的?</strong>
+      </p>
+
+      <div class="callout note">
+        <div class="ico">🔁</div>
+        <div class="body">
+          <span class="c-title">交換論證:為什麼該選最早結束的活動</span>
+          <p>令所有活動中結束最早的是 $g$。我們證明:<strong>一定存在一個最佳解包含 $g$。</strong></p>
+          <p>隨便拿一個最佳解 $O$,把它裡面的活動也按結束時間排好,設第一個是 $a_1$。
+          因為 $g$ 是<em>全場最早結束</em>的,所以 $g$ 的結束時間 $\le a_1$ 的結束時間。
+          現在把 $O$ 裡的 $a_1$ <strong>換成 $g$</strong>:$g$ 結束得不比 $a_1$ 晚,所以它<em>絕不會</em>和 $O$ 中後面的活動衝突
+          (那些活動本來就排在 $a_1$ 結束之後)。換完後活動<em>數量不變</em>,所以新解 $O'$ 仍然是最佳解,而且包含 $g$。</p>
+          <p>這就證明了貪婪選擇性質。選完 $g$ 之後,剩下「在 $g$ 結束後才開始的活動」又是一個一模一樣的小問題(最佳子結構),
+          於是同樣的論證可以一路遞推到底。兩個要件都齊備,貪婪正確。</p>
+        </div>
+      </div>
+
+      <h2>經典貪婪二:分數背包</h2>
+      <p>
+        第二個經典問題是<strong>分數背包(fractional knapsack)</strong>。你是個闖進金庫的大盜,
+        背包最多裝得下 $W$ 公斤。金庫裡有好幾堆財寶,每一堆都有「總價值」和「總重量」,
+        而且——關鍵來了——這些財寶是<strong>可以切開的</strong>(金沙、香料、黃金粉),你可以只拿走某一堆的一部分。
+        怎麼裝才能讓背包裡的總價值最高?
+      </p>
+      <p>
+        貪婪策略呼之欲出:看哪一堆<strong>「每公斤最值錢」</strong>就先拿哪一堆。我們把這個「每公斤的價值」
+        $\dfrac{\text{價值}}{\text{重量}}$ 叫做<strong>CP 值</strong>(性價比)。把所有財寶按 CP 值由高到低排序,
+        貪心地一堆堆塞進背包;塞到最後背包快滿時,就把當前這一堆「切下剛好裝得下的比例」填滿它。
+      </p>
+      <pre><code class="language-python">def fractional_knapsack(items, capacity):
+    # items:[(價值, 重量), ...]
+    items.sort(key=lambda it: it[0] / it[1], reverse=True)  # 按 CP 值排序
+    total = 0.0
+    for value, weight in items:
+        if capacity &gt;= weight:
+            capacity -= weight
+            total += value                        # 整堆拿走
+        else:
+            total += value * (capacity / weight)  # 只拿裝得下的比例
+            break                                 # 背包滿了,結束
+    return total
+
+items = [(60, 10), (100, 20), (120, 30)]   # (價值, 重量)
+print(fractional_knapsack(items, 50))       # 240.0</code></pre>
+      <p>
+        為什麼這樣對?同樣是交換論證的味道:假設某個最佳解<em>沒有</em>把背包的空間優先給最高 CP 值的財寶,
+        那我們總能「抽掉一點低 CP 值的、換進等重的高 CP 值的」,在總重不變下讓總價值上升——
+        這跟「最佳解」的前提矛盾。所以最佳解一定是「CP 值越高越優先裝滿」,正是貪婪所做的。
+      </p>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">不能切開時,貪婪立刻崩潰:0/1 背包</span>
+          <p>把規則改一個字:財寶<strong>不能切開</strong>,每一堆只能「整堆拿」或「整堆不拿」——這就是惡名昭彰的
+          <strong>0/1 背包問題(0/1 knapsack)</strong>。同樣的資料 <code>[(60,10),(100,20),(120,30)]</code>、容量 50,
+          貪婪按 CP 值會拿走 (60,10) 和 (100,20),用掉 30 公斤、得到 160;
+          剩下的 20 公斤裝不下整堆 (120,30),又不能切,只好作罷。可是真正的最佳解是
+          (100,20)+(120,30),剛好 50 公斤、價值 <strong>220</strong>!貪婪在 0/1 背包上徹底失靈。</p>
+          <p>差別在哪?能切開時,「先用最高 CP 值填滿空間」永遠不吃虧(貪婪選擇性質成立);
+          不能切開時,一個「裝不滿的空隙」可能逼你放棄更好的組合,局部最優不再保證全域最優。
+          0/1 背包要用<strong>動態規劃</strong>才能正確解——這是第 32 章的重頭戲之一。同一個問題,只因一個「能不能切」的差異,
+          就從貪婪跨到了動態規劃,這個對比值得你牢牢記住。</p>
+        </div>
+      </div>
+
+      <h2>經典貪婪三:霍夫曼編碼(重頭戲)</h2>
+      <p>
+        現在來到本章最精彩的一段。<strong>霍夫曼編碼(Huffman coding)</strong>是一個既優雅、又每天在你身邊運轉的貪婪演算法
+        ——ZIP、PNG、JPEG、MP3 的壓縮裡,都有它的身影。它解決的問題是:<strong>如何用最少的位元數,把一段資料無損地編碼?</strong>
+      </p>
+
+      <h3>定長碼的浪費</h3>
+      <p>
+        假設一份檔案只用到六個字元 a、b、c、d、e、f。最直覺的做法是給每個字元一個固定長度的編碼。
+        六個字元需要 3 個位元($2^3 = 8 \ge 6$),例如 a=000、b=001、……、f=101。
+        如果檔案有 10 萬個字元,就要 30 萬個位元。
+      </p>
+      <p>
+        但這樣很浪費——因為字元出現的頻率天差地別。在很多文本裡,某些字元(像英文的 e、t)滿天飛,
+        某些(像 z、q)難得一見。霍夫曼的洞見是:<strong>讓常出現的字元用短碼,罕見的字元用長碼</strong>,
+        平均下來就能省下大量位元。這叫<strong>變長編碼(variable-length code)</strong>。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">前綴碼:變長碼怎麼「斷句」?</span>
+          <p>變長碼有個麻煩:如果 a=0、b=01,那收到 <code>01</code> 時,你怎麼知道是「b」還是「a 接著某個以 1 開頭的字」?
+          霍夫曼用<strong>前綴碼(prefix code,又稱前綴自由碼)</strong>解決:規定<em>任何字元的編碼,都不是另一個字元編碼的開頭</em>。
+          這樣解碼時從左到右讀,一旦湊出某個字元的完整編碼,就能<strong>毫不猶豫</strong>地斷句,不會有歧義。
+          霍夫曼樹天生就保證了這個性質——因為所有字元都掛在<strong>葉節點</strong>,沒有任何字元在另一個字元的「路徑上」。</p>
+        </div>
+      </div>
+
+      <h3>霍夫曼的貪婪建樹</h3>
+      <p>
+        霍夫曼把字元放到一棵二元樹的葉節點上,從根走到某葉的路徑(向左記 0、向右記 1)就是那個字元的編碼。
+        路徑越短 = 編碼越短,所以我們希望<strong>頻率高的字元離根越近</strong>。問題變成:怎麼建出這棵最佳的樹?
+      </p>
+      <p>
+        貪婪策略美得像一首詩:<strong>每次都把目前「頻率最小的兩個」節點合併成一個新節點</strong>
+        (新節點的頻率是兩者之和),放回去,重複到只剩一個節點為止——那就是樹根。
+        想想看,頻率最小的兩個字元,最不怕被放到樹的最深處(它們很少出現,編碼長一點無所謂),
+        所以先把它們配成一對、沉到底,正是最划算的安排。
+      </p>
+      <p>
+        而「每次取出最小的兩個」這個動作,正是<strong>最小堆(min-heap / 優先佇列)</strong>的拿手好戲
+        ——你在第 29 章已經學過它。我們用 Python 內建的 <code>heapq</code> 來實作:
+      </p>
+      <pre><code class="language-python">import heapq
+
+def build_huffman(freqs):
+    # freqs: dict,例如 {"a": 5, "b": 9, ...}
+    # 堆中元素為 (頻率, 流水號, 節點);節點是字串(葉)或 (左, 右) 元組(內部)
+    heap = [(f, i, ch) for i, (ch, f) in enumerate(freqs.items())]
+    heapq.heapify(heap)
+    seq = len(heap)                       # 流水號:打破頻率相同時的比較僵局
+    while len(heap) &gt; 1:
+        f1, _, n1 = heapq.heappop(heap)   # 最小
+        f2, _, n2 = heapq.heappop(heap)   # 次小
+        heapq.heappush(heap, (f1 + f2, seq, (n1, n2)))   # 合併後放回
+        seq += 1
+    _, _, root = heap[0]
+
+    codes = {}                            # 走訪樹,收集每個字元的 0/1 編碼
+    def walk(node, prefix):
+        if isinstance(node, str):         # 葉節點:這就是一個字元
+            codes[node] = prefix or "0"   # 只有一個字元時的邊界情況
+        else:
+            walk(node[0], prefix + "0")   # 左:0
+            walk(node[1], prefix + "1")   # 右:1
+    walk(root, "")
+    return codes
+
+freqs = {"a": 5, "b": 9, "c": 12, "d": 13, "e": 16, "f": 45}
+codes = build_huffman(freqs)
+for ch in sorted(codes):
+    print(ch, codes[ch])</code></pre>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">那個「流水號」是什麼把戲?</span>
+          <p>堆會用元組的第一個元素(頻率)來排序。但如果兩個節點頻率相同,Python 會接著比第二個元素;
+          而我們的「節點」可能是字串、也可能是元組,兩者<strong>無法互相比較</strong>,程式會當掉。
+          所以我們塞進一個永遠遞增的<strong>流水號 <code>seq</code></strong> 當第二欄:頻率相同時就比流水號,
+          保證任何時候都比得出大小,根本輪不到去比第三欄的節點。這是用 <code>heapq</code> 放置複雜物件時的常用技巧。</p>
+        </div>
+      </div>
+
+      <p>用上面那組經典頻率(取自演算法教科書 CLRS),一步步合併,會長出這棵樹:</p>
+
+      <div class="diagram">
+<svg viewBox="0 0 640 410" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- edges -->
+  <g stroke="#8a929b" stroke-width="2">
+    <line x1="300" y1="40" x2="160" y2="120"/>
+    <line x1="300" y1="40" x2="440" y2="120"/>
+    <line x1="430" y1="120" x2="350" y2="200"/>
+    <line x1="430" y1="120" x2="530" y2="200"/>
+    <line x1="350" y1="200" x2="310" y2="290"/>
+    <line x1="350" y1="200" x2="390" y2="290"/>
+    <line x1="530" y1="200" x2="470" y2="290"/>
+    <line x1="530" y1="200" x2="565" y2="290"/>
+    <line x1="470" y1="290" x2="438" y2="360"/>
+    <line x1="470" y1="290" x2="512" y2="360"/>
+  </g>
+  <!-- edge labels (0 = left, 1 = right) -->
+  <g font-size="12" font-weight="700" fill="#b4541f" text-anchor="middle">
+    <text x="218" y="78">0</text><text x="382" y="78">1</text>
+    <text x="382" y="162">0</text><text x="488" y="162">1</text>
+    <text x="320" y="248">0</text><text x="378" y="248">1</text>
+    <text x="490" y="248">0</text><text x="556" y="248">1</text>
+    <text x="446" y="328">0</text><text x="500" y="328">1</text>
+  </g>
+  <!-- internal nodes (circles) -->
+  <g font-size="13" font-weight="700" text-anchor="middle">
+    <circle cx="300" cy="40" r="21" fill="#b4541f"/><text x="300" y="45" fill="#fff">100</text>
+    <circle cx="430" cy="120" r="20" fill="#c4733f"/><text x="430" y="125" fill="#fff">55</text>
+    <circle cx="350" cy="200" r="19" fill="#c4733f"/><text x="350" y="205" fill="#fff">25</text>
+    <circle cx="530" cy="200" r="19" fill="#c4733f"/><text x="530" y="205" fill="#fff">30</text>
+    <circle cx="470" cy="290" r="18" fill="#c4733f"/><text x="470" y="295" fill="#fff">14</text>
+  </g>
+  <!-- leaves (rounded rects) -->
+  <g font-size="13" font-weight="800" text-anchor="middle">
+    <rect x="134" y="100" width="52" height="40" rx="7" fill="#2f6f6a"/><text x="160" y="118" fill="#fff">f</text><text x="160" y="133" fill="#cfe6e2" font-size="11">45</text>
+    <rect x="285" y="270" width="50" height="40" rx="7" fill="#2f6f6a"/><text x="310" y="288" fill="#fff">c</text><text x="310" y="303" fill="#cfe6e2" font-size="11">12</text>
+    <rect x="365" y="270" width="50" height="40" rx="7" fill="#2f6f6a"/><text x="390" y="288" fill="#fff">d</text><text x="390" y="303" fill="#cfe6e2" font-size="11">13</text>
+    <rect x="541" y="270" width="50" height="40" rx="7" fill="#2f6f6a"/><text x="566" y="288" fill="#fff">e</text><text x="566" y="303" fill="#cfe6e2" font-size="11">16</text>
+    <rect x="413" y="340" width="50" height="40" rx="7" fill="#2f6f6a"/><text x="438" y="358" fill="#fff">a</text><text x="438" y="373" fill="#cfe6e2" font-size="11">5</text>
+    <rect x="487" y="340" width="50" height="40" rx="7" fill="#2f6f6a"/><text x="512" y="358" fill="#fff">b</text><text x="512" y="373" fill="#cfe6e2" font-size="11">9</text>
+  </g>
+</svg>
+        <figcaption>圖 31-3:霍夫曼樹。合併順序為 a+b→14、c+d→25、14+e→30、25+30→55、f+55→100。最常出現的 f(45)離根最近,只要 1 個位元;最罕見的 a、b 沉到最深,各需 4 個位元。</figcaption>
+      </div>
+
+      <p>從根走到每個葉,就讀出它的前綴碼:</p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>字元</th><th>頻率</th><th>編碼</th><th>長度</th><th>位元數(頻率×長度)</th></tr></thead>
+        <tbody>
+          <tr><td>f</td><td>45</td><td><code>0</code></td><td>1</td><td>45</td></tr>
+          <tr><td>c</td><td>12</td><td><code>100</code></td><td>3</td><td>36</td></tr>
+          <tr><td>d</td><td>13</td><td><code>101</code></td><td>3</td><td>39</td></tr>
+          <tr><td>e</td><td>16</td><td><code>111</code></td><td>3</td><td>48</td></tr>
+          <tr><td>a</td><td>5</td><td><code>1100</code></td><td>4</td><td>20</td></tr>
+          <tr><td>b</td><td>9</td><td><code>1101</code></td><td>4</td><td>36</td></tr>
+          <tr><td colspan="4"><strong>霍夫曼總計</strong></td><td><strong>224</strong></td></tr>
+          <tr><td colspan="4">定長 3-bit 碼(100 個字元 × 3)</td><td>300</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>
+        霍夫曼把 300 位元壓到 224 位元,省下約 25%——而且<strong>完全無損</strong>,解碼能一字不差還原。
+        這就是為什麼它是無數壓縮格式的基礎構件。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">📡</div>
+        <div class="body">
+          <span class="c-title">和資訊理論的會合點</span>
+          <p>霍夫曼編碼的平均長度,逼近一個由<strong>資訊理論(information theory)</strong>給出的理論下限——
+          夏農(Claude Shannon)的<strong>熵(entropy)</strong> $H = -\sum_i p_i \log_2 p_i$。
+          熵衡量「一份資料平均每個符號至少需要幾個位元才能表示」;越「可預測」(頻率越不均)的資料,熵越低,壓得越扁。
+          霍夫曼是「每符號整數個位元」前提下的最佳前綴碼,而它和熵之間那一點點差距,
+          後來被算術編碼(arithmetic coding)等技術進一步抹平。資訊理論告訴你「壓縮的極限在哪」,
+          霍夫曼則告訴你「怎麼用一個漂亮的貪婪法逼近那個極限」。</p>
+        </div>
+      </div>
+
+      <h2>最小生成樹:把所有點用最省的線連起來</h2>
+      <p>
+        貪婪最華麗的舞台之一,是<strong>最小生成樹(minimum spanning tree, MST)</strong>。問題是這樣的:
+      </p>
+      <blockquote>給你一個<strong>連通、加權、無向</strong>的圖,選出一些邊,使得<strong>所有頂點都連在一起</strong>,
+      而且選中的<strong>邊權總和最小</strong>。</blockquote>
+      <p>
+        想像你要替一個社區的 $n$ 棟房子鋪設網路光纖,任兩棟之間鋪線都有不同的成本(距離、地形)。
+        你要讓每棟房子都連上網(整體連通),又想花最少的錢。答案就是這張圖的最小生成樹。
+      </p>
+      <p>
+        為什麼答案一定是「樹」?回憶第 15 章:樹是<strong>連通且無環</strong>的圖,$n$ 個頂點剛好 $n-1$ 條邊。
+        如果你選的邊裡出現了「環」,那環上隨便拆掉一條邊,所有點<em>依然連通</em>,總成本卻變小了——
+        所以最省的連法絕不會有環,必然是一棵橫跨所有頂點的樹,這就是「生成樹(spanning tree)」之名的由來。
+        而所有生成樹裡權重總和最小的那一棵,就是 MST。
+      </p>
+      <p>MST 的應用比你想的更廣:</p>
+      <ul>
+        <li><strong>網路 / 電路佈線</strong>:用最少的線材連通所有節點(這正是 MST 演算法最初被發明的動機)。</li>
+        <li><strong>聚類(clustering)</strong>:建出 MST 後,把權重最大的幾條邊「剪掉」,圖就自然斷成幾群——這是一種簡潔的分群法。</li>
+        <li><strong>近似求解難題</strong>:旅行推銷員問題(TSP)這類 NP 困難問題,常用 MST 當起點來做近似演算法。</li>
+      </ul>
+
+      <p>我們用下面這張 5 個頂點的小圖,貫穿接下來兩個演算法:</p>
+
+      <div class="diagram">
+<svg viewBox="0 0 520 330" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- non-MST edges (gray dashed) -->
+  <g stroke="#c8cdd3" stroke-width="2" stroke-dasharray="5 4">
+    <line x1="120" y1="70" x2="220" y2="170"/>   <!-- A-C 3 -->
+    <line x1="220" y1="170" x2="430" y2="150"/>  <!-- C-D 5 -->
+    <line x1="430" y1="150" x2="340" y2="280"/>  <!-- D-E 7 -->
+  </g>
+  <!-- MST edges (green thick) -->
+  <g stroke="#2f6f6a" stroke-width="4">
+    <line x1="120" y1="70" x2="300" y2="60"/>    <!-- A-B 2 -->
+    <line x1="300" y1="60" x2="220" y2="170"/>   <!-- B-C 1 -->
+    <line x1="300" y1="60" x2="430" y2="150"/>   <!-- B-D 4 -->
+    <line x1="220" y1="170" x2="340" y2="280"/>  <!-- C-E 6 -->
+  </g>
+  <!-- weight labels -->
+  <g font-size="12" font-weight="700" text-anchor="middle">
+    <rect x="198" y="55" width="22" height="18" rx="4" fill="#fff" stroke="#2f6f6a"/><text x="209" y="68" fill="#2f6f6a">2</text>
+    <rect x="249" y="104" width="22" height="18" rx="4" fill="#fff" stroke="#2f6f6a"/><text x="260" y="117" fill="#2f6f6a">1</text>
+    <rect x="354" y="96" width="22" height="18" rx="4" fill="#fff" stroke="#2f6f6a"/><text x="365" y="109" fill="#2f6f6a">4</text>
+    <rect x="269" y="216" width="22" height="18" rx="4" fill="#fff" stroke="#2f6f6a"/><text x="280" y="229" fill="#2f6f6a">6</text>
+    <rect x="159" y="111" width="22" height="18" rx="4" fill="#fff" stroke="#c8cdd3"/><text x="170" y="124" fill="#8a929b">3</text>
+    <rect x="314" y="151" width="22" height="18" rx="4" fill="#fff" stroke="#c8cdd3"/><text x="325" y="164" fill="#8a929b">5</text>
+    <rect x="374" y="206" width="22" height="18" rx="4" fill="#fff" stroke="#c8cdd3"/><text x="385" y="219" fill="#8a929b">7</text>
+  </g>
+  <!-- vertices -->
+  <g font-size="15" font-weight="800" text-anchor="middle">
+    <circle cx="120" cy="70" r="20" fill="#1f2328"/><text x="120" y="76" fill="#fff">A</text>
+    <circle cx="300" cy="60" r="20" fill="#1f2328"/><text x="300" y="66" fill="#fff">B</text>
+    <circle cx="220" cy="170" r="20" fill="#1f2328"/><text x="220" y="176" fill="#fff">C</text>
+    <circle cx="430" cy="150" r="20" fill="#1f2328"/><text x="430" y="156" fill="#fff">D</text>
+    <circle cx="340" cy="280" r="20" fill="#1f2328"/><text x="340" y="286" fill="#fff">E</text>
+  </g>
+</svg>
+        <figcaption>圖 31-4:一張加權無向圖。粗綠線是它的最小生成樹:A-B(2)、B-C(1)、B-D(4)、C-E(6),總權重 = 13。灰色虛線(A-C 3、C-D 5、D-E 7)雖然也連著點,但選了它們會更貴或製造出環。</figcaption>
+      </div>
+
+      <h3>切割性質:兩個演算法共同的靠山</h3>
+      <p>
+        在看演算法之前,先建立那個「為什麼貪婪選邊不會錯」的核心直覺。它叫<strong>切割性質(cut property)</strong>。
+      </p>
+      <p>
+        所謂一個<strong>切割(cut)</strong>,就是把所有頂點分成<em>互不相交的兩群</em>。
+        一條邊如果兩端分屬不同群,就說它<strong>橫跨</strong>這個切割。切割性質說:
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">切割性質(cut property)</span>
+          <p>對於<strong>任何</strong>一種把頂點分成兩群的切割,在所有「橫跨」這個切割的邊裡,
+          <strong>權重最小的那一條,一定屬於某個最小生成樹。</strong></p>
+          <p>直覺(又是交換論證):假設某個 MST 沒有用這條最輕的跨界邊 $e$,而是用了另一條較重的跨界邊 $e'$ 來連接兩群。
+          那我們把 $e$ 加進這棵樹——它會和 $e'$ 形成一個環;把環上那條較重的 $e'$ 拆掉,得到的仍是一棵生成樹,
+          但總權重<em>更小(或相等)</em>。既然能改得不更差,「包含最輕跨界邊」的 MST 必定存在。</p>
+        </div>
+      </div>
+
+      <div class="diagram">
+<svg viewBox="0 0 520 330" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- the cut curve -->
+  <path d="M370,10 C300,110 420,200 360,320" fill="none" stroke="#8b5cf6" stroke-width="2.5" stroke-dasharray="7 5"/>
+  <text x="380" y="28" font-size="12" font-weight="700" fill="#8b5cf6">切割</text>
+  <text x="150" y="320" font-size="12" fill="#8b5cf6" text-anchor="middle">左群 {A, B, C}</text>
+  <text x="460" y="60" font-size="12" fill="#8b5cf6" text-anchor="middle">右群 {D, E}</text>
+  <!-- crossing edges -->
+  <line x1="300" y1="60" x2="430" y2="150" stroke="#b4541f" stroke-width="4"/>            <!-- B-D 4 : min crossing -->
+  <line x1="220" y1="170" x2="430" y2="150" stroke="#c8cdd3" stroke-width="2"/>           <!-- C-D 5 -->
+  <line x1="220" y1="170" x2="340" y2="280" stroke="#c8cdd3" stroke-width="2"/>           <!-- C-E 6 -->
+  <!-- in-group edges (faint) -->
+  <g stroke="#e3e7ea" stroke-width="2">
+    <line x1="120" y1="70" x2="300" y2="60"/>
+    <line x1="300" y1="60" x2="220" y2="170"/>
+    <line x1="120" y1="70" x2="220" y2="170"/>
+    <line x1="430" y1="150" x2="340" y2="280"/>
+  </g>
+  <!-- weight labels on crossing edges -->
+  <g font-size="12" font-weight="700" text-anchor="middle">
+    <rect x="354" y="96" width="24" height="18" rx="4" fill="#fff" stroke="#b4541f"/><text x="366" y="109" fill="#b4541f">4</text>
+    <rect x="314" y="151" width="22" height="18" rx="4" fill="#fff" stroke="#c8cdd3"/><text x="325" y="164" fill="#8a929b">5</text>
+    <rect x="269" y="216" width="22" height="18" rx="4" fill="#fff" stroke="#c8cdd3"/><text x="280" y="229" fill="#8a929b">6</text>
+  </g>
+  <!-- vertices -->
+  <g font-size="15" font-weight="800" text-anchor="middle">
+    <circle cx="120" cy="70" r="20" fill="#2f6f6a"/><text x="120" y="76" fill="#fff">A</text>
+    <circle cx="300" cy="60" r="20" fill="#2f6f6a"/><text x="300" y="66" fill="#fff">B</text>
+    <circle cx="220" cy="170" r="20" fill="#2f6f6a"/><text x="220" y="176" fill="#fff">C</text>
+    <circle cx="430" cy="150" r="20" fill="#b4541f"/><text x="430" y="156" fill="#fff">D</text>
+    <circle cx="340" cy="280" r="20" fill="#b4541f"/><text x="340" y="286" fill="#fff">E</text>
+  </g>
+</svg>
+        <figcaption>圖 31-5:把頂點切成 {A,B,C} 與 {D,E} 兩群。橫跨切割的邊有三條:B-D(4)、C-D(5)、C-E(6)。其中最輕的 B-D(4) 必定能安全地放進 MST——這就是切割性質。Prim 與 Kruskal 不過是用不同方式,反覆套用這一條而已。</figcaption>
+      </div>
+
+      <h3>Prim 演算法:從一點長出整棵樹</h3>
+      <p>
+        <strong>Prim 演算法</strong>的想法像吹氣球:從任意一個頂點開始,把它當成一棵「正在生長的小樹」。
+        接著反覆做同一件事——<strong>在所有「一端在樹內、一端在樹外」的邊裡,挑最輕的那條,把它連同新頂點吸收進樹</strong>
+        ——直到所有頂點都進來。
+      </p>
+      <p>
+        你看出來了嗎?「樹內 vs 樹外」正是一個切割,而 Prim 每一步選的就是這個切割上最輕的跨界邊——
+        切割性質直接保證了每一步都對。怎麼「快速找出最輕的跨界邊」?又是<strong>優先佇列(heap)</strong>登場
+        (第 29 章):把所有「從樹邊緣通往外界」的候選邊丟進最小堆,每次彈出最輕的即可。
+      </p>
+      <pre><code class="language-python">import heapq
+
+def prim(n, graph, start=0):
+    # graph:鄰接串列 {u: [(鄰居 v, 邊權 w), ...]}
+    visited = [False] * n
+    heap = [(0, start, -1)]      # (邊權, 抵達的點, 從哪個點來);起點來自 -1
+    mst, total = [], 0
+    while heap:
+        w, u, frm = heapq.heappop(heap)   # 目前最輕的跨界邊
+        if visited[u]:
+            continue                       # u 已在樹內,跳過
+        visited[u] = True
+        if frm != -1:
+            mst.append((frm, u, w))        # 把這條邊收進 MST
+            total += w
+        for v, wt in graph[u]:             # 把 u 通往外界的邊加入候選
+            if not visited[v]:
+                heapq.heappush(heap, (wt, v, u))
+    return mst, total
+
+graph = {
+    0: [(1, 2), (2, 3)],                   # A: 連 B(2)、C(3)
+    1: [(0, 2), (2, 1), (3, 4)],           # B
+    2: [(0, 3), (1, 1), (3, 5), (4, 6)],   # C
+    3: [(1, 4), (2, 5), (4, 7)],           # D
+    4: [(2, 6), (3, 7)],                   # E
+}
+print(prim(5, graph, 0))
+# ([(0, 1, 2), (1, 2, 1), (1, 3, 4), (2, 4, 6)], 13)</code></pre>
+      <p>
+        從 A(0)出發,Prim 依序吞下 A-B(2)、B-C(1)、B-D(4)、C-E(6),總權重 13,和圖 31-4 完全吻合。
+        用二元堆實作時,每條邊最多進出堆一次,複雜度是 $O(E \log V)$($E$ 邊數、$V$ 頂點數)。
+        Prim 特別適合<strong>稠密圖</strong>(邊很多時)。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">📜</div>
+        <div class="body">
+          <span class="c-title">一個被重新發明三次的演算法</span>
+          <p>這個演算法最早由捷克數學家 Vojtěch Jarník 在 1930 年提出,1957 年 Robert Prim、
+          1959 年 Edsger Dijkstra 又各自獨立重新發現它——所以它有時也叫 Jarník–Prim 演算法。
+          有趣的是,Prim 演算法和我們等一下要回顧的 Dijkstra 最短路徑演算法,結構幾乎是雙胞胎,
+          這絕非巧合:它們都是「從一點長出、每次貪婪地吸收最近的新頂點」的同一個家族。</p>
+        </div>
+      </div>
+
+      <h3>Kruskal 演算法:把最便宜的邊一條條接起來</h3>
+      <p>
+        <strong>Kruskal 演算法</strong>換了個角度,完全不管「從哪裡長出來」,而是<strong>盯著邊看</strong>:
+        把所有邊<strong>按權重由小到大排序</strong>,然後一條條檢視——<strong>只要這條邊不會和已選的邊形成環,就收下它</strong>;
+        會成環就丟棄。收滿 $n-1$ 條邊,MST 就完成了。
+      </p>
+      <p>
+        它一開始把每個頂點都看成一座孤島(一個個獨立的小森林),每收一條邊就把兩座島接成一塊。
+        關鍵問題是:<strong>怎麼快速判斷「加這條邊會不會成環」?</strong>答案是——這條邊的兩端如果<em>本來就已經連在同一塊</em>,
+        再連就會成環。而「快速判斷兩個元素在不在同一群、以及合併兩群」,正是第 29 章<strong>union-find(並查集)</strong>的看家本領!
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 560 150" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="280" y="22" font-size="13" font-weight="700" fill="#1f2328" text-anchor="middle">把七條邊按權重排好,逐一裁決</text>
+  <g font-size="13" text-anchor="middle">
+    <!-- weight 1 BC accept -->
+    <rect x="30"  y="44" width="64" height="44" rx="7" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/><text x="62"  y="64" font-weight="800" fill="#2f6f6a">1</text><text x="62"  y="80" font-size="11" fill="#2f6f6a">B-C ✓</text>
+    <rect x="104" y="44" width="64" height="44" rx="7" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/><text x="136" y="64" font-weight="800" fill="#2f6f6a">2</text><text x="136" y="80" font-size="11" fill="#2f6f6a">A-B ✓</text>
+    <rect x="178" y="44" width="64" height="44" rx="7" fill="#f0f1f3" stroke="#c8cdd3"/><text x="210" y="64" font-weight="800" fill="#b5bcc4">3</text><text x="210" y="80" font-size="11" fill="#b5bcc4">A-C ✗環</text>
+    <rect x="252" y="44" width="64" height="44" rx="7" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/><text x="284" y="64" font-weight="800" fill="#2f6f6a">4</text><text x="284" y="80" font-size="11" fill="#2f6f6a">B-D ✓</text>
+    <rect x="326" y="44" width="64" height="44" rx="7" fill="#f0f1f3" stroke="#c8cdd3"/><text x="358" y="64" font-weight="800" fill="#b5bcc4">5</text><text x="358" y="80" font-size="11" fill="#b5bcc4">C-D ✗環</text>
+    <rect x="400" y="44" width="64" height="44" rx="7" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/><text x="432" y="64" font-weight="800" fill="#2f6f6a">6</text><text x="432" y="80" font-size="11" fill="#2f6f6a">C-E ✓</text>
+    <rect x="474" y="44" width="64" height="44" rx="7" fill="#f0f1f3" stroke="#c8cdd3"/><text x="506" y="64" font-weight="800" fill="#b5bcc4">7</text><text x="506" y="80" font-size="11" fill="#b5bcc4">D-E —</text>
+  </g>
+  <text x="280" y="118" font-size="12" fill="#8a929b" text-anchor="middle">收下 1、2、4、6 共 4 條(= 頂點數 5 − 1),總權重 13;遇到會成環的就跳過</text>
+</svg>
+        <figcaption>圖 31-6:Kruskal 的運作。邊權排序後,B-C(1)、A-B(2) 先入選;A-C(3) 會讓 A、B、C 成環故跳過;B-D(4) 入選;C-D(5) 成環跳過;C-E(6) 入選。湊滿 4 條邊即停止。</figcaption>
+      </div>
+
+      <pre><code class="language-python">def find(parent, x):
+    while parent[x] != x:
+        parent[x] = parent[parent[x]]   # 路徑壓縮:順手把樹壓扁
+        x = parent[x]
+    return x
+
+def union(parent, rank, a, b):
+    ra, rb = find(parent, a), find(parent, b)
+    if ra == rb:
+        return False        # 已在同一群 → 這條邊會成環,拒絕
+    if rank[ra] &lt; rank[rb]: # 按秩合併:矮樹掛到高樹下
+        ra, rb = rb, ra
+    parent[rb] = ra
+    if rank[ra] == rank[rb]:
+        rank[ra] += 1
+    return True
+
+def kruskal(n, edges):
+    # edges:[(權重, u, v), ...]
+    edges.sort()                        # 按權重由小到大
+    parent = list(range(n))
+    rank = [0] * n
+    mst, total = [], 0
+    for w, u, v in edges:
+        if union(parent, rank, u, v):   # 不成環才收下
+            mst.append((u, v, w))
+            total += w
+    return mst, total
+
+edges = [(2, 0, 1), (3, 0, 2), (1, 1, 2), (4, 1, 3),
+         (5, 2, 3), (6, 2, 4), (7, 3, 4)]
+print(kruskal(5, edges))
+# ([(1, 2, 1), (0, 1, 2), (1, 3, 4), (2, 4, 6)], 13)</code></pre>
+      <p>
+        排序邊是 $O(E \log E)$,而搭配「路徑壓縮 + 按秩合併」的 union-find,後續每次操作幾乎是常數時間,
+        所以 Kruskal 整體也是 $O(E \log E)$,主要成本在排序。它特別適合<strong>稀疏圖</strong>。
+        每一條被收下的邊,都正好是某個切割上最輕的跨界邊(它連接了兩個原本不相連的群),
+        所以——切割性質再次保證了 Kruskal 的正確性。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">同一個道理,兩種長相</span>
+          <p>Prim 與 Kruskal 看似完全不同——一個「從點長出」、一個「把邊接起來」——但它們其實是<strong>同一個貪婪原理</strong>
+          (切割性質)的兩種具現。Prim 維護一個「不斷長大的單一切割」(樹內 vs 樹外);
+          Kruskal 則在「許多小森林」之間,每次都挑能安全合併兩座森林的最輕邊。
+          兩者都靠你在第 29 章學的資料結構撐腰:Prim 靠 heap,Kruskal 靠 union-find。
+          這正是「資料結構是演算法的基石」最漂亮的例證。</p>
+        </div>
+      </div>
+
+      <h2>原來 Dijkstra 也是貪婪</h2>
+      <p>
+        如果你讀過第 30 章的<strong>Dijkstra 最短路徑演算法</strong>,現在回頭看,會有種恍然大悟的感覺:
+        它根本就是個貪婪演算法。Dijkstra 維護一群「已確定最短距離」的頂點,每一步都<strong>貪婪地</strong>
+        從尚未確定的頂點裡,挑出「目前距離起點最近」的那一個,拍板定案它的最短距離,再用它去鬆弛(relax)鄰居。
+      </p>
+      <p>
+        它和 Prim 像得驚人:兩者都從一點出發、都用優先佇列、都「每次吸收一個最近的新頂點」。
+        唯一的差別在<strong>「最近」的定義</strong>:
+      </p>
+      <ul>
+        <li><strong>Prim</strong> 比的是「這個頂點到<em>已建好的樹</em>的單一邊權」——只看一步。</li>
+        <li><strong>Dijkstra</strong> 比的是「這個頂點到<em>起點</em>的累積總距離」——看從起點走到這裡的整條路。</li>
+      </ul>
+      <p>
+        為什麼 Dijkstra 的貪婪是對的?同樣有它的「交換論證式」證明:第一個被確定的頂點,
+        因為它是離起點最近的,任何「繞路」去它的路徑都只會更長,所以直達就是最短——當下的貪婪選擇,
+        正是全域最佳的一部分。(也正因如此,Dijkstra 在<strong>負權邊</strong>下會失效:有了負權,「繞遠路反而更短」變得可能,
+        貪婪選擇性質就崩了。這時得改用第 30 章提到的 Bellman–Ford。)
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">貪婪是一種「思想」,不是一個「演算法」</span>
+          <p>活動選擇、分數背包、霍夫曼、Prim、Kruskal、Dijkstra……表面是六個不同的演算法,
+          骨子裡卻是<strong>同一種思考方式</strong>:把大問題拆成一連串選擇,每一步義無反顧地選當下最好的,
+          並用一個論證(通常是交換論證或切割性質)保證「局部最優累加起來就是全域最優」。
+          學會辨認「這題能不能貪婪、為什麼能」,比背下任何單一演算法都重要。</p>
+        </div>
+      </div>
+
+      <h2>貪婪、動態規劃、分治:該用哪一個?</h2>
+      <p>
+        到這裡,你手上已經有三種「把大問題拆成小問題」的演算法範式了。它們常被放在一起比較,因為三者都依賴
+        <strong>最佳子結構</strong>,卻用截然不同的態度面對「選擇」:
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>範式</th><th>核心做法</th><th>子問題關係</th><th>面對「選擇」的態度</th><th>代表例子</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>分治</strong><br>(divide &amp; conquer)</td>
+            <td>把問題切成幾個<em>獨立</em>的子問題,各自遞迴解完再合併</td>
+            <td>子問題<strong>互不重疊</strong></td>
+            <td>不需要做選擇,只是「分而治之」</td>
+            <td>合併排序、快速排序、二分搜尋</td>
+          </tr>
+          <tr>
+            <td><strong>動態規劃</strong><br>(DP)</td>
+            <td>把<em>所有</em>選擇都試過,記下子問題答案避免重算,再挑最好的</td>
+            <td>子問題<strong>大量重疊</strong></td>
+            <td>謹慎:每一步都把所有選項算過再決定</td>
+            <td>0/1 背包、最短編輯距離、找零最少硬幣</td>
+          </tr>
+          <tr>
+            <td><strong>貪婪</strong><br>(greedy)</td>
+            <td>每一步只做<em>一個</em>當下最好的選擇,選了不回頭</td>
+            <td>子問題不重疊(做完選擇就只剩一個)</td>
+            <td>果斷:當機立斷,絕不反悔</td>
+            <td>活動選擇、霍夫曼、MST、Dijkstra</td>
+          </tr>
+        </tbody>
+      </table>
+      </div>
+      <p>
+        一個實用的判斷流程:先看子問題會不會<strong>重疊</strong>——不重疊、能直接合併,那是<strong>分治</strong>;
+        會重疊,就進入 DP / 貪婪的地盤。接著問自己:<strong>能不能證明「每步只挑一個局部最優」就保證全域最優?</strong>
+        能(找得到交換論證或類似的保證)就用又快又省的<strong>貪婪</strong>;不能,就退而求其次,用<strong>動態規劃</strong>
+        把所有可能性穩穩地算過一遍。記住找零錢與背包的教訓:<strong>貪婪錯了往往悄無聲息——它照樣給你一個「看起來合理」的答案,
+        卻不是最佳解。</strong>所以「能不能貪婪」這個問題,永遠值得你停下來認真證一證。動態規劃的完整威力,下一章見。
+      </p>
+
+      <h2>練習</h2>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 31.1 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>實作活動選擇 <code>activity_selection(activities)</code>:輸入一串 <code>(開始, 結束)</code>,
+          回傳能排進同一個會議室、互不重疊的<strong>最多</strong>活動清單。用
+          <code>[(1,4),(3,5),(0,6),(5,7),(3,9),(5,9),(6,10),(8,11),(8,12),(2,14),(12,16)]</code> 測試,
+          看看你選出了幾場。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">def activity_selection(activities):
+    activities.sort(key=lambda a: a[1])   # 按結束時間排序
+    selected = []
+    last_finish = float("-inf")
+    for start, finish in activities:
+        if start &gt;= last_finish:
+            selected.append((start, finish))
+            last_finish = finish
+    return selected
+
+acts = [(1,4),(3,5),(0,6),(5,7),(3,9),(5,9),(6,10),(8,11),(8,12),(2,14),(12,16)]
+print(activity_selection(acts))
+# [(1, 4), (5, 7), (8, 11), (12, 16)] —— 共 4 場</code></pre>
+              <p>關鍵只有兩件事:<strong>先按結束時間排序</strong>,以及用 <code>last_finish</code> 記住「目前最晚的收工時間」,
+              只接 <code>start &gt;= last_finish</code> 的活動。其他憑直覺的策略(先選最早開始、先選最短)都會被反例打敗,
+              唯獨「最早結束」能用交換論證證明最佳(見練習 31.7)。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 31.2 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>找出一組<strong>不同於</strong>本章 {1, 3, 4} 的硬幣面額,使得「每次拿最大面額」的貪婪找零會給出
+          <em>非最佳</em>的結果。明確寫出面額、目標金額、貪婪的答案、以及真正的最佳答案,並解釋貪婪錯在哪。
+          (加分:寫個程式,在 1~30 元範圍內自動找出所有「貪婪會出錯」的金額。)</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>一個經典反例:面額 <strong>{1, 6, 10}</strong>,目標 <strong>12</strong>。貪婪先拿 10,剩 2,再拿兩個 1
+              ,共 <code>10+1+1</code> 三枚;但最佳是 <code>6+6</code>,只要兩枚。貪婪敗在「貪心搶了 10,反而錯過能整除的 6+6」
+              ——這組面額不滿足貪婪選擇性質。用程式把貪婪和 DP 對照,自動掃出所有出錯金額:</p>
+              <pre><code class="language-python">def greedy_count(coins, amount):
+    cnt = 0
+    for c in sorted(coins, reverse=True):
+        cnt += amount // c
+        amount %= c
+    return cnt if amount == 0 else None
+
+def min_coins(coins, amount):              # DP:真正的最少硬幣數
+    INF = float("inf")
+    dp = [0] + [INF] * amount
+    for x in range(1, amount + 1):
+        for c in coins:
+            if c &lt;= x:
+                dp[x] = min(dp[x], dp[x - c] + 1)
+    return dp[amount] if dp[amount] != INF else None
+
+coins = [1, 6, 10]
+for amt in range(1, 31):
+    g, m = greedy_count(coins, amt), min_coins(coins, amt)
+    if g != m:
+        print(f"金額 {amt}:貪婪 {g} 枚,最佳 {m} 枚 ← 貪婪出錯")
+# 金額 12:貪婪 3 枚,最佳 2 枚 ← 貪婪出錯
+# 金額 18:貪婪 4 枚,最佳 3 枚 ← 貪婪出錯 ...等</code></pre>
+              <p>這題的精神是:<strong>貪婪錯起來不會報錯</strong>,它照樣回傳一個看似合理的答案。
+              唯有拿一個保證正確的方法(這裡是 DP)來對照,才抓得到它的破綻。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 31.3 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>實作分數背包 <code>fractional_knapsack(items, capacity)</code>,<code>items</code> 為
+          <code>(價值, 重量)</code> 的清單,物品可以切開拿。回傳能達到的最大總價值。
+          用 <code>[(60,10),(100,20),(120,30)]</code>、容量 50 測試(答案 240.0)。
+          進階:同時回傳每件物品「拿了多少比例」。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">def fractional_knapsack(items, capacity):
+    items = sorted(items, key=lambda it: it[0] / it[1], reverse=True)
+    total = 0.0
+    plan = []                                  # 記錄每件拿了多少比例
+    for value, weight in items:
+        if capacity &gt;= weight:
+            capacity -= weight
+            total += value
+            plan.append((value, weight, 1.0))
+        elif capacity &gt; 0:
+            frac = capacity / weight
+            total += value * frac
+            plan.append((value, weight, round(frac, 3)))
+            capacity = 0
+        else:
+            plan.append((value, weight, 0.0))
+    return total, plan
+
+value, plan = fractional_knapsack([(60,10),(100,20),(120,30)], 50)
+print(value)   # 240.0
+print(plan)    # [(60,10,1.0), (100,20,1.0), (120,30,0.667)]</code></pre>
+              <p>核心是 <code>key=lambda it: it[0]/it[1]</code> 這個 CP 值排序,再貪婪地塞;最後一件裝不下整件時,
+              切下 <code>capacity/weight</code> 的比例填滿。因為物品可切,「優先填高 CP 值」永遠不吃虧,所以貪婪正確。
+              對照之下,把規則改成不能切(0/1 背包),這個策略就會失靈,得改用第 32 章的動態規劃。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 31.4 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>用最小堆實作霍夫曼編碼。寫 <code>build_huffman(freqs)</code> 回傳每個字元的 0/1 編碼,
+          再寫一個函式算出「用這套編碼壓縮後的總位元數」,並和「定長碼」比較省了多少。
+          用 <code>{"a":5,"b":9,"c":12,"d":13,"e":16,"f":45}</code> 測試。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">import heapq, math
+
+def build_huffman(freqs):
+    heap = [(f, i, ch) for i, (ch, f) in enumerate(freqs.items())]
+    heapq.heapify(heap)
+    seq = len(heap)
+    while len(heap) &gt; 1:
+        f1, _, n1 = heapq.heappop(heap)
+        f2, _, n2 = heapq.heappop(heap)
+        heapq.heappush(heap, (f1 + f2, seq, (n1, n2)))
+        seq += 1
+    _, _, root = heap[0]
+    codes = {}
+    def walk(node, prefix):
+        if isinstance(node, str):
+            codes[node] = prefix or "0"
+        else:
+            walk(node[0], prefix + "0")
+            walk(node[1], prefix + "1")
+    walk(root, "")
+    return codes
+
+freqs = {"a":5, "b":9, "c":12, "d":13, "e":16, "f":45}
+codes = build_huffman(freqs)
+
+huff_bits  = sum(freqs[ch] * len(codes[ch]) for ch in freqs)
+fixed_len  = math.ceil(math.log2(len(freqs)))      # 每字元需要的定長位元數
+fixed_bits = sum(freqs.values()) * fixed_len
+
+for ch in sorted(codes):
+    print(ch, codes[ch])
+print("霍夫曼總位元:", huff_bits)                  # 224
+print("定長碼總位元:", fixed_bits)                 # 300
+print(f"省下 {(1 - huff_bits/fixed_bits)*100:.1f}%")  # 省下 25.3%</code></pre>
+              <p>每次合併「最小的兩個」靠 <code>heapq</code> 一行搞定;那個遞增的 <code>seq</code> 是為了在頻率相同時有東西可比,
+              避免去比較無法比較的節點(細節見內文的提示框)。注意:你跑出來的<em>個別編碼字串</em>可能和內文表格略有差異
+              (取決於相同頻率時誰先被取出、以及左右子樹的順序),但<strong>總位元數一定相同</strong>——
+              因為所有最佳霍夫曼樹的「帶權路徑長度」都相等。這正是貪婪保證的最優性。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 31.5 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>用 <strong>union-find</strong> 實作 Kruskal 演算法 <code>kruskal(n, edges)</code>,<code>edges</code> 為
+          <code>(權重, u, v)</code> 的清單(頂點以 0 ~ n−1 編號),回傳 MST 的邊清單與總權重。
+          用圖 31-4 那張圖(邊:A-B 2、A-C 3、B-C 1、B-D 4、C-D 5、C-E 6、D-E 7)測試,確認總權重為 13。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">def find(parent, x):
+    while parent[x] != x:
+        parent[x] = parent[parent[x]]      # 路徑壓縮
+        x = parent[x]
+    return x
+
+def union(parent, rank, a, b):
+    ra, rb = find(parent, a), find(parent, b)
+    if ra == rb:
+        return False                       # 同群 → 成環,拒絕
+    if rank[ra] &lt; rank[rb]:
+        ra, rb = rb, ra
+    parent[rb] = ra
+    if rank[ra] == rank[rb]:
+        rank[ra] += 1
+    return True
+
+def kruskal(n, edges):
+    edges.sort()                           # 按權重排序
+    parent, rank = list(range(n)), [0] * n
+    mst, total = [], 0
+    for w, u, v in edges:
+        if union(parent, rank, u, v):      # 不成環才收
+            mst.append((u, v, w))
+            total += w
+            if len(mst) == n - 1:          # 收滿 n-1 條即可提早停
+                break
+    return mst, total
+
+# A=0 B=1 C=2 D=3 E=4
+edges = [(2,0,1),(3,0,2),(1,1,2),(4,1,3),(5,2,3),(6,2,4),(7,3,4)]
+print(kruskal(5, edges))
+# ([(1, 2, 1), (0, 1, 2), (1, 3, 4), (2, 4, 6)], 13)</code></pre>
+              <p>Kruskal = 「邊權排序」+「union-find 偵測環」。<code>union</code> 回傳 <code>False</code> 就代表兩端已連通、
+              加這條邊會成環,直接略過。收滿 $n-1$ 條邊就能提早收工。這題把第 29 章的並查集真正用在了一個漂亮的演算法上。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 31.6 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>用 <strong>優先佇列(heap)</strong> 實作 Prim 演算法 <code>prim(n, graph, start)</code>,
+          <code>graph</code> 為鄰接串列 <code>{u: [(v, w), ...]}</code>,回傳 MST 的邊與總權重。
+          用和練習 31.5 同一張圖測試,確認不論從哪個起點出發,總權重都是 13。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">import heapq
+
+def prim(n, graph, start=0):
+    visited = [False] * n
+    heap = [(0, start, -1)]                 # (邊權, 抵達點, 來源點)
+    mst, total = [], 0
+    while heap and len(mst) &lt; n - 1 + 1:
+        w, u, frm = heapq.heappop(heap)
+        if visited[u]:
+            continue
+        visited[u] = True
+        if frm != -1:
+            mst.append((frm, u, w))
+            total += w
+        for v, wt in graph[u]:
+            if not visited[v]:
+                heapq.heappush(heap, (wt, v, u))
+    return mst, total
+
+graph = {
+    0: [(1,2),(2,3)],
+    1: [(0,2),(2,1),(3,4)],
+    2: [(0,3),(1,1),(3,5),(4,6)],
+    3: [(1,4),(2,5),(4,7)],
+    4: [(2,6),(3,7)],
+}
+for s in range(5):
+    print(f"從 {s} 出發:", prim(5, graph, s))
+# 每一行的總權重都是 13(邊的順序可能不同,但這棵 MST 唯一)</code></pre>
+              <p>Prim 用堆每次彈出「樹邊緣到外界最輕的邊」,把新頂點吸收進來。<code>if visited[u]: continue</code>
+              這行很關鍵——堆裡可能殘留通往「已經進樹」的舊候選邊,要跳過它們。和 Kruskal 殊途同歸:這張圖的最小生成樹唯一,
+              所以無論用哪個演算法、從哪裡起步,總權重都是 13。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 31.7 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>用<strong>交換論證</strong>,嚴謹地證明:在活動選擇問題裡,「永遠選結束時間最早、且不與已選衝突的活動」
+          這個貪婪策略,一定能得到場數最多的解。(只需文字論證,不必寫程式。)</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>主張:</strong>設 $g$ 是所有活動中結束最早的一個,則必存在一個「場數最多」的最佳解包含 $g$。</p>
+              <p><strong>證明(交換論證):</strong>任取一個最佳解 $O$,把 $O$ 裡的活動依結束時間排序,設第一個是 $a_1$。
+              因為 $g$ 是<em>全體</em>活動中結束最早的,所以
+              $$\text{finish}(g) \le \text{finish}(a_1).$$
+              現在把 $O$ 中的 $a_1$ <strong>換成 $g$</strong>,得到 $O' = (O \setminus \{a_1\}) \cup \{g\}$。要確認 $O'$ 仍合法:
+              $O$ 中除 $a_1$ 外的活動,開始時間都 $\ge \text{finish}(a_1) \ge \text{finish}(g)$,
+              所以它們也都不會和 $g$ 衝突;而 $g$ 是被換進去的第一個活動,前面沒有別的活動。因此 $O'$ 裡的活動兩兩不重疊,合法。
+              又因為只是「一換一」,$|O'| = |O|$,所以 $O'$ 也是最佳解,且它<strong>包含 $g$</strong>。貪婪選擇性質成立。</p>
+              <p><strong>遞推(最佳子結構):</strong>選定 $g$ 之後,剩下的問題變成「在所有開始時間 $\ge \text{finish}(g)$ 的活動中,
+              再選最多場」——這是一個規模更小、結構完全相同的子問題。對它套用同樣的論證,可知「在子問題裡也選最早結束的」依然最佳。
+              一路歸納下去,整個貪婪流程選出的活動數,等於最佳解的活動數。$\blacksquare$</p>
+              <p>這就是交換論證的標準形:<strong>拿任意最佳解 → 把它改造成包含貪婪選擇 → 證明改造後不更差。</strong>
+              你會發現,MST 的切割性質、Dijkstra 的正確性,骨子裡用的都是同一招。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 31.8 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>一個活動選擇的變形:你有一堆會議要排,但這次<strong>會議室不限數量</strong>。每個會議有開始與結束時間,
+          兩個時間重疊的會議不能塞進同一間。問:<strong>最少需要幾間會議室</strong>,才能把所有會議都排下?
+          設計一個貪婪演算法並實作。用
+          <code>[(0,30),(5,10),(15,20),(20,35),(8,12),(25,40)]</code> 測試。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>關鍵洞見:答案就等於<strong>「在任一瞬間,同時進行的會議數」的最大值</strong>。把每個會議拆成兩個事件——
+              「開始 +1」與「結束 −1」,按時間排好後掃一遍,維護「目前同時進行幾場」,取過程中的最大值即可。
+              (用最小堆記「各會議室最早何時空出來」也是一種等價寫法。)排序時要讓<strong>結束事件排在同時刻的開始事件之前</strong>,
+              因為一場會議結束的瞬間,那間會議室就能立刻給下一場用。</p>
+              <pre><code class="language-python">def min_rooms(meetings):
+    events = []
+    for start, end in meetings:
+        events.append((start, +1))    # 會議開始,佔用一間
+        events.append((end,   -1))    # 會議結束,釋放一間
+    # 同一時刻:先處理 -1(結束)再處理 +1(開始)→ 用第二欄排序自然成立
+    events.sort()
+    cur = best = 0
+    for _, delta in events:
+        cur += delta
+        best = max(best, cur)
+    return best
+
+print(min_rooms([(0,30),(5,10),(15,20),(20,35),(8,12),(25,40)]))  # 2</code></pre>
+              <p>這題和正文「最多活動」的版本是一體兩面:正文問「一間會議室最多塞幾場」,這裡問「塞下全部最少要幾間」。
+              它也是貪婪——「掃過時間軸、即時統計重疊數」就是一連串局部決策。
+              這種「事件掃描線(sweep line)」是處理區間問題的通用利器,你在計算幾何、排程裡會一再遇見它。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>把這一章串起來</h2>
+      <p>
+        我們從便利商店的找零,一路走到了光纖佈線與檔案壓縮。回顧這趟貪婪之旅的路標:
+      </p>
+      <ul>
+        <li><strong>貪婪演算法</strong>在每一步都選「當下最好」、選了不回頭。它又快又簡單,但<strong>不一定正確</strong>
+        ——找零錢 {1,3,4} 湊 6 就是血淋淋的反例。</li>
+        <li>貪婪要對,需要兩個要件:<strong>貪婪選擇性質</strong>(存在含有貪婪選擇的最佳解)與
+        <strong>最佳子結構</strong>(大解包含子問題的解);而證明前者的萬用利器是<strong>交換論證</strong>。</li>
+        <li>三個經典貪婪:<strong>活動選擇</strong>(按結束時間排序)、<strong>分數背包</strong>(按 CP 值排序,
+        但不能切的 0/1 背包就得靠 DP)、<strong>霍夫曼編碼</strong>(用最小堆反覆合併最小頻率,建出最佳前綴碼,逼近資訊熵的下限)。</li>
+        <li><strong>最小生成樹</strong>用最省的邊連通所有點。<strong>Prim</strong>(靠 heap,從一點長出)與
+        <strong>Kruskal</strong>(靠 union-find,把最輕的邊接起來)都正確,因為它們都在反覆套用<strong>切割性質</strong>。</li>
+        <li><strong>Dijkstra</strong> 最短路徑其實也是貪婪——可見貪婪是貫穿許多演算法的一種<em>思想</em>,而非單一招式。</li>
+        <li>面對新問題:子問題不重疊用<strong>分治</strong>;會重疊且能證明局部最優即全域最優,用<strong>貪婪</strong>;
+        否則用<strong>動態規劃</strong>把所有可能算過一遍。</li>
+      </ul>
+      <p>
+        貪婪教給我們的,其實是一種看待問題的眼光:有些問題寬容到「一路向前、永不回頭」也能抵達最佳;
+        有些問題卻會懲罰短視,逼你把所有岔路都走過一遍。分辨這兩者的能力,正是下一章<strong>動態規劃</strong>的起點
+        ——當貪婪靠不住時,DP 會教你如何「謹慎地嘗試所有選擇,卻又不重複勞動」。我們下一章見。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">📚</div>
+        <div class="body">
+          <span class="c-title">想更深入?延伸資源</span>
+          <p>本章對應 OSSU 課程地圖中的
+          <a href="https://www.coursera.org/specializations/algorithms">Stanford Algorithms(Tim Roughgarden)</a>
+          的 Part 2/Part 3——其中貪婪演算法、霍夫曼編碼與最小生成樹(Prim、Kruskal、union-find)正是核心主題。
+          Roughgarden 把這些內容寫成了一套極好讀的書,並把講義、習題與影片整理在
+          <a href="https://www.algorithmsilluminated.org/"><em>Algorithms Illuminated</em></a>(其中
+          <em>Part 3: Greedy Algorithms and Dynamic Programming</em> 一冊把本章與下一章完整涵蓋)。
+          想要更紮實的證明與更多貪婪題型,經典教科書《演算法導論》(CLRS)第 15、23 章(貪婪與最小生成樹)是公認的權威參考——
+          本章那組霍夫曼頻率(a:5, b:9, …, f:45)正是出自它。</p>
+        </div>
+      </div>
+
+          <div class="callout tip">
+        <div class="ico">🧭</div>
+        <div class="body">
+          <span class="c-title">延伸：專修軌道</span>
+          <p>貪心與掃描線在競賽中極常見。實戰題型與證明手法見<a href="62-competitive-paradigms.html">第 62 章《競賽範式》</a>。</p>
+        </div>
+      </div>
+

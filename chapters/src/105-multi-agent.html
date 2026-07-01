@@ -1,0 +1,1079 @@
+<!--meta
+title: 多代理協作系統
+description: 從單 agent 走向多 agent 協作:協調者-工作者、流水線、辯論投票三種拓樸;代理間訊息傳遞與共享記憶;17 種架構與 21 種設計模式導覽;用前面零件組一個多代理研究系統。
+-->
+
+      <div class="eyebrow">第二二部 · 動手打造 LLM Agent</div>
+      <h1>多代理協作系統</h1>
+      <p class="subtitle">一個 agent 包山包海會「樣樣通、樣樣鬆」——把它拆成各司其職的多個 agent，讓複雜任務在協作中完成。但多代理不是萬靈丹：協調本身就是成本。這一章教你看清取捨，然後動手組出一個多代理研究系統。</p>
+      <div class="byline">
+        <span class="tag">第 99 章</span>
+        <span>閱讀時間 ≈ 80 分鐘</span>
+        <span>難度:★★★★☆</span>
+      </div>
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>何時值得用多代理、何時多代理只是徒增成本與協調複雜度（誠實的取捨分析）</li>
+          <li>三種核心拓樸：協調者-工作者（orchestrator-worker）、流水線（pipeline）、辯論投票（debate / ensemble）</li>
+          <li>代理間通訊格式、訊息傳遞模式，以及如何用共享黑板（blackboard）或向量記憶交換中間結果</li>
+          <li>17 種 agentic 架構與 21 種 agentic 設計模式的全景地圖（給你方向，不逐一展開）</li>
+          <li>如何用第 94–98 章的零件（LLMClient、ToolRegistry、VectorStore）組出一個多代理研究系統骨架</li>
+          <li>多代理常見失敗模式：協調開銷、訊息爆炸、責任分散、成本失控，以及何時退回單 agent</li>
+        </ul>
+      </div>
+
+      <!-- ===== h2 ① 開場 ===== -->
+      <h2>開場：一個 agent 包山包海，為什麼會「樣樣鬆」？</h2>
+      <p>
+        讀完第 98 章（進階單代理：規劃、反思、記憶），你的 agent 已經能分解任務、反思輸出、查向量記憶。
+        很強，對吧？然後你給它一個現實世界的研究任務：
+      </p>
+      <blockquote>
+        「調查量子計算對現有密碼學基礎架構的衝擊，涵蓋技術進展、政府政策、企業應對策略，最後給出一份帶引用的報告。」
+      </blockquote>
+      <p>
+        你的單一 agent 開始工作：它搜尋技術論文、讀政府白皮書、找企業財報……上下文視窗（context window）
+        在幾輪迴圈後塞爆了。它試圖「記住」所有細節，結果對技術部分寫得還行，政策部分一塌糊塗，
+        企業策略幾乎是編造的。
+      </p>
+      <p>
+        問題的根源很直觀：這個任務需要<strong>不同的專業知識</strong>、<strong>可以平行進行的子任務</strong>、
+        以及<strong>彼此制衡的多個視角</strong>。塞給一個 agent，就像要求一個人在同一時刻既是律師又是工程師又是財務分析師。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">多代理的根本動機</span>
+          <p>多代理協作（multi-agent collaboration）不是為了「讓系統看起來很酷」，而是為了解決三個具體問題：
+          ① 任務超過單一 agent 的上下文容量；② 任務可分解成可平行執行的子任務；③ 任務需要多個獨立視角的制衡與彙整。</p>
+        </div>
+      </div>
+
+      <p>
+        但在你開始把所有東西都拆成多代理之前——先等一下。多代理有真實的代價，我們需要先誠實地討論取捨。
+      </p>
+
+      <!-- ===== h2 ② 取捨 ===== -->
+      <h2>何時該用多代理？誠實的取捨分析</h2>
+      <p>
+        業界有一種傾向：凡是系統太慢或品質不好，就往「加更多 agent」想。這是錯的。
+        多代理本身會引入新問題，而且這些問題往往比它解決的問題更難 debug。
+      </p>
+
+      <h3>多代理划算的情境</h3>
+      <ul>
+        <li><strong>任務可真正平行</strong>：檢索三個不同資料來源這件事，讓三個 worker 各自跑，速度可以接近 1/3。</li>
+        <li><strong>角色分工清晰</strong>：「搜尋者」與「寫作者」需要的提示（prompt）差異很大，塞在同一個 context 裡會互相干擾。</li>
+        <li><strong>需要多視角制衡</strong>：讓三個 agent 各自對同一題作答再投票，比一個 agent 重試三次更能捕捉到真正的分歧。</li>
+        <li><strong>任務超出單一 context window</strong>：一份長達幾十萬 token 的文件集，必須拆開給多個 agent 各自摘要。</li>
+      </ul>
+
+      <h3>多代理不划算的情境</h3>
+      <ul>
+        <li><strong>任務本質是線性的</strong>：如果步驟 B 必須等步驟 A 完成，加多個 agent 只是增加協調開銷，不加速。</li>
+        <li><strong>任務夠簡單</strong>：問一個事實性問題，一個 agent 一步就能答對，多代理是殺雞用牛刀。</li>
+        <li><strong>協調邏輯比業務邏輯更複雜</strong>：如果你花了 80% 的時間在處理 agent 之間的訊息格式、重試、逾時，這個系統設計就出問題了。</li>
+        <li><strong>成本敏感</strong>：每個 agent 都要呼叫 LLM，N 個 agent 等於 N 倍（甚至更多）的 API 費用。</li>
+      </ul>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">多代理最常見的過度使用</span>
+          <p>把每個功能都包成一個獨立 agent，然後用一個「協調者 agent」串起來——這是目前 LLM 應用開發社群裡最常見的過度設計。
+          大多數場景下，一個精心設計的單 agent + 好的工具集，比鬆散協作的五個 agent 更可靠、更便宜、更容易 debug。
+          先用單 agent，有具體瓶頸了再拆。</p>
+        </div>
+      </div>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">經驗法則</span>
+          <p>問自己：「這個任務如果讓一個聰明的人類做，他會同時開幾個視窗平行工作，還是一步一步依序做？」
+          如果答案是後者，單 agent 就夠了。如果是前者，多代理才真的有意義。</p>
+        </div>
+      </div>
+
+      <!-- ===== h2 ③ 拓樸一：協調者-工作者 ===== -->
+      <h2>拓樸一：協調者-工作者（Orchestrator-Worker）</h2>
+      <p>
+        最常見的多代理拓樸。一個<strong>協調者（orchestrator / supervisor）</strong>負責接收任務、
+        分解成子任務、分派給多個<strong>工作者（worker）</strong>，最後收集結果並彙整。
+        工作者之間互不直接通訊——全部透過協調者。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 700 320" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="arr-ow" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto">
+      <polygon points="0 0,9 3.5,0 7" fill="#2f6f6a"/>
+    </marker>
+    <marker id="arr-ow-ret" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto">
+      <polygon points="0 0,9 3.5,0 7" fill="#b4541f"/>
+    </marker>
+  </defs>
+
+  <!-- 協調者 -->
+  <rect x="250" y="20" width="200" height="60" rx="10" fill="#e3efed" stroke="#2f6f6a" stroke-width="2.5"/>
+  <text x="350" y="46" text-anchor="middle" font-size="14" font-weight="700" fill="#1f2328">協調者</text>
+  <text x="350" y="64" text-anchor="middle" font-size="11" fill="#4a5159">Orchestrator / Supervisor</text>
+
+  <!-- 三個 worker -->
+  <rect x="30" y="180" width="160" height="60" rx="8" fill="#f3f4f6" stroke="#8a929b" stroke-width="1.5"/>
+  <text x="110" y="206" text-anchor="middle" font-size="13" font-weight="600" fill="#1f2328">工作者 A</text>
+  <text x="110" y="224" text-anchor="middle" font-size="11" fill="#4a5159">搜尋 / 檢索</text>
+
+  <rect x="270" y="180" width="160" height="60" rx="8" fill="#f3f4f6" stroke="#8a929b" stroke-width="1.5"/>
+  <text x="350" y="206" text-anchor="middle" font-size="13" font-weight="600" fill="#1f2328">工作者 B</text>
+  <text x="350" y="224" text-anchor="middle" font-size="11" fill="#4a5159">程式碼執行</text>
+
+  <rect x="510" y="180" width="160" height="60" rx="8" fill="#f3f4f6" stroke="#8a929b" stroke-width="1.5"/>
+  <text x="590" y="206" text-anchor="middle" font-size="13" font-weight="600" fill="#1f2328">工作者 C</text>
+  <text x="590" y="224" text-anchor="middle" font-size="11" fill="#4a5159">資料摘要</text>
+
+  <!-- 分派箭頭（由上往下，綠色） -->
+  <line x1="260" y1="80" x2="130" y2="178" stroke="#2f6f6a" stroke-width="1.8" marker-end="url(#arr-ow)"/>
+  <line x1="350" y1="80" x2="350" y2="178" stroke="#2f6f6a" stroke-width="1.8" marker-end="url(#arr-ow)"/>
+  <line x1="440" y1="80" x2="570" y2="178" stroke="#2f6f6a" stroke-width="1.8" marker-end="url(#arr-ow)"/>
+
+  <!-- 回傳箭頭（由下往上，磚紅色） -->
+  <line x1="115" y1="180" x2="268" y2="82" stroke="#b4541f" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arr-ow-ret)"/>
+  <line x1="350" y1="180" x2="350" y2="82" stroke="#b4541f" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arr-ow-ret)"/>
+  <line x1="585" y1="180" x2="432" y2="82" stroke="#b4541f" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arr-ow-ret)"/>
+
+  <!-- 圖例 -->
+  <line x1="30" y1="290" x2="70" y2="290" stroke="#2f6f6a" stroke-width="1.8" marker-end="url(#arr-ow)"/>
+  <text x="78" y="294" font-size="11" fill="#4a5159">任務分派</text>
+  <line x1="180" y1="290" x2="220" y2="290" stroke="#b4541f" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arr-ow-ret)"/>
+  <text x="228" y="294" font-size="11" fill="#4a5159">結果回傳</text>
+
+  <!-- 說明文字 -->
+  <text x="350" y="133" text-anchor="middle" font-size="11" fill="#2f6f6a" font-style="italic">並行分派子任務</text>
+  <text x="350" y="164" text-anchor="middle" font-size="11" fill="#b4541f" font-style="italic">收集並彙整結果</text>
+</svg>
+        <figcaption>圖 99-1：協調者-工作者拓樸。協調者分派子任務，工作者平行執行，結果彙整回協調者。</figcaption>
+      </div>
+
+      <p>
+        協調者-工作者的關鍵設計決策：
+      </p>
+      <ul>
+        <li><strong>工作者是靜態還是動態？</strong>靜態：協調者知道有哪些工作者，直接分派。動態：協調者用 LLM 推理「需要哪種工作者」，再動態建立或挑選。</li>
+        <li><strong>工作者是否共享工具？</strong>最簡單的做法：每個工作者有自己的 <code>ToolRegistry</code>（第 95 章），協調者不直接操作工具。</li>
+        <li><strong>協調者本身也是 LLM agent 嗎？</strong>可以是，也可以是一段純程式碼的路由邏輯。後者更可預測、更便宜、更易測試。</li>
+      </ul>
+
+      <p>以下是一個最小的協調者-工作者骨架：</p>
+
+      <pre><code class="language-python">from llm_client import get_client
+from tool_react import ToolRegistry, run_react   # 第 95 章
+import concurrent.futures
+
+# ---------- 工作者定義 ----------
+class ResearchWorker:
+    """單一工作者：有自己的 ToolRegistry，執行一個子查詢。"""
+    def __init__(self, name: str, registry: ToolRegistry):
+        self.name = name
+        self.client = get_client()
+        self.registry = registry
+
+    def run(self, subtask: str) -&gt; str:
+        """執行子任務並回傳文字結果。"""
+        print(f"[{self.name}] 開始: {subtask[:60]}...")
+        result = run_react(self.client, self.registry, subtask)
+        print(f"[{self.name}] 完成")
+        return result
+
+# ---------- 協調者 ----------
+class Orchestrator:
+    """協調者：接收主任務，分解後分派給工作者，彙整結果。"""
+    def __init__(self, workers: list[ResearchWorker]):
+        self.client = get_client()
+        self.workers = workers           # 靜態工作者池
+
+    def decompose(self, task: str) -&gt; list[str]:
+        """用 LLM 把主任務分解成 N 個子任務（回傳字串列表）。"""
+        prompt = f"""你是一個任務分解器。把以下研究任務拆成 {len(self.workers)} 個獨立子查詢，
+每個子查詢應能各自獨立完成，輸出以換行分隔的純文字列表（不加序號）。
+
+任務：{task}"""
+        raw = self.client.complete(prompt)
+        subtasks = [s.strip() for s in raw.strip().split("\n") if s.strip()]
+        # 補齊或截斷至工作者數量
+        while len(subtasks) &lt; len(self.workers):
+            subtasks.append(task)        # 退化：重複主任務
+        return subtasks[:len(self.workers)]
+
+    def synthesize(self, task: str, results: list[str]) -&gt; str:
+        """把各工作者的結果彙整成最終答案。"""
+        parts = "\n\n".join(
+            f"=== 工作者 {i+1} 的發現 ===\n{r}"
+            for i, r in enumerate(results)
+        )
+        prompt = f"""你是一個研究彙整者。以下是 {len(results)} 個工作者針對同一任務分頭研究的結果，
+請整合成一份完整、有結構、帶引用標記的報告。
+
+原始任務：{task}
+
+{parts}
+
+請輸出最終報告（繁體中文）："""
+        return self.client.complete(prompt)
+
+    def run(self, task: str) -&gt; str:
+        """主入口：分解 → 平行執行 → 彙整。"""
+        subtasks = self.decompose(task)
+
+        # 平行分派給工作者
+        results = []
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            futures = {
+                executor.submit(w.run, st): w.name
+                for w, st in zip(self.workers, subtasks)
+            }
+            for f in concurrent.futures.as_completed(futures):
+                results.append(f.result())
+
+        return self.synthesize(task, results)</code></pre>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">為什麼用 ThreadPoolExecutor？</span>
+          <p>LLM API 呼叫是 I/O 密集型（等網路回應），不是 CPU 密集型，所以 Python 的 GIL 不是問題。
+          <code>ThreadPoolExecutor</code> 讓多個工作者同時等待 LLM 回應，實際加速效果接近理論值。
+          若工作者有大量 CPU 計算，改用 <code>ProcessPoolExecutor</code>。</p>
+        </div>
+      </div>
+
+      <!-- ===== h2 ④ 流水線 ===== -->
+      <h2>拓樸二：流水線（Pipeline）</h2>
+      <p>
+        流水線拓樸適合「步驟有明確順序、後步依賴前步輸出」的場景。
+        最典型的例子是「研究 → 起草 → 審查 → 修訂」，每個 agent 只做一件事，
+        然後把輸出傳給下一個 agent。
+      </p>
+      <p>
+        流水線的優點是清晰：每個 agent 的職責極度單一，提示可以高度針對化，
+        各自的輸出格式也很好定義。缺點是線性：整個系統的速度等於最慢那一步，
+        無法平行加速。
+      </p>
+
+      <pre><code class="language-python">from dataclasses import dataclass, field
+from llm_client import get_client
+
+@dataclass
+class PipelineState:
+    """在各 agent 之間傳遞的共享狀態物件。"""
+    original_query: str
+    research_notes: str = ""
+    draft: str = ""
+    review_feedback: str = ""
+    final_report: str = ""
+
+class PipelineAgent:
+    """流水線中的單一節點。"""
+    def __init__(self, name: str, system_prompt: str):
+        self.name = name
+        self.client = get_client()
+        self.system_prompt = system_prompt
+
+    def process(self, state: PipelineState) -&gt; PipelineState:
+        raise NotImplementedError
+
+class ResearchAgent(PipelineAgent):
+    def process(self, state: PipelineState) -&gt; PipelineState:
+        raw = self.client.chat([
+            {"role": "system", "content": self.system_prompt},
+            {"role": "user",   "content": f"請研究以下主題:\n{state.original_query}"}
+        ])
+        state.research_notes = raw
+        return state
+
+class WriterAgent(PipelineAgent):
+    def process(self, state: PipelineState) -&gt; PipelineState:
+        raw = self.client.chat([
+            {"role": "system", "content": self.system_prompt},
+            {"role": "user",   "content":
+                f"根據以下研究筆記撰寫報告草稿:\n{state.research_notes}"}
+        ])
+        state.draft = raw
+        return state
+
+class ReviewerAgent(PipelineAgent):
+    def process(self, state: PipelineState) -&gt; PipelineState:
+        raw = self.client.chat([
+            {"role": "system", "content": self.system_prompt},
+            {"role": "user",   "content":
+                f"請審查以下報告草稿並給出修訂建議:\n{state.draft}"}
+        ])
+        state.review_feedback = raw
+        return state
+
+def run_pipeline(query: str) -&gt; str:
+    """執行完整流水線。"""
+    agents = [
+        ResearchAgent("研究者", "你是專業研究者，找出關鍵事實與數據。"),
+        WriterAgent("寫作者",   "你是科技報告寫手，寫出清晰有結構的報告。"),
+        ReviewerAgent("審查者", "你是嚴格的編輯，找出不準確、不清晰的地方。"),
+    ]
+    state = PipelineState(original_query=query)
+    for agent in agents:
+        state = agent.process(state)
+    # 最後一步可加「修訂者」把 draft + feedback 合併成 final_report
+    return state.draft   # 簡化：直接回傳草稿</code></pre>
+
+      <!-- ===== h2 ⑤ 辯論投票 ===== -->
+      <h2>拓樸三：辯論與投票（Debate / Ensemble）</h2>
+      <p>
+        辯論/集成拓樸的核心思想很像軟體工程的「code review」：
+        不信任任何一個個體的輸出，讓多個獨立的 agent 各自作答，
+        再透過某種彙整機制（投票、加權、LLM 裁判）得出最終答案。
+      </p>
+      <p>
+        研究顯示，在推理題、事實核查等任務上，多個 LLM 投票的準確率
+        往往高於單一 LLM 多次重試——因為各次呼叫並非完全獨立：
+        同一個模型在同一 prompt 下容易犯同樣的系統性錯誤（systematic bias）。
+        而不同的 prompt / 溫度 / 角色設定，能引出真正多樣的輸出。
+      </p>
+
+      <pre><code class="language-python">from llm_client import get_client
+from collections import Counter
+
+def debate_vote(question: str, n_agents: int = 3) -&gt; str:
+    """
+    讓 n 個 agent 獨立作答，多數決取最終答案。
+    適用於有明確正確答案的選擇題或短答題。
+    """
+    client = get_client()
+
+    # 用不同 system prompt 製造多樣性
+    personas = [
+        "你是謹慎的分析師，傾向從數據和文獻出發。",
+        "你是有創意的思考者，傾向從第一原則推理。",
+        "你是批判性思考者，先找各種答案的缺陷再選最好的。",
+    ]
+
+    answers = []
+    for i in range(n_agents):
+        persona = personas[i % len(personas)]
+        reply = client.chat([
+            {"role": "system", "content": persona},
+            {"role": "user",   "content":
+                f"{question}\n\n請用一句話給出你的最終答案（只給答案，不解釋）。"}
+        ])
+        answers.append(reply.strip())
+        print(f"[Agent {i+1}] {reply.strip()}")
+
+    # 多數決
+    counter = Counter(answers)
+    winner, count = counter.most_common(1)[0]
+    print(f"\n投票結果: {counter} → 勝出: {winner!r} ({count}/{n_agents})")
+    return winner
+
+def llm_judge_ensemble(question: str, n_agents: int = 3) -&gt; str:
+    """
+    讓 n 個 agent 作答後，用一個「裁判 LLM」綜合判斷。
+    比純多數決更適合開放式問題。
+    """
+    client = get_client()
+    answers = []
+    for i in range(n_agents):
+        reply = client.complete(
+            f"問題：{question}\n\n請給出你最完整的分析：（Agent {i+1}）"
+        )
+        answers.append(f"Agent {i+1}：{reply}")
+
+    combined = "\n\n".join(answers)
+    judgment = client.chat([
+        {"role": "system", "content": "你是公正的裁判，負責整合多個專家意見得出最佳答案。"},
+        {"role": "user",   "content":
+            f"問題：{question}\n\n以下是 {n_agents} 個專家的回答：\n{combined}\n\n請整合以上意見，給出最佳最完整的答案："}
+    ])
+    return judgment</code></pre>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">辯論投票的成本</span>
+          <p>N 個 agent 參與辯論，API 呼叫量至少 N 倍（若有迭代辯論則更多）。
+          在生產環境使用前，先確認這個任務的正確率提升值得這個成本。
+          「LLM 裁判」模式尤其要小心：裁判本身也可能出錯，而且它的判斷往往偏向冗長、自信的回答，而不是正確的回答（length bias）。</p>
+        </div>
+      </div>
+
+      <!-- ===== h2 ⑥ 代理間通訊 ===== -->
+      <h2>代理間通訊與共享記憶</h2>
+      <p>
+        多代理系統裡，「agent 之間如何傳遞資訊」是最容易被低估的設計決策。
+        選錯通訊模式，系統很快就會退化成「訊息黑洞」——某個 agent 等待永遠不會到達的回覆。
+      </p>
+
+      <h3>訊息格式</h3>
+      <p>
+        最簡單也最推薦的做法是用 Python <code>dataclass</code> 定義結構化訊息：
+      </p>
+      <pre><code class="language-python">from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Any
+
+@dataclass
+class AgentMessage:
+    """代理間的標準訊息格式。"""
+    sender: str                    # 發送者 agent 名稱
+    recipient: str                 # 接收者（"*" 代表廣播）
+    task_id: str                   # 任務 ID，用於追蹤
+    content: str                   # 主要文字內容
+    metadata: dict[str, Any] = field(default_factory=dict)  # 附加資訊
+    timestamp: str = field(
+        default_factory=lambda: datetime.utcnow().isoformat()
+    )
+
+    def to_llm_turn(self) -&gt; dict[str, str]:
+        """轉換成 LLM chat 格式的 user/assistant turn。"""
+        return {
+            "role": "user",
+            "content": f"[來自 {self.sender}] {self.content}"
+        }</code></pre>
+
+      <h3>共享黑板（Blackboard）</h3>
+      <p>
+        黑板（blackboard）是一種共享記憶體模式：所有 agent 都能讀寫同一個結構化儲存，
+        用來交換中間結果，無需直接點對點通訊。這讓系統的耦合度大幅降低。
+      </p>
+      <pre><code class="language-python">import threading
+from typing import Any, Optional
+
+class Blackboard:
+    """
+    共享黑板：所有 agent 可讀可寫。
+    用 threading.Lock 確保並發安全。
+    """
+    def __init__(self):
+        self._store: dict[str, Any] = {}
+        self._lock = threading.Lock()
+
+    def write(self, key: str, value: Any, agent: str = "") -&gt; None:
+        with self._lock:
+            self._store[key] = {
+                "value": value,
+                "written_by": agent,
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+
+    def read(self, key: str) -&gt; Optional[Any]:
+        with self._lock:
+            entry = self._store.get(key)
+            return entry["value"] if entry else None
+
+    def snapshot(self) -&gt; dict:
+        """取得全部狀態的快照（用於 debug 或彙整）。"""
+        with self._lock:
+            return {k: v["value"] for k, v in self._store.items()}</code></pre>
+
+      <h3>向量記憶共享</h3>
+      <p>
+        對於需要語意檢索的中間結果，可以讓所有 agent 共享同一個 <code>VectorStore</code>（<a href="102-rag-from-scratch.html">第 96 章</a>）：
+        工作者把發現存進向量庫，協調者或彙整者再用語意搜尋取出最相關的片段。
+        這比在訊息裡傳遞大量文字更有效率，也讓資訊可以按語意索引。
+      </p>
+      <pre><code class="language-python">from rag_from_scratch import VectorStore   # 第 96 章
+
+# 全局共享向量記憶（所有 agent 共用同一個 store）
+shared_memory = VectorStore()
+
+# 工作者儲存發現
+def worker_store_finding(worker_name: str, text: str, topic: str) -&gt; None:
+    shared_memory.add(text, metadata={"source": worker_name, "topic": topic})
+
+# 彙整者檢索相關內容
+def synthesizer_retrieve(query: str, k: int = 5) -&gt; list[dict]:
+    return shared_memory.search(query, k=k)</code></pre>
+
+      <!-- ===== h2 ⑦ 架構地圖 ===== -->
+      <h2>架構與模式導覽：17 種架構、21 種設計模式的地圖</h2>
+      <p>
+        多代理領域發展非常快，已有研究者系統整理出「17 種 agentic 架構」（all-agentic-architectures）
+        和「21 種 agentic 設計模式」（agentic-design-patterns），數量多到讓人頭暈。
+        這裡我們不逐一展開（那樣這章會變成一本書），而是給你一張地圖——讓你知道存在什麼、何時去查。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">你不需要全背，但需要知道地圖</span>
+          <p>遇到具體問題時，知道「這類問題有標準解法存在、去哪裡找」，
+          比硬背所有模式更有價值。以下分類給你方向。</p>
+        </div>
+      </div>
+
+      <h3>按協調方式分</h3>
+      <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>類別</th><th>代表架構</th><th>適用場景</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>集中協調</strong></td>
+            <td>Orchestrator-Worker、Supervisor</td>
+            <td>任務可明確分解、協調者有全局視野</td>
+          </tr>
+          <tr>
+            <td><strong>去中心化</strong></td>
+            <td>Peer-to-peer、Gossip、Market-based</td>
+            <td>動態任務、agent 數量大、不需全局一致性</td>
+          </tr>
+          <tr>
+            <td><strong>層階式</strong></td>
+            <td>Hierarchical（多層協調者）</td>
+            <td>大型複雜任務需多級分解</td>
+          </tr>
+          <tr>
+            <td><strong>流程驅動</strong></td>
+            <td>Pipeline、DAG（有向無環圖）</td>
+            <td>步驟依賴關係清晰、可靜態排程</td>
+          </tr>
+        </tbody>
+      </table>
+      </div>
+
+      <h3>按通訊模式分</h3>
+      <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>模式</th><th>說明</th><th>優缺點</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Direct Messaging</strong></td>
+            <td>點對點，sender 直接呼叫 recipient</td>
+            <td>簡單直觀；但高耦合，不易擴展</td>
+          </tr>
+          <tr>
+            <td><strong>Blackboard</strong></td>
+            <td>共享黑板，agent 讀寫共同狀態</td>
+            <td>低耦合；需處理並發衝突</td>
+          </tr>
+          <tr>
+            <td><strong>Message Queue</strong></td>
+            <td>非同步佇列（如 Redis、Kafka）</td>
+            <td>生產環境首選；基礎設施成本較高</td>
+          </tr>
+          <tr>
+            <td><strong>Publish-Subscribe</strong></td>
+            <td>事件驅動，agent 訂閱感興趣的事件</td>
+            <td>彈性高；debug 困難，訊息順序不保證</td>
+          </tr>
+        </tbody>
+      </table>
+      </div>
+
+      <h3>21 種設計模式的分類</h3>
+      <p>
+        Andrew Ng 在 AI Agentic Design Patterns 系列中整理了四大類設計模式：
+      </p>
+      <ul>
+        <li><strong>反思（Reflection）</strong>：agent 自我審查輸出、迭代改善。本章兄弟章第 98 章有完整實作。</li>
+        <li><strong>工具使用（Tool Use）</strong>：agent 呼叫外部工具（<a href="101-tool-react.html">第 95 章</a>），擴展能力邊界。</li>
+        <li><strong>規劃（Planning）</strong>：把複雜任務分解成有序步驟再執行，第 98 章的規劃骨架。</li>
+        <li><strong>多代理協作（Multi-agent Collaboration）</strong>：本章的主題——角色分工、辯論、投票、彙整。</li>
+      </ul>
+      <p>
+        17 種架構則涵蓋更細的拓樸變體，例如：Self-Refinement、Constitutional AI、RLHF-in-the-loop、
+        Mixture of Experts（用路由器選工作者）、Chain-of-Thought ensemble……這些架構多半是上述四類模式的具體組合。
+        延伸資源在本章末尾的 callout 裡。
+      </p>
+
+      <!-- ===== h2 ⑧ 動手：多代理研究 agent ===== -->
+      <h2>動手：組一個多代理研究 Agent</h2>
+      <p>
+        現在把理論落地。我們要組的系統叫做 <strong>MultiAgentResearcher</strong>，靈感來自開源的
+        <em>nanoDeepResearch</em>——一個用最小零件實現「多來源研究」的多代理系統。
+        它的流程是：
+      </p>
+      <ol>
+        <li><strong>規劃者（Planner）</strong>接收主問題，拆成 N 個子查詢。</li>
+        <li><strong>N 個工作者（Worker）</strong>並行執行，每個用 <code>run_react</code>（<a href="101-tool-react.html">第 95 章</a>）搜尋並把發現寫進共享 <code>Blackboard</code>。</li>
+        <li><strong>彙整者（Synthesizer）</strong>從 Blackboard 收集所有發現，用 <code>rag_answer</code>（<a href="102-rag-from-scratch.html">第 96 章</a>）輔助，生成最終報告。</li>
+      </ol>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 400" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="arr-r" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto">
+      <polygon points="0 0,9 3.5,0 7" fill="#2f6f6a"/>
+    </marker>
+    <marker id="arr-r2" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto">
+      <polygon points="0 0,9 3.5,0 7" fill="#8b5cf6"/>
+    </marker>
+    <marker id="arr-r3" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto">
+      <polygon points="0 0,9 3.5,0 7" fill="#b4541f"/>
+    </marker>
+  </defs>
+
+  <!-- 使用者問題 -->
+  <rect x="280" y="10" width="160" height="44" rx="8" fill="#1f2328" />
+  <text x="360" y="30" text-anchor="middle" font-size="12" font-weight="700" fill="#ffffff">使用者問題</text>
+  <text x="360" y="46" text-anchor="middle" font-size="10" fill="#adb5bd">research query</text>
+
+  <!-- 規劃者 -->
+  <rect x="250" y="86" width="220" height="54" rx="8" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="360" y="110" text-anchor="middle" font-size="13" font-weight="700" fill="#1f2328">規劃者（Planner）</text>
+  <text x="360" y="128" text-anchor="middle" font-size="11" fill="#4a5159">LLM 拆出 N 個子查詢</text>
+
+  <!-- 規劃者 → 三個 Worker -->
+  <line x1="280" y1="140" x2="120" y2="198" stroke="#2f6f6a" stroke-width="1.8" marker-end="url(#arr-r)"/>
+  <line x1="360" y1="140" x2="360" y2="198" stroke="#2f6f6a" stroke-width="1.8" marker-end="url(#arr-r)"/>
+  <line x1="440" y1="140" x2="600" y2="198" stroke="#2f6f6a" stroke-width="1.8" marker-end="url(#arr-r)"/>
+
+  <!-- 三個 Worker -->
+  <rect x="20" y="200" width="200" height="60" rx="8" fill="#f3f4f6" stroke="#8a929b" stroke-width="1.5"/>
+  <text x="120" y="228" text-anchor="middle" font-size="12" font-weight="600" fill="#1f2328">Worker A</text>
+  <text x="120" y="246" text-anchor="middle" font-size="10" fill="#4a5159">run_react + 工具 A</text>
+
+  <rect x="260" y="200" width="200" height="60" rx="8" fill="#f3f4f6" stroke="#8a929b" stroke-width="1.5"/>
+  <text x="360" y="228" text-anchor="middle" font-size="12" font-weight="600" fill="#1f2328">Worker B</text>
+  <text x="360" y="246" text-anchor="middle" font-size="10" fill="#4a5159">run_react + 工具 B</text>
+
+  <rect x="500" y="200" width="200" height="60" rx="8" fill="#f3f4f6" stroke="#8a929b" stroke-width="1.5"/>
+  <text x="600" y="228" text-anchor="middle" font-size="12" font-weight="600" fill="#1f2328">Worker C</text>
+  <text x="600" y="246" text-anchor="middle" font-size="10" fill="#4a5159">run_react + 工具 C</text>
+
+  <!-- 共享黑板 -->
+  <rect x="200" y="294" width="320" height="50" rx="8" fill="#fff3cd" stroke="#b4541f" stroke-width="2"/>
+  <text x="360" y="316" text-anchor="middle" font-size="13" font-weight="700" fill="#7c3d12">共享黑板（Blackboard）</text>
+  <text x="360" y="334" text-anchor="middle" font-size="10" fill="#7c3d12">各 Worker 發現 → 寫入 key-value</text>
+
+  <!-- Worker → 黑板 -->
+  <line x1="120" y1="260" x2="240" y2="292" stroke="#8b5cf6" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arr-r2)"/>
+  <line x1="360" y1="260" x2="360" y2="292" stroke="#8b5cf6" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arr-r2)"/>
+  <line x1="600" y1="260" x2="480" y2="292" stroke="#8b5cf6" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arr-r2)"/>
+
+  <!-- 彙整者 -->
+  <rect x="250" y="364" width="220" height="26" rx="8" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="360" y="382" text-anchor="middle" font-size="13" font-weight="700" fill="#1f2328">彙整者（Synthesizer）→ 最終報告</text>
+
+  <!-- 黑板 → 彙整者 -->
+  <line x1="360" y1="344" x2="360" y2="362" stroke="#b4541f" stroke-width="1.8" marker-end="url(#arr-r3)"/>
+
+  <!-- 說明 -->
+  <text x="10" y="388" font-size="10" fill="#8a929b">① 拆題</text>
+  <text x="10" y="400" font-size="10" fill="#8a929b">② 並行搜尋</text>
+  <text x="80" y="400" font-size="10" fill="#8b5cf6">③ 寫黑板</text>
+  <text x="175" y="400" font-size="10" fill="#b4541f">④ 彙整報告</text>
+</svg>
+        <figcaption>圖 99-2：多代理研究系統資料流。規劃者拆題 → 工作者並行搜尋並寫入黑板 → 彙整者生成報告。</figcaption>
+      </div>
+
+      <p>以下是完整可執行的骨架（需先安裝 <code>llm_client.py</code>、<code>tool_react.py</code>、<code>rag_from_scratch.py</code>）：</p>
+
+      <pre><code class="language-python">"""
+multi_agent_researcher.py
+多代理研究系統骨架
+依賴：第 94 章 llm_client, 第 95 章 tool_react, 第 96 章 rag_from_scratch
+"""
+import concurrent.futures
+import threading
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Any, Optional
+
+from llm_client import get_client, LLMClient       # 第 94 章
+from tool_react import ToolRegistry, run_react      # 第 95 章
+from rag_from_scratch import VectorStore            # 第 96 章
+
+# ===== 共享黑板 =====
+class Blackboard:
+    def __init__(self):
+        self._store: dict[str, Any] = {}
+        self._lock = threading.Lock()
+
+    def write(self, key: str, value: Any, agent: str = "") -&gt; None:
+        with self._lock:
+            self._store[key] = {"value": value, "by": agent,
+                                "ts": datetime.utcnow().isoformat()}
+
+    def read(self, key: str) -&gt; Optional[Any]:
+        with self._lock:
+            entry = self._store.get(key)
+            return entry["value"] if entry else None
+
+    def all_values(self) -&gt; list[str]:
+        with self._lock:
+            return [v["value"] for v in self._store.values()
+                    if isinstance(v["value"], str)]
+
+# ===== 規劃者 =====
+class Planner:
+    def __init__(self, client: LLMClient, n_workers: int):
+        self.client = client
+        self.n_workers = n_workers
+
+    def plan(self, main_task: str) -&gt; list[str]:
+        prompt = (
+            f"請把以下研究任務拆成 {self.n_workers} 個獨立子查詢，"
+            f"每行一個子查詢，不加序號。\n\n任務：{main_task}"
+        )
+        raw = self.client.complete(prompt)
+        subtasks = [s.strip() for s in raw.strip().split("\n") if s.strip()]
+        # 補齊
+        while len(subtasks) &lt; self.n_workers:
+            subtasks.append(main_task)
+        return subtasks[:self.n_workers]
+
+# ===== 工作者 =====
+class ResearchWorker:
+    def __init__(self, name: str, registry: ToolRegistry,
+                 blackboard: Blackboard):
+        self.name = name
+        self.client = get_client()
+        self.registry = registry
+        self.blackboard = blackboard
+
+    def run(self, subtask: str) -&gt; None:
+        print(f"[{self.name}] 開始: {subtask[:50]}...")
+        try:
+            result = run_react(self.client, self.registry, subtask)
+        except Exception as e:
+            result = f"[錯誤] {self.name} 執行失敗: {e}"
+        self.blackboard.write(
+            key=f"{self.name}_result",
+            value=result,
+            agent=self.name
+        )
+        print(f"[{self.name}] 完成，已寫入黑板")
+
+# ===== 彙整者 =====
+class Synthesizer:
+    def __init__(self, client: LLMClient, blackboard: Blackboard,
+                 vector_store: Optional[VectorStore] = None):
+        self.client = client
+        self.blackboard = blackboard
+        self.vector_store = vector_store
+
+    def synthesize(self, original_task: str) -&gt; str:
+        # 從黑板取所有發現
+        findings = self.blackboard.all_values()
+        if not findings:
+            return "所有工作者均未回傳結果。"
+
+        # 若有向量記憶，先把發現存進去，再用 rag_answer
+        if self.vector_store is not None:
+            for i, f in enumerate(findings):
+                self.vector_store.add(f, metadata={"worker": f"worker_{i}"})
+            from rag_from_scratch import rag_answer   # 第 96 章
+            return rag_answer(self.client, self.vector_store, original_task)
+
+        # 否則直接彙整
+        combined = "\n\n---\n\n".join(
+            f"發現 {i+1}：\n{f}" for i, f in enumerate(findings)
+        )
+        prompt = (
+            f"任務：{original_task}\n\n"
+            f"以下是 {len(findings)} 個研究工作者的發現：\n\n{combined}\n\n"
+            f"請整合成一份完整的繁體中文報告，附帶引用標記："
+        )
+        return self.client.complete(prompt)
+
+# ===== 主控制器 =====
+class MultiAgentResearcher:
+    """
+    多代理研究系統主入口。
+    使用方式：
+        registries = [build_search_registry(), build_calc_registry(), ...]
+        system = MultiAgentResearcher(registries)
+        report = system.research("你的研究問題")
+    """
+    def __init__(self, worker_registries: list[ToolRegistry],
+                 use_vector_memory: bool = True):
+        self.client = get_client()
+        self.blackboard = Blackboard()
+        self.vector_store = VectorStore() if use_vector_memory else None
+
+        self.planner = Planner(self.client, len(worker_registries))
+        self.workers = [
+            ResearchWorker(f"Worker-{i+1}", reg, self.blackboard)
+            for i, reg in enumerate(worker_registries)
+        ]
+        self.synthesizer = Synthesizer(
+            self.client, self.blackboard, self.vector_store
+        )
+
+    def research(self, task: str) -&gt; str:
+        print(f"\n{'='*60}")
+        print(f"任務: {task}")
+        print(f"{'='*60}")
+
+        # 1. 規劃
+        subtasks = self.planner.plan(task)
+        print(f"\n[規劃者] 拆出 {len(subtasks)} 個子任務:")
+        for i, st in enumerate(subtasks, 1):
+            print(f"  {i}. {st}")
+
+        # 2. 並行執行工作者
+        print(f"\n[系統] 並行啟動 {len(self.workers)} 個工作者...")
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            futures = [
+                executor.submit(w.run, st)
+                for w, st in zip(self.workers, subtasks)
+            ]
+            concurrent.futures.wait(futures)
+
+        # 3. 彙整
+        print(f"\n[彙整者] 整合所有發現...")
+        report = self.synthesizer.synthesize(task)
+        print(f"\n{'='*60}")
+        print("最終報告：")
+        print(report)
+        return report</code></pre>
+
+      <p>使用方式：</p>
+      <pre><code class="language-python">from tool_react import ToolRegistry, Tool   # 第 95 章
+
+# 建立工具（此處用簡單的回傳假資料工具作示範）
+def make_search_registry(source: str) -&gt; ToolRegistry:
+    reg = ToolRegistry()
+
+    def search(query: str) -&gt; str:
+        # 實際場景換成真正的搜尋 API
+        return f"[{source}] 關於「{query}」的搜尋結果（示範）"
+
+    reg.add(Tool(
+        name="search",
+        description=f"在 {source} 中搜尋資訊",
+        parameters={"query": {"type": "string", "description": "搜尋關鍵字"}},
+        run=search,
+    ))
+    return reg
+
+# 建立三個各有不同工具集的 worker registry
+registries = [
+    make_search_registry("學術資料庫"),
+    make_search_registry("新聞媒體"),
+    make_search_registry("政府官網"),
+]
+
+system = MultiAgentResearcher(registries)
+report = system.research("量子計算對現有密碼學基礎架構的短期衝擊")</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">這個骨架和 nanoDeepResearch 的精神</span>
+          <p>nanoDeepResearch 的核心流程正是如此：LLM 規劃 → 多個搜尋工作者並行 → LLM 彙整。
+          最小實作可以在幾百行 Python 裡完成，不需要 LangGraph 或 CrewAI 這些重框架。
+          理解這個骨架，你就能讀懂所有多代理研究框架的核心邏輯。</p>
+        </div>
+      </div>
+
+      <!-- ===== h2 ⑨ 失敗模式 ===== -->
+      <h2>失敗模式：何時退回單 Agent？</h2>
+      <p>
+        多代理系統的失敗往往不是「某個 agent 壞了」——而是整個系統的協調機制在壓力下崩潰。
+        以下是最常見的四種失敗模式，以及如何偵測和應對。
+      </p>
+
+      <h3>失敗模式一：協調開銷爆炸（Coordination Overhead）</h3>
+      <p>
+        協調者需要分派、等待、重試、彙整——每一步都要呼叫 LLM。
+        在 N 個工作者的系統裡，協調者的 LLM 呼叫數可能和 N 成正比甚至超線性。
+        如果任務本身只需要 3 次 LLM 呼叫就能解決，卻因為多代理架構變成 15 次，
+        你就該問：「這個複雜度值得嗎？」
+      </p>
+
+      <h3>失敗模式二：訊息爆炸（Message Explosion）</h3>
+      <p>
+        代理間若互相傳遞全量資訊，訊息大小隨著迭代次數指數增長。
+        一個工作者的輸出作為下一個工作者的 context，後者再傳給第三個……
+        到了彙整者手裡，輸入可能已經超過 context window。
+        <strong>緩解策略</strong>：每個 agent 在輸出前先做摘要；使用黑板只存關鍵結論而非全文。
+      </p>
+
+      <h3>失敗模式三：責任分散（Diffusion of Responsibility）</h3>
+      <p>
+        當每個 agent 都假設「另一個 agent 會處理邊界情況」，結果沒有任何一個處理。
+        典型症狀：系統給出了答案，但沒有人對答案的正確性負責，也沒有引用來源。
+        <strong>緩解策略</strong>：明確指定「哪個 agent 對哪類輸出負最終責任」，並在彙整者加上事實核查步驟。
+      </p>
+
+      <h3>失敗模式四：成本失控（Cost Explosion）</h3>
+      <p>
+        多代理系統在測試時用小規模資料，上線後規模一放大，API 費用可能讓人驚嚇。
+        尤其是辯論型架構（N 個 agent 各自生成長回應），成本是單 agent 的 N 倍以上。
+      </p>
+      <pre><code class="language-python">import time
+
+class CostGuard:
+    """簡單的成本護衛：追蹤 token 用量，超過閾值就停止。"""
+    def __init__(self, max_tokens: int = 50_000):
+        self.max_tokens = max_tokens
+        self.used_tokens = 0
+        self._lock = threading.Lock()
+
+    def check_and_add(self, tokens: int) -&gt; bool:
+        """回傳 True 代表可以繼續，False 代表已超限。"""
+        with self._lock:
+            if self.used_tokens + tokens &gt; self.max_tokens:
+                print(f"[CostGuard] 超過 token 上限 {self.max_tokens}，停止。")
+                return False
+            self.used_tokens += tokens
+            return True</code></pre>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">何時應該退回單 Agent</span>
+          <p>以下情況應該退回單 agent：① 協調 + 彙整的 LLM 呼叫數超過直接完成任務所需呼叫數的 2 倍；
+          ② 失敗的主要原因是「某個 worker 沒回傳正確格式」而不是「任務太難」；
+          ③ 系統已有超過 50% 的時間花在協調而非實際工作。這些都是信號：你的多代理設計過度了。</p>
+        </div>
+      </div>
+
+      <!-- ===== h2 ⑩ 練習 ===== -->
+      <h2>動手練習</h2>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 99.1 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>
+            把本章的 <code>MultiAgentResearcher</code> 改造成協調者-工作者架構：
+            新增一個 <code>Orchestrator</code> 類別，讓它用 <code>run_react</code>（<a href="101-tool-react.html">第 95 章</a>）動態決定「需要呼叫哪個工作者」，
+            而不是靜態地把所有工作者全部啟動。觀察：動態派發和靜態派發在什麼任務上各自更有效率？
+          </p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p>關鍵改動：把 <code>Planner.plan()</code> 替換成一個「協調者工具呼叫迴圈」——協調者 agent 有一組工具，每個工具對應一個 worker：</p>
+              <pre><code class="language-python">from tool_react import ToolRegistry, Tool, run_react
+from llm_client import get_client
+
+def build_orchestrator_registry(workers: list[ResearchWorker]) -&gt; ToolRegistry:
+    reg = ToolRegistry()
+    for w in workers:
+        # 閉包捕獲 worker 參考
+        worker = w
+        def make_tool_fn(wkr):
+            def tool_fn(subtask: str) -&gt; str:
+                wkr.run(subtask)
+                return wkr.blackboard.read(f"{wkr.name}_result") or "(無結果)"
+            return tool_fn
+        reg.add(Tool(
+            name=f"call_{w.name.lower().replace('-', '_')}",
+            description=f"呼叫 {w.name} 執行子查詢",
+            parameters={"subtask": {"type": "string", "description": "子查詢內容"}},
+            run=make_tool_fn(worker),
+        ))
+    return reg
+
+# 使用：
+orch_client = get_client()
+orch_registry = build_orchestrator_registry(workers)
+result = run_react(orch_client, orch_registry,
+    "研究量子計算對密碼學的衝擊，使用你所有可用的工具")
+</code></pre>
+              <p><strong>靜態 vs 動態的取捨</strong>：靜態派發（本章原版）在任務可明確分解時效率更高，所有 worker 並行啟動；動態派發（本練習）適合「事先不確定需要哪些工具」的開放式任務，但因為協調者需要一步一步 react，無法平行加速。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 99.2 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>
+            你要設計一個辯論型多 agent 系統，讓三個 agent 對同一問題給出不同答案，
+            然後用一個「裁判 LLM」彙整。請設計彙整規則，回答以下三個問題：
+            ① 若三個 agent 答案相同，裁判應該「直接採用」還是「獨立驗證再採用」？
+            ② 若兩個 agent 同意、一個反對，裁判應該採多數決還是要求少數派說明理由？
+            ③ 「裁判 LLM 本身出錯」的風險如何降低？
+          </p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>① 三個 agent 都同意時</strong>：不應直接採用，應加一步「獨立核查」——讓裁判用不同 prompt 角度再驗證一次。原因：三個 agent 可能有相同的系統性偏誤（例如都在訓練資料中學到同一個錯誤說法），一致不代表正確。</p>
+              <p><strong>② 多數決 vs 要求少數說明</strong>：最佳做法是兩者並用。先讓少數派「寫出反對的具體理由」，再讓裁判判斷「少數派的理由是否更有說服力」。純多數決在推理題上容易錯——少數派往往是發現了多數沒注意到的漏洞。</p>
+              <p><strong>③ 降低裁判出錯風險</strong>：① 給裁判比工作者更強的模型（或更低的 temperature）；② 要求裁判輸出「決策理由 + 引用工作者的原文」，便於人工審核；③ 加上「如果三個 agent 答案差異超過 X，就升級為人工審核」的護欄；④ 對高風險決策，裁判的輸出再丟給另一個「事後審查者 agent」複查。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 99.3 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>
+            以下五個任務，請各自判斷「單 agent 足夠 / 多代理划算 / 多代理不划算但常被過度使用」，
+            並說明理由：
+          </p>
+          <ol>
+            <li>把一封 100 字的英文 email 翻譯成繁體中文。</li>
+            <li>分析一家公司過去五年的財報，彙整成一份投資分析報告（資料共 300 頁 PDF）。</li>
+            <li>在三個不同的搜尋引擎上搜尋同一個關鍵字並整合結果。</li>
+            <li>撰寫一個 Python 函式，功能是「把列表排序後去重複」。</li>
+            <li>同時監控五個不同語言的社群媒體頻道，偵測是否有特定話題的討論熱潮。</li>
+          </ol>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <ol>
+                <li><strong>單 agent 足夠</strong>。翻譯是線性、單步任務，多 agent 只是浪費。</li>
+                <li><strong>多代理划算</strong>。300 頁資料超出單一 context window，可分給多個 worker 各自摘要不同年份或不同財務面向，再彙整。任務本身也有明確角色分工：資料擷取 / 趨勢分析 / 風險評估可各自獨立。</li>
+                <li><strong>多代理划算（但要謹慎）</strong>。三個搜尋任務可真正平行，時間是 1/3。但如果搜尋 API 呼叫本身就很快（&lt;1 秒），多 agent 的協調開銷反而讓整體更慢——這時直接在單 agent 裡循序呼叫三個 API 更簡單。</li>
+                <li><strong>單 agent 足夠，多代理常被過度使用</strong>。這是一個簡單的程式碼生成任務，一次 LLM 呼叫就解決。把它包成多 agent 是典型過度工程。</li>
+                <li><strong>多代理划算</strong>。五個語言的監控任務天然可平行，且各自需要不同的語言能力（可以給各 worker 不同的 system prompt 設定語言專業），彙整者只需要判斷「跨語言是否有共同熱潮」。這是多代理最有說服力的使用場景之一。</li>
+              </ol>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ===== h2 ⑪ 串起來 ===== -->
+      <h2>把這一章串起來</h2>
+      <p>
+        這一章從「一個 agent 包山包海的困境」出發，走過了多代理的三種核心拓樸：
+      </p>
+      <ul>
+        <li><strong>協調者-工作者（Orchestrator-Worker）</strong>：適合可平行分解的研究型任務，協調者統籌、工作者各自執行。</li>
+        <li><strong>流水線（Pipeline）</strong>：適合依序進行的生產流程，每個 agent 職責單一，清晰但無法平行。</li>
+        <li><strong>辯論投票（Debate / Ensemble）</strong>：適合需要多視角制衡的高風險決策，提升可靠度但成本倍增。</li>
+      </ul>
+      <p>
+        我們也動手把第 94–98 章的零件（<a href="100-llm-client.html">LLMClient</a>、<a href="101-tool-react.html">ToolRegistry + run_react</a>、<a href="102-rag-from-scratch.html">VectorStore + rag_answer</a>）
+        組成了一個 <code>MultiAgentResearcher</code>——規劃者拆題、工作者並行搜尋並寫入共享黑板、彙整者整合成報告。
+        這個骨架不依賴任何外部框架，幾百行 Python 就能跑起來，和 nanoDeepResearch 的精神一致。
+      </p>
+      <p>
+        最後，我們誠實地面對多代理的陰暗面：協調開銷、訊息爆炸、責任分散、成本失控。
+        多代理是強大的工具，但<strong>先問清楚「真的需要嗎？」，比急著套用多代理架構更重要</strong>。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">本章最重要的一課</span>
+          <p>多代理不是「讓系統更厲害」的魔法——它是「在任務確實需要時，分解複雜度的工程工具」。
+          先用最簡單的單 agent 解決問題，有具體瓶頸（context 不夠、速度太慢、需要多視角）了再拆。
+          過度設計的多代理系統，比設計良好的單 agent 更難維護、更貴、更容易出奇怪的錯。</p>
+        </div>
+      </div>
+
+      <p>
+        第二二部的後續章節（第 100 章）將把我們這幾章建造的玩具系統推向生產環境：
+        容錯、監控、成本控制、評估（evals）。那時候，你手上會有一個完整的武器庫——
+        第 94 章的 LLMClient、第 95 章的工具呼叫、第 96 章的 RAG、<a href="103-mcp.html">第 97 章的 MCP</a>、
+        第 98 章的規劃反思、以及本章的多代理協作——所有東西準備好一起上生產。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">延伸資源</span>
+          <p>
+            <strong>架構地圖</strong>：<a href="https://github.com/e2b-dev/awesome-ai-agents" target="_blank">Awesome AI Agents</a>（GitHub，含 17 種 agentic 架構的整理）；
+            <strong>設計模式</strong>：<a href="https://www.deeplearning.ai/the-batch/how-agents-can-improve-llm-performance/" target="_blank">Andrew Ng — Agentic Design Patterns（DeepLearning.AI）</a>（21 種 agentic 設計模式的原始來源）；
+            <strong>nanoDeepResearch</strong>：<a href="https://github.com/liyuan24/nanoDeepResearch" target="_blank">github.com/liyuan24/nanoDeepResearch</a>（本章骨架的精神來源，最小可執行的多代理研究系統）；
+            <strong>中文版模式整理</strong>：搜尋「agentic-design-patterns-cn」可找到社群翻譯版。
+          </p>
+        </div>
+      </div>

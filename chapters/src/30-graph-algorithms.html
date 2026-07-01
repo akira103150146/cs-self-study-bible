@@ -1,0 +1,1828 @@
+<!--meta
+title: 圖演算法
+description: 把第 15 章的「點與線」真正跑起來:廣度優先搜尋(BFS)、深度優先搜尋(DFS)、連通元件與強連通元件、拓樸排序、環偵測,以及最短路徑三巨頭 Dijkstra、Bellman-Ford 與 Floyd-Warshall。大量走訪 SVG、Python 實作與真實應用。
+-->
+
+
+      <div class="eyebrow">第六部 · 演算法與資料結構</div>
+      <h1>圖演算法</h1>
+      <p class="subtitle">第 15 章我們學會用「點與線」描述世界,第 29 章我們備好了佇列、堆積與並查集。現在,是時候讓圖「動起來」了——從你每天用的地圖導航、社群推薦到課程選修,背後跑的都是這一章的演算法。</p>
+      <div class="byline">
+        <span class="tag">第 30 章</span>
+        <span>閱讀時間 ≈ 65 分鐘</span>
+        <span>難度:★★★★☆</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>廣度優先搜尋(BFS)如何「層層擴散」,並一口氣解出無權圖的最短步數</li>
+          <li>深度優先搜尋(DFS)的遞迴與迭代兩種寫法,以及「發現/完成時間」藏著什麼祕密</li>
+          <li>BFS 與 DFS 各自擅長什麼——一張取捨表幫你一輩子不再選錯</li>
+          <li>怎麼找出連通元件,以及有向圖的強連通元件(SCC)是什麼</li>
+          <li>拓樸排序如何替「有相依關係的任務」排出合法順序(課程先修、建置相依)</li>
+          <li>怎麼偵測有向圖與無向圖裡的環(用顏色,或用第 29 章的並查集)</li>
+          <li>最短路徑三巨頭:Dijkstra(非負權)、Bellman-Ford(可處理負權與負環)、Floyd-Warshall(全點對)</li>
+          <li>這些演算法如何撐起地圖導航、社群網路、PageRank、相依解析與推薦系統</li>
+        </ul>
+      </div>
+
+      <h2>從一張靜止的圖,到會「走路」的演算法</h2>
+      <p>
+        回想一下第 15 章。我們把捷運路線、好友關係、城市航線、網頁連結,全都抽象成同一個東西:
+        <strong>圖(graph)</strong>——一堆<strong>頂點(vertex)</strong>,加上連接它們的<strong>邊(edge)</strong>。
+        我們甚至學會了怎麼把圖塞進電腦:用鄰接矩陣,或更常用的鄰接串列。
+      </p>
+      <p>
+        但那時候的圖,是<em>靜止</em>的。它只是被「存」在記憶體裡,像一張攤開在桌上的地圖。
+        真正讓它發揮威力的,是接下來這件事:<strong>在圖上「走路」</strong>。從某個頂點出發,
+        沿著邊一步步探索,回答各種問題——
+      </p>
+      <ul>
+        <li>從台北車站到淡水,<strong>最少要轉幾站</strong>?(最短步數)</li>
+        <li>這個社交圈裡,<strong>有沒有人和我完全沒有任何共同朋友鏈</strong>?(連通性)</li>
+        <li>這學期想修「機器學習」,我得<strong>先把哪些先修課修完</strong>、按什麼順序?(拓樸排序)</li>
+        <li>Google 地圖怎麼在零點幾秒內,從上億條道路裡挑出<strong>開車最快的那條路</strong>?(加權最短路徑)</li>
+      </ul>
+      <p>
+        這些問題的答案,全都來自同一個家族的演算法。而這個家族的兩位族長,就是 <strong>BFS</strong> 與 <strong>DFS</strong>——
+        所有圖演算法的根。把它們學透,後面的拓樸排序、環偵測、最短路徑,都只是在它們身上加裝幾個零件而已。
+        別怕,我們會從最直覺的地方開始。
+      </p>
+
+      <h3>先把工具擺好:這一章的範例圖</h3>
+      <p>
+        為了全章一致,我們先定義一個小圖,當作貫穿後面所有走訪示範的「白老鼠」。它是一個無向、無權圖,
+        6 個頂點 A~F、6 條邊。我們沿用第 15 章的結論:<strong>鄰接串列是絕大多數圖演算法的預設選擇</strong>
+        (因為現實的圖通常稀疏),所以這裡用 Python 的字典來存它,每個頂點對應一份鄰居清單。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 520 250" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <g stroke="#8a929b" stroke-width="2">
+    <line x1="110" y1="60" x2="300" y2="60"/>   <!-- A-B -->
+    <line x1="110" y1="60" x2="110" y2="195"/>  <!-- A-C -->
+    <line x1="300" y1="60" x2="448" y2="42"/>   <!-- B-D -->
+    <line x1="300" y1="60" x2="448" y2="150"/>  <!-- B-E -->
+    <line x1="110" y1="195" x2="300" y2="195"/> <!-- C-F -->
+    <line x1="448" y1="150" x2="300" y2="195"/> <!-- E-F -->
+  </g>
+  <g font-size="15" font-weight="800" text-anchor="middle">
+    <circle cx="110" cy="60" r="22" fill="#2f6f6a"/><text x="110" y="66" fill="#fff">A</text>
+    <circle cx="300" cy="60" r="22" fill="#2f6f6a"/><text x="300" y="66" fill="#fff">B</text>
+    <circle cx="110" cy="195" r="22" fill="#2f6f6a"/><text x="110" y="201" fill="#fff">C</text>
+    <circle cx="448" cy="42" r="22" fill="#2f6f6a"/><text x="448" y="48" fill="#fff">D</text>
+    <circle cx="448" cy="150" r="22" fill="#2f6f6a"/><text x="448" y="156" fill="#fff">E</text>
+    <circle cx="300" cy="195" r="22" fill="#2f6f6a"/><text x="300" y="201" fill="#fff">F</text>
+  </g>
+</svg>
+        <figcaption>圖 30-1:本章的範例圖。6 個頂點、6 條邊的無向圖。注意它含有一個環(A–B–E–F–C–A),這讓走訪時「避免重複拜訪」變得很重要。</figcaption>
+      </div>
+
+      <pre><code class="language-python"># 用鄰接串列(字典)存圖:每個頂點 → 它的鄰居清單
+graph = {
+    'A': ['B', 'C'],
+    'B': ['A', 'D', 'E'],
+    'C': ['A', 'F'],
+    'D': ['B'],
+    'E': ['B', 'F'],
+    'F': ['C', 'E'],
+}
+# 想知道 B 連到誰?直接看 graph['B'] → ['A', 'D', 'E']</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">圖走訪的鐵律:標記「看過的」頂點</span>
+          <p>圖和樹最大的不同,是<strong>圖可以有環</strong>。如果你不記錄「哪些頂點已經拜訪過」,走到環裡就會
+          無限繞圈、永遠停不下來。所以幾乎每個圖走訪演算法的骨架都長一樣:
+          <strong>一個「待辦容器」(佇列或堆疊)+ 一個「已訪集合」(visited)</strong>。
+          兩者的差別,只在那個容器是「先進先出」還是「後進先出」——而這個小小的差別,
+          就分出了 BFS 和 DFS 兩條路。</p>
+        </div>
+      </div>
+
+      <h2>廣度優先搜尋 BFS:像水波一樣擴散</h2>
+      <p>
+        想像你在一片平靜的池塘正中央丟下一顆石頭。水波會怎麼擴散?<strong>一圈一圈、由近到遠</strong>:
+        先是緊鄰落點的那一圈,再來是外面一圈,然後更外面一圈……永遠是「把目前這一圈走完,
+        才往外踏一步」。<strong>廣度優先搜尋(Breadth-First Search, BFS)</strong>就是這個水波。
+      </p>
+      <p>
+        從起點出發,BFS 先拜訪所有「距離 1 步」的頂點,再拜訪所有「距離 2 步」的,以此類推。
+        它<strong>層層擴散(level by level)</strong>,所以又叫「層序走訪」。要做到這件事,我們需要一個
+        <strong>佇列(queue)</strong>——還記得第 29 章嗎?佇列是「先進先出(FIFO)」的容器,
+        正好能保證「先排隊的(較近的)先被處理」。
+      </p>
+
+      <h3>BFS 怎麼跑:手動走一遍</h3>
+      <p>用圖 30-1,從 A 出發。我們維護一個佇列(隊伍)和一個「已看過」集合:</p>
+      <ol>
+        <li><strong>起點 A</strong> 入列,標記已看過。隊伍:<code>[A]</code></li>
+        <li>取出 <strong>A</strong>,看它的鄰居 B、C:都沒看過 → 標記並入列。隊伍:<code>[B, C]</code></li>
+        <li>取出 <strong>B</strong>,鄰居 A(看過)、D、E:D、E 沒看過 → 入列。隊伍:<code>[C, D, E]</code></li>
+        <li>取出 <strong>C</strong>,鄰居 A(看過)、F:F 沒看過 → 入列。隊伍:<code>[D, E, F]</code></li>
+        <li>取出 <strong>D</strong>,鄰居只有 B(看過)。隊伍:<code>[E, F]</code></li>
+        <li>取出 <strong>E</strong>,鄰居 B、F 都看過了。隊伍:<code>[F]</code></li>
+        <li>取出 <strong>F</strong>,鄰居都看過。隊伍空了 → 結束。</li>
+      </ol>
+      <p>
+        走訪順序:<strong>A → B → C → D → E → F</strong>。注意這個順序漂亮地分成三「層」:
+        <code>{A}</code>(第 0 層,距離 0)、<code>{B, C}</code>(第 1 層,距離 1)、<code>{D, E, F}</code>(第 2 層,距離 2)。
+        這就是 BFS 最珍貴的性質——<strong>它走到每個頂點時,走的恰好是「邊數最少」的路</strong>。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 560 300" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- level guide arcs -->
+  <g fill="none" stroke-dasharray="4 4">
+    <path d="M 110 110 A 50 50 0 0 1 110 10" stroke="#cbd2d8"/>
+  </g>
+  <g stroke="#8a929b" stroke-width="2">
+    <line x1="110" y1="60" x2="300" y2="60"/>
+    <line x1="110" y1="60" x2="110" y2="195"/>
+    <line x1="300" y1="60" x2="448" y2="42"/>
+    <line x1="300" y1="60" x2="448" y2="150"/>
+    <line x1="110" y1="195" x2="300" y2="195"/>
+    <line x1="448" y1="150" x2="300" y2="195"/>
+  </g>
+  <g font-size="15" font-weight="800" text-anchor="middle">
+    <circle cx="110" cy="60" r="22" fill="#b4541f"/><text x="110" y="66" fill="#fff">A</text>
+    <circle cx="300" cy="60" r="22" fill="#2f6f6a"/><text x="300" y="66" fill="#fff">B</text>
+    <circle cx="110" cy="195" r="22" fill="#2f6f6a"/><text x="110" y="201" fill="#fff">C</text>
+    <circle cx="448" cy="42" r="22" fill="#8b5cf6"/><text x="448" y="48" fill="#fff">D</text>
+    <circle cx="448" cy="150" r="22" fill="#8b5cf6"/><text x="448" y="156" fill="#fff">E</text>
+    <circle cx="300" cy="195" r="22" fill="#8b5cf6"/><text x="300" y="201" fill="#fff">F</text>
+  </g>
+  <!-- distance labels -->
+  <g font-size="11" font-weight="700" text-anchor="middle">
+    <text x="110" y="32" fill="#b4541f">0</text>
+    <text x="328" y="40" fill="#2f6f6a">1</text>
+    <text x="82" y="195" fill="#2f6f6a">1</text>
+    <text x="448" y="14" fill="#8b5cf6">2</text>
+    <text x="480" y="150" fill="#8b5cf6">2</text>
+    <text x="300" y="232" fill="#8b5cf6">2</text>
+  </g>
+  <!-- queue strip -->
+  <text x="20" y="265" font-size="12" font-weight="700" fill="#1f2328">走訪順序(佇列彈出):</text>
+  <g font-size="13" text-anchor="middle" font-weight="700">
+    <rect x="180" y="252" width="34" height="26" rx="4" fill="#f6e7dd" stroke="#b4541f"/><text x="197" y="270" fill="#b4541f">A</text>
+    <rect x="222" y="252" width="34" height="26" rx="4" fill="#e3efed" stroke="#2f6f6a"/><text x="239" y="270" fill="#2f6f6a">B</text>
+    <rect x="264" y="252" width="34" height="26" rx="4" fill="#e3efed" stroke="#2f6f6a"/><text x="281" y="270" fill="#2f6f6a">C</text>
+    <rect x="306" y="252" width="34" height="26" rx="4" fill="#efe9fb" stroke="#8b5cf6"/><text x="323" y="270" fill="#8b5cf6">D</text>
+    <rect x="348" y="252" width="34" height="26" rx="4" fill="#efe9fb" stroke="#8b5cf6"/><text x="365" y="270" fill="#8b5cf6">E</text>
+    <rect x="390" y="252" width="34" height="26" rx="4" fill="#efe9fb" stroke="#8b5cf6"/><text x="407" y="270" fill="#8b5cf6">F</text>
+  </g>
+</svg>
+        <figcaption>圖 30-2:BFS 的「水波擴散」。從 A(磚紅,距離 0)出發,先吃掉整個第 1 層 {B, C}(藍綠),再吃第 2 層 {D, E, F}(紫)。每個頂點旁的數字是它到 A 的最短步數。</figcaption>
+      </div>
+
+      <h3>Python 實作 BFS</h3>
+      <p>
+        我們用 <code>collections.deque</code> 當佇列——它的 <code>popleft()</code> 是 $O(1)$ 的「從前端取出」,
+        比 list 的 <code>pop(0)</code>($O(n)$)快得多。這是第 29 章學過的細節,現在派上用場了。
+      </p>
+      <pre><code class="language-python">from collections import deque
+
+def bfs(graph, start):
+    visited = {start}              # 已看過的頂點(集合,查詢 O(1))
+    order = []                     # 記錄走訪順序
+    queue = deque([start])         # 佇列:先進先出
+    while queue:
+        node = queue.popleft()     # 從隊伍「前端」取出
+        order.append(node)
+        for neighbor in graph[node]:
+            if neighbor not in visited:
+                visited.add(neighbor)   # 關鍵:一「入列」就立刻標記
+                queue.append(neighbor)  # 放到隊伍「尾端」
+    return order
+
+print(bfs(graph, 'A'))   # ['A', 'B', 'C', 'D', 'E', 'F']</code></pre>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">常見陷阱:要在「入列時」標記,不是「出列時」</span>
+          <p>很多初學者把 <code>visited.add</code> 寫在 <code>popleft()</code> 之後。這在小圖看起來「也會動」,
+          但同一個頂點可能被多個鄰居重複塞進佇列,造成大量重複工作,最壞情況退化成指數級。
+          記住:<strong>一旦把某頂點放進佇列,它的命運就定了</strong>(最短距離已確定),立刻標記,別讓它再被加入第二次。</p>
+        </div>
+      </div>
+
+      <h3>BFS 的招牌應用:無權圖的最短路徑</h3>
+      <p>
+        BFS 為什麼這麼重要?因為它<strong>免費</strong>就解出了一個大問題:在一張<strong>無權圖</strong>裡
+        (每條邊都算「1 步」),從起點到任何頂點的<strong>最少邊數</strong>是多少。理由很簡單:
+        BFS 是按距離一層一層擴散的,所以它<strong>第一次</strong>碰到某個頂點時,走的必然是最短的那條路。
+      </p>
+      <p>把 <code>order</code> 換成「距離字典」,稍微改一下就好:</p>
+      <pre><code class="language-python">from collections import deque
+
+def bfs_distances(graph, start):
+    dist = {start: 0}              # 距離字典兼當「已看過」用
+    queue = deque([start])
+    while queue:
+        node = queue.popleft()
+        for neighbor in graph[node]:
+            if neighbor not in dist:            # 還沒有距離 = 還沒看過
+                dist[neighbor] = dist[node] + 1 # 比上一層多走一步
+                queue.append(neighbor)
+    return dist
+
+print(bfs_distances(graph, 'A'))
+# {'A': 0, 'B': 1, 'C': 1, 'D': 2, 'E': 2, 'F': 2}</code></pre>
+      <p>
+        如果你不只要「幾步」,還要「實際走哪條路」,只要多記一個 <strong>parent(前驅)</strong> 字典:
+        每次把某頂點加入佇列時,記下「我是從誰過來的」。最後從終點沿著 parent 一路回溯到起點,
+        反轉就是最短路徑:
+      </p>
+      <pre><code class="language-python">from collections import deque
+
+def bfs_path(graph, start, goal):
+    parent = {start: None}        # 記錄每個頂點是「從誰」第一次到達的
+    queue = deque([start])
+    while queue:
+        node = queue.popleft()
+        if node == goal:
+            break
+        for neighbor in graph[node]:
+            if neighbor not in parent:
+                parent[neighbor] = node
+                queue.append(neighbor)
+    if goal not in parent:
+        return None               # 起點走不到終點
+    # 從終點沿 parent 回溯,再反轉
+    path, cur = [], goal
+    while cur is not None:
+        path.append(cur)
+        cur = parent[cur]
+    path.reverse()
+    return path
+
+print(bfs_path(graph, 'A', 'F'))   # ['A', 'C', 'F']</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">BFS 的時間複雜度:$O(V + E)$</span>
+          <p>每個頂點最多入列、出列一次($O(V)$);每條邊在掃描鄰居時最多被看兩次($O(E)$)。
+          合起來是 <strong>$O(V + E)$</strong>——和「圖的大小」成線性。這已經是「必須把每個頂點和每條邊
+          至少看一次」的問題所能達到的最佳速度了。空間複雜度同樣是 $O(V)$(visited 與佇列)。</p>
+        </div>
+      </div>
+
+      <h3>BFS 還能做什麼</h3>
+      <p>同一套「層層擴散」的骨架,稍微改裝就能解一票問題:</p>
+      <ul>
+        <li><strong>最少步數問題</strong>:魔術方塊最少轉幾次能還原?騎士從棋盤這格到那格最少跳幾步?
+        字梯(word ladder)從一個單字變到另一個最少改幾個字母?只要「每一步代價相同」,就是 BFS 的主場。</li>
+        <li><strong>連通元件(connected components)</strong>:從某點 BFS,能走到的所有頂點就是同一塊。稍後詳談。</li>
+        <li><strong>二分圖檢測(bipartite check)</strong>:邊走邊把相鄰頂點塗成相反顏色,若發現「相鄰卻同色」就不是二分圖。稍後實作。</li>
+        <li><strong>洪水填充(flood fill)</strong>:小畫家的「油漆桶」工具、踩地雷點開一片空白,本質都是在格子圖上跑 BFS/DFS。</li>
+      </ul>
+
+      <h2>深度優先搜尋 DFS:不撞牆不回頭</h2>
+      <p>
+        BFS 是謹慎的探勘隊,把附近搜乾淨才前進。<strong>深度優先搜尋(Depth-First Search, DFS)</strong>
+        則是個莽撞的冒險家:<strong>挑一條路,一頭栽到底,直到走不下去(死路),才退回上一個岔路口
+        試另一條</strong>。就像走迷宮時你沿著右手邊的牆一直走——這正是 DFS 的精神。
+      </p>
+      <p>
+        BFS 用佇列(先進先出),DFS 則用<strong>堆疊(stack,後進先出)</strong>:最晚發現的岔路,
+        最先被探索。而堆疊最自然的化身,就是<strong>函式呼叫自己</strong>——遞迴。所以 DFS 通常寫成遞迴,
+        簡潔得不可思議。
+      </p>
+
+      <h3>DFS 怎麼跑:遞迴版</h3>
+      <p>一樣從 A 出發,鄰居按清單順序嘗試:</p>
+      <pre><code class="language-python">def dfs(graph, start):
+    visited = set()
+    order = []
+    def visit(node):
+        visited.add(node)
+        order.append(node)
+        for neighbor in graph[node]:
+            if neighbor not in visited:
+                visit(neighbor)      # 對鄰居遞迴:一路鑽到底
+    visit(start)
+    return order
+
+print(dfs(graph, 'A'))   # ['A', 'B', 'D', 'E', 'F', 'C']</code></pre>
+      <p>
+        走訪順序 <strong>A → B → D → E → F → C</strong>,和 BFS 截然不同。跟著走一遍:A 先衝到 B,
+        B 衝到 D(死路,退回),再從 B 衝到 E,E 衝到 F,F 衝到 C(C 的鄰居都看過了,退回),
+        然後一路退回 A。注意 C 雖然是 A 的直接鄰居,卻<strong>最後</strong>才被走到——因為 DFS 先把 B 那條路鑽到天荒地老。
+      </p>
+
+      <h3>迭代版:自己管理一個堆疊</h3>
+      <p>
+        遞迴很漂亮,但 Python 的遞迴深度有上限(預設約 1000 層),圖一大就可能「堆疊溢位」。
+        這時可以改用迭代版,自己拿一個 list 當堆疊。技巧是把鄰居<strong>逆序</strong>壓入,
+        讓走訪順序和遞迴版一致:
+      </p>
+      <pre><code class="language-python">def dfs_iter(graph, start):
+    visited = set()
+    order = []
+    stack = [start]
+    while stack:
+        node = stack.pop()          # 從「頂端」取出(後進先出)
+        if node in visited:
+            continue                # 可能被重複壓入,出列時再檢查
+        visited.add(node)
+        order.append(node)
+        for neighbor in reversed(graph[node]):   # 逆序壓入
+            if neighbor not in visited:
+                stack.append(neighbor)
+    return order
+
+print(dfs_iter(graph, 'A'))   # ['A', 'B', 'D', 'E', 'F', 'C']</code></pre>
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">迭代 DFS 的小差異:在「出列時」才標記</span>
+          <p>注意迭代版把 <code>visited</code> 檢查放在 <code>pop()</code> 之後。這是因為同一個頂點可能在被處理前
+          就被好幾個鄰居壓進堆疊;我們允許它重複入堆疊,但靠出列時的 <code>if node in visited: continue</code>
+          確保它只被真正處理一次。這和 BFS「入列即標記」的策略不同,是堆疊行為帶來的小細節。</p>
+        </div>
+      </div>
+
+      <h3>發現時間與完成時間:DFS 的隱藏寶藏</h3>
+      <p>
+        DFS 有個 BFS 沒有的迷人結構。我們替每個頂點記兩個時間戳:<strong>發現時間(discovery time)</strong>——
+        第一次踏進它的時刻;以及<strong>完成時間(finish time)</strong>——它所有子孫都走完、要退出它的時刻。
+        想像一個碼表,每發生一次「進入」或「退出」就 +1。
+      </p>
+      <pre><code class="language-python">def dfs_times(graph, start):
+    color = {v: 'white' for v in graph}   # white=未發現
+    disc, fin = {}, {}
+    clock = [0]                            # 用 list 當可變的計時器
+    def visit(u):
+        clock[0] += 1
+        disc[u] = clock[0]                 # 進入 u:記下發現時間
+        color[u] = 'gray'                  # gray=發現了、還在堆疊上
+        for v in graph[u]:
+            if color[v] == 'white':
+                visit(v)
+        color[u] = 'black'                 # black=完成(子孫全走完)
+        clock[0] += 1
+        fin[u] = clock[0]                  # 退出 u:記下完成時間
+    visit(start)
+    return disc, fin
+
+disc, fin = dfs_times(graph, 'A')
+for v in 'ABCDEF':
+    print(v, disc[v], '/', fin[v])
+# A 1 / 12   B 2 / 11   D 3 / 4   E 5 / 10   F 6 / 9   C 7 / 8</code></pre>
+      <p>
+        看那些數字:每個頂點的 <code>[發現, 完成]</code> 區間,要嘛完全互相包含,要嘛完全不重疊——
+        絕不會「交錯」。這叫<strong>括號定理(parenthesis theorem)</strong>:DFS 的進出,
+        就像一串配對工整的括號。這個結構不是花拳繡腿——它正是<strong>拓樸排序</strong>與
+        <strong>強連通元件</strong>演算法的數學地基,等一下你就會看到它發光。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 540 250" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- tree edges (red) and non-tree edge (dashed) -->
+  <g stroke-width="3">
+    <line x1="110" y1="60" x2="300" y2="60" stroke="#b4541f"/>     <!-- A-B tree -->
+    <line x1="300" y1="60" x2="448" y2="42" stroke="#b4541f"/>     <!-- B-D tree -->
+    <line x1="300" y1="60" x2="448" y2="150" stroke="#b4541f"/>    <!-- B-E tree -->
+    <line x1="448" y1="150" x2="300" y2="195" stroke="#b4541f"/>   <!-- E-F tree -->
+    <line x1="300" y1="195" x2="110" y2="195" stroke="#b4541f"/>   <!-- F-C tree -->
+  </g>
+  <line x1="110" y1="60" x2="110" y2="195" stroke="#8a929b" stroke-width="2" stroke-dasharray="5 4"/>  <!-- A-C non-tree -->
+  <g font-size="15" font-weight="800" text-anchor="middle">
+    <circle cx="110" cy="60" r="22" fill="#2f6f6a"/><text x="110" y="66" fill="#fff">A</text>
+    <circle cx="300" cy="60" r="22" fill="#2f6f6a"/><text x="300" y="66" fill="#fff">B</text>
+    <circle cx="110" cy="195" r="22" fill="#2f6f6a"/><text x="110" y="201" fill="#fff">C</text>
+    <circle cx="448" cy="42" r="22" fill="#2f6f6a"/><text x="448" y="48" fill="#fff">D</text>
+    <circle cx="448" cy="150" r="22" fill="#2f6f6a"/><text x="448" y="156" fill="#fff">E</text>
+    <circle cx="300" cy="195" r="22" fill="#2f6f6a"/><text x="300" y="201" fill="#fff">F</text>
+  </g>
+  <!-- disc/fin labels -->
+  <g font-size="11" font-weight="700" fill="#b4541f" text-anchor="middle">
+    <text x="110" y="30">1/12</text>
+    <text x="300" y="30">2/11</text>
+    <text x="448" y="16">3/4</text>
+    <text x="486" y="150">5/10</text>
+    <text x="300" y="230">6/9</text>
+    <text x="80" y="170">7/8</text>
+  </g>
+  <text x="370" y="225" font-size="11" fill="#8a929b">虛線 A–C 是「非樹邊」(C 已從 F 走到)</text>
+</svg>
+        <figcaption>圖 30-3:DFS 的走訪樹與時間戳。紅色實線是 DFS 實際走過的「樹邊」,虛線 A–C 是沒被用到的邊。每個頂點標著「發現時間/完成時間」,它們構成完美巢狀的括號結構。</figcaption>
+      </div>
+
+      <h3>DFS 的應用</h3>
+      <ul>
+        <li><strong>找出兩點間是否有路徑</strong>:從起點 DFS,看走不走得到終點。是「連通嗎?」最直接的解法。</li>
+        <li><strong>偵測環</strong>:DFS 過程中若碰到「還在堆疊上(gray)」的頂點,代表繞回去了 → 有環。稍後詳談。</li>
+        <li><strong>走迷宮、解謎</strong>:迷宮就是格子圖,DFS 的「一路走到底、撞牆回頭」正是人走迷宮的直覺。</li>
+        <li><strong>拓樸排序、強連通元件</strong>:都建立在 DFS 的完成時間之上。</li>
+      </ul>
+      <p>來看「找路徑」這個最基本的應用,順便示範遞迴怎麼「提早回報成功」:</p>
+      <pre><code class="language-python">def has_path(graph, start, goal):
+    visited = set()
+    def visit(node):
+        if node == goal:
+            return True
+        visited.add(node)
+        for neighbor in graph[node]:
+            if neighbor not in visited:
+                if visit(neighbor):       # 任何一條子路找到了,就一路回報 True
+                    return True
+        return False
+    return visit(start)
+
+print(has_path(graph, 'A', 'F'))   # True
+print(has_path(graph, 'D', 'C'))   # True(D-B-...-C 走得到)</code></pre>
+
+      <h2>BFS vs DFS:該用哪一個?</h2>
+      <p>
+        兩者都是 $O(V+E)$、都能走遍整張圖,差別只在「探索的順序」。但這個順序差異,
+        決定了它們各自擅長的題型。先看一張概念圖,再看取捨表。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 560 250" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- BFS tree -->
+  <text x="140" y="24" font-size="13" font-weight="800" fill="#2f6f6a" text-anchor="middle">BFS:一層一層</text>
+  <g stroke="#cbd2d8" stroke-width="2">
+    <line x1="140" y1="50" x2="80" y2="110"/><line x1="140" y1="50" x2="200" y2="110"/>
+    <line x1="80" y1="110" x2="50" y2="180"/><line x1="80" y1="110" x2="110" y2="180"/>
+    <line x1="200" y1="110" x2="170" y2="180"/><line x1="200" y1="110" x2="230" y2="180"/>
+  </g>
+  <g font-size="13" font-weight="800" text-anchor="middle" fill="#fff">
+    <circle cx="140" cy="50" r="17" fill="#2f6f6a"/><text x="140" y="55">1</text>
+    <circle cx="80" cy="110" r="17" fill="#2f6f6a"/><text x="80" y="115">2</text>
+    <circle cx="200" cy="110" r="17" fill="#2f6f6a"/><text x="200" y="115">3</text>
+    <circle cx="50" cy="180" r="17" fill="#2f6f6a"/><text x="50" y="185">4</text>
+    <circle cx="110" cy="180" r="17" fill="#2f6f6a"/><text x="110" y="185">5</text>
+    <circle cx="170" cy="180" r="17" fill="#2f6f6a"/><text x="170" y="185">6</text>
+    <circle cx="230" cy="180" r="17" fill="#2f6f6a"/><text x="230" y="185">7</text>
+  </g>
+  <!-- DFS tree -->
+  <text x="420" y="24" font-size="13" font-weight="800" fill="#b4541f" text-anchor="middle">DFS:一路到底</text>
+  <g stroke="#cbd2d8" stroke-width="2">
+    <line x1="420" y1="50" x2="360" y2="110"/><line x1="420" y1="50" x2="480" y2="110"/>
+    <line x1="360" y1="110" x2="330" y2="180"/><line x1="360" y1="110" x2="390" y2="180"/>
+    <line x1="480" y1="110" x2="450" y2="180"/><line x1="480" y1="110" x2="510" y2="180"/>
+  </g>
+  <g font-size="13" font-weight="800" text-anchor="middle" fill="#fff">
+    <circle cx="420" cy="50" r="17" fill="#b4541f"/><text x="420" y="55">1</text>
+    <circle cx="360" cy="110" r="17" fill="#b4541f"/><text x="360" y="115">2</text>
+    <circle cx="480" cy="110" r="17" fill="#b4541f"/><text x="480" y="115">5</text>
+    <circle cx="330" cy="180" r="17" fill="#b4541f"/><text x="330" y="185">3</text>
+    <circle cx="390" cy="180" r="17" fill="#b4541f"/><text x="390" y="185">4</text>
+    <circle cx="450" cy="180" r="17" fill="#b4541f"/><text x="450" y="185">6</text>
+    <circle cx="510" cy="180" r="17" fill="#b4541f"/><text x="510" y="185">7</text>
+  </g>
+</svg>
+        <figcaption>圖 30-4:同一棵樹,兩種走訪順序。BFS(左)橫著掃,1→2→3 再往下;DFS(右)直著鑽,1→2→3 一路到底再回頭。數字是造訪先後。</figcaption>
+      </div>
+
+      <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>面向</th><th>BFS(廣度優先)</th><th>DFS(深度優先)</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>資料結構</td><td>佇列(queue,FIFO)</td><td>堆疊(stack,LIFO)/ 遞迴</td></tr>
+          <tr><td>探索順序</td><td>由近到遠,一層一層</td><td>挑一條路鑽到底,再回頭</td></tr>
+          <tr><td>無權最短路徑</td><td>✅ 天生就會(第一次碰到即最短)</td><td>❌ 不保證最短</td></tr>
+          <tr><td>記憶體(最壞)</td><td>$O(寬度)$:寬圖會吃很多(整層都在佇列裡)</td><td>$O(深度)$:深圖會吃很多(遞迴堆疊)</td></tr>
+          <tr><td>環/連通/可達性</td><td>都可以</td><td>都可以</td></tr>
+          <tr><td>拓樸排序、SCC</td><td>Kahn 版用 BFS 思路</td><td>✅ 經典做法靠 DFS 完成時間</td></tr>
+          <tr><td>適合的題型</td><td>最少步數、最近、層級、廣播擴散</td><td>找任一條路、回溯、環、相依分析、走迷宮</td></tr>
+        </tbody>
+      </table>
+      </div>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">一句話記住怎麼選</span>
+          <p>看到「<strong>最少</strong>步數 / <strong>最近</strong> / <strong>最短(無權)</strong>」就用 <strong>BFS</strong>;
+          看到「<strong>有沒有一條路</strong> / 偵測<strong>環</strong> / 相依<strong>排序</strong> / <strong>回溯</strong>窮舉」就用 <strong>DFS</strong>。
+          兩者骨架幾乎一樣,差別只在那個容器是隊伍還是堆疊——這是整個圖演算法世界裡 CP 值最高的一個認知。</p>
+        </div>
+      </div>
+
+      <h2>連通元件:這張圖分成幾座「島」?</h2>
+      <p>
+        一張圖不一定是「整片相連」的。它可能像一片群島:有幾塊互相連通,塊與塊之間卻沒有任何邊。
+        每一塊「內部彼此走得到、與外界走不到」的最大子圖,就是一個<strong>連通元件(connected component)</strong>。
+      </p>
+      <p>
+        找出所有連通元件的演算法非常自然:對每個「還沒被走過」的頂點,發動一次 BFS 或 DFS,
+        把這次能碰到的所有頂點圈成一塊。掃完所有頂點,就分好了:
+      </p>
+      <pre><code class="language-python">def connected_components(graph):
+    visited = set()
+    components = []
+    for start in graph:                  # 確保每個頂點都被考慮到
+        if start not in visited:
+            comp = []
+            stack = [start]              # 這裡用 DFS;換成 deque 就是 BFS
+            while stack:
+                node = stack.pop()
+                if node in visited:
+                    continue
+                visited.add(node)
+                comp.append(node)
+                for nb in graph[node]:
+                    if nb not in visited:
+                        stack.append(nb)
+            components.append(comp)
+    return components
+
+islands = {
+    'A': ['B'], 'B': ['A', 'C'], 'C': ['B'],   # 第一座島
+    'D': ['E'], 'E': ['D'],                      # 第二座島
+    'F': [],                                     # 孤島(沒有鄰居)
+}
+print(connected_components(islands))
+# [['A', 'B', 'C'], ['D', 'E'], ['F']]</code></pre>
+
+      <div class="diagram">
+<svg viewBox="0 0 560 200" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- island 1: A-B-C -->
+  <g stroke="#8a929b" stroke-width="2">
+    <line x1="60" y1="70" x2="150" y2="50"/>
+    <line x1="150" y1="50" x2="140" y2="140"/>
+  </g>
+  <g font-size="14" font-weight="800" text-anchor="middle" fill="#fff">
+    <circle cx="60" cy="70" r="20" fill="#2f6f6a"/><text x="60" y="75">A</text>
+    <circle cx="150" cy="50" r="20" fill="#2f6f6a"/><text x="150" y="55">B</text>
+    <circle cx="140" cy="140" r="20" fill="#2f6f6a"/><text x="140" y="145">C</text>
+  </g>
+  <!-- island 2: D-E -->
+  <line x1="290" y1="60" x2="380" y2="120" stroke="#8a929b" stroke-width="2"/>
+  <g font-size="14" font-weight="800" text-anchor="middle" fill="#fff">
+    <circle cx="290" cy="60" r="20" fill="#b4541f"/><text x="290" y="65">D</text>
+    <circle cx="380" cy="120" r="20" fill="#b4541f"/><text x="380" y="125">E</text>
+  </g>
+  <!-- island 3: F -->
+  <g font-size="14" font-weight="800" text-anchor="middle" fill="#fff">
+    <circle cx="500" cy="90" r="20" fill="#8b5cf6"/><text x="500" y="95">F</text>
+  </g>
+  <text x="115" y="190" font-size="12" fill="#8a929b" text-anchor="middle">元件 1</text>
+  <text x="335" y="180" font-size="12" fill="#8a929b" text-anchor="middle">元件 2</text>
+  <text x="500" y="140" font-size="12" fill="#8a929b" text-anchor="middle">元件 3(孤點)</text>
+</svg>
+        <figcaption>圖 30-5:三個連通元件(三座島)。同色為同一塊,塊與塊之間沒有任何邊。對每個未訪頂點各跑一次走訪,即可把它們一一圈出。</figcaption>
+      </div>
+
+      <h3>有向圖的進階版:強連通元件(SCC)</h3>
+      <p>
+        上面講的是<strong>無向圖</strong>。換到<strong>有向圖</strong>,「連通」要更講究:光是「A 走得到 B」還不夠,
+        得「A 走得到 B,<strong>而且</strong> B 也走得回 A」才算同一夥。一群頂點若兩兩<strong>互相可達</strong>,
+        就構成一個<strong>強連通元件(Strongly Connected Component, SCC)</strong>。
+      </p>
+      <p>
+        把每個 SCC 縮成一個點,整張有向圖就會塌成一個<strong>沒有環的有向圖(DAG)</strong>——這個「凝聚圖」
+        在編譯器、相依分析裡用途極廣(例如找出程式裡互相遞迴呼叫的一群函式)。
+      </p>
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">兩個經典 SCC 演算法(一句話版)</span>
+          <p><strong>Kosaraju 演算法</strong>:做兩次 DFS——先在原圖跑一次記下完成時間,再把所有邊「反向」,
+          按完成時間由大到小跑第二次,每棵 DFS 樹就是一個 SCC。<strong>Tarjan 演算法</strong>:只跑<em>一次</em> DFS,
+          用一個「low-link 值」追蹤每個頂點能繞回的最早祖先,巧妙地一趟就切出所有 SCC。兩者都是 $O(V+E)$;
+          細節留到進階,但你已經看到——它們全都站在 DFS 的「完成時間」這個肩膀上。</p>
+        </div>
+      </div>
+
+      <h2>拓樸排序:替「有先後的任務」排隊</h2>
+      <p>
+        你想修「機器學習」,但它要先修「演算法」;「演算法」又要先修「資料結構」和「離散數學」……
+        這些「A 必須在 B 之前」的限制,構成一個<strong>有向無環圖(Directed Acyclic Graph, DAG)</strong>:
+        邊 <code>A → B</code> 代表「A 要排在 B 前面」。問題是:能不能把所有課排成一條<strong>線性順序</strong>,
+        讓每門課都排在它所有先修課之後?
+      </p>
+      <p>
+        這就是<strong>拓樸排序(topological sort)</strong>。它的存在有個前提:<strong>圖裡不能有環</strong>——
+        如果 A 要先於 B、B 要先於 C、C 又要先於 A,那是死結,誰也排不出來(這也是「無環」這個詞的由來)。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 620 250" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="ar" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <path d="M0,0 L9,3 L0,6 Z" fill="#8a929b"/>
+    </marker>
+  </defs>
+  <g stroke="#8a929b" stroke-width="2" fill="none" marker-end="url(#ar)">
+    <line x1="92" y1="55" x2="178" y2="45"/>    <!-- prog->ds -->
+    <line x1="92" y1="65" x2="178" y2="150"/>   <!-- prog->discrete -->
+    <line x1="262" y1="45" x2="348" y2="45"/>   <!-- ds->os -->
+    <line x1="262" y1="52" x2="348" y2="140"/>  <!-- ds->algo -->
+    <line x1="262" y1="158" x2="348" y2="152"/> <!-- discrete->algo -->
+    <line x1="262" y1="165" x2="520" y2="115"/> <!-- discrete->ml -->
+    <line x1="432" y1="150" x2="520" y2="110"/> <!-- algo->ml -->
+  </g>
+  <g font-size="11" font-weight="700" text-anchor="middle" fill="#fff">
+    <circle cx="60" cy="60" r="30" fill="#2f6f6a"/><text x="60" y="58">程式</text><text x="60" y="72">設計</text>
+    <circle cx="210" cy="42" r="30" fill="#2f6f6a"/><text x="210" y="40">資料</text><text x="210" y="54">結構</text>
+    <circle cx="210" cy="160" r="30" fill="#2f6f6a"/><text x="210" y="158">離散</text><text x="210" y="172">數學</text>
+    <circle cx="380" cy="42" r="30" fill="#2f6f6a"/><text x="380" y="40">作業</text><text x="380" y="54">系統</text>
+    <circle cx="400" cy="152" r="30" fill="#2f6f6a"/><text x="400" y="156">演算法</text>
+    <circle cx="550" cy="100" r="30" fill="#b4541f"/><text x="550" y="98">機器</text><text x="550" y="112">學習</text>
+  </g>
+  <!-- linear order strip -->
+  <text x="20" y="222" font-size="12" font-weight="700" fill="#1f2328">合法排序:</text>
+  <text x="95" y="222" font-size="12" fill="#2f6f6a" font-weight="700">程式設計 → 資料結構 → 離散數學 → 作業系統 → 演算法 → 機器學習</text>
+</svg>
+        <figcaption>圖 30-6:課程先修關係的 DAG。箭頭 X→Y 代表「X 要先修」。拓樸排序把它攤平成一條線,讓每門課都排在它的先修課之後。合法排序通常不只一種。</figcaption>
+      </div>
+
+      <h3>做法一:Kahn 演算法(看「入度」)</h3>
+      <p>
+        Kahn 的想法非常符合直覺:<strong>沒有任何先修課的科目(入度為 0)可以馬上修</strong>。
+        修完它,就把它「移除」,它指向的科目的「待修先修數」各減一;若某科目減到 0,代表它的先修都修完了,
+        輪到它。這其實就是一個用佇列驅動的 BFS。<strong>入度(in-degree)</strong>就是「指向我的箭頭數」。
+      </p>
+      <pre><code class="language-python">from collections import deque
+
+def topo_sort_kahn(graph):
+    # 1. 算每個頂點的入度
+    indeg = {u: 0 for u in graph}
+    for u in graph:
+        for v in graph[u]:
+            indeg[v] += 1
+    # 2. 所有入度為 0 的頂點先入列
+    queue = deque(u for u in graph if indeg[u] == 0)
+    order = []
+    while queue:
+        u = queue.popleft()
+        order.append(u)
+        for v in graph[u]:           # 「移除」u,等於拔掉它的所有出邊
+            indeg[v] -= 1
+            if indeg[v] == 0:        # v 的先修都修完了
+                queue.append(v)
+    if len(order) != len(graph):
+        raise ValueError("圖中有環,無法拓樸排序")   # 順帶偵測了環!
+    return order
+
+courses = {
+    '程式設計': ['資料結構', '離散數學'],
+    '資料結構': ['作業系統', '演算法'],
+    '離散數學': ['演算法', '機器學習'],
+    '作業系統': [],
+    '演算法': ['機器學習'],
+    '機器學習': [],
+}
+print(topo_sort_kahn(courses))
+# ['程式設計', '資料結構', '離散數學', '作業系統', '演算法', '機器學習']</code></pre>
+      <p>
+        留意最後那個 <code>if len(order) != len(graph)</code>:如果圖裡有環,環上的頂點入度永遠減不到 0、
+        進不了佇列,最後 <code>order</code> 會少幾個。所以 <strong>Kahn 演算法順手就能偵測有向環</strong>——一魚兩吃。
+      </p>
+
+      <h3>做法二:DFS + 完成時間</h3>
+      <p>
+        還記得 DFS 的完成時間嗎?這裡它大顯身手。觀察:在 DAG 裡,一個頂點 <strong>u 一定比它指向的所有頂點
+        「晚完成」</strong>(因為要先把子孫走完才會輪到 u 退出)。所以把所有頂點<strong>按完成時間由大到小</strong>
+        排,就是一個合法的拓樸序。實作上,只要在 DFS 「完成」一個頂點時把它推進清單,最後反轉即可:
+      </p>
+      <pre><code class="language-python">def topo_sort_dfs(graph):
+    visited = set()
+    order = []
+    def visit(u):
+        visited.add(u)
+        for v in graph[u]:
+            if v not in visited:
+                visit(v)
+        order.append(u)          # 關鍵:子孫都走完(「完成」)才加入
+    for u in graph:              # 圖可能不連通,每個未訪點都要起跑
+        if u not in visited:
+            visit(u)
+    order.reverse()             # 完成順序的反向 = 拓樸序
+    return order
+
+print(topo_sort_dfs(courses))
+# ['程式設計', '離散數學', '資料結構', '演算法', '作業系統', '機器學習'](也是合法的)</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">拓樸排序無所不在</span>
+          <p>只要有「A 必須在 B 之前」的相依關係,背後就是拓樸排序:<strong>課程先修</strong>規劃、
+          <code>make</code> / Bazel 等<strong>建置系統</strong>決定先編譯哪個檔、<strong>套件管理員</strong>(pip、npm)
+          安裝相依套件的順序、試算表<strong>公式</strong>的重算順序、專案管理的<strong>任務排程</strong>。
+          下次你 <code>npm install</code> 看到一堆套件依序裝好,那就是一次拓樸排序在跑。</p>
+        </div>
+      </div>
+
+      <h2>環偵測:有沒有「繞回原地」?</h2>
+      <p>
+        「圖裡有沒有環」是個極常見的問題:相依關係有沒有死結?電路有沒有迴路?死結偵測(deadlock)裡,
+        資源等待圖有沒有環?有向圖和無向圖的判法略有不同,我們各看一種漂亮的解法。
+      </p>
+
+      <h3>有向圖:用三種顏色追蹤 DFS</h3>
+      <p>
+        在有向圖裡,環的特徵是 DFS 過程中出現<strong>回邊(back edge)</strong>:走到一個<strong>還在目前遞迴路徑上
+        (還沒完成)</strong>的頂點。我們用三種顏色標記每個頂點的狀態:
+      </p>
+      <ul>
+        <li><strong>白色(WHITE)</strong>:還沒拜訪。</li>
+        <li><strong>灰色(GRAY)</strong>:正在拜訪中——它還在當前的遞迴堆疊上。</li>
+        <li><strong>黑色(BLACK)</strong>:已完成,它和它的子孫都走完了。</li>
+      </ul>
+      <p>規則很簡單:DFS 時如果遇到一個<strong>灰色</strong>的鄰居,就代表繞回了自己的祖先 → <strong>找到環</strong>。</p>
+
+      <div class="diagram">
+<svg viewBox="0 0 440 230" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="ar2" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto"><path d="M0,0 L9,3 L0,6 Z" fill="#8a929b"/></marker>
+    <marker id="arR" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto"><path d="M0,0 L9,3 L0,6 Z" fill="#b4541f"/></marker>
+  </defs>
+  <g stroke="#8a929b" stroke-width="2" fill="none" marker-end="url(#ar2)">
+    <line x1="142" y1="60" x2="258" y2="60"/>    <!-- A->B -->
+    <line x1="280" y1="82" x2="280" y2="158"/>   <!-- B->C -->
+    <line x1="120" y1="82" x2="120" y2="158"/>   <!-- A->D -->
+  </g>
+  <!-- back edge C->A red dashed -->
+  <path d="M 258 178 Q 130 200 118 84" stroke="#b4541f" stroke-width="2.5" fill="none" stroke-dasharray="6 4" marker-end="url(#arR)"/>
+  <g font-size="15" font-weight="800" text-anchor="middle">
+    <circle cx="120" cy="60" r="22" fill="#9aa3ab"/><text x="120" y="66" fill="#fff">A</text>
+    <circle cx="280" cy="60" r="22" fill="#9aa3ab"/><text x="280" y="66" fill="#fff">B</text>
+    <circle cx="280" cy="180" r="22" fill="#9aa3ab"/><text x="280" y="186" fill="#fff">C</text>
+    <circle cx="120" cy="180" r="22" fill="#1f2328"/><text x="120" y="186" fill="#fff">D</text>
+  </g>
+  <g font-size="11" text-anchor="middle">
+    <text x="120" y="34" fill="#8a929b">灰</text>
+    <text x="280" y="34" fill="#8a929b">灰</text>
+    <text x="312" y="184" fill="#8a929b">灰</text>
+    <text x="120" y="214" fill="#1f2328">黑</text>
+  </g>
+  <text x="360" y="120" font-size="12" fill="#b4541f" font-weight="700">回邊!</text>
+  <text x="360" y="138" font-size="11" fill="#8a929b">C→A,而 A 是灰色</text>
+  <text x="360" y="153" font-size="11" fill="#8a929b">(還在堆疊上)→ 有環</text>
+</svg>
+        <figcaption>圖 30-7:有向圖環偵測。DFS 走到 A(灰)→B(灰)→C(灰),C 嘗試走向 A——但 A 還是灰色(在當前路徑上),這條 C→A 就是回邊,代表存在環 A→B→C→A。D 已完成,塗黑。</figcaption>
+      </div>
+
+      <pre><code class="language-python">def has_cycle_directed(graph):
+    WHITE, GRAY, BLACK = 0, 1, 2
+    color = {u: WHITE for u in graph}
+    def visit(u):
+        color[u] = GRAY                  # 進入:標記「在堆疊上」
+        for v in graph[u]:
+            if color[v] == GRAY:         # 碰到灰色 → 回邊 → 有環
+                return True
+            if color[v] == WHITE and visit(v):
+                return True
+        color[u] = BLACK                 # 完成:標記「已離開堆疊」
+        return False
+    return any(color[u] == WHITE and visit(u) for u in graph)
+
+dag = {'A': ['B', 'D'], 'B': ['C'], 'C': [], 'D': []}
+cyclic = {'A': ['B', 'D'], 'B': ['C'], 'C': ['A'], 'D': []}
+print(has_cycle_directed(dag))     # False
+print(has_cycle_directed(cyclic))  # True(A→B→C→A)</code></pre>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">別把「黑色」也當成環</span>
+          <p>只有碰到<strong>灰色</strong>頂點才算環。碰到<strong>黑色</strong>頂點只代表「這條路我以前走過、已經處理完了」,
+          那是 DAG 裡完全正常的「交會」(例如兩條路最後都通到同一個已完成的點),<em>不是</em>環。
+          初學者最常見的 bug,就是用單一個 <code>visited</code> 集合(只分白/非白),把正常交會誤判成環。
+          有向圖環偵測一定要分清楚「在路徑上(灰)」與「已完成(黑)」。</p>
+        </div>
+      </div>
+
+      <h3>無向圖:用第 29 章的並查集</h3>
+      <p>
+        無向圖判環有個特別優雅的方法,直接呼應第 29 章的<strong>並查集(Union-Find / Disjoint Set Union)</strong>。
+        想法是:一條一條把邊加進來,每條邊連接兩個頂點。如果某條邊的<strong>兩個端點原本就已經在同一個集合裡</strong>,
+        代表它們之間早就有路可通——這條新邊一接,就<strong>多出一個環</strong>。
+      </p>
+      <pre><code class="language-python">class UnionFind:
+    def __init__(self, items):
+        self.parent = {x: x for x in items}   # 一開始每個點自成一國
+    def find(self, x):
+        while self.parent[x] != x:
+            self.parent[x] = self.parent[self.parent[x]]  # 路徑壓縮
+            x = self.parent[x]
+        return x
+    def union(self, a, b):
+        ra, rb = self.find(a), self.find(b)
+        if ra == rb:
+            return False        # 已在同一集合 → 這條邊製造了環
+        self.parent[ra] = rb    # 合併兩國
+        return True
+
+def has_cycle_undirected(vertices, edges):
+    uf = UnionFind(vertices)
+    for u, v in edges:
+        if not uf.union(u, v):  # union 回傳 False 表示形成環
+            return True
+    return False
+
+V = ['A', 'B', 'C', 'D']
+print(has_cycle_undirected(V, [('A','B'), ('B','C'), ('C','D')]))        # False(一條鏈)
+print(has_cycle_undirected(V, [('A','B'), ('B','C'), ('C','A')]))        # True(三角形)</code></pre>
+      <p>
+        這個「加邊、若兩端已連通就成環」的並查集技巧,等到第 31 章講<strong>最小生成樹(MST)的 Kruskal 演算法</strong>時
+        會再次登場——Kruskal 正是「由小到大加邊,但<em>跳過會成環的邊</em>」。你看,工具一旦學會,就到處都用得上。
+      </p>
+
+      <h2>最短路徑:這一章的重頭戲</h2>
+      <p>
+        終於到了壓軸。BFS 已經解了「<strong>無權</strong>圖」的最短路徑,但真實世界的邊往往有<strong>權重</strong>:
+        兩城市間的公里數、網路的延遲、轉乘的時間、轉帳的手續費。這時「邊數最少」不等於「總權重最小」——
+        繞個遠路但每段都短,可能反而更划算。我們需要更強的工具。
+      </p>
+      <p>三位主角依「能力」與「代價」排排站:</p>
+      <ul>
+        <li><strong>Dijkstra</strong>:單一起點到所有點,要求<strong>邊權非負</strong>。又快又常用,地圖導航的基礎。</li>
+        <li><strong>Bellman-Ford</strong>:單一起點到所有點,<strong>容許負權</strong>,還能<strong>偵測負環</strong>。比較慢,但更通用。</li>
+        <li><strong>Floyd-Warshall</strong>:一口氣算出<strong>所有點對</strong>之間的最短路徑。三行迴圈,優雅但較貴。</li>
+      </ul>
+
+      <h3>核心動作:鬆弛(relaxation)</h3>
+      <p>
+        三個演算法共用一個核心動作,叫<strong>鬆弛(relax)</strong>。我們替每個頂點維護一個「目前已知到它的最短距離」
+        <code>dist[v]</code>(一開始除了起點是 0,其餘都是無限大 ∞)。鬆弛一條邊 <code>u → v</code>(權重 <code>w</code>)的意思是:
+      </p>
+      <blockquote>「如果<em>先到 u、再走這條邊</em>,會比我現在記的 <code>dist[v]</code> 更短,那就更新它。」<br>
+      也就是:<code>if dist[u] + w &lt; dist[v]: dist[v] = dist[u] + w</code></blockquote>
+      <p>
+        所有最短路徑演算法,本質上都是「<strong>用對的順序,把每條邊鬆弛足夠多次</strong>」。差別只在於那個「順序」和「次數」。
+      </p>
+
+      <h3>Dijkstra:每次貪心地確定「最近的未定點」</h3>
+      <p>
+        Dijkstra 的策略是<strong>貪心</strong>的:維護一群「距離已經確定」的頂點,每一步從「還沒確定」的頂點中,
+        挑出<strong>目前 <code>dist</code> 最小</strong>的那個,宣告它「定案」,再用它去鬆弛它的鄰居。
+        為什麼挑最小的就能「定案」?因為所有邊權非負,沒有任何尚未確定的路徑能「繞回來」讓它變得更短。
+      </p>
+      <p>
+        「每次挑出最小的」——這不正是<strong>優先佇列(priority queue)</strong>的拿手好戲嗎?第 29 章的
+        <strong>最小堆積(min-heap)</strong>正好提供 $O(\log V)$ 的「取出最小」。我們用 Python 的 <code>heapq</code>:
+      </p>
+      <pre><code class="language-python">import heapq
+
+def dijkstra(graph, start):
+    dist = {start: 0}
+    pq = [(0, start)]                       # 最小堆:(目前距離, 頂點)
+    while pq:
+        d, u = heapq.heappop(pq)            # 取出目前最近的未定點
+        if d &gt; dist.get(u, float('inf')):
+            continue                        # 過期的舊紀錄,跳過
+        for v, w in graph[u]:               # 鬆弛 u 的每條出邊
+            nd = d + w
+            if nd &lt; dist.get(v, float('inf')):
+                dist[v] = nd                # 找到更短的路 → 更新
+                heapq.heappush(pq, (nd, v)) # 把新距離丟進堆積
+    return dist
+
+graph = {
+    'A': [('B', 4), ('C', 1)],
+    'B': [('E', 3)],
+    'C': [('B', 2), ('D', 5)],
+    'D': [('E', 1)],
+    'E': [],
+}
+print(dijkstra(graph, 'A'))
+# {'A': 0, 'C': 1, 'B': 3, 'D': 6, 'E': 6}</code></pre>
+
+      <div class="diagram">
+<svg viewBox="0 0 540 250" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="arg" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto"><path d="M0,0 L9,3 L0,6 Z" fill="#8a929b"/></marker>
+    <marker id="arr" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto"><path d="M0,0 L9,3 L0,6 Z" fill="#b4541f"/></marker>
+  </defs>
+  <!-- edges -->
+  <g stroke-width="2.5" fill="none">
+    <line x1="92" y1="112" x2="232" y2="68" stroke="#8a929b" marker-end="url(#arg)"/>     <!-- A->B 4 -->
+    <line x1="92" y1="128" x2="232" y2="182" stroke="#b4541f" marker-end="url(#arr)"/>    <!-- A->C 1 (path) -->
+    <line x1="250" y1="162" x2="250" y2="78" stroke="#b4541f" marker-end="url(#arr)"/>    <!-- C->B 2 (path) -->
+    <line x1="278" y1="180" x2="402" y2="190" stroke="#8a929b" marker-end="url(#arg)"/>   <!-- C->D 5 -->
+    <line x1="272" y1="56" x2="426" y2="74" stroke="#b4541f" marker-end="url(#arr)"/>     <!-- B->E 3 (path) -->
+    <line x1="430" y1="178" x2="452" y2="98" stroke="#8a929b" marker-end="url(#arg)"/>    <!-- D->E 1 -->
+  </g>
+  <!-- weight labels -->
+  <g font-size="12" font-weight="700" fill="#1f2328">
+    <text x="150" y="78">4</text>
+    <text x="148" y="168" fill="#b4541f">1</text>
+    <text x="232" y="125" fill="#b4541f">2</text>
+    <text x="320" y="200">5</text>
+    <text x="350" y="55" fill="#b4541f">3</text>
+    <text x="455" y="145">1</text>
+  </g>
+  <!-- nodes -->
+  <g font-size="15" font-weight="800" text-anchor="middle">
+    <circle cx="70" cy="120" r="22" fill="#b4541f"/><text x="70" y="126" fill="#fff">A</text>
+    <circle cx="250" cy="55" r="22" fill="#2f6f6a"/><text x="250" y="61" fill="#fff">B</text>
+    <circle cx="250" cy="180" r="22" fill="#2f6f6a"/><text x="250" y="186" fill="#fff">C</text>
+    <circle cx="420" cy="190" r="22" fill="#2f6f6a"/><text x="420" y="196" fill="#fff">D</text>
+    <circle cx="450" cy="78" r="22" fill="#2f6f6a"/><text x="450" y="84" fill="#fff">E</text>
+  </g>
+  <!-- final distances -->
+  <g font-size="11" font-weight="700" fill="#b4541f" text-anchor="middle">
+    <text x="70" y="92">0</text>
+    <text x="250" y="28">3</text>
+    <text x="222" y="184">1</text>
+    <text x="420" y="222">6</text>
+    <text x="482" y="78">6</text>
+  </g>
+</svg>
+        <figcaption>圖 30-8:Dijkstra 在加權有向圖上的結果。紅字是每個頂點到 A 的最短距離,紅色邊是最短路徑樹。注意 B 的距離不是直達的 4,而是繞道 A→C→B = 1+2 = 3——鬆弛把它「修短」了。</figcaption>
+      </div>
+
+      <p>逐步追蹤一次(<code>·</code> 表示 ∞),體會「鬆弛」如何一步步把距離修短:</p>
+      <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>取出(定案)</th><th>A</th><th>B</th><th>C</th><th>D</th><th>E</th><th>動作</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>(初始)</td><td>0</td><td>·</td><td>·</td><td>·</td><td>·</td><td>起點 A = 0</td></tr>
+          <tr><td>A(0)</td><td>0</td><td>4</td><td>1</td><td>·</td><td>·</td><td>鬆弛 A→B=4、A→C=1</td></tr>
+          <tr><td>C(1)</td><td>0</td><td><strong>3</strong></td><td>1</td><td>6</td><td>·</td><td>A→C→B=3 比 4 短!D=6</td></tr>
+          <tr><td>B(3)</td><td>0</td><td>3</td><td>1</td><td>6</td><td>6</td><td>鬆弛 B→E=3+3=6</td></tr>
+          <tr><td>D(6)</td><td>0</td><td>3</td><td>1</td><td>6</td><td>6</td><td>D→E=7,沒比 6 短,不更新</td></tr>
+          <tr><td>E(6)</td><td>0</td><td>3</td><td>1</td><td>6</td><td>6</td><td>全部定案,結束</td></tr>
+        </tbody>
+      </table>
+      </div>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">為什麼 Dijkstra 不能有負權邊?</span>
+          <p>Dijkstra 的貪心建立在一個假設上:「一旦某頂點被取出定案,就不可能再有更短的路了。」這在邊權非負時成立,
+          但<strong>負邊會打破它</strong>。看下圖:從 A 出發,A→B = 4,A→C = 5,C→B = −3。Dijkstra 會先取出 B(距離 4)
+          並宣告定案——但真正的最短是 A→C→B = 5 + (−3) = <strong>2</strong>!那條更短的路,因為要先經過「比較遠」的 C,
+          被貪心策略錯過了。有負權?請改用 Bellman-Ford。</p>
+        </div>
+      </div>
+
+      <div class="diagram">
+<svg viewBox="0 0 440 190" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs><marker id="arn" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto"><path d="M0,0 L9,3 L0,6 Z" fill="#8a929b"/></marker></defs>
+  <g stroke="#8a929b" stroke-width="2.5" fill="none" marker-end="url(#arn)">
+    <line x1="102" y1="92" x2="262" y2="62"/>    <!-- A->B 4 -->
+    <line x1="102" y1="108" x2="262" y2="138"/>  <!-- A->C 5 -->
+    <line x1="290" y1="138" x2="290" y2="84"/>   <!-- C->B -3 -->
+  </g>
+  <g font-size="13" font-weight="700" fill="#1f2328">
+    <text x="165" y="68">4</text>
+    <text x="165" y="138">5</text>
+    <text x="298" y="115" fill="#b4541f">-3</text>
+  </g>
+  <g font-size="15" font-weight="800" text-anchor="middle">
+    <circle cx="80" cy="100" r="22" fill="#b4541f"/><text x="80" y="106" fill="#fff">A</text>
+    <circle cx="290" cy="60" r="22" fill="#2f6f6a"/><text x="290" y="66" fill="#fff">B</text>
+    <circle cx="290" cy="150" r="22" fill="#2f6f6a"/><text x="290" y="156" fill="#fff">C</text>
+  </g>
+  <text x="360" y="60" font-size="11" fill="#8a929b">Dijkstra 說 B=4(錯)</text>
+  <text x="360" y="78" font-size="11" fill="#b4541f">真實 B=2(A→C→B)</text>
+</svg>
+        <figcaption>圖 30-9:負權邊讓 Dijkstra 出錯。它太早把 B「定案」成 4,錯過了繞經 C 的更短路徑 5+(−3)=2。</figcaption>
+      </div>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">Dijkstra 的複雜度</span>
+          <p>用二元堆積實作的 Dijkstra 是 <strong>$O((V + E) \log V)$</strong>:每個頂點取出一次($V \log V$),
+          每條邊最多觸發一次 push($E \log V$)。這也是為什麼第 29 章要先把堆積學好——
+          沒有那個「$O(\log V)$ 取最小」的優先佇列,Dijkstra 跑不快。
+          (用更進階的費氏堆積可降到 $O(E + V \log V)$,但實務上二元堆積已經夠用。)</p>
+        </div>
+      </div>
+
+      <h3>Bellman-Ford:慢,但什麼都吃</h3>
+      <p>
+        Bellman-Ford 不耍貪心,改走「暴力但可靠」的路:<strong>把<em>每一條</em>邊都鬆弛,重複 $V-1$ 輪</strong>。
+        為什麼是 $V-1$ 輪?因為任何最短路徑最多經過 $V-1$ 條邊(不會重複頂點);每跑一輪,
+        至少能讓「多走一條邊才到」的頂點距離定下來。$V-1$ 輪後,所有最短距離都收斂了。
+      </p>
+      <pre><code class="language-python">def bellman_ford(vertices, edges, start):
+    dist = {v: float('inf') for v in vertices}
+    dist[start] = 0
+    # 鬆弛 V-1 輪
+    for _ in range(len(vertices) - 1):
+        for u, v, w in edges:
+            if dist[u] + w &lt; dist[v]:
+                dist[v] = dist[u] + w
+    # 第 V 輪:若還能鬆弛,代表存在「負權環」
+    for u, v, w in edges:
+        if dist[u] + w &lt; dist[v]:
+            raise ValueError("圖中存在負權環,最短路徑無定義")
+    return dist
+
+V = ['A', 'B', 'C', 'D']
+edges = [('A','B',4), ('A','C',5), ('C','B',-3), ('B','D',3), ('C','D',6)]
+print(bellman_ford(V, edges, 'A'))
+# {'A': 0, 'B': 2, 'C': 5, 'D': 5}  ← B = 2,正確抓到了 A→C→B 的負邊捷徑</code></pre>
+      <p>
+        注意它<strong>正確</strong>算出 B = 2,正是 Dijkstra 會搞錯的那個負邊例子。代價是速度:
+        Bellman-Ford 是 <strong>$O(V \cdot E)$</strong>,比 Dijkstra 慢一截。但它能處理負權,而且——
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">偵測負環:Bellman-Ford 的獨門絕活</span>
+          <p>如果圖裡有一個<strong>負權環</strong>(繞一圈總權重為負),那「最短路徑」根本不存在——你可以一直繞那個環,
+          距離無限往下掉。Bellman-Ford 能偵測它:跑完 $V-1$ 輪後<strong>再多跑一輪</strong>,
+          如果<em>還有任何邊能被鬆弛</em>,就證明存在負環。這個能力在金融套利偵測(貨幣兌換繞一圈賺到錢=負環)
+          等場景非常有用。</p>
+        </div>
+      </div>
+
+      <h3>Floyd-Warshall:三行迴圈,算出「所有點對」</h3>
+      <p>
+        前兩個都是「<strong>單源</strong>(single-source)」:從一個起點出發。如果你想要的是<strong>每一對頂點之間</strong>
+        的最短距離(例如算出城市兩兩之間的最短車程表),可以用 <strong>Floyd-Warshall</strong>。它是個漂亮的
+        <strong>動態規劃(dynamic programming)</strong>——這正是第 32 章的主題,這裡先嚐一口。
+      </p>
+      <p>
+        它的核心想法美得令人讚嘆:逐一考慮「<strong>允許經過頂點 $k$ 當中繼站</strong>」。對每一對 $(i, j)$,
+        檢查「繞經 $k$」會不會比「目前的 $i$ 到 $j$」更短。把 $k$ 從第一個頂點試到最後一個,
+        答案就全部出來了——整個演算法只有三層迴圈:
+      </p>
+      <pre><code class="language-python">INF = float('inf')
+
+def floyd_warshall(dist):
+    # dist[i][j] = i 到 j 的直達邊權(沒有邊就填 INF,自己到自己填 0)
+    n = len(dist)
+    for k in range(n):              # 中繼站 k
+        for i in range(n):         # 起點 i
+            for j in range(n):     # 終點 j
+                if dist[i][k] + dist[k][j] &lt; dist[i][j]:
+                    dist[i][j] = dist[i][k] + dist[k][j]
+    return dist
+
+# 4 個頂點 0~3 的距離矩陣(INF 代表沒有直達邊)
+g = [
+    [0,   3,   INF, 7],
+    [8,   0,   2,   INF],
+    [5,   INF, 0,   1],
+    [2,   INF, INF, 0],
+]
+for row in floyd_warshall(g):
+    print(row)
+# [0, 3, 5, 6]  /  [5, 0, 2, 3]  /  [3, 6, 0, 1]  /  [2, 5, 7, 0]</code></pre>
+      <p>
+        Floyd-Warshall 是 <strong>$O(V^3)$</strong>,只用一個 $V \times V$ 矩陣,程式短到不可思議。
+        對「點不多但要查全部點對」的情境(例如數百個節點的路網),它常常是最省事的選擇。
+        它也容許負邊(但同樣不能有負環)。
+      </p>
+
+      <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>演算法</th><th>解什麼</th><th>負權?</th><th>負環偵測?</th><th>複雜度</th><th>關鍵工具</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>BFS</td><td>單源、<strong>無權</strong>最短路</td><td>—</td><td>—</td><td>$O(V+E)$</td><td>佇列</td></tr>
+          <tr><td>Dijkstra</td><td>單源,邊權<strong>非負</strong></td><td>❌</td><td>❌</td><td>$O((V{+}E)\log V)$</td><td>最小堆積</td></tr>
+          <tr><td>Bellman-Ford</td><td>單源,可<strong>負權</strong></td><td>✅</td><td>✅</td><td>$O(V \cdot E)$</td><td>反覆鬆弛</td></tr>
+          <tr><td>Floyd-Warshall</td><td><strong>全點對</strong></td><td>✅</td><td>(可改裝)</td><td>$O(V^3)$</td><td>動態規劃</td></tr>
+        </tbody>
+      </table>
+      </div>
+
+      <h2>不只最短路:再往前一步</h2>
+      <p>圖演算法的世界比這一章大得多。兩個你接下來會遇到的重要主題,先用一句話讓你有個鉤子:</p>
+      <ul>
+        <li><strong>最小生成樹(Minimum Spanning Tree, MST)</strong>:用「最便宜的一組邊」把所有頂點連起來、不留環,
+        像是用最少的纜線串連所有城市。經典解法 <strong>Kruskal</strong>(由小到大加邊,用<em>並查集</em>跳過成環者)與
+        <strong>Prim</strong>(從一點長出,用<em>優先佇列</em>挑最便宜的邊)——是第 31 章的主角,你會發現這一章的並查集與堆積又回來了。</li>
+        <li><strong>最大流(maximum flow)</strong>:把圖想成水管網路,每條邊有「容量」,問從源頭到匯點最多能送多少流量?
+        Ford-Fulkerson 與 Edmonds-Karp(其實就是在「殘餘網路」上反覆跑 BFS)能解它。最大流還和「最小切割」
+        這個看似無關的問題完美對偶,是組合最佳化裡最迷人的結果之一。</li>
+      </ul>
+
+      <h2>圖演算法在真實世界</h2>
+      <p>這一章學的不是抽象玩具,而是你每天在用的科技骨架:</p>
+      <ul>
+        <li><strong>地圖導航</strong>:Google Maps、車載導航的「最快路線」,核心就是 Dijkstra 及其加速版
+        <strong>A*</strong>(用「離終點還有多遠」的估計值當啟發式,大幅剪枝)。路網就是加權圖,權重是時間或距離。</li>
+        <li><strong>社群網路</strong>:LinkedIn 的「第幾度人脈」就是 BFS 求最短步數;「你可能認識的人」靠分析共同鄰居;
+        找出緊密社群(community detection)則和連通元件、圖分割有關。</li>
+        <li><strong>網頁排名(PageRank)</strong>:Google 把整個網際網路看成一張巨大有向圖(網頁是點、超連結是邊),
+        用「一個隨機點擊者長期停留在每頁的機率」來衡量頁面重要性——這是圖上的一種隨機漫步,本質仍是圖演算法。</li>
+        <li><strong>相依解析</strong>:套件管理員(pip、npm、apt)、建置系統(make、Bazel)、試算表重算,
+        全靠拓樸排序決定先做什麼;順便用環偵測抓出「循環相依」這個惡夢。</li>
+        <li><strong>推薦系統</strong>:電商與串流平台把「使用者—商品」建成二分圖,用圖上的關聯與隨機漫步替你推薦
+        「買了這個的人也買了……」。</li>
+        <li><strong>其他</strong>:編譯器的暫存器配置(圖著色)、IC 佈線、航班排程、生物的蛋白質交互作用網路……
+        只要問題裡有「東西」與「關係」,圖演算法就在那裡。</li>
+      </ul>
+
+      <h2>動手練習</h2>
+      <p>圖演算法是「看懂很容易、自己寫才會卡」的典型。下面九題由淺入深,務必先動手再看解答。</p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 30.1 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>用 BFS 實作 <code>shortest_steps(graph, start)</code>,回傳起點到每個頂點的<strong>最少邊數</strong>(無權圖)。
+          用本章的範例 <code>graph</code> 從 <code>'A'</code> 驗證,應得 A:0, B:1, C:1, D:2, E:2, F:2。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">from collections import deque
+
+def shortest_steps(graph, start):
+    dist = {start: 0}
+    queue = deque([start])
+    while queue:
+        u = queue.popleft()
+        for v in graph[u]:
+            if v not in dist:            # 第一次碰到 = 最短
+                dist[v] = dist[u] + 1
+                queue.append(v)
+    return dist
+
+graph = {'A':['B','C'],'B':['A','D','E'],'C':['A','F'],
+         'D':['B'],'E':['B','F'],'F':['C','E']}
+print(shortest_steps(graph, 'A'))
+# {'A': 0, 'B': 1, 'C': 1, 'D': 2, 'E': 2, 'F': 2}</code></pre>
+              <p>重點:BFS 按層擴散,所以「第一次把 v 放進佇列」時記下的距離,保證就是最短。
+              不需要任何比較或更新——這是 BFS 解無權最短路的精髓。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 30.2 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>用 DFS 實作 <code>has_path(graph, start, goal)</code>,判斷兩點間是否存在路徑。
+          試試 <code>has_path(graph, 'A', 'F')</code>(True)與一個走不到的例子。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">def has_path(graph, start, goal):
+    visited = set()
+    def visit(u):
+        if u == goal:
+            return True
+        visited.add(u)
+        for v in graph[u]:
+            if v not in visited and visit(v):
+                return True
+        return False
+    return visit(start)
+
+print(has_path(graph, 'A', 'F'))   # True
+# 若把 D 改成孤立(graph['D']=[] 且沒人指向它),則 has_path 到 D 會是 False</code></pre>
+              <p>也可以用迭代 + 堆疊寫,避免遞迴過深。核心都是「從起點探索,看能否觸及終點」。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 30.3 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>用 BFS 實作 <code>is_bipartite(graph)</code>:能否把所有頂點塗成兩色,使得<strong>每條邊兩端顏色不同</strong>?
+          (等價於「圖中沒有奇數長度的環」。)提示:BFS 時把鄰居塗成相反色,發現「相鄰卻同色」就回 False。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">from collections import deque
+
+def is_bipartite(graph):
+    color = {}
+    for start in graph:                  # 處理可能不連通的圖
+        if start in color:
+            continue
+        color[start] = 0
+        queue = deque([start])
+        while queue:
+            u = queue.popleft()
+            for v in graph[u]:
+                if v not in color:
+                    color[v] = 1 - color[u]   # 塗相反色
+                    queue.append(v)
+                elif color[v] == color[u]:
+                    return False              # 相鄰同色 → 不是二分圖
+    return True
+
+square = {'A':['B','D'],'B':['A','C'],'C':['B','D'],'D':['A','C']}  # 4-環
+triangle = {'A':['B','C'],'B':['A','C'],'C':['A','B']}              # 3-環
+print(is_bipartite(square))     # True(偶環可二分)
+print(is_bipartite(triangle))   # False(奇環不行)</code></pre>
+              <p>二分圖在「配對問題」(學生選社團、工作分派)裡是核心結構。檢測它就是一次帶顏色的 BFS。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 30.4 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>用 Kahn 演算法(入度)實作 <code>topo_sort(graph)</code>,回傳一個合法的拓樸序;若圖有環則回傳
+          <code>None</code>。用本章的 <code>courses</code> 字典驗證。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">from collections import deque
+
+def topo_sort(graph):
+    indeg = {u: 0 for u in graph}
+    for u in graph:
+        for v in graph[u]:
+            indeg[v] += 1
+    queue = deque(u for u in graph if indeg[u] == 0)
+    order = []
+    while queue:
+        u = queue.popleft()
+        order.append(u)
+        for v in graph[u]:
+            indeg[v] -= 1
+            if indeg[v] == 0:
+                queue.append(v)
+    return order if len(order) == len(graph) else None   # 少了 = 有環
+
+courses = {'程式設計':['資料結構','離散數學'],'資料結構':['作業系統','演算法'],
+           '離散數學':['演算法','機器學習'],'作業系統':[],
+           '演算法':['機器學習'],'機器學習':[]}
+print(topo_sort(courses))
+# ['程式設計', '資料結構', '離散數學', '作業系統', '演算法', '機器學習']</code></pre>
+              <p>若把 <code>courses['機器學習']=['程式設計']</code> 造一個環,函式會回傳 <code>None</code>——Kahn 順手偵測了環。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 30.5 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>用 <code>heapq</code> 實作 <code>dijkstra(graph, start)</code>,圖以 <code>{u: [(v, w), ...]}</code> 表示。
+          回傳起點到所有頂點的最短距離。用本章的加權 <code>graph</code> 從 <code>'A'</code> 驗證
+          (A:0, C:1, B:3, D:6, E:6)。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">import heapq
+
+def dijkstra(graph, start):
+    dist = {start: 0}
+    pq = [(0, start)]
+    while pq:
+        d, u = heapq.heappop(pq)
+        if d &gt; dist.get(u, float('inf')):
+            continue                     # 過期紀錄,跳過
+        for v, w in graph[u]:
+            nd = d + w
+            if nd &lt; dist.get(v, float('inf')):
+                dist[v] = nd
+                heapq.heappush(pq, (nd, v))
+    return dist
+
+graph = {'A':[('B',4),('C',1)],'B':[('E',3)],
+         'C':[('B',2),('D',5)],'D':[('E',1)],'E':[]}
+print(dijkstra(graph, 'A'))   # {'A':0,'C':1,'B':3,'D':6,'E':6}</code></pre>
+              <p>進階:把 <code>dist</code> 旁邊再記一個 <code>parent</code> 字典(鬆弛成功時 <code>parent[v]=u</code>),
+              就能像 BFS 那樣回溯出「實際的最短路徑」,而不只是距離。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 30.6 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>實作 <code>has_cycle_directed(graph)</code>,用「白/灰/黑」三色 DFS 判斷<strong>有向圖</strong>是否有環。
+          用一個 DAG 與一個含環圖各驗證一次。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">def has_cycle_directed(graph):
+    WHITE, GRAY, BLACK = 0, 1, 2
+    color = {u: WHITE for u in graph}
+    def visit(u):
+        color[u] = GRAY
+        for v in graph[u]:
+            if color[v] == GRAY:                 # 回邊 → 有環
+                return True
+            if color[v] == WHITE and visit(v):
+                return True
+        color[u] = BLACK
+        return False
+    return any(color[u] == WHITE and visit(u) for u in graph)
+
+print(has_cycle_directed({'A':['B'],'B':['C'],'C':[]}))        # False
+print(has_cycle_directed({'A':['B'],'B':['C'],'C':['A']}))     # True</code></pre>
+              <p>切記:只有遇到<strong>灰色</strong>(還在當前遞迴路徑上)的頂點才是環;遇到黑色只是「以前走完的點」,不算環。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 30.7 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>實際問題:迷宮最少步數。給一個 0/1 的方格 <code>grid</code>(0 可走、1 是牆),求從左上角
+          <code>(0,0)</code> 走到右下角的<strong>最少步數</strong>(只能上下左右移動);走不到回 <code>-1</code>。
+          這是 BFS 在隱式格子圖上的經典應用。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">from collections import deque
+
+def shortest_maze(grid):
+    rows, cols = len(grid), len(grid[0])
+    goal = (rows - 1, cols - 1)
+    if grid[0][0] == 1 or grid[goal[0]][goal[1]] == 1:
+        return -1
+    queue = deque([((0, 0), 0)])         # ((列, 行), 已走步數)
+    seen = {(0, 0)}
+    while queue:
+        (r, c), steps = queue.popleft()
+        if (r, c) == goal:
+            return steps
+        for dr, dc in [(-1,0),(1,0),(0,-1),(0,1)]:
+            nr, nc = r + dr, c + dc
+            if 0 &lt;= nr &lt; rows and 0 &lt;= nc &lt; cols \
+               and grid[nr][nc] == 0 and (nr, nc) not in seen:
+                seen.add((nr, nc))
+                queue.append(((nr, nc), steps + 1))
+    return -1
+
+maze = [
+    [0, 0, 1, 0],
+    [1, 0, 1, 0],
+    [0, 0, 0, 0],
+    [0, 1, 1, 0],
+]
+print(shortest_maze(maze))   # 6</code></pre>
+              <p>關鍵體悟:格子迷宮根本不必先「建出一張圖」。每個格子是頂點,「上下左右相鄰且不是牆」就是邊——
+              我們在 BFS 過程中<strong>即時推算鄰居</strong>(這叫「隱式圖」)。因為每步代價都是 1,BFS 自然給出最少步數。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 30.8 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>字梯(Word Ladder)。給起始單字 <code>begin</code>、目標單字 <code>end</code> 和一份字典 <code>word_list</code>,
+          每次只能改<strong>一個字母</strong>且改完必須仍是字典裡的字。求從 <code>begin</code> 變到 <code>end</code> 的最短變換序列<strong>長度</strong>
+          (含頭尾),走不到回 0。提示:把每個單字當頂點,「差一個字母」當邊,跑 BFS。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">from collections import deque
+import string
+
+def word_ladder(begin, end, word_list):
+    words = set(word_list)
+    if end not in words:
+        return 0
+    queue = deque([(begin, 1)])          # (目前單字, 序列長度)
+    seen = {begin}
+    while queue:
+        word, length = queue.popleft()
+        if word == end:
+            return length
+        for i in range(len(word)):       # 嘗試改每一位
+            for ch in string.ascii_lowercase:
+                nxt = word[:i] + ch + word[i+1:]
+                if nxt in words and nxt not in seen:
+                    seen.add(nxt)
+                    queue.append((nxt, length + 1))
+    return 0
+
+wl = ["hot","dot","dog","lot","log","cog"]
+print(word_ladder("hit", "cog", wl))   # 5:hit→hot→dot→dog→cog</code></pre>
+              <p>這題完美展示「<strong>把問題建模成圖</strong>」的威力:單字之間並沒有現成的邊,但只要定義好「什麼算相鄰」,
+              一個看似文字遊戲的問題,瞬間變成最單純的 BFS 最短路。建模,往往比寫演算法更關鍵。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 30.9 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>實作 <code>bellman_ford(vertices, edges, start)</code>,其中 <code>edges</code> 是 <code>(u, v, w)</code> 的清單。
+          回傳最短距離字典;若圖中存在<strong>負權環</strong>,回傳字串 <code>"NEGATIVE CYCLE"</code>。
+          用一個含負邊但無負環的圖,以及一個含負環的圖各驗證一次。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">def bellman_ford(vertices, edges, start):
+    dist = {v: float('inf') for v in vertices}
+    dist[start] = 0
+    for _ in range(len(vertices) - 1):       # 鬆弛 V-1 輪
+        for u, v, w in edges:
+            if dist[u] + w &lt; dist[v]:
+                dist[v] = dist[u] + w
+    for u, v, w in edges:                     # 第 V 輪還能鬆弛 → 負環
+        if dist[u] + w &lt; dist[v]:
+            return "NEGATIVE CYCLE"
+    return dist
+
+V = ['A','B','C','D']
+ok = [('A','B',4),('A','C',5),('C','B',-3),('B','D',3),('C','D',6)]
+print(bellman_ford(V, ok, 'A'))   # {'A':0,'B':2,'C':5,'D':5}
+
+# 製造負環:B→C→B 總和 -3 + 1 = -2 &lt; 0
+neg = [('A','B',1),('B','C',1),('C','B',-3)]
+print(bellman_ford(['A','B','C'], neg, 'A'))   # NEGATIVE CYCLE</code></pre>
+              <p>「鬆弛 $V-1$ 輪後,若<em>還能再鬆弛</em>就有負環」——這個第 $V$ 輪的檢查,是 Bellman-Ford 相對 Dijkstra
+              最珍貴的能力,也是貨幣套利偵測等應用的理論基礎。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>動手實驗室:打造一個小圖並跑經典演算法</h2>
+      <p>
+        理論看懂還不夠——圖演算法要<em>親手跑過一遍</em>才真的記得住。
+        這個實驗室用一張 5 節點的有向加權 DAG,依序實作
+        <strong>BFS 無權最短步數、DFS 拓樸排序、Dijkstra 最短路徑</strong>,
+        每段程式碼都附預期輸出,可直接貼進 Python 直譯器驗算。
+      </p>
+
+      <h3>實驗圖:5 節點有向加權 DAG</h3>
+      <p>
+        7 條有向加權邊、邊權皆正、無環(DAG),三種演算法共用同一張圖。
+        節點 A 是起點,E 是終點。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 540 310" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="arlab" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <path d="M0,0 L9,3 L0,6 Z" fill="#8a929b"/>
+    </marker>
+  </defs>
+  <g stroke="#8a929b" stroke-width="2" fill="none" marker-end="url(#arlab)">
+    <line x1="100" y1="141" x2="238" y2="79"/>   <!-- A→B -->
+    <line x1="100" y1="159" x2="238" y2="221"/>  <!-- A→C -->
+    <line x1="260" y1="92"  x2="260" y2="208"/>  <!-- B→C -->
+    <line x1="282" y1="70"  x2="418" y2="70"/>   <!-- B→D -->
+    <line x1="277" y1="215" x2="424" y2="85"/>   <!-- C→D -->
+    <line x1="282" y1="230" x2="418" y2="230"/>  <!-- C→E -->
+    <line x1="440" y1="92"  x2="440" y2="208"/>  <!-- D→E -->
+  </g>
+  <g font-size="12" font-weight="700" fill="#b4541f" text-anchor="middle">
+    <text x="162" y="100">2</text>
+    <text x="162" y="205">5</text>
+    <text x="247" y="155">1</text>
+    <text x="350" y="58">4</text>
+    <text x="362" y="162">2</text>
+    <text x="350" y="248">3</text>
+    <text x="453" y="155">1</text>
+  </g>
+  <g font-size="15" font-weight="800" text-anchor="middle">
+    <circle cx="80"  cy="150" r="22" fill="#2f6f6a"/><text x="80"  y="156" fill="#fff">A</text>
+    <circle cx="260" cy="70"  r="22" fill="#2f6f6a"/><text x="260" y="76"  fill="#fff">B</text>
+    <circle cx="260" cy="230" r="22" fill="#2f6f6a"/><text x="260" y="236" fill="#fff">C</text>
+    <circle cx="440" cy="70"  r="22" fill="#2f6f6a"/><text x="440" y="76"  fill="#fff">D</text>
+    <circle cx="440" cy="230" r="22" fill="#2f6f6a"/><text x="440" y="236" fill="#fff">E</text>
+  </g>
+  <!-- legend -->
+  <text x="270" y="290" font-size="11" fill="#8a929b" text-anchor="middle">邊旁紅字為權重;箭頭表示方向</text>
+</svg>
+        <figcaption>圖 Lab-1:實驗室用圖。5 節點、7 條有向加權邊的 DAG。
+        忽略邊上數字即為無權版(BFS / DFS);保留數字則用於 Dijkstra。</figcaption>
+      </div>
+
+      <pre><code class="language-python"># 有向加權鄰接串列:每條邊存 (鄰居, 權重)
+lab_graph = {
+    'A': [('B', 2), ('C', 5)],
+    'B': [('C', 1), ('D', 4)],
+    'C': [('D', 2), ('E', 3)],
+    'D': [('E', 1)],
+    'E': [],
+}
+# 忽略權重,只取鄰居結構,用於 BFS / DFS / 拓樸排序
+lab_unweighted = {u: [v for v, _ in nb] for u, nb in lab_graph.items()}
+# → {'A':['B','C'], 'B':['C','D'], 'C':['D','E'], 'D':['E'], 'E':[]}</code></pre>
+
+      <h3>實驗一:BFS — 無權最短步數</h3>
+      <p>
+        BFS 把每條邊視為代價 1,層層擴散;第一次到達某節點時記下的步數即為最短步數。
+      </p>
+      <pre><code class="language-python">from collections import deque
+
+def bfs_dist(graph, start):
+    dist = {start: 0}
+    queue = deque([start])
+    while queue:
+        u = queue.popleft()
+        for v in graph[u]:
+            if v not in dist:
+                dist[v] = dist[u] + 1
+                queue.append(v)
+    return dist
+
+print(bfs_dist(lab_unweighted, 'A'))
+# 預期輸出:{'A': 0, 'B': 1, 'C': 1, 'D': 2, 'E': 2}</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">BFS 結果驗收</span>
+          <p>從 A 出發,第 1 層 {B, C} 距 1 步;第 2 層 {D, E} 距 2 步。
+          輸出符合 <code>{'A':0, 'B':1, 'C':1, 'D':2, 'E':2}</code> 即正確。
+          注意 D 雖可從 B 或 C 到達,BFS 在 B 那輪就先標記了它(兩條路步數相同)。</p>
+        </div>
+      </div>
+
+      <h3>實驗二:DFS + 拓樸排序</h3>
+      <p>
+        對 DAG 跑 DFS,在「完成」某節點(所有子孫全走完)時才放入清單,
+        最後反轉即得拓樸序——每個節點排在它所有後繼之前。
+      </p>
+      <pre><code class="language-python">def topo_dfs(graph):
+    visited = set()
+    result = []
+    def visit(u):
+        visited.add(u)
+        for v, _ in graph[u]:    # 忽略權重,只走結構
+            if v not in visited:
+                visit(v)
+        result.append(u)          # 「完成」時才放入
+    for u in graph:
+        if u not in visited:
+            visit(u)
+    return result[::-1]           # 反轉完成順序 = 拓樸序
+
+print(topo_dfs(lab_graph))
+# 預期輸出:['A', 'B', 'C', 'D', 'E']</code></pre>
+      <p>
+        DFS 完成順序為 E → D → C → B → A(越深的節點越先完成);
+        反轉後得 A → B → C → D → E。
+        驗算:每條邊 X→Y 中,X 都排在 Y 前面——拓樸序成立。
+      </p>
+
+      <h3>實驗三:Dijkstra 最短路徑</h3>
+      <p>
+        使用 <code>heapq</code> 最小堆積:每次取出目前已知距離最小的未定節點,鬆弛其所有出邊。
+      </p>
+      <pre><code class="language-python">import heapq
+
+def dijkstra(graph, start):
+    dist = {start: 0}
+    pq = [(0, start)]                      # (目前最短距離, 節點)
+    while pq:
+        d, u = heapq.heappop(pq)
+        if d &gt; dist.get(u, float('inf')):
+            continue                       # 過期舊紀錄,跳過
+        for v, w in graph[u]:
+            nd = d + w
+            if nd &lt; dist.get(v, float('inf')):
+                dist[v] = nd
+                heapq.heappush(pq, (nd, v))
+    return dist
+
+print(dijkstra(lab_graph, 'A'))
+# 預期輸出:{'A': 0, 'B': 2, 'C': 3, 'D': 5, 'E': 6}</code></pre>
+
+      <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>取出(定案)</th><th>A</th><th>B</th><th>C</th><th>D</th><th>E</th><th>動作</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>(初始)</td><td>0</td><td>·</td><td>·</td><td>·</td><td>·</td><td>起點 A=0</td></tr>
+          <tr><td>A (0)</td><td>0</td><td>2</td><td>5</td><td>·</td><td>·</td><td>鬆弛 A→B=2、A→C=5</td></tr>
+          <tr><td>B (2)</td><td>0</td><td>2</td><td><strong>3</strong></td><td>6</td><td>·</td><td>A→B→C=3 比 5 短!D=6</td></tr>
+          <tr><td>C (3)</td><td>0</td><td>2</td><td>3</td><td><strong>5</strong></td><td>6</td><td>A→B→C→D=5 比 6 短!</td></tr>
+          <tr><td>D (5)</td><td>0</td><td>2</td><td>3</td><td>5</td><td>6</td><td>D→E=6,不優於 6</td></tr>
+          <tr><td>E (6)</td><td>0</td><td>2</td><td>3</td><td>5</td><td>6</td><td>全部定案</td></tr>
+        </tbody>
+      </table>
+      </div>
+
+      <h3>選做:偵測有向環</h3>
+      <p>
+        本實驗圖是 DAG,無環。加入 <code>'E': [('A', 0)]</code> 後,環偵測應回傳 <code>True</code>。
+      </p>
+      <pre><code class="language-python">def has_cycle(graph):
+    WHITE, GRAY, BLACK = 0, 1, 2
+    color = {u: WHITE for u in graph}
+    def visit(u):
+        color[u] = GRAY
+        for v, _ in graph[u]:
+            if color[v] == GRAY:              # 回邊 → 有環
+                return True
+            if color[v] == WHITE and visit(v):
+                return True
+        color[u] = BLACK
+        return False
+    return any(color[u] == WHITE and visit(u) for u in graph)
+
+print(has_cycle(lab_graph))          # False — 原圖是 DAG
+
+cyclic = dict(lab_graph)             # 淺拷貝,不影響原 lab_graph
+cyclic['E'] = [('A', 0)]            # 加入 E→A,製造環 A→…→E→A
+print(has_cycle(cyclic))             # True</code></pre>
+
+      <h3>驗收標準</h3>
+      <ul>
+        <li>BFS 距離:<code>{'A':0, 'B':1, 'C':1, 'D':2, 'E':2}</code></li>
+        <li>DFS 拓樸序:<code>['A', 'B', 'C', 'D', 'E']</code>(任合法排列均可,僅需每條邊 X→Y 中 X 排在 Y 前)</li>
+        <li>Dijkstra 距離:<code>{'A':0, 'B':2, 'C':3, 'D':5, 'E':6}</code></li>
+        <li>環偵測:原 DAG → <code>False</code>;加入 E→A → <code>True</code></li>
+      </ul>
+
+      <h3>實驗室練習</h3>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ Lab 練習 1 <span class="badge">觀念</span></div>
+        <div class="ex-body">
+          <p>
+            為什麼 Dijkstra <strong>不能</strong>處理負權邊?
+            考慮三節點圖:A→B 權重 4、A→C 權重 5、C→B 權重 −3。
+            請說明 Dijkstra 在哪一步做出了錯誤決策,以及最終會給出什麼錯誤答案。
+          </p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>
+                真正的最短路 A→B 是 A→C→B = 5+(−3) = <strong>2</strong>。
+              </p>
+              <p>
+                <strong>經典 Dijkstra(含 settled set)為何出錯:</strong>
+                標準教科書版本維護一個「已定案集合」:節點一旦從堆積取出便立刻加入 settled,
+                之後不再更新。對本例,Dijkstra 先取出 B(距離 4)並將 B 加入 settled——
+                之後取出 C(5)時雖能算出 C→B = 5+(−3) = 2,但 B 已定案,鬆弛被忽略。
+                最終 <strong>B 錯誤地停在 4</strong>。
+              </p>
+              <p>
+                <strong>本 lab 的 lazy-deletion 版行為:</strong>
+                本 lab 實作沒有 settled set,靠「<code>if d &gt; dist[u]: continue</code>」
+                跳過過期紀錄。對此三節點圖,流程如下:
+              </p>
+              <ol>
+                <li>取出 A(0):鬆弛 A→B=4、A→C=5;堆積 = [(4,B),(5,C)]</li>
+                <li>取出 B(4):d==dist[B],處理;B 無出邊;堆積 = [(5,C)]</li>
+                <li>取出 C(5):鬆弛 C→B,2 &lt; 4 → 更新 dist[B]=2,推入 (2,B);堆積 = [(2,B)]</li>
+                <li>取出 B(2):d==dist[B],再次處理;B 無出邊;堆積為空</li>
+                <li>結果:dist[B] = <strong>2</strong>(正確!)</li>
+              </ol>
+              <p>
+                所以本 lab 實作在此無負環例子上<em>碰巧給出正確答案</em>。
+                但這並不代表負權邊無害——它帶來兩個嚴重問題:
+              </p>
+              <ul>
+                <li><strong>貪婪不變量被破壞:</strong>Dijkstra 的正確性依賴「取出節點時距離已最短」,
+                  負邊讓節點需被重複處理,複雜度從 O((V+E)logV) 退化。</li>
+                <li><strong>負環讓 lazy 版無限循環:</strong>若圖中有負環(例如再加 B→A = −10),
+                  每輪鬆弛都能產生更短距離,節點被無限重推,程式永不終止。</li>
+              </ul>
+              <p>
+                根本原因:<strong>Dijkstra 的正確性與複雜度均依賴「邊權非負」這一前提。
+                有負權邊時請改用 Bellman-Ford。</strong>
+              </p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ Lab 練習 2 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>
+            擴充 <code>bfs_dist</code>,加入 <code>parent</code> 字典記錄前驅,
+            並實作 <code>reconstruct_path(parent, start, end)</code>
+            從 A 回溯到 E 的<strong>無權最短路徑</strong>。
+            預期路徑長度 2 步(例如 <code>['A', 'C', 'E']</code>)。
+          </p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">from collections import deque
+
+def bfs_with_path(graph, start):
+    dist = {start: 0}
+    parent = {start: None}
+    queue = deque([start])
+    while queue:
+        u = queue.popleft()
+        for v in graph[u]:
+            if v not in dist:
+                dist[v] = dist[u] + 1
+                parent[v] = u        # 記錄「從哪來的」
+                queue.append(v)
+    return dist, parent
+
+def reconstruct_path(parent, start, end):
+    if end not in parent:
+        return None
+    path, cur = [], end
+    while cur is not None:
+        path.append(cur)
+        cur = parent[cur]
+    path.reverse()
+    return path
+
+dist, parent = bfs_with_path(lab_unweighted, 'A')
+print(dist)                                   # {'A':0,'B':1,'C':1,'D':2,'E':2}
+print(reconstruct_path(parent, 'A', 'E'))
+# ['A', 'C', 'E']  (BFS 先發現 C,再從 C 發現 E,故 parent['E']='C')</code></pre>
+              <p>
+                BFS 保證「第一次把 v 放入佇列時,<code>parent[v]</code> 一定在一條最短路徑上」。
+                從終點沿 <code>parent</code> 回溯到起點再反轉,即是最短路徑本身。
+              </p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ Lab 練習 3 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>
+            <strong>關鍵路徑</strong>:在 <code>lab_graph</code> 上求從 A 到 E 的<strong>最長加權路徑</strong>。
+            提示:DAG 上可用帶備忘的 DFS,定義 <code>dp(u)</code> = 從 u 到 E 的最長路徑長度;
+            從 E 往 A 反向遞推。預期答案:<code>8</code>。
+          </p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">def critical_path_length(graph, start, end):
+    """DAG 上 start 到 end 的最長加權路徑長度。"""
+    memo = {}
+    def dp(u):
+        if u == end:
+            return 0
+        if u in memo:
+            return memo[u]
+        best = float('-inf')          # -inf 代表從 u 走不到 end
+        for v, w in graph[u]:
+            sub = dp(v)
+            if sub != float('-inf'):
+                best = max(best, w + sub)
+        memo[u] = best
+        return best
+    return dp(start)
+
+print(critical_path_length(lab_graph, 'A', 'E'))
+# 8</code></pre>
+              <p>手算遞推:</p>
+              <ul>
+                <li><code>dp('E') = 0</code></li>
+                <li><code>dp('D') = 1+0 = 1</code>（D→E）</li>
+                <li><code>dp('C') = max(2+1, 3+0) = 3</code>（C→D 或 C→E）</li>
+                <li><code>dp('B') = max(1+3, 4+1) = 5</code>（B→C 或 B→D）</li>
+                <li><code>dp('A') = max(2+5, 5+3) = 8</code>（A→B 路徑 7 vs A→C 路徑 8;取大者 <strong>= 8</strong>）</li>
+              </ul>
+              <p>
+                關鍵路徑為 <strong>A→C→D→E</strong>(5+2+1=8)或 <strong>A→C→E</strong>(5+3=8)。
+                在專案管理中,關鍵路徑決定最短完工時間;壓縮非關鍵路徑上的任務不會讓專案更快——
+                只有壓縮關鍵路徑上的任務才有效。
+              </p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>把這一章串起來</h2>
+      <p>我們讓第 15 章那張靜止的圖,真正「走」了起來。回顧這趟旅程的路標:</p>
+      <ul>
+        <li><strong>BFS</strong>(佇列、層層擴散)解無權圖最短步數;<strong>DFS</strong>(堆疊/遞迴、一路到底)擅長找路、偵測環、相依分析。
+        兩者都是 $O(V+E)$,差別只在「待辦容器」是隊伍還是堆疊。</li>
+        <li><strong>連通元件</strong>用一次次走訪圈出「島」;有向圖的<strong>強連通元件(SCC)</strong>則靠 Kosaraju / Tarjan,
+        而它們都站在 DFS 完成時間的肩膀上。</li>
+        <li><strong>拓樸排序</strong>替有相依關係的任務排出合法順序——Kahn(入度 + 佇列)或 DFS(完成時間反轉),
+        順便偵測有向環。</li>
+        <li><strong>環偵測</strong>:有向圖用「白/灰/黑」三色找回邊;無向圖用第 29 章的<strong>並查集</strong>「加邊即成環」。</li>
+        <li><strong>最短路徑</strong>:核心是「鬆弛」。<strong>Dijkstra</strong>(非負權、最小堆積、貪心)、
+        <strong>Bellman-Ford</strong>(可負權、能偵測負環、反覆鬆弛)、<strong>Floyd-Warshall</strong>(全點對、動態規劃、三層迴圈)。</li>
+        <li>這些演算法撐起了<strong>地圖導航、社群網路、PageRank、相依解析、推薦系統</strong>——你每天都在使用它們。</li>
+      </ul>
+      <p>
+        你也許注意到了:這一章幾乎沒有發明新的資料結構,而是把第 29 章的<strong>佇列、堆積、並查集</strong>
+        拿來「組裝」成強大的演算法。這正是演算法學習的精髓——少數幾個紮實的零件,排列組合出無窮的解法。
+        下一章(第 31 章)我們會用同樣的零件解<strong>最小生成樹</strong>,接著(第 32 章)正式進入
+        <strong>動態規劃</strong>的世界,把這裡偷瞄到的 Floyd-Warshall 講個透徹。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">📚</div>
+        <div class="body">
+          <span class="c-title">想更深入?延伸資源</span>
+          <p>本章對應 OSSU 的 <strong>Algorithms Part 2</strong>(Stanford,Tim Roughgarden 主講)——它涵蓋了圖搜尋、
+          最短路徑、SCC 與生成樹。配套的免費教材是 Roughgarden 的
+          <a href="https://www.algorithmsilluminated.org/"><em>Algorithms Illuminated</em></a>,
+          其中 <em>Part 2: Graph Algorithms and Data Structures</em> 把 BFS、DFS、Dijkstra 講得既直觀又嚴謹,
+          網站上還有影片與習題,強烈推薦。若想要更「百科全書」式的參考,經典的 CLRS
+          <em>(Introduction to Algorithms)</em> 第 22~25 章是圖演算法的權威章節。</p>
+        </div>
+      </div>
+
+          <div class="callout tip">
+        <div class="ico">🧭</div>
+        <div class="body">
+          <span class="c-title">延伸：專修軌道</span>
+          <p>想看這些圖演算法的 C++ 競賽寫法,加上樹形 DP、樹直徑與 LCA,見<a href="63-graph-tree-advanced.html">第 63 章《圖論與樹上演算法》</a>。</p>
+        </div>
+      </div>
+

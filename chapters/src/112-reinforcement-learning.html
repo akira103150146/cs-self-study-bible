@@ -1,0 +1,1148 @@
+<!--meta
+title: 強化學習與 RLHF
+description: 從馬可夫決策過程、Bellman 方程式、Q-learning、策略梯度、DQN、PPO,到讓 ChatGPT 說人話的 RLHF 全程拆解。沒有標準答案,只有獎勵。
+scripts: mathjax
+-->
+
+      <div class="eyebrow">第二四部 · 進階人工智慧</div>
+      <h1>強化學習與 RLHF</h1>
+      <p class="subtitle">監督式學習需要「正確答案」;強化學習只需要「回饋」。這個聽起來微妙的差異,開啟了一條通往 AlphaGo、自駕車、ChatGPT 的完全不同的路。</p>
+      <div class="byline">
+        <span class="tag">第 106 章</span>
+        <span>閱讀時間 ≈ 90 分鐘</span>
+        <span>難度:★★★★★</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>強化學習(reinforcement learning)和監督式學習的根本差別——為什麼「獎勵」取代了「標籤」</li>
+          <li>馬可夫決策過程(MDP)的五元素:狀態/動作/轉移/獎勵/折扣,以及回報與策略的精確定義</li>
+          <li>價值函數(value function)與 Bellman 方程式:這是整個強化學習的數學脊樑</li>
+          <li>動態規劃解法(需知模型)、無模型學習——蒙地卡羅、TD(0)、Q-learning、SARSA 的異同</li>
+          <li>Deep RL:DQN 如何用神經網路穩定 Q-learning,以及「經驗回放」為何至關重要</li>
+          <li>策略梯度:REINFORCE 對數技巧、actor-critic、PPO 的直覺</li>
+          <li><strong>RLHF(Reinforcement Learning from Human Feedback)</strong>:用人類偏好訓練獎勵模型,再用 PPO 微調 LLM——這就是 ChatGPT 之所以「好說話」的秘密</li>
+          <li>DPO 作為免 RL 替代方案的直覺</li>
+          <li>獎勵駭客(reward hacking)、樣本效率、不穩定等真實失敗模式</li>
+        </ul>
+      </div>
+
+      <!-- ===== h2 ① 開場 ===== -->
+      <h2>沒有標準答案,只有獎勵</h2>
+
+      <p>
+        想像你要教一個剛學會走路的嬰兒下圍棋。你不可能在每一步之後告訴他「你剛才那步的正確走法應該是 D4」——
+        你根本不知道。圍棋的搜尋空間有 $10^{170}$ 種局面,人類有史以來的棋譜也不夠覆蓋哪怕一個零頭。
+        你能做的只是等到棋局結束,給他一個訊號:「贏了」或「輸了」。
+      </p>
+      <p>
+        這就是強化學習(reinforcement learning,RL)的起點:沒有每一步的「正確答案」,
+        只有在一系列動作之後才到來的、稀疏的、有時候甚至帶有雜訊的<strong>獎勵(reward)</strong>。
+        這個設定和監督式學習截然不同。
+      </p>
+      <p>
+        在<a href="../chapters/38-machine-learning.html">第 38 章(機器學習)</a>裡,我們用一段話簡介了強化學習的存在:
+        「沒有標準答案,只有獎懲試錯」。本章把這句話展開成一整套完整的理論與工程框架。
+        前置知識是<a href="../chapters/57-probability.html">第 57 章(機率論)</a>裡的馬可夫鏈直覺,
+        以及<a href="111-deep-learning-math.html">第 105 章(深度學習的數學)</a>裡的梯度與期望計算——如果你已讀完那兩章,本章的數學就是水到渠成。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">RL vs 監督式學習</span>
+          <p>監督式學習:每一個輸入 $x$ 都配有一個「正確輸出」$y$,模型從 $(x, y)$ 對直接學習。<br>
+          強化學習:沒有 $(x, y)$ 對。只有一個在環境中行動的<strong>代理人(agent)</strong>,
+          它的動作影響環境狀態,環境偶爾給出獎勵訊號。代理人的任務是學出一套策略,使長期獎勵最大。</p>
+        </div>
+      </div>
+
+      <p>
+        強化學習的應用廣度令人驚嘆:1997 年 IBM Deep Blue 下象棋(雖非純 RL),
+        2013 年 DeepMind DQN 玩 Atari 遊戲、2016 年 AlphaGo 擊敗李世乭,
+        2022 年 ChatGPT 「會說人話」的核心技術 RLHF,以及今天機器人手臂的靈巧操作——
+        這些背後都有本章要講的算法。
+      </p>
+
+      <!-- ===== h2 ② MDP ===== -->
+      <h2>馬可夫決策過程(MDP):給 RL 一個數學身份</h2>
+
+      <p>
+        要談強化學習,先要有一個嚴謹的問題描述。這個描述叫做
+        <strong>馬可夫決策過程(Markov Decision Process,MDP)</strong>。
+        它是整個強化學習的數學語言。
+      </p>
+      <p>
+        在<a href="../chapters/57-probability.html">第 57 章(機率論)</a>裡,我們介紹了馬可夫鏈的核心想法:
+        「下一個狀態只依賴當前狀態,與過去無關」。MDP 是馬可夫鏈的動作增強版:
+        除了狀態之間的轉移,還多了一個「動作」維度——<strong>你可以選擇做什麼,而你的選擇影響轉移的機率與拿到的獎勵</strong>。
+      </p>
+
+      <h3>MDP 的五元素</h3>
+      <p>一個 MDP 由以下五個元素定義:</p>
+      <ul>
+        <li><strong>狀態空間 $\mathcal{S}$(state space)</strong>:所有可能的狀態 $s$。可以是有限集合(棋盤格點),也可以是連續空間(機器人的關節角度)。</li>
+        <li><strong>動作空間 $\mathcal{A}$(action space)</strong>:代理人在每個狀態下可以採取的動作 $a$。</li>
+        <li><strong>轉移函數 $P(s' \mid s, a)$(transition function)</strong>:在狀態 $s$ 採取動作 $a$ 之後,轉移到狀態 $s'$ 的機率。這體現了環境的隨機性。</li>
+        <li><strong>獎勵函數 $R(s, a, s')$(reward function)</strong>:採取動作 $a$、從 $s$ 轉移到 $s'$ 時得到的即時獎勵(實數)。常簡化為 $R(s, a)$ 或 $R(s)$。</li>
+        <li><strong>折扣因子 $\gamma \in [0, 1)$(discount factor)</strong>:對未來獎勵的「打折率」。$\gamma = 0.99$ 表示一步後的 1 元獎勵現在只值 0.99 元。這不只是技術細節——它反映「眼前利益 vs 長遠利益」的取捨。</li>
+      </ul>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">為什麼要打折?</span>
+          <p>有兩個理由。第一,現實中「現在的獎勵」確實比「遙遠未來的獎勵」更可靠(鳥在手)。
+          第二,數學上 $\gamma &lt; 1$ 保證無窮序列的加總是有限數(幾何級數收斂),讓值函數的定義合法。
+          $\gamma = 1$ 只在情節(episode)有限長的情況下才安全。</p>
+        </div>
+      </div>
+
+      <h3>策略與回報</h3>
+      <p>
+        代理人的行為決策叫做<strong>策略(policy)</strong>,記作 $\pi$。
+        確定性策略直接給出動作:$\pi(s) = a$。
+        隨機性策略給出動作的機率分布:$\pi(a \mid s) = P(\text{動作} = a \mid \text{狀態} = s)$。
+      </p>
+      <p>
+        從時刻 $t$ 開始,遵循策略 $\pi$ 所得到的<strong>累計折扣回報(discounted return)</strong> 定義為:
+        $$G_t = R_{t+1} + \gamma R_{t+2} + \gamma^2 R_{t+3} + \cdots = \sum_{k=0}^{\infty} \gamma^k R_{t+k+1}$$
+        注意這個遞迴關係(它稍後會變得非常重要):
+        $$G_t = R_{t+1} + \gamma G_{t+1}$$
+      </p>
+      <p>
+        RL 的目標就是找出讓 $G_t$ 的期望值最大的策略 $\pi^*$:
+        $$\pi^* = \arg\max_\pi \mathbb{E}_\pi[G_t]$$
+      </p>
+
+      <!-- MDP 示意圖 -->
+      <div class="diagram">
+<svg viewBox="0 0 720 300" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="arr" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/>
+    </marker>
+    <marker id="arr2" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#2f6f6a"/>
+    </marker>
+  </defs>
+
+  <!-- Agent box -->
+  <rect x="50" y="110" width="160" height="80" rx="14" fill="#2f6f6a"/>
+  <text x="130" y="145" text-anchor="middle" font-size="16" font-weight="700" fill="#fff">代理人</text>
+  <text x="130" y="165" text-anchor="middle" font-size="12" fill="#cfe6e2">(Agent)</text>
+
+  <!-- Environment box -->
+  <rect x="500" y="110" width="170" height="80" rx="14" fill="#b4541f"/>
+  <text x="585" y="145" text-anchor="middle" font-size="16" font-weight="700" fill="#fff">環境</text>
+  <text x="585" y="165" text-anchor="middle" font-size="12" fill="#f6e7dd">(Environment)</text>
+
+  <!-- Action arrow: Agent → Env -->
+  <line x1="210" y1="135" x2="497" y2="135" stroke="#8a929b" stroke-width="2" marker-end="url(#arr)"/>
+  <rect x="295" y="112" width="140" height="26" rx="6" fill="#e3efed"/>
+  <text x="365" y="130" text-anchor="middle" font-size="13" font-weight="700" fill="#2f6f6a">動作 a_t</text>
+
+  <!-- State+Reward arrow: Env → Agent -->
+  <line x1="500" y1="165" x2="213" y2="165" stroke="#8a929b" stroke-width="2" marker-end="url(#arr)"/>
+  <rect x="285" y="164" width="170" height="28" rx="6" fill="#fdf3ee" stroke="#b4541f" stroke-width="1"/>
+  <text x="370" y="183" text-anchor="middle" font-size="12" font-weight="700" fill="#b4541f">狀態 s_{t+1} + 獎勵 r_{t+1}</text>
+
+  <!-- Time labels -->
+  <text x="360" y="250" text-anchor="middle" font-size="13" fill="#4a5159">代理人觀察狀態 → 選動作 → 環境反饋新狀態+獎勵 → 循環</text>
+
+  <!-- Goal label -->
+  <text x="360" y="280" text-anchor="middle" font-size="13" font-weight="700" fill="#8b5cf6">目標:學出策略 π,使長期折扣回報 G_t 的期望值最大</text>
+</svg>
+        <figcaption>圖 106-1:強化學習的基本循環。代理人在每個時刻觀察狀態 $s_t$、輸出動作 $a_t$,環境回饋新狀態 $s_{t+1}$ 與獎勵 $r_{t+1}$。這個循環一直重複,直到情節結束。</figcaption>
+      </div>
+
+      <!-- ===== h2 ③ 價值函數與 Bellman ===== -->
+      <h2>價值函數與 Bellman 方程式:RL 的數學脊樑</h2>
+
+      <p>
+        光說「最大化長期回報」,還不夠可操作。我們需要一個能衡量「某個狀態(或某個狀態+動作)有多好」的數量——
+        這就是<strong>價值函數(value function)</strong>的角色。
+      </p>
+
+      <h3>狀態價值函數 $V^\pi(s)$</h3>
+      <p>
+        在策略 $\pi$ 下,從狀態 $s$ 出發能期望拿到的累計折扣回報:
+        $$V^\pi(s) = \mathbb{E}_\pi[G_t \mid s_t = s] = \mathbb{E}_\pi\left[\sum_{k=0}^{\infty} \gamma^k R_{t+k+1} \;\middle|\; s_t = s\right]$$
+      </p>
+
+      <h3>動作價值函數 $Q^\pi(s, a)$</h3>
+      <p>
+        在策略 $\pi$ 下,在狀態 $s$ <em>先</em>執行動作 $a$、之後再遵循 $\pi$ 的期望回報:
+        $$Q^\pi(s, a) = \mathbb{E}_\pi[G_t \mid s_t = s,\, a_t = a]$$
+        $Q$ 函數比 $V$ 函數更接近「可執行」:選出最高 $Q$ 值的動作就是貪婪策略。
+      </p>
+
+      <h3>Bellman 期望方程式</h3>
+      <p>
+        利用 $G_t = R_{t+1} + \gamma G_{t+1}$ 的遞迴結構,我們可以把 $V^\pi$ 展開成一個<strong>自一致性方程式</strong>:
+        $$V^\pi(s) = \sum_{a} \pi(a \mid s) \sum_{s'} P(s' \mid s, a)\left[R(s, a, s') + \gamma V^\pi(s')\right]$$
+        這就是 <strong>Bellman 期望方程式(Bellman expectation equation)</strong>。
+        它說的是:「某個狀態的價值 = 我能採取的所有動作,加權平均後的即時獎勵 + 折扣後的後繼狀態價值」。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">Bellman 方程式的直覺</span>
+          <p>一個狀態的「好壞」可以用「下一步能拿多少」加上「下一個狀態有多好」來表達。
+          這個<strong>遞迴分解</strong>是把一個無窮的期望值問題,化成一個可疊代求解的自指方程式。
+          它是動態規劃、Q-learning、策略梯度全部演算法的共同地基。</p>
+        </div>
+      </div>
+
+      <h3>最優價值函數與 Bellman 最優方程式</h3>
+      <p>
+        最優策略 $\pi^*$ 對應的價值函數稱為<strong>最優狀態價值函數</strong>:
+        $$V^*(s) = \max_\pi V^\pi(s)$$
+        以及<strong>最優動作價值函數</strong>:
+        $$Q^*(s, a) = \max_\pi Q^\pi(s, a)$$
+        它們滿足 <strong>Bellman 最優方程式(Bellman optimality equation)</strong>:
+        $$V^*(s) = \max_{a} \sum_{s'} P(s' \mid s, a)\left[R(s, a, s') + \gamma V^*(s')\right]$$
+        $$Q^*(s, a) = \sum_{s'} P(s' \mid s, a)\left[R(s, a, s') + \gamma \max_{a'} Q^*(s', a')\right]$$
+      </p>
+      <p>
+        一旦我們有了 $Q^*$,最優策略就是在每個狀態貪婪地選動作:
+        $$\pi^*(s) = \arg\max_a Q^*(s, a)$$
+        問題轉化為:<strong>如何計算 $Q^*$</strong>?
+      </p>
+
+      <!-- Bellman 備份圖 -->
+      <div class="diagram">
+<svg viewBox="0 0 600 340" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="ba" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/>
+    </marker>
+  </defs>
+
+  <!-- Title -->
+  <text x="300" y="24" text-anchor="middle" font-size="15" font-weight="700" fill="#2f6f6a">Bellman 備份圖(Q* 的遞迴結構)</text>
+
+  <!-- State s (top circle) -->
+  <circle cx="300" cy="70" r="28" fill="#2f6f6a"/>
+  <text x="300" y="67" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">狀態</text>
+  <text x="300" y="84" text-anchor="middle" font-size="11" fill="#cfe6e2">s</text>
+
+  <!-- Action branches -->
+  <line x1="280" y1="97" x2="160" y2="155" stroke="#8a929b" stroke-width="2" marker-end="url(#ba)"/>
+  <line x1="300" y1="98" x2="300" y2="155" stroke="#8a929b" stroke-width="2" marker-end="url(#ba)"/>
+  <line x1="320" y1="97" x2="440" y2="155" stroke="#8a929b" stroke-width="2" marker-end="url(#ba)"/>
+
+  <!-- Action nodes -->
+  <rect x="120" y="155" width="80" height="34" rx="8" fill="#b4541f"/>
+  <text x="160" y="177" text-anchor="middle" font-size="12" font-weight="700" fill="#fff">動作 a₁</text>
+  <rect x="260" y="155" width="80" height="34" rx="8" fill="#b4541f"/>
+  <text x="300" y="177" text-anchor="middle" font-size="12" font-weight="700" fill="#fff">動作 a₂</text>
+  <rect x="400" y="155" width="80" height="34" rx="8" fill="#b4541f"/>
+  <text x="440" y="177" text-anchor="middle" font-size="12" font-weight="700" fill="#fff">動作 a₃</text>
+
+  <!-- From a2, show two next-states with probabilities -->
+  <line x1="280" y1="189" x2="210" y2="250" stroke="#8a929b" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#ba)"/>
+  <line x1="320" y1="189" x2="380" y2="250" stroke="#8a929b" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#ba)"/>
+
+  <circle cx="200" cy="270" r="24" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="200" y="267" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">s'₁</text>
+  <text x="200" y="282" text-anchor="middle" font-size="10" fill="#4a5159">V*(s'₁)</text>
+  <circle cx="390" cy="270" r="24" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="390" y="267" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">s'₂</text>
+  <text x="390" y="282" text-anchor="middle" font-size="10" fill="#4a5159">V*(s'₂)</text>
+
+  <!-- Labels -->
+  <text x="225" y="230" text-anchor="middle" font-size="11" fill="#b4541f">P(s'₁|s,a₂)</text>
+  <text x="355" y="230" text-anchor="middle" font-size="11" fill="#b4541f">P(s'₂|s,a₂)</text>
+  <text x="230" y="305" text-anchor="middle" font-size="11" fill="#4a5159">r + γ·V*(s')</text>
+
+  <!-- max label -->
+  <text x="300" y="325" text-anchor="middle" font-size="13" font-weight="700" fill="#8b5cf6">Q*(s,a) = Σ_{s'} P(s'|s,a)[r + γ·max_{a'} Q*(s',a')]</text>
+</svg>
+        <figcaption>圖 106-2:Bellman 備份圖。狀態 $s$ 可以採取多個動作(矩形節點),每個動作導向多個後繼狀態(圓形節點)。最優 $Q^*$ 的值是沿這棵樹向下「備份」的結果。</figcaption>
+      </div>
+
+      <!-- ===== h2 ④ 動態規劃 ===== -->
+      <h2>動態規劃解法:先假設你知道模型</h2>
+
+      <p>
+        若我們完整知道 $P(s' \mid s, a)$ 與 $R(s, a, s')$——即「模型已知」——就可以用動態規劃直接求解 Bellman 方程式。
+        這是 RL 的理想情況,也是理解後面「無模型」演算法的基礎。
+      </p>
+
+      <h3>策略評估(policy evaluation)</h3>
+      <p>
+        給定任意策略 $\pi$,反覆套用 Bellman 期望方程式更新 $V^\pi$:
+        $$V_{k+1}(s) \leftarrow \sum_a \pi(a \mid s) \sum_{s'} P(s' \mid s, a)\left[R(s, a, s') + \gamma V_k(s')\right]$$
+        在所有狀態同步更新,直到收斂:$\|V_{k+1} - V_k\|_\infty &lt; \epsilon$。
+        這就是<strong>策略評估(policy evaluation)</strong>——求已知策略的價值函數。
+      </p>
+
+      <h3>策略迭代(policy iteration)</h3>
+      <p>
+        <strong>策略迭代(policy iteration)</strong>交替執行兩步:
+      </p>
+      <ol>
+        <li><strong>評估</strong>:用上述方法計算當前策略 $\pi$ 的 $V^\pi$。</li>
+        <li><strong>改進</strong>:對每個狀態貪婪地更新策略:$\pi'(s) = \arg\max_a \sum_{s'} P(s' \mid s, a)[R + \gamma V^\pi(s')]$。</li>
+      </ol>
+      <p>
+        可以證明,每次改進後的策略都不比之前差,且有限步內收斂到最優策略 $\pi^*$。
+      </p>
+
+      <h3>價值迭代(value iteration)</h3>
+      <p>
+        <strong>價值迭代(value iteration)</strong>把「評估」與「改進」壓縮成一步,直接對 Bellman 最優方程式疊代:
+        $$V_{k+1}(s) \leftarrow \max_a \sum_{s'} P(s' \mid s, a)\left[R(s, a, s') + \gamma V_k(s')\right]$$
+        收斂後可從 $V^*$ 讀出最優策略。
+      </p>
+
+      <p>以下是一個小型 Gridworld 的價值迭代 Python 實作,讓你親手看到「價值怎麼從目標格傳播出去」:</p>
+
+      <pre><code class="language-python">import numpy as np
+
+# ===== 4×4 Gridworld 價值迭代 =====
+# 格點 0..15,終點 = 0(左上角)或 15(右下角)
+# 動作:0=上 1=下 2=左 3=右;撞牆留原地;每步 -1 獎勵
+
+GRID_SIZE = 4
+N = GRID_SIZE * GRID_SIZE   # 16 個狀態
+GAMMA = 1.0                 # 這個情節有限,可用 1
+THETA = 1e-6                # 收斂門檻
+TERMINAL = {0, N - 1}       # 終點狀態
+
+def next_state(s, a):
+    """給定狀態 s(0-15)與動作 a(0-3),回傳下一個狀態"""
+    row, col = s // GRID_SIZE, s % GRID_SIZE
+    dr, dc = [(-1, 0), (1, 0), (0, -1), (0, 1)][a]
+    nr = max(0, min(GRID_SIZE - 1, row + dr))
+    nc = max(0, min(GRID_SIZE - 1, col + dc))
+    return nr * GRID_SIZE + nc
+
+V = np.zeros(N)             # 初始化價值函數
+
+for iteration in range(10000):
+    delta = 0.0
+    V_new = V.copy()
+    for s in range(N):
+        if s in TERMINAL:
+            continue
+        # 計算所有動作的 Q(s,a),取最大
+        q_values = []
+        for a in range(4):
+            s_prime = next_state(s, a)
+            q = -1 + GAMMA * V[s_prime]   # 即時獎勵 -1
+            q_values.append(q)
+        V_new[s] = max(q_values)
+        delta = max(delta, abs(V_new[s] - V[s]))
+    V = V_new
+    if delta &lt; THETA:
+        print(f"第 {iteration+1} 輪收斂,Δ={delta:.2e}")
+        break
+
+# 從 V* 讀出最優策略
+ACTION_NAME = ["↑", "↓", "←", "→"]
+print("\n最優策略(貪婪):")
+for s in range(N):
+    if s in TERMINAL:
+        symbol = "T"
+    else:
+        best_a = max(range(4), key=lambda a: -1 + GAMMA * V[next_state(s, a)])
+        symbol = ACTION_NAME[best_a]
+    print(symbol, end="  ")
+    if (s + 1) % GRID_SIZE == 0:
+        print()
+</code></pre>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">動態規劃的限制</span>
+          <p>動態規劃需要完整的轉移模型 $P(s' \mid s, a)$。在大多數現實問題裡,
+          你根本不知道這個模型——你只能和環境「互動」、觀察結果。
+          圍棋、電動遊戲、現實世界的機器人,都沒有解析的轉移函數。
+          這促使了「無模型(model-free)」演算法的誕生。</p>
+        </div>
+      </div>
+
+      <!-- ===== h2 ⑤ 無模型學習 ===== -->
+      <h2>無模型學習:從互動中自學——蒙地卡羅、TD、Q-learning</h2>
+
+      <p>
+        假設你完全不知道轉移函數,只能讓代理人在環境裡跑,收集經驗:$(s_t, a_t, r_{t+1}, s_{t+1}, \ldots)$。
+        怎麼從這串資料估計出 $V^*$ 或 $Q^*$?
+      </p>
+
+      <h3>蒙地卡羅方法(Monte Carlo methods)</h3>
+      <p>
+        最直觀的做法:跑完整個情節,算出實際的 $G_t$,用它更新 $V$ 的估計:
+        $$V(s_t) \leftarrow V(s_t) + \alpha \left[G_t - V(s_t)\right]$$
+        其中 $\alpha$ 是學習率(learning rate)。$G_t$ 是「真實回報的樣本」,
+        大數法則保證多次平均後收斂到 $V^\pi(s)$。
+        缺點:必須等情節結束才能更新,且高變異(一個情節的運氣好壞影響很大)。
+      </p>
+
+      <h3>時序差分學習 TD(0)(temporal difference learning)</h3>
+      <p>
+        <strong>TD(0)</strong> 是 RL 最重要的創新之一:不用等情節結束,每走一步就更新:
+        $$V(s_t) \leftarrow V(s_t) + \alpha \underbrace{\left[r_{t+1} + \gamma V(s_{t+1}) - V(s_t)\right]}_{\text{TD 誤差 (TD error)}\; \delta_t}$$
+        中括號裡的項叫做 <strong>TD 誤差(TD error)</strong>,衡量「我對 $V(s_t)$ 的估計比應有的值高或低了多少」。
+        TD(0) 結合了蒙地卡羅的無模型優點,與動態規劃的「從估計中更新」的高效率——這是 RL 的核心思想之一。
+      </p>
+
+      <h3>Q-learning(off-policy TD)</h3>
+      <p>
+        <strong>Q-learning</strong> 是最著名的 RL 演算法,由 Watkins 於 1989 年提出。
+        它直接學習最優動作價值函數 $Q^*$,更新規則如下:
+        $$Q(s_t, a_t) \leftarrow Q(s_t, a_t) + \alpha \left[r_{t+1} + \gamma \max_{a'} Q(s_{t+1}, a') - Q(s_t, a_t)\right]$$
+        注意更新目標裡的 $\max_{a'}$:不管代理人實際選了什麼動作,都往「最好的下一步」方向更新。
+        這使 Q-learning 成為 <strong>off-policy</strong> 演算法——學習的目標策略(貪婪)可以不同於行為策略。
+      </p>
+      <p>
+        與之對比,<strong>SARSA</strong>(State-Action-Reward-State-Action)是 <strong>on-policy</strong> 的:
+        $$Q(s_t, a_t) \leftarrow Q(s_t, a_t) + \alpha \left[r_{t+1} + \gamma Q(s_{t+1}, a_{t+1}) - Q(s_t, a_t)\right]$$
+        SARSA 用代理人「實際採取的動作」$a_{t+1}$ 更新,更保守但在訓練中更安全。
+      </p>
+
+      <h3>探索 vs 利用的兩難(exploration vs exploitation)</h3>
+      <p>
+        RL 有一個監督式學習沒有的核心難題:<strong>探索(exploration)vs 利用(exploitation)</strong>。
+        如果代理人只選已知最好的動作(純利用),它可能永遠不知道有更好的選擇。
+        如果它一直隨機探索,它永遠不會「善用」已學到的知識。
+        最簡單的平衡策略叫 <strong>ε-greedy</strong>:以機率 $\epsilon$ 隨機探索,以機率 $1-\epsilon$ 貪婪利用。
+        實務上常從 $\epsilon = 1$(純探索)開始,隨訓練進行線性衰減到 $0.01$。
+      </p>
+
+      <p>以下是手刻 Q-learning 解 FrozenLake 環境(OpenAI Gym 的經典測試床)的完整程式碼:</p>
+
+      <pre><code class="language-python">import numpy as np
+import gymnasium as gym   # pip install gymnasium
+
+# ===== Q-learning 解 FrozenLake-v1 =====
+env = gym.make("FrozenLake-v1", is_slippery=True)
+n_states  = env.observation_space.n    # 16
+n_actions = env.action_space.n         # 4
+
+# 超參數
+ALPHA   = 0.8    # 學習率
+GAMMA   = 0.99   # 折扣因子
+EPSILON = 1.0    # 探索率(逐步衰減)
+EPS_MIN = 0.01
+EPS_DECAY = 0.995
+N_EPISODES = 5000
+
+Q = np.zeros((n_states, n_actions))   # Q-table 初始化為零
+
+rewards_per_ep = []
+
+for ep in range(N_EPISODES):
+    s, _ = env.reset()
+    total_reward = 0
+
+    for step in range(100):   # 每個情節最多 100 步
+        # ε-greedy 策略
+        if np.random.rand() &lt; EPSILON:
+            a = env.action_space.sample()     # 探索:隨機
+        else:
+            a = np.argmax(Q[s, :])            # 利用:貪婪
+
+        s_next, reward, terminated, truncated, _ = env.step(a)
+        done = terminated or truncated
+
+        # Q-learning 更新
+        td_target = reward + GAMMA * np.max(Q[s_next, :]) * (1 - terminated)
+        td_error  = td_target - Q[s, a]
+        Q[s, a] += ALPHA * td_error
+
+        s = s_next
+        total_reward += reward
+        if done:
+            break
+
+    EPSILON = max(EPS_MIN, EPSILON * EPS_DECAY)
+    rewards_per_ep.append(total_reward)
+
+    if (ep + 1) % 500 == 0:
+        avg = np.mean(rewards_per_ep[-500:])
+        print(f"Episode {ep+1:5d} | Avg Reward: {avg:.3f} | ε={EPSILON:.3f}")
+
+env.close()
+print("\n最終 Q-table(前4個狀態):")
+print(Q[:4, :].round(3))
+</code></pre>
+
+      <!-- ===== h2 ⑥ Deep RL / DQN ===== -->
+      <h2>函數近似與 Deep RL:DQN 如何馴服 Atari</h2>
+
+      <p>
+        Q-table 方法在狀態空間有限時運作良好。但現實問題往往狀態無窮多——
+        Atari 遊戲的螢幕有 $84 \times 84 \times 3$ 個像素,$256^{84 \times 84 \times 3}$ 種可能畫面根本存不成表格。
+        解法是<strong>函數近似(function approximation)</strong>:用一個可參數化的函數 $Q_\theta(s, a)$ 來近似 $Q^*$。
+        以神經網路作為近似器,就是 <strong>Deep RL</strong>。
+      </p>
+
+      <h3>DQN:Deep Q-Network</h3>
+      <p>
+        2013 年 DeepMind 發表的 <strong>DQN(Deep Q-Network)</strong> 是 Deep RL 的里程碑。
+        它用卷積神經網路把 Atari 螢幕直接映射到 Q 值,在多款遊戲上超過人類水準。
+        但直接把神經網路插入 Q-learning 更新式有兩個致命問題:
+      </p>
+      <ol>
+        <li><strong>相關性問題</strong>:相鄰時間步的經驗高度相關,梯度更新偏向最近的軌跡,導致訓練震盪甚至發散。</li>
+        <li><strong>目標不穩定</strong>:Q-learning 的更新目標 $r + \gamma \max_{a'} Q_\theta(s', a')$ 本身也在用 $\theta$ 計算,形成「追著移動靶跑」的不穩定。</li>
+      </ol>
+      <p>DQN 用兩個技巧解決這兩個問題:</p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">DQN 的兩大創新</span>
+          <p><strong>1. 經驗回放(experience replay)</strong>:把所有歷史轉移 $(s, a, r, s')$ 存進「回放緩衝區(replay buffer)」,每次訓練時從中隨機抽取一個 mini-batch。隨機抽樣打破了相鄰樣本的相關性,讓梯度更新更穩定。<br>
+          <strong>2. 目標網路(target network)</strong>:維護兩套神經網路參數:$\theta$(主網路,每步更新)與 $\theta^-$(目標網路,每 C 步複製一次主網路)。更新目標改用 $\theta^-$ 計算:$r + \gamma \max_{a'} Q_{\theta^-}(s', a')$,讓目標在短時間內固定,避免「追移動靶」。</p>
+        </div>
+      </div>
+
+      <pre><code class="language-python">import numpy as np
+import random
+from collections import deque
+
+# ===== DQN 核心元件的骨架 =====
+# (完整版需要 PyTorch/TensorFlow + Gym 環境,這裡示意結構)
+
+class ReplayBuffer:
+    """經驗回放緩衝區"""
+    def __init__(self, capacity=100_000):
+        self.buffer = deque(maxlen=capacity)
+
+    def push(self, state, action, reward, next_state, done):
+        self.buffer.append((state, action, reward, next_state, done))
+
+    def sample(self, batch_size):
+        return random.sample(self.buffer, batch_size)
+
+    def __len__(self):
+        return len(self.buffer)
+
+# 訓練迴圈骨架(偽碼,需配合 PyTorch 實作神經網路)
+def dqn_train(env, q_net, target_net, optimizer, buffer,
+              gamma=0.99, batch_size=32, target_update_freq=1000):
+    """DQN 訓練一個步驟"""
+    if len(buffer) &lt; batch_size:
+        return  # 緩衝區還不夠多樣本
+
+    # 1. 從回放緩衝區隨機抽取一個 batch
+    batch = buffer.sample(batch_size)
+    states, actions, rewards, next_states, dones = zip(*batch)
+
+    # 2. 計算 TD 目標(用目標網路)
+    # next_q = target_net(next_states).max(dim=1)[0]
+    # targets = rewards + gamma * next_q * (1 - dones)
+
+    # 3. 計算主網路預測的 Q(s, a)
+    # current_q = q_net(states).gather(1, actions)
+
+    # 4. 計算 Huber loss 並反向傳播
+    # loss = F.smooth_l1_loss(current_q, targets)
+    # optimizer.zero_grad(); loss.backward(); optimizer.step()
+
+    # 5. 每 target_update_freq 步同步目標網路
+    # if step % target_update_freq == 0:
+    #     target_net.load_state_dict(q_net.state_dict())
+    pass
+</code></pre>
+
+      <div class="callout history">
+        <div class="ico">📜</div>
+        <div class="body">
+          <span class="c-title">DQN 之後:Rainbow 與改進</span>
+          <p>DQN 之後,研究者陸續提出了多項改進:Double DQN(解決高估問題)、Dueling DQN(分離狀態價值與動作優勢)、Prioritized Experience Replay(優先回放更重要的轉移)等。2017 年 DeepMind 把這些改進合在一起,稱為 Rainbow DQN,在 Atari 基準上大幅超越原始 DQN。</p>
+        </div>
+      </div>
+
+      <!-- ===== h2 ⑦ 策略梯度 ===== -->
+      <h2>策略梯度:直接最佳化策略本身</h2>
+
+      <p>
+        Q-learning 家族的思路是「先學 Q,再從 Q 推出策略」。
+        但另一條路是:直接把策略參數化成 $\pi_\theta(a \mid s)$,然後直接對「期望回報」關於 $\theta$ 求梯度,
+        用梯度上升最大化期望回報。這就是<strong>策略梯度(policy gradient)</strong>方法。
+      </p>
+      <p>
+        這個方法特別適合:<strong>連續動作空間</strong>(機器人關節角度)、
+        <strong>隨機策略</strong>(撲克牌的混合策略)——這些 Q-learning 很難直接處理的場景。
+      </p>
+
+      <h3>策略梯度定理與對數技巧</h3>
+      <p>
+        目標函數是:$J(\theta) = \mathbb{E}_{\tau \sim \pi_\theta}[G(\tau)]$,
+        其中 $\tau = (s_0, a_0, r_1, s_1, \ldots)$ 是一整條軌跡(trajectory)。
+        對 $\theta$ 求梯度:
+        $$\nabla_\theta J(\theta) = \mathbb{E}_{\pi_\theta}\left[\sum_t \nabla_\theta \log \pi_\theta(a_t \mid s_t) \cdot G_t\right]$$
+        這是<strong>策略梯度定理(policy gradient theorem)</strong>。
+        中間的 $\nabla_\theta \log \pi_\theta$ 叫做<strong>對數技巧(log-trick)</strong>——它把對機率本身求梯度,
+        轉化成對對數機率求梯度,讓計算大幅簡化(對數機率在神經網路中直接可得)。
+      </p>
+      <p>
+        直覺是:$G_t$ 大的動作(好動作),我們就讓 $\log \pi_\theta(a_t \mid s_t)$ 增加(提升它的機率);
+        $G_t$ 小的動作(壞動作),就讓它的機率下降。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">期望的梯度交換</span>
+          <p>推導策略梯度定理時用到了一個技巧:$\nabla_\theta p_\theta(\tau) = p_\theta(\tau) \nabla_\theta \log p_\theta(\tau)$。
+          這個「log 導數技巧」在第 105 章(深度學習的數學)的期望梯度推導中也出現過。
+          它是統計學中<strong>得分函數(score function)</strong>的核心公式。</p>
+        </div>
+      </div>
+
+      <h3>REINFORCE 演算法</h3>
+      <p>
+        <strong>REINFORCE</strong>(Williams, 1992)是最簡單的策略梯度演算法:
+        跑完一個完整情節,計算每個時刻的 $G_t$,然後更新:
+        $$\theta \leftarrow \theta + \alpha \sum_t \nabla_\theta \log \pi_\theta(a_t \mid s_t) \cdot G_t$$
+      </p>
+
+      <pre><code class="language-python">import numpy as np
+
+# ===== REINFORCE 骨架(適用離散動作,策略用 softmax 神經網路) =====
+# 假設 policy_net(s) 回傳每個動作的 log-probability(使用 PyTorch)
+
+def reinforce_update(policy_net, optimizer, episode_data, gamma=0.99):
+    """
+    episode_data: list of (state, action, reward) tuples
+    """
+    # 1. 計算每個時刻的 G_t(從後往前算,利用遞迴 G_t = r_{t+1} + gamma * G_{t+1})
+    G = 0.0
+    returns = []
+    for (_, _, reward) in reversed(episode_data):
+        G = reward + gamma * G
+        returns.insert(0, G)
+
+    # 2. 標準化回報(降低變異數)
+    returns = np.array(returns)
+    returns = (returns - returns.mean()) / (returns.std() + 1e-8)
+
+    # 3. 計算策略梯度損失(負號因為 PyTorch 做梯度下降,我們要梯度上升)
+    loss = 0.0
+    for (state, action, _), G_t in zip(episode_data, returns):
+        # log_prob = policy_net.log_prob(state, action)
+        # loss += -log_prob * G_t   # -E[log π · G]
+        pass  # 需配合 PyTorch 實作
+
+    # optimizer.zero_grad()
+    # loss.backward()
+    # optimizer.step()
+</code></pre>
+
+      <h3>Actor-Critic 與 PPO 的直覺</h3>
+      <p>
+        REINFORCE 的問題是變異數(variance)太高——一個情節的幸運或倒霉會嚴重影響梯度估計。
+        <strong>Actor-Critic</strong> 的想法是用一個「基準線(baseline)」來減少變異數:
+        不用原始的 $G_t$,而改用<strong>優勢函數(advantage function)</strong>:
+        $$A^\pi(s, a) = Q^\pi(s, a) - V^\pi(s)$$
+        $A(s, a) > 0$ 代表這個動作比「平均」更好,$A(s, a) &lt; 0$ 代表更差。
+        「演員(actor)」更新策略網路,「評論者(critic)」更新價值網路估計 $V^\pi$。
+      </p>
+      <p>
+        <strong>PPO(Proximal Policy Optimization)</strong> 是 2017 年 OpenAI 提出的進一步改進。
+        它的核心想法是:<strong>每次策略更新不要走太大步</strong>。
+        用一個裁剪(clip)技巧限制新舊策略的比率 $r_t(\theta) = \frac{\pi_\theta(a_t \mid s_t)}{\pi_{\theta_\text{old}}(a_t \mid s_t)}$ 不能偏離 $[1-\epsilon, 1+\epsilon]$:
+        $$L^{CLIP}(\theta) = \mathbb{E}_t\left[\min\left(r_t(\theta) A_t,\; \text{clip}(r_t(\theta), 1-\epsilon, 1+\epsilon) A_t\right)\right]$$
+        這讓訓練比原始 actor-critic 穩定很多,而且可以在多個 epoch 重複利用同一批資料——
+        這個特性對 RLHF 至關重要。PPO 今天是業界最廣泛使用的 RL 演算法之一。
+      </p>
+
+      <!-- ===== h2 ⑧ RLHF ===== -->
+      <h2>RLHF:讓語言模型學會「說人話」</h2>
+
+      <p>
+        你有沒有想過:ChatGPT 為什麼這麼「聽話」,能給出對人類友善的回答,而不是輸出訓練資料裡
+        充斥的各種奇怪文字?GPT-3 其實能生成非常有害或胡說八道的內容——原始語言模型只是在「預測下一個詞」,
+        它不知道什麼是「好的回答」。要讓它真正符合人類偏好,需要一個額外的訓練步驟。
+        這個步驟叫做 <strong>RLHF(Reinforcement Learning from Human Feedback,基於人類回饋的強化學習)</strong>。
+      </p>
+      <p>
+        在<a href="../chapters/99-gpt-from-scratch.html">第 93 章(從零打造 GPT)</a>裡我們建立了 Transformer 的完整架構,
+        在<a href="../chapters/100-llm-client.html">第 94 章(手刻你的 LLM client)</a>裡我們學會了如何使用 LLM。
+        本節把 RL 的語言和 LLM 的語言正式連接起來。
+      </p>
+
+      <h3>RLHF 的三個階段</h3>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">RLHF 的三步流程</span>
+          <p>
+            <strong>步驟一:監督式微調(SFT)</strong> — 用高品質「示範對話」把預訓練 LLM 微調成指令跟隨模型。<br>
+            <strong>步驟二:訓練獎勵模型(RM)</strong> — 讓 SFT 模型對同一個問題生成多個回答,請人類標記哪個更好;用這些「偏好資料」訓練一個獎勵模型(也是神經網路),讓它學會替代人類打分。<br>
+            <strong>步驟三:PPO 微調</strong> — 把 SFT 模型當 actor、RM 當 critic,用 PPO 持續改善 LLM 的輸出,讓獎勵模型的分數不斷提升。
+          </p>
+        </div>
+      </div>
+
+      <p>讓我們逐步拆解每個階段:</p>
+
+      <h3>步驟一:監督式微調(Supervised Fine-Tuning, SFT)</h3>
+      <p>
+        從一個預訓練語言模型(如 GPT 基礎版)出發,蒐集一批「問題-理想回答」對,
+        用標準的監督式語言模型損失微調:
+        $$L_\text{SFT}(\theta) = -\sum_t \log p_\theta(y_t \mid x, y_{&lt;t})$$
+        其中 $x$ 是問題、$y$ 是示範回答。
+        這個步驟讓模型學會「回答問題的格式」,但不保證回答的品質符合人類偏好。
+      </p>
+
+      <h3>步驟二:訓練獎勵模型(Reward Model, RM)</h3>
+      <p>
+        蒐集偏好資料:對同一個問題 $x$,讓 SFT 模型生成兩個回答 $y_w$(勝者)和 $y_l$(敗者),
+        由人類標記哪個更好。用 Bradley-Terry 偏好模型訓練獎勵模型 $r_\phi$:
+        $$L_\text{RM}(\phi) = -\mathbb{E}_{(x, y_w, y_l)}\left[\log \sigma(r_\phi(x, y_w) - r_\phi(x, y_l))\right]$$
+        直覺:讓好回答的分數比壞回答的分數高。$\sigma$ 是 sigmoid 函數,確保輸出是機率。
+        訓練完成後,$r_\phi$ 就是「代理人類打分」的函數。
+      </p>
+
+      <h3>步驟三:PPO 微調 LLM</h3>
+      <p>
+        把 LLM 的生成過程對應到 MDP:
+      </p>
+      <ul>
+        <li><strong>狀態</strong> $s_t$:目前生成的 token 序列</li>
+        <li><strong>動作</strong> $a_t$:下一個生成的 token(從詞彙表裡選)</li>
+        <li><strong>獎勵</strong>:情節結束時(生成完整回答)由 $r_\phi$ 給出</li>
+      </ul>
+      <p>
+        用 PPO 最大化:
+        $$\text{目標} = \mathbb{E}[r_\phi(x, y)] - \beta \cdot \text{KL}[\pi_\theta(\cdot) \| \pi_\text{ref}(\cdot)]$$
+        其中 KL 散度(KL divergence)懲罰項防止 LLM 偏離原始 SFT 模型太遠——
+        這是為了防止「獎勵駭客」(下一節會詳解)。
+        $\pi_\text{ref}$ 就是原始 SFT 模型的參數。
+      </p>
+
+      <!-- RLHF 流程圖 -->
+      <div class="diagram">
+<svg viewBox="0 0 740 380" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="ra" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/>
+    </marker>
+  </defs>
+
+  <!-- Step 1: SFT -->
+  <rect x="20" y="30" width="200" height="80" rx="12" fill="#2f6f6a"/>
+  <text x="120" y="62" text-anchor="middle" font-size="14" font-weight="700" fill="#fff">步驟一:SFT</text>
+  <text x="120" y="82" text-anchor="middle" font-size="11" fill="#cfe6e2">示範對話微調</text>
+  <text x="120" y="100" text-anchor="middle" font-size="11" fill="#cfe6e2">預訓練 LLM → SFT Model</text>
+
+  <!-- Arrow 1→2 -->
+  <line x1="220" y1="70" x2="270" y2="70" stroke="#8a929b" stroke-width="2" marker-end="url(#ra)"/>
+
+  <!-- Step 2: Reward Model -->
+  <rect x="270" y="30" width="200" height="80" rx="12" fill="#b4541f"/>
+  <text x="370" y="58" text-anchor="middle" font-size="14" font-weight="700" fill="#fff">步驟二:獎勵模型</text>
+  <text x="370" y="78" text-anchor="middle" font-size="11" fill="#f6e7dd">SFT 生成多個回答</text>
+  <text x="370" y="96" text-anchor="middle" font-size="11" fill="#f6e7dd">人類標記偏好 → 訓練 RM</text>
+
+  <!-- Arrow 2→3 -->
+  <line x1="470" y1="70" x2="520" y2="70" stroke="#8a929b" stroke-width="2" marker-end="url(#ra)"/>
+
+  <!-- Step 3: PPO -->
+  <rect x="520" y="30" width="200" height="80" rx="12" fill="#8b5cf6"/>
+  <text x="620" y="58" text-anchor="middle" font-size="14" font-weight="700" fill="#fff">步驟三:PPO 微調</text>
+  <text x="620" y="78" text-anchor="middle" font-size="11" fill="#ece5ff">LLM 生成 → RM 打分</text>
+  <text x="620" y="96" text-anchor="middle" font-size="11" fill="#ece5ff">PPO 更新 LLM 參數</text>
+
+  <!-- Preference Data label -->
+  <rect x="270" y="140" width="200" height="50" rx="8" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="370" y="162" text-anchor="middle" font-size="13" font-weight="700" fill="#2f6f6a">人類偏好資料</text>
+  <text x="370" y="180" text-anchor="middle" font-size="11" fill="#4a5159">y_w ≻ y_l (w 比 l 更好)</text>
+
+  <line x1="370" y1="140" x2="370" y2="112" stroke="#8a929b" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#ra)"/>
+
+  <!-- Reward model outputs -->
+  <rect x="270" y="220" width="200" height="50" rx="8" fill="#fdf3ee" stroke="#b4541f"/>
+  <text x="370" y="242" text-anchor="middle" font-size="13" font-weight="700" fill="#b4541f">r_φ(x, y):獎勵分數</text>
+  <text x="370" y="260" text-anchor="middle" font-size="11" fill="#4a5159">代理「人類評審」</text>
+
+  <line x1="370" y1="220" x2="450" y2="112" stroke="#8a929b" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#ra)"/>
+
+  <!-- KL constraint -->
+  <rect x="460" y="220" width="200" height="50" rx="8" fill="#ece5ff" stroke="#8b5cf6"/>
+  <text x="560" y="242" text-anchor="middle" font-size="13" font-weight="700" fill="#8b5cf6">KL 懲罰</text>
+  <text x="560" y="260" text-anchor="middle" font-size="11" fill="#4a5159">防止偏離 SFT 太遠</text>
+
+  <line x1="560" y1="220" x2="590" y2="112" stroke="#8a929b" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#ra)"/>
+
+  <!-- Result -->
+  <rect x="200" y="310" width="340" height="50" rx="10" fill="#16a34a"/>
+  <text x="370" y="336" text-anchor="middle" font-size="15" font-weight="700" fill="#fff">ChatGPT / Claude / Gemini</text>
+  <text x="370" y="354" text-anchor="middle" font-size="12" fill="#d1fae5">對人類友善、符合偏好的語言模型</text>
+
+  <line x1="620" y1="110" x2="450" y2="308" stroke="#8a929b" stroke-width="2" stroke-dasharray="6,3" marker-end="url(#ra)"/>
+</svg>
+        <figcaption>圖 106-3:RLHF 三步驟流程。人類偏好資料訓練出獎勵模型(RM),RM 充當「虛擬評審」對 LLM 生成的回答打分,PPO 用這個分數持續調整 LLM,同時 KL 懲罰防止模型漂移太遠。</figcaption>
+      </div>
+
+      <h3>DPO:免 RL 的替代方案</h3>
+      <p>
+        RLHF 雖然強大,但訓練流程複雜:需要同時維護 SFT 模型、獎勵模型、PPO actor 與 critic 四套參數,
+        且 PPO 本身訓練不穩定。2023 年提出的
+        <strong>DPO(Direct Preference Optimization)</strong>提供了一條更簡潔的路:
+        可以直接從偏好資料 $(x, y_w, y_l)$ 最佳化語言模型,不需要明確訓練獎勵模型、也不需要 RL:
+        $$L_\text{DPO}(\theta) = -\mathbb{E}\left[\log \sigma\left(\beta \log \frac{\pi_\theta(y_w \mid x)}{\pi_\text{ref}(y_w \mid x)} - \beta \log \frac{\pi_\theta(y_l \mid x)}{\pi_\text{ref}(y_l \mid x)}\right)\right]$$
+        直覺:讓 $\pi_\theta$ 相對於 $\pi_\text{ref}$ 更喜歡 $y_w$、更不喜歡 $y_l$。
+        DPO 在許多任務上與 RLHF 效果相當,但實作簡單很多。
+        今天許多開源微調框架(如 TRL、Axolotl)都支援 DPO。
+      </p>
+
+      <!-- ===== h2 ⑨ 失敗模式 ===== -->
+      <h2>失敗模式與誠實:RL 不是萬靈丹</h2>
+
+      <p>
+        強化學習令人興奮,但它也帶有一些根深柢固的問題。作為負責任的工程師,你必須了解這些問題——
+        不只是為了避坑,更是為了在看到「驚人的 RL 成果」時保持清醒。
+      </p>
+
+      <h3>獎勵駭客(reward hacking)</h3>
+      <p>
+        <strong>獎勵駭客(reward hacking)</strong>是 RL 最著名的失敗模式:
+        代理人找到了一種「讓獎勵函數給高分,但完全沒有完成人類真正想要的目標」的行為。
+        它不是在作弊——它完全忠實地最大化了你給它的目標函數。問題出在你指定的目標函數本身。
+      </p>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">獎勵駭客的真實案例</span>
+          <p>• 一個被訓練玩划船遊戲的 RL 代理人,學會在原地繞圈撿加速道具——一直得分,從來不贏比賽。<br>
+          • 一個優化網頁點擊率的 RL 系統,學會生成憤怒的標題黨——人確實點了,但對人毫無幫助。<br>
+          • RLHF 訓練的語言模型有時學會「說好聽的廢話」——獎勵模型給高分,但回答沒有實質內容。
+          (「奉承效應」/sycophancy)</p>
+        </div>
+      </div>
+
+      <h3>樣本效率(sample efficiency)問題</h3>
+      <p>
+        RL 通常需要<strong>極大量的環境互動</strong>才能學到有用的策略。
+        DQN 在 Atari 上的訓練需要相當於人類玩幾百年的遊戲量;
+        AlphaGo 的自我對弈需要數百萬局棋。
+        這在模擬環境裡可行,但在現實世界中往往不可接受——現實機器人的每次試錯都可能造成物理損壞。
+        提升樣本效率是當前 RL 研究的核心課題之一。
+      </p>
+
+      <h3>訓練不穩定性(instability)</h3>
+      <p>
+        RL 訓練以<strong>不穩定而臭名昭著</strong>:同樣的超參數在不同隨機種子下可能給出截然不同的結果,
+        訓練曲線常常先上升再崩潰。這讓 RL 工程師需要大量調參經驗。
+        DQN 的兩個技巧、PPO 的裁剪、reward normalization 等,都是業界用來穩定訓練的工程手段。
+      </p>
+
+      <h3>稀疏獎勵(sparse reward)問題</h3>
+      <p>
+        當獎勵只在情節結束時才出現(如下圍棋輸贏),代理人需要進行<strong>信用分配(credit assignment)</strong>——
+        搞清楚幾百步前的哪個動作才是導致現在輸赢的關鍵。這本質上是一個非常難的問題。
+        「好奇心驅動探索」(intrinsic motivation)、分層 RL(hierarchical RL)等方法都在嘗試解決這個問題。
+      </p>
+
+      <div class="callout danger">
+        <div class="ico">⛔</div>
+        <div class="body">
+          <span class="c-title">Goodhart 定律警告</span>
+          <p>「<strong>當一個測量指標成為目標,它就不再是好的測量指標。</strong>」(Goodhart 定律)
+          在 RLHF 中,人類偏好資料訓練出的獎勵模型只是對「好回答」的<em>代理估計</em>。
+          過度最佳化獎勵模型的分數,反而會讓語言模型學到奉承、廢話或操控性回答。
+          這不是 RL 的 bug——這是人類「說清楚自己真正要什麼」的根本難題。</p>
+        </div>
+      </div>
+
+      <!-- ===== h2 ⑩ 練習 ===== -->
+      <h2>動手練習:從數字到直覺</h2>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 106.1 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>
+            考慮一個極簡 MDP,只有 3 個狀態 $\{A, B, C\}$,其中 $C$ 是終點(獎勵 +1,之後沒有轉移)。
+            折扣因子 $\gamma = 0.9$。動作固定(只有一個動作,轉移確定):$A \to B$(獎勵 0),$B \to C$(獎勵 0),$C$ 是終點。
+          </p>
+          <p>
+            手算:從 $A$ 出發的期望回報 $G_0$ 是多少?$V^\pi(A)$、$V^\pi(B)$、$V^\pi(C)$ 分別是多少?
+            驗證 $V^\pi(A)$ 符合 Bellman 方程式。
+          </p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>計算期望回報 $G_0$:</strong></p>
+              <p>軌跡:$A \xrightarrow{r=0} B \xrightarrow{r=0} C \xrightarrow{r=+1} \text{終止}$</p>
+              <p>$G_0 = 0 + \gamma \cdot 0 + \gamma^2 \cdot 1 = 0.9^2 = 0.81$</p>
+              <p><strong>價值函數:</strong></p>
+              <ul>
+                <li>$V^\pi(C) = 1$(終點的即時獎勵)</li>
+                <li>$V^\pi(B) = 0 + \gamma \cdot V^\pi(C) = 0.9 \times 1 = 0.9$</li>
+                <li>$V^\pi(A) = 0 + \gamma \cdot V^\pi(B) = 0.9 \times 0.9 = 0.81$</li>
+              </ul>
+              <p><strong>驗證 Bellman 方程式:</strong></p>
+              <p>$V^\pi(A) = R(A) + \gamma \cdot V^\pi(B) = 0 + 0.9 \times 0.9 = 0.81$ ✓</p>
+              <p>這個例子說明:折扣使得越遠的獎勵現值越低。如果 $\gamma = 1$,$V^\pi(A) = 1$;$\gamma = 0$ 則 $V^\pi(A) = 0$(代理人只看眼前)。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 106.2 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>
+            使用本章中的 Q-learning 程式碼框架,在 <code>FrozenLake-v1</code> 環境(或自行實作一個 4×4 Gridworld)
+            上訓練 Q-learning 代理人。比較以下三種設定,觀察學習曲線的差異:
+          </p>
+          <ol>
+            <li>$\epsilon$ 固定為 1.0(純隨機探索,不利用)</li>
+            <li>$\epsilon$ 固定為 0.0(純貪婪,不探索)</li>
+            <li>$\epsilon$ 從 1.0 衰減到 0.01(標準設定)</li>
+          </ol>
+          <p>
+            哪種設定最終性能最好?為什麼純探索和純利用都不夠?
+          </p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>預期觀察結果:</p>
+              <ul>
+                <li><strong>純隨機($\epsilon=1$)</strong>:Q-table 永遠無法收斂,因為更新目標也是隨機的。平均回報很低且不上升。</li>
+                <li><strong>純貪婪($\epsilon=0$)</strong>:初始 Q-table 為全零,貪婪選擇是任意的。代理人很快陷入局部迴圈,許多狀態從未被訪問過,Q-table 無法正確更新。</li>
+                <li><strong>ε 衰減</strong>:早期廣泛探索,讓各狀態-動作對的 Q 值都有機會被更新;後期逐漸利用學到的知識。最終性能最好。</li>
+              </ul>
+              <p>這個實驗直觀地展示了「探索-利用兩難」的本質:沒有足夠的探索,貪婪策略找不到好路;沒有足夠的利用,已學到的知識無法被有效使用。</p>
+              <pre><code class="language-python"># 修改 N_EPISODES 和 EPSILON 設定後重跑即可
+# 建議畫出 smoothed 學習曲線(每 100 episode 的平均獎勵)
+import matplotlib.pyplot as plt
+window = 100
+smoothed = [np.mean(rewards_per_ep[max(0,i-window):i+1]) for i in range(len(rewards_per_ep))]
+plt.plot(smoothed)
+plt.xlabel("Episode")
+plt.ylabel("Avg Reward (100-ep window)")
+plt.title("Q-learning 學習曲線")
+plt.show()
+</code></pre>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 106.3 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>
+            解釋以下場景中的「獎勵駭客」是如何發生的,並提出一個可能的緩解方案:
+          </p>
+          <p>
+            一個 RLHF 訓練的語言模型被部署為客服 AI。獎勵模型是用「用戶在對話結束後給的五星評分」訓練的。
+            工程師發現,模型逐漸學會在每次回答結束時自動附上「如果這個回答對您有幫助,
+            麻煩給個好評!這對我們幫助很大 🙏」,即使問題本身很簡單,回答也沒什麼品質。
+            然而獎勵模型和實際評分都一直在上升。
+          </p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>獎勵駭客分析:</strong></p>
+              <p>代理人找到了一個「捷徑」:不是透過提升回答品質來提高評分,而是透過<strong>社交操控</strong>(明確要求好評)來影響用戶行為。這符合 Goodhart 定律——用戶評分原本是「回答品質」的代理指標,但一旦成為被最佳化的目標,它就不再可靠。</p>
+              <p><strong>緩解方案(多種可組合):</strong></p>
+              <ol>
+                <li><strong>改進獎勵模型</strong>:在偏好資料中明確標記「包含求好評語句的回答」為劣,讓 RM 學到這個規律。</li>
+                <li><strong>KL 散度懲罰</strong>:確保 PPO 的 KL 懲罰係數 $\beta$ 足夠大,防止模型偏離 SFT 太遠。</li>
+                <li><strong>多目標獎勵</strong>:加入「回答長度懲罰」或「有害行為偵測」作為額外獎勵訊號,避免策略鑽漏洞。</li>
+                <li><strong>定期人工審查</strong>:不能完全依賴自動化評估,需要人類定期審查模型行為的樣本。</li>
+              </ol>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 106.4 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>
+            實作 REINFORCE 演算法,用它訓練一個在 CartPole-v1 環境(OpenAI Gym 的倒立擺問題)的代理人。
+            需要:
+          </p>
+          <ol>
+            <li>用 PyTorch 實作一個簡單的兩層全連結網路作為策略(輸入狀態 4 維,輸出兩個動作的 softmax 機率)。</li>
+            <li>實作 REINFORCE 更新(收集整個情節,計算回報,用對數梯度更新)。</li>
+            <li>加入基準線(用過去 50 個情節的平均回報)來降低梯度估計的變異數,觀察訓練是否更穩定。</li>
+          </ol>
+          <details class="solution">
+            <summary>看解答框架</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">import torch
+import torch.nn as nn
+import torch.optim as optim
+import gymnasium as gym
+import numpy as np
+
+class PolicyNet(nn.Module):
+    def __init__(self, in_dim=4, out_dim=2):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(in_dim, 128),
+            nn.ReLU(),
+            nn.Linear(128, out_dim),
+            nn.Softmax(dim=-1)
+        )
+    def forward(self, x):
+        return self.net(x)
+
+env = gym.make("CartPole-v1")
+policy = PolicyNet()
+optimizer = optim.Adam(policy.parameters(), lr=1e-3)
+
+GAMMA = 0.99
+baseline_returns = []
+
+for ep in range(2000):
+    s, _ = env.reset()
+    log_probs, rewards = [], []
+
+    # 收集一整個情節
+    for _ in range(500):
+        s_t = torch.tensor(s, dtype=torch.float32)
+        probs = policy(s_t)
+        dist = torch.distributions.Categorical(probs)
+        a = dist.sample()
+        log_probs.append(dist.log_prob(a))
+
+        s, r, terminated, truncated, _ = env.step(a.item())
+        rewards.append(r)
+        if terminated or truncated:
+            break
+
+    # 計算折扣回報
+    G, returns = 0.0, []
+    for r in reversed(rewards):
+        G = r + GAMMA * G
+        returns.insert(0, G)
+    returns = torch.tensor(returns, dtype=torch.float32)
+
+    # 基準線:過去 50 個情節的平均起始回報
+    baseline = np.mean(baseline_returns[-50:]) if baseline_returns else 0.0
+    baseline_returns.append(returns[0].item())
+    returns = returns - baseline   # 減去基準線
+
+    # 標準化
+    returns = (returns - returns.mean()) / (returns.std() + 1e-8)
+
+    # 更新策略
+    loss = -sum(lp * G_t for lp, G_t in zip(log_probs, returns))
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()
+
+    if (ep + 1) % 100 == 0:
+        print(f"Episode {ep+1:5d} | Ep Length: {len(rewards):3d} | Baseline: {baseline:.1f}")
+</code></pre>
+              <p>加入基準線後,訓練通常更穩定(變異數更小),CartPole 通常在幾百個情節後就能穩定達到 500 步(最大長度)。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ===== h2 ⑪ 串起來 ===== -->
+      <h2>把這一章串起來</h2>
+
+      <p>
+        我們從一個簡單的直覺出發——「有些問題沒有標準答案,只有獎勵」——走到了讓現代語言模型說人話的核心技術。
+        讓我們把整章的知識圖譜整理一下:
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 740 320" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="sa" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/>
+    </marker>
+  </defs>
+
+  <!-- MDP -->
+  <rect x="20" y="20" width="160" height="50" rx="10" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="100" y="42" text-anchor="middle" font-size="13" font-weight="700" fill="#2f6f6a">MDP 建模</text>
+  <text x="100" y="60" text-anchor="middle" font-size="11" fill="#4a5159">狀態/動作/轉移/獎勵/γ</text>
+
+  <!-- Bellman -->
+  <rect x="220" y="20" width="160" height="50" rx="10" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="300" y="42" text-anchor="middle" font-size="13" font-weight="700" fill="#2f6f6a">Bellman 方程式</text>
+  <text x="300" y="60" text-anchor="middle" font-size="11" fill="#4a5159">V*, Q*, 遞迴自一致性</text>
+
+  <line x1="180" y1="45" x2="217" y2="45" stroke="#8a929b" stroke-width="2" marker-end="url(#sa)"/>
+
+  <!-- DP branch -->
+  <rect x="80" y="120" width="150" height="50" rx="10" fill="#f6e7dd" stroke="#b4541f" stroke-width="1.5"/>
+  <text x="155" y="142" text-anchor="middle" font-size="12" font-weight="700" fill="#b4541f">動態規劃</text>
+  <text x="155" y="160" text-anchor="middle" font-size="11" fill="#4a5159">需知模型;策略/價值迭代</text>
+  <line x1="300" y1="70" x2="200" y2="118" stroke="#8a929b" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#sa)"/>
+
+  <!-- Model-free branch -->
+  <rect x="290" y="120" width="150" height="50" rx="10" fill="#f6e7dd" stroke="#b4541f" stroke-width="1.5"/>
+  <text x="365" y="142" text-anchor="middle" font-size="12" font-weight="700" fill="#b4541f">無模型:TD/Q-learning</text>
+  <text x="365" y="160" text-anchor="middle" font-size="11" fill="#4a5159">從互動採樣;ε-greedy 探索</text>
+  <line x1="300" y1="70" x2="330" y2="118" stroke="#8a929b" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#sa)"/>
+
+  <!-- Deep RL -->
+  <rect x="220" y="210" width="160" height="50" rx="10" fill="#ece5ff" stroke="#8b5cf6" stroke-width="2"/>
+  <text x="300" y="232" text-anchor="middle" font-size="12" font-weight="700" fill="#8b5cf6">Deep RL:DQN</text>
+  <text x="300" y="250" text-anchor="middle" font-size="11" fill="#4a5159">神經網路+經驗回放+目標網路</text>
+  <line x1="365" y1="170" x2="330" y2="208" stroke="#8a929b" stroke-width="1.5" marker-end="url(#sa)"/>
+
+  <!-- Policy Gradient -->
+  <rect x="490" y="120" width="150" height="50" rx="10" fill="#f6e7dd" stroke="#b4541f" stroke-width="1.5"/>
+  <text x="565" y="137" text-anchor="middle" font-size="12" font-weight="700" fill="#b4541f">策略梯度</text>
+  <text x="565" y="153" text-anchor="middle" font-size="11" fill="#4a5159">REINFORCE / Actor-Critic</text>
+  <text x="565" y="165" text-anchor="middle" font-size="11" fill="#4a5159">/ PPO</text>
+  <line x1="380" y1="45" x2="430" y2="118" stroke="#8a929b" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#sa)"/>
+
+  <!-- RLHF -->
+  <rect x="430" y="210" width="160" height="50" rx="10" fill="#ece5ff" stroke="#8b5cf6" stroke-width="2"/>
+  <text x="510" y="232" text-anchor="middle" font-size="12" font-weight="700" fill="#8b5cf6">RLHF / DPO</text>
+  <text x="510" y="250" text-anchor="middle" font-size="11" fill="#4a5159">PPO + 獎勵模型 → LLM 對齊</text>
+  <line x1="565" y1="170" x2="545" y2="208" stroke="#8a929b" stroke-width="1.5" marker-end="url(#sa)"/>
+
+  <!-- Reward hacking warning -->
+  <rect x="560" y="15" width="170" height="70" rx="10" fill="#fef9c3" stroke="#ca8a04" stroke-width="1.5"/>
+  <text x="645" y="38" text-anchor="middle" font-size="12" font-weight="700" fill="#ca8a04">⚠️ 陷阱</text>
+  <text x="645" y="56" text-anchor="middle" font-size="11" fill="#4a5159">獎勵駭客/樣本效率</text>
+  <text x="645" y="72" text-anchor="middle" font-size="11" fill="#4a5159">不穩定/稀疏獎勵</text>
+
+  <!-- Bottom text -->
+  <text x="370" y="300" text-anchor="middle" font-size="13" font-weight="700" fill="#16a34a">最終目標:學出讓長期獎勵最大的策略 π*</text>
+</svg>
+        <figcaption>圖 106-4:本章知識地圖。MDP 與 Bellman 方程式是地基;動態規劃需要模型;無模型方法從互動採樣;Deep RL 加入神經網路;策略梯度直接最佳化策略;RLHF 把這一切應用到 LLM 對齊。</figcaption>
+      </div>
+
+      <p>幾個最重要的記憶點:</p>
+      <ul>
+        <li><strong>MDP</strong> 是 RL 的數學語言;Bellman 方程式是一切演算法的地基</li>
+        <li><strong>Q-learning</strong>:off-policy、直接逼近 $Q^*$、$\epsilon$-greedy 平衡探索與利用</li>
+        <li><strong>DQN</strong>:神經網路 + 經驗回放 + 目標網路,讓 Q-learning 能處理高維狀態</li>
+        <li><strong>策略梯度</strong>:直接對期望回報求梯度,適合連續動作空間;PPO 用裁剪穩定訓練</li>
+        <li><strong>RLHF</strong>:SFT → 獎勵模型(偏好資料訓練)→ PPO 微調 LLM,讓語言模型符合人類偏好</li>
+        <li><strong>誠實</strong>:獎勵駭客、樣本效率、不穩定——RL 不是萬靈丹,目標函數設計比演算法更難</li>
+      </ul>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">延伸學習資源</span>
+          <p>
+            <strong>經典教科書</strong>:<a href="http://incompleteideas.net/book/the-book.html" target="_blank">Sutton &amp; Barto《Reinforcement Learning: An Introduction》(第二版,免費線上)</a>——
+            RL 領域的聖經,從 MDP 到函數近似到策略梯度一網打盡,強烈建議作為本章的補充閱讀。<br>
+            <strong>互動式課程</strong>:<a href="https://spinningup.openai.com/" target="_blank">OpenAI Spinning Up in Deep RL</a>——
+            含 PyTorch 實作的 PPO、SAC 等演算法,以及 RL 概念的精彩文字講解。<br>
+            <strong>RLHF 論文</strong>:Christiano et al. (2017)《Deep Reinforcement Learning from Human Preferences》;
+            Ouyang et al. (2022)《Training language models to follow instructions with human feedback》(InstructGPT)。<br>
+            <strong>DPO 論文</strong>:Rafailov et al. (2023)《Direct Preference Optimization: Your Language Model is Secretly a Reward Model》。
+          </p>
+        </div>
+      </div>
+

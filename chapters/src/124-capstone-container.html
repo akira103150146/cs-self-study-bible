@@ -1,0 +1,1237 @@
+<!--meta
+title: 實戰:手寫容器執行時
+description: 以 Go 語言從零打造 OCI 風格容器執行時，走過六個里程碑：clone 與 pivot_root 行程隔離、六大 namespace、cgroup v2 資源限制、OverlayFS 映像疊層、veth pair 容器網路，最終組裝成能跑真實映像的 minioci。
+-->
+
+      <div class="eyebrow">第二七部 · 動手實戰專案</div>
+      <h1>實戰:手寫容器執行時</h1>
+      <p class="subtitle">Docker 並不神奇——它只是把幾個 Linux 系統呼叫串在一起。這一章，我們用 Go 語言親手走過六個里程碑，從零打造一個能跑起隔離行程、限制資源、疊 OverlayFS、通網路的 OCI 風格容器執行時。</p>
+      <div class="byline">
+        <span class="tag">第 118 章</span>
+        <span>閱讀時間 ≈ 120 分鐘</span>
+        <span>難度:★★★★★</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>容器執行時(container runtime)的完整架構：從 <code>run</code> 指令到行程執行的全路徑</li>
+          <li>如何用 Go 的 <code>syscall.SysProcAttr.Cloneflags</code> 一次開六個 namespace，建立完整的隔離環境</li>
+          <li>如何在 Go 中操作 cgroup v2 介面，限制容器的記憶體、CPU 與 PID 數量</li>
+          <li>如何用 OverlayFS 把 OCI 映像的唯讀層與容器可寫層疊成一個完整根目錄</li>
+          <li>如何用 veth pair 與 Linux bridge 讓容器獲得獨立 IP 並能對外通訊</li>
+          <li>OCI Runtime Specification 的核心設計，以及 runc 如何遵循它</li>
+          <li>容器的安全邊界在哪裡：逃逸風險、capabilities 降權與 seccomp 過濾器</li>
+          <li>這個教學執行時與生產級 Docker/containerd 的差距，以及下一步學什麼</li>
+        </ul>
+      </div>
+
+      <!-- ===== §1 ===== -->
+      <h2>容器不是虛擬機——它只是被隔離的行程</h2>
+
+      <p>
+        你在<a href="91-virt-landscape.html">第 85 章</a>看過虛擬化光譜——從純行程隔離到全虛擬機，
+        中間有無數層次。容器坐落在最輕量的那一端：它沒有 Guest OS、沒有 Hypervisor、沒有模擬硬體，
+        只是一個普通的 Linux 行程，但被精心地放進一個「視圖受限、資源受管、根目錄替換過」的環境。
+      </p>
+      <p>
+        在<a href="93-container-internals.html">第 87 章</a>，你已經拆解了容器的四層機制理論：
+        namespace 隔離、cgroup 資源限制、OverlayFS 聯合掛載、capabilities + seccomp 最小特權。
+        在<a href="94-mini-docker.html">第 88 章</a>，你用約 200 行 C 語言把這些機制串起來，
+        寫出了能跑的 <code>mydocker</code>。
+      </p>
+      <p>
+        <strong>那這一章呢？</strong>這一章是整合性的 capstone：我們換用 <strong>Go 語言</strong>重打，
+        因為 Go 的型別系統讓錯誤處理更清晰，而且真實世界的容器工具（Docker Engine、containerd、runc 等）
+        大多用 Go 寫成。更重要的是，我們要往前走幾步：
+      </p>
+      <ul>
+        <li><strong>六個 namespace 全開</strong>，包含 user namespace（讓 rootless 容器成為可能）</li>
+        <li>從 <strong>tarball 解出 rootfs</strong>，並用 OverlayFS 把映像層與可寫層組合</li>
+        <li>完整的 <strong>veth pair + bridge 網路</strong>讓容器可以對外通訊</li>
+        <li>認識 <strong>OCI Runtime Specification</strong>，理解 runc 遵循什麼規格</li>
+      </ul>
+      <p>
+        最終成品叫做 <strong><code>minioci</code></strong>，它的指令介面是：
+      </p>
+      <pre><code class="language-bash">sudo ./minioci run /path/to/rootfs /bin/sh
+# 在隔離環境中進入一個有獨立 PID/網路/hostname 的 shell</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">本章定位</span>
+          <p>這是一個<strong>教學用進階 OCI 風格容器執行時</strong>。它比 <code>mydocker</code>（第 88 章）
+          更完整，但仍不處理 registry 拉取、CNI 外掛、安全強化配置等生產級需求。
+          執行需要 <strong>root 或 CAP_SYS_ADMIN</strong>，建議在 Linux VM 或
+          WSL2（需開啟 cgroup v2）裡操作。</p>
+        </div>
+      </div>
+
+      <!-- 架構 SVG -->
+      <div class="diagram">
+<svg viewBox="0 0 740 360" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/>
+    </marker>
+  </defs>
+
+  <!-- 容器邊界虛線框 -->
+  <rect x="8" y="8" width="724" height="344" rx="14" fill="#f0f7f6" stroke="#2f6f6a" stroke-width="2" stroke-dasharray="10,5"/>
+  <text x="370" y="348" text-anchor="middle" font-size="11" fill="#2f6f6a" font-style="italic">容器邊界（由 namespace + cgroup + rootfs 共同構成）</text>
+
+  <!-- 中心：行程 -->
+  <circle cx="370" cy="165" r="52" fill="#2f6f6a"/>
+  <text x="370" y="160" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">容器行程</text>
+  <text x="370" y="177" text-anchor="middle" font-size="11" fill="#cfe6e2">PID 1 (in ns)</text>
+
+  <!-- Namespace 六邊標籤 -->
+  <!-- PID NS 上 -->
+  <rect x="305" y="30" width="130" height="36" rx="8" fill="#b4541f"/>
+  <text x="370" y="53" text-anchor="middle" font-size="12" font-weight="700" fill="#fff">PID namespace</text>
+  <line x1="370" y1="66" x2="370" y2="113" stroke="#b4541f" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arr)"/>
+
+  <!-- UTS NS 左上 -->
+  <rect x="40" y="55" width="130" height="36" rx="8" fill="#8b5cf6"/>
+  <text x="105" y="78" text-anchor="middle" font-size="12" font-weight="700" fill="#fff">UTS namespace</text>
+  <line x1="170" y1="73" x2="325" y2="148" stroke="#8b5cf6" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arr)"/>
+
+  <!-- NET NS 左下 -->
+  <rect x="40" y="240" width="130" height="36" rx="8" fill="#8b5cf6"/>
+  <text x="105" y="263" text-anchor="middle" font-size="12" font-weight="700" fill="#fff">NET namespace</text>
+  <line x1="170" y1="258" x2="322" y2="200" stroke="#8b5cf6" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arr)"/>
+
+  <!-- MNT NS 下 -->
+  <rect x="305" y="272" width="130" height="36" rx="8" fill="#8b5cf6"/>
+  <text x="370" y="295" text-anchor="middle" font-size="12" font-weight="700" fill="#fff">MNT namespace</text>
+  <line x1="370" y1="272" x2="370" y2="217" stroke="#8b5cf6" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arr)"/>
+
+  <!-- IPC NS 右下 -->
+  <rect x="570" y="240" width="130" height="36" rx="8" fill="#8b5cf6"/>
+  <text x="635" y="263" text-anchor="middle" font-size="12" font-weight="700" fill="#fff">IPC namespace</text>
+  <line x1="570" y1="258" x2="418" y2="200" stroke="#8b5cf6" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arr)"/>
+
+  <!-- USER NS 右上 -->
+  <rect x="570" y="55" width="130" height="36" rx="8" fill="#8b5cf6"/>
+  <text x="635" y="78" text-anchor="middle" font-size="12" font-weight="700" fill="#fff">USER namespace</text>
+  <line x1="570" y1="73" x2="415" y2="148" stroke="#8b5cf6" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arr)"/>
+
+  <!-- cgroup 資源限制（下方橫條） -->
+  <rect x="50" y="148" width="130" height="34" rx="6" fill="#e3efed" stroke="#2f6f6a" stroke-width="1.5"/>
+  <text x="115" y="163" text-anchor="middle" font-size="11" font-weight="600" fill="#1f2328">cgroup v2</text>
+  <text x="115" y="176" text-anchor="middle" font-size="10" fill="#4a5159">CPU · MEM · PIDs</text>
+  <line x1="180" y1="165" x2="318" y2="165" stroke="#2f6f6a" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arr)"/>
+
+  <!-- OverlayFS（右邊） -->
+  <rect x="560" y="140" width="150" height="50" rx="6" fill="#e3efed" stroke="#2f6f6a" stroke-width="1.5"/>
+  <text x="635" y="160" text-anchor="middle" font-size="11" font-weight="600" fill="#1f2328">OverlayFS</text>
+  <text x="635" y="175" text-anchor="middle" font-size="10" fill="#4a5159">image layer (ro)</text>
+  <text x="635" y="187" text-anchor="middle" font-size="10" fill="#4a5159">+ container rw</text>
+  <line x1="560" y1="165" x2="422" y2="165" stroke="#2f6f6a" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arr)"/>
+</svg>
+        <figcaption>圖 118-1：一個容器 = 行程 × namespace（隔離視圖）× cgroup（資源限制）× OverlayFS（根目錄）</figcaption>
+      </div>
+
+      <!-- ===== §2 ===== -->
+      <h2>環境準備：Go 專案骨架與工具鏈</h2>
+
+      <p>
+        本章所有程式碼需要 <strong>Linux</strong> 環境（Kernel ≥ 5.10，cgroup v2 統一階層）。
+        macOS 與 Windows 可用 WSL2 或 VM。需要安裝 <strong>Go 1.21+</strong> 與 <strong>root 權限</strong>。
+      </p>
+
+      <h3>建立專案</h3>
+      <pre><code class="language-bash">mkdir minioci &amp;&amp; cd minioci
+go mod init minioci
+# 建立主程式
+touch main.go overlay.go network.go cgroup.go</code></pre>
+
+      <h3>專案檔案結構</h3>
+      <pre><code class="language-text">minioci/
+├── main.go       ← 入口：run / _child 兩個子命令
+├── cgroup.go     ← cgroup v2 資源限制
+├── overlay.go    ← OverlayFS 映像掛載
+├── network.go    ← veth pair + bridge 設定
+└── go.mod</code></pre>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">為什麼要 re-exec？</span>
+          <p>Go runtime 是多執行緒的，直接在現有行程裡呼叫 <code>clone()</code> 後進行 <code>fork</code>
+          會有競態問題（執行緒鎖、goroutine 狀態未複製）。解法是：
+          <strong>re-exec 技巧</strong>——父行程用 <code>exec.Command("/proc/self/exe", "_child", ...)</code>
+          重新啟動一個乾淨的子行程，並在 fork 時透過 <code>SysProcAttr.Cloneflags</code>
+          開新的 namespace。子行程（<code>_child</code> 路徑）在新 namespace 裡完成容器初始化後
+          再 <code>exec</code> 使用者的命令。</p>
+        </div>
+      </div>
+
+      <!-- ===== §3 ===== -->
+      <h2>里程碑 1 — 行程與檔案系統隔離：clone() 與 pivot_root</h2>
+
+      <p>
+        第一個里程碑的目標：能夠執行 <code>./minioci run /path/to/rootfs /bin/sh</code>，
+        進入一個有獨立 PID namespace 與獨立根目錄的 shell，而且 <code>echo $$</code> 顯示 PID 為 1，
+        <code>ls /</code> 看到的是 rootfs 的根目錄，而不是主機的根目錄。
+      </p>
+
+      <h3>main.go — 骨架與 run()</h3>
+      <pre><code class="language-go">package main
+
+import (
+    "fmt"
+    "os"
+    "os/exec"
+    "syscall"
+)
+
+func main() {
+    if len(os.Args) &lt; 2 {
+        usage()
+    }
+    switch os.Args[1] {
+    case "run":
+        if len(os.Args) &lt; 4 {
+            usage()
+        }
+        run(os.Args[2], os.Args[3:])
+    case "_child": // 內部子命令，由 run() 自動呼叫
+        child()
+    default:
+        usage()
+    }
+}
+
+func usage() {
+    fmt.Fprintln(os.Stderr, "用法: minioci run &lt;rootfs&gt; &lt;cmd&gt; [args...]")
+    os.Exit(1)
+}
+
+// run: 父行程 — 建立新 namespace，re-exec 自己為 _child
+func run(rootfs string, args []string) {
+    // 把所有參數轉給 _child
+    cmdArgs := append([]string{"_child", rootfs}, args...)
+    cmd := exec.Command("/proc/self/exe", cmdArgs...)
+    cmd.Stdin  = os.Stdin
+    cmd.Stdout = os.Stdout
+    cmd.Stderr = os.Stderr
+
+    cmd.SysProcAttr = &amp;syscall.SysProcAttr{
+        Cloneflags: syscall.CLONE_NEWUTS | // hostname 隔離
+                    syscall.CLONE_NEWPID | // PID 空間隔離
+                    syscall.CLONE_NEWNS  | // mount namespace
+                    syscall.CLONE_NEWIPC,  // IPC/共享記憶體隔離
+    }
+
+    if err := cmd.Start(); err != nil {
+        fatal("啟動容器失敗", err)
+    }
+    // 拿到子行程 PID，設定 cgroup（里程碑 3 加入）
+    // setupCgroup(cmd.Process.Pid)
+
+    must(cmd.Wait())
+}
+
+// child: 子行程 — 已在新 namespace，完成初始化後 exec 使用者命令
+func child() {
+    rootfs   := os.Args[2]
+    userArgs := os.Args[3:]
+
+    // 1. 設定容器 hostname
+    must(syscall.Sethostname([]byte("minioci")))
+
+    // 2. 換根目錄：pivot_root 比 chroot 更安全（見第 87 章）
+    must(pivotRoot(rootfs))
+
+    // 3. 掛載 /proc（讓 ps、top 等工具正常運作）
+    must(syscall.Mount("proc", "/proc", "proc", 0, ""))
+
+    // 4. 執行使用者指定的命令
+    cmd := exec.Command(userArgs[0], userArgs[1:]...)
+    cmd.Stdin  = os.Stdin
+    cmd.Stdout = os.Stdout
+    cmd.Stderr = os.Stderr
+    must(cmd.Run())
+}
+
+func must(err error) {
+    if err != nil { fatal("", err) }
+}
+
+func fatal(msg string, err error) {
+    if msg != "" {
+        fmt.Fprintf(os.Stderr, "minioci: %s: %v\n", msg, err)
+    } else {
+        fmt.Fprintf(os.Stderr, "minioci: %v\n", err)
+    }
+    os.Exit(1)
+}</code></pre>
+
+      <h3>pivotRoot() — 安全換根</h3>
+      <p>
+        <code>pivot_root(new_root, put_old)</code> 是 <a href="93-container-internals.html">第 87 章</a>
+        講過的「安全換根」系統呼叫。它把容器的新根掛到 <code>new_root</code>，
+        舊根移到 <code>put_old</code>，然後我們把舊根 detach 卸除，讓容器看不到主機的任何路徑。
+        相比之下，<code>chroot</code> 仍能透過 <code>/../</code> 跳出去，安全性不足。
+      </p>
+
+      <pre><code class="language-go">// main.go（接上）
+import "path/filepath"
+
+func pivotRoot(newroot string) error {
+    putold := filepath.Join(newroot, ".pivot_old")
+    if err := os.MkdirAll(putold, 0o700); err != nil {
+        return fmt.Errorf("建立 put_old 目錄: %w", err)
+    }
+
+    // pivot_root 要求 new_root 必須是一個「獨立的掛載點」
+    // 用 bind mount 把 newroot 掛到自己，讓核心認可它
+    if err := syscall.Mount(newroot, newroot, "",
+        syscall.MS_BIND|syscall.MS_REC, ""); err != nil {
+        return fmt.Errorf("bind mount newroot: %w", err)
+    }
+
+    if err := syscall.PivotRoot(newroot, putold); err != nil {
+        return fmt.Errorf("pivot_root: %w", err)
+    }
+
+    // 切換工作目錄到新的根
+    if err := os.Chdir("/"); err != nil {
+        return err
+    }
+
+    // 以 MNT_DETACH 懶卸除舊根（允許現有使用者存取完成），再刪目錄
+    if err := syscall.Unmount("/.pivot_old",
+        syscall.MNT_DETACH); err != nil {
+        return fmt.Errorf("unmount 舊根: %w", err)
+    }
+    return os.Remove("/.pivot_old")
+}</code></pre>
+
+      <h3>準備 rootfs</h3>
+      <p>
+        最快的辦法是從 Docker 匯出一個乾淨的 Ubuntu rootfs：
+      </p>
+      <pre><code class="language-bash"># 從 Docker 匯出 Ubuntu 根目錄（不需要啟動容器）
+docker export $(docker create ubuntu:22.04) | tar -C /tmp/ubuntu-rootfs -xf -
+ls /tmp/ubuntu-rootfs   # 應該看到 bin/ etc/ usr/ var/ ...
+
+# 也可以用 debootstrap（Debian/Ubuntu 系統可安裝）
+sudo debootstrap jammy /tmp/ubuntu-rootfs https://mirrors.ubuntu.com/ubuntu/</code></pre>
+
+      <h3>建置與驗收</h3>
+      <pre><code class="language-bash">go build -o minioci .
+sudo ./minioci run /tmp/ubuntu-rootfs /bin/sh</code></pre>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">里程碑 1 驗收清單</span>
+          <p>在容器 shell 裡執行以下指令，確認隔離正常：</p>
+          <pre><code class="language-bash"># 在容器 shell 裡
+echo $$        # 應印出 1（你是 PID namespace 裡的第一個行程）
+hostname       # 應印出 minioci（不是主機的 hostname）
+ls /           # 應看到 ubuntu rootfs，而非主機根目錄
+ps aux         # 應只看到幾個行程，而非主機的全部
+cat /proc/1/cgroup  # 驗證 /proc 正確掛載</code></pre>
+        </div>
+      </div>
+
+      <!-- ===== §4 ===== -->
+      <h2>里程碑 2 — 六道命名空間門：namespace 全家桶</h2>
+
+      <p>
+        里程碑 1 只開了 UTS、PID、mount、IPC 四個 namespace。
+        完整的容器隔離需要全部六個，尤其是
+        <strong>NET namespace</strong>（讓容器有自己的網路介面）與
+        <strong>USER namespace</strong>（讓無 root 的 rootless 容器成為可能）。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">六個 namespace 一覽（詳見第 87 章）</span>
+          <p>
+            <code>CLONE_NEWPID</code>：獨立 PID 空間，容器初始行程為 PID 1。<br>
+            <code>CLONE_NEWNS</code>：獨立 mount 表，容器看不到主機掛載。<br>
+            <code>CLONE_NEWUTS</code>：獨立 hostname 與 domain name。<br>
+            <code>CLONE_NEWIPC</code>：獨立 IPC/共享記憶體 key 空間。<br>
+            <code>CLONE_NEWNET</code>：獨立網路介面、路由表、防火牆規則。<br>
+            <code>CLONE_NEWUSER</code>：獨立 UID/GID 映射，容器內 root 可對應到主機的非 root。
+          </p>
+        </div>
+      </div>
+
+      <h3>加入 NET 與 USER namespace</h3>
+      <p>
+        更新 <code>run()</code> 的 <code>SysProcAttr</code>，加入 <code>CLONE_NEWNET</code>
+        與 <code>CLONE_NEWUSER</code>，並提供 UID/GID 映射讓容器內的 root（UID 0）
+        對應到主機上的一般使用者（避免真正的 root 洩漏）：
+      </p>
+
+      <pre><code class="language-go">func run(rootfs string, args []string) {
+    cmdArgs := append([]string{"_child", rootfs}, args...)
+    cmd := exec.Command("/proc/self/exe", cmdArgs...)
+    cmd.Stdin  = os.Stdin
+    cmd.Stdout = os.Stdout
+    cmd.Stderr = os.Stderr
+
+    uid := os.Getuid()
+    gid := os.Getgid()
+
+    cmd.SysProcAttr = &amp;syscall.SysProcAttr{
+        Cloneflags: syscall.CLONE_NEWUTS  |
+                    syscall.CLONE_NEWPID  |
+                    syscall.CLONE_NEWNS   |
+                    syscall.CLONE_NEWIPC  |
+                    syscall.CLONE_NEWNET  |  // ← 網路 namespace（里程碑 5 加入 veth）
+                    syscall.CLONE_NEWUSER,   // ← user namespace
+        // 把容器 UID 0（root）映射到主機目前使用者
+        UidMappings: []syscall.SysProcIDMap{
+            {ContainerID: 0, HostID: uid, Size: 1},
+        },
+        GidMappings: []syscall.SysProcIDMap{
+            {ContainerID: 0, HostID: gid, Size: 1},
+        },
+    }
+
+    if err := cmd.Start(); err != nil {
+        fatal("啟動容器失敗", err)
+    }
+    setupCgroup(cmd.Process.Pid) // 里程碑 3
+    must(cmd.Wait())
+}</code></pre>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">user namespace + OverlayFS 的注意事項</span>
+          <p>在 user namespace 裡掛載 OverlayFS 需要核心支援 rootless overlay（Kernel ≥ 5.11 加上
+          <code>CONFIG_OVERLAY_FS_REDIRECT_DIR=y</code>）。若環境不支援，可先移除
+          <code>CLONE_NEWUSER</code> 以 root 執行里程碑 1–5，最後再加回 user namespace。</p>
+        </div>
+      </div>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">里程碑 2 驗收</span>
+          <p>在容器 shell 裡：</p>
+          <pre><code class="language-bash">id              # 應看到 uid=0(root) gid=0(root)（容器內的映射 root）
+ip link         # 應只看到 lo，不見主機的 eth0/wlan0（NET namespace 隔離）
+ls /proc/net/   # 獨立網路狀態
+cat /proc/self/uid_map   # 確認 UID 映射：0 &lt;host-uid&gt; 1</code></pre>
+        </div>
+      </div>
+
+      <!-- ===== §5 ===== -->
+      <h2>里程碑 3 — 資源限制：cgroup v2 的介面與 Go 實作</h2>
+
+      <p>
+        容器沒有資源限制，是一個裸行程。一個失控的容器可以把整台主機的 CPU 和記憶體耗盡。
+        <strong>cgroup v2（unified hierarchy）</strong>透過 <code>/sys/fs/cgroup/</code> 下的
+        偽檔案系統提供一個統一介面：你往檔案裡寫值，核心就強制執行。
+      </p>
+      <p>
+        確認系統使用 cgroup v2：
+      </p>
+      <pre><code class="language-bash">mount | grep cgroup2
+# 應看到類似：cgroup2 on /sys/fs/cgroup type cgroup2 (rw,...)</code></pre>
+
+      <h3>cgroup.go</h3>
+      <pre><code class="language-go">package main
+
+import (
+    "fmt"
+    "os"
+    "path/filepath"
+    "strconv"
+)
+
+const cgroupBase = "/sys/fs/cgroup/minioci"
+
+// setupCgroup: 建立 minioci cgroup，寫入資源限制，並把 pid 加入
+func setupCgroup(pid int) error {
+    if err := os.MkdirAll(cgroupBase, 0o755); err != nil {
+        return fmt.Errorf("建立 cgroup 目錄: %w", err)
+    }
+
+    limits := map[string]string{
+        // 記憶體上限：128 MiB（必須寫位元組數）
+        "memory.max": "134217728",
+        // 最多 64 個行程
+        "pids.max":   "64",
+        // CPU 配額：100000 微秒/100000 微秒週期 = 1 顆核心
+        // 格式：&lt;quota_us&gt; &lt;period_us&gt;
+        "cpu.max":    "100000 100000",
+        // 啟用記憶體 swap 限制（等同 memory.max，不允許 swap）
+        "memory.swap.max": "0",
+    }
+
+    for file, val := range limits {
+        p := filepath.Join(cgroupBase, file)
+        if err := os.WriteFile(p, []byte(val), 0o644); err != nil {
+            return fmt.Errorf("寫 %s (%s): %w", file, val, err)
+        }
+    }
+
+    // 把容器行程加入 cgroup
+    procsFile := filepath.Join(cgroupBase, "cgroup.procs")
+    return os.WriteFile(procsFile, []byte(strconv.Itoa(pid)), 0o644)
+}
+
+// teardownCgroup: 容器結束後刪除 cgroup（需先確認無行程）
+func teardownCgroup() {
+    os.Remove(cgroupBase) // 只有在沒有任何行程時才能刪成功
+}</code></pre>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">cpu.max 格式詳解</span>
+          <p><code>cpu.max</code> 的格式是 <code>&lt;quota&gt; &lt;period&gt;</code>，單位都是微秒（µs）。
+          寫 <code>100000 100000</code> 表示每 100ms 週期裡，容器最多使用 100ms CPU，等同限制一顆完整核心。
+          若寫 <code>50000 100000</code> 則限制半顆核心。寫 <code>max 100000</code> 表示不限制。</p>
+        </div>
+      </div>
+
+      <h3>在 run() 中呼叫 setupCgroup</h3>
+      <p>
+        注意時序：必須在子行程 <code>Start()</code> <em>之後</em>、<code>Wait()</code> <em>之前</em>
+        設定 cgroup，因為要先知道子行程的 PID：
+      </p>
+      <pre><code class="language-go">if err := cmd.Start(); err != nil {
+    fatal("啟動容器失敗", err)
+}
+// cmd.Process.Pid 是剛 fork 出來的子行程 PID
+if err := setupCgroup(cmd.Process.Pid); err != nil {
+    fmt.Fprintln(os.Stderr, "警告: setupCgroup 失敗:", err)
+}
+defer teardownCgroup()
+must(cmd.Wait())</code></pre>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">里程碑 3 驗收：觀察 OOM</span>
+          <p>我們用 <code>stress-ng</code> 驗證記憶體限制：</p>
+          <pre><code class="language-bash"># 在容器 rootfs 裡安裝 stress-ng（或直接複製靜態二進位）
+# 進入容器後：
+stress-ng --vm 1 --vm-bytes 200M --timeout 5s
+# 預期：kernel OOM killer 介入，行程被終止
+# 主機上觀察：
+cat /sys/fs/cgroup/minioci/memory.events
+# 應看到 oom 與 oom_kill 計數大於 0</code></pre>
+          <p>驗證 PID 限制：在容器裡快速 fork 64 個以上行程，應看到 <code>fork: Resource temporarily unavailable</code>（errno EAGAIN）。</p>
+        </div>
+      </div>
+
+      <!-- ===== §6 ===== -->
+      <h2>里程碑 4 — 映像與根檔案系統：OverlayFS 疊層</h2>
+
+      <p>
+        里程碑 1 直接使用了一個預先解壓的 rootfs。真實的容器執行時會把 OCI 映像（一組 tar layer）
+        動態疊成一個根目錄——唯讀的映像層堆在下面，容器可寫層蓋在上面，
+        容器寫入的任何內容只存在可寫層，不會汙染映像層。
+        這就是 <strong>OverlayFS（聯合檔案系統，union filesystem）</strong>的工作。
+      </p>
+
+      <!-- OverlayFS SVG -->
+      <div class="diagram">
+<svg viewBox="0 0 700 320" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="arrd" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/>
+    </marker>
+  </defs>
+
+  <!-- merged（使用者看到的） -->
+  <rect x="200" y="18" width="300" height="54" rx="10" fill="#2f6f6a"/>
+  <text x="350" y="43" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">merged（容器看到的根目錄）</text>
+  <text x="350" y="61" text-anchor="middle" font-size="11" fill="#cfe6e2">讀：先 upper → 再 lower；寫：只寫 upper</text>
+
+  <line x1="350" y1="72" x2="350" y2="100" stroke="#8a929b" stroke-width="2" marker-end="url(#arrd)"/>
+  <text x="360" y="90" font-size="10" fill="#8a929b">OverlayFS 合併</text>
+
+  <!-- upper（可寫層） -->
+  <rect x="100" y="104" width="220" height="54" rx="10" fill="#b4541f"/>
+  <text x="210" y="129" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">upperdir（可寫層）</text>
+  <text x="210" y="147" text-anchor="middle" font-size="11" fill="#f6e7dd">容器寫入 / 新增的檔案</text>
+
+  <!-- workdir -->
+  <rect x="380" y="104" width="200" height="54" rx="10" fill="#e3efed" stroke="#8a929b" stroke-width="1.5"/>
+  <text x="480" y="129" text-anchor="middle" font-size="12" font-weight="600" fill="#4a5159">workdir</text>
+  <text x="480" y="147" text-anchor="middle" font-size="11" fill="#4a5159">核心暫存（必需）</text>
+
+  <line x1="210" y1="158" x2="210" y2="186" stroke="#8a929b" stroke-width="2" marker-end="url(#arrd)"/>
+  <text x="220" y="178" font-size="10" fill="#8a929b">讀不到時往下找</text>
+
+  <!-- lower（映像層） -->
+  <rect x="30" y="190" width="490" height="48" rx="10" fill="#8b5cf6"/>
+  <text x="275" y="213" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">lowerdir（映像層，唯讀）</text>
+  <text x="275" y="230" text-anchor="middle" font-size="11" fill="#e8d8ff">layer N / layer N-1 / … / layer 1（從左到右疊加，左覆蓋右）</text>
+
+  <!-- 主機檔案系統 -->
+  <rect x="30" y="258" width="490" height="40" rx="8" fill="#e3efed" stroke="#8a929b" stroke-width="1.5"/>
+  <text x="275" y="283" text-anchor="middle" font-size="12" fill="#4a5159">主機真實檔案系統（ext4 / xfs 等）</text>
+
+  <!-- 掛載指令提示 -->
+  <text x="350" y="315" text-anchor="middle" font-size="10" fill="#8a929b">mount -t overlay overlay -o lowerdir=lower,upperdir=upper,workdir=work /merged</text>
+</svg>
+        <figcaption>圖 118-2：OverlayFS 三層結構。容器對 merged 的讀取會先查 upper（可寫層），找不到才去 lower（映像層）；寫入永遠只落在 upper，不汙染映像。</figcaption>
+      </div>
+
+      <h3>overlay.go</h3>
+      <pre><code class="language-go">package main
+
+import (
+    "fmt"
+    "os"
+    "strings"
+    "syscall"
+)
+
+// MountOverlay: 把映像層（lowerDirs，可以多層用 : 分隔）與容器可寫層組合成 merged
+// lowerDirs: 多個唯讀層，用冒號分隔，左邊優先（e.g. "layer2:layer1:layer0"）
+// containerDir: 存放 upper + work 的目錄（與 lowerDirs 必須在同一檔案系統）
+// mergedDir: 最終掛載點
+func MountOverlay(lowerDirs []string, containerDir, mergedDir string) error {
+    upperDir := containerDir + "/upper"
+    workDir  := containerDir + "/work"
+
+    for _, d := range []string{upperDir, workDir, mergedDir} {
+        if err := os.MkdirAll(d, 0o755); err != nil {
+            return err
+        }
+    }
+
+    opts := fmt.Sprintf(
+        "lowerdir=%s,upperdir=%s,workdir=%s",
+        strings.Join(lowerDirs, ":"), upperDir, workDir,
+    )
+    return syscall.Mount("overlay", mergedDir, "overlay", 0, opts)
+}
+
+// UmountOverlay: 卸載 merged（容器退出後呼叫）
+func UmountOverlay(mergedDir string) error {
+    return syscall.Unmount(mergedDir, syscall.MNT_DETACH)
+}
+
+// ExtractTar: 把 OCI image layer tarball 解壓到 destDir
+func ExtractTar(tarPath, destDir string) error {
+    if err := os.MkdirAll(destDir, 0o755); err != nil {
+        return err
+    }
+    // 使用系統的 tar，-C 指定目的地
+    return runCmd("tar", "-xf", tarPath, "-C", destDir)
+}</code></pre>
+
+      <pre><code class="language-go">// 在 main.go 加入輔助函式
+import "os/exec"
+
+func runCmd(name string, args ...string) error {
+    cmd := exec.Command(name, args...)
+    cmd.Stdout = os.Stdout
+    cmd.Stderr = os.Stderr
+    return cmd.Run()
+}</code></pre>
+
+      <h3>在 run() 裡整合 OverlayFS</h3>
+      <pre><code class="language-go">func run(rootfs string, args []string) {
+    // rootfs 現在是 lowerdir（映像解壓後的唯讀層）
+    containerDir := "/tmp/minioci-container"
+    mergedDir    := "/tmp/minioci-merged"
+
+    // 疊 OverlayFS
+    if err := MountOverlay([]string{rootfs}, containerDir, mergedDir); err != nil {
+        fatal("MountOverlay 失敗", err)
+    }
+    defer UmountOverlay(mergedDir)
+
+    // 後續把 mergedDir 當成 rootfs 傳給 _child
+    cmdArgs := append([]string{"_child", mergedDir}, args...)
+    cmd := exec.Command("/proc/self/exe", cmdArgs...)
+    // ... 其餘同前
+}</code></pre>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">里程碑 4 驗收：寫入隔離</span>
+          <pre><code class="language-bash"># 在容器 shell 裡
+echo "hello from container" &gt; /tmp/test.txt
+# 離開容器後，在主機確認：
+ls /tmp/minioci-container/upper/tmp/   # 應看到 test.txt
+ls /tmp/ubuntu-rootfs/tmp/             # 應看不到 test.txt（映像未被汙染）
+ls /tmp/minioci-merged/tmp/            # 應看到 test.txt（合併後可見）</code></pre>
+        </div>
+      </div>
+
+      <h3>capabilities 降權</h3>
+      <p>
+        OverlayFS 一旦掛好，在執行使用者命令前，應收縮容器的 Linux capabilities。
+        真實的 runc 預設會保留約 14 個，並丟棄 <code>CAP_SYS_ADMIN</code>、
+        <code>CAP_NET_ADMIN</code>、<code>CAP_SYS_BOOT</code> 等危險能力。
+        在 Go 裡透過 <code>syscall.Prctl</code> 與
+        <a href="https://pkg.go.dev/kernel.org/pub/linux/libs/security/libcap/cap" target="_blank">libcap</a>
+        套件可以操作 capability bounding set。教學上最簡單的做法是把需要丟棄的能力
+        從 <code>PR_CAPBSET_DROP</code> 中移除，留給讀者作延伸練習。
+      </p>
+
+      <!-- ===== §7 ===== -->
+      <h2>里程碑 5 — 容器網路：veth pair 與 Linux bridge</h2>
+
+      <p>
+        在里程碑 2 裡，我們加入了 <code>CLONE_NEWNET</code>，容器有了自己的 NET namespace，
+        但裡面只有一個 <code>lo</code>（loopback）介面，完全無法對外通訊。
+        要讓容器「上網」，需要在主機與容器之間建立一條虛擬乙太網路通道，
+        這就是 <strong>veth pair（虛擬乙太對）</strong>的用途。
+      </p>
+
+      <h3>概念：veth pair + bridge</h3>
+      <ol>
+        <li>建立一對 veth：<code>veth-host</code>（在主機端）↔ <code>eth0</code>（在容器端）</li>
+        <li>把 <code>eth0</code> 移入容器的 NET namespace</li>
+        <li>把 <code>veth-host</code> 接到主機的 Linux bridge（<code>br0</code>）</li>
+        <li>bridge 啟用 IP 轉發（<code>ip_forward</code>）與 NAT（iptables MASQUERADE）</li>
+        <li>容器設定 IP 與預設閘道即可對外通訊</li>
+      </ol>
+
+      <h3>network.go — 主機端設定</h3>
+      <pre><code class="language-go">package main
+
+import (
+    "fmt"
+    "os"
+    "strconv"
+)
+
+const (
+    bridgeName = "br0"
+    bridgeIP   = "10.88.0.1/24"
+    containerIP = "10.88.0.2/24"
+    containerGW = "10.88.0.1"
+    vethHost    = "veth-host"
+    vethCont    = "eth0"
+)
+
+// SetupNetwork: 在主機建立 bridge 與 veth pair，把 veth 容器端移入 pid 的 NET namespace
+func SetupNetwork(pid int) error {
+    pidStr := strconv.Itoa(pid)
+
+    steps := [][]string{
+        // 若 bridge 不存在則建立
+        {"ip", "link", "add", "name", bridgeName, "type", "bridge"},
+        {"ip", "addr", "add", bridgeIP, "dev", bridgeName},
+        {"ip", "link", "set", bridgeName, "up"},
+        // 建立 veth pair
+        {"ip", "link", "add", vethHost, "type", "veth", "peer", "name", vethCont},
+        // 把容器端 veth 移入容器的 NET namespace
+        {"ip", "link", "set", vethCont, "netns", pidStr},
+        // 把主機端 veth 接到 bridge
+        {"ip", "link", "set", vethHost, "master", bridgeName},
+        {"ip", "link", "set", vethHost, "up"},
+    }
+    for _, s := range steps {
+        if err := runCmd(s[0], s[1:]...); err != nil {
+            // 部分步驟（如 bridge 已存在）允許失敗
+            fmt.Printf("網路設定警告: %v: %v\n", s, err)
+        }
+    }
+    return nil
+}
+
+// SetupContainerNetwork: 在容器的 NET namespace 裡設定 IP 與路由
+// 必須在 child() 裡（已在新 NET namespace 後）呼叫
+func SetupContainerNetwork() error {
+    steps := [][]string{
+        {"ip", "link", "set", "lo", "up"},
+        {"ip", "addr", "add", containerIP, "dev", vethCont},
+        {"ip", "link", "set", vethCont, "up"},
+        {"ip", "route", "add", "default", "via", containerGW},
+    }
+    for _, s := range steps {
+        if err := runCmd(s[0], s[1:]...); err != nil {
+            return fmt.Errorf("容器網路設定: %v: %w", s, err)
+        }
+    }
+    return nil
+}
+
+// EnableNAT: 主機端開啟 IP 轉發並設定 MASQUERADE，讓容器封包能出主機
+func EnableNAT(iface string) error {
+    // 開啟核心 IP 轉發
+    if err := os.WriteFile(
+        "/proc/sys/net/ipv4/ip_forward", []byte("1"), 0o644); err != nil {
+        return err
+    }
+    // NAT：容器 10.88.0.0/24 的出口封包偽裝成主機 IP
+    return runCmd("iptables", "-t", "nat", "-A", "POSTROUTING",
+        "-s", "10.88.0.0/24", "-o", iface, "-j", "MASQUERADE")
+}</code></pre>
+
+      <h3>在 run() 與 child() 整合網路</h3>
+      <pre><code class="language-go">// run() 裡，Start() 之後：
+if err := cmd.Start(); err != nil {
+    fatal("啟動容器失敗", err)
+}
+setupCgroup(cmd.Process.Pid)
+SetupNetwork(cmd.Process.Pid)          // 主機端 veth + bridge
+EnableNAT("eth0" /* 主機的對外網路介面 */)
+must(cmd.Wait())
+
+// child() 裡，pivot_root 之後、exec 之前：
+must(SetupContainerNetwork())          // 容器內 IP + 路由</code></pre>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">里程碑 5 驗收：容器通外網</span>
+          <pre><code class="language-bash"># 在容器 shell 裡
+ip addr show eth0        # 應看到 10.88.0.2/24
+ip route show            # 應看到 default via 10.88.0.1
+ping -c 3 10.88.0.1      # 能通閘道（主機 br0）
+ping -c 3 8.8.8.8        # 能通外網（需要主機 NAT 正確）
+curl -s https://ifconfig.me  # 顯示主機的公網 IP（NAT 成功）</code></pre>
+        </div>
+      </div>
+
+      <!-- ===== §8 ===== -->
+      <h2>里程碑 6 — 組裝完整執行時：認識 OCI Runtime Specification</h2>
+
+      <p>
+        把前五個里程碑組在一起，我們已經有了一個能隔離行程、限制資源、有獨立根目錄、
+        能對外通訊的容器執行時。但真實世界的 Docker、containerd、Podman 是如何協作的？
+        答案是 <strong>OCI Runtime Specification（開放容器倡議執行時規範）</strong>。
+      </p>
+
+      <h3>OCI Runtime Spec 要求什麼</h3>
+      <p>
+        OCI Runtime Spec 定義了一個「符合規範的容器執行時」必須做的事：
+      </p>
+      <ol>
+        <li><strong><code>config.json</code></strong>：一個 JSON 設定檔，描述 namespace、mounts、process、
+            hooks、Linux 特定設定（capabilities、seccomp、cgroups）</li>
+        <li><strong>生命週期操作</strong>：<code>create</code>（建立但不啟動）→ <code>start</code>（執行行程）
+            → <code>kill</code>（送訊號）→ <code>delete</code>（清理）→ <code>state</code>（查詢狀態）</li>
+        <li><strong>bundle 格式</strong>：一個目錄，包含 <code>config.json</code> 與 <code>rootfs/</code></li>
+      </ol>
+
+      <h3>最小 config.json 骨架</h3>
+      <pre><code class="language-text">{
+  "ociVersion": "1.0.2",
+  "process": {
+    "terminal": true,
+    "user": { "uid": 0, "gid": 0 },
+    "args": ["/bin/sh"],
+    "env": ["PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"],
+    "cwd": "/"
+  },
+  "root": { "path": "rootfs", "readonly": false },
+  "hostname": "minioci",
+  "mounts": [
+    { "destination": "/proc", "type": "proc", "source": "proc" },
+    { "destination": "/dev",  "type": "tmpfs", "source": "tmpfs" }
+  ],
+  "linux": {
+    "namespaces": [
+      {"type": "pid"}, {"type": "network"}, {"type": "ipc"},
+      {"type": "uts"}, {"type": "mount"},   {"type": "user"}
+    ],
+    "resources": {
+      "memory": { "limit": 134217728 },
+      "pids":   { "limit": 64 },
+      "cpu":    { "quota": 100000, "period": 100000 }
+    }
+  }
+}</code></pre>
+
+      <h3>在 minioci 加入 config.json 解析</h3>
+      <pre><code class="language-go">// config.go（示意，僅解析最小子集）
+package main
+
+import (
+    "encoding/json"
+    "os"
+)
+
+type Config struct {
+    Process struct {
+        Args []string `json:"args"`
+        Cwd  string   `json:"cwd"`
+    } `json:"process"`
+    Root struct {
+        Path string `json:"path"`
+    } `json:"root"`
+    Hostname string `json:"hostname"`
+}
+
+func LoadConfig(bundleDir string) (*Config, error) {
+    data, err := os.ReadFile(bundleDir + "/config.json")
+    if err != nil {
+        return nil, err
+    }
+    var cfg Config
+    if err := json.Unmarshal(data, &amp;cfg); err != nil {
+        return nil, err
+    }
+    return &amp;cfg, nil
+}</code></pre>
+
+      <h3>與 runc 的關係</h3>
+      <p>
+        <a href="https://github.com/opencontainers/runc" target="_blank">runc</a>
+        是 Docker/containerd 預設使用的 OCI 參考實作（大約 60,000 行 Go 程式碼）。
+        當你執行 <code>docker run ubuntu bash</code>，Docker Engine 呼叫 containerd，
+        containerd 準備好 bundle（config.json + rootfs overlay）後呼叫 runc，
+        runc 才是真正執行上述六個里程碑的那個程式。
+        我們的 <code>minioci</code> 走的是完全相同的路徑，只是功能更精簡。
+      </p>
+      <p>
+        在<a href="96-kubernetes.html">第 90 章</a>（Kubernetes），kubelet 透過
+        CRI（容器執行時介面）呼叫 containerd 或 CRI-O，最後也是落到 runc/crun 層。
+        整個鏈路：<strong>kubectl → API Server → kubelet → CRI → containerd → runc（本章的 minioci 即扮演這一層）</strong>。
+      </p>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">里程碑 6 驗收：OCI bundle 啟動</span>
+          <pre><code class="language-bash"># 建立標準 OCI bundle 目錄
+mkdir -p /tmp/mycontainer/rootfs
+# 複製 rootfs（或用 OverlayFS merged 目錄）
+cp -r /tmp/ubuntu-rootfs/. /tmp/mycontainer/rootfs/
+# 生成 config.json（runc 可以幫你生成模板）
+runc spec --bundle /tmp/mycontainer
+# 用我們的 minioci 讀取並執行
+./minioci bundle /tmp/mycontainer
+# 或用 runc 對照驗證：
+sudo runc --bundle /tmp/mycontainer run mycontainer</code></pre>
+        </div>
+      </div>
+
+      <!-- ===== §9 ===== -->
+      <h2>安全與隔離邊界：容器逃逸、能力降權與 seccomp</h2>
+
+      <p>
+        現在你懂了容器怎麼建，是時候問一個更重要的問題：
+        <strong>這堵牆究竟有多厚？</strong>
+      </p>
+
+      <h3>容器隔離 ≠ VM 等級安全</h3>
+      <p>
+        容器與 VM 的根本差距在<a href="91-virt-landscape.html">第 85 章</a>的虛擬化光譜裡講過：
+        容器共用主機的 Linux 核心。這意味著任何 Linux 核心漏洞都能讓容器「逃逸」，
+        直接操控主機。而 VM（如 KVM、Firecracker）在 Guest OS 與 Host 之間多了一層 Hypervisor，
+        攻擊者需要先在 Guest 裡找到 VM 層的漏洞，攻擊難度大得多。
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>隔離機制</th><th>核心共用？</th><th>逃逸難度</th><th>啟動速度</th><th>開銷</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>容器（namespace/cgroup）</td><td>是</td><td>低（核心漏洞可逃逸）</td><td>毫秒</td><td>幾乎為零</td></tr>
+          <tr><td>Firecracker microVM</td><td>否</td><td>高（需 VMM 漏洞）</td><td>125ms</td><td>低</td></tr>
+          <tr><td>gVisor</td><td>部分（User-space kernel）</td><td>中</td><td>~100ms</td><td>中</td></tr>
+          <tr><td>WASM（WASI）</td><td>否</td><td>高（能力安全沙箱）</td><td>微秒</td><td>低</td></tr>
+          <tr><td>KVM 全虛擬機</td><td>否</td><td>最高</td><td>秒級</td><td>高</td></tr>
+        </tbody>
+      </table>
+
+      <p>
+        <a href="120-wasm.html">第 114 章</a>的 WebAssembly (WASM) 提供了一個完全不同的安全模型：
+        能力安全（capability-based security）沙箱，程式只能使用明確授予的能力，
+        不需要 namespace 或 cgroup。這是 Fastly、Cloudflare Workers 選擇 WASM 的原因之一。
+      </p>
+
+      <h3>真實世界的容器逃逸案例</h3>
+      <ul>
+        <li>
+          <strong>CVE-2019-5736（runc container escape）</strong>：
+          攻擊者可以從容器內覆蓋 <code>/proc/self/exe</code>（即主機上的 runc 二進位），
+          導致下次 <code>docker exec</code> 時以 root 執行任意程式。
+          根本原因：runc 在 <code>exec</code> 時以 root 在容器 mount namespace 裡打開了 <code>/proc/self/exe</code>，
+          而容器有權修改它。修復方法：runc 改用 <code>/proc/self/fd/N</code> 的 fd 而非路徑。
+        </li>
+        <li>
+          <strong>CAP_SYS_ADMIN 洩漏</strong>：許多「特權容器」（<code>docker run --privileged</code>）
+          擁有完整的 capabilities，幾乎等同 root 直接存取主機。
+          解法：<a href="34-security-fundamentals.html">第 34 章</a>的最小特權原則
+          ——永遠只授予容器必要的能力。
+        </li>
+      </ul>
+
+      <h3>capabilities 降權在 Go 中</h3>
+      <p>
+        在 child() 執行使用者命令前，丟棄危險 capability：
+      </p>
+      <pre><code class="language-go">import "golang.org/x/sys/unix"
+
+func dropCaps() error {
+    // 從 bounding set 丟棄幾個最危險的能力
+    dangerous := []uintptr{
+        unix.CAP_SYS_ADMIN,
+        unix.CAP_SYS_MODULE,
+        unix.CAP_SYS_BOOT,
+        unix.CAP_NET_ADMIN,
+        unix.CAP_SYS_RAWIO,
+    }
+    for _, cap := range dangerous {
+        if err := unix.Prctl(unix.PR_CAPBSET_DROP, cap, 0, 0, 0); err != nil {
+            return fmt.Errorf("丟棄 CAP %d: %w", cap, err)
+        }
+    }
+    return nil
+}</code></pre>
+
+      <h3>seccomp 過濾器</h3>
+      <p>
+        <strong>seccomp（secure computing mode）</strong>讓你限制行程能呼叫哪些系統呼叫。
+        Docker 預設的 seccomp profile 阻擋了約 44 個危險系統呼叫（如 <code>mount</code>、
+        <code>reboot</code>、<code>ptrace</code>、<code>kexec_load</code>）。
+        在 Go 裡，seccomp 過濾器必須在<strong>子行程初始化階段</strong>（re-exec 後的 <code>child()</code> 路徑內）自行載入——
+        父行程無法透過 <code>SysProcAttr</code> 替子行程安裝過濾器。
+        注意：<code>SysProcAttr.SeccompTsync</code>（<code>bool</code>）並非「設定過濾器」的開關，
+        它的作用是讓子行程在呼叫 <code>seccomp()</code> 系統呼叫時附上
+        <code>SECCOMP_FILTER_FLAG_TSYNC</code> 旗標，把過濾器同步到行程內所有執行緒；
+        過濾器本體仍須由子行程自行建立並載入。
+        實際做法是在 <code>child()</code> 裡使用
+        <a href="https://pkg.go.dev/github.com/seccomp/libseccomp-golang" target="_blank">libseccomp-golang</a>
+        的 <code>filter.Load()</code>，或直接呼叫 <code>unix.Prctl</code>。
+      </p>
+      <pre><code class="language-go">// 正確做法：在 child()（re-exec 後）載入 seccomp 過濾器
+// syscall.SysProcAttr 沒有 Seccomp 欄位；父行程無法替子行程設定過濾器。
+
+// 方法一：libseccomp-golang（go get github.com/seccomp/libseccomp-golang）
+// import seccomp "github.com/seccomp/libseccomp-golang"
+func loadSeccomp() error {
+    filter, err := seccomp.NewFilter(seccomp.ActErrno.SetReturnCode(int16(syscall.EPERM)))
+    if err != nil { return err }
+    for _, sc := range []seccomp.ScmpSyscall{
+        seccomp.ScmpSyscall(unix.SYS_READ),  seccomp.ScmpSyscall(unix.SYS_WRITE),
+        seccomp.ScmpSyscall(unix.SYS_OPEN),  seccomp.ScmpSyscall(unix.SYS_CLOSE),
+        seccomp.ScmpSyscall(unix.SYS_EXIT_GROUP),
+        // ... 完整白名單見 moby/moby profiles/seccomp/default.json
+    } {
+        filter.AddRule(sc, seccomp.ActAllow)
+    }
+    return filter.Load() // ← 必須在 child() 內、exec 前呼叫
+}
+
+// 方法二：直接呼叫 unix.Prctl（需自行組裝 BPF sock_filter）
+// unix.Prctl(unix.PR_SET_SECCOMP, unix.SECCOMP_MODE_FILTER,
+//     uintptr(unsafe.Pointer(&amp;prog)), 0, 0)</code></pre>
+
+      <!-- ===== §10 ===== -->
+      <h2>驗收清單與延伸方向</h2>
+
+      <h3>六個里程碑驗收摘要</h3>
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">最終整合驗收</span>
+          <p>執行下列測試腳本，全部通過即代表六個里程碑均已完成：</p>
+          <pre><code class="language-bash">#!/bin/bash
+# 確認隔離環境
+sudo ./minioci run /tmp/ubuntu-rootfs bash -c "
+  echo '=== 里程碑 1：行程隔離 ==='
+  echo 'PID=' \$\$                # 預期: 1
+  echo 'Hostname=' \$(hostname)   # 預期: minioci
+
+  echo '=== 里程碑 2：Namespace ==='
+  cat /proc/self/uid_map         # 預期: 0 &lt;hostuid&gt; 1
+  ip link | grep -c eth0         # 預期: 1（有獨立網路介面）
+
+  echo '=== 里程碑 3：cgroup 資源限制 ==='
+  cat /proc/self/cgroup          # 預期: 0::/ 或含 minioci 路徑
+
+  echo '=== 里程碑 4：OverlayFS 寫入隔離 ==='
+  echo 'capstone' &gt; /tmp/ovtest.txt
+  cat /tmp/ovtest.txt            # 預期: capstone
+
+  echo '=== 里程碑 5：網路通訊 ==='
+  ping -c 1 10.88.0.1 &amp;&amp; echo 'gateway OK'
+
+  echo '=== 全部通過！==='
+"</code></pre>
+        </div>
+      </div>
+
+      <h3>延伸方向</h3>
+      <ul>
+        <li>
+          <strong>Rootless 容器</strong>：把所有 namespace（包含 user namespace）
+          在一般使用者身份下開啟，不需要 root。Podman、Buildah 走的就是這條路。
+          關鍵在 <code>newuidmap</code>/<code>newgidmap</code> 指令協助擴大 UID 映射範圍。
+        </li>
+        <li>
+          <strong>OCI 映像建置</strong>：實作一個簡單的 <code>minioci build</code>，
+          讀取 Dockerfile 並疊加 OverlayFS 層，最後打包成 OCI image manifest + tar layers。
+          可參考 <a href="https://github.com/opencontainers/image-spec" target="_blank">OCI Image Spec</a>。
+        </li>
+        <li>
+          <strong>Registry 整合</strong>：從 Docker Hub 或私有 registry 下載 OCI image，
+          需實作 Docker Registry HTTP API v2，驗證 layer sha256，然後逐層解壓。
+        </li>
+        <li>
+          <strong>與 Kubernetes 整合</strong>：實作 CRI（Container Runtime Interface）gRPC 伺服器，
+          讓 kubelet 能呼叫你的 minioci 啟動容器。這就是 CRI-O、containerd 做的事。
+          詳見<a href="96-kubernetes.html">第 90 章</a>的 Kubernetes 架構。
+        </li>
+        <li>
+          <strong>eBPF 觀測</strong>：用<a href="97-ebpf.html">第 91 章</a>學到的 eBPF
+          追蹤容器內的系統呼叫，實作細粒度的安全監控。
+        </li>
+      </ul>
+
+      <h3>參考資源</h3>
+      <ul>
+        <li>Liz Rice — <em><a href="https://github.com/lizrice/containers-from-scratch" target="_blank">Containers from Scratch</a></em>（2016 DockerCon 演講，Go 版本原版）</li>
+        <li>OCI Runtime Spec — <a href="https://github.com/opencontainers/runtime-spec" target="_blank">opencontainers/runtime-spec</a></li>
+        <li>runc 原始碼 — <a href="https://github.com/opencontainers/runc" target="_blank">opencontainers/runc</a>（Go 語言，閱讀 <code>libcontainer/</code> 目錄）</li>
+        <li>Julia Evans — <em><a href="https://jvns.ca/categories/containers/" target="_blank">How containers work</a></em>（系列部落格文，圖文並茂）</li>
+        <li>Linux man pages: <code>clone(2)</code>、<code>pivot_root(2)</code>、<code>namespaces(7)</code>、<code>cgroups(7)</code>、<code>overlay(5)</code></li>
+      </ul>
+
+      <!-- 練習 -->
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 118.1 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>
+            在 <code>child()</code> 執行使用者命令前，加入 <code>dropCaps()</code>
+            並丟棄 <code>CAP_SYS_ADMIN</code> 與 <code>CAP_NET_ADMIN</code>。
+            驗證：在容器 shell 裡嘗試 <code>mount -t tmpfs tmpfs /mnt</code>，
+            應得到 <code>Operation not permitted</code>。
+          </p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p>在 <code>child()</code> 裡 <code>pivotRoot()</code> 之後、<code>cmd.Run()</code> 之前加入：</p>
+              <pre><code class="language-go">if err := dropCaps(); err != nil {
+    fmt.Fprintln(os.Stderr, "警告: dropCaps:", err)
+}
+// 或者更嚴格：must(dropCaps())</code></pre>
+              <p>執行後，容器裡的 mount 命令會因缺少 <code>CAP_SYS_ADMIN</code> 而失敗。
+              注意：若使用 user namespace，部分 capability 的行為不同——
+              在 user namespace 內部你「看起來」有 CAP_SYS_ADMIN，但實際上受到外部 namespace 的限制。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 118.2 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>
+            修改 <code>minioci</code>，讓它從 OCI image tarball 解壓並疊 OverlayFS。
+            具體步驟：<br>
+            1. 從命令列接受一個 <code>.tar.gz</code> 映像路徑（可用 <code>docker save ubuntu:22.04 -o ubuntu.tar</code> 匯出）<br>
+            2. 解析 <code>manifest.json</code> 找出 layer 的 tar 路徑<br>
+            3. 依序解壓每個 layer 到獨立目錄（<code>layer0/</code>、<code>layer1/</code>…）<br>
+            4. 用 <code>MountOverlay([]string{"layer2", "layer1", "layer0"}, ...)</code> 疊成完整 rootfs
+          </p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-go">// image.go（骨架）
+func LoadImage(tarPath string) ([]string, error) {
+    // 1. 解壓整個 image tar 到暫存目錄
+    imgDir := "/tmp/minioci-img"
+    os.MkdirAll(imgDir, 0o755)
+    runCmd("tar", "-xf", tarPath, "-C", imgDir)
+
+    // 2. 讀 manifest.json
+    data, _ := os.ReadFile(imgDir + "/manifest.json")
+    // 解析 JSON，取得 Layers 欄位（[]string，每個是 layer.tar 路徑）
+    // ... （省略 JSON 解析細節）
+
+    // 3. 解壓每個 layer
+    var layerDirs []string
+    for i, layerTar := range layers {
+        dir := fmt.Sprintf("%s/layer%d", imgDir, i)
+        os.MkdirAll(dir, 0o755)
+        runCmd("tar", "-xf", imgDir+"/"+layerTar, "-C", dir)
+        layerDirs = append([]string{dir}, layerDirs...) // 後層覆蓋前層
+    }
+    return layerDirs, nil
+}</code></pre>
+              <p>然後把回傳的 <code>layerDirs</code> 作為 <code>MountOverlay</code> 的 <code>lowerDirs</code> 參數。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 118.3 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>
+            實作 <strong>rootless minioci</strong>：不需要 root 權限，完全在一般使用者身份下執行。
+            關鍵差異：<br>
+            1. 必須加入 <code>CLONE_NEWUSER</code> 並設定 UID/GID 映射<br>
+            2. OverlayFS 在 rootless 下需要 <code>fuse-overlayfs</code>（Kernel &lt; 5.11）或 Kernel ≥ 5.11 的 rootless overlay 支援<br>
+            3. 網路設定需要 <code>slirp4netns</code> 取代 veth + bridge（因為一般使用者無法建立 bridge）<br>
+            驗證：以非 root 使用者執行 <code>./minioci run /path/to/rootfs /bin/sh</code>，並在裡面 <code>id</code> 看到 uid=0。
+          </p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p>rootless 的核心是 user namespace 讓一般使用者在容器內「假裝」是 root：</p>
+              <pre><code class="language-go">cmd.SysProcAttr = &amp;syscall.SysProcAttr{
+    Cloneflags: syscall.CLONE_NEWUSER | /* 其他 */ ,
+    UidMappings: []syscall.SysProcIDMap{
+        {ContainerID: 0, HostID: os.Getuid(), Size: 1},
+    },
+    GidMappings: []syscall.SysProcIDMap{
+        {ContainerID: 0, HostID: os.Getgid(), Size: 1},
+    },
+    GidMappingsEnableSetgroups: false,
+}</code></pre>
+              <p>網路部分用 <code>slirp4netns</code> 替代：</p>
+              <pre><code class="language-bash">slirp4netns --configure --mtu=65520 --disable-host-loopback $PID eth0 &amp;</code></pre>
+              <p>OverlayFS 若不支援 rootless，改用 <code>fuse-overlayfs</code>：</p>
+              <pre><code class="language-go">runCmd("fuse-overlayfs",
+    "-o", fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s",
+        lowerDirs, upperDir, workDir),
+    mergedDir)</code></pre>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ===== §11 ===== -->
+      <h2>把這一章串起來</h2>
+
+      <p>
+        六個里程碑，六把鑰匙，開了同一扇門：
+      </p>
+      <ol>
+        <li><strong>里程碑 1</strong>：<code>clone() + pivot_root</code> — 行程的視野被換掉了，它以為自己是 PID 1，根目錄是 <code>/</code>，但這一切都是主機核心製造的視圖。</li>
+        <li><strong>里程碑 2</strong>：六個 namespace 全開 — hostname、PID 空間、mount 表、IPC key、網路介面、UID 空間全部隔離，容器變成一個高度封閉的環境。</li>
+        <li><strong>里程碑 3</strong>：cgroup v2 — 把容器行程放進一個資源籠子裡，記憶體、CPU、PID 數量都受到核心強制執行。</li>
+        <li><strong>里程碑 4</strong>：OverlayFS — 映像層是唯讀的底座，容器可寫層是透明的薄膜，合在一起就是容器看到的完整根目錄，而且容器退出後映像不受汙染。</li>
+        <li><strong>里程碑 5</strong>：veth pair + bridge + NAT — 容器有了自己的 IP，封包出主機再轉回來，一條虛擬乙太網路通道把容器連接到外部世界。</li>
+        <li><strong>里程碑 6</strong>：OCI Runtime Spec — 你的 minioci 與 runc 說著同一種語言：config.json 定義一切，生命週期操作是統一協定，上面可以接 containerd，再上面可以接 Kubernetes。</li>
+      </ol>
+      <p>
+        理論上，你已經「讀懂」了 <code>docker run</code> 背後所有步驟。
+        但這一章的目的不只是理解，而是讓你的手做過一遍，感受每一個系統呼叫的重量、
+        每一條錯誤訊息背後的核心語義、每一個 cgroup 介面的物理意義。
+        從今以後，當你看到一個容器化的生產系統，你不會只看到「黑盒子」，
+        而是看到六道被精心管理的 Linux 門。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">延伸學習資源</span>
+          <p>
+            <strong>Liz Rice《Container Security》</strong>（O'Reilly, 2020）——從攻擊者角度深入容器安全。<br>
+            <strong>runc 原始碼</strong>（<a href="https://github.com/opencontainers/runc" target="_blank">github.com/opencontainers/runc</a>）——閱讀 <code>libcontainer/factory_linux.go</code> 看生產級實作如何處理 re-exec 與 namespace 設定。<br>
+            <strong>OCI Image Spec</strong>（<a href="https://github.com/opencontainers/image-spec" target="_blank">github.com/opencontainers/image-spec</a>）——學習映像層格式與 manifest 結構。<br>
+            <strong>containerd 原始碼</strong>（<a href="https://github.com/containerd/containerd" target="_blank">github.com/containerd/containerd</a>）——理解 CRI 層如何把 Kubernetes 請求轉成 OCI bundle。<br>
+            <strong>Linux man pages</strong>：<code>man 2 clone</code>、<code>man 2 pivot_root</code>、<code>man 7 namespaces</code>、<code>man 7 cgroups</code>、<code>man 5 overlayfs</code>。
+          </p>
+        </div>
+      </div>

@@ -1,0 +1,1536 @@
+<!--meta
+title: 排序與搜尋
+description: 排序是演算法的 Hello World:從 O(n²) 的選擇/插入/氣泡,到快速排序與合併排序的取捨;比較排序的 Ω(n log n) 下界與決策樹證明;計數/基數/桶排序如何繞過下界;二分搜尋的嚴謹邊界、lower_bound 與 quickselect 選擇問題。
+-->
+
+
+      <div class="eyebrow">第六部 · 演算法與資料結構</div>
+      <h1>排序與搜尋</h1>
+      <p class="subtitle">把一疊東西排好——這件你每天都在做、看似平凡到不行的事,藏著整個演算法世界最深刻的幾個祕密:一個關於「分治」的鋒利刀刃、一道用決策樹證明的數學下界,還有一群「不靠比較」就偷偷繞過它的排序法。</p>
+      <div class="byline">
+        <span class="tag">第 28 章</span>
+        <span>閱讀時間 ≈ 50 分鐘</span>
+        <span>難度:★★★★☆</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>為什麼排序是 CS 的「Hello World 級」核心問題,而且是無數演算法的前置步驟</li>
+          <li>三個 $O(n^2)$ 排序(選擇、插入、氣泡)的差別,以及插入排序何時其實非常好用</li>
+          <li>快速排序的靈魂:分割(partition);它為什麼平均 $O(n\log n)$、最壞 $O(n^2)$,以及隨機化 pivot 如何救命</li>
+          <li>合併排序 vs 快速排序的取捨:穩定性、原地性、實務表現,以及標準庫為何用混合策略</li>
+          <li>一個漂亮的理論結果:任何「基於比較」的排序,最少都要 $\Omega(n\log n)$——用決策樹證給你看</li>
+          <li>計數、基數、桶排序如何「繞過」這道下界,以及它們的代價與限制</li>
+          <li>把二分搜尋的邊界寫到滴水不漏,並做出 <code>lower_bound</code> 等變體</li>
+          <li>選擇問題:不必整串排好,就能用 quickselect 平均 $O(n)$ 找出第 $k$ 小</li>
+        </ul>
+      </div>
+
+      <h2>為什麼一本演算法書,總是從排序講起?</h2>
+      <p>
+        翻開任何一本演算法教科書,你幾乎都會在前幾章撞見「排序」。這不是巧合,也不是因為排序特別難。
+        恰恰相反——排序是那種「人人都直覺地知道答案長什麼樣」的問題:把一串東西,由小到大(或由大到小)排好。
+        正因為目標如此清晰,它成了演算法世界最理想的<strong>練習場</strong>與<strong>共同語言</strong>:
+        我們可以把各種解題思想(暴力、分治、隨機化、空間換時間……)全丟進這個乾淨的問題裡,
+        看它們各自表現如何。它就是演算法的「Hello, World」。
+      </p>
+      <p>
+        但排序遠不只是練習。它<strong>無所不在</strong>,而且常常是別的演算法能跑得快的<strong>前置步驟</strong>。
+        最直接的例子你上一部就見過了:<strong>二分搜尋(binary search)</strong>快得驚人,
+        但它有個鐵打的前提——資料必須先排好序。沒有排序,就沒有二分搜尋。
+        再往外看:找出重複的元素、求中位數、合併兩份名單、依時間軸處理事件、
+        資料庫的 <code>ORDER BY</code> 與索引建立、電腦繪圖裡決定誰擋住誰……
+        背後幾乎都站著一個排序步驟。<strong>學會排序,等於拿到一把能打開無數扇門的萬用鑰匙。</strong>
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">排序是「賦能型」演算法</span>
+          <p>很多時候,排序本身不是你的最終目的,而是讓<em>後續</em>步驟變快的手段。
+          一旦資料有序,搜尋、去重、找極值、找鄰近元素、合併……全都能從 $O(n)$ 甚至 $O(n^2)$
+          降到 $O(\log n)$ 或 $O(n)$。先花一次 $O(n\log n)$ 把資料排好,
+          常常是「一本萬利」的投資——這正是上一章「分治」思想的延伸與發揚。</p>
+        </div>
+      </div>
+
+      <p>
+        這一章我們會從你在第 5 章熱身過的 $O(n^2)$ 排序快速複習起步,接著迎來重頭戲——
+        <strong>快速排序(quicksort)</strong>,把上一章的分治思想磨成一把鋒利的刀;
+        然後爬上一座理論高峰:證明「基於比較的排序」<em>不可能</em>快過 $\Omega(n\log n)$;
+        再看一群「不講道理」的排序如何繞過這道牆;最後回到搜尋,把二分搜尋的每個邊界都釘死,
+        並學會只找「第 $k$ 小」而不必整串排好的聰明技巧。出發。
+      </p>
+
+      <h2>複習:三個 $O(n^2)$ 排序,各有各的個性</h2>
+      <p>
+        第 5 章你已經摸過氣泡與插入排序的手感。這裡我們把三個經典的<strong>平方級</strong>排序放在一起對照,
+        因為它們雖然都是 $O(n^2)$,個性卻完全不同——而理解這些差異,正是後面欣賞快速排序與合併排序的基礎。
+      </p>
+
+      <h3>選擇排序(selection sort):每次挑出最小的</h3>
+      <p>
+        最符合「人類直覺」的排法:掃過整個未排序區,找出<strong>最小</strong>的那個,把它換到最前面;
+        然後對剩下的部分重複。就像反覆從一堆牌裡「選」出最小的一張放好——名字就是這麼來的。
+      </p>
+      <pre><code class="language-python">def selection_sort(arr):
+    n = len(arr)
+    for i in range(n):                 # i 是「已排序區」的右界
+        min_idx = i                    # 先假設未排序區的第一個最小
+        for j in range(i + 1, n):      # 在未排序區裡找真正的最小
+            if arr[j] &lt; arr[min_idx]:
+                min_idx = j
+        arr[i], arr[min_idx] = arr[min_idx], arr[i]   # 把最小的換到位
+    return arr
+
+print(selection_sort([5, 2, 9, 1, 7]))   # [1, 2, 5, 7, 9]</code></pre>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 220" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="20" y="28" font-size="13" font-weight="700" fill="#1f2328">選擇排序的第一輪:掃過全部,找出最小值 1,把它和最前面的 5 對調</text>
+  <!-- before -->
+  <text x="40" y="66" font-size="11" fill="#8a929b">掃描中(藍綠 = 未排序區,紫框 = 目前找到的最小)</text>
+  <g font-size="14" text-anchor="middle">
+    <rect x="60"  y="74" width="50" height="36" rx="5" fill="#e3efed" stroke="#2f6f6a"/><text x="85"  y="98">5</text>
+    <rect x="118" y="74" width="50" height="36" rx="5" fill="#e3efed" stroke="#2f6f6a"/><text x="143" y="98">2</text>
+    <rect x="176" y="74" width="50" height="36" rx="5" fill="#e3efed" stroke="#2f6f6a"/><text x="201" y="98">9</text>
+    <rect x="234" y="74" width="50" height="36" rx="5" fill="#8b5cf6"/><text x="259" y="98" fill="#fff" font-weight="700">1</text>
+    <rect x="292" y="74" width="50" height="36" rx="5" fill="#e3efed" stroke="#2f6f6a"/><text x="317" y="98">7</text>
+  </g>
+  <text x="259" y="128" font-size="11" fill="#8b5cf6" text-anchor="middle">↑ 最小</text>
+  <!-- arrow -->
+  <text x="430" y="96" font-size="22" fill="#b4541f" text-anchor="middle">⇒</text>
+  <!-- after -->
+  <text x="468" y="66" font-size="11" fill="#8a929b">交換後:1 就定位(綠 = 已排序)</text>
+  <g font-size="14" text-anchor="middle">
+    <rect x="468" y="74" width="50" height="36" rx="5" fill="#16a34a"/><text x="493" y="98" fill="#fff" font-weight="700">1</text>
+    <rect x="526" y="74" width="50" height="36" rx="5" fill="#e3efed" stroke="#2f6f6a"/><text x="551" y="98">2</text>
+    <rect x="584" y="74" width="50" height="36" rx="5" fill="#e3efed" stroke="#2f6f6a"/><text x="609" y="98">9</text>
+    <rect x="642" y="74" width="50" height="36" rx="5" fill="#e3efed" stroke="#2f6f6a"/><text x="667" y="98">5</text>
+  </g>
+  <text x="468" y="150" font-size="12" fill="#1f2328">接著對剩下的 [2, 9, 5, 7] 再選一次最小……如此重複 n 輪。</text>
+  <text x="60" y="190" font-size="12" fill="#4a5159">特色:不論資料長怎樣,都老老實實掃 $n$ 輪、每輪掃一遍 →</text>
+  <text x="60" y="208" font-size="12" fill="#b4541f" font-weight="700">交換次數最少(每輪最多 1 次),但比較次數永遠是 n²/2,連已排好的也一樣慢。</text>
+</svg>
+        <figcaption>圖 28-1:選擇排序的一輪。在未排序區裡找出最小值,和未排序區的第一個位置對調。它的「比較次數」與輸入無關,永遠是 $\frac{n(n-1)}{2}$ 次。</figcaption>
+      </div>
+
+      <h3>插入排序(insertion sort):像整理手上的撲克牌</h3>
+      <p>
+        把陣列分成「左邊已排序」與「右邊待處理」。每次拿右區的第一張牌,往左插到它該在的位置——
+        比它大的元素統統往右挪一格,讓出空位。理牌的人都做過這件事。
+      </p>
+      <pre><code class="language-python">def insertion_sort(arr):
+    for i in range(1, len(arr)):       # arr[0] 自成已排序區
+        key = arr[i]                   # 手上要插入的牌
+        j = i - 1
+        while j &gt;= 0 and arr[j] &gt; key: # 比 key 大的,通通往右挪
+            arr[j + 1] = arr[j]
+            j -= 1
+        arr[j + 1] = key               # 空出來的位置就是 key 的家
+    return arr
+
+print(insertion_sort([5, 2, 4, 6, 1]))   # [1, 2, 4, 5, 6]</code></pre>
+
+      <h3>氣泡排序(bubble sort):相鄰交換,大的浮上去</h3>
+      <p>
+        反覆掃過陣列,比較相鄰兩個,左大於右就交換。每掃一輪,當前最大的數會像氣泡一樣「浮」到最右端。
+        加一個「這輪都沒交換就提早收工」的旗標,它在已排序資料上能達到最佳的 $O(n)$。
+      </p>
+      <pre><code class="language-python">def bubble_sort(arr):
+    n = len(arr)
+    for i in range(n):
+        swapped = False
+        for j in range(n - 1 - i):     # 已浮上去的不必再比
+            if arr[j] &gt; arr[j + 1]:
+                arr[j], arr[j + 1] = arr[j + 1], arr[j]
+                swapped = True
+        if not swapped:                # 一整輪沒交換 → 已排好,提早結束
+            break
+    return arr</code></pre>
+
+      <h3>三個一起看:它們到底差在哪?</h3>
+      <p>
+        三者最壞都是 $O(n^2)$,但魔鬼在細節。下表把關鍵差異攤開——尤其注意<strong>「最佳情況」</strong>
+        與<strong>「穩定性」</strong>這兩欄,它們之後會反覆出現:
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>排序</th><th>最佳</th><th>平均</th><th>最壞</th><th>穩定?</th><th>一句話特色</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>選擇排序</td><td>$O(n^2)$</td><td>$O(n^2)$</td><td>$O(n^2)$</td><td>否*</td><td>交換次數最少;但對任何輸入都一樣慢</td></tr>
+          <tr><td>插入排序</td><td>$O(n)$</td><td>$O(n^2)$</td><td>$O(n^2)$</td><td>是</td><td>近乎有序、小資料時超快,實務愛用</td></tr>
+          <tr><td>氣泡排序</td><td>$O(n)$</td><td>$O(n^2)$</td><td>$O(n^2)$</td><td>是</td><td>教學經典,實務幾乎用不到</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>
+        <strong>穩定(stable)</strong>是個我們稍後會講透的關鍵詞,先記住一句直覺:<em>「值相等的元素,排完後仍維持原本的先後順序」</em>。
+        (*選擇排序的典型實作會因為「長距離交換」而打亂相等元素的相對位置,所以不穩定。)
+      </p>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">別瞧不起插入排序——它在對的場合是冠軍</span>
+          <p>當資料<strong>幾乎已經排好</strong>(每個元素離正確位置都不遠),插入排序的內層幾乎不用挪動,
+          整體逼近 $O(n)$,把所有 $O(n\log n)$ 的「高級」排序都打趴。當資料<strong>很小</strong>(比如少於 16 個)時,
+          它沒有遞迴、沒有額外配置,常數極小,也常常最快。正因如此,工業級排序(像 Python 的 Timsort、
+          C++ 的 introsort)都會在「小區段」上偷偷切換成插入排序。<strong>「慢」演算法在它的主場,可以很快。</strong></p>
+        </div>
+      </div>
+
+      <h2>快速排序:把分治磨成一把刀</h2>
+      <p>
+        上一章你學到了<strong>分治(divide and conquer)</strong>:把大問題切成同類的小問題,各自解完再合併。
+        合併排序是分治的標準範例——對半切、各自排、再合併。現在登場的<strong>快速排序</strong>
+        (quicksort,1959 年由 Tony Hoare 發明)用了一個更狡猾的分治策略,它把力氣花在「切」的時候,
+        切完幾乎不用「合」。
+      </p>
+      <p>
+        快速排序的核心動作只有一個,叫<strong>分割(partition)</strong>:挑一個元素當<strong>樞紐(pivot)</strong>,
+        然後把整個陣列「攪」一下,讓——
+      </p>
+      <ul>
+        <li>所有<strong>比 pivot 小</strong>的元素,跑到 pivot 的<strong>左邊</strong></li>
+        <li>所有<strong>比 pivot 大</strong>的元素,跑到 pivot 的<strong>右邊</strong></li>
+      </ul>
+      <p>
+        分割做完後,有一件神奇的事發生了:<strong>pivot 已經在它最終正確的位置上了</strong>——
+        它左邊全比它小、右邊全比它大,排序完成後它哪兒也不會去。剩下的,只要對左半和右半
+        <em>遞迴地</em>再做同樣的事。當每一段都縮到剩 0 或 1 個元素,整串就排好了——而且<strong>完全不需要合併步驟</strong>。
+      </p>
+
+      <h3>Lomuto 分割法:一個指標掃過去</h3>
+      <p>
+        分割有好幾種寫法,最容易理解的是 <strong>Lomuto 分割</strong>。它選最右邊的元素當 pivot,
+        用一個指標 <code>i</code> 標記「已知 ≤ pivot 的區域」的右界,再用 <code>j</code> 從左掃到右:
+        每遇到一個 ≤ pivot 的元素,就把 <code>i</code> 往右挪一格,並把這個元素換進「小於區」。
+        掃完後,把 pivot 換到「小於區」的正後方,它就歸位了。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 320" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="20" y="26" font-size="13" font-weight="700" fill="#1f2328">Lomuto 分割 [7,2,1,8,6,3,5],pivot = 5(最右、磚紅)</text>
+  <text x="20" y="46" font-size="11" fill="#8a929b">綠 = 已確定 ≤ pivot 的區域(i 的左側);灰白 = 還沒比到</text>
+
+  <!-- Row 1: initial -->
+  <text x="20" y="84" font-size="11" fill="#4a5159">起始:i 停在第 0 格之前</text>
+  <g font-size="13" text-anchor="middle">
+    <rect x="60"  y="92" width="44" height="32" rx="4" fill="#f0f1f3" stroke="#d4d8dd"/><text x="82"  y="113">7</text>
+    <rect x="108" y="92" width="44" height="32" rx="4" fill="#f0f1f3" stroke="#d4d8dd"/><text x="130" y="113">2</text>
+    <rect x="156" y="92" width="44" height="32" rx="4" fill="#f0f1f3" stroke="#d4d8dd"/><text x="178" y="113">1</text>
+    <rect x="204" y="92" width="44" height="32" rx="4" fill="#f0f1f3" stroke="#d4d8dd"/><text x="226" y="113">8</text>
+    <rect x="252" y="92" width="44" height="32" rx="4" fill="#f0f1f3" stroke="#d4d8dd"/><text x="274" y="113">6</text>
+    <rect x="300" y="92" width="44" height="32" rx="4" fill="#f0f1f3" stroke="#d4d8dd"/><text x="322" y="113">3</text>
+    <rect x="348" y="92" width="44" height="32" rx="4" fill="#b4541f"/><text x="370" y="113" fill="#fff" font-weight="700">5</text>
+  </g>
+
+  <!-- Row 2: after scanning, before placing pivot -->
+  <text x="20" y="164" font-size="11" fill="#4a5159">掃完 j:把 2、1、3 換進綠區</text>
+  <g font-size="13" text-anchor="middle">
+    <rect x="60"  y="172" width="44" height="32" rx="4" fill="#16a34a" fill-opacity="0.2" stroke="#16a34a"/><text x="82"  y="193">2</text>
+    <rect x="108" y="172" width="44" height="32" rx="4" fill="#16a34a" fill-opacity="0.2" stroke="#16a34a"/><text x="130" y="193">1</text>
+    <rect x="156" y="172" width="44" height="32" rx="4" fill="#16a34a" fill-opacity="0.2" stroke="#16a34a"/><text x="178" y="193">3</text>
+    <rect x="204" y="172" width="44" height="32" rx="4" fill="#f0f1f3" stroke="#d4d8dd"/><text x="226" y="193">8</text>
+    <rect x="252" y="172" width="44" height="32" rx="4" fill="#f0f1f3" stroke="#d4d8dd"/><text x="274" y="193">6</text>
+    <rect x="300" y="172" width="44" height="32" rx="4" fill="#f0f1f3" stroke="#d4d8dd"/><text x="322" y="193">7</text>
+    <rect x="348" y="172" width="44" height="32" rx="4" fill="#b4541f"/><text x="370" y="193" fill="#fff" font-weight="700">5</text>
+  </g>
+  <text x="178" y="222" font-size="11" fill="#16a34a" text-anchor="middle">↑ i 在此(綠區右界)</text>
+  <text x="226" y="222" font-size="11" fill="#8a929b" text-anchor="middle">i+1</text>
+
+  <!-- Row 3: pivot placed -->
+  <text x="20" y="260" font-size="11" fill="#4a5159">把 pivot 換到 i+1:歸位!</text>
+  <g font-size="13" text-anchor="middle">
+    <rect x="60"  y="268" width="44" height="32" rx="4" fill="#16a34a" fill-opacity="0.2" stroke="#16a34a"/><text x="82"  y="289">2</text>
+    <rect x="108" y="268" width="44" height="32" rx="4" fill="#16a34a" fill-opacity="0.2" stroke="#16a34a"/><text x="130" y="289">1</text>
+    <rect x="156" y="268" width="44" height="32" rx="4" fill="#16a34a" fill-opacity="0.2" stroke="#16a34a"/><text x="178" y="289">3</text>
+    <rect x="204" y="268" width="44" height="32" rx="4" fill="#16a34a"/><text x="226" y="289" fill="#fff" font-weight="700">5</text>
+    <rect x="252" y="268" width="44" height="32" rx="4" fill="#f6e7dd" stroke="#b4541f"/><text x="274" y="289">6</text>
+    <rect x="300" y="268" width="44" height="32" rx="4" fill="#f6e7dd" stroke="#b4541f"/><text x="322" y="289">8</text>
+    <rect x="348" y="268" width="44" height="32" rx="4" fill="#f6e7dd" stroke="#b4541f"/><text x="370" y="289">7</text>
+  </g>
+  <text x="148" y="318" font-size="11" fill="#16a34a" text-anchor="middle">← 全部 ≤ 5</text>
+  <text x="226" y="318" font-size="11" fill="#1f2328" text-anchor="middle" font-weight="700">5 已就定位</text>
+  <text x="322" y="318" font-size="11" fill="#b4541f" text-anchor="middle">全部 &gt; 5 →</text>
+
+  <!-- right side: recurse note -->
+  <text x="440" y="120" font-size="12" font-weight="700" fill="#2f6f6a">接著遞迴:</text>
+  <text x="440" y="144" font-size="12" fill="#4a5159">對左半 [2,1,3] 再分割,</text>
+  <text x="440" y="162" font-size="12" fill="#4a5159">對右半 [6,8,7] 再分割,</text>
+  <text x="440" y="180" font-size="12" fill="#4a5159">直到每段剩 0 或 1 個。</text>
+  <text x="440" y="212" font-size="12" fill="#b4541f" font-weight="700">不需要合併步驟!</text>
+  <text x="440" y="232" font-size="12" fill="#4a5159">pivot 一旦歸位就再也不動,</text>
+  <text x="440" y="250" font-size="12" fill="#4a5159">整串在「切」的過程中就排好了。</text>
+</svg>
+        <figcaption>圖 28-2:Lomuto 分割。指標掃過陣列,把每個 ≤ pivot 的元素收進「綠色小於區」,最後把 pivot 換到小於區正後方,它便永遠歸位。左右兩半再各自遞迴。</figcaption>
+      </div>
+
+      <p>把這個過程寫成<strong>原地(in-place)</strong>的 Python——它只在原陣列上搬動,不額外開新陣列:</p>
+      <pre><code class="language-python">def quicksort_inplace(arr, low=0, high=None):
+    if high is None:
+        high = len(arr) - 1
+    if low &gt;= high:                      # 區段剩 0 或 1 個,天生有序
+        return
+    p = partition(arr, low, high)        # 分割,回傳 pivot 歸位後的索引
+    quicksort_inplace(arr, low, p - 1)   # 遞迴排左半
+    quicksort_inplace(arr, p + 1, high)  # 遞迴排右半
+
+def partition(arr, low, high):
+    pivot = arr[high]                    # 選最右邊當 pivot(Lomuto)
+    i = low - 1                          # i 是「≤ pivot 區」的右界
+    for j in range(low, high):
+        if arr[j] &lt;= pivot:
+            i += 1
+            arr[i], arr[j] = arr[j], arr[i]   # 把這個元素收進小於區
+    arr[i + 1], arr[high] = arr[high], arr[i + 1]   # pivot 歸位
+    return i + 1
+
+data = [7, 2, 1, 8, 6, 3, 5]
+quicksort_inplace(data)
+print(data)   # [1, 2, 3, 5, 6, 7, 8]</code></pre>
+
+      <p>
+        如果你覺得指標來指標去有點繞,這裡有一個<strong>不原地、但極好懂</strong>的版本,用串列生成式把分割寫得一目了然。
+        它清楚地展現了快速排序「小於 pivot / 等於 pivot / 大於 pivot」三分天下的本質:
+      </p>
+      <pre><code class="language-python">def quicksort(arr):
+    if len(arr) &lt;= 1:
+        return arr
+    pivot = arr[len(arr) // 2]                    # 隨手挑中間當 pivot
+    less    = [x for x in arr if x &lt; pivot]
+    equal   = [x for x in arr if x == pivot]
+    greater = [x for x in arr if x &gt; pivot]
+    return quicksort(less) + equal + quicksort(greater)
+
+print(quicksort([7, 2, 1, 8, 6, 3, 5]))   # [1, 2, 3, 5, 6, 7, 8]</code></pre>
+      <p>
+        這個版本漂亮歸漂亮,但它每層都開了三個新串列,額外用掉 $O(n)$ 空間,失去了快速排序最大的賣點之一——<strong>原地</strong>。
+        實務上的快速排序幾乎都用上面那種原地版本。
+      </p>
+
+      <h3>它有多快?平均 $O(n\log n)$,最壞卻是 $O(n^2)$</h3>
+      <p>
+        分割本身要掃過整段,是 $O(n)$。關鍵在於遞迴會分多少層。
+        <strong>理想情況</strong>:每次 pivot 都剛好落在中位數,把陣列切成兩個等大的一半。
+        那麼遞迴深度是 $\log_2 n$,每層的分割工作加總起來都是 $O(n)$,
+        總成本 $O(n) \times \log_2 n = O(n\log n)$。這就是快速排序平均的好表現。
+      </p>
+      <p>
+        但<strong>最壞情況</strong>呢?想像 pivot 每次都挑到最大或最小的元素——
+        比如陣列<em>已經排好序</em>、而你又永遠選最右邊當 pivot。那麼每次分割,
+        一邊是空的、另一邊是 $n-1$ 個元素。遞迴深度退化成 $n$,總成本變成
+        $n + (n-1) + (n-2) + \dots + 1 = \frac{n(n+1)}{2} = O(n^2)$。
+        諷刺的是,快速排序在「<strong>已經排好的資料</strong>」上,反而跑出最差的成績。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 250" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- balanced -->
+  <text x="180" y="24" font-size="13" font-weight="700" fill="#2f6f6a" text-anchor="middle">理想:pivot 居中 → 深度 log n</text>
+  <g stroke="#2f6f6a" stroke-width="1.5" fill="none">
+    <line x1="180" y1="48" x2="110" y2="86"/><line x1="180" y1="48" x2="250" y2="86"/>
+    <line x1="110" y1="106" x2="75" y2="140"/><line x1="110" y1="106" x2="145" y2="140"/>
+    <line x1="250" y1="106" x2="215" y2="140"/><line x1="250" y1="106" x2="285" y2="140"/>
+  </g>
+  <g font-size="11" text-anchor="middle">
+    <rect x="150" y="34" width="60" height="22" rx="11" fill="#e3efed" stroke="#2f6f6a"/><text x="180" y="49">n</text>
+    <rect x="84"  y="86" width="52" height="22" rx="11" fill="#e3efed" stroke="#2f6f6a"/><text x="110" y="101">n/2</text>
+    <rect x="224" y="86" width="52" height="22" rx="11" fill="#e3efed" stroke="#2f6f6a"/><text x="250" y="101">n/2</text>
+    <rect x="52"  y="140" width="46" height="20" rx="10" fill="#e3efed" stroke="#2f6f6a"/><text x="75" y="154">n/4</text>
+    <rect x="122" y="140" width="46" height="20" rx="10" fill="#e3efed" stroke="#2f6f6a"/><text x="145" y="154">n/4</text>
+    <rect x="192" y="140" width="46" height="20" rx="10" fill="#e3efed" stroke="#2f6f6a"/><text x="215" y="154">n/4</text>
+    <rect x="262" y="140" width="46" height="20" rx="10" fill="#e3efed" stroke="#2f6f6a"/><text x="285" y="154">n/4</text>
+  </g>
+  <text x="180" y="190" font-size="12" fill="#2f6f6a" text-anchor="middle">log n 層 × 每層 O(n)</text>
+  <text x="180" y="210" font-size="13" font-weight="700" fill="#2f6f6a" text-anchor="middle">= O(n log n) 😊</text>
+
+  <!-- divider -->
+  <line x1="375" y1="20" x2="375" y2="230" stroke="#d4d8dd" stroke-width="1" stroke-dasharray="4 4"/>
+
+  <!-- worst -->
+  <text x="545" y="24" font-size="13" font-weight="700" fill="#b4541f" text-anchor="middle">最壞:pivot 最大/最小 → 深度 n</text>
+  <g stroke="#b4541f" stroke-width="1.5" fill="none">
+    <line x1="470" y1="48" x2="500" y2="84"/>
+    <line x1="500" y1="104" x2="530" y2="140"/>
+    <line x1="530" y1="160" x2="560" y2="196"/>
+  </g>
+  <g font-size="11" text-anchor="middle">
+    <rect x="440" y="34" width="60" height="22" rx="11" fill="#f6e7dd" stroke="#b4541f"/><text x="470" y="49">n</text>
+    <rect x="470" y="84" width="60" height="22" rx="11" fill="#f6e7dd" stroke="#b4541f"/><text x="500" y="99">n−1</text>
+    <rect x="500" y="140" width="60" height="20" rx="10" fill="#f6e7dd" stroke="#b4541f"/><text x="530" y="154">n−2</text>
+    <rect x="530" y="196" width="60" height="20" rx="10" fill="#f6e7dd" stroke="#b4541f"/><text x="560" y="210">…</text>
+  </g>
+  <text x="600" y="120" font-size="12" fill="#b4541f">n 層 × O(n)</text>
+  <text x="600" y="140" font-size="13" font-weight="700" fill="#b4541f">= O(n²) 😱</text>
+</svg>
+        <figcaption>圖 28-3:快速排序的命運,全看 pivot 怎麼挑。切得均勻(左)→ $\log n$ 淺淺幾層;每次都切到最邊邊(右)→ 退化成 $n$ 層的「斜長條」,變回平方級。</figcaption>
+      </div>
+
+      <h3>隨機化 pivot:用骰子打敗最壞情況</h3>
+      <p>
+        $O(n^2)$ 的最壞情況聽起來嚇人,但它有個致命弱點:它只在 pivot <em>恰好</em>連續挑到極端值時才發生。
+        而「永遠選最右邊」這種固定規則,正好讓「已排序的輸入」變成它的剋星——
+        在真實世界裡,「已排序或接近排序的資料」其實非常常見(這很要命)。
+      </p>
+      <p>
+        解法優雅得令人會心一笑:<strong>別讓對手預測你的 pivot</strong>。每次分割前,
+        從區段裡<strong>隨機</strong>挑一個元素當 pivot(把它換到最右邊,其餘程式碼照舊)。
+        這麼一來,沒有任何「特定輸入」能持續逼出最壞情況——因為 pivot 的選擇與輸入的排列無關了。
+        可以證明,隨機化快速排序的<strong>期望</strong>時間是 $O(n\log n)$,而且與輸入長相無關。
+        這正是我們在隨機演算法那一章談過的思想:<em>用隨機性,把「最壞情況」變成「機率低到可以忽略的衰事」</em>。
+      </p>
+      <pre><code class="language-python">import random
+
+def partition(arr, low, high):
+    r = random.randint(low, high)              # 隨機挑一個位置
+    arr[r], arr[high] = arr[high], arr[r]      # 把它換到最右邊當 pivot
+    pivot = arr[high]
+    i = low - 1
+    for j in range(low, high):
+        if arr[j] &lt;= pivot:
+            i += 1
+            arr[i], arr[j] = arr[j], arr[i]
+    arr[i + 1], arr[high] = arr[high], arr[i + 1]
+    return i + 1
+# quicksort_inplace 完全不用改,只要換掉 partition 即可</code></pre>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">隨機化降低機率,不是消除可能</span>
+          <p>隨機化 pivot 讓最壞情況的<em>機率</em>低到天荒地老都遇不到一次,但它沒有把 $O(n^2)$
+          的<em>可能性</em>從數學上抹除——理論上你還是可能連續擲出爛骰子。
+          對於需要「鐵打的最壞保證」的場合(例如即時系統、防惡意輸入的服務),
+          就得改用最壞也 $O(n\log n)$ 的合併排序或堆積排序,或對 pivot 用後面會提的「中位數的中位數」。
+          這也是 C++ <code>std::sort</code> 採用 introsort 的原因——它平時用快速排序,
+          一旦偵測到遞迴太深(快變 $O(n^2)$),就切換成堆積排序保底。</p>
+        </div>
+      </div>
+
+      <h2>合併排序 vs 快速排序:一場精彩的取捨</h2>
+      <p>
+        你在上一章「分治」見過<strong>合併排序(merge sort)</strong>:對半切、左右各自遞迴排好、
+        再把兩條有序串「拉鍊式」合併起來。它和快速排序都是 $O(n\log n)$ 的明星,卻是兩種性格。
+        我們先快速複習合併的核心——那個把兩條有序串併成一條的步驟:
+      </p>
+      <pre><code class="language-python">def merge(left, right):
+    result, i, j = [], 0, 0
+    while i &lt; len(left) and j &lt; len(right):
+        if left[i] &lt;= right[j]:        # 用 &lt;= 而非 &lt;,是「穩定」的關鍵!
+            result.append(left[i]); i += 1
+        else:
+            result.append(right[j]); j += 1
+    result.extend(left[i:])           # 把剩下的尾巴接上
+    result.extend(right[j:])
+    return result
+
+def merge_sort(arr):
+    if len(arr) &lt;= 1:
+        return arr
+    mid = len(arr) // 2
+    return merge(merge_sort(arr[:mid]), merge_sort(arr[mid:]))</code></pre>
+      <p>那麼,什麼時候該用哪個?三個維度決定一切:</p>
+
+      <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>維度</th><th>快速排序</th><th>合併排序</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>平均時間</td><td>$O(n\log n)$</td><td>$O(n\log n)$</td></tr>
+          <tr><td>最壞時間</td><td>$O(n^2)$(隨機化後機率極低)</td><td>$O(n\log n)$(鐵打保證)</td></tr>
+          <tr><td>額外空間</td><td>$O(\log n)$(只有遞迴堆疊)</td><td>$O(n)$(要開新陣列合併)</td></tr>
+          <tr><td>原地(in-place)</td><td>是 ✅</td><td>否 ❌</td></tr>
+          <tr><td>穩定(stable)</td><td>否 ❌(分割會長距離交換)</td><td>是 ✅</td></tr>
+          <tr><td>快取友善 / 常數</td><td>很好,常數小(實務常勝)</td><td>稍差(到處搬資料)</td></tr>
+        </tbody>
+      </table>
+      </div>
+
+      <p>
+        簡單地說:<strong>快速排序通常「實際跑起來」更快</strong>(常數小、原地、對快取友善),
+        是排「一堆數字」這種不在乎穩定性場景的首選;<strong>合併排序勝在「可預測」與「穩定」</strong>——
+        最壞也保證 $O(n\log n)$,而且能保持相等元素的原始順序,還天生適合「資料大到塞不進記憶體」
+        的外部排序(把一塊塊排好的檔案合併)。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">標準庫的答案:混合策略</span>
+          <p>實務上沒有人只用單一排序。聰明的標準庫會「<strong>看菜下飯</strong>」:
+          C++ 的 <code>std::sort</code> 用 <strong>introsort</strong>(快速排序為主 + 遞迴過深時退守堆積排序 + 小區段用插入排序);
+          Python 與 Java 的物件排序用 <strong>Timsort</strong>(合併排序的變體,專門偵測資料中「已經有序的片段」並善加利用,小區段同樣切換插入排序)。
+          它們都把本章學到的幾種排序<em>組合</em>起來,各取所長。</p>
+        </div>
+      </div>
+
+      <h2>一道優美的牆:比較排序的 $\Omega(n\log n)$ 下界</h2>
+      <p>
+        到這裡你可能會想:既然快速排序、合併排序都是 $O(n\log n)$,有沒有人能想出更快的、
+        比如 $O(n)$ 的通用排序?這是個了不起的問題,而答案是電腦科學裡最漂亮的結果之一:
+        <strong>只要你的排序是「靠比較元素大小」來決定順序的,你就<em>不可能</em>快過 $\Omega(n\log n)$。</strong>
+        這不是「目前還沒人想到」,而是被嚴格<em>證明</em>的——任何聰明才智都突破不了的牆。
+      </p>
+      <p>
+        證明的工具是<strong>決策樹(decision tree)</strong>。先想清楚一件事:一個「基於比較
+        (comparison-based)」的排序演算法,它對輸入唯一能做的事,就是<em>問問題</em>:
+        「$a_i$ 和 $a_j$,誰比較大?」每問一次,得到「≤」或「&gt;」兩種答案之一,程式就根據答案走向不同分支。
+        於是,整個演算法的執行流程,可以畫成一棵<strong>二元樹</strong>:每個內部節點是一次比較,
+        兩條分支是兩種答案,而每片<strong>葉子</strong>對應到一種最終的輸出排列。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 760 380" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="380" y="22" font-size="13" font-weight="700" fill="#1f2328" text-anchor="middle">為三個元素 a₁,a₂,a₃ 排序的決策樹(每個葉子是一種排列)</text>
+  <!-- edges -->
+  <g stroke="#8a929b" stroke-width="1.5" fill="none">
+    <line x1="380" y1="62" x2="200" y2="118"/><line x1="380" y1="62" x2="560" y2="118"/>
+    <line x1="200" y1="142" x2="110" y2="200"/><line x1="200" y1="142" x2="300" y2="200"/>
+    <line x1="560" y1="142" x2="470" y2="200"/><line x1="560" y1="142" x2="650" y2="200"/>
+    <line x1="300" y1="222" x2="250" y2="296"/><line x1="300" y1="222" x2="360" y2="296"/>
+    <line x1="470" y1="222" x2="420" y2="296"/><line x1="470" y1="222" x2="530" y2="296"/>
+  </g>
+  <!-- edge labels -->
+  <g font-size="11" fill="#2f6f6a" font-weight="700">
+    <text x="278" y="92">≤</text><text x="476" y="92">&gt;</text>
+    <text x="146" y="176">≤</text><text x="258" y="176">&gt;</text>
+    <text x="506" y="176">≤</text><text x="614" y="176">&gt;</text>
+    <text x="266" y="266">≤</text><text x="338" y="266">&gt;</text>
+    <text x="436" y="266">≤</text><text x="508" y="266">&gt;</text>
+  </g>
+  <!-- internal nodes -->
+  <g font-size="12" text-anchor="middle">
+    <rect x="346" y="40" width="68" height="26" rx="13" fill="#2f6f6a"/><text x="380" y="58" fill="#fff" font-weight="700">a₁ : a₂</text>
+    <rect x="166" y="118" width="68" height="26" rx="13" fill="#2f6f6a"/><text x="200" y="136" fill="#fff" font-weight="700">a₂ : a₃</text>
+    <rect x="526" y="118" width="68" height="26" rx="13" fill="#2f6f6a"/><text x="560" y="136" fill="#fff" font-weight="700">a₂ : a₃</text>
+    <rect x="266" y="200" width="68" height="26" rx="13" fill="#2f6f6a"/><text x="300" y="218" fill="#fff" font-weight="700">a₁ : a₃</text>
+    <rect x="436" y="200" width="68" height="26" rx="13" fill="#2f6f6a"/><text x="470" y="218" fill="#fff" font-weight="700">a₁ : a₃</text>
+  </g>
+  <!-- leaves -->
+  <g font-size="11" text-anchor="middle">
+    <rect x="78"  y="200" width="64" height="26" rx="5" fill="#f6e7dd" stroke="#b4541f"/><text x="110" y="217">1 2 3</text>
+    <rect x="618" y="200" width="64" height="26" rx="5" fill="#f6e7dd" stroke="#b4541f"/><text x="650" y="217">3 2 1</text>
+    <rect x="218" y="296" width="64" height="26" rx="5" fill="#f6e7dd" stroke="#b4541f"/><text x="250" y="313">1 3 2</text>
+    <rect x="328" y="296" width="64" height="26" rx="5" fill="#f6e7dd" stroke="#b4541f"/><text x="360" y="313">3 1 2</text>
+    <rect x="388" y="296" width="64" height="26" rx="5" fill="#f6e7dd" stroke="#b4541f"/><text x="420" y="313">2 1 3</text>
+    <rect x="498" y="296" width="64" height="26" rx="5" fill="#f6e7dd" stroke="#b4541f"/><text x="530" y="313">2 3 1</text>
+  </g>
+  <text x="380" y="352" font-size="12" fill="#4a5159" text-anchor="middle">3 個元素 → 3! = 6 種排列 → 樹至少要有 6 片葉子。最深的路徑(此處 3 次比較)就是「最壞情況比較次數」。</text>
+</svg>
+        <figcaption>圖 28-4:任何比較排序,執行起來都像在走這棵決策樹。從根到葉的每條路徑,是一連串比較的結果;走到哪片葉子,就輸出哪種排列。</figcaption>
+      </div>
+
+      <p>現在,證明只需要兩個觀察,加一點點算術:</p>
+      <ol>
+        <li>
+          <strong>葉子至少要有 $n!$ 片。</strong> $n$ 個相異元素共有 $n!$ 種可能的排列,而正確的排序必須能輸出其中<em>任何一種</em>
+          (端看輸入怎麼亂)。每種排列至少要對應到一片葉子,所以這棵樹的葉子數 $\ge n!$。
+        </li>
+        <li>
+          <strong>樹高決定最壞比較次數。</strong> 演算法在最壞情況下的比較次數,等於從根走到最深葉子的<em>路徑長度</em>,
+          也就是樹的<strong>高度</strong> $h$。而一棵高度為 $h$ 的二元樹,葉子最多 $2^h$ 片。
+        </li>
+      </ol>
+      <p>把兩件事兜起來:葉子數既 $\ge n!$,又 $\le 2^h$,於是</p>
+      <p>$$ 2^h \ge n! \quad\Longrightarrow\quad h \ge \log_2(n!). $$</p>
+      <p>剩下的就是估計 $\log_2(n!)$ 有多大。用一個不需要史特靈公式的初等技巧:</p>
+      <p>$$ \log_2(n!) = \sum_{i=1}^{n}\log_2 i \;\ge\; \sum_{i=n/2}^{n}\log_2 i \;\ge\; \frac{n}{2}\log_2\frac{n}{2} = \Omega(n\log n). $$</p>
+      <p>
+        (中間那步:後半段那 $n/2$ 個項,每一項都至少是 $\log_2(n/2)$。)更精確地,史特靈公式給出
+        $\log_2(n!) \approx n\log_2 n - n\log_2 e$,主項正是 $n\log_2 n$。
+        所以樹高 $h = \Omega(n\log n)$——<strong>任何比較排序,在最壞情況下都至少要做這麼多次比較。牆,就在這裡。</strong>
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">這道下界在說什麼</span>
+          <p>它說的不是「某個演算法很慢」,而是「<strong>所有</strong>靠比較的排序<strong>都</strong>逃不過 $\Omega(n\log n)$」。
+          因此合併排序、堆積排序這些 $O(n\log n)$ 的演算法,在「比較排序」這個賽道上已經是<strong>漸進最佳(asymptotically optimal)</strong>——
+          再怎麼聰明也只能改善常數,不可能改變那個 $n\log n$。
+          要更快,唯一的出路是<strong>跳出賽道:不要靠比較</strong>。這就引出了下一節。</p>
+        </div>
+      </div>
+
+      <h2>跳出牆外:不靠比較的排序</h2>
+      <p>
+        上面那道牆,只困得住「靠比較」的排序。但比較並不是排序的唯一手段。
+        如果我們能<strong>直接從元素的「值」算出它該放哪裡</strong>——而不是反覆問「誰比誰大」——
+        就能完全繞過 $\Omega(n\log n)$。代價是:這類方法對資料有額外要求(通常得是範圍有限的整數或可分桶的鍵)。
+      </p>
+
+      <h3>計數排序(counting sort):用「值」當地址</h3>
+      <p>
+        假設你要排的是一堆 0 到 $k$ 之間的整數(比如考試分數 0–100)。計數排序的點子簡單到近乎作弊:
+        <strong>開一個大小為 $k+1$ 的計數陣列,數一數每個值各出現幾次,再依序「倒」出來。</strong>
+        它從頭到尾<em>沒有比較過任何兩個元素</em>。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 250" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="20" y="24" font-size="13" font-weight="700" fill="#1f2328">計數排序 [2,5,2,0,3,0](值域 0–5):數次數 → 依序倒出</text>
+  <!-- input -->
+  <text x="20" y="58" font-size="11" fill="#8a929b">輸入</text>
+  <g font-size="13" text-anchor="middle">
+    <rect x="70"  y="44" width="40" height="30" rx="4" fill="#e3efed" stroke="#2f6f6a"/><text x="90"  y="64">2</text>
+    <rect x="114" y="44" width="40" height="30" rx="4" fill="#e3efed" stroke="#2f6f6a"/><text x="134" y="64">5</text>
+    <rect x="158" y="44" width="40" height="30" rx="4" fill="#e3efed" stroke="#2f6f6a"/><text x="178" y="64">2</text>
+    <rect x="202" y="44" width="40" height="30" rx="4" fill="#e3efed" stroke="#2f6f6a"/><text x="222" y="64">0</text>
+    <rect x="246" y="44" width="40" height="30" rx="4" fill="#e3efed" stroke="#2f6f6a"/><text x="266" y="64">3</text>
+    <rect x="290" y="44" width="40" height="30" rx="4" fill="#e3efed" stroke="#2f6f6a"/><text x="310" y="64">0</text>
+  </g>
+  <!-- count array -->
+  <text x="20" y="124" font-size="11" fill="#8a929b">計數</text>
+  <g font-size="13" text-anchor="middle">
+    <rect x="70"  y="110" width="46" height="30" rx="4" fill="#f6e7dd" stroke="#b4541f"/><text x="93"  y="130" font-weight="700">2</text>
+    <rect x="120" y="110" width="46" height="30" rx="4" fill="#f6e7dd" stroke="#b4541f"/><text x="143" y="130" font-weight="700">0</text>
+    <rect x="170" y="110" width="46" height="30" rx="4" fill="#f6e7dd" stroke="#b4541f"/><text x="193" y="130" font-weight="700">2</text>
+    <rect x="220" y="110" width="46" height="30" rx="4" fill="#f6e7dd" stroke="#b4541f"/><text x="243" y="130" font-weight="700">1</text>
+    <rect x="270" y="110" width="46" height="30" rx="4" fill="#f6e7dd" stroke="#b4541f"/><text x="293" y="130" font-weight="700">0</text>
+    <rect x="320" y="110" width="46" height="30" rx="4" fill="#f6e7dd" stroke="#b4541f"/><text x="343" y="130" font-weight="700">1</text>
+  </g>
+  <g font-size="10" text-anchor="middle" fill="#8a929b">
+    <text x="93" y="156">值0</text><text x="143" y="156">值1</text><text x="193" y="156">值2</text>
+    <text x="243" y="156">值3</text><text x="293" y="156">值4</text><text x="343" y="156">值5</text>
+  </g>
+  <!-- output -->
+  <text x="20" y="206" font-size="11" fill="#8a929b">輸出</text>
+  <g font-size="13" text-anchor="middle">
+    <rect x="70"  y="192" width="40" height="30" rx="4" fill="#16a34a" fill-opacity="0.18" stroke="#16a34a"/><text x="90"  y="212">0</text>
+    <rect x="114" y="192" width="40" height="30" rx="4" fill="#16a34a" fill-opacity="0.18" stroke="#16a34a"/><text x="134" y="212">0</text>
+    <rect x="158" y="192" width="40" height="30" rx="4" fill="#16a34a" fill-opacity="0.18" stroke="#16a34a"/><text x="178" y="212">2</text>
+    <rect x="202" y="192" width="40" height="30" rx="4" fill="#16a34a" fill-opacity="0.18" stroke="#16a34a"/><text x="222" y="212">2</text>
+    <rect x="246" y="192" width="40" height="30" rx="4" fill="#16a34a" fill-opacity="0.18" stroke="#16a34a"/><text x="266" y="212">3</text>
+    <rect x="290" y="192" width="40" height="30" rx="4" fill="#16a34a" fill-opacity="0.18" stroke="#16a34a"/><text x="310" y="212">5</text>
+  </g>
+  <!-- explanation -->
+  <text x="430" y="60" font-size="12" fill="#4a5159">① 掃一遍輸入,</text>
+  <text x="430" y="80" font-size="12" fill="#4a5159">　 count[值] 加一。</text>
+  <text x="430" y="116" font-size="12" fill="#4a5159">② 從值 0 到 k,</text>
+  <text x="430" y="136" font-size="12" fill="#4a5159">　 各印出 count[值] 個。</text>
+  <text x="430" y="180" font-size="12" fill="#b4541f" font-weight="700">總工作量 = O(n + k)</text>
+  <text x="430" y="200" font-size="12" fill="#4a5159">n = 元素個數,k = 值域大小。</text>
+  <text x="430" y="220" font-size="12" fill="#4a5159">沒有比較任何一對元素!</text>
+</svg>
+        <figcaption>圖 28-5:計數排序。值本身就是計數陣列的「地址」,因此完全不需要比較。代價是要一塊與「值域大小 $k$」成正比的額外空間。</figcaption>
+      </div>
+
+      <pre><code class="language-python">def counting_sort(arr):
+    if not arr:
+        return []
+    k = max(arr)                       # 最大值,決定計數陣列大小(假設值 ≥ 0)
+    count = [0] * (k + 1)              # count[v] = 值 v 出現的次數
+    for x in arr:                      # ① 掃一遍,數次數:O(n)
+        count[x] += 1
+    out = []
+    for v in range(k + 1):             # ② 依序倒出來:O(n + k)
+        out.extend([v] * count[v])
+    return out
+
+print(counting_sort([2, 5, 2, 0, 3, 0]))   # [0, 0, 2, 2, 3, 5]</code></pre>
+      <p>
+        它的複雜度是 $O(n + k)$——當值域 $k$ 和元素個數 $n$ 同級時,這就是不折不扣的<strong>線性</strong>排序,
+        把 $\Omega(n\log n)$ 遠遠甩在後頭。但魔鬼藏在那個 $k$ 裡:如果你要排的整數可以大到上億(比如排序所有人的身分證號),
+        $k$ 就會大到計數陣列塞爆記憶體。<strong>計數排序只在「值域不大」時划算。</strong>
+      </p>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">天下沒有白吃的午餐:它沒有違反下界</span>
+          <p>計數排序 $O(n)$ 不代表 $\Omega(n\log n)$ 的證明錯了。下界的前提是「<strong>基於比較</strong>」,
+          而計數排序根本不比較——它用「值」當記憶體地址直接定位。它用<strong>對輸入的額外假設</strong>
+          (值是範圍有限的整數)和<strong>額外的空間 $O(k)$</strong>,換來了時間上的突破。
+          這正是演算法世界反覆出現的交易:時間、空間、通用性,三者難以兼得。</p>
+        </div>
+      </div>
+
+      <h3>基數排序(radix sort)與桶排序(bucket sort):計數排序的兩種放大術</h3>
+      <p>
+        計數排序怕「值域太大」。有兩個漂亮的點子能繞過這個限制:
+      </p>
+      <ul>
+        <li>
+          <strong>基數排序</strong>:不要把整個數字當一個值,而是<strong>一位數一位數</strong>地排。
+          先依個位數排(用穩定的計數排序),再依十位數排,再百位數……排完最高位,整體就有序了。
+          這裡<em>穩定性是命脈</em>:每一輪都必須保持前幾輪建立的順序,否則前功盡棄。
+          對 $d$ 位數、每位值域 $b$(例如十進位 $b=10$)的資料,複雜度是 $O(d\,(n+b))$——
+          當位數 $d$ 視為常數時,等於線性。這就是排「固定長度整數或字串」的利器。
+        </li>
+        <li>
+          <strong>桶排序</strong>:假設資料大致<strong>均勻分布</strong>在某個區間(例如 $[0,1)$ 的小數)。
+          把區間切成 $n$ 個「桶」,依值把每個元素丟進對應的桶,再對每個桶內部各自排序(桶內元素少,用插入排序就好),
+          最後依序串起來。在均勻分布的假設下,平均是 $O(n)$;但若資料全擠在同一個桶,就退化回桶內排序的複雜度。
+        </li>
+      </ul>
+      <p>
+        三者共通的精神都是:<strong>用結構性的假設(整數、有限位數、均勻分布)取代「比較」,
+        把元素直接安置到位。</strong>它們不是萬用排序,而是「知道資料長相時」的特化武器。
+      </p>
+
+      <h2>回到搜尋:把二分搜尋的邊界釘死</h2>
+      <p>
+        排序鋪好了路,現在回到搜尋。<strong>線性搜尋</strong>($O(n)$,從頭找到尾)在第 5 章講過,
+        它的好處是不挑資料、隨時能用。但只要資料<strong>已排序</strong>,<strong>二分搜尋</strong>($O(\log n)$)
+        就能降維打擊:每次看中間,砍掉一半。概念你已經懂了,這一節我們要做的是更難、也更重要的事——
+        把它的邊界與正確性<strong>寫到滴水不漏</strong>。二分搜尋是出了名「人人都覺得會、人人都寫錯」的演算法。
+      </p>
+      <p>
+        寫對二分搜尋的關鍵,是時時抓著一個<strong>迴圈不變量(loop invariant)</strong>:
+        「答案(若存在)永遠落在區間 <code>[low, high]</code> 之內」。只要每一步都維持這個不變量、
+        而且區間嚴格縮小,演算法就保證正確且會停。注意三個最常出錯的細節:
+        <strong>(1)</strong> 區間是閉區間 <code>[low, high]</code> 還是半開 <code>[low, high)</code>?
+        <strong>(2)</strong> 迴圈條件是 <code>&lt;</code> 還是 <code>&lt;=</code>?
+        <strong>(3)</strong> 更新時是 <code>mid</code> 還是 <code>mid ± 1</code>?三者必須首尾一致。
+      </p>
+      <pre><code class="language-python">def binary_search(arr, target):
+    """在已排序的 arr 中找 target,回傳索引;找不到回傳 -1。"""
+    low, high = 0, len(arr) - 1        # 閉區間 [low, high]
+    while low &lt;= high:                 # 區間非空時才繼續(注意是 &lt;=)
+        mid = low + (high - low) // 2  # 比 (low+high)//2 更防溢位(C/Java 重要)
+        if arr[mid] == target:
+            return mid
+        elif arr[mid] &lt; target:
+            low = mid + 1             # target 在右半,丟掉含 mid 的左半
+        else:
+            high = mid - 1           # target 在左半,丟掉含 mid 的右半
+    return -1                         # 區間縮空了還沒找到
+
+nums = [2, 5, 8, 12, 16, 23, 38, 45, 56, 72]
+print(binary_search(nums, 23))   # 5
+print(binary_search(nums, 100))  # -1</code></pre>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">為什麼是 <code>low + (high - low) // 2</code>?</span>
+          <p>在 Python 裡 <code>(low + high) // 2</code> 沒問題,因為整數無上限。但在 C、Java
+          這類有固定位寬整數的語言,當 <code>low</code> 與 <code>high</code> 都很大時,<code>low + high</code>
+          可能<strong>溢位(overflow)</strong>變成負數,釀成隱晦的 bug。寫成 <code>low + (high - low) // 2</code>
+          就永遠不會溢位。這個 bug 真實地潛伏在 Java 標準庫的二分搜尋裡長達九年,才被發現修正——
+          二分搜尋的邊界,真的不簡單。</p>
+        </div>
+      </div>
+
+      <h3>變體:找「第一個」「最後一個」與 <code>lower_bound</code></h3>
+      <p>
+        標準二分搜尋找到「<em>某一個</em>」等於 target 的位置就回傳。但實務上你常想問更精細的問題:
+        當有重複值時,<strong>第一個</strong>等於 target 的位置在哪?或者更通用——<strong>第一個 ≥ target 的位置</strong>
+        在哪(這正是 C++ <code>std::lower_bound</code> 做的事)?它能回答「target 該插在哪」「有幾個元素小於 target」這類查詢。
+      </p>
+      <p>
+        訣竅是改用<strong>半開區間 <code>[low, high)</code></strong>,而且<strong>找到候選時不要急著回傳</strong>——
+        記住它,繼續往左壓縮,看看左邊有沒有更靠前的合格者:
+      </p>
+      <pre><code class="language-python">def lower_bound(arr, x):
+    """回傳第一個 &gt;= x 的索引;若全部都 &lt; x,回傳 len(arr)。"""
+    low, high = 0, len(arr)            # 半開區間 [low, high),注意 high = len(arr)
+    while low &lt; high:                  # 半開區間,用 &lt;(不是 &lt;=)
+        mid = low + (high - low) // 2
+        if arr[mid] &lt; x:
+            low = mid + 1             # mid 太小,捨棄;答案在 (mid, high)
+        else:
+            high = mid               # arr[mid] &gt;= x,mid 可能就是答案 → 保留它
+    return low                         # low == high,即第一個 &gt;= x 的位置
+
+a = [1, 2, 2, 2, 5, 8]
+print(lower_bound(a, 2))   # 1  ← 第一個 2 的位置
+print(lower_bound(a, 3))   # 4  ← 3 該插在索引 4(第一個 &gt;= 3 的是 5)
+print(lower_bound(a, 9))   # 6  ← 全都比 9 小,回傳 len(a)</code></pre>
+      <p>
+        有了 <code>lower_bound</code>,很多查詢都變得輕鬆:「有幾個元素 &lt; x」就是 <code>lower_bound(a, x)</code>;
+        「第一個 &gt; x」就是 <code>lower_bound(a, x+1)</code>(整數情形);
+        「x 出現幾次」就是 <code>lower_bound(a, x+1) - lower_bound(a, x)</code>。
+        Python 標準庫的 <code>bisect</code> 模組(<code>bisect_left</code> / <code>bisect_right</code>)
+        正是把這些寫好、調校到滴水不漏的版本,實務上直接用它即可。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">二分搜尋不只用在「找數字」</span>
+          <p>它真正威力來自一個抽象:只要存在一個<strong>單調的判定條件</strong>(某個分界點之前都是「否」、之後都是「是」),
+          你就能用二分法在 $O(\log n)$ 內找到那個分界。這招叫「<strong>對答案二分</strong>」,
+          能解「最小可行容量」「最大化最小值」這類乍看不像搜尋的最佳化問題——是競賽與面試的常客。</p>
+        </div>
+      </div>
+
+      <h2>選擇問題:只想要第 $k$ 小,何必整串排好?</h2>
+      <p>
+        最後一個漂亮的問題。假設你只想知道「<strong>第 $k$ 小的元素是誰</strong>」——比如中位數($k = n/2$)、
+        或考試的第 90 百分位。最直覺的做法是先排序($O(n\log n)$)再取第 $k$ 個。但這太浪費了:
+        我們把<em>全部</em>都排好,只為了拿<em>一個</em>。能不能更快?
+      </p>
+      <p>
+        能。關鍵的領悟是:快速排序的<strong>分割</strong>步驟,其實已經幫我們做了大半的事。
+        每次分割後,pivot 落在某個最終位置 <code>p</code>——這代表「pivot 是第 <code>p</code> 小的元素」(0 起算),
+        而且左邊全比它小、右邊全比它大。於是:
+      </p>
+      <ul>
+        <li>若 <code>p == k</code>:賓果,pivot 就是答案。</li>
+        <li>若 <code>p &lt; k</code>:第 $k$ 小在<strong>右半</strong>,只要遞迴右半就好——<strong>左半完全不用碰</strong>。</li>
+        <li>若 <code>p &gt; k</code>:第 $k$ 小在<strong>左半</strong>,只遞迴左半。</li>
+      </ul>
+      <p>
+        這就是 <strong>quickselect</strong>(快速選擇)。和快速排序不同的是,它每次<strong>只追一邊</strong>,
+        不像排序要兩邊都遞迴。平均下來,工作量是 $n + \frac{n}{2} + \frac{n}{4} + \dots \approx 2n = O(n)$——
+        <strong>線性</strong>時間就能找出第 $k$ 小,不必整串排好!(最壞情況和快速排序一樣是 $O(n^2)$,同樣用隨機 pivot 化解。)
+      </p>
+      <pre><code class="language-python">import random
+
+def quickselect(arr, k):
+    """回傳 arr 中第 k 小的元素(k 從 0 起算,k=0 即最小值)。"""
+    if not 0 &lt;= k &lt; len(arr):
+        raise IndexError("k 超出範圍")
+    a = list(arr)                      # 複製一份,避免改動呼叫者的資料
+    low, high = 0, len(a) - 1
+    while True:
+        p = partition(a, low, high)    # 借用前面隨機化的 Lomuto partition
+        if p == k:
+            return a[p]
+        elif p &lt; k:
+            low = p + 1               # 第 k 小在右半,只追右邊
+        else:
+            high = p - 1              # 在左半,只追左邊
+
+data = [7, 2, 1, 8, 6, 3, 5]
+print(quickselect(data, 0))   # 1  (最小)
+print(quickselect(data, 3))   # 5  (第 4 小,即中位數)
+print(quickselect(data, 6))   # 8  (最大)</code></pre>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">最壞也 $O(n)$:中位數的中位數</span>
+          <p>隨機化讓 quickselect <em>期望</em> $O(n)$,但理論上仍可能很慢。1973 年,Blum、Floyd、Pratt、Rivest、Tarjan
+          提出「<strong>中位數的中位數(median of medians)</strong>」:把元素每 5 個一組、各取組內中位數,
+          再遞迴地求這些中位數的中位數當 pivot。這個精心挑選的 pivot 保證每次至少切掉固定比例,
+          讓選擇問題的<strong>最壞情況</strong>也是 $O(n)$。它是理論上的里程碑(常數較大,實務多半還是用隨機化版本),
+          證明了「找第 $k$ 小」本質上不比「掃一遍」更難。</p>
+        </div>
+      </div>
+
+      <h2>實務:站在巨人的標準庫上</h2>
+      <p>
+        講了這麼多手刻排序,最後要說一句最重要的實話:<strong>在真實專案裡,請用標準庫的排序。</strong>
+        它們由頂尖工程師打磨多年,比你我手寫的快、穩、又正確。手刻排序的價值在於「理解」,而非「上線」。
+      </p>
+      <p>Python 提供兩個工具,背後都是高度優化的 <strong>Timsort</strong>(穩定、最壞 $O(n\log n)$):</p>
+      <pre><code class="language-python"># sorted():回傳「新的」排好序的串列,不動原本的
+nums = [5, 2, 9, 1, 7]
+print(sorted(nums))            # [1, 2, 5, 7, 9]
+print(sorted(nums, reverse=True))   # [9, 7, 5, 2, 1]
+print(nums)                    # [5, 2, 9, 1, 7]  ← 原串列沒變
+
+# list.sort():原地排序,改動原串列本身,回傳 None
+nums.sort()
+print(nums)                    # [1, 2, 5, 7, 9]</code></pre>
+      <p>
+        最強大的是 <code>key</code> 參數:你給它一個函式,Python 會依「每個元素經過該函式算出的鍵」來排序。
+        這讓你能排序任何複雜物件:
+      </p>
+      <pre><code class="language-python">words = ["banana", "Kiwi", "apple", "fig"]
+print(sorted(words, key=len))            # 依長度:['fig', 'Kiwi', 'apple', 'banana']
+print(sorted(words, key=str.lower))      # 不分大小寫的字典序
+
+students = [
+    {"name": "小明", "score": 88, "age": 19},
+    {"name": "小華", "score": 88, "age": 17},
+    {"name": "小美", "score": 95, "age": 18},
+]
+# 多重排序鍵:先依分數「由高到低」,分數相同時年齡「由小到大」
+ranked = sorted(students, key=lambda s: (-s["score"], s["age"]))
+for s in ranked:
+    print(s["name"], s["score"], s["age"])
+# 小美 95 18 / 小華 88 17 / 小明 88 19</code></pre>
+      <p>
+        注意上面用 tuple <code>(-score, age)</code> 當鍵,就能一次表達「主鍵、次鍵」的排序規則——
+        tuple 是按元素逐一比較的。而因為 Timsort <strong>穩定</strong>,你也可以用另一招:
+        「<strong>先排次要鍵,再排主要鍵</strong>」,穩定性會保證次要鍵的順序在主鍵相同時被保留下來。
+        這正是穩定排序在實務上最常見的用途。
+      </p>
+      <p>
+        至於 C,標準庫提供 <code>qsort</code>(名字源自 quicksort,但實作不保證、通常不穩定),
+        你得自己寫一個「比較函式」傳給它——這是 C 用函式指標達成泛型的經典手法,我們在系統那幾章已經見識過。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">穩定性,到底何時重要?</span>
+          <p>當你的元素「不只是一個數字」、而是有多個欄位的紀錄,且你想<strong>分階段、多鍵排序</strong>時,穩定性就攸關正確。
+          例:先把員工名單依「姓名」排好,再依「部門」排——若排序穩定,同部門內的人會維持姓名順序;
+          若不穩定,第二次排序會把第一次的成果打亂。對「純數字、不在乎相等元素誰先誰後」的排序,穩定性則無關緊要。
+          <strong>記住這個判準:你會不會在乎「值相等的元素,排完後的相對先後」?會,就需要穩定排序。</strong></p>
+        </div>
+      </div>
+
+      <h2>練習</h2>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 28.1 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>實作一個<strong>原地、隨機化</strong>的快速排序 <code>quicksort(arr)</code>(用 Lomuto 分割)。
+          要求:(1) 隨機選 pivot 以避開最壞情況;(2) 直接在原陣列上排序。
+          並說明:為什麼隨機化能讓「已排序的輸入」不再是它的剋星?</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">import random
+
+def quicksort(arr, low=0, high=None):
+    if high is None:
+        high = len(arr) - 1
+    if low &gt;= high:                  # 剩 0 或 1 個,已有序
+        return
+    p = partition(arr, low, high)
+    quicksort(arr, low, p - 1)
+    quicksort(arr, p + 1, high)
+
+def partition(arr, low, high):
+    r = random.randint(low, high)              # 隨機挑 pivot
+    arr[r], arr[high] = arr[high], arr[r]      # 換到最右
+    pivot = arr[high]
+    i = low - 1
+    for j in range(low, high):
+        if arr[j] &lt;= pivot:
+            i += 1
+            arr[i], arr[j] = arr[j], arr[i]
+    arr[i + 1], arr[high] = arr[high], arr[i + 1]
+    return i + 1
+
+# 測試,包含「已排序」這個對固定-pivot 版本最毒的輸入
+data = list(range(20))
+random.shuffle(data)
+quicksort(data)
+assert data == list(range(20))
+print("通過 ✅")</code></pre>
+              <p><strong>為什麼隨機化有效?</strong>「永遠選最右邊」的固定規則,讓「已排序輸入」每次都把 pivot 選到最大值,
+              切出 $0$ 與 $n-1$ 的極端分割,退化成 $O(n^2)$。一旦改成<em>隨機</em>選 pivot,
+              pivot 的好壞就與「輸入的排列方式」脫鉤了——沒有任何特定輸入能持續逼出爛 pivot。
+              期望分割相當均勻,期望時間 $O(n\log n)$,與輸入長相無關。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 28.2 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>實作計數排序 <code>counting_sort(arr)</code>,支援含<strong>負數</strong>的整數(例如 <code>[-3, 1, -3, 0, 2]</code>)。
+          提示:用 <code>min</code> 求出偏移量,把每個值平移成非負的索引。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>關鍵是用 <code>lo = min(arr)</code> 當「零點」,值 <code>x</code> 對應到計數陣列的索引 <code>x - lo</code>。</p>
+              <pre><code class="language-python">def counting_sort(arr):
+    if not arr:
+        return []
+    lo, hi = min(arr), max(arr)
+    count = [0] * (hi - lo + 1)        # 索引 0 對應最小值 lo
+    for x in arr:
+        count[x - lo] += 1            # 平移後當索引
+    out = []
+    for i, c in enumerate(count):
+        out.extend([i + lo] * c)      # 還原:索引 i 對應值 i + lo
+    return out
+
+print(counting_sort([-3, 1, -3, 0, 2]))   # [-3, -3, 0, 1, 2]
+print(counting_sort([]))                   # []</code></pre>
+              <p>複雜度 $O(n + k)$,其中 $k = \text{hi} - \text{lo} + 1$ 是值域大小。
+              當值域遠大於元素個數(例如 <code>[0, 1000000]</code> 只有兩個元素)時,它會浪費大量空間,此時不該用計數排序。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 28.3 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>在一個<strong>已排序、可能有重複</strong>的陣列裡,實作 <code>lower_bound(arr, x)</code>:
+          回傳<strong>第一個 ≥ x</strong> 的索引;若不存在(全部都 &lt; x),回傳 <code>len(arr)</code>。
+          請寫出迴圈不變量,並用它論證程式為何正確。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">def lower_bound(arr, x):
+    low, high = 0, len(arr)           # 半開區間 [low, high)
+    while low &lt; high:
+        mid = low + (high - low) // 2
+        if arr[mid] &lt; x:
+            low = mid + 1            # 答案不可能 &lt;= mid,推進 low
+        else:
+            high = mid              # arr[mid] &gt;= x,mid 可能是答案,保留
+    return low
+
+a = [1, 2, 2, 2, 5, 8]
+assert lower_bound(a, 2) == 1
+assert lower_bound(a, 3) == 4
+assert lower_bound(a, 0) == 0
+assert lower_bound(a, 9) == 6
+print("通過 ✅")</code></pre>
+              <p><strong>不變量:</strong>「答案一定落在 <code>[low, high]</code> 之內」——即 <code>arr[low-1] &lt; x</code>
+              (low 左邊的都太小)且 <code>arr[high] &gt;= x</code> 或 <code>high == len(arr)</code>(high 及其右邊都合格或越界)。
+              每輪檢查 <code>mid</code>:若 <code>arr[mid] &lt; x</code>,則 <code>mid</code> 與其左側都不合格,安全地令 <code>low = mid + 1</code>;
+              否則 <code>mid</code> 是個合格候選,但左邊可能還有更早的,故令 <code>high = mid</code>(保留 mid)。
+              區間每輪嚴格縮小,最終 <code>low == high</code>,正是第一個 ≥ x 的位置。
+              用 <code>high = mid</code>(不減一)又能停機,正是因為配對的是「半開區間 + <code>low &lt; high</code>」。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 28.4 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>用自己的話解釋:為什麼<strong>任何</strong>「基於比較」的排序,最壞情況都至少要 $\Omega(n\log n)$ 次比較?
+          並回答:計數排序是 $O(n)$,這有沒有推翻這個下界?為什麼?</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>下界論證(決策樹):</strong>一個比較排序對輸入唯一的操作就是「比較兩個元素」,每次比較有「≤/&gt;」兩種結果。
+              因此整個演算法可畫成一棵二元決策樹:內部節點是比較,分支是結果,每片葉子是一種輸出排列。
+              因為 $n$ 個相異元素有 $n!$ 種可能排列,而正確排序必須能產生其中任何一種,
+              所以樹至少有 $n!$ 片葉子。高度 $h$ 的二元樹最多 $2^h$ 片葉子,於是
+              $2^h \ge n!$,即 $h \ge \log_2(n!)$。再用
+              $\log_2(n!) \ge \frac{n}{2}\log_2\frac{n}{2} = \Omega(n\log n)$
+              (或史特靈公式 $\log_2(n!)\approx n\log_2 n$)。樹高就是最壞比較次數,故任何比較排序都 $\ge \Omega(n\log n)$。</p>
+              <p><strong>計數排序沒有推翻它。</strong>下界的前提是「<em>基於比較</em>」。計數排序<em>不比較任何一對元素</em>——
+              它用元素的值直接當計數陣列的索引來定位。它是靠「對輸入的額外假設(範圍有限的整數)」與「額外空間 $O(k)$」
+              跳出了比較模型,因此不受這條下界約束。下界依然對所有比較排序成立。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 28.5 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>給定一串書籍紀錄,用 <code>sorted</code> 的 <code>key</code> 參數把它們排成:
+          <strong>先依「年份」由新到舊;同年份時,依「書名」字典序由 A 到 Z(不分大小寫)。</strong></p>
+          <pre><code class="language-python">books = [
+    {"title": "Dune", "year": 1965},
+    {"title": "neuromancer", "year": 1984},
+    {"title": "Snow Crash", "year": 1992},
+    {"title": "Hyperion", "year": 1989},
+    {"title": "Foundation", "year": 1951},
+    {"title": "Accelerando", "year": 1992},
+]</code></pre>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>用 tuple 當複合鍵:第一鍵 <code>-year</code>(負號達成「由新到舊」),第二鍵 <code>title.lower()</code>(不分大小寫的字典序)。</p>
+              <pre><code class="language-python">ranked = sorted(books, key=lambda b: (-b["year"], b["title"].lower()))
+for b in ranked:
+    print(b["year"], b["title"])
+# 1992 Accelerando
+# 1992 Snow Crash
+# 1989 Hyperion
+# 1984 neuromancer
+# 1965 Dune
+# 1951 Foundation</code></pre>
+              <p>注意 1992 那兩本:<code>Accelerando</code> 排在 <code>Snow Crash</code> 之前,
+              正是因為第二鍵 <code>title.lower()</code> 比較了字典序。
+              另一種等價寫法是利用穩定性<strong>分兩次排</strong>:先 <code>sorted(books, key=lambda b: b["title"].lower())</code>,
+              再 <code>sorted(..., key=lambda b: -b["year"])</code>——第二次排序時,穩定性會保留同年份內已排好的書名順序。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 28.6 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>實作 <code>quickselect(arr, k)</code>,在<strong>平均 $O(n)$</strong> 時間內找出第 $k$ 小的元素(<code>k</code> 從 0 起算)。
+          不可以先把整串排好。再回答:為什麼平均是 $O(n)$ 而不是 $O(n\log n)$?</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">import random
+
+def quickselect(arr, k):
+    if not 0 &lt;= k &lt; len(arr):
+        raise IndexError("k 超出範圍")
+    a = list(arr)                     # 複製,避免動到原陣列
+    low, high = 0, len(a) - 1
+    while True:
+        p = partition(a, low, high)  # 用練習 28.1 的隨機化 Lomuto partition
+        if p == k:
+            return a[p]
+        elif p &lt; k:
+            low = p + 1             # 只追右半
+        else:
+            high = p - 1           # 只追左半
+
+data = [7, 2, 1, 8, 6, 3, 5]
+assert quickselect(data, 0) == 1
+assert quickselect(data, 3) == 5
+assert quickselect(data, 6) == 8
+print("通過 ✅")</code></pre>
+              <p><strong>為什麼是 $O(n)$?</strong>關鍵差別:快速排序分割後要<em>遞迴兩邊</em>,所以是
+              $T(n) = 2T(n/2) + O(n) = O(n\log n)$;而 quickselect 只需要<em>追含答案的那一邊</em>。
+              在均勻分割的期望下,工作量是 $n + \frac{n}{2} + \frac{n}{4} + \dots$,這個等比級數收斂到約 $2n$,即 $O(n)$。
+              「少走一半的路」省掉了那個 $\log n$ 因子。(最壞仍 $O(n^2)$,隨機化使其機率極低;
+              要鐵打的最壞 $O(n)$ 則需中位數的中位數選 pivot。)</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 28.7 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>寫一個函式 <code>is_stable(sort_fn)</code>,它接受一個「依 key 排序」的排序函式,
+          並<strong>實測</strong>該排序是否穩定(回傳 <code>True</code>/<code>False</code>)。
+          用它驗證你練習 28.1 的快速排序與 Python 內建 <code>sorted</code>。最後,舉一個<strong>具體情境</strong>
+          說明穩定性何時攸關正確。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>測法:造一組記錄,每筆是 <code>(key, 進場序號)</code>。只依 <code>key</code> 排序後,
+              對每個相同 key 的群組,檢查其「進場序號」是否仍維持遞增——若被打亂,即不穩定。</p>
+              <pre><code class="language-python">def is_stable(sort_fn):
+    # key 故意大量重複,序號 0..n-1 記錄原始順序
+    data = [(2, 0), (1, 1), (2, 2), (1, 3), (2, 4), (1, 5)]
+    out = sort_fn(data, key=lambda p: p[0])
+    # 蒐集每個 key 對應的「序號出現順序」
+    seen = {}
+    for key, idx in out:
+        seen.setdefault(key, []).append(idx)
+    # 穩定 ⇔ 每個 key 的序號清單都是遞增的
+    return all(lst == sorted(lst) for lst in seen.values())
+
+# Python 內建 sorted 是穩定的(Timsort)
+print(is_stable(sorted))                       # True
+
+# 包裝一下快速排序,讓它符合 (data, key) 介面後測試
+def quicksort_keyed(data, key):
+    if len(data) &lt;= 1:
+        return list(data)
+    pivot = key(data[len(data) // 2])
+    less    = [x for x in data if key(x) &lt; pivot]
+    equal   = [x for x in data if key(x) == pivot]
+    greater = [x for x in data if key(x) &gt; pivot]
+    return quicksort_keyed(less, key) + equal + quicksort_keyed(greater, key)
+
+print(is_stable(quicksort_keyed))   # True 或 False?見下方說明</code></pre>
+              <p>有趣的是,上面這個<strong>用串列生成式</strong>寫的快速排序其實<em>是穩定的</em>——因為
+              <code>less</code>/<code>equal</code>/<code>greater</code> 都按原順序逐一收集,沒有打亂相對位置。
+              但<strong>原地 Lomuto 版本不穩定</strong>:它的「長距離交換」會把相等元素的相對順序弄亂。
+              你可以把 <code>is_stable</code> 套到原地版本(需先包裝介面)親眼驗證它回傳 <code>False</code>。
+              這也點出一個重點:「快速排序穩不穩定」取決於<em>實作方式</em>,而不是演算法名稱。</p>
+              <p><strong>穩定性何時攸關正確?</strong>一個具體情境:電商後台的訂單表,使用者先點「依下單時間排序」,
+              看到一個順序;接著再點「依金額排序」。如果排序穩定,金額相同的訂單會<em>保留</em>剛才的時間順序,
+              符合使用者「在金額相同時,沿用上一個排序」的心理預期;若不穩定,相同金額的訂單順序會莫名跳動,
+              體驗很差。更廣義地說,任何「多階段、分鍵」的排序(如基數排序、先次鍵後主鍵的技巧)都<em>依賴</em>穩定性才會正確。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="callout note"><div class="ico">🧭</div><div class="body"><span class="c-title">延伸:新軌道</span><p>想看同樣的排序與搜尋演算法在 Rust 所有權模型下怎麼實作?<a href="87-rust-collections-ds.html">第 81 章「集合、迭代器與所有權視角的資料結構」</a>從 Rust 的角度重演這些結構,讓你看見所有權如何在不引入 GC 的情況下保證記憶體安全。</p></div></div>
+
+      <h2>動手實驗室:實作並實測比較排序演算法</h2>
+      <p>
+        讀完理論,是時候讓數字自己說話。這個實驗室分三站:
+        (1) 實作本章正文未完整示範的<strong>堆積排序</strong>並驗收;
+        (2) 用<strong>比較計數框架</strong>親眼看 $O(n\log n)$ 與 $O(n^2)$ 的成長差距;
+        (3) 對二分搜尋進行<strong>全方位驗收</strong>(找到、找不到、<code>lower_bound</code> 邊界)。
+        最後三道練習讓你動手鞏固直覺。
+      </p>
+
+      <h3>站一:堆積排序(heapsort)</h3>
+      <p>
+        合併排序和快速排序本章都示範了,但<strong>堆積排序</strong>只在比較表格裡出現過。
+        它有個獨特組合:最壞 $O(n\log n)$ <em>且</em>原地,不需額外陣列也不怕退化到 $O(n^2)$。
+        代價是常數較大,實務上通常比快速排序慢,但在「需要鐵打的最壞保證且不能用額外記憶體」的場合是首選。
+      </p>
+      <p>
+        堆積排序的核心是<strong>最大堆(max-heap)</strong>:用陣列表示一棵完全二元樹,
+        索引 $i$ 的左右子節點在 $2i+1$ 和 $2i+2$,且每個節點的值 ≥ 子節點。
+        演算法分兩步:
+      </p>
+      <ol>
+        <li><strong>建堆:</strong>從最後一個非葉子節點往根走,對每個節點執行 <code>sift_down</code> 把它「沉」到正確位置。$O(n)$ 就能建好整個堆。</li>
+        <li><strong>反覆取最大:</strong>堆頂(索引 0)永遠是最大值。把它和堆的最後一個元素對調,縮減堆的範圍,再對新堆頂做 <code>sift_down</code>。重複 $n-1$ 次。</li>
+      </ol>
+      <pre><code class="language-python">def heapsort(arr):
+    n = len(arr)
+
+    def sift_down(root, end):
+        """把 arr[root] 往下沉,使 arr[root..end-1] 維持最大堆。"""
+        while True:
+            largest = root
+            left  = 2 * root + 1
+            right = 2 * root + 2
+            if left  &lt; end and arr[left]  &gt; arr[largest]:
+                largest = left
+            if right &lt; end and arr[right] &gt; arr[largest]:
+                largest = right
+            if largest == root:
+                break                      # 已是最大,不需下沉
+            arr[root], arr[largest] = arr[largest], arr[root]
+            root = largest
+
+    # ① 建最大堆:從最後一個非葉子往根走
+    for i in range(n // 2 - 1, -1, -1):
+        sift_down(i, n)
+
+    # ② 反覆把堆頂(最大值)移到已排序區
+    for end in range(n - 1, 0, -1):
+        arr[0], arr[end] = arr[end], arr[0]   # 堆頂換到末尾
+        sift_down(0, end)                     # 修復堆(縮小範圍)
+
+    return arr
+
+# 驗收
+import random
+data = list(range(20))
+random.shuffle(data)
+heapsort(data)
+assert data == list(range(20)), "排序結果錯誤!"
+print("heapsort 驗收通過 ✅")
+print("排序結果:", heapsort([5, 3, 8, 1, 9, 2]))   # [1, 2, 3, 5, 8, 9]</code></pre>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">Python 標準庫的 heapq</span>
+          <p>Python 的 <code>heapq</code> 模組實作<strong>最小堆</strong>:
+          <code>heapq.heapify(arr)</code> 原地建堆,<code>heapq.heappop(arr)</code> 取出最小值。
+          <code>heapq.nsmallest(k, arr)</code> 和 <code>heapq.nlargest(k, arr)</code> 是「找 top-k」的實用工具。
+          生產程式碼請直接用 <code>heapq</code>,不必手刻。</p>
+        </div>
+      </div>
+
+      <h3>站二:比較計數框架——親眼看 $O(n\log n)$ vs $O(n^2)$</h3>
+      <p>
+        理論說 $n=2000$ 時 $O(n^2)$ 和 $O(n\log n)$ 的差距大約是 <strong>91 倍</strong>。
+        下面用一個「在每次比較時遞增計數器」的框架,把插入排序(代表 $O(n^2)$)和合併排序
+        (代表 $O(n\log n)$)放在三種輸入——隨機、已排序、逆序——上一起跑,讓數字現身。
+      </p>
+      <pre><code class="language-python">import time, math, random
+
+comparisons = 0        # 全域比較計數器
+
+def reset():
+    global comparisons
+    comparisons = 0
+
+def cmp_lt(a, b):
+    """回傳 a &lt; b 並計一次比較。"""
+    global comparisons
+    comparisons += 1
+    return a &lt; b
+
+# ── 插入排序(O(n²))────────────────────────────────────────────────
+def insertion_sort_c(arr):
+    a = list(arr)
+    for i in range(1, len(a)):
+        key = a[i]; j = i - 1
+        while j &gt;= 0 and cmp_lt(key, a[j]):
+            a[j + 1] = a[j]; j -= 1
+        a[j + 1] = key
+    return a
+
+# ── 合併排序(O(n log n))──────────────────────────────────────────
+def merge_sort_c(arr):
+    if len(arr) &lt;= 1:
+        return list(arr)
+    mid = len(arr) // 2
+    L = merge_sort_c(arr[:mid])
+    R = merge_sort_c(arr[mid:])
+    res, i, j = [], 0, 0
+    while i &lt; len(L) and j &lt; len(R):
+        if cmp_lt(R[j], L[i]):          # R[j] &lt; L[i]
+            res.append(R[j]); j += 1
+        else:
+            res.append(L[i]); i += 1
+    res.extend(L[i:]); res.extend(R[j:])
+    return res
+
+# ── 計時與計數────────────────────────────────────────────────────
+def bench(fn, data, label):
+    reset()
+    t0 = time.perf_counter()
+    fn(data[:])
+    ms = (time.perf_counter() - t0) * 1000
+    print(f"  {label:&lt;14} 比較={comparisons:&gt;9,d}  耗時={ms:&gt;7.2f}ms")
+
+n = 2000
+rand_d = [random.randint(0, 10**6) for _ in range(n)]
+asc_d  = list(range(n))
+desc_d = list(range(n, 0, -1))
+
+print(f"n={n}  理論 n²={n*n:,}  理論 n·log₂n={int(n*math.log2(n)):,}")
+print()
+for name, fn in [("插入排序 O(n²)", insertion_sort_c),
+                 ("合併排序 O(nlogn)", merge_sort_c)]:
+    print(f"【{name}】")
+    bench(fn, rand_d,  "隨機")
+    bench(fn, asc_d,   "已排序")
+    bench(fn, desc_d,  "逆序")
+    print()</code></pre>
+
+      <p>預期輸出(趨勢固定,絕對值因機器而異):</p>
+      <pre><code class="language-text">n=2000  理論 n²=4,000,000  理論 n·log₂n=21,931
+
+【插入排序 O(n²)】
+  隨機           比較=  998,341  耗時=  60.18ms
+  已排序         比較=    1,999  耗時=   0.41ms   ← 最佳情況 O(n)
+  逆序           比較=1,999,000  耗時= 120.94ms   ← 最壞情況 O(n²)
+
+【合併排序 O(nlogn)】
+  隨機           比較=   19,921  耗時=   1.24ms
+  已排序         比較=   11,577  耗時=   0.88ms
+  逆序           比較=   10,988  耗時=   0.85ms</code></pre>
+
+      <p>
+        三個重點:(1) 插入排序對「已排序」只需 $n-1=1999$ 次比較,正是它的最佳情況;
+        (2) 合併排序三種輸入的比較次數都在 $n\log_2 n \approx 21931$ 附近,不因輸入長相大幅波動;
+        (3) 插入排序對逆序比較次數達 $\frac{n(n-1)}{2} \approx 2\times10^6$,是合併排序的 <strong>91 倍</strong>——
+        $n$ 再增十倍這個差距跳到約 <strong>700 倍</strong>(差距以 $n/\log n$ 成長,非線性外推)。這就是「$O(n^2)$ vs $O(n\log n)$」在現實中的重量。
+      </p>
+
+      <h3>站三:二分搜尋全方位驗收</h3>
+      <p>
+        把 <code>binary_search</code> 和 <code>lower_bound</code> 套上完整邊界測試,
+        涵蓋:目標在中間、在兩端、找不到、重複值、空陣列五類情況。
+      </p>
+      <pre><code class="language-python">def binary_search(arr, target):
+    """在已排序的 arr 找 target,找到回傳索引,找不到回傳 -1。"""
+    low, high = 0, len(arr) - 1
+    while low &lt;= high:
+        mid = low + (high - low) // 2
+        if arr[mid] == target:
+            return mid
+        elif arr[mid] &lt; target:
+            low = mid + 1
+        else:
+            high = mid - 1
+    return -1
+
+def lower_bound(arr, x):
+    """回傳第一個 &gt;= x 的索引;若全部都 &lt; x,回傳 len(arr)。"""
+    low, high = 0, len(arr)
+    while low &lt; high:
+        mid = low + (high - low) // 2
+        if arr[mid] &lt; x:
+            low = mid + 1
+        else:
+            high = mid
+    return low
+
+# ── 驗收套件 ──────────────────────────────────────────────────────
+a = [1, 2, 2, 2, 5, 8, 13, 21]
+
+# 找到:一般位置、頭、尾
+assert binary_search(a,  5) == 4
+assert binary_search(a,  1) == 0
+assert binary_search(a, 21) == 7
+
+# 找不到:不存在、比最小更小、比最大更大
+assert binary_search(a,  3) == -1
+assert binary_search(a,  0) == -1
+assert binary_search(a, 99) == -1
+
+# 重複值:找到「某一個」2 即可
+assert a[binary_search(a, 2)] == 2
+
+# lower_bound 邊界
+assert lower_bound(a, 2)  == 1    # 第一個 &gt;= 2 的索引是 1
+assert lower_bound(a, 3)  == 4    # 3 不存在,第一個 &gt;= 3 的是 5(索引 4)
+assert lower_bound(a, 0)  == 0    # 全部 &gt;= 0
+assert lower_bound(a, 99) == 8    # 全部 &lt; 99,回傳 len(a)=8
+
+# 空陣列
+assert binary_search([], 1) == -1
+assert lower_bound([], 1)   == 0
+
+print("二分搜尋全方位驗收通過 ✅")</code></pre>
+
+      <h3>實驗室練習</h3>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 實驗 L1 <span class="badge">思考 + 驗證</span></div>
+        <div class="ex-body">
+          <p>
+            <strong>穩定性判斷:</strong>不跑程式,先憑直覺判斷以下三個排序是否穩定並寫下理由:
+            (a) 站一實作的 <code>heapsort</code>;
+            (b) 本章 <code>merge_sort</code>(合併時用 <code>&lt;=</code> 取左);
+            (c) 本章原地 Lomuto <code>quicksort_inplace</code>。
+            判斷後,用練習 28.7 的 <code>is_stable</code> 函式實測三者,驗證你的猜測。
+          </p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>(a) heapsort — 不穩定。</strong><code>sift_down</code> 只比較「值」,不在乎原始索引;
+              建堆和排序過程中相等元素的陣列位置會因遠距離交換而打亂。<code>is_stable</code> 回傳 <code>False</code>。</p>
+              <p><strong>(b) merge_sort — 穩定。</strong>合併條件是「右邊嚴格小於左邊才取右(<code>R[j] &lt; L[i]</code>)」,
+              相等時優先取左邊元素——左邊對應原始陣列較早的那些,相對順序被保留。<code>is_stable</code> 回傳 <code>True</code>。</p>
+              <p><strong>(c) quicksort_inplace(Lomuto) — 不穩定。</strong>Lomuto 分割靠「長距離交換」把 ≤ pivot 的元素收進前半,
+              相等元素的原始相對順序因此打亂。<code>is_stable</code> 回傳 <code>False</code>。</p>
+              <p>核心結論:穩定性取決於演算法「是否對相等元素進行遠距離交換」——合併排序不會,堆積與原地快速排序都會。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 實驗 L2 <span class="badge">實作 + 觀察</span></div>
+        <div class="ex-body">
+          <p>
+            <strong>對已排序輸入的最壞情況:</strong>把<em>非隨機化</em> Lomuto 快速排序(固定選最右邊當 pivot)
+            套上計數框架,對 $n = 100, 500, 1000, 2000$ 的<em>已排序輸入</em>各跑一次。
+            觀察比較次數是否恆等於 $\frac{n(n-1)}{2}$,並說明為何已排序是它的「剋星」。
+          </p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-python">comparisons = 0
+
+def reset():
+    global comparisons; comparisons = 0
+
+def partition_fixed(arr, low, high):
+    global comparisons
+    pivot = arr[high]               # 固定選最右
+    i = low - 1
+    for j in range(low, high):
+        comparisons += 1
+        if arr[j] &lt;= pivot:
+            i += 1
+            arr[i], arr[j] = arr[j], arr[i]
+    arr[i + 1], arr[high] = arr[high], arr[i + 1]
+    return i + 1
+
+def quicksort_fixed(arr, low=0, high=None):
+    if high is None: high = len(arr) - 1
+    if low &gt;= high: return
+    p = partition_fixed(arr, low, high)
+    quicksort_fixed(arr, low, p - 1)
+    quicksort_fixed(arr, p + 1, high)
+
+print(f"{'n':&gt;5}  {'比較次數':&gt;12}  {'n(n-1)/2':&gt;12}  {'比值':&gt;5}")
+for n in [100, 500, 1000, 2000]:
+    data = list(range(n))   # 已排序輸入
+    reset(); quicksort_fixed(data)
+    theory = n * (n - 1) // 2
+    print(f"{n:&gt;5}  {comparisons:&gt;12,d}  {theory:&gt;12,d}  {comparisons/theory:&gt;5.3f}")</code></pre>
+              <p>預期輸出:比值欄全部是 <code>1.000</code>,比較次數恰等理論最壞值。</p>
+              <p><strong>為何已排序是剋星?</strong>選最右邊當 pivot 時,已排序陣列的最右元素永遠是當前區段的最大值。
+              分割後「小於 pivot 的左半」有 $n-1$ 個元素、「大於 pivot 的右半」有 $0$ 個——
+              每次都切出 $0:n-1$ 的極端比例。遞迴深度退化到 $n$ 層,第 $k$ 層做 $n-k$ 次比較,
+              總計 $\sum_{k=1}^{n-1}k = \frac{n(n-1)}{2}$,即 $O(n^2)$。
+              隨機化 pivot 後,任何輸入都難以持續誘發這種極端分割。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 實驗 L3 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>
+            <strong>穩定計數排序:</strong>練習 28.2 的計數排序用 <code>extend([v]*count[v])</code>
+            重建輸出——它只保留「值」,丟失了原始物件本身,因此無法穩定地排序帶附帶資料的紀錄。
+            實作 <code>counting_sort_stable(arr, key)</code>:
+            <code>key</code> 是取出整數鍵的函式,排序後相同鍵的元素保持原始相對順序。
+            用下方學生資料驗收——只依 <code>score</code> 排序,同分者須維持原始先後。
+          </p>
+          <pre><code class="language-python">students = [
+    {"name": "小明", "score": 3},
+    {"name": "小華", "score": 1},
+    {"name": "小美", "score": 3},
+    {"name": "小傑", "score": 2},
+    {"name": "小玲", "score": 1},
+]
+# 期望:小華(1) → 小玲(1) → 小傑(2) → 小明(3) → 小美(3)</code></pre>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>穩定計數排序的關鍵:把 <code>count</code> 陣列轉成<strong>前綴和</strong>,
+              得到每個值的輸出起始位置;再<strong>從後往前</strong>遍歷原始陣列填入輸出陣列——
+              後遍歷到的元素佔較前面的位置,整體保持原始相對順序(穩定)。
+              這正是基數排序每一輪使用的那個計數排序。</p>
+              <pre><code class="language-python">def counting_sort_stable(arr, key):
+    if not arr:
+        return []
+    keys = [key(x) for x in arr]
+    lo, hi = min(keys), max(keys)
+    count = [0] * (hi - lo + 1)
+    for k in keys:
+        count[k - lo] += 1
+
+    # 前綴和:count[i] 改存「值 lo+i 結束後的下一個空位索引」
+    for i in range(1, len(count)):
+        count[i] += count[i - 1]
+
+    out = [None] * len(arr)
+    for x in reversed(arr):        # 從後往前,保持穩定性
+        k = key(x) - lo
+        count[k] -= 1
+        out[count[k]] = x
+    return out
+
+result = counting_sort_stable(students, key=lambda s: s["score"])
+for s in result:
+    print(s["name"], s["score"])
+# 小華 1 / 小玲 1 / 小傑 2 / 小明 3 / 小美 3</code></pre>
+              <p>「從後往前」的作用:小明(score=3,原始索引 0)和小美(score=3,原始索引 2)都是鍵值 3。
+              從後往前遍歷時先遇到小美,填入 <code>count[3]-1</code> 的位置並遞減;再遇到小明,填入更前面的位置。
+              最終小明在小美之前——與原始順序一致,穩定性保持。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>把這一章串起來</h2>
+      <p>
+        從「把一疊東西排好」這個樸素的問題出發,我們走了一趟濃縮的演算法之旅:
+      </p>
+      <ul>
+        <li><strong>排序無所不在</strong>,而且常是其他演算法(二分搜尋、去重、找中位數……)能變快的前置步驟——它是「賦能型」演算法。</li>
+        <li><strong>三個 $O(n^2)$ 排序</strong>各有個性:選擇排序交換最少、插入排序在「近乎有序/小資料」時是冠軍、氣泡排序主要用於教學。</li>
+        <li><strong>快速排序</strong>把分治磨成刀:核心是<em>分割</em>,讓 pivot 一次歸位;平均 $O(n\log n)$、最壞 $O(n^2)$,<strong>隨機化 pivot</strong> 用骰子化解最壞情況,而且<strong>原地</strong>。</li>
+        <li><strong>快速排序 vs 合併排序</strong>是一場取捨:前者快、原地、不穩定;後者最壞有保證、穩定、但要 $O(n)$ 空間。標準庫用 <strong>introsort / Timsort</strong> 等混合策略各取所長。</li>
+        <li><strong>$\Omega(n\log n)$ 下界</strong>:用決策樹證明,任何<em>比較</em>排序都逃不過——$n!$ 片葉子,樹高至少 $\log_2(n!)\approx n\log n$。這是一道優美而堅固的牆。</li>
+        <li><strong>非比較排序</strong>(計數 $O(n+k)$、基數、桶)<em>不靠比較</em>,用「值即地址」的假設與額外空間跳出牆外,但只在資料長相配合時划算。</li>
+        <li><strong>二分搜尋</strong>的威力在於把邊界釘死:抓住迴圈不變量、區間與條件首尾一致,就能寫出 <code>lower_bound</code> 等變體。</li>
+        <li><strong>選擇問題</strong>不必整串排好:<strong>quickselect</strong> 只追一邊,平均 $O(n)$;<em>中位數的中位數</em>把最壞也壓到 $O(n)$。</li>
+        <li><strong>實務上請用標準庫</strong>:Python 的 <code>sorted</code>/<code>list.sort</code> 是穩定的 Timsort,善用 <code>key</code> 與多重鍵,並理解穩定性何時攸關正確。</li>
+      </ul>
+      <p>
+        這一章你看到了演算法世界最迷人的幾種風景:用分治把問題切碎、用隨機性馴服最壞情況、
+        用一棵樹證明「沒有更好的方法存在」、再用額外的假設聰明地繞過它。
+        這些思想——分治、隨機化、下界證明、空間換時間——會在接下來的章節裡反覆出現。
+        排序只是它們第一次同台演出的舞台。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">📚</div>
+        <div class="body">
+          <span class="c-title">想更深入?延伸資源</span>
+          <p>本章對應 OSSU 的 <strong>Algorithms, Part 1</strong>(Princeton,Sedgewick &amp; Wayne,Coursera)
+          關於排序、快速排序、優先佇列與搜尋的單元。若你想要一份特別好讀、把「為什麼」講得透徹的教材,
+          強烈推薦 Tim Roughgarden 的 <a href="https://www.algorithmsilluminated.org/"><em>Algorithms Illuminated</em></a>
+          (algorithmsilluminated.org,有配套免費影片):它的第一冊把合併排序、快速排序與 $\Omega(n\log n)$
+          下界、選擇問題講得清晰又優雅,是本章內容的完美延伸。把這幾種排序與搜尋的細節親手寫過、測過,
+          你對「分治」與「複雜度」的直覺會就此扎根——下一站,我們把目光轉向能<em>儲存</em>與<em>組織</em>資料的結構。</p>
+        </div>
+      </div>
+
+          <div class="callout tip">
+        <div class="ico">🧭</div>
+        <div class="body">
+          <span class="c-title">延伸：專修軌道</span>
+          <p>想把排序與二分搜練成競賽肌肉?<a href="60-competitive-techniques.html">第 60 章</a>教「二分搜答案」等技巧,<a href="59-cpp-stl.html">第 59 章</a>則示範 C++ <code>sort</code> 與自訂比較。</p>
+        </div>
+      </div>
+

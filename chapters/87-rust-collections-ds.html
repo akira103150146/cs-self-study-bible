@@ -1,0 +1,1309 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>集合、迭代器與所有權視角的資料結構 · CS 自學聖經</title>
+<meta name="description" content="從所有權視角理解 Vec、HashMap、迭代器，以及為何 linked list 需要 Box、樹需要 Rc/RefCell、圖需要索引法或 Arc/Mutex。">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;700&family=Noto+Sans+TC:wght@400;700&family=Lora:ital,wght@0,400;0,600;0,700;1,400&family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <main class="main">
+    <article class="content">
+      <div class="eyebrow">第二十部 · Rust 系統程式設計</div>
+      <h1>集合、迭代器與所有權視角的資料結構</h1>
+      <p class="subtitle">同一個資料結構，C 寫起來自由奔放，Rust 卻要你說清楚「誰擁有誰」——這份「麻煩」，正是安全保證的代價與紅利。</p>
+      <div class="byline">
+        <span class="tag">第 81 章</span>
+        <span>閱讀時間 ≈ 65 分鐘</span>
+        <span>難度:★★★★☆</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章，你會知道</div>
+        <ul>
+          <li>用 <code>Vec&lt;T&gt;</code> 的容量/重配置機制與 <code>entry</code> API 寫出慣用 <code>HashMap</code></li>
+          <li>迭代器的惰性與零成本抽象：<code>map</code>/<code>filter</code>/<code>collect</code> 如何取代手寫迴圈</li>
+          <li>Rust 的 linked list「很痛」的原因：<code>Box&lt;T&gt;</code> 表達擁有鏈 vs C 的裸指標</li>
+          <li>樹為何需要 <code>Rc&lt;RefCell&lt;T&gt;&gt;</code>：共享所有權 + 內部可變性；父指標用 <code>Weak&lt;T&gt;</code> 避免循環參照</li>
+          <li>圖遍歷的兩條路：索引法(index-based) vs <code>Arc&lt;Mutex&lt;T&gt;&gt;</code></li>
+          <li><code>unsafe</code> 的合理用途：何時需要裸指標，如何封裝成安全抽象</li>
+          <li>容器選型決策：<code>Vec</code>、<code>VecDeque</code>、<code>LinkedList</code>、<code>HashMap</code>、<code>BTreeMap</code> 的所有權語意</li>
+        </ul>
+      </div>
+
+      <!-- ==================== h2 ① ==================== -->
+      <h2>為什麼同一個資料結構，Rust 寫起來「卡卡的」</h2>
+
+      <p>
+        你已在<a href="29-data-structures.html">第 29 章</a>學過鏈結串列、樹、圖的演算法邏輯，
+        在<a href="28-sorting-searching.html">第 28 章</a>學過排序與搜尋。
+        這些演算法的正確性、複雜度、應用場景，本章一律不重複——
+        那些知識已在那兩章說透了，有需要請連回去。
+      </p>
+
+      <p>
+        本章換一個視角：<strong>所有權視角(ownership lens)</strong>。
+        焦點是：在 Rust 的所有權/借用規則下，
+        同樣的資料結構為什麼要用不同的方式實現，以及每一種選擇背後的取捨。
+      </p>
+
+      <p>
+        先感受一下對比。在 C，建立鏈結串列節點是這樣：
+      </p>
+
+      <pre><code class="language-c">/* C：裸指標，生命週期靠程式設計師自己管 */
+struct Node {
+    int value;
+    struct Node *next;   /* 指向下一個節點——但誰負責釋放它？ */
+};
+
+struct Node *new_node(int v) {
+    struct Node *n = malloc(sizeof(struct Node));
+    n-&gt;value = v;
+    n-&gt;next  = NULL;
+    return n;   /* 呼叫者拿到指標，但「釋放的責任」只存在於慣例中 */
+}</code></pre>
+
+      <p>
+        C 的指標可以被任意複製、共享，甚至忘記釋放。
+        誰負責這塊記憶體？靠慣例、靠文件、靠記憶。
+        Rust 的 borrow checker 不接受這種模糊性——
+        每個值在每個時刻都必須有一個明確的<strong>擁有者</strong>，
+        所有權的轉移和借用都要顯式地寫在型別裡。
+        這就是為什麼「自然而然」的 C 風格資料結構，
+        在 Rust 裡常讓新手撞牆。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">設計 Rust 資料結構的三個問題</span>
+          <p>
+            每次設計或閱讀 Rust 資料結構時，先問：<br>
+            1. 這個節點/值<strong>被誰擁有</strong>？（決定用 <code>Box</code>、<code>Rc</code> 還是直接存放）<br>
+            2. 其他人可以<strong>讀取或修改</strong>它嗎？（決定是否需要 <code>RefCell</code>/<code>Mutex</code>）<br>
+            3. 它的<strong>生命週期</strong>怎麼管？（決定是 <code>Rc</code> 引用計數還是 <code>Weak</code> 弱參考）
+          </p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ② ==================== -->
+      <h2>Vec&lt;T&gt; 與 HashMap&lt;K, V&gt;：最常用的集合</h2>
+
+      <p>
+        <code>Vec&lt;T&gt;</code>（向量）是 Rust 的動態陣列。
+        它在 heap 上維護一塊連續記憶體，並在 stack 上記錄三個欄位：
+        <strong>ptr</strong>（緩衝區起始位址）、<strong>len</strong>（目前元素數）、<strong>cap</strong>（緩衝區總容量）。
+      </p>
+
+      <pre><code class="language-rust">fn main() {
+    let mut v: Vec&lt;i32&gt; = Vec::with_capacity(4);  // cap=4, len=0
+    v.push(1); v.push(2); v.push(3); v.push(4);    // len=4, cap=4(剛好填滿)
+    v.push(5);                                      // 第 5 次 push 超出 cap=4 → 觸發重配置
+                                                    //   Rust 配置更大的緩衝區（通常翻倍），複製所有元素，釋放舊緩衝區
+                                                    //   此時任何指向舊元素的 &amp;v[i] 都會成為懸空指標
+                                                    //   ——這正是 borrow checker 禁止「借用後呼叫 push」的真正原因
+
+    println!("len={}, cap={}", v.len(), v.capacity());  // len=5, cap≥8
+}</code></pre>
+
+      <p>
+        重配置的危險性已在<a href="85-rust-ownership.html">第 79 章</a>提過：
+        <code>let first = &amp;v[0]; v.push(x);</code> 之所以被 borrow checker 擋下，
+        不是因為 Rust「刁難」你——是因為 <code>push</code> 可能讓 <code>first</code> 指向一塊已被釋放的記憶體。
+        <strong>所有權規則在資料結構上的體現，就是「防止結構改變時讓外部參考失效」。</strong>
+      </p>
+
+      <h3>Vec 的所有權語意</h3>
+
+      <pre><code class="language-rust">fn main() {
+    let v1 = vec![1, 2, 3];
+    let v2 = v1;                    // move：v1 失效，v2 是唯一擁有者
+    // println!("{:?}", v1);        // ✗ 編譯錯誤
+
+    // 借用切片：最常見的「以唯讀方式傳入函式」慣用法
+    fn sum(nums: &amp;[i32]) -&gt; i32 {  // &amp;[i32] 切片參考，不奪取所有權
+        nums.iter().sum()
+    }
+
+    let data = vec![10, 20, 30];
+    println!("{}", sum(&amp;data));     // 60 ← data 依然有效
+    println!("{:?}", data);         // [10, 20, 30]
+}</code></pre>
+
+      <h3>HashMap 與 entry API</h3>
+
+      <p>
+        <code>HashMap&lt;K, V&gt;</code> 對鍵與值都持有所有權(owned)——
+        插入時，鍵和值的所有權都<strong>移進</strong> HashMap：
+      </p>
+
+      <pre><code class="language-rust">use std::collections::HashMap;
+
+fn main() {
+    let mut scores: HashMap&lt;String, i32&gt; = HashMap::new();
+
+    let name = String::from("Alice");
+    scores.insert(name, 100);      // name 的所有權移進 HashMap
+    // println!("{}", name);       // ✗ name 已被 move
+
+    // get 回傳 Option&lt;&amp;V&gt;（借用），不奪取所有權
+    if let Some(s) = scores.get("Alice") {
+        println!("Alice: {}", s);
+    }
+
+    // entry API：「若不存在則插入預設值」的慣用模式
+    scores.entry(String::from("Bob")).or_insert(85);
+    scores.entry(String::from("Alice")).or_insert(999);  // Alice 已存在，跳過
+
+    // 計數器慣用法：or_insert 回傳 &amp;mut V，直接就地遞增
+    let text = "hello world hello rust";
+    let mut word_count: HashMap&lt;&amp;str, u32&gt; = HashMap::new();
+    for word in text.split_whitespace() {
+        *word_count.entry(word).or_insert(0) += 1;
+    }
+    println!("{:?}", word_count);  // {"hello": 2, "world": 1, "rust": 1}
+}</code></pre>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">Copy 型別當鍵不需擔心 move</span>
+          <p>如果鍵是實作了 <code>Copy</code> 的型別（如 <code>i32</code>、<code>u64</code>），
+          插入時會複製而非 move，所以原變數仍然有效。
+          <code>String</code> 沒有實作 <code>Copy</code>，所以插入後原變數失效。
+          這是容器設計中最常見的所有權陷阱之一。</p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ③ ==================== -->
+      <h2>迭代器(iterator)與閉包：惰性、零成本、所有權友善</h2>
+
+      <p>
+        Rust 的迭代器不只是語法糖：它是<strong>集合操作的統一介面</strong>，
+        且和所有權系統深度整合——不同的迭代方式，對應不同的所有權操作。
+        更重要的是，迭代器鏈在編譯期被展開成和手寫迴圈效率相同的機器碼，真正做到「零成本(zero-cost)」。
+      </p>
+
+      <h3>三種迭代器，對應三種所有權操作</h3>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>方法</th><th>元素型別</th><th>所有權效果</th><th>適用場景</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>v.iter()</code></td>
+              <td><code>&amp;T</code></td>
+              <td>借用；集合保留所有權</td>
+              <td>唯讀遍歷</td>
+            </tr>
+            <tr>
+              <td><code>v.iter_mut()</code></td>
+              <td><code>&amp;mut T</code></td>
+              <td>可變借用；就地修改</td>
+              <td>原地更新元素</td>
+            </tr>
+            <tr>
+              <td><code>v.into_iter()</code></td>
+              <td><code>T</code></td>
+              <td>消耗集合；元素被 move 出來</td>
+              <td>轉換成另一種集合</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <pre><code class="language-rust">fn main() {
+    let words = vec![
+        String::from("hello"),
+        String::from("world"),
+        String::from("rust"),
+    ];
+
+    // iter()：借用，words 在 collect 後依然有效
+    let lengths: Vec&lt;usize&gt; = words.iter().map(|s| s.len()).collect();
+    println!("{:?}", lengths);  // [5, 5, 4]
+    println!("{:?}", words);    // words 依然有效
+
+    // into_iter()：消耗 words，每個 String 被 move 進閉包
+    let upper: Vec&lt;String&gt; = words.into_iter()
+                                   .map(|s| s.to_uppercase())
+                                   .collect();
+    println!("{:?}", upper);    // ["HELLO", "WORLD", "RUST"]
+    // words 在這裡已失效
+}</code></pre>
+
+      <h3>惰性求值與常用適配器</h3>
+
+      <pre><code class="language-rust">fn main() {
+    let data = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+
+    // 迭代器鏈是惰性的：直到 collect/sum/find 等「消費者」才真正執行
+    let result: Vec&lt;i32&gt; = data.iter()
+        .filter(|&amp;&amp;x| x % 2 == 0)   // 保留偶數
+        .map(|&amp;x| x * x)             // 平方
+        .take(3)                      // 只取前 3 個（短路！不處理後面的元素）
+        .collect();
+    println!("{:?}", result);   // [4, 16, 36]
+
+    // fold：累積計算（等同 reduce）
+    let product: i32 = data.iter().take(5).fold(1, |acc, &amp;x| acc * x);
+    println!("1×2×3×4×5 = {}", product);   // 120
+
+    // chain：串接兩個迭代器
+    let a = vec![1, 2, 3];
+    let b = vec![4, 5, 6];
+    let combined: Vec&lt;i32&gt; = a.iter().chain(b.iter()).copied().collect();
+    println!("{:?}", combined);  // [1, 2, 3, 4, 5, 6]
+}</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">迭代器讓所有權流動可見</span>
+          <p>
+            手寫迴圈靠可變狀態（<code>let mut result = vec![];</code>）累積結果，
+            所有權流動隱藏在 <code>push</code> 呼叫之間。
+            迭代器鏈把「如何轉換」寫在<strong>介面上</strong>：
+            <code>.iter()</code> 就是「借用」，<code>.into_iter()</code> 就是「消耗」，
+            任何讀者一眼就知道集合之後是否還有效。
+            這不只是風格選擇，而是所有權語意的顯式表達。
+          </p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 81.1 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>
+            用迭代器改寫下面這段手寫迴圈（功能：找出 <code>Vec&lt;String&gt;</code> 中長度大於 4 的單詞、轉成大寫、依字母序排列後回傳）。
+            改寫後只用一條迭代器鏈 + 一次 <code>sort</code>。
+          </p>
+          <pre><code class="language-rust">fn process(words: Vec&lt;String&gt;) -&gt; Vec&lt;String&gt; {
+    let mut result = Vec::new();
+    for w in &amp;words {
+        if w.len() &gt; 4 {
+            result.push(w.to_uppercase());
+        }
+    }
+    result.sort();
+    result
+}</code></pre>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-rust">fn process(words: Vec&lt;String&gt;) -&gt; Vec&lt;String&gt; {
+    let mut result: Vec&lt;String&gt; = words.iter()
+        .filter(|w| w.len() &gt; 4)       // 借用過濾，words 不被消耗
+        .map(|w| w.to_uppercase())      // 生成新的 String
+        .collect();
+    result.sort();
+    result
+}
+
+fn main() {
+    let words = vec![
+        String::from("rust"), String::from("hello"),
+        String::from("cs"),   String::from("world"),
+    ];
+    println!("{:?}", process(words));  // ["HELLO", "WORLD"]
+}</code></pre>
+              <p>這裡用 <code>words.iter()</code>（借用）而非 <code>words.into_iter()</code>（消耗），
+              因為 <code>to_uppercase()</code> 會生成全新的 <code>String</code>，不需要 move 原始字串。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ④ ==================== -->
+      <h2>單向鏈結串列：<code>Box&lt;T&gt;</code> 的擁有鏈</h2>
+
+      <p>
+        鏈結串列是資料結構教學的「Hello World」。
+        但在 Rust，它比想像中棘手——這份「棘手」本身就是一堂課。
+      </p>
+
+      <p>先嘗試最直覺的寫法：</p>
+
+      <pre><code class="language-rust">// ✗ 無法編譯！
+enum List {
+    Cons(i32, List),   // List 的大小包含自身 → 無限大 → 編譯器拒絕
+    Nil,
+}</code></pre>
+
+      <p>
+        Rust 的 enum 大小必須在編譯期確定，自我指涉的型別大小是無限的。
+        解法：用 <code>Box&lt;T&gt;</code> 把「下一個節點」放到 heap，讓 stack 上只存一個固定大小的指標：
+      </p>
+
+      <pre><code class="language-rust">// ✓ Box&lt;T&gt;：heap 上的獨佔所有權智慧指標
+enum List {
+    Cons(i32, Box&lt;List&gt;),  // Box&lt;List&gt; 大小固定（就是一個指標）
+    Nil,
+}
+
+use List::*;
+
+fn main() {
+    // 建立鏈結串列 1 → 2 → 3 → Nil
+    let list = Cons(1, Box::new(Cons(2, Box::new(Cons(3, Box::new(Nil))))));
+
+    // 遞迴列印
+    fn print_list(node: &amp;List) {
+        match node {
+            Cons(v, next) =&gt; { print!("{} → ", v); print_list(next); }
+            Nil            =&gt; println!("Nil"),
+        }
+    }
+    print_list(&amp;list);   // 1 → 2 → 3 → Nil
+
+    // 當 list 離開作用域：Rust 遞迴地 drop 每一個 Box，從頭到尾自動釋放
+    // 不需要手動 free，永遠不會雙重釋放
+}</code></pre>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">Box&lt;T&gt; 的所有權語意</span>
+          <p>
+            <code>Box&lt;T&gt;</code> 是 heap 記憶體的<strong>唯一擁有者</strong>。
+            它實作了 <code>Deref</code> trait，讓你像使用 <code>T</code> 一樣使用它；
+            實作了 <code>Drop</code> trait，讓它離開作用域時自動釋放 heap 記憶體。
+            一個 <code>Box&lt;T&gt;</code> 只能被<em>一個</em>擁有者持有——這和 C 的多指標共享同一塊記憶體根本不同。
+          </p>
+        </div>
+      </div>
+
+      <h3>為何 Rust 的 linked list「很痛」</h3>
+
+      <p>
+        <code>Box</code> 版 linked list 能用，但有個問題：你幾乎只能從頭部操作。
+        要在中間插入一個節點，你需要可變借用到那個節點的 <code>Box</code>；
+        要刪除一個節點，你需要把它的下一個節點的所有權「接起來」——
+        這都牽涉到把所有權從 Box 裡取出來，然後重新組裝。
+      </p>
+
+      <p>
+        真實的 Rust 鏈結串列比這更複雜，需要仔細處理 <code>Option&lt;Box&lt;Node&gt;&gt;</code>
+        模式來表示「可能為空的下一個節點」。
+        Rust 社群甚至有一本專書討論這個問題——
+        《<a href="https://rust-unofficial.github.io/too-many-lists/" target="_blank">Learn Rust With Entirely Too Many Linked Lists</a>》。
+        它深刻地說明了：<strong>linked list 在 Rust 裡之所以「很痛」，
+        正是因為它的「多個指標可能指向同一個節點」的設計，和所有權系統的「唯一擁有者」原則天然衝突。</strong>
+      </p>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">在 Rust 裡，Vec 幾乎永遠勝過 LinkedList</span>
+          <p>Rust 標準庫有 <code>std::collections::LinkedList&lt;T&gt;</code>，但官方文件直接寫道：
+          「在任何情況下，你幾乎都應該用 <code>VecDeque</code> 代替它。」
+          連續記憶體的快取友善性讓 <code>Vec</code>/<code>VecDeque</code> 在絕大多數場景都更快。
+          如果你真的需要 linked list，通常是因為需要 O(1) 的任意位置插入——
+          而在 Rust 裡，這通常意味著要用索引法或 unsafe。</p>
+        </div>
+      </div>
+
+      <div class="diagram">
+<svg viewBox="0 0 700 300" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <rect width="700" height="300" fill="#f8fafb" rx="10"/>
+  <text x="350" y="22" text-anchor="middle" font-size="13" font-weight="bold" fill="#333">C 裸指標鏈 vs Rust Box 擁有鏈</text>
+
+  <!-- Left: C raw pointer chain -->
+  <rect x="10" y="34" width="320" height="250" rx="8" fill="#fef3ec" stroke="#b4541f" stroke-width="2"/>
+  <text x="170" y="55" text-anchor="middle" font-size="12" font-weight="bold" fill="#b4541f">C：裸指標鏈（擁有關係模糊）</text>
+
+  <defs>
+    <marker id="ch87-ar" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 Z" fill="#b4541f"/>
+    </marker>
+    <marker id="ch87-ag" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 Z" fill="#2f6f6a"/>
+    </marker>
+  </defs>
+
+  <!-- C nodes -->
+  <rect x="28" y="80" width="80" height="50" rx="6" fill="#fff" stroke="#b4541f" stroke-width="1.5"/>
+  <text x="68" y="100" text-anchor="middle" font-size="13" fill="#b4541f" font-weight="bold">1</text>
+  <text x="68" y="120" text-anchor="middle" font-size="10" fill="#8a929b">*next</text>
+
+  <rect x="130" y="80" width="80" height="50" rx="6" fill="#fff" stroke="#b4541f" stroke-width="1.5"/>
+  <text x="170" y="100" text-anchor="middle" font-size="13" fill="#b4541f" font-weight="bold">2</text>
+  <text x="170" y="120" text-anchor="middle" font-size="10" fill="#8a929b">*next</text>
+
+  <rect x="232" y="80" width="80" height="50" rx="6" fill="#fff" stroke="#b4541f" stroke-width="1.5"/>
+  <text x="272" y="100" text-anchor="middle" font-size="13" fill="#b4541f" font-weight="bold">3</text>
+  <text x="272" y="120" text-anchor="middle" font-size="10" fill="#8a929b">NULL</text>
+
+  <line x1="108" y1="105" x2="128" y2="105" stroke="#b4541f" stroke-width="1.8" marker-end="url(#ch87-ar)"/>
+  <line x1="210" y1="105" x2="230" y2="105" stroke="#b4541f" stroke-width="1.8" marker-end="url(#ch87-ar)"/>
+
+  <!-- Extra pointer to node 2 (aliasing) -->
+  <rect x="80" y="170" width="120" height="30" rx="5" fill="#fde" stroke="#b4541f" stroke-width="1" stroke-dasharray="4,2"/>
+  <text x="140" y="190" text-anchor="middle" font-size="10" fill="#b4541f">另一個指標也指向節點 2</text>
+  <line x1="140" y1="170" x2="165" y2="132" stroke="#b4541f" stroke-width="1.3" stroke-dasharray="4,2" marker-end="url(#ch87-ar)"/>
+
+  <text x="170" y="230" text-anchor="middle" font-size="10" fill="#b4541f">誰負責 free？</text>
+  <text x="170" y="248" text-anchor="middle" font-size="10" fill="#b4541f">可能 double free 或 leak</text>
+  <text x="170" y="270" text-anchor="middle" font-size="10" fill="#b4541f">⚠️ 只靠慣例與注意力</text>
+
+  <!-- Right: Rust Box chain -->
+  <rect x="370" y="34" width="320" height="250" rx="8" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="530" y="55" text-anchor="middle" font-size="12" font-weight="bold" fill="#2f6f6a">Rust：Box 擁有鏈（所有權明確）</text>
+
+  <!-- Rust nodes -->
+  <rect x="388" y="80" width="80" height="50" rx="6" fill="#fff" stroke="#2f6f6a" stroke-width="1.5"/>
+  <text x="428" y="100" text-anchor="middle" font-size="13" fill="#2f6f6a" font-weight="bold">1</text>
+  <text x="428" y="120" text-anchor="middle" font-size="10" fill="#8a929b">Box&lt;next&gt;</text>
+
+  <rect x="490" y="80" width="80" height="50" rx="6" fill="#fff" stroke="#2f6f6a" stroke-width="1.5"/>
+  <text x="530" y="100" text-anchor="middle" font-size="13" fill="#2f6f6a" font-weight="bold">2</text>
+  <text x="530" y="120" text-anchor="middle" font-size="10" fill="#8a929b">Box&lt;next&gt;</text>
+
+  <rect x="592" y="80" width="80" height="50" rx="6" fill="#fff" stroke="#2f6f6a" stroke-width="1.5"/>
+  <text x="632" y="100" text-anchor="middle" font-size="13" fill="#2f6f6a" font-weight="bold">3</text>
+  <text x="632" y="120" text-anchor="middle" font-size="10" fill="#8a929b">Nil</text>
+
+  <line x1="468" y1="105" x2="488" y2="105" stroke="#2f6f6a" stroke-width="1.8" marker-end="url(#ch87-ag)"/>
+  <line x1="570" y1="105" x2="590" y2="105" stroke="#2f6f6a" stroke-width="1.8" marker-end="url(#ch87-ag)"/>
+
+  <!-- ownership arrows (downward) -->
+  <text x="428" y="155" text-anchor="middle" font-size="9" fill="#2f6f6a">擁有 ↓</text>
+  <text x="530" y="155" text-anchor="middle" font-size="9" fill="#2f6f6a">擁有 ↓</text>
+
+  <text x="530" y="210" text-anchor="middle" font-size="10" fill="#2f6f6a">唯一擁有者，無法別名</text>
+  <text x="530" y="228" text-anchor="middle" font-size="10" fill="#2f6f6a">離開作用域時自動遞迴 drop</text>
+  <text x="530" y="268" text-anchor="middle" font-size="10" fill="#2f6f6a">✓ 編譯期保證安全</text>
+</svg>
+        <figcaption>圖 81-1：C 裸指標鏈（左）與 Rust <code>Box</code> 擁有鏈（右）的比較。C 可以有多個指標指向同一節點，導致 double free 或洩漏的可能性；Rust 的 <code>Box</code> 保證每個節點只有一個擁有者，離開作用域時自動遞迴釋放整條鏈。</figcaption>
+      </div>
+
+      <!-- ==================== h2 ⑤ ==================== -->
+      <h2>樹與多重所有權：<code>Rc&lt;RefCell&lt;T&gt;&gt;</code> + <code>Weak&lt;T&gt;</code></h2>
+
+      <p>
+        鏈結串列每個節點只有一個前驅——<code>Box</code> 的唯一擁有者剛好夠用。
+        但<strong>樹(tree)</strong>不一樣：如果你想讓子節點知道自己的父節點是誰，
+        就需要「子節點參考父節點，父節點同時擁有子節點」——
+        這時 <code>Box</code> 的「唯一擁有者」就不夠了。
+      </p>
+
+      <h3>Rc&lt;T&gt;：引用計數，共享所有權</h3>
+
+      <p>
+        <code>Rc&lt;T&gt;</code>（Reference Counted）讓多個擁有者<strong>共同持有</strong>同一份 heap 資料，
+        用引用計數追蹤有幾個擁有者；計數歸零時自動釋放：
+      </p>
+
+      <pre><code class="language-rust">use std::rc::Rc;
+
+fn main() {
+    let a = Rc::new(5);             // 計數 = 1
+    let b = Rc::clone(&amp;a);          // 計數 = 2（只複製指標，不複製資料）
+    let c = Rc::clone(&amp;a);          // 計數 = 3
+    println!("計數 = {}", Rc::strong_count(&amp;a));  // 3
+
+    drop(b);                        // 計數 = 2
+    drop(c);                        // 計數 = 1
+    // a 離開作用域 → 計數 = 0 → 釋放 heap 資料
+}</code></pre>
+
+      <p>
+        但 <code>Rc&lt;T&gt;</code> 有一個限制：它只給你<strong>共享參考</strong>（<code>&amp;T</code>），
+        不能修改裡面的值。如果多個節點都想修改共用的資料，需要搭配 <code>RefCell&lt;T&gt;</code>。
+      </p>
+
+      <h3>RefCell&lt;T&gt;：內部可變性，把借用檢查移到執行時</h3>
+
+      <p>
+        <code>RefCell&lt;T&gt;</code> 讓你在擁有<strong>不可變參考</strong>的情況下，仍能修改裡面的值。
+        但代價是：借用規則的檢查從編譯期移到<strong>執行時</strong>——
+        若違反規則（例如同時有可變和不可變借用），程式在執行時 panic，而不是編譯失敗：
+      </p>
+
+      <pre><code class="language-rust">use std::cell::RefCell;
+
+fn main() {
+    let data = RefCell::new(vec![1, 2, 3]);
+
+    // borrow() 取得不可變借用；borrow_mut() 取得可變借用
+    // 兩者都在執行時追蹤借用計數，違規時 panic
+    {
+        let r1 = data.borrow();     // 借用計數 +1
+        let r2 = data.borrow();     // 借用計數 +1（多個不可變借用合法）
+        println!("{:?} {:?}", r1, r2);
+    }   // r1, r2 離開作用域 → 借用計數歸零
+
+    data.borrow_mut().push(4);      // 取得可變借用，修改內部資料
+    println!("{:?}", data.borrow()); // [1, 2, 3, 4]
+}</code></pre>
+
+      <h3>Rc&lt;RefCell&lt;T&gt;&gt;：共享所有權 + 內部可變性</h3>
+
+      <p>
+        把兩者組合起來，就得到 Rust 在 safe 程式碼中表達「多個擁有者都可以修改同一份資料」的標準模式：
+      </p>
+
+      <pre><code class="language-rust">use std::rc::Rc;
+use std::cell::RefCell;
+
+// 樹節點：父子節點間共享所有權
+#[derive(Debug)]
+struct TreeNode {
+    val: i32,
+    children: Vec&lt;Rc&lt;RefCell&lt;TreeNode&gt;&gt;&gt;,    // 子節點列表，共享所有權
+    parent: Option&lt;std::rc::Weak&lt;RefCell&lt;TreeNode&gt;&gt;&gt;,  // 弱參考指向父節點
+}
+
+impl TreeNode {
+    fn new(val: i32) -&gt; Rc&lt;RefCell&lt;TreeNode&gt;&gt; {
+        Rc::new(RefCell::new(TreeNode {
+            val,
+            children: vec![],
+            parent: None,
+        }))
+    }
+
+    fn add_child(
+        parent: &amp;Rc&lt;RefCell&lt;TreeNode&gt;&gt;,
+        child: &amp;Rc&lt;RefCell&lt;TreeNode&gt;&gt;,
+    ) {
+        // 設定子節點的父指標（弱參考，不增加強計數）
+        child.borrow_mut().parent = Some(Rc::downgrade(parent));
+        // 把子節點加入父節點的 children 列表（強引用）
+        parent.borrow_mut().children.push(Rc::clone(child));
+    }
+}
+
+fn main() {
+    let root  = TreeNode::new(1);
+    let left  = TreeNode::new(2);
+    let right = TreeNode::new(3);
+
+    TreeNode::add_child(&amp;root, &amp;left);
+    TreeNode::add_child(&amp;root, &amp;right);
+
+    // 從子節點找父節點
+    let parent_val = left.borrow()
+        .parent
+        .as_ref()
+        .and_then(|w| w.upgrade())         // Weak -&gt; Option&lt;Rc&gt;
+        .map(|p| p.borrow().val);
+    println!("left 的父節點值: {:?}", parent_val);  // Some(1)
+
+    // 深度優先印出樹（遞迴）
+    fn dfs(node: &amp;Rc&lt;RefCell&lt;TreeNode&gt;&gt;, depth: usize) {
+        println!("{}{}", "  ".repeat(depth), node.borrow().val);
+        for child in &amp;node.borrow().children {
+            dfs(child, depth + 1);
+        }
+    }
+    dfs(&amp;root, 0);
+    // 1
+    //   2
+    //   3
+}</code></pre>
+
+      <h3>Weak&lt;T&gt;：弱參考，打破循環</h3>
+
+      <p>
+        如果父節點持有子節點的 <code>Rc</code>（強引用），子節點又持有父節點的 <code>Rc</code>——
+        兩者的引用計數永遠不會歸零，<strong>記憶體洩漏</strong>。
+        解法是讓父節點持有子節點的強引用，子節點持有父節點的<strong>弱參考</strong>（<code>Weak&lt;T&gt;</code>）——
+        弱參考不計入引用計數，打破循環：
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 680 300" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <rect width="680" height="300" fill="#f8fafb" rx="10"/>
+  <text x="340" y="22" text-anchor="middle" font-size="13" font-weight="bold" fill="#333">Rc 強引用 + Weak 弱參考：打破循環參照</text>
+
+  <defs>
+    <marker id="ch87-strong" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 Z" fill="#2f6f6a"/>
+    </marker>
+    <marker id="ch87-weak" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 Z" fill="#8b5cf6"/>
+    </marker>
+  </defs>
+
+  <!-- Root node -->
+  <rect x="270" y="44" width="140" height="60" rx="8" fill="#2f6f6a"/>
+  <text x="340" y="68" text-anchor="middle" font-size="13" fill="#fff" font-weight="bold">root (Rc count=1)</text>
+  <text x="340" y="90" text-anchor="middle" font-size="11" fill="#e3efed">val=1</text>
+
+  <!-- Left child -->
+  <rect x="80" y="160" width="140" height="60" rx="8" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="150" y="184" text-anchor="middle" font-size="12" fill="#2f6f6a" font-weight="bold">left (Rc count=2)</text>
+  <text x="150" y="202" text-anchor="middle" font-size="11" fill="#555">val=2</text>
+
+  <!-- Right child -->
+  <rect x="460" y="160" width="140" height="60" rx="8" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="530" y="184" text-anchor="middle" font-size="12" fill="#2f6f6a" font-weight="bold">right (Rc count=2)</text>
+  <text x="530" y="202" text-anchor="middle" font-size="11" fill="#555">val=3</text>
+
+  <!-- Strong arrows: parent → children -->
+  <line x1="300" y1="104" x2="178" y2="160" stroke="#2f6f6a" stroke-width="2" marker-end="url(#ch87-strong)"/>
+  <line x1="380" y1="104" x2="502" y2="160" stroke="#2f6f6a" stroke-width="2" marker-end="url(#ch87-strong)"/>
+
+  <!-- Weak arrows: children → parent -->
+  <path d="M150 160 Q90 100 270 74" fill="none" stroke="#8b5cf6" stroke-width="1.8" stroke-dasharray="6,3" marker-end="url(#ch87-weak)"/>
+  <path d="M530 160 Q590 100 410 74" fill="none" stroke="#8b5cf6" stroke-width="1.8" stroke-dasharray="6,3" marker-end="url(#ch87-weak)"/>
+
+  <!-- Legend -->
+  <line x1="60" y1="258" x2="100" y2="258" stroke="#2f6f6a" stroke-width="2" marker-end="url(#ch87-strong)"/>
+  <text x="108" y="263" font-size="11" fill="#333">Rc 強引用（計入計數；子節點被父節點所有）</text>
+
+  <line x1="60" y1="280" x2="100" y2="280" stroke="#8b5cf6" stroke-width="1.8" stroke-dasharray="6,3" marker-end="url(#ch87-weak)"/>
+  <text x="108" y="285" font-size="11" fill="#333">Weak 弱參考（不計入計數；子節點指向父節點，不擁有）</text>
+</svg>
+        <figcaption>圖 81-2：<code>Rc</code> 強引用與 <code>Weak</code> 弱參考。父節點用 <code>Rc</code> 強引用擁有子節點（引用計數計入）；子節點用 <code>Weak</code> 弱參考指回父節點（不計入計數）。當 root 離開作用域，計數依序歸零，整棵樹自動釋放，無循環洩漏。</figcaption>
+      </div>
+
+      <h3>手刻：以所有權視角實現 BST</h3>
+
+      <p>
+        讓我們實現一個簡單的二元搜尋樹(BST)。這裡只談<strong>實現的所有權結構</strong>——
+        BST 的演算法邏輯（插入、查找、遍歷的正確性）在<a href="29-data-structures.html">第 29 章</a>已有完整說明。
+      </p>
+
+      <pre><code class="language-rust">// BST 節點：Box 表達「唯一擁有者」的左右子樹
+#[derive(Debug)]
+struct BstNode {
+    val: i32,
+    left:  Option&lt;Box&lt;BstNode&gt;&gt;,   // Option：可能沒有左子節點
+    right: Option&lt;Box&lt;BstNode&gt;&gt;,   // Box：唯一擁有者
+}
+
+impl BstNode {
+    fn new(val: i32) -&gt; Box&lt;BstNode&gt; {  // 回傳 Box，呼叫者直接持有所有權
+        Box::new(BstNode { val, left: None, right: None })
+    }
+
+    // 插入：取可變參考（&amp;mut self），不奪取所有權
+    fn insert(&amp;mut self, v: i32) {
+        if v &lt; self.val {
+            if self.left.is_none() {
+                self.left = Some(BstNode::new(v));
+            } else if let Some(node) = &amp;mut self.left {
+                node.insert(v);   // 遞迴插入左子樹
+            }
+        } else if v &gt; self.val {
+            if self.right.is_none() {
+                self.right = Some(BstNode::new(v));
+            } else if let Some(node) = &amp;mut self.right {
+                node.insert(v);
+            }
+        }
+        // v == self.val：重複值不插入
+    }
+
+    // 查找：取不可變參考（&amp;self），回傳布林
+    fn contains(&amp;self, v: i32) -&gt; bool {
+        if v == self.val { return true; }
+        if v &lt; self.val {
+            self.left.as_ref().map_or(false, |n| n.contains(v))
+        } else {
+            self.right.as_ref().map_or(false, |n| n.contains(v))
+        }
+    }
+
+    // 中序遍歷（左→根→右）：回傳排序後的值
+    fn inorder(&amp;self) -&gt; Vec&lt;i32&gt; {
+        let mut result = Vec::new();
+        if let Some(left) = &amp;self.left  { result.extend(left.inorder()); }
+        result.push(self.val);
+        if let Some(right) = &amp;self.right { result.extend(right.inorder()); }
+        result
+    }
+}
+
+fn main() {
+    let mut root = BstNode::new(5);
+    for v in [3, 7, 1, 4, 6, 8] { root.insert(v); }
+
+    println!("中序: {:?}", root.inorder());   // [1, 3, 4, 5, 6, 7, 8]
+    println!("含 4: {}", root.contains(4));   // true
+    println!("含 9: {}", root.contains(9));   // false
+    // root 離開作用域 → 整棵樹遞迴 drop，無需手動釋放
+}</code></pre>
+
+      <p>
+        注意 <code>Option&lt;Box&lt;BstNode&gt;&gt;</code> 的模式：
+        <code>None</code> 表示空節點，<code>Some(box_node)</code> 表示存在的子節點。
+        <code>Box</code> 確保每個子節點只有一個擁有者（它的父節點），
+        所以整棵樹是一條清晰的所有權樹——父節點被 drop 時，子節點也跟著遞迴 drop。
+      </p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 81.2 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>
+            如果想讓一棵 BST 的每個節點都能直接存取自己的父節點（parent pointer），
+            分析以下三種方案在 Rust 中各自的問題，並說明哪種是 Rust 安全程式碼中的推薦做法：
+          </p>
+          <ol>
+            <li>在 <code>BstNode</code> 裡加一個 <code>parent: Option&lt;Box&lt;BstNode&gt;&gt;</code> 欄位</li>
+            <li>在 <code>BstNode</code> 裡加一個 <code>parent: Option&lt;Rc&lt;RefCell&lt;BstNode&gt;&gt;&gt;</code> 欄位</li>
+            <li>使用索引法：把所有節點存在一個 <code>Vec</code>，父指標改成 <code>parent: Option&lt;usize&gt;</code></li>
+          </ol>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <ol>
+                <li>
+                  <strong><code>Option&lt;Box&lt;BstNode&gt;&gt;</code></strong>：完全不可行。
+                  <code>Box</code> 表示唯一所有權，但父節點和子節點不能互相「擁有」對方——
+                  那會造成所有權循環，而且一個節點會被兩個 <code>Box</code> 嘗試擁有，
+                  這在 Rust 的型別系統裡根本表達不了。
+                </li>
+                <li>
+                  <strong><code>Rc&lt;RefCell&lt;BstNode&gt;&gt;</code></strong>：可行，但要用 <code>Weak</code>！
+                  父節點用 <code>Rc</code> 擁有子節點（強引用），子節點用 <code>Weak</code>（弱參考）指回父節點。
+                  若子節點也用 <code>Rc</code> 指向父節點，兩者形成循環引用，引用計數永不歸零，造成記憶體洩漏。
+                </li>
+                <li>
+                  <strong>索引法</strong>：在複雜圖/樹結構中常用的 Rust 慣用做法，且是效能最好的一種。
+                  把所有節點存進一個 <code>Vec&lt;BstNode&gt;</code>，用 <code>usize</code> 索引當作「指標」。
+                  不涉及所有權問題（索引只是整數），但需要自己確保索引有效，移除節點時也要小心。
+                </li>
+              </ol>
+              <p><strong>推薦做法</strong>：對效能敏感的場景，使用<strong>索引法</strong>；
+              對正確性要求高、節點需要共享的場景，使用 <code>Rc&lt;RefCell&lt;...&gt;&gt;</code> + <code>Weak</code>。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑥ ==================== -->
+      <h2>圖遍歷(BFS/DFS)在 Rust：索引法 vs <code>Arc&lt;Mutex&lt;T&gt;&gt;</code></h2>
+
+      <p>
+        圖(graph)比樹更複雜：一個節點可能被多條邊從多個方向指向，
+        所有權關係不再是清晰的樹狀層次。
+        BFS 和 DFS 的演算法本身已在<a href="29-data-structures.html">第 29 章</a>介紹；
+        本節聚焦：Rust 如何在所有權限制下表達圖結構？
+      </p>
+
+      <h3>方案一：索引法（Index-Based Graph）</h3>
+
+      <p>
+        最 Rust 慣用的圖實現：用一個 <code>Vec</code> 存放所有節點，
+        邊用「節點的索引」表示，而非指標。
+        索引只是 <code>usize</code>（實作了 <code>Copy</code>），不涉及所有權問題：
+      </p>
+
+      <pre><code class="language-rust">// 索引法圖：Vec 持有所有節點，邊是 usize 索引
+struct Graph {
+    nodes: Vec&lt;i32&gt;,               // 節點值
+    adj:   Vec&lt;Vec&lt;usize&gt;&gt;,        // 鄰接表：adj[i] = i 的所有鄰居索引
+}
+
+impl Graph {
+    fn new(n: usize) -&gt; Self {
+        Graph {
+            nodes: vec![0; n],
+            adj:   vec![vec![]; n],
+        }
+    }
+
+    fn add_edge(&amp;mut self, from: usize, to: usize) {
+        self.adj[from].push(to);    // 有向圖；無向圖再加 self.adj[to].push(from)
+    }
+
+    // BFS/DFS 演算法本身的邏輯見第 29 章；這裡只展示所有權角度
+    // visited 用 Vec&lt;bool&gt; 而非借用節點，完全無借用衝突
+    fn dfs(&amp;self, start: usize, visited: &amp;mut Vec&lt;bool&gt;, order: &amp;mut Vec&lt;usize&gt;) {
+        if visited[start] { return; }
+        visited[start] = true;
+        order.push(start);
+        for &amp;nb in &amp;self.adj[start] {
+            self.dfs(nb, visited, order);
+        }
+    }
+}
+
+fn main() {
+    let mut g = Graph::new(5);
+    g.nodes = vec![10, 20, 30, 40, 50];
+    g.add_edge(0, 1); g.add_edge(0, 2);
+    g.add_edge(1, 3); g.add_edge(2, 4);
+
+    let mut visited = vec![false; 5];
+    let mut order   = Vec::new();
+    g.dfs(0, &amp;mut visited, &amp;mut order);
+    println!("DFS 順序: {:?}", order);  // [0, 1, 3, 2, 4]（或其他等價順序）
+}</code></pre>
+
+      <p>
+        索引法之所以「Rust 友善」，原因很簡單：
+        <strong>整數沒有所有權</strong>，你可以隨意複製索引、在 <code>visited</code> 陣列裡標記，
+        完全不涉及借用衝突。代價是：你需要自己保證索引的有效性（越界會 panic），
+        而且節點的「身份」是索引，不像指標那樣直覺。
+      </p>
+
+      <h3>方案二：<code>Arc&lt;Mutex&lt;T&gt;&gt;</code> 用於多執行緒共享</h3>
+
+      <p>
+        如果你需要在<strong>多個執行緒</strong>間共享圖結構並同時修改，
+        <code>Rc&lt;RefCell&lt;T&gt;&gt;</code> 不夠用（它不是執行緒安全的）——
+        需要改用執行緒安全版本：
+        <code>Arc&lt;Mutex&lt;T&gt;&gt;</code>（原子引用計數 + 互斥鎖）：
+      </p>
+
+      <pre><code class="language-rust">use std::sync::{Arc, Mutex};
+use std::thread;
+
+fn main() {
+    // Arc：多執行緒共享所有權（Atomic Reference Counted）
+    // Mutex：保護內部資料，一次只讓一個執行緒存取
+    let graph: Arc&lt;Mutex&lt;Vec&lt;Vec&lt;usize&gt;&gt;&gt;&gt; = Arc::new(Mutex::new(vec![
+        vec![1, 2],   // 節點 0 的鄰居
+        vec![3],      // 節點 1 的鄰居
+        vec![3],      // 節點 2 的鄰居
+        vec![],       // 節點 3 的鄰居
+    ]));
+
+    let graph_clone = Arc::clone(&amp;graph);   // 複製 Arc（不複製資料），給另一個執行緒
+
+    let handle = thread::spawn(move || {
+        // 在新執行緒裡讀取圖
+        let g = graph_clone.lock().unwrap();   // 取得 Mutex 鎖
+        println!("執行緒看到的節點 0 的鄰居: {:?}", g[0]);
+        // 離開作用域時自動釋放鎖
+    });
+
+    // 主執行緒也可以存取
+    {
+        let g = graph.lock().unwrap();
+        println!("主執行緒看到節點數: {}", g.len());
+    }
+
+    handle.join().unwrap();
+}</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">Rc vs Arc、RefCell vs Mutex</span>
+          <p>
+            <code>Rc&lt;T&gt;</code> 和 <code>RefCell&lt;T&gt;</code> 是<strong>單執行緒</strong>版本：
+            引用計數不是原子操作，借用追蹤也沒有同步機制，但因此開銷極小。<br>
+            <code>Arc&lt;T&gt;</code> 和 <code>Mutex&lt;T&gt;</code> 是<strong>多執行緒</strong>版本：
+            引用計數用原子操作（CAS），<code>Mutex</code> 確保互斥存取，可安全跨執行緒傳遞（實作了 <code>Send</code>/<code>Sync</code>）。<br>
+            原則：<strong>能用單執行緒版本就不用多執行緒版本</strong>，避免不必要的同步開銷。
+          </p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 81.3 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>
+            用索引法實作一個無向圖，並加一個 <code>bfs</code> 方法（廣度優先搜尋）回傳從起始節點可達的節點索引列表（依 BFS 訪問順序）。
+            提示：BFS 的演算法邏輯（佇列、已訪問集合）見<a href="29-data-structures.html">第 29 章</a>；
+            這裡只需在 Rust 裡實現，注意 <code>VecDeque</code> 是 Rust 的雙端佇列。
+          </p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-rust">use std::collections::VecDeque;
+
+struct UndirectedGraph {
+    adj: Vec&lt;Vec&lt;usize&gt;&gt;,
+}
+
+impl UndirectedGraph {
+    fn new(n: usize) -&gt; Self {
+        UndirectedGraph { adj: vec![vec![]; n] }
+    }
+
+    fn add_edge(&amp;mut self, u: usize, v: usize) {
+        self.adj[u].push(v);
+        self.adj[v].push(u);   // 無向：雙向加邊
+    }
+
+    fn bfs(&amp;self, start: usize) -&gt; Vec&lt;usize&gt; {
+        let n = self.adj.len();
+        let mut visited = vec![false; n];
+        let mut order   = Vec::new();
+        let mut queue   = VecDeque::new();
+
+        visited[start] = true;
+        queue.push_back(start);
+
+        while let Some(node) = queue.pop_front() {
+            order.push(node);
+            for &amp;nb in &amp;self.adj[node] {
+                if !visited[nb] {
+                    visited[nb] = true;
+                    queue.push_back(nb);
+                }
+            }
+        }
+        order
+    }
+}
+
+fn main() {
+    let mut g = UndirectedGraph::new(6);
+    g.add_edge(0, 1); g.add_edge(0, 2);
+    g.add_edge(1, 3); g.add_edge(2, 4); g.add_edge(3, 5);
+
+    println!("BFS from 0: {:?}", g.bfs(0));  // [0, 1, 2, 3, 4, 5]
+}</code></pre>
+              <p>索引法的優點再次體現：<code>visited</code> 陣列用索引標記，
+              <code>queue</code> 裡放 <code>usize</code> 索引（<code>Copy</code>），
+              整個 BFS 完全無借用衝突。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑦ ==================== -->
+      <h2><code>unsafe</code> 的邊界：何時需要裸指標</h2>
+
+      <p>
+        學到這裡你可能想問：既然 <code>Box</code>/<code>Rc</code>/<code>RefCell</code> 讓資料結構這麼麻煩，
+        能不能直接用裸指標（raw pointer）？<br>
+        答案是：可以，但必須用 <code>unsafe</code> 包住。
+        而且<strong><code>unsafe</code> 不是「逃脫所有限制」的魔法——它是一份承諾書，
+        你向編譯器保證「這段程式碼我知道我在做什麼」。</strong>
+      </p>
+
+      <h3>裸指標的語法</h3>
+
+      <pre><code class="language-rust">fn main() {
+    let x = 5_i32;
+    let p: *const i32 = &amp;x as *const i32;   // 不可變裸指標（*const T）
+    let mut y = 10_i32;
+    let q: *mut i32 = &amp;mut y as *mut i32;    // 可變裸指標（*mut T）
+
+    // 建立裸指標是安全的（只是建立一個整數值）
+    // 解參考裸指標才需要 unsafe
+    unsafe {
+        println!("*p = {}", *p);   // 讀取
+        *q = 20;                   // 寫入
+        println!("y = {}", y);     // 20
+    }
+}</code></pre>
+
+      <h3>何時真的需要 unsafe</h3>
+
+      <p>unsafe 的合理用途通常是以下幾種：</p>
+
+      <ul>
+        <li><strong>高效資料結構</strong>：實現雙向鏈結串列、侵入式資料結構，或標準庫層級的容器（Rust 標準庫的 <code>Vec</code>、<code>LinkedList</code> 內部大量使用 unsafe）。</li>
+        <li><strong>FFI（外部函式介面）</strong>：呼叫 C 函式庫。C 函式不遵守 Rust 的借用規則，呼叫必須標記 unsafe。</li>
+        <li><strong>效能臨界路徑</strong>：已確認邊界安全、需要跳過邊界檢查的情況（但這需要 benchmark 佐證）。</li>
+      </ul>
+
+      <h3>把 unsafe 封裝成安全抽象</h3>
+
+      <p>
+        Rust 設計哲學：<strong>unsafe 程式碼必須封裝在安全的公開介面背後，
+        讓使用者不需要自己寫 unsafe</strong>。
+        這就是標準庫的做法——<code>Vec</code> 的公開 API 完全是 safe 的，
+        但其內部實現有 unsafe 裸指標操作：
+      </p>
+
+      <pre><code class="language-rust">// 示範：用裸指標實作一個簡單的 unsafe 節點，並封裝成安全介面
+struct RawStack&lt;T&gt; {
+    data: *mut T,    // 裸指標：指向 heap 上的連續記憶體
+    len:  usize,
+    cap:  usize,
+}
+
+impl&lt;T&gt; RawStack&lt;T&gt; {
+    fn new() -&gt; Self {
+        RawStack { data: std::ptr::null_mut(), len: 0, cap: 0 }
+    }
+
+    // 安全的公開介面：使用者不需要知道內部有 unsafe
+    fn push(&amp;mut self, val: T) {
+        if self.len == self.cap { self.grow(); }  // 擴容（含 unsafe）
+        unsafe {
+            // 在 data[len] 位置寫入 val（unsafe：直接指標操作）
+            std::ptr::write(self.data.add(self.len), val);
+        }
+        self.len += 1;
+    }
+
+    fn pop(&amp;mut self) -&gt; Option&lt;T&gt; {
+        if self.len == 0 { return None; }
+        self.len -= 1;
+        unsafe {
+            Some(std::ptr::read(self.data.add(self.len)))
+        }
+    }
+
+    fn grow(&amp;mut self) {
+        let new_cap = if self.cap == 0 { 4 } else { self.cap * 2 };
+        let layout  = std::alloc::Layout::array::&lt;T&gt;(new_cap).unwrap();
+        unsafe {
+            let new_data = std::alloc::alloc(layout) as *mut T;
+            if self.cap &gt; 0 {
+                // 把舊資料複製到新的記憶體
+                std::ptr::copy_nonoverlapping(self.data, new_data, self.len);
+                std::alloc::dealloc(
+                    self.data as *mut u8,
+                    std::alloc::Layout::array::&lt;T&gt;(self.cap).unwrap(),
+                );
+            }
+            self.data = new_data;
+        }
+        self.cap = new_cap;
+    }
+}
+
+// Drop 必須手動實作：unsafe 資料結構要自己管理記憶體釋放
+impl&lt;T&gt; Drop for RawStack&lt;T&gt; {
+    fn drop(&amp;mut self) {
+        while self.pop().is_some() {}   // 先 drop 所有元素
+        if self.cap &gt; 0 {
+            unsafe {
+                std::alloc::dealloc(
+                    self.data as *mut u8,
+                    std::alloc::Layout::array::&lt;T&gt;(self.cap).unwrap(),
+                );
+            }
+        }
+    }
+}
+
+fn main() {
+    let mut s: RawStack&lt;i32&gt; = RawStack::new();
+    s.push(1); s.push(2); s.push(3);
+    println!("{:?}", s.pop());  // Some(3)
+    println!("{:?}", s.pop());  // Some(2)
+    // s 離開作用域，Drop 自動呼叫，釋放 heap 記憶體
+}</code></pre>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">unsafe 不等於「不安全就對了」</span>
+          <p>
+            使用 <code>unsafe</code>，你承擔了本來由 borrow checker 為你承擔的責任：
+            確保指標有效、沒有 data race、沒有越界存取。
+            任何一個錯誤都可能導致記憶體損壞或安全漏洞——
+            就像你手動管理 C 記憶體一樣。
+            在沒有充分理由（FFI、標準庫級容器、benchmarked 效能瓶頸）之前，
+            應該優先找安全的替代方案（索引法、<code>Rc</code>/<code>RefCell</code>）。
+          </p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑧ ==================== -->
+      <h2>內建容器 vs 手寫的決策表</h2>
+
+      <p>
+        學了這麼多，到底什麼時候用哪種容器？
+        下面的決策表從「所有權語意」和「使用場景」兩個維度整理：
+      </p>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>需求</th>
+              <th>推薦容器</th>
+              <th>所有權語意</th>
+              <th>備注</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>一般序列、動態陣列</td>
+              <td><code>Vec&lt;T&gt;</code></td>
+              <td>唯一擁有者，元素連續</td>
+              <td>快取友善、<code>push</code>/<code>pop</code> 均攤 O(1)</td>
+            </tr>
+            <tr>
+              <td>雙端佇列（兩端 push/pop）</td>
+              <td><code>VecDeque&lt;T&gt;</code></td>
+              <td>唯一擁有者，環形緩衝區</td>
+              <td>BFS 的首選；比 LinkedList 快</td>
+            </tr>
+            <tr>
+              <td>鍵值對，O(1) 查找</td>
+              <td><code>HashMap&lt;K, V&gt;</code></td>
+              <td>擁有鍵與值</td>
+              <td>需要鍵實作 <code>Hash + Eq</code></td>
+            </tr>
+            <tr>
+              <td>有序鍵值對，O(log n) 查找</td>
+              <td><code>BTreeMap&lt;K, V&gt;</code></td>
+              <td>擁有鍵與值，維護排序</td>
+              <td>需要鍵實作 <code>Ord</code>；範圍查詢</td>
+            </tr>
+            <tr>
+              <td>唯一元素集合</td>
+              <td><code>HashSet&lt;T&gt;</code> / <code>BTreeSet&lt;T&gt;</code></td>
+              <td>擁有元素</td>
+              <td>去重、集合運算</td>
+            </tr>
+            <tr>
+              <td>heap 上的單一值（遞迴型別、dyn Trait）</td>
+              <td><code>Box&lt;T&gt;</code></td>
+              <td>唯一擁有者</td>
+              <td>零引用計數開銷</td>
+            </tr>
+            <tr>
+              <td>單執行緒共享所有權</td>
+              <td><code>Rc&lt;T&gt;</code></td>
+              <td>引用計數，多擁有者</td>
+              <td>+ <code>RefCell</code> 若需修改</td>
+            </tr>
+            <tr>
+              <td>多執行緒共享所有權</td>
+              <td><code>Arc&lt;T&gt;</code></td>
+              <td>原子引用計數，多擁有者</td>
+              <td>+ <code>Mutex</code>/<code>RwLock</code> 若需修改</td>
+            </tr>
+            <tr>
+              <td>指回父節點（打破循環）</td>
+              <td><code>Weak&lt;T&gt;</code></td>
+              <td>弱參考，不計入計數</td>
+              <td>需搭配 <code>Rc</code>/<code>Arc</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">Rust 容器選型的兩個問題</span>
+          <p>
+            <strong>問 1：這個資料需要被幾個擁有者持有？</strong><br>
+            一個 → <code>Box</code> 或直接 owned value；多個且單執行緒 → <code>Rc</code>；多個且多執行緒 → <code>Arc</code>。<br>
+            <strong>問 2：這個資料需要在持有「不可變參考」的情況下被修改嗎？</strong><br>
+            是 → 加 <code>RefCell</code>（單執行緒）或 <code>Mutex</code>/<code>RwLock</code>（多執行緒）；否 → 直接借用。
+          </p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 81.4 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>
+            針對以下每個場景，說明應該用哪種 Rust 容器或指標，並解釋理由：
+          </p>
+          <ol>
+            <li>一個編譯器的 AST（抽象語法樹）節點：每個節點有零到多個子節點，父節點擁有子節點，不需要子節點指回父節點。</li>
+            <li>一個 GUI 框架的 widget 系統：父 widget 擁有子 widget，每個子 widget 也需要能通知父 widget（回呼）——可能形成循環參照。</li>
+            <li>一個多執行緒網頁爬蟲：多個 worker 執行緒共享一個「已訪問 URL」的集合，並需要並發地新增 URL。</li>
+            <li>一個需要快速 push/pop 兩端的任務佇列（單一執行緒）。</li>
+          </ol>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <ol>
+                <li>
+                  <strong><code>Box&lt;T&gt;</code>（或直接 <code>Vec&lt;ChildNode&gt;</code>）</strong>：
+                  每個節點是父節點的唯一擁有者，用 <code>Vec&lt;Box&lt;AstNode&gt;&gt;</code> 存子節點列表。
+                  不需要共享所有權或循環指標，<code>Box</code> 的唯一擁有者模型完全足夠，且開銷最小。
+                </li>
+                <li>
+                  <strong>父→子用 <code>Rc&lt;RefCell&lt;Widget&gt;&gt;</code>，子→父用 <code>Weak&lt;RefCell&lt;Widget&gt;&gt;</code></strong>：
+                  父 widget 強引用子 widget（<code>Rc</code>），子 widget 弱參考父 widget（<code>Weak</code>）以避免循環。
+                  <code>RefCell</code> 讓共享的 widget 能被修改。
+                </li>
+                <li>
+                  <strong><code>Arc&lt;Mutex&lt;HashSet&lt;String&gt;&gt;&gt;</code></strong>：
+                  多執行緒共享 → <code>Arc</code>；需要修改共享集合 → <code>Mutex</code>（或 <code>RwLock</code> 若讀多寫少）；
+                  集合語意 → <code>HashSet</code>。
+                </li>
+                <li>
+                  <strong><code>VecDeque&lt;T&gt;</code></strong>：
+                  雙端 push/pop 均攤 O(1)，比 <code>LinkedList</code> 更快（連續記憶體）。
+                  單執行緒，不需要 <code>Arc</code>/<code>Mutex</code>。
+                </li>
+              </ol>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑨ ==================== -->
+      <h2>把這一章串起來</h2>
+
+      <p>
+        從「為什麼 Rust 的資料結構寫起來卡卡的」出發，我們沿著所有權視角走過了整張地圖：
+      </p>
+
+      <ul>
+        <li>
+          <strong><code>Vec&lt;T&gt;</code> 與 <code>HashMap&lt;K, V&gt;</code></strong>：
+          最常用的集合，插入時奪取值的所有權；<code>get</code>/<code>iter</code> 回傳借用。
+          重配置機制解釋了為何借用後不能 <code>push</code>。
+          <code>entry</code> API 是「若不存在則插入」的慣用模式。
+        </li>
+        <li>
+          <strong>迭代器</strong>：三種操作對應三種所有權——<code>iter()</code> 借用、<code>iter_mut()</code> 可變借用、<code>into_iter()</code> 消耗。
+          惰性求值讓短路操作天然高效，零成本抽象讓迭代器和手寫迴圈一樣快。
+        </li>
+        <li>
+          <strong>鏈結串列與 <code>Box&lt;T&gt;</code></strong>：
+          <code>Box</code> 解決遞迴型別大小問題，提供唯一擁有者語意。
+          Rust 的 linked list「很痛」，因為多指標共享和唯一擁有者天然衝突——優先用 <code>Vec</code>。
+        </li>
+        <li>
+          <strong>樹與 <code>Rc&lt;RefCell&lt;T&gt;&gt;</code> + <code>Weak&lt;T&gt;</code></strong>：
+          <code>Rc</code> 解決多重所有權，<code>RefCell</code> 解決內部可變性，<code>Weak</code> 打破循環參照。
+          這三個組合是 Rust safe 程式碼裡表達「共享且可修改的節點」的標準模式。
+        </li>
+        <li>
+          <strong>圖遍歷</strong>：索引法是最 Rust 慣用的圖表示——整數索引沒有所有權，
+          避免了借用衝突；多執行緒則用 <code>Arc&lt;Mutex&lt;T&gt;&gt;</code>。
+        </li>
+        <li>
+          <strong><code>unsafe</code></strong>：必要時（FFI、高效資料結構）可以使用，
+          但必須封裝在安全介面背後，且你親自承擔 borrow checker 本來提供的保證。
+        </li>
+      </ul>
+
+      <p>
+        所有權視角的核心洞見：<strong>Rust 的「麻煩」不是任意的限制，而是把真實存在的危險（懸空指標、double free、data race）
+        從執行時崩潰提前到編譯期錯誤</strong>。
+        每當你選擇 <code>Box</code>、<code>Rc</code>、<code>RefCell</code> 或 <code>Arc</code>，
+        你實際上是在把「這塊資料的生命週期和存取權」用型別明確地寫出來——
+        讓任何讀者（包括未來的自己）一眼就知道這段程式碼的記憶體語意。
+      </p>
+
+      <p>
+        下一章，我們將進入 Rust 的<strong>並行程式設計(concurrency)</strong>：
+        執行緒、<code>async/await</code>、channel——以及 Rust 如何用所有權系統在編譯期消滅 data race。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">📚</div>
+        <div class="body">
+          <span class="c-title">延伸資源</span>
+          <p>
+            <strong><a href="https://rust-unofficial.github.io/too-many-lists/" target="_blank">Learn Rust With Entirely Too Many Linked Lists</a></strong>：
+            深入探討在 Rust 中實現各種 linked list 的挑戰——從 safe 到 unsafe 一步步拆解，是理解所有權視角的最佳實戰材料。<br><br>
+            <strong><a href="https://doc.rust-lang.org/book/ch15-00-smart-pointers.html" target="_blank">The Rust Book 第 15 章：智慧指標</a></strong>：
+            官方對 <code>Box</code>、<code>Rc</code>、<code>RefCell</code>、<code>Weak</code> 的完整說明。<br><br>
+            <strong><a href="https://course.rs/advance/smart-pointer/box.html" target="_blank">Rust 語言聖經：智慧指標</a></strong>：
+            中文深度解說 <code>Box</code>、<code>Rc</code>/<code>Arc</code>、<code>RefCell</code>/<code>Mutex</code>，對繁中讀者極為友善。<br><br>
+            <strong><a href="https://doc.rust-lang.org/std/collections/index.html" target="_blank">std::collections 官方文件</a></strong>：
+            完整列出各容器的複雜度、使用場景與選型指南——是容器決策表的權威來源。
+          </p>
+        </div>
+      </div>
+</article>
+  </main>
+</div>
+<script src="../assets/book.js"></script>
+</body>
+</html>

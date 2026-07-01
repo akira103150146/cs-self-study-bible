@@ -1,0 +1,1622 @@
+<!--meta
+title: 圖論與樹上演算法
+description: 把第 30 章的圖演算法搬上競賽舞台:用 C++ 把圖建模、跑 BFS/DFS、做拓樸排序與 DAG 上 DP、寫出 Dijkstra/Bellman-Ford/Floyd-Warshall 三巨頭與 Kruskal/Prim 最小生成樹,最後深入樹上演算法的重頭戲——樹形 DP、樹的直徑與倍增法 LCA。大量圖/樹 SVG 與可執行 C++。
+-->
+
+
+      <div class="eyebrow">第十六部 · 競賽程式設計與 APCS</div>
+      <h1>圖論與樹上演算法</h1>
+      <p class="subtitle">第 30 章我們用 Python 讓圖「動」了起來;這一章要把同樣的招式搬上競賽現場——換成 C++、加上時間限制、面對刁鑽的測資。最後深入一個 APCS 與大學程式競賽的兵家必爭之地:樹上演算法。</p>
+      <div class="byline">
+        <span class="tag">第 63 章</span>
+        <span>閱讀時間 ≈ 75 分鐘</span>
+        <span>難度:★★★★☆</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>用 C++ 的 <code>vector</code> 鄰接串列建圖的競賽標準寫法,以及「隱式圖」如何把看似無關的問題翻譯成圖</li>
+          <li>BFS/DFS 的 C++ 模板,以及「圖上」與「圖外(網格)」搜尋的關鍵差別——方向陣列 <code>dx[]/dy[]</code></li>
+          <li>競賽四大基本應用:連通元件、洪水填充數島嶼、網格最短步數、二分圖判定</li>
+          <li>拓樸排序(Kahn)與 DAG 上 DP——課程相依、最長路徑</li>
+          <li>最短路徑三巨頭的競賽寫法:Dijkstra(<code>priority_queue</code>)、Bellman-Ford / SPFA、Floyd-Warshall,以及「何時用哪個」</li>
+          <li>最小生成樹:Kruskal(並查集)與 Prim 的競賽寫法</li>
+          <li>樹上演算法重頭戲:樹的性質與 DFS、樹形 DP(子樹資訊合併)、求樹直徑(兩次 BFS)、倍增法 LCA</li>
+          <li>一張「競賽圖論題型對照表」,看到題目關鍵字就知道該掏出哪把刀</li>
+        </ul>
+      </div>
+
+      <h2>從 Python 直覺,到 C++ 競賽現場</h2>
+      <p>
+        在第 30 章,我們用 Python 把圖演算法的「直覺」全部建立起來:BFS 像水波擴散、DFS 一路鑽到底、
+        拓樸排序替相依任務排隊、Dijkstra 貪心地確定最近的點。那一章的目標是「<strong>懂</strong>」。
+        這一章的目標,則是「<strong>在比賽裡贏</strong>」。
+      </p>
+      <p>
+        舞台換了,規則也變嚴苛了。APCS、ZeroJudge、Codeforces、CSES 這些評測系統會給你
+        <strong>$n \le 10^5$ 個點、$m \le 2 \times 10^5$ 條邊</strong>,然後要求你在 <strong>1 秒</strong>內輸出答案。
+        Python 在這種規模下常常 TLE(Time Limit Exceeded,超時),所以競賽圈幾乎清一色用 <strong>C++</strong>——
+        它快、貼近底層、標準函式庫(STL)的 <code>vector</code>、<code>queue</code>、<code>priority_queue</code> 又恰好是圖演算法的天然零件。
+      </p>
+      <p>
+        所以這一章我們會做三件事:第一,把第 30 章的每個演算法<strong>翻成乾淨、可直接貼上評測的 C++</strong>;
+        第二,補上競賽特有的題型——網格搜尋、二分圖、DAG 上 DP、最小生成樹;第三,也是本章的<strong>重頭戲</strong>,
+        深入<strong>樹上演算法</strong>:當圖是一棵樹時,它的特殊性質會開啟一整套更漂亮、更高效的解法。
+        本章整合自 AP325 演算法解題教材第 7、8 章,是 APCS 進階與 TOI(資訊奧林匹亞)選訓的核心範圍。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">這一章預設你已經……</span>
+          <p>讀過<strong>第 15 章</strong>(圖的「點與線」基本定義)、<strong>第 30 章</strong>(BFS/DFS/最短路的直覺),
+          並對 <strong>C++ 的 STL</strong> 容器不陌生(<code>vector</code>、<code>queue</code>、<code>pair</code>、<code>priority_queue</code>)。
+          這些容器的內部原理在<strong>第 29 章</strong>講過;本章把它們當成現成零件來「組裝」演算法。
+          (如果忘了堆積或並查集怎麼運作,翻回第 29 章複習一下會更踏實。)</p>
+        </div>
+      </div>
+
+      <h2>圖的建模與表示:競賽寫法</h2>
+      <p>
+        競賽裡的第一道關卡,往往不是演算法,而是<strong>「怎麼把題目讀進來、存成圖」</strong>。第 15、30 章說過,
+        圖有兩種主要存法:<strong>鄰接矩陣(adjacency matrix)</strong>與<strong>鄰接串列(adjacency list)</strong>。
+        在競賽中,除非點數很少($V$ 大約 $\le 500$)或你要查「全點對」,否則答案幾乎永遠是<strong>鄰接串列</strong>——
+        因為現實的圖通常<strong>稀疏(sparse)</strong>:邊數遠小於 $V^2$。
+      </p>
+
+      <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>表示法</th><th>判斷 u→v 有邊</th><th>列舉 u 的鄰居</th><th>空間</th><th>競賽時機</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>鄰接矩陣</td><td>$O(1)$</td><td>$O(V)$</td><td>$O(V^2)$</td><td>$V \le 500$、需 $O(1)$ 判邊、Floyd-Warshall</td></tr>
+          <tr><td>鄰接串列</td><td>$O(\deg u)$</td><td>$O(\deg u)$</td><td>$O(V+E)$</td><td><strong>絕大多數題目</strong>(稀疏圖)</td></tr>
+          <tr><td>邊列表(edge list)</td><td>—</td><td>—</td><td>$O(E)$</td><td>Kruskal、Bellman-Ford(只需逐邊掃)</td></tr>
+        </tbody>
+      </table>
+      </div>
+
+      <h3>鄰接串列:C++ 的 <code>vector</code> 寫法</h3>
+      <p>
+        競賽 C++ 的鄰接串列就是「一個 <code>vector</code> 陣列」:<code>g[u]</code> 存著 u 的所有鄰居。
+        習慣上開全域固定大小陣列(避免每次 new 的開銷),點通常編號 $1 \sim n$。
+      </p>
+      <pre><code class="language-cpp">#include &lt;bits/stdc++.h&gt;   // 競賽常用:一次引入所有標準函式庫
+using namespace std;
+
+const int N = 1e5 + 5;       // 最大點數,多開幾格保險
+vector&lt;int&gt; g[N];            // g[u] = u 的鄰居清單
+
+int main() {
+    ios::sync_with_stdio(false); cin.tie(nullptr);  // I/O 加速,競賽必備
+    int n, m;
+    cin &gt;&gt; n &gt;&gt; m;
+    for (int i = 0; i &lt; m; i++) {
+        int u, v;
+        cin &gt;&gt; u &gt;&gt; v;
+        g[u].push_back(v);
+        g[v].push_back(u);   // 無向圖:兩個方向都加。有向圖只加這行上面那一條
+    }
+    // 想列舉 u 的鄰居:for (int v : g[u]) ...
+    return 0;
+}</code></pre>
+
+      <div class="diagram">
+<svg viewBox="0 0 600 250" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- left: small graph -->
+  <text x="120" y="24" font-size="13" font-weight="800" fill="#2f6f6a" text-anchor="middle">一張無向圖</text>
+  <g stroke="#8a929b" stroke-width="2">
+    <line x1="70" y1="70" x2="170" y2="70"/>
+    <line x1="70" y1="70" x2="70" y2="170"/>
+    <line x1="170" y1="70" x2="170" y2="170"/>
+    <line x1="70" y1="170" x2="170" y2="170"/>
+  </g>
+  <g font-size="14" font-weight="800" text-anchor="middle" fill="#fff">
+    <circle cx="70" cy="70" r="20" fill="#2f6f6a"/><text x="70" y="75">1</text>
+    <circle cx="170" cy="70" r="20" fill="#2f6f6a"/><text x="170" y="75">2</text>
+    <circle cx="70" cy="170" r="20" fill="#2f6f6a"/><text x="70" y="175">3</text>
+    <circle cx="170" cy="170" r="20" fill="#2f6f6a"/><text x="170" y="175">4</text>
+  </g>
+  <!-- right: adjacency list -->
+  <text x="430" y="24" font-size="13" font-weight="800" fill="#b4541f" text-anchor="middle">鄰接串列 g[ ]</text>
+  <g font-size="13" font-weight="700">
+    <text x="280" y="60" fill="#1f2328">g[1]:</text>
+    <text x="280" y="100" fill="#1f2328">g[2]:</text>
+    <text x="280" y="140" fill="#1f2328">g[3]:</text>
+    <text x="280" y="180" fill="#1f2328">g[4]:</text>
+  </g>
+  <g font-size="13" text-anchor="middle" font-weight="700">
+    <rect x="330" y="46" width="34" height="22" rx="4" fill="#f6e7dd" stroke="#b4541f"/><text x="347" y="62" fill="#b4541f">2</text>
+    <rect x="370" y="46" width="34" height="22" rx="4" fill="#f6e7dd" stroke="#b4541f"/><text x="387" y="62" fill="#b4541f">3</text>
+    <rect x="330" y="86" width="34" height="22" rx="4" fill="#f6e7dd" stroke="#b4541f"/><text x="347" y="102" fill="#b4541f">1</text>
+    <rect x="370" y="86" width="34" height="22" rx="4" fill="#f6e7dd" stroke="#b4541f"/><text x="387" y="102" fill="#b4541f">4</text>
+    <rect x="330" y="126" width="34" height="22" rx="4" fill="#f6e7dd" stroke="#b4541f"/><text x="347" y="142" fill="#b4541f">1</text>
+    <rect x="370" y="126" width="34" height="22" rx="4" fill="#f6e7dd" stroke="#b4541f"/><text x="387" y="142" fill="#b4541f">4</text>
+    <rect x="330" y="166" width="34" height="22" rx="4" fill="#f6e7dd" stroke="#b4541f"/><text x="347" y="182" fill="#b4541f">2</text>
+    <rect x="370" y="166" width="34" height="22" rx="4" fill="#f6e7dd" stroke="#b4541f"/><text x="387" y="182" fill="#b4541f">3</text>
+  </g>
+  <text x="300" y="225" font-size="11" fill="#8a929b">每個 vector 只存「真正存在的邊」,空間 O(V+E)</text>
+</svg>
+        <figcaption>圖 63-1:鄰接串列就是「一排 vector」。左邊的方形圖有 4 點 4 邊,右邊每個 <code>g[u]</code> 列出 u 的鄰居。無向邊在兩端的清單裡各出現一次,所以邊總共被存兩份(共 $2E$ 格)。</figcaption>
+      </div>
+
+      <h3>帶權圖與有向圖</h3>
+      <p>
+        若邊有<strong>權重(weight)</strong>(距離、費用、時間),鄰居清單裡每一項就要同時記「鄰居是誰」和「邊權多少」。
+        最簡潔的寫法是 <code>vector&lt;pair&lt;int,int&gt;&gt;</code>,用 <code>{鄰居, 邊權}</code> 表示;
+        若還需要更多欄位,就改用 <code>struct</code>。
+      </p>
+      <pre><code class="language-cpp">// 帶權圖:g[u] 存 {鄰居 v, 邊權 w}
+vector&lt;pair&lt;int,int&gt;&gt; g[N];
+
+// 讀入一條無向帶權邊
+int u, v, w;
+cin &gt;&gt; u &gt;&gt; v &gt;&gt; w;
+g[u].push_back({v, w});
+g[v].push_back({u, w});
+
+// 列舉 u 的帶權鄰居(C++17 結構化綁定,乾淨好讀)
+for (auto [v, w] : g[u]) {
+    // v 是鄰居,w 是這條邊的權重
+}</code></pre>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">競賽 C++ 的兩個保命習慣</span>
+          <p>第一,<code>ios::sync_with_stdio(false); cin.tie(nullptr);</code> 兩行放在 <code>main</code> 開頭,
+          能讓 <code>cin/cout</code> 快上數倍——大量輸入時這是 AC 與 TLE 的差別。第二,<strong>陣列開全域、開大一點</strong>:
+          全域陣列自動歸零,大小用 <code>const int N</code> 統一管理。看到 $n \le 10^5$ 就開 <code>1e5 + 5</code>,
+          那個 <code>+5</code> 是防止「點從 1 編號」或邊界讀取時越界的便宜保險。</p>
+        </div>
+      </div>
+
+      <h3>隱式圖:把問題「翻譯」成圖</h3>
+      <p>
+        競賽圖論真正的門檻,常常不在演算法,而在<strong>建模(modeling)</strong>——看出「這題其實是一張圖」。
+        很多題目<strong>表面上和圖毫無關係</strong>,但只要你定義好「什麼是點、什麼算相鄰」,它就瞬間塌縮成一個 BFS 或 DFS。
+        這種「點與邊沒有真的存進記憶體,而是<em>需要時即時推算</em>」的圖,叫<strong>隱式圖(implicit graph)</strong>。
+      </p>
+      <p>三個經典的「翻譯」例子,值得你刻進直覺:</p>
+      <ul>
+        <li><strong>單字接龍(word ladder)</strong>:每個單字是一個點,「只差一個字母」就算一條邊。問「最少改幾次能從 A 變到 B」
+        ——就是隱式圖上的 BFS 最短步數。沒有人會真的把所有單字對建成鄰接串列,而是查字典即時找鄰居。</li>
+        <li><strong>網格 / 迷宮</strong>:每個格子是一個點,「上下左右相鄰且不是牆」算一條邊。求最少步數就是 BFS。
+        格子的鄰居用<strong>座標位移</strong>即時算出,不必建圖。(這就是下一節「圖外搜尋」的主場。)</li>
+        <li><strong>狀態空間</strong>:魔術方塊的每個轉法、推箱子的每個盤面、八數碼的每種排列,都是一個「狀態點」,
+        「一步操作可達」就是邊。求最少步數,還是 BFS。</li>
+      </ul>
+      <p>
+        AP325 教材裡的「銀河帝國旅行社」把星球的<strong>從屬關係</strong>翻譯成父子節點(於是變成一棵樹),
+        「邏輯電路」把<strong>邏輯閘</strong>當點、<strong>電線</strong>當邊(於是延遲計算變成拓樸排序),都是同一種思維。
+        記住這句口訣:<strong>看到「最少步數」「能不能到」「分成幾群」「先後順序」,先問自己——點是什麼?邊是什麼?</strong>
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">建模優先於演算法</span>
+          <p>本章後面所有演算法,你在第 30 章其實都見過。競賽真正考你的,是<strong>「認出它」</strong>:
+          把一個披著文字外衣的問題,剝開成「這是一張圖,我要在上面跑 BFS / 最短路 / 拓樸排序」。
+          一旦建模成功,寫程式只是把模板貼上去。所以解競賽圖論題,<strong>八成的力氣花在想「點與邊」,兩成花在打字</strong>。</p>
+        </div>
+      </div>
+
+      <h2>BFS 與 DFS:競賽應用全家桶</h2>
+      <p>
+        BFS 與 DFS 是所有圖演算法的根。第 30 章講透了它們的直覺,這裡我們直接看 C++ 模板,然後一口氣示範
+        四個競賽最常考的應用:<strong>連通元件、洪水填充、網格最短步數、二分圖判定</strong>。
+      </p>
+
+      <h3>C++ 模板:DFS(遞迴)與 BFS(佇列)</h3>
+      <pre><code class="language-cpp">vector&lt;int&gt; g[N];
+bool vis[N];
+
+// DFS:遞迴,簡潔。注意 C++ 預設遞迴深度有限,點太多(深鏈)可能爆 stack
+void dfs(int u) {
+    vis[u] = true;
+    for (int v : g[u])
+        if (!vis[v]) dfs(v);
+}
+
+// BFS:佇列,順便求無權最短步數
+int dist[N];
+void bfs(int s) {
+    queue&lt;int&gt; q;
+    q.push(s); vis[s] = true; dist[s] = 0;
+    while (!q.empty()) {
+        int u = q.front(); q.pop();
+        for (int v : g[u]) if (!vis[v]) {
+            vis[v] = true;            // 關鍵:入列時就標記(第 30 章的鐵律)
+            dist[v] = dist[u] + 1;
+            q.push(v);
+        }
+    }
+}</code></pre>
+      <p>
+        兩者都是 $O(V+E)$。差別只在那個「待辦容器」是佇列(BFS,先進先出,層層擴散)還是堆疊/遞迴
+        (DFS,後進先出,一路到底)。<strong>看到「最少步數」用 BFS;看到「找一條路、連通塊、判環」用 DFS</strong>——這條取捨在第 30 章詳述過。
+      </p>
+
+      <h3>應用一:連通元件——這張圖分成幾塊?</h3>
+      <p>
+        「圖分成幾個互不相連的塊?」是最基本的圖論題。做法:對每個還沒被走過的點發動一次 DFS/BFS,
+        每發動一次就代表發現了一座新的「島」。
+      </p>
+      <pre><code class="language-cpp">int components = 0;
+for (int i = 1; i &lt;= n; i++) {
+    if (!vis[i]) {
+        components++;     // 找到一塊新的連通元件
+        dfs(i);           // 把這一整塊走光、標記掉
+    }
+}
+cout &lt;&lt; components &lt;&lt; '\n';</code></pre>
+      <p>
+        這個 $O(V+E)$ 的小迴圈是無數題目的骨架。AP325 的「開車蒐集寶物」(找最大權重連通塊)、
+        CSES 的「Building Roads」(問還要補幾條邊才全連通——答案就是<strong>連通元件數 $- 1$</strong>)都是它的變形。
+        順帶一提,連通性也能用<strong>並查集</strong>解(本章稍後的 MST 會用到),兩種工具都要會。
+      </p>
+
+      <h3>圖上 vs 圖外(網格):搜尋的兩種長相</h3>
+      <p>
+        這是競賽圖論一個非常重要、卻常被忽略的觀念分水嶺。BFS/DFS 的「骨架」永遠一樣,
+        差別只在<strong>「怎麼找到一個點的鄰居」</strong>:
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th></th><th>圖上(explicit graph)</th><th>圖外(網格 / 隱式圖)</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>圖怎麼來</td><td>讀入邊、建成鄰接串列 <code>g[]</code></td><td>沒有建圖,鄰居「即時算」</td></tr>
+          <tr><td>怎麼找鄰居</td><td><code>for (int v : g[u])</code></td><td>用方向陣列 <code>nx=x+dx[k], ny=y+dy[k]</code></td></tr>
+          <tr><td>「點」是什麼</td><td>頂點編號</td><td>格子座標 <code>(x, y)</code></td></tr>
+          <tr><td>典型題</td><td>城市道路、社群關係、相依</td><td>迷宮、數島、淹水、棋盤</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>
+        「圖外」搜尋的核心工具是<strong>方向陣列(direction array)</strong>:把「上下左右」四個移動打包成兩個小陣列,
+        用一個迴圈就能列舉四個鄰居。要對角線就用八方向版。
+      </p>
+      <pre><code class="language-cpp">// 四方向:下、上、右、左
+int dx[4] = {1, -1, 0, 0};
+int dy[4] = {0, 0, 1, -1};
+
+// 列舉格子 (x, y) 的四個鄰居,標準三件套:位移 → 邊界檢查 → 可走檢查
+for (int k = 0; k &lt; 4; k++) {
+    int nx = x + dx[k], ny = y + dy[k];
+    if (nx &gt;= 0 &amp;&amp; nx &lt; n &amp;&amp; ny &gt;= 0 &amp;&amp; ny &lt; m &amp;&amp; grid[nx][ny] == 0) {
+        // (nx, ny) 在界內、而且可以走
+    }
+}
+
+// 八方向(含對角線):多四組
+int ex[8] = {1,-1,0,0, 1,1,-1,-1};
+int ey[8] = {0,0,1,-1, 1,-1,1,-1};</code></pre>
+
+      <div class="diagram">
+<svg viewBox="0 0 560 230" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="d63a" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#b4541f"/></marker>
+  </defs>
+  <!-- 3x3 grid -->
+  <g stroke="#cbd2d8" stroke-width="1.5" fill="#f7faf9">
+    <rect x="180" y="30" width="60" height="60"/>
+    <rect x="240" y="30" width="60" height="60"/>
+    <rect x="300" y="30" width="60" height="60"/>
+    <rect x="180" y="90" width="60" height="60"/>
+    <rect x="240" y="90" width="60" height="60" fill="#e3efed"/>
+    <rect x="300" y="90" width="60" height="60"/>
+    <rect x="180" y="150" width="60" height="60"/>
+    <rect x="240" y="150" width="60" height="60"/>
+    <rect x="300" y="150" width="60" height="60"/>
+  </g>
+  <!-- center cell -->
+  <text x="270" y="125" font-size="13" font-weight="800" text-anchor="middle" fill="#2f6f6a">(x,y)</text>
+  <!-- arrows to 4 neighbors -->
+  <g stroke="#b4541f" stroke-width="2.2" fill="none" marker-end="url(#d63a)">
+    <line x1="270" y1="105" x2="270" y2="68"/>   <!-- up -->
+    <line x1="270" y1="135" x2="270" y2="172"/>  <!-- down -->
+    <line x1="255" y1="120" x2="218" y2="120"/>  <!-- left -->
+    <line x1="285" y1="120" x2="322" y2="120"/>  <!-- right -->
+  </g>
+  <g font-size="11" font-weight="700" fill="#b4541f" text-anchor="middle">
+    <text x="270" y="52">dx=-1</text>
+    <text x="270" y="195">dx=+1</text>
+    <text x="200" y="112">dy=-1</text>
+    <text x="340" y="112">dy=+1</text>
+  </g>
+  <!-- labels -->
+  <text x="90" y="120" font-size="13" font-weight="800" fill="#1f2328" text-anchor="middle">「圖外」搜尋</text>
+  <text x="90" y="142" font-size="11" fill="#8a929b" text-anchor="middle">鄰居 = 即時算</text>
+  <text x="470" y="80" font-size="12" fill="#8a929b">四方向只需</text>
+  <text x="470" y="100" font-size="12" fill="#8a929b">一個 for 迴圈</text>
+  <text x="470" y="120" font-size="12" fill="#8a929b">就走訪完畢</text>
+</svg>
+        <figcaption>圖 63-2:「圖外(網格)」搜尋。中央格子 <code>(x,y)</code> 的四個鄰居,由方向陣列 <code>dx[]/dy[]</code> 加上座標位移即時算出。沒有任何 <code>g[]</code> 被建出來——這就是隱式圖。</figcaption>
+      </div>
+
+      <h3>應用二:洪水填充(flood fill)——數島嶼</h3>
+      <p>
+        經典題:給一個 0/1 網格,上下左右相連的 1 算同一座島,問<strong>有幾座島</strong>?
+        做法和「連通元件」一模一樣,只是搬到網格上:每碰到一個還是 1 的格子,答案 +1,
+        再用 DFS 把整座島「沉掉」(全部改成 0)以免重複數。把走過的格子改成 0,
+        等於<strong>免費省下一個 <code>visited[][]</code> 陣列</strong>——這是網格題的招牌技巧。
+      </p>
+      <pre><code class="language-cpp">#include &lt;bits/stdc++.h&gt;
+using namespace std;
+
+int n, m;
+int grid[1005][1005];
+int dx[4] = {1, -1, 0, 0}, dy[4] = {0, 0, 1, -1};
+
+void flood(int x, int y) {
+    grid[x][y] = 0;                       // 「沉島」:把這格洗成海,當作已訪
+    for (int k = 0; k &lt; 4; k++) {
+        int nx = x + dx[k], ny = y + dy[k];
+        if (nx &gt;= 0 &amp;&amp; nx &lt; n &amp;&amp; ny &gt;= 0 &amp;&amp; ny &lt; m &amp;&amp; grid[nx][ny] == 1)
+            flood(nx, ny);
+    }
+}
+
+int main() {
+    ios::sync_with_stdio(false); cin.tie(nullptr);
+    cin &gt;&gt; n &gt;&gt; m;
+    for (int i = 0; i &lt; n; i++)
+        for (int j = 0; j &lt; m; j++)
+            cin &gt;&gt; grid[i][j];
+
+    int islands = 0;
+    for (int i = 0; i &lt; n; i++)
+        for (int j = 0; j &lt; m; j++)
+            if (grid[i][j] == 1) {        // 發現一座沒沉過的島
+                islands++;
+                flood(i, j);              // 整片沉掉
+            }
+    cout &lt;&lt; islands &lt;&lt; '\n';
+    return 0;
+}</code></pre>
+
+      <div class="diagram">
+<svg viewBox="0 0 540 220" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- 5x6 grid, three islands colored -->
+  <g font-size="13" font-weight="700" text-anchor="middle">
+    <!-- row helper -->
+    <!-- We'll draw cells: 1 = land colored, 0 = water gray -->
+    <!-- island A teal, island B brick, island C purple -->
+    <!-- coordinates start x=120 y=30, size 50 -->
+    <!-- Row 0 -->
+    <rect x="120" y="30" width="46" height="34" rx="3" fill="#2f6f6a"/><text x="143" y="52" fill="#fff">1</text>
+    <rect x="168" y="30" width="46" height="34" rx="3" fill="#2f6f6a"/><text x="191" y="52" fill="#fff">1</text>
+    <rect x="216" y="30" width="46" height="34" rx="3" fill="#eef1f3"/><text x="239" y="52" fill="#aeb6bd">0</text>
+    <rect x="264" y="30" width="46" height="34" rx="3" fill="#eef1f3"/><text x="287" y="52" fill="#aeb6bd">0</text>
+    <rect x="312" y="30" width="46" height="34" rx="3" fill="#b4541f"/><text x="335" y="52" fill="#fff">1</text>
+    <!-- Row 1 -->
+    <rect x="120" y="66" width="46" height="34" rx="3" fill="#2f6f6a"/><text x="143" y="88" fill="#fff">1</text>
+    <rect x="168" y="66" width="46" height="34" rx="3" fill="#eef1f3"/><text x="191" y="88" fill="#aeb6bd">0</text>
+    <rect x="216" y="66" width="46" height="34" rx="3" fill="#eef1f3"/><text x="239" y="88" fill="#aeb6bd">0</text>
+    <rect x="264" y="66" width="46" height="34" rx="3" fill="#eef1f3"/><text x="287" y="88" fill="#aeb6bd">0</text>
+    <rect x="312" y="66" width="46" height="34" rx="3" fill="#b4541f"/><text x="335" y="88" fill="#fff">1</text>
+    <!-- Row 2 -->
+    <rect x="120" y="102" width="46" height="34" rx="3" fill="#eef1f3"/><text x="143" y="124" fill="#aeb6bd">0</text>
+    <rect x="168" y="102" width="46" height="34" rx="3" fill="#eef1f3"/><text x="191" y="124" fill="#aeb6bd">0</text>
+    <rect x="216" y="102" width="46" height="34" rx="3" fill="#8b5cf6"/><text x="239" y="124" fill="#fff">1</text>
+    <rect x="264" y="102" width="46" height="34" rx="3" fill="#eef1f3"/><text x="287" y="124" fill="#aeb6bd">0</text>
+    <rect x="312" y="102" width="46" height="34" rx="3" fill="#eef1f3"/><text x="335" y="124" fill="#aeb6bd">0</text>
+    <!-- Row 3 -->
+    <rect x="120" y="138" width="46" height="34" rx="3" fill="#eef1f3"/><text x="143" y="160" fill="#aeb6bd">0</text>
+    <rect x="168" y="138" width="46" height="34" rx="3" fill="#8b5cf6"/><text x="191" y="160" fill="#fff">1</text>
+    <rect x="216" y="138" width="46" height="34" rx="3" fill="#8b5cf6"/><text x="239" y="160" fill="#fff">1</text>
+    <rect x="264" y="138" width="46" height="34" rx="3" fill="#eef1f3"/><text x="287" y="160" fill="#aeb6bd">0</text>
+    <rect x="312" y="138" width="46" height="34" rx="3" fill="#eef1f3"/><text x="335" y="160" fill="#aeb6bd">0</text>
+  </g>
+  <text x="60" y="55" font-size="12" font-weight="700" fill="#2f6f6a">島 A</text>
+  <text x="430" y="65" font-size="12" font-weight="700" fill="#b4541f">島 B</text>
+  <text x="430" y="150" font-size="12" font-weight="700" fill="#8b5cf6">島 C</text>
+  <text x="240" y="205" font-size="12" fill="#8a929b" text-anchor="middle">三座島(同色相連)。每碰到一個未沉的 1,答案+1 並把整片沉掉</text>
+</svg>
+        <figcaption>圖 63-3:洪水填充數島嶼。三個顏色是三座連通的島;0 是海。主迴圈掃過每格,遇到還沒沉的陸地就計數一次、再 DFS 把整座島淹成 0。</figcaption>
+      </div>
+
+      <h3>應用三:網格最短步數(BFS)</h3>
+      <p>
+        把「數島」的 DFS 換成 BFS,就能求<strong>網格上的最少步數</strong>(每步代價都是 1,所以 BFS 第一次到達即最短)。
+        座標用 <code>pair&lt;int,int&gt;</code> 放進佇列。一個漂亮的省記憶體技巧:用 <code>dist</code> 陣列<strong>身兼「已訪標記」與「步數紀錄」</strong>
+        ——初始化成 $-1$ 代表未訪,被賦值就代表訪過。
+      </p>
+      <pre><code class="language-cpp">int bfs_grid(int sx, int sy, int tx, int ty) {
+    vector&lt;vector&lt;int&gt;&gt; dist(n, vector&lt;int&gt;(m, -1));  // -1 = 未訪
+    queue&lt;pair&lt;int,int&gt;&gt; q;
+    q.push({sx, sy});
+    dist[sx][sy] = 0;
+    while (!q.empty()) {
+        auto [x, y] = q.front(); q.pop();
+        if (x == tx &amp;&amp; y == ty) return dist[x][y];   // 抵達終點
+        for (int k = 0; k &lt; 4; k++) {
+            int nx = x + dx[k], ny = y + dy[k];
+            if (nx &gt;= 0 &amp;&amp; nx &lt; n &amp;&amp; ny &gt;= 0 &amp;&amp; ny &lt; m
+                &amp;&amp; grid[nx][ny] == 0 &amp;&amp; dist[nx][ny] == -1) {
+                dist[nx][ny] = dist[x][y] + 1;        // 比上一格多走一步
+                q.push({nx, ny});
+            }
+        }
+    }
+    return -1;   // 走不到
+}</code></pre>
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">網格題的兩個常見陷阱</span>
+          <p>第一,<strong>邊界檢查要寫全</strong>:四個條件 <code>nx&gt;=0 &amp;&amp; nx&lt;n &amp;&amp; ny&gt;=0 &amp;&amp; ny&lt;m</code> 缺一不可,
+          否則陣列越界,RE(Runtime Error)或更糟——讀到垃圾值給出 WA(Wrong Answer)。
+          第二,<strong>起點本身可能就是終點</strong>(或起點就是答案格),要先特判,別讓 BFS 從第一步才開始算。
+          AP325 的「WAKUWAKU 尋找興奮源」就是栽在「起點剛好是興奮源」這個邊界。</p>
+        </div>
+      </div>
+
+      <h3>應用四:二分圖判定(染色 BFS)</h3>
+      <p>
+        <strong>二分圖(bipartite graph)</strong>:能不能把所有點塗成兩色,讓<strong>每條邊的兩端顏色不同</strong>?
+        它等價於「圖中沒有<strong>奇數長度的環</strong>」,在配對問題(學生選社團、工作分派)裡是核心結構。
+        判定法:BFS 時把鄰居塗成相反色,一旦發現「相鄰卻同色」就不是二分圖。
+      </p>
+      <pre><code class="language-cpp">int color[N];   // -1 = 未染色,0 / 1 = 兩種顏色
+
+bool is_bipartite(int n) {
+    for (int i = 1; i &lt;= n; i++) color[i] = -1;
+    for (int s = 1; s &lt;= n; s++) {       // 圖可能不連通,每塊都要查
+        if (color[s] != -1) continue;
+        queue&lt;int&gt; q;
+        q.push(s); color[s] = 0;
+        while (!q.empty()) {
+            int u = q.front(); q.pop();
+            for (int v : g[u]) {
+                if (color[v] == -1) {
+                    color[v] = color[u] ^ 1;   // 塗相反色(0↔1)
+                    q.push(v);
+                } else if (color[v] == color[u]) {
+                    return false;              // 相鄰同色 → 不是二分圖
+                }
+            }
+        }
+    }
+    return true;
+}</code></pre>
+      <p>
+        注意 <code>color[u] ^ 1</code> 這個位元小技巧:<code>0 ^ 1 = 1</code>、<code>1 ^ 1 = 0</code>,一行就翻色。
+        AP325 的「小寶的著色問題」正是這題,並特別提醒:<strong>圖可能不連通,每個未染色的點都要當起點跑一次</strong>。
+      </p>
+
+      <h2>拓樸排序與 DAG 上 DP</h2>
+      <p>
+        當圖是<strong>有向無環圖(DAG, Directed Acyclic Graph)</strong>時,我們可以把所有點排成一條線,
+        讓每條有向邊都「從前指向後」——這就是<strong>拓樸排序(topological sort)</strong>。它是處理「相依關係」的萬用工具:
+        課程先修、建置系統、邏輯電路的訊號傳遞。
+      </p>
+
+      <h3>Kahn 演算法:看「入度」(C++ 版)</h3>
+      <p>
+        Kahn 的直覺:<strong>入度(in-degree,指向我的箭頭數)為 0 的點可以馬上處理</strong>。處理完它,
+        把它指向的點入度各減一;誰減到 0,就輪到誰。用佇列驅動,本質是一個 BFS。
+      </p>
+      <pre><code class="language-cpp">vector&lt;int&gt; g[N];
+int indeg[N];
+
+vector&lt;int&gt; topo_sort(int n) {
+    queue&lt;int&gt; q;
+    for (int i = 1; i &lt;= n; i++)
+        if (indeg[i] == 0) q.push(i);   // 所有入度 0 的點先入列
+    vector&lt;int&gt; order;
+    while (!q.empty()) {
+        int u = q.front(); q.pop();
+        order.push_back(u);
+        for (int v : g[u])
+            if (--indeg[v] == 0)         // 拔掉 u 的出邊,v 入度若歸零就入列
+                q.push(v);
+    }
+    return order;   // 若 order.size() &lt; n,代表圖中有環(無法拓樸排序)
+}</code></pre>
+      <p>
+        最後那句註解很重要:<strong>Kahn 順手就能偵測有向環</strong>——環上的點入度永遠減不到 0,進不了佇列,
+        所以 <code>order</code> 會少幾個。若 <code>order.size() == n</code> 才是合法 DAG。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 620 210" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="d63b" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto"><path d="M0,0 L9,3 L0,6 Z" fill="#8a929b"/></marker>
+  </defs>
+  <g stroke="#8a929b" stroke-width="2" fill="none" marker-end="url(#d63b)">
+    <line x1="92" y1="60" x2="158" y2="60"/>
+    <line x1="92" y1="72" x2="158" y2="120"/>
+    <line x1="202" y1="60" x2="268" y2="60"/>
+    <line x1="202" y1="120" x2="268" y2="70"/>
+    <line x1="312" y1="60" x2="378" y2="60"/>
+    <line x1="202" y1="128" x2="490" y2="105"/>
+    <line x1="422" y1="62" x2="488" y2="95"/>
+  </g>
+  <g font-size="12" font-weight="800" text-anchor="middle" fill="#fff">
+    <circle cx="70" cy="65" r="22" fill="#2f6f6a"/><text x="70" y="70">A</text>
+    <circle cx="180" cy="60" r="22" fill="#2f6f6a"/><text x="180" y="65">B</text>
+    <circle cx="180" cy="125" r="22" fill="#2f6f6a"/><text x="180" y="130">C</text>
+    <circle cx="290" cy="60" r="22" fill="#2f6f6a"/><text x="290" y="65">D</text>
+    <circle cx="400" cy="60" r="22" fill="#2f6f6a"/><text x="400" y="65">E</text>
+    <circle cx="510" cy="100" r="22" fill="#b4541f"/><text x="510" y="105">F</text>
+  </g>
+  <g font-size="10" fill="#8a929b" text-anchor="middle">
+    <text x="70" y="38">入度 0</text>
+  </g>
+  <text x="20" y="180" font-size="12" font-weight="700" fill="#1f2328">合法拓樸序:</text>
+  <text x="135" y="180" font-size="12" font-weight="700" fill="#2f6f6a">A → B → C → D → E → F</text>
+  <text x="20" y="200" font-size="11" fill="#8a929b">(箭頭 X→Y 代表「X 必須排在 Y 前面」;合法排序通常不只一種)</text>
+</svg>
+        <figcaption>圖 63-4:一個 DAG 的拓樸排序。從入度 0 的 A 開始,每「移除」一個點就更新後繼的入度,佇列驅動地排出一條合法線性順序。</figcaption>
+      </div>
+
+      <h3>DAG 上 DP:最長路徑</h3>
+      <p>
+        DAG「無環」的性質,讓動態規劃(DP)在它身上特別好用——因為<strong>沿著拓樸序處理,每個點被算到時,
+        它的所有前驅都已經算完了</strong>,不會循環依賴。最經典的就是<strong>DAG 最長路徑</strong>
+        (專案管理裡叫「關鍵路徑」,決定整個工程最短要多久)。
+      </p>
+      <p>
+        設 <code>dp[v]</code> = 以 v 結尾的最長路徑長度。沿拓樸序處理每個 u,用它去更新所有後繼 v:
+      </p>
+      <pre><code class="language-cpp">// g[u] 存 {鄰居 v, 邊權 w};order 是 topo_sort 算出的拓樸序
+vector&lt;pair&lt;int,int&gt;&gt; g[N];
+long long dp[N];   // dp[v] = 到 v 的最長路徑
+
+long long longest_path(vector&lt;int&gt;&amp; order, int n) {
+    for (int u : order)
+        for (auto [v, w] : g[u])
+            dp[v] = max(dp[v], dp[u] + w);   // 鬆弛:從 u 接一條邊到 v
+    long long best = 0;
+    for (int i = 1; i &lt;= n; i++) best = max(best, dp[i]);
+    return best;
+}</code></pre>
+      <p>
+        AP325 的「DAG 的最長與最短路徑」正是這題;把 <code>max</code> 換成 <code>min</code>(並小心初始化)就是最短路徑版。
+        這種「在 DAG 上沿拓樸序做 DP」的模式,是<strong>第 62 章競賽 DP</strong> 的重要橋樑——很多看似複雜的 DP,
+        本質都是在一張隱式 DAG(「狀態」當點、「轉移」當邊)上跑最長/最短路。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">拓樸序 = DP 的合法計算順序</span>
+          <p>DP 的本質是「大問題拆成小問題,小問題先算」。當這些子問題的依賴關係構成一張 DAG,
+          <strong>拓樸排序就是那個「先算誰、後算誰」的合法順序</strong>。所以「DAG 上 DP」不是一個特殊技巧,
+          而是 DP 與圖論交會的根本真相。第 30 章偷瞄到的 Floyd-Warshall、本章的最長路徑,都是這個思想的化身。</p>
+        </div>
+      </div>
+
+      <h2>最短路徑:競賽三巨頭(C++)</h2>
+      <p>
+        BFS 解的是「無權」最短路。一旦邊有了權重,就要請出三巨頭。第 30 章講了它們的直覺與 Python 版,
+        這裡給出競賽 C++ 寫法,並把「<strong>何時用哪個</strong>」釘死成一張表。三者的共同核心都是
+        <strong>鬆弛(relaxation)</strong>:<code>if (dist[u] + w &lt; dist[v]) dist[v] = dist[u] + w;</code>
+      </p>
+
+      <h3>Dijkstra:<code>priority_queue</code> 版</h3>
+      <p>
+        Dijkstra 貪心地「每次取出目前距離最小的未定點」。這個「取最小」正是<strong>優先佇列(priority_queue)</strong>
+        ——也就是第 29 章的<strong>最小堆積</strong>——的拿手好戲。C++ 的 <code>priority_queue</code> 預設是最大堆,
+        要用 <code>greater</code> 改成最小堆。要求:<strong>邊權非負</strong>。
+      </p>
+      <pre><code class="language-cpp">typedef pair&lt;long long,int&gt; pli;   // {距離, 頂點}
+vector&lt;pair&lt;int,int&gt;&gt; g[N];         // {鄰居, 邊權}
+long long dist[N];
+
+void dijkstra(int s, int n) {
+    for (int i = 1; i &lt;= n; i++) dist[i] = LLONG_MAX;
+    priority_queue&lt;pli, vector&lt;pli&gt;, greater&lt;pli&gt;&gt; pq;  // 最小堆
+    dist[s] = 0;
+    pq.push({0, s});
+    while (!pq.empty()) {
+        auto [d, u] = pq.top(); pq.pop();
+        if (d &gt; dist[u]) continue;          // 過期紀錄(同一點被推過多次),跳過
+        for (auto [v, w] : g[u]) {
+            if (dist[u] + w &lt; dist[v]) {     // 鬆弛成功 → 更新並重新入堆
+                dist[v] = dist[u] + w;
+                pq.push({dist[v], v});
+            }
+        }
+    }
+}</code></pre>
+      <p>
+        複雜度 $O((V+E)\log V)$。注意那行 <code>if (d &gt; dist[u]) continue;</code>——這是 <code>priority_queue</code> 版
+        Dijkstra 的靈魂:我們<strong>不刪除</strong>堆裡的舊紀錄(STL 堆不支援高效刪除),而是允許同一個點被推進去多次,
+        靠這行「發現拿到的是過期距離就略過」來保證正確。這個「過期跳過」技巧在 <strong>第 61 章</strong>
+        講競賽資料結構時會再深入。
+      </p>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">Dijkstra 不能有負權邊</span>
+          <p>Dijkstra 的貪心建立在「一旦取出某點就定案、不會再變短」之上,這在邊權非負時成立。
+          <strong>負邊會打破它</strong>(第 30 章圖 30-9 那個例子)。看到負權,改用 Bellman-Ford。
+          另外,距離用 <code>long long</code>:$10^5$ 條邊、每條權重 $10^9$,加起來會爆 <code>int</code>。</p>
+        </div>
+      </div>
+
+      <h3>Bellman-Ford 與 SPFA:慢,但吃負權</h3>
+      <p>
+        Bellman-Ford 不貪心,改走暴力:<strong>把每一條邊都鬆弛,重複 $V-1$ 輪</strong>。它能處理負權,
+        還能<strong>偵測負環</strong>(跑完 $V-1$ 輪後再跑一輪,若還能鬆弛就有負環)。複雜度 $O(VE)$。
+      </p>
+      <pre><code class="language-cpp">struct Edge { int u, v, w; };
+vector&lt;Edge&gt; edges;
+long long dist[N];
+
+bool bellman_ford(int s, int n) {
+    for (int i = 1; i &lt;= n; i++) dist[i] = LLONG_MAX;
+    dist[s] = 0;
+    for (int i = 1; i &lt; n; i++)                   // 鬆弛 V-1 輪
+        for (auto&amp; e : edges)
+            if (dist[e.u] != LLONG_MAX &amp;&amp; dist[e.u] + e.w &lt; dist[e.v])
+                dist[e.v] = dist[e.u] + e.w;
+    for (auto&amp; e : edges)                          // 第 V 輪:還能鬆弛 → 有負環
+        if (dist[e.u] != LLONG_MAX &amp;&amp; dist[e.u] + e.w &lt; dist[e.v])
+            return false;
+    return true;                                   // 無負環
+}</code></pre>
+      <p>
+        <strong>SPFA</strong>(Shortest Path Faster Algorithm)是 Bellman-Ford 的佇列優化版:只把「距離剛被更新」的點
+        重新入列,而不是每輪盲目掃所有邊。在隨機圖上快很多,但<strong>最壞情況仍是 $O(VE)$,且容易被出題者「卡」(hack)</strong>
+        ——所以非負權時請優先用 Dijkstra,SPFA 留給「有負權又想偷懶」的場合。
+      </p>
+      <pre><code class="language-cpp">// SPFA:Bellman-Ford 的佇列優化
+vector&lt;pair&lt;int,int&gt;&gt; g[N];
+long long dist[N];
+bool inq[N];
+
+void spfa(int s, int n) {
+    for (int i = 1; i &lt;= n; i++) dist[i] = LLONG_MAX;
+    queue&lt;int&gt; q;
+    dist[s] = 0; q.push(s); inq[s] = true;
+    while (!q.empty()) {
+        int u = q.front(); q.pop(); inq[u] = false;
+        for (auto [v, w] : g[u])
+            if (dist[u] + w &lt; dist[v]) {
+                dist[v] = dist[u] + w;
+                if (!inq[v]) { q.push(v); inq[v] = true; }  // 不重複入列
+            }
+    }
+}</code></pre>
+
+      <h3>Floyd-Warshall:三層迴圈,全點對</h3>
+      <p>
+        想一次算出<strong>每一對</strong>頂點之間的最短距離?用 Floyd-Warshall。它是個漂亮的 DP:逐一允許「經過頂點 $k$ 當中繼」。
+        程式只有三層迴圈,複雜度 $O(V^3)$,只適合 $V$ 小(約 $\le 500$)的情形。
+      </p>
+      <pre><code class="language-cpp">const long long INF = 1e18;
+long long d[505][505];   // d[i][j]:初始為直達邊權,自己到自己為 0,無邊為 INF
+
+void floyd(int n) {
+    for (int k = 1; k &lt;= n; k++)              // 中繼站 k(必須在最外層!)
+        for (int i = 1; i &lt;= n; i++)
+            for (int j = 1; j &lt;= n; j++)
+                if (d[i][k] &lt; INF &amp;&amp; d[k][j] &lt; INF
+                    &amp;&amp; d[i][k] + d[k][j] &lt; d[i][j])
+                    d[i][j] = d[i][k] + d[k][j];
+}</code></pre>
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">Floyd-Warshall 的 k 一定要在最外層</span>
+          <p>三層迴圈的順序<strong>不能調換</strong>:中繼站 <code>k</code> 必須是最外層的迴圈。
+          原因是 DP 的定義是「只允許用前 $k$ 個點當中繼時的最短路」,必須一層一層「解鎖」中繼站。
+          把 <code>k</code> 寫進內層是初學者最致命、又最難看出的 bug——程式照跑、答案卻錯。</p>
+        </div>
+      </div>
+
+      <h3>何時用哪個?</h3>
+      <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>演算法</th><th>解什麼</th><th>負權?</th><th>負環?</th><th>複雜度</th><th>競賽時機</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>BFS</td><td>單源、<strong>無權</strong></td><td>—</td><td>—</td><td>$O(V+E)$</td><td>每步代價都是 1(網格、步數)</td></tr>
+          <tr><td>Dijkstra</td><td>單源、非負權</td><td>❌</td><td>❌</td><td>$O((V{+}E)\log V)$</td><td><strong>最常用</strong>的帶權單源最短路</td></tr>
+          <tr><td>Bellman-Ford</td><td>單源、可負權</td><td>✅</td><td>✅</td><td>$O(VE)$</td><td>有負權、或要偵測負環</td></tr>
+          <tr><td>SPFA</td><td>單源、可負權</td><td>✅</td><td>✅</td><td>$O(VE)$ 最壞</td><td>負權圖、隨機資料(會被卡)</td></tr>
+          <tr><td>Floyd-Warshall</td><td><strong>全點對</strong></td><td>✅</td><td>(可改裝)</td><td>$O(V^3)$</td><td>$V \le 500$、要查任意兩點距離</td></tr>
+        </tbody>
+      </table>
+      </div>
+
+      <h2>最小生成樹(MST)</h2>
+      <p>
+        <strong>最小生成樹(Minimum Spanning Tree, MST)</strong>:用「最便宜的一組邊」把所有頂點連起來、不留環。
+        想像用最少的纜線總長串連所有城市,或最低成本鋪設電網。一棵生成樹恰好有 $n-1$ 條邊。
+        這是<strong>第 31 章貪心演算法</strong>的招牌應用,有兩個經典解法。
+      </p>
+
+      <h3>並查集複習(Kruskal 的引擎)</h3>
+      <p>
+        Kruskal 需要一個能快速回答「這兩點已經連通了嗎?」的工具,那就是第 29 章的
+        <strong>並查集(Union-Find / Disjoint Set Union)</strong>。配上「路徑壓縮」與「按大小合併」兩個優化,
+        每次操作近乎 $O(1)$。這個結構在 <strong>第 61 章</strong> 還會被反覆使用。
+      </p>
+      <pre><code class="language-cpp">int par[N], sz[N];
+void dsu_init(int n) {
+    for (int i = 1; i &lt;= n; i++) { par[i] = i; sz[i] = 1; }
+}
+int find(int x) {                       // 路徑壓縮
+    return par[x] == x ? x : par[x] = find(par[x]);
+}
+bool unite(int a, int b) {              // 合併;回傳 false 表示原本就同一集合
+    a = find(a); b = find(b);
+    if (a == b) return false;
+    if (sz[a] &lt; sz[b]) swap(a, b);      // 按大小合併:小的併到大的
+    par[b] = a; sz[a] += sz[b];
+    return true;
+}</code></pre>
+
+      <h3>Kruskal:由小到大加邊</h3>
+      <p>
+        Kruskal 的貪心極其直白:<strong>把所有邊按權重由小到大排序,依序嘗試加入;若這條邊的兩端已經連通(會成環)就跳過</strong>。
+        加滿 $n-1$ 條邊就完成。它用的是「邊列表」表示法。
+      </p>
+      <pre><code class="language-cpp">struct Edge { int u, v, w; };
+
+long long kruskal(vector&lt;Edge&gt;&amp; edges, int n) {
+    sort(edges.begin(), edges.end(),
+         [](const Edge&amp; a, const Edge&amp; b){ return a.w &lt; b.w; });  // 邊權由小到大
+    dsu_init(n);
+    long long total = 0;
+    int used = 0;
+    for (auto&amp; e : edges) {
+        if (unite(e.u, e.v)) {          // 兩端原本不連通 → 加這條邊不成環
+            total += e.w;
+            if (++used == n - 1) break; // 湊滿 n-1 條,完成
+        }
+    }
+    return total;   // 若 used &lt; n-1,代表圖不連通,沒有生成樹
+}</code></pre>
+      <p>複雜度 $O(E \log E)$,瓶頸在排序。</p>
+
+      <div class="diagram">
+<svg viewBox="0 0 560 240" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- vertices -->
+  <!-- edges: chosen (brick thick) vs skipped (gray dashed) -->
+  <g stroke-width="3" fill="none">
+    <line x1="90" y1="70" x2="210" y2="50" stroke="#b4541f"/>    <!-- A-B 1 chosen -->
+    <line x1="210" y1="50" x2="330" y2="80" stroke="#b4541f"/>   <!-- B-C 2 chosen -->
+    <line x1="90" y1="70" x2="180" y2="180" stroke="#b4541f"/>   <!-- A-D 3 chosen -->
+    <line x1="330" y1="80" x2="450" y2="170" stroke="#b4541f"/>  <!-- C-E 4 chosen -->
+  </g>
+  <g stroke-width="2" fill="none" stroke="#c9d0d6" stroke-dasharray="5 4">
+    <line x1="210" y1="50" x2="180" y2="180"/>   <!-- B-D 6 skipped -->
+    <line x1="180" y1="180" x2="450" y2="170"/>  <!-- D-E 7 skipped -->
+  </g>
+  <!-- weight labels -->
+  <g font-size="12" font-weight="700">
+    <text x="145" y="52" fill="#b4541f">1</text>
+    <text x="270" y="58" fill="#b4541f">2</text>
+    <text x="120" y="135" fill="#b4541f">3</text>
+    <text x="398" y="120" fill="#b4541f">4</text>
+    <text x="180" y="120" fill="#8a929b">6</text>
+    <text x="320" y="190" fill="#8a929b">7</text>
+  </g>
+  <g font-size="14" font-weight="800" text-anchor="middle" fill="#fff">
+    <circle cx="90" cy="70" r="20" fill="#2f6f6a"/><text x="90" y="75">A</text>
+    <circle cx="210" cy="50" r="20" fill="#2f6f6a"/><text x="210" y="55">B</text>
+    <circle cx="330" cy="80" r="20" fill="#2f6f6a"/><text x="330" y="85">C</text>
+    <circle cx="180" cy="180" r="20" fill="#2f6f6a"/><text x="180" y="185">D</text>
+    <circle cx="450" cy="170" r="20" fill="#2f6f6a"/><text x="450" y="175">E</text>
+  </g>
+  <text x="480" y="40" font-size="11" font-weight="700" fill="#b4541f">粗線=選中</text>
+  <text x="480" y="58" font-size="11" fill="#8a929b">虛線=跳過(成環)</text>
+  <text x="280" y="225" font-size="12" fill="#8a929b" text-anchor="middle">依權重 1,2,3,4 加入;邊 6、7 因兩端已連通而跳過。MST 總權重 = 1+2+3+4 = 10</text>
+</svg>
+        <figcaption>圖 63-5:Kruskal 求 MST。把邊由小到大考慮:1、2、3、4 都不成環,選入(磚紅粗線);權重 6、7 的邊因兩端早已連通(會成環)而被並查集擋下(灰虛線)。</figcaption>
+      </div>
+
+      <h3>Prim:從一點長出</h3>
+      <p>
+        Prim 的策略像 Dijkstra:從一個點出發,維護一群「已在樹裡」的點,每次用<strong>優先佇列</strong>挑出「連接樹與樹外、最便宜的那條邊」,
+        把對應的新點納入。適合<strong>稠密圖</strong>(用鄰接串列 + 堆積時複雜度 $O(E \log V)$)。
+      </p>
+      <pre><code class="language-cpp">typedef pair&lt;int,int&gt; pii;          // {邊權, 頂點}
+vector&lt;pair&lt;int,int&gt;&gt; g[N];          // {鄰居, 邊權}
+
+long long prim(int s, int n) {
+    vector&lt;bool&gt; inMST(n + 1, false);
+    priority_queue&lt;pii, vector&lt;pii&gt;, greater&lt;pii&gt;&gt; pq;
+    pq.push({0, s});
+    long long total = 0;
+    int cnt = 0;
+    while (!pq.empty() &amp;&amp; cnt &lt; n) {
+        auto [w, u] = pq.top(); pq.pop();
+        if (inMST[u]) continue;         // 已在樹裡,跳過(過期紀錄)
+        inMST[u] = true;
+        total += w;
+        cnt++;
+        for (auto [v, wt] : g[u])
+            if (!inMST[v]) pq.push({wt, v});
+    }
+    return total;
+}</code></pre>
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">Kruskal vs Prim:一句話選</span>
+          <p>競賽裡 <strong>Kruskal 用得更多</strong>:它寫起來短(排序 + 並查集),又天然適合「邊列表」輸入,稀疏圖尤佳。
+          當圖很<strong>稠密</strong>(邊接近 $V^2$)或題目本來就給鄰接串列時,Prim 可能更順手。
+          兩者答案相同(MST 唯一性在邊權互異時成立)。注意它們和 Dijkstra 長得很像——
+          差別只在 Prim 的 key 是「到樹的邊權」,Dijkstra 是「到起點的總距離」。</p>
+        </div>
+      </div>
+
+      <h2>樹上演算法:本章的重頭戲</h2>
+      <p>
+        終於來到壓軸。<strong>樹(tree)</strong>是一種特別的圖:$n$ 個點、恰 $n-1$ 條邊、連通、無環。
+        正因為這些限制,樹擁有一票普通圖沒有的漂亮性質,讓許多在一般圖上很難的問題,在樹上有又快又優雅的解。
+        這一節整合 AP325 第 8 章,是 APCS 進階與競賽的<strong>高頻考點</strong>。
+      </p>
+
+      <h3>樹的性質:為什麼樹這麼好用</h3>
+      <ul>
+        <li><strong>$n$ 點、$n-1$ 邊、連通、無環</strong>——這四個條件任三個都能推出第四個。</li>
+        <li><strong>任兩點之間恰有唯一一條路徑</strong>。這是樹最珍貴的性質:不必擔心「繞路」,路徑是唯一的。</li>
+        <li>任意加一條邊就<strong>產生環</strong>;任意刪一條邊就<strong>斷成兩棵樹</strong>。</li>
+        <li>除了根之外,每個點<strong>恰有一個父節點</strong>;沒有父節點的就是<strong>根(root)</strong>,沒有子節點的就是<strong>葉(leaf)</strong>。</li>
+      </ul>
+      <p>
+        這帶來一個解題上的大紅利:<strong>在樹上 DFS,常常不需要 <code>visited</code> 陣列</strong>——只要記住「父節點是誰」,
+        不要走回頭路就行。這是樹 DFS 的招牌寫法:
+      </p>
+      <pre><code class="language-cpp">vector&lt;int&gt; g[N];   // 無根樹用無向鄰接串列
+int sz[N];          // 子樹大小
+
+// 傳入 parent,用「不等於父節點」取代 visited 陣列
+void dfs(int u, int parent) {
+    sz[u] = 1;                          // 自己算一個
+    for (int v : g[u]) {
+        if (v == parent) continue;      // 不走回父節點 → 不會繞回去
+        dfs(v, u);
+        sz[u] += sz[v];                 // 把子樹大小累加上來
+    }
+}
+// 指定 1 為根:dfs(1, 0);  之後 sz[u] 就是「以 u 為根的子樹」有幾個點</code></pre>
+      <p>
+        上面這個 <code>sz[]</code>(子樹大小)是「子樹資訊由下往上合併」最樸素的例子。把它換成別的資訊
+        (子樹高度、子樹點權和……),骨架完全一樣。<strong>這個「DFS 回傳子樹資訊、父節點合併」的模式,
+        就是樹形 DP 的心臟</strong>。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">深度用 BFS,高度用 DFS</span>
+          <p>一個好記的對比:<strong>深度(depth)</strong>(根到某點的距離)是「由上往下」的資訊,
+          BFS 一層一層走最自然;<strong>高度(height)</strong>(某點到最遠子孫的距離)是「由下往上」的資訊,
+          需要子節點先回傳數值給父節點,所以要靠 DFS 遞迴的「回傳」特性。記住:<strong>往下的量用 BFS,往上的量用 DFS</strong>。</p>
+        </div>
+      </div>
+
+      <h3>樹形 DP:子樹資訊合併(最大獨立集)</h3>
+      <p>
+        <strong>樹形 DP(tree DP)</strong>的精髓:<strong>每個點的答案,由它各個子樹的答案合併而來</strong>。
+        我們用一個經典題把它講透——<strong>樹的最大權重獨立集(maximum weight independent set)</strong>。
+      </p>
+      <p>
+        題目:每個點 $u$ 有一個權重 $w_u$。請選出一組點,使得<strong>沒有任何兩個被選的點相鄰</strong>(這叫「獨立集」),
+        並讓被選點的權重總和最大。經典背景故事是「公司派對」:每個員工有歡樂值,但<strong>員工和他的直屬主管不能同時出席</strong>
+        (太尷尬),問派對最大歡樂值。
+      </p>
+      <p>
+        關鍵觀察:對每個點 $u$,只有兩種狀態——<strong>選 $u$</strong> 或 <strong>不選 $u$</strong>。我們對每個點記兩個值:
+      </p>
+      <ul>
+        <li><code>dp[u][0]</code> = 在 u 的子樹裡,<strong>不選 u</strong> 時的最大權重和。此時每個子節點 v 可選可不選,取較大者。</li>
+        <li><code>dp[u][1]</code> = 在 u 的子樹裡,<strong>選 u</strong> 時的最大權重和。此時每個子節點 v <strong>都不能選</strong>。</li>
+      </ul>
+      <p>於是合併公式($v$ 跑遍 $u$ 的所有子節點):</p>
+      <p>$$dp[u][0] = \sum_{v} \max\big(dp[v][0],\, dp[v][1]\big)$$</p>
+      <p>$$dp[u][1] = w_u + \sum_{v} dp[v][0]$$</p>
+      <p>最後答案是 $\max\big(dp[\text{root}][0],\, dp[\text{root}][1]\big)$。</p>
+      <pre><code class="language-cpp">vector&lt;int&gt; g[N];
+long long dp[N][2];
+int w[N];               // 點權
+
+void dfs(int u, int parent) {
+    dp[u][0] = 0;        // 不選 u 的基底
+    dp[u][1] = w[u];     // 選 u 的基底:先把自己的權重算進來
+    for (int v : g[u]) {
+        if (v == parent) continue;
+        dfs(v, u);                                   // 先算完子樹
+        dp[u][0] += max(dp[v][0], dp[v][1]);         // 不選 u:子節點隨意
+        dp[u][1] += dp[v][0];                        // 選 u:子節點必不選
+    }
+}
+
+// 主程式:dfs(1, 0); 答案 = max(dp[1][0], dp[1][1]);</code></pre>
+
+      <div class="diagram">
+<svg viewBox="0 0 560 270" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- tree edges -->
+  <g stroke="#8a929b" stroke-width="2">
+    <line x1="280" y1="55" x2="160" y2="130"/>
+    <line x1="280" y1="55" x2="400" y2="130"/>
+    <line x1="160" y1="130" x2="100" y2="210"/>
+    <line x1="160" y1="130" x2="220" y2="210"/>
+    <line x1="400" y1="130" x2="400" y2="210"/>
+  </g>
+  <!-- nodes; chosen (selected in MIS) = brick, not chosen = teal -->
+  <g font-size="13" font-weight="800" text-anchor="middle" fill="#fff">
+    <circle cx="280" cy="55" r="22" fill="#2f6f6a"/><text x="280" y="60">A</text>
+    <circle cx="160" cy="130" r="22" fill="#b4541f"/><text x="160" y="135">B</text>
+    <circle cx="400" cy="130" r="22" fill="#b4541f"/><text x="400" y="135">C</text>
+    <circle cx="100" cy="210" r="22" fill="#2f6f6a"/><text x="100" y="215">D</text>
+    <circle cx="220" cy="210" r="22" fill="#2f6f6a"/><text x="220" y="215">E</text>
+    <circle cx="400" cy="210" r="22" fill="#2f6f6a"/><text x="400" y="215">F</text>
+  </g>
+  <!-- weights -->
+  <g font-size="11" font-weight="700" fill="#1f2328" text-anchor="middle">
+    <text x="280" y="30">w=3</text>
+    <text x="124" y="118">w=6</text>
+    <text x="436" y="118">w=5</text>
+    <text x="64" y="205">w=2</text>
+    <text x="256" y="205">w=2</text>
+    <text x="436" y="205">w=1</text>
+  </g>
+  <text x="500" y="60" font-size="11" font-weight="700" fill="#b4541f">磚紅=選</text>
+  <text x="500" y="78" font-size="11" fill="#2f6f6a">藍綠=不選</text>
+  <text x="280" y="255" font-size="12" fill="#8a929b" text-anchor="middle">選 B、C(相鄰的父 A 與子 D/E/F 都不選):權重和 = 6 + 5 = 11(最大)</text>
+</svg>
+        <figcaption>圖 63-6:樹的最大權重獨立集。每點 DFS 回傳「選/不選」兩個值,父節點合併。這裡選 B、C(磚紅)得 $6+5=11$;若改選 A 就不能選 B、C,只剩 $3+2+2+1=8$,較差。</figcaption>
+      </div>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">樹形 DP 的通用配方</span>
+          <p>幾乎所有樹形 DP 都長這樣:<strong>(1)</strong> 為每個點定義「以它為根的子樹」上、若干種狀態的最佳值
+          (例如「選/不選這個點」);<strong>(2)</strong> 用一次 DFS,在「子節點全算完之後」把它們的狀態合併成父節點的狀態;
+          <strong>(3)</strong> 根節點的狀態取最佳就是答案。同一個配方能解最大獨立集、最小頂點覆蓋、最小管轄集、
+          樹上選點/染色……換的只是「狀態定義」與「合併公式」。AP325 第 8 章一整章都在玩這個配方。</p>
+        </div>
+      </div>
+
+      <h3>樹的直徑:兩次 BFS 的魔法</h3>
+      <p>
+        <strong>樹的直徑(diameter)</strong>:樹上<strong>距離最遠的兩個點之間的距離</strong>。
+        它有一個美得不像話的解法——<strong>只要兩次 BFS</strong>:
+      </p>
+      <ol>
+        <li>從<strong>任意一點</strong>(例如 1)BFS,找到離它<strong>最遠的點 $a$</strong>。</li>
+        <li>再從 $a$ BFS,找到離 $a$ <strong>最遠的點 $b$</strong>。則 $a$ 到 $b$ 的距離<strong>就是直徑</strong>。</li>
+      </ol>
+      <p>
+        為什麼第一步隨便選一點,找到的最遠點 $a$ 就一定是某條直徑的<strong>端點</strong>?
+        直覺:樹上「最遠」具有傳遞性——從任何點出發走到最遠處,必然停在直徑的一端。
+        (嚴格證明用反證法,可參考延伸資源。)這招在 AP325 叫「farthest of farthest」。
+      </p>
+      <pre><code class="language-cpp">vector&lt;int&gt; g[N];
+
+// 從 s 做 BFS,回傳 {最遠的點, 該距離}
+pair&lt;int,int&gt; bfs_far(int s, int n) {
+    vector&lt;int&gt; dist(n + 1, -1);
+    queue&lt;int&gt; q;
+    q.push(s); dist[s] = 0;
+    int far = s;
+    while (!q.empty()) {
+        int u = q.front(); q.pop();
+        if (dist[u] &gt; dist[far]) far = u;
+        for (int v : g[u]) if (dist[v] == -1) {
+            dist[v] = dist[u] + 1;
+            q.push(v);
+        }
+    }
+    return {far, dist[far]};
+}
+
+int diameter(int n) {
+    int a = bfs_far(1, n).first;        // 第一次:任取一點找最遠 a
+    auto [b, d] = bfs_far(a, n);        // 第二次:從 a 找最遠 b,距離 d 即直徑
+    return d;
+}</code></pre>
+      <p>
+        另一種解法是<strong>一次 DFS</strong>:對每個點求「往下兩條最長路徑」相加(它們會經過該點,構成一條候選直徑),
+        取所有點的最大值。這個寫法在帶權樹上一樣適用,而且能順便求出更多資訊:
+      </p>
+      <pre><code class="language-cpp">int ans = 0;
+// 回傳「u 往下能延伸的最長路徑(邊數)」,同時更新全域直徑 ans
+int dfs_diam(int u, int parent) {
+    int max1 = 0, max2 = 0;             // 最長、次長的「往下深度」
+    for (int v : g[u]) {
+        if (v == parent) continue;
+        int h = dfs_diam(v, u) + 1;
+        if (h &gt; max1) { max2 = max1; max1 = h; }
+        else if (h &gt; max2) max2 = h;
+    }
+    ans = max(ans, max1 + max2);        // 經過 u 的最長路徑 = 兩條最長下行路相加
+    return max1;
+}</code></pre>
+
+      <div class="diagram">
+<svg viewBox="0 0 580 230" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="d63c" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#b4541f"/></marker>
+  </defs>
+  <!-- tree edges -->
+  <g stroke="#8a929b" stroke-width="2">
+    <line x1="120" y1="60" x2="230" y2="110"/>
+    <line x1="230" y1="110" x2="340" y2="70"/>
+    <line x1="230" y1="110" x2="340" y2="160"/>
+    <line x1="340" y1="160" x2="450" y2="120"/>
+    <line x1="340" y1="160" x2="450" y2="200"/>
+  </g>
+  <!-- diameter path highlight: D? Let's mark 120,60 -> 230,110 -> 340,160 -> 450,200 -->
+  <g stroke="#b4541f" stroke-width="3.5" fill="none">
+    <line x1="120" y1="60" x2="230" y2="110"/>
+    <line x1="230" y1="110" x2="340" y2="160"/>
+    <line x1="340" y1="160" x2="450" y2="200"/>
+  </g>
+  <g font-size="13" font-weight="800" text-anchor="middle" fill="#fff">
+    <circle cx="120" cy="60" r="20" fill="#b4541f"/><text x="120" y="65">a</text>
+    <circle cx="230" cy="110" r="20" fill="#2f6f6a"/><text x="230" y="115">·</text>
+    <circle cx="340" cy="70" r="20" fill="#2f6f6a"/><text x="340" y="75">·</text>
+    <circle cx="340" cy="160" r="20" fill="#2f6f6a"/><text x="340" y="165">·</text>
+    <circle cx="450" cy="120" r="20" fill="#2f6f6a"/><text x="450" y="125">·</text>
+    <circle cx="450" cy="200" r="20" fill="#b4541f"/><text x="450" y="205">b</text>
+  </g>
+  <text x="60" y="40" font-size="11" font-weight="700" fill="#b4541f">①任取點 BFS→最遠 a</text>
+  <text x="455" y="170" font-size="11" font-weight="700" fill="#b4541f">②從 a BFS→最遠 b</text>
+  <text x="285" y="222" font-size="12" fill="#8a929b" text-anchor="middle">a 到 b 的路徑(磚紅粗線)長度 = 樹的直徑 = 3</text>
+</svg>
+        <figcaption>圖 63-7:兩次 BFS 求樹直徑。第一次從任意點找到最遠端點 $a$;第二次從 $a$ 出發找到最遠端點 $b$。$a\!-\!b$ 的距離就是直徑。直覺上,「最遠的最遠」必然撐開整棵樹。</figcaption>
+      </div>
+
+      <h3>最近共同祖先 LCA:倍增法</h3>
+      <p>
+        最後一個重頭戲:<strong>最近共同祖先(Lowest Common Ancestor, LCA)</strong>。
+        在一棵有根樹裡,兩點 $u$、$v$ 的 LCA 是「同時是兩者祖先、且離它們最近」的那個點。
+        它能解一票問題:<strong>樹上兩點距離</strong> = $depth[u] + depth[v] - 2 \times depth[\text{LCA}(u,v)]$;
+        判斷祖孫關係;樹上路徑查詢……
+      </p>
+      <p>
+        最暴力的做法是「讓較深的點先往上爬到同深度,再兩點一起往上爬,直到相遇」,單次查詢 $O(h)$(樹高)。
+        鏈狀樹會退化成 $O(n)$,大量查詢就爆了。競賽標準解是<strong>倍增法(binary lifting)</strong>:
+        預處理每個點「往上跳 $2^k$ 步」的祖先,之後每次查詢只要 $O(\log n)$。
+      </p>
+      <p>
+        核心是一張表 <code>up[v][k]</code> = 「從 v 往上跳 $2^k$ 步」到達的祖先。它有個漂亮的遞推:
+        <strong>往上跳 $2^k$ 步 = 先跳 $2^{k-1}$ 步,再從那裡跳 $2^{k-1}$ 步</strong>:
+      </p>
+      <p>$$up[v][k] = up[\,up[v][k-1]\,][k-1]$$</p>
+
+      <div class="diagram">
+<svg viewBox="0 0 580 250" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="d63d" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L9,3 L0,6 Z" fill="#8b5cf6"/></marker>
+  </defs>
+  <!-- a vertical chain of 9 nodes to illustrate jumps -->
+  <g stroke="#cbd2d8" stroke-width="2">
+    <line x1="120" y1="40" x2="120" y2="215"/>
+  </g>
+  <g font-size="11" font-weight="800" text-anchor="middle" fill="#fff">
+    <circle cx="120" cy="40" r="14" fill="#2f6f6a"/><text x="120" y="44">0</text>
+    <circle cx="120" cy="62" r="14" fill="#8a929b"/><text x="120" y="66">1</text>
+    <circle cx="120" cy="84" r="14" fill="#8a929b"/><text x="120" y="88">2</text>
+    <circle cx="120" cy="106" r="14" fill="#8a929b"/><text x="120" y="110">3</text>
+    <circle cx="120" cy="128" r="14" fill="#8a929b"/><text x="120" y="132">4</text>
+    <circle cx="120" cy="150" r="14" fill="#8a929b"/><text x="120" y="154">5</text>
+    <circle cx="120" cy="172" r="14" fill="#8a929b"/><text x="120" y="176">6</text>
+    <circle cx="120" cy="194" r="14" fill="#8a929b"/><text x="120" y="198">7</text>
+    <circle cx="120" cy="216" r="14" fill="#b4541f"/><text x="120" y="220">v</text>
+  </g>
+  <!-- jump arcs on the right -->
+  <g stroke="#8b5cf6" stroke-width="2" fill="none" marker-end="url(#d63d)">
+    <path d="M 135 216 Q 200 205 178 196"/>            <!-- 2^0 -->
+    <path d="M 145 216 Q 250 190 162 152"/>            <!-- 2^1 -->
+    <path d="M 155 216 Q 330 130 132 86"/>             <!-- 2^2 -->
+  </g>
+  <g font-size="12" font-weight="700" fill="#8b5cf6">
+    <text x="205" y="200">up[v][0]:跳 1 步</text>
+    <text x="265" y="158">up[v][1]:跳 2 步</text>
+    <text x="345" y="92">up[v][2]:跳 4 步</text>
+  </g>
+  <text x="300" y="240" font-size="11" fill="#8a929b">每個點存「跳 1、2、4、8… 步」的祖先,任何距離都能用二進位拼出</text>
+</svg>
+        <figcaption>圖 63-8:倍增法 LCA。從 v 預存「往上跳 $2^k$ 步」的祖先(跳 1、2、4 步…)。要往上爬任意距離 $d$,只要把 $d$ 拆成二進位,用對應的幾次跳躍拼出來——$O(\log n)$ 完成。</figcaption>
+      </div>
+
+      <pre><code class="language-cpp">const int LOG = 17;        // 2^17 = 131072 &gt; 1e5,夠用
+vector&lt;int&gt; g[N];
+int up[N][LOG];            // up[v][k] = v 往上跳 2^k 步的祖先
+int depth[N];
+
+// 預處理:DFS 算 depth 與 up 表。根 r 呼叫 dfs(r, r)
+void dfs(int u, int parent) {
+    up[u][0] = parent;                            // 往上 1 步 = 父節點
+    for (int k = 1; k &lt; LOG; k++)
+        up[u][k] = up[ up[u][k-1] ][k-1];         // 倍增遞推
+    for (int v : g[u]) if (v != parent) {
+        depth[v] = depth[u] + 1;
+        dfs(v, u);
+    }
+}
+
+int lca(int a, int b) {
+    if (depth[a] &lt; depth[b]) swap(a, b);          // 保證 a 較深
+    int diff = depth[a] - depth[b];
+    for (int k = 0; k &lt; LOG; k++)                  // 把 a 提到和 b 同深度
+        if (diff &amp; (1 &lt;&lt; k)) a = up[a][k];
+    if (a == b) return a;                          // b 本來就是 a 的祖先
+    for (int k = LOG - 1; k &gt;= 0; k--)             // 兩點一起往上,跳到 LCA 正下方
+        if (up[a][k] != up[b][k]) {
+            a = up[a][k];
+            b = up[b][k];
+        }
+    return up[a][0];                               // 再跳一步就是 LCA
+}
+
+// 樹上兩點距離 = depth[a] + depth[b] - 2 * depth[lca(a,b)]</code></pre>
+      <p>
+        預處理 $O(n \log n)$,每次查詢 $O(\log n)$。理解兩個關鍵步驟:第一個迴圈用 <code>diff</code> 的二進位位元,
+        把較深的點「精準地」提升到與另一點同深度;第二個迴圈是<strong>從大步到小步</strong>嘗試一起跳,
+        「能跳就跳,但永遠不跳到共同祖先之上」,最後兩點會停在 LCA 的正下方,再跳一步(<code>up[a][0]</code>)就是答案。
+        這個「從高位往低位試跳」的逆序迴圈是倍增法的精髓,務必想清楚。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">倍增法不只用在 LCA</span>
+          <p>「預存 $2^k$ 步的結果,查詢時用二進位拼湊」這個<strong>倍增(binary lifting)</strong>思想威力極廣:
+          求樹上「往上第 $k$ 個祖先」、稀疏表(sparse table)做區間最值查詢、快速冪($a^n$ 用 $O(\log n)$ 次乘法)
+          ——都是同一招的變奏。看到「重複很多次的同質操作 + 大量查詢」,就該想到倍增。</p>
+        </div>
+      </div>
+
+      <h2>競賽圖論題型對照表</h2>
+      <p>
+        圖論題的難點往往是「認出它」。把這張表記熟,看到題目關鍵字,就知道該掏出哪把刀:
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>題目關鍵字 / 特徵</th><th>對應演算法</th><th>複雜度</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>最少步數、最短(每步代價=1)</td><td>BFS</td><td>$O(V+E)$</td></tr>
+          <tr><td>網格、迷宮、數島、淹水</td><td>圖外 BFS/DFS(方向陣列)</td><td>$O(\text{格數})$</td></tr>
+          <tr><td>分成幾塊、是否連通</td><td>DFS/BFS 連通元件 或 並查集</td><td>$O(V+E)$</td></tr>
+          <tr><td>兩色、配對、無奇環</td><td>二分圖判定(染色 BFS)</td><td>$O(V+E)$</td></tr>
+          <tr><td>先後順序、相依、判有向環</td><td>拓樸排序(Kahn)</td><td>$O(V+E)$</td></tr>
+          <tr><td>相依任務 + 最佳化</td><td>DAG 上 DP(沿拓樸序)</td><td>$O(V+E)$</td></tr>
+          <tr><td>帶權最短路(非負)</td><td>Dijkstra(priority_queue)</td><td>$O((V{+}E)\log V)$</td></tr>
+          <tr><td>帶權最短路(有負權)/偵測負環</td><td>Bellman-Ford / SPFA</td><td>$O(VE)$</td></tr>
+          <tr><td>全點對最短路($V$ 小)</td><td>Floyd-Warshall</td><td>$O(V^3)$</td></tr>
+          <tr><td>最小成本連通所有點</td><td>MST:Kruskal / Prim</td><td>$O(E\log E)$</td></tr>
+          <tr><td>動態合併集合、判無向環</td><td>並查集</td><td>近 $O(1)$/次</td></tr>
+          <tr><td>樹 + 子樹資訊 / 選或不選</td><td>樹形 DP</td><td>$O(V)$</td></tr>
+          <tr><td>樹上最遠兩點</td><td>樹直徑(兩次 BFS)</td><td>$O(V)$</td></tr>
+          <tr><td>樹上兩點距離 / 共同祖先(多次查詢)</td><td>LCA 倍增法</td><td>$O(n\log n + q\log n)$</td></tr>
+        </tbody>
+      </table>
+      </div>
+
+      <h2>動手練習</h2>
+      <p>圖論是「看懂容易、寫對才算數」的典型。下面八題由淺入深,涵蓋本章每個主題,務必先自己動手,再展開解答對照。</p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 63.1 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p><strong>洪水填充:數島嶼。</strong>給一個 $n \times m$ 的 0/1 網格,上下左右相連的 1 算同一座島。輸出島嶼數量。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-cpp">#include &lt;bits/stdc++.h&gt;
+using namespace std;
+
+int n, m, grid[1005][1005];
+int dx[4] = {1, -1, 0, 0}, dy[4] = {0, 0, 1, -1};
+
+void flood(int x, int y) {
+    grid[x][y] = 0;                       // 沉島當作已訪
+    for (int k = 0; k &lt; 4; k++) {
+        int nx = x + dx[k], ny = y + dy[k];
+        if (nx &gt;= 0 &amp;&amp; nx &lt; n &amp;&amp; ny &gt;= 0 &amp;&amp; ny &lt; m &amp;&amp; grid[nx][ny] == 1)
+            flood(nx, ny);
+    }
+}
+
+int main() {
+    ios::sync_with_stdio(false); cin.tie(nullptr);
+    cin &gt;&gt; n &gt;&gt; m;
+    for (int i = 0; i &lt; n; i++)
+        for (int j = 0; j &lt; m; j++) cin &gt;&gt; grid[i][j];
+    int islands = 0;
+    for (int i = 0; i &lt; n; i++)
+        for (int j = 0; j &lt; m; j++)
+            if (grid[i][j] == 1) { islands++; flood(i, j); }
+    cout &lt;&lt; islands &lt;&lt; '\n';
+    return 0;
+}</code></pre>
+              <p>重點:把走過的格子改成 0,等於免費省掉 <code>visited[][]</code> 陣列。若網格很大(深鏈),
+              遞迴 DFS 可能爆 stack,可改成用 <code>queue&lt;pair&lt;int,int&gt;&gt;</code> 的 BFS 版,邏輯完全一樣。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 63.2 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p><strong>二分圖判定。</strong>給一張無向圖(可能不連通),判斷它是否為二分圖。輸出 <code>YES</code> / <code>NO</code>。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-cpp">#include &lt;bits/stdc++.h&gt;
+using namespace std;
+
+const int N = 1e5 + 5;
+vector&lt;int&gt; g[N];
+int color[N];
+
+int main() {
+    ios::sync_with_stdio(false); cin.tie(nullptr);
+    int n, m;
+    cin &gt;&gt; n &gt;&gt; m;
+    for (int i = 0; i &lt; m; i++) {
+        int u, v; cin &gt;&gt; u &gt;&gt; v;
+        g[u].push_back(v); g[v].push_back(u);
+    }
+    for (int i = 1; i &lt;= n; i++) color[i] = -1;
+    bool ok = true;
+    for (int s = 1; s &lt;= n &amp;&amp; ok; s++) {
+        if (color[s] != -1) continue;
+        queue&lt;int&gt; q; q.push(s); color[s] = 0;
+        while (!q.empty()) {
+            int u = q.front(); q.pop();
+            for (int v : g[u]) {
+                if (color[v] == -1) { color[v] = color[u] ^ 1; q.push(v); }
+                else if (color[v] == color[u]) { ok = false; break; }
+            }
+        }
+    }
+    cout &lt;&lt; (ok ? "YES" : "NO") &lt;&lt; '\n';
+    return 0;
+}</code></pre>
+              <p>核心是 <code>color[u] ^ 1</code> 一行翻色。別忘了「圖可能不連通」,每個未染色點都要當起點。
+              二分圖 ⇔ 沒有奇數長度的環。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 63.3 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p><strong>拓樸排序。</strong>給一張有 $n$ 點 $m$ 邊的有向圖,輸出一個合法的拓樸序;若有環則輸出 <code>IMPOSSIBLE</code>。
+          (例:課程先修排序。)</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-cpp">#include &lt;bits/stdc++.h&gt;
+using namespace std;
+
+const int N = 1e5 + 5;
+vector&lt;int&gt; g[N];
+int indeg[N];
+
+int main() {
+    ios::sync_with_stdio(false); cin.tie(nullptr);
+    int n, m;
+    cin &gt;&gt; n &gt;&gt; m;
+    for (int i = 0; i &lt; m; i++) {
+        int u, v; cin &gt;&gt; u &gt;&gt; v;   // u 必須排在 v 前面
+        g[u].push_back(v);
+        indeg[v]++;
+    }
+    queue&lt;int&gt; q;
+    for (int i = 1; i &lt;= n; i++) if (indeg[i] == 0) q.push(i);
+    vector&lt;int&gt; order;
+    while (!q.empty()) {
+        int u = q.front(); q.pop();
+        order.push_back(u);
+        for (int v : g[u]) if (--indeg[v] == 0) q.push(v);
+    }
+    if ((int)order.size() != n) { cout &lt;&lt; "IMPOSSIBLE\n"; return 0; }
+    for (int x : order) cout &lt;&lt; x &lt;&lt; ' ';
+    cout &lt;&lt; '\n';
+    return 0;
+}</code></pre>
+              <p>Kahn 順手偵測有向環:若有環,環上的點入度永遠減不到 0,<code>order</code> 會少幾個,
+              所以 <code>order.size() != n</code> 就代表無解。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 63.4 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p><strong>Dijkstra 最短路。</strong>給帶權有向圖($1 \le w \le 10^9$,非負),求從點 1 到所有點的最短距離。
+          走不到輸出 <code>-1</code>。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-cpp">#include &lt;bits/stdc++.h&gt;
+using namespace std;
+typedef pair&lt;long long,int&gt; pli;
+
+const int N = 1e5 + 5;
+vector&lt;pair&lt;int,int&gt;&gt; g[N];
+long long dist[N];
+
+int main() {
+    ios::sync_with_stdio(false); cin.tie(nullptr);
+    int n, m;
+    cin &gt;&gt; n &gt;&gt; m;
+    for (int i = 0; i &lt; m; i++) {
+        int u, v, w; cin &gt;&gt; u &gt;&gt; v &gt;&gt; w;
+        g[u].push_back({v, w});
+    }
+    for (int i = 1; i &lt;= n; i++) dist[i] = LLONG_MAX;
+    priority_queue&lt;pli, vector&lt;pli&gt;, greater&lt;pli&gt;&gt; pq;
+    dist[1] = 0; pq.push({0, 1});
+    while (!pq.empty()) {
+        auto [d, u] = pq.top(); pq.pop();
+        if (d &gt; dist[u]) continue;            // 過期紀錄
+        for (auto [v, w] : g[u])
+            if (dist[u] + w &lt; dist[v]) {
+                dist[v] = dist[u] + w;
+                pq.push({dist[v], v});
+            }
+    }
+    for (int i = 1; i &lt;= n; i++)
+        cout &lt;&lt; (dist[i] == LLONG_MAX ? -1 : dist[i]) &lt;&lt; " \n"[i == n];
+    return 0;
+}</code></pre>
+              <p>用 <code>long long</code> 防溢位;<code>if (d &gt; dist[u]) continue;</code> 是 STL 堆 Dijkstra 的靈魂
+              (不刪舊紀錄,出堆時跳過過期者)。想輸出實際路徑就再記一個 <code>parent[]</code>,鬆弛成功時更新。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 63.5 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p><strong>Kruskal 最小生成樹。</strong>給 $n$ 點 $m$ 條帶權無向邊,求 MST 的總權重;若圖不連通輸出 <code>IMPOSSIBLE</code>。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-cpp">#include &lt;bits/stdc++.h&gt;
+using namespace std;
+
+const int N = 1e5 + 5;
+int par[N], sz[N];
+int find(int x) { return par[x] == x ? x : par[x] = find(par[x]); }
+bool unite(int a, int b) {
+    a = find(a); b = find(b);
+    if (a == b) return false;
+    if (sz[a] &lt; sz[b]) swap(a, b);
+    par[b] = a; sz[a] += sz[b];
+    return true;
+}
+
+struct Edge { int u, v, w; };
+
+int main() {
+    ios::sync_with_stdio(false); cin.tie(nullptr);
+    int n, m;
+    cin &gt;&gt; n &gt;&gt; m;
+    vector&lt;Edge&gt; edges(m);
+    for (auto&amp; e : edges) cin &gt;&gt; e.u &gt;&gt; e.v &gt;&gt; e.w;
+    sort(edges.begin(), edges.end(),
+         [](const Edge&amp; a, const Edge&amp; b){ return a.w &lt; b.w; });
+    for (int i = 1; i &lt;= n; i++) { par[i] = i; sz[i] = 1; }
+    long long total = 0; int used = 0;
+    for (auto&amp; e : edges)
+        if (unite(e.u, e.v)) { total += e.w; used++; }
+    if (used != n - 1) cout &lt;&lt; "IMPOSSIBLE\n";
+    else cout &lt;&lt; total &lt;&lt; '\n';
+    return 0;
+}</code></pre>
+              <p>Kruskal = 排序 + 並查集。<code>unite</code> 回傳 <code>false</code> 代表兩端已連通(加了會成環),自動跳過。
+              最後若選到的邊不足 $n-1$ 條,代表圖不連通、沒有生成樹。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 63.6 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p><strong>樹的直徑。</strong>給一棵 $n$ 點的樹($n-1$ 條無向邊),求它的直徑(最遠兩點的邊數距離)。
+          用「兩次 BFS」實作。(背景:AP325「血緣關係」。)</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-cpp">#include &lt;bits/stdc++.h&gt;
+using namespace std;
+
+const int N = 1e5 + 5;
+vector&lt;int&gt; g[N];
+
+pair&lt;int,int&gt; bfs_far(int s, int n) {   // 回傳 {最遠點, 距離}
+    vector&lt;int&gt; dist(n + 1, -1);
+    queue&lt;int&gt; q; q.push(s); dist[s] = 0;
+    int far = s;
+    while (!q.empty()) {
+        int u = q.front(); q.pop();
+        if (dist[u] &gt; dist[far]) far = u;
+        for (int v : g[u]) if (dist[v] == -1) {
+            dist[v] = dist[u] + 1; q.push(v);
+        }
+    }
+    return {far, dist[far]};
+}
+
+int main() {
+    ios::sync_with_stdio(false); cin.tie(nullptr);
+    int n; cin &gt;&gt; n;
+    for (int i = 0; i &lt; n - 1; i++) {
+        int u, v; cin &gt;&gt; u &gt;&gt; v;
+        g[u].push_back(v); g[v].push_back(u);
+    }
+    int a = bfs_far(1, n).first;     // 任取一點找最遠 a
+    int d = bfs_far(a, n).second;    // 從 a 找最遠,距離即直徑
+    cout &lt;&lt; d &lt;&lt; '\n';
+    return 0;
+}</code></pre>
+              <p>為什麼第一次「隨便選一點」找到的 $a$ 一定是直徑端點?因為樹上「最遠」有傳遞性:
+              從任何點走到最遠處,必落在某條直徑的一端。第二次從 $a$ 出發,自然量到整條直徑。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 63.7 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p><strong>樹形 DP:最大權重獨立集。</strong>給一棵 $n$ 點的樹,每點有權重 $w_i$。選一組互不相鄰的點,使權重和最大。
+          (背景:AP325「公司派對」。)</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-cpp">#include &lt;bits/stdc++.h&gt;
+using namespace std;
+
+const int N = 1e5 + 5;
+vector&lt;int&gt; g[N];
+long long dp[N][2];
+int w[N];
+
+void dfs(int u, int parent) {
+    dp[u][0] = 0;          // 不選 u
+    dp[u][1] = w[u];       // 選 u
+    for (int v : g[u]) {
+        if (v == parent) continue;
+        dfs(v, u);
+        dp[u][0] += max(dp[v][0], dp[v][1]);   // 不選 u → 子節點隨意
+        dp[u][1] += dp[v][0];                   // 選 u → 子節點不能選
+    }
+}
+
+int main() {
+    ios::sync_with_stdio(false); cin.tie(nullptr);
+    int n; cin &gt;&gt; n;
+    for (int i = 1; i &lt;= n; i++) cin &gt;&gt; w[i];
+    for (int i = 0; i &lt; n - 1; i++) {
+        int u, v; cin &gt;&gt; u &gt;&gt; v;
+        g[u].push_back(v); g[v].push_back(u);
+    }
+    dfs(1, 0);
+    cout &lt;&lt; max(dp[1][0], dp[1][1]) &lt;&lt; '\n';
+    return 0;
+}</code></pre>
+              <p>樹形 DP 的通用配方:每點兩個狀態(選/不選),DFS 在「子節點全算完」後合併。
+              想練變形?把規則改成「最小頂點覆蓋」(每條邊至少一端被選)或「最小管轄集」,狀態與公式換掉、骨架不變。
+              注意若樹是一條深鏈,遞迴可能爆 stack——競賽中可手動加大堆疊或改成迭代式 DFS。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 63.8 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p><strong>進階:LCA 與樹上距離查詢。</strong>給一棵 $n$ 點有根樹(根為 1)與 $q$ 筆查詢,每筆問兩點 $u$、$v$ 之間的距離。
+          用倍增法 LCA,讓每筆查詢 $O(\log n)$。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <pre><code class="language-cpp">#include &lt;bits/stdc++.h&gt;
+using namespace std;
+
+const int N = 1e5 + 5, LOG = 17;
+vector&lt;int&gt; g[N];
+int up[N][LOG], dep[N];
+
+void dfs(int u, int parent) {
+    up[u][0] = parent;
+    for (int k = 1; k &lt; LOG; k++)
+        up[u][k] = up[ up[u][k-1] ][k-1];
+    for (int v : g[u]) if (v != parent) {
+        dep[v] = dep[u] + 1;
+        dfs(v, u);
+    }
+}
+
+int lca(int a, int b) {
+    if (dep[a] &lt; dep[b]) swap(a, b);
+    int diff = dep[a] - dep[b];
+    for (int k = 0; k &lt; LOG; k++)
+        if (diff &amp; (1 &lt;&lt; k)) a = up[a][k];
+    if (a == b) return a;
+    for (int k = LOG - 1; k &gt;= 0; k--)
+        if (up[a][k] != up[b][k]) { a = up[a][k]; b = up[b][k]; }
+    return up[a][0];
+}
+
+int main() {
+    ios::sync_with_stdio(false); cin.tie(nullptr);
+    int n, q;
+    cin &gt;&gt; n &gt;&gt; q;
+    for (int i = 0; i &lt; n - 1; i++) {
+        int u, v; cin &gt;&gt; u &gt;&gt; v;
+        g[u].push_back(v); g[v].push_back(u);
+    }
+    dep[1] = 0;
+    dfs(1, 1);                       // 根的父節點設為自己,跳出界仍停在根
+    while (q--) {
+        int u, v; cin &gt;&gt; u &gt;&gt; v;
+        int w = lca(u, v);
+        cout &lt;&lt; dep[u] + dep[v] - 2 * dep[w] &lt;&lt; '\n';   // 樹上距離公式
+        // 樹上距離 = dep[u] + dep[v] - 2*dep[LCA(u,v)]
+    }
+    return 0;
+}</code></pre>
+              <p>把根的父節點設成自己(<code>dfs(1, 1)</code>),這樣 <code>up[1][k]</code> 永遠是 1,往上跳超過根也安全停在根。
+              距離公式的直覺:$u$ 到 LCA、$v$ 到 LCA 兩段路相加,而它們共用的「深度」被算了兩次,所以減 $2 \times dep[\text{LCA}]$。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>把這一章串起來</h2>
+      <p>我們把第 30 章的圖演算法,從 Python 直覺一路鍛造成競賽級的 C++ 兵器庫:</p>
+      <ul>
+        <li><strong>建模與表示</strong>:鄰接串列(<code>vector</code>)是稀疏圖的預設;真正的功夫在<strong>隱式圖</strong>——把文字題翻譯成「點與邊」。</li>
+        <li><strong>BFS/DFS 四大應用</strong>:連通元件、洪水填充數島、網格最短步數、二分圖判定。關鍵分水嶺是
+        「<strong>圖上</strong>(查 <code>g[]</code>)vs <strong>圖外</strong>(方向陣列即時算鄰居)」。</li>
+        <li><strong>拓樸排序與 DAG 上 DP</strong>:Kahn(入度 + 佇列)排出相依順序、順手偵測有向環;沿拓樸序做 DP 解最長路徑——這是通往第 62 章競賽 DP 的橋。</li>
+        <li><strong>最短路三巨頭</strong>:Dijkstra(<code>priority_queue</code>、非負權、最常用)、Bellman-Ford / SPFA(可負權、偵測負環)、Floyd-Warshall(全點對、$k$ 在最外層)。</li>
+        <li><strong>最小生成樹</strong>:Kruskal(排序 + 並查集)與 Prim(優先佇列),呼應第 31 章貪心。</li>
+        <li><strong>樹上演算法(重頭戲)</strong>:樹的性質讓 DFS 可省 <code>visited</code>;<strong>樹形 DP</strong>(子樹資訊合併,最大獨立集);
+        <strong>樹直徑</strong>(兩次 BFS 的魔法);<strong>LCA 倍增法</strong>($O(\log n)$ 查祖先與距離)。</li>
+      </ul>
+      <p>
+        你會發現,這一章幾乎沒有發明全新的「資料結構」——佇列、堆積、並查集都是第 29 章的老朋友
+        (它們在<strong>第 61 章</strong>競賽資料結構裡會再被深挖)。競賽的真正功夫,在於<strong>把這些零件,
+        對著一個被你成功「翻譯成圖」的問題,組裝成解法</strong>。下一步,你該做的就是打開評測系統,
+        把本章的八題模板親手敲過、送出、被 AC 一次——演算法是手指的肌肉記憶,讀懂永遠不等於寫得出來。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">📚</div>
+        <div class="body">
+          <span class="c-title">想更深入?延伸資源</span>
+          <p>本章整合自 <strong>AP325 演算法解題教材</strong>(第 7 章基本圖論演算法、第 8 章樹上演算法),
+          搭配 <a href="https://judge.tcirc.tw/">TCIRC judge</a> 與 <a href="https://zerojudge.tw/">ZeroJudge</a> 的對應題目(d090~d115 一系列)實戰最有效。
+          想要系統化、附中文詳解的線上百科,首推 <a href="https://oi-wiki.org/graph/">OI-Wiki 圖論章節</a>
+          (BFS/DFS、最短路、生成樹、樹上問題、LCA 倍增法都有清楚的條目與證明)。
+          想要一條龍的刷題路線,強烈推薦 <a href="https://cses.fi/problemset/">CSES Problem Set</a> 的
+          <em>Graph Algorithms</em>(連通、最短路、拓樸、環偵測)與 <em>Tree Algorithms</em>(子樹、直徑、LCA)兩大分類——
+          題目精選、難度循序,是公認練圖論與樹論的最佳題庫。</p>
+        </div>
+      </div>
+
+    

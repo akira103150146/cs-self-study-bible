@@ -1,0 +1,1012 @@
+<!--meta
+title: GPU 架構與 CUDA 程式設計
+description: 從少數強核到海量弱核——理解 GPU 的 SM、warp、SIMT 執行模型、記憶體階層與合併存取，並親手撰寫 vector add、tiled 矩陣乘法與平行歸約三個 CUDA kernel。
+-->
+
+      <div class="eyebrow">第二六部 · 高效能運算、GPU 與 WASM</div>
+      <h1>GPU 架構與 CUDA 程式設計</h1>
+      <p class="subtitle">深度學習、大型語言模型、即時光線追蹤——這些計算奇蹟的共同底座是數千個微小的處理核心同時協作。這一章我們拆開 GPU 的外殼，從 warp 與 SM 出發，一路手刻三個 CUDA kernel，直到看懂 PyTorch 底層在做什麼。</p>
+      <div class="byline">
+        <span class="tag">第 112 章</span>
+        <span>閱讀時間 ≈ 75 分鐘</span>
+        <span>難度:★★★★★</span>
+      </div>
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>為何 GPU(海量弱核)比 CPU(少數強核)更適合矩陣與 ML 計算——從晶片設計哲學到記憶體頻寬</li>
+          <li>GPU 硬體模型：SM(Streaming Multiprocessor)、CUDA core、warp(32 執行緒 SIMT)、thread / block / grid 三層階層</li>
+          <li>SIMT 執行：warp 內鎖步(lockstep)執行、分支發散(branch divergence)造成的 lane 浪費</li>
+          <li>記憶體階層：global / shared / register / constant 的延遲與頻寬差異，以及合併存取(coalescing)為何是 GPU 程式設計的第一要義</li>
+          <li>親手撰寫三個 CUDA kernel：向量加法(vector add)、tiled 矩陣乘法(tiled matmul)、平行歸約(reduction)</li>
+          <li>同步原語：<code>__syncthreads()</code> 的語意、競態條件(race condition)、原子操作(atomic)</li>
+          <li>生態系：cuBLAS / cuDNN / Thrust 如何讓深度學習框架站在 GPU 的肩膀上；Tensor Core 與混合精度計算一瞥</li>
+        </ul>
+      </div>
+
+      <!-- ===== h2 ① ===== -->
+      <h2>少數強核 vs 海量弱核：CPU 與 GPU 的根本哲學差異</h2>
+
+      <p>
+        想像你要把一億個浮點數兩兩相加。用 CPU 做，你有 16 個高頻核心，
+        每個核心有亂序執行(out-of-order)、分支預測、大快取——是個全能的「廚師長」，
+        什麼工作都能高效完成，但同時只能讓 16 個廚師長上工。
+      </p>
+      <p>
+        GPU 的思路完全不同。一塊現代 GPU 可能有 6,000–16,000 個「迷你核心」，
+        每個核心的單執行緒效能遠不如 CPU，沒有複雜的亂序引擎，快取也小；
+        但它們<em>同時</em>執行同一段程式——只是資料不同。把那一億個加法分給一億個
+        （虛擬的）執行緒，每個執行緒只算一對，全部同時跑完，
+        這就是 GPU 計算的核心思想。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">CPU vs GPU 設計哲學</span>
+          <p>
+            CPU 把大部分晶片面積給了控制邏輯與快取，追求<strong>單執行緒延遲(latency)</strong>最小化。
+            GPU 把面積給了算術單元(ALU)，追求<strong>聚合吞吐(throughput)</strong>最大化，
+            用執行緒切換隱藏記憶體存取延遲。
+          </p>
+        </div>
+      </div>
+
+      <p>
+        為什麼深度學習天生適合 GPU？因為訓練一個神經網路的核心操作是矩陣乘法(matrix multiplication)——
+        你在<a href="54-linear-algebra.html">第 54 章</a>學過它的數學，在
+        <a href="99-gpt-from-scratch.html">第 93 章</a>看到它撐起了 GPT 的 attention 計算。
+        矩陣乘法有個完美的特性：<em>每一個輸出元素的計算之間完全獨立</em>，
+        可以無限並行。幾千個 CUDA 核心同時計算矩陣裡的幾千個格子——這就是為什麼
+        一張 GPU 能讓訓練速度比 CPU 快 100 倍。
+      </p>
+
+      <p>
+        CUDA(Compute Unified Device Architecture)是 NVIDIA 在 2006 年發布的
+        GPU 通用計算平台，讓開發者能用類 C 的語言直接撰寫在 GPU 上執行的程式。
+        本章以 CUDA C 為主，你在這裡學到的概念——SIMT、warp、共享記憶體、
+        合併存取——在 OpenCL、Metal Compute 與 WebGPU Compute Shader 裡同樣適用。
+      </p>
+
+      <div class="callout history">
+        <div class="ico">📜</div>
+        <div class="body">
+          <span class="c-title">GPU 通用計算的誕生</span>
+          <p>
+            2006 年之前，研究者只能把科學計算「偽裝」成圖形問題，才能用 GPU 跑。
+            CUDA 的發布讓 GPU 真正成為通用計算平台。2012 年 AlexNet 在 ImageNet 競賽上以 GPU 訓練奪冠，
+            把 GPU 訓練推進主流——從此 GPU 不再只是遊戲顯示卡，
+            而是 AI 時代最珍貴的算力資源。
+          </p>
+        </div>
+      </div>
+
+      <!-- ===== h2 ② ===== -->
+      <h2>GPU 硬體模型：SM、CUDA Core、Warp 與執行緒三層階層</h2>
+
+      <p>
+        打開一塊 NVIDIA GPU，你會看到幾個層次的組織：
+      </p>
+      <ul>
+        <li><strong>GPU 晶片</strong>：整塊裝置，有幾十到上百個 SM。</li>
+        <li><strong>SM(Streaming Multiprocessor，串流多處理器)</strong>：GPU 的基本運算單元，
+          類似 CPU 的「一個核心」，但比 CPU 核心簡單得多。
+          每個 SM 包含幾十到上百個 CUDA core、共享記憶體(shared memory)、
+          暫存器檔案(register file)、warp scheduler。</li>
+        <li><strong>CUDA Core</strong>：SM 內部最小的算術執行單元，能做浮點加法或乘法。</li>
+        <li><strong>Warp(線束)</strong>：32 個執行緒的群組，是 GPU 排程的最小單位。
+          一個 warp 內所有執行緒<em>同步執行同一條指令</em>，只是各自處理不同的資料。</li>
+      </ul>
+
+      <p>
+        從程式設計師的視角，你把工作組織成三層：
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 760 320" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif" font-size="12">
+  <defs>
+    <marker id="arr" markerWidth="9" markerHeight="9" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/>
+    </marker>
+  </defs>
+
+  <!-- Grid (outermost) -->
+  <rect x="10" y="10" width="740" height="295" rx="12" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="380" y="30" text-anchor="middle" font-weight="700" fill="#2f6f6a" font-size="14">Grid（格子）</text>
+  <text x="380" y="46" text-anchor="middle" fill="#4a8a85" font-size="11">gridDim.x × gridDim.y 個 Block，對應整個問題空間</text>
+
+  <!-- Block 1 -->
+  <rect x="30" y="60" width="210" height="220" rx="8" fill="#fff" stroke="#2f6f6a" stroke-width="1.5"/>
+  <text x="135" y="80" text-anchor="middle" font-weight="700" fill="#2f6f6a">Block (0,0)</text>
+
+  <!-- Threads inside Block 1 - warp 0 -->
+  <text x="40" y="100" fill="#b4541f" font-size="10" font-weight="600">Warp 0 (thread 0–31)</text>
+  <rect x="38" y="104" width="190" height="22" rx="4" fill="#fce8dc" stroke="#b4541f" stroke-width="1"/>
+  <text x="133" y="119" text-anchor="middle" fill="#b4541f" font-size="10">T0  T1  T2  …  T31</text>
+
+  <!-- warp 1 -->
+  <text x="40" y="142" fill="#8b5cf6" font-size="10" font-weight="600">Warp 1 (thread 32–63)</text>
+  <rect x="38" y="146" width="190" height="22" rx="4" fill="#ede9fb" stroke="#8b5cf6" stroke-width="1"/>
+  <text x="133" y="161" text-anchor="middle" fill="#8b5cf6" font-size="10">T32  T33  …  T63</text>
+
+  <!-- warp 2 -->
+  <text x="40" y="184" fill="#8b5cf6" font-size="10" font-weight="600">Warp 2 (thread 64–95)</text>
+  <rect x="38" y="188" width="190" height="22" rx="4" fill="#ede9fb" stroke="#8b5cf6" stroke-width="1"/>
+  <text x="133" y="203" text-anchor="middle" fill="#8b5cf6" font-size="10">T64  …  T95</text>
+
+  <text x="133" y="240" text-anchor="middle" fill="#8a929b" font-size="10">⋮  (共 blockDim.x/32 個 warp)</text>
+
+  <!-- threadIdx label -->
+  <text x="133" y="270" text-anchor="middle" fill="#4a5159" font-size="10">threadIdx.x = 0 … blockDim.x–1</text>
+
+  <!-- Block 2 -->
+  <rect x="270" y="60" width="210" height="220" rx="8" fill="#fff" stroke="#2f6f6a" stroke-width="1.5"/>
+  <text x="375" y="80" text-anchor="middle" font-weight="700" fill="#2f6f6a">Block (1,0)</text>
+  <text x="375" y="165" text-anchor="middle" fill="#8a929b" font-size="11">同樣的 warp 結構</text>
+  <text x="375" y="182" text-anchor="middle" fill="#8a929b" font-size="10">blockIdx.x = 1</text>
+
+  <!-- Block 3 (partial) -->
+  <rect x="510" y="60" width="210" height="220" rx="8" fill="#fff" stroke="#8a929b" stroke-width="1.5" stroke-dasharray="6,4"/>
+  <text x="615" y="165" text-anchor="middle" fill="#8a929b">…  Block (N-1, 0)</text>
+
+  <!-- Index formula -->
+  <rect x="30" y="288" width="700" height="12" rx="3" fill="none"/>
+  <text x="380" y="298" text-anchor="middle" fill="#2f6f6a" font-size="11" font-weight="600">
+    全域索引 i = blockIdx.x × blockDim.x + threadIdx.x
+  </text>
+</svg>
+        <figcaption>圖 112-1：CUDA 的三層執行層次。Grid 由若干 Block 組成；每個 Block 內的 32 個執行緒形成一個 warp，由同一個 SM 調度執行。全域索引公式 <code>blockIdx.x * blockDim.x + threadIdx.x</code> 是幾乎每個 kernel 的第一行。</figcaption>
+      </div>
+
+      <p>
+        對照到硬體：當你啟動一個 kernel 時，CUDA 執行期(runtime)會把你的 block 分配到 GPU 上各個 SM；
+        每個 SM 負責執行分配給它的所有 block。一個 SM 同時可以駐留(resident)多個 warp——
+        當某個 warp 在等待記憶體讀取時，SM 立刻切換執行另一個 warp，完全不需要儲存上下文(context switch)的開銷，
+        因為每個 warp 都有自己獨立的暫存器。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">Block 大小的慣例</span>
+          <p>
+            Block 的執行緒數必須是 warp size(32)的倍數，常用 128、256、512、1024。
+            每個 block 最大 <strong>1024</strong> 個執行緒(現代 GPU 皆同)；
+            每個 SM 可同時駐留多個 block，合計最多約 2048 個執行緒(架構而異)。
+            選 256 是個安全的起點，因為它讓每個 block 有 8 個 warp，SM 的 warp scheduler 有足夠的 warp 可以切換。
+          </p>
+        </div>
+      </div>
+
+      <!-- ===== h2 ③ ===== -->
+      <h2>SIMT 執行模型：鎖步、分支發散與 Warp 效率</h2>
+
+      <p>
+        GPU 採用 <strong>SIMT(Single Instruction, Multiple Threads，單一指令多執行緒)</strong> 模型——
+        在你從<a href="48-computer-architecture.html">第 48 章</a>學到的 SIMD 之上再加一層抽象。
+        在同一個 warp 裡的 32 個執行緒，在任意一個時鐘週期，<em>執行的是同一條指令</em>；
+        差別只在它們處理的資料(寄存器值)不同。
+      </p>
+
+      <h3>鎖步執行(Lockstep Execution)</h3>
+      <p>
+        把 warp 想像成一列 32 個士兵，他們被命令「一起舉右手、一起放下、一起邁左腳」。
+        每一個時鐘週期，指揮官(warp scheduler)廣播一條指令，所有士兵同時執行，
+        用各自持有的「資料」(registers)做運算。這樣的設計讓硬體非常簡單——
+        你不需要為 32 個核心分別維護 32 個 instruction fetch / decode 單元，一套就夠了。
+      </p>
+
+      <h3>分支發散(Branch Divergence)的代價</h3>
+      <p>
+        問題來了：如果那 32 個士兵要做「<em>如果你是第一組，舉右手；否則舉左手</em>」這種判斷呢？
+        在 CPU 執行緒裡，每個執行緒獨立決定跳不跳轉，沒有任何問題。
+        在 CUDA warp 裡，因為必須鎖步，GPU 的做法是：
+      </p>
+      <ol>
+        <li>先讓「條件為真」的執行緒執行 then-branch，「條件為假」的執行緒此時被<strong>遮罩(mask off)</strong>，空轉。</li>
+        <li>再讓「條件為假」的執行緒執行 else-branch，「條件為真」的執行緒空轉。</li>
+      </ol>
+      <p>
+        如果 warp 裡有一半執行緒走 if、另一半走 else，那麼有效利用率只剩 50%。
+        極端情況(每個執行緒走不同路徑)會讓效能掉成 1/32。
+      </p>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">避免 warp 內的分支發散</span>
+          <p>
+            最佳實務是讓同一個 warp(連續 32 個執行緒)在遇到分支時都走同一條路。
+            常見技法：把邏輯上不同的「工作類型」安排到不同的 block，
+            或用資料重排(data rearrangement)把同類資料聚在一起。
+            若分支發散不可避免(如只在邊界執行緒做邊界檢查)，代價往往可接受，
+            因為邊界執行緒只佔少數 warp。
+          </p>
+        </div>
+      </div>
+
+      <!-- ===== h2 ④ ===== -->
+      <h2>記憶體階層：Global、Shared、Register 與合併存取</h2>
+
+      <p>
+        GPU 的記憶體階層是理解效能的核心。不懂這個，你寫的 CUDA 程式可能比 CPU 還慢。
+      </p>
+
+      <h3>四種記憶體空間</h3>
+      <table>
+        <thead>
+          <tr><th>記憶體類型</th><th>位置</th><th>大小</th><th>延遲</th><th>頻寬</th><th>可見範圍</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Register(暫存器)</strong></td>
+            <td>SM 片上</td>
+            <td>每執行緒 ~255 個</td>
+            <td>~1 cycle</td>
+            <td>極高</td>
+            <td>單一執行緒</td>
+          </tr>
+          <tr>
+            <td><strong>Shared Memory(共享記憶體)</strong></td>
+            <td>SM 片上</td>
+            <td>每 SM 48–228 KB</td>
+            <td>~5 cycle</td>
+            <td>極高</td>
+            <td>同一 block 內所有執行緒</td>
+          </tr>
+          <tr>
+            <td><strong>L1 / L2 Cache</strong></td>
+            <td>SM / 晶片</td>
+            <td>幾 MB</td>
+            <td>~30–100 cycle</td>
+            <td>高</td>
+            <td>自動管理</td>
+          </tr>
+          <tr>
+            <td><strong>Global Memory(全域記憶體/VRAM)</strong></td>
+            <td>裝置 DRAM(HBM)</td>
+            <td>8–80 GB</td>
+            <td>~200–600 cycle</td>
+            <td>高(但需合併)</td>
+            <td>所有執行緒</td>
+          </tr>
+          <tr>
+            <td><strong>Constant Memory(常數記憶體)</strong></td>
+            <td>裝置(有快取)</td>
+            <td>64 KB</td>
+            <td>~5 cycle(命中)</td>
+            <td>中</td>
+            <td>唯讀，所有執行緒</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>合併存取(Coalescing)：為何它是第一要義</h3>
+
+      <p>
+        GPU 的全域記憶體控制器每次讀取是一個 <em>128 bytes 的交易(transaction)</em>。
+        如果一個 warp 的 32 個執行緒讀取的是<strong>連續的、對齊的</strong> 128 bytes（每個執行緒讀 4 bytes 的 float），
+        控制器只需發出 <strong>1 次</strong>記憶體交易就能滿足所有 32 個執行緒的需求——這叫「合併存取」。
+      </p>
+      <p>
+        反之，如果 32 個執行緒讀取的是隨機散落的位址，控制器最多需要發出 <strong>32 次</strong>交易，
+        頻寬利用率只有 1/32（~3%）。兩者效能差距可達 10–30 倍。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 760 280" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif" font-size="12">
+
+  <!-- Title: Coalesced -->
+  <text x="190" y="22" text-anchor="middle" font-weight="700" fill="#2f6f6a" font-size="13">合併存取（Coalesced）✓</text>
+
+  <!-- 32 threads on left (coalesced) -->
+  <text x="10" y="48" fill="#4a5159" font-size="10">Warp threads:</text>
+  <!-- Thread blocks -->
+  <g fill="#2f6f6a">
+    <rect x="10" y="54" width="20" height="18" rx="2"/><text x="20" y="66" text-anchor="middle" fill="#fff" font-size="9">T0</text>
+    <rect x="32" y="54" width="20" height="18" rx="2"/><text x="42" y="66" text-anchor="middle" fill="#fff" font-size="9">T1</text>
+    <rect x="54" y="54" width="20" height="18" rx="2"/><text x="64" y="66" text-anchor="middle" fill="#fff" font-size="9">T2</text>
+    <rect x="76" y="54" width="20" height="18" rx="2"/><text x="86" y="66" text-anchor="middle" fill="#fff" font-size="9">T3</text>
+    <text x="112" y="66" text-anchor="middle" fill="#2f6f6a">…</text>
+    <rect x="130" y="54" width="24" height="18" rx="2"/><text x="142" y="66" text-anchor="middle" fill="#fff" font-size="9">T31</text>
+  </g>
+
+  <!-- Arrows down (coalesced) -->
+  <line x1="20" y1="72" x2="20" y2="105" stroke="#2f6f6a" stroke-width="1.2" marker-end="url(#arr)"/>
+  <line x1="42" y1="72" x2="42" y2="105" stroke="#2f6f6a" stroke-width="1.2" marker-end="url(#arr)"/>
+  <line x1="64" y1="72" x2="64" y2="105" stroke="#2f6f6a" stroke-width="1.2" marker-end="url(#arr)"/>
+  <line x1="86" y1="72" x2="86" y2="105" stroke="#2f6f6a" stroke-width="1.2" marker-end="url(#arr)"/>
+  <line x1="142" y1="72" x2="142" y2="105" stroke="#2f6f6a" stroke-width="1.2" marker-end="url(#arr)"/>
+
+  <!-- Memory bar (coalesced): one transaction -->
+  <rect x="5" y="110" width="160" height="26" rx="4" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="85" y="127" text-anchor="middle" fill="#2f6f6a" font-weight="700" font-size="11">128 bytes — 1 次交易</text>
+
+  <!-- Arrow down -->
+  <line x1="85" y1="136" x2="85" y2="158" stroke="#2f6f6a" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- DRAM block coalesced -->
+  <rect x="5" y="160" width="160" height="26" rx="4" fill="#2f6f6a"/>
+  <text x="85" y="177" text-anchor="middle" fill="#fff" font-size="11">Global Memory (DRAM)</text>
+
+  <text x="85" y="210" text-anchor="middle" fill="#2f6f6a" font-size="11" font-weight="600">1 次交易，頻寬利用 100%</text>
+
+  <!-- Divider -->
+  <line x1="380" y1="10" x2="380" y2="240" stroke="#dde2e7" stroke-width="1.5" stroke-dasharray="4,4"/>
+
+  <!-- Title: Uncoalesced -->
+  <text x="570" y="22" text-anchor="middle" font-weight="700" fill="#b4541f" font-size="13">非合併存取（Uncoalesced）✗</text>
+
+  <!-- 32 threads right side -->
+  <text x="390" y="48" fill="#4a5159" font-size="10">Warp threads (stride=N):</text>
+  <g fill="#b4541f">
+    <rect x="390" y="54" width="20" height="18" rx="2"/><text x="400" y="66" text-anchor="middle" fill="#fff" font-size="9">T0</text>
+    <rect x="412" y="54" width="20" height="18" rx="2"/><text x="422" y="66" text-anchor="middle" fill="#fff" font-size="9">T1</text>
+    <rect x="434" y="54" width="20" height="18" rx="2"/><text x="444" y="66" text-anchor="middle" fill="#fff" font-size="9">T2</text>
+    <text x="490" y="66" text-anchor="middle" fill="#b4541f">…</text>
+    <rect x="510" y="54" width="24" height="18" rx="2"/><text x="522" y="66" text-anchor="middle" fill="#fff" font-size="9">T31</text>
+  </g>
+
+  <!-- Arrows spread (uncoalesced) -->
+  <line x1="400" y1="72" x2="420" y2="105" stroke="#b4541f" stroke-width="1.2" marker-end="url(#arr)"/>
+  <line x1="422" y1="72" x2="460" y2="105" stroke="#b4541f" stroke-width="1.2" marker-end="url(#arr)"/>
+  <line x1="444" y1="72" x2="510" y2="105" stroke="#b4541f" stroke-width="1.2" marker-end="url(#arr)"/>
+  <line x1="522" y1="72" x2="700" y2="105" stroke="#b4541f" stroke-width="1.2" marker-end="url(#arr)"/>
+
+  <!-- Multiple memory chunks -->
+  <rect x="400" y="110" width="50" height="22" rx="3" fill="#fce8dc" stroke="#b4541f" stroke-width="1.5"/>
+  <text x="425" y="124" text-anchor="middle" fill="#b4541f" font-size="9">128 B</text>
+
+  <rect x="455" y="110" width="50" height="22" rx="3" fill="#fce8dc" stroke="#b4541f" stroke-width="1.5"/>
+  <text x="480" y="124" text-anchor="middle" fill="#b4541f" font-size="9">128 B</text>
+
+  <text x="530" y="124" fill="#b4541f" font-size="11">…</text>
+
+  <rect x="545" y="110" width="50" height="22" rx="3" fill="#fce8dc" stroke="#b4541f" stroke-width="1.5"/>
+  <text x="570" y="124" text-anchor="middle" fill="#b4541f" font-size="9">128 B</text>
+
+  <rect x="680" y="110" width="50" height="22" rx="3" fill="#fce8dc" stroke="#b4541f" stroke-width="1.5"/>
+  <text x="705" y="124" text-anchor="middle" fill="#b4541f" font-size="9">128 B</text>
+
+  <!-- DRAM block uncoalesced -->
+  <rect x="390" y="160" width="360" height="26" rx="4" fill="#b4541f"/>
+  <text x="570" y="177" text-anchor="middle" fill="#fff" font-size="11">Global Memory (DRAM)</text>
+
+  <text x="570" y="210" text-anchor="middle" fill="#b4541f" font-size="11" font-weight="600">最多 32 次交易，頻寬利用率 ~3%</text>
+
+  <defs>
+    <marker id="arr" markerWidth="9" markerHeight="9" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/>
+    </marker>
+  </defs>
+</svg>
+        <figcaption>圖 112-2：合併存取 vs 非合併存取。左側 warp 的 32 個執行緒存取連續位址，只需一次 128 bytes 的 DRAM 交易；右側執行緒存取的位址散落各處(如以行優先存取一個列優先矩陣)，觸發多達 32 次交易，頻寬利用率暴降。</figcaption>
+      </div>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">確保合併存取的鐵律</span>
+          <p>
+            讓第 <em>i</em> 個執行緒存取 <code>arr[i]</code> 而非 <code>arr[i * stride]</code>。
+            若你的演算法必須走 column-major，考慮先轉置矩陣(一次性代價)，
+            再以 row-major 方式存取。共享記憶體的 bank conflict 是另一個需要注意的地方，
+            見後面 §平行歸約 的討論。
+          </p>
+        </div>
+      </div>
+
+      <!-- ===== h2 ⑤ ===== -->
+      <h2>你的第一個 CUDA Kernel：向量加法</h2>
+
+      <p>
+        理論夠了，動手寫。CUDA 程式設計的最小工作單元叫做 <strong>kernel</strong>，
+        以 <code>__global__</code> 修飾詞宣告，在 host(CPU)端啟動，在 device(GPU)端執行。
+      </p>
+
+      <p>
+        以下是完整的向量加法範例：<code>C[i] = A[i] + B[i]</code>。
+        請特別注意 host 端的記憶體管理流程與 kernel 啟動語法。
+      </p>
+
+<pre><code class="language-c">/* vec_add.cu — 在 GPU 上平行計算 C[i] = A[i] + B[i]
+ * 編譯：nvcc vec_add.cu -o vec_add
+ * 執行：./vec_add
+ */
+#include &lt;stdio.h&gt;
+#include &lt;cuda_runtime.h&gt;
+
+/* ① Kernel：__global__ 表示在 GPU 上執行，由 CPU 呼叫 */
+__global__ void vecAdd(float *A, float *B, float *C, int N) {
+    /* 每個執行緒計算自己負責的索引 */
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i &lt; N)          /* 邊界防護：最後一個 block 可能不滿 */
+        C[i] = A[i] + B[i];
+}
+
+int main(void) {
+    int N = 1 &lt;&lt; 20;            /* 2^20 = 1,048,576 個元素 */
+    size_t bytes = N * sizeof(float);
+
+    /* ② Host 端配置記憶體 */
+    float *h_A = (float *)malloc(bytes);
+    float *h_B = (float *)malloc(bytes);
+    float *h_C = (float *)malloc(bytes);
+    for (int i = 0; i &lt; N; i++) { h_A[i] = 1.0f; h_B[i] = 2.0f; }
+
+    /* ③ Device 端配置記憶體 */
+    float *d_A, *d_B, *d_C;
+    cudaMalloc(&amp;d_A, bytes);   /* &amp;d_A：傳指標的指標 */
+    cudaMalloc(&amp;d_B, bytes);
+    cudaMalloc(&amp;d_C, bytes);
+
+    /* ④ Host → Device 資料搬移 */
+    cudaMemcpy(d_A, h_A, bytes, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_B, h_B, bytes, cudaMemcpyHostToDevice);
+
+    /* ⑤ 啟動 Kernel：&lt;&lt;&lt;gridDim, blockDim&gt;&gt;&gt; */
+    int BLOCK = 256;
+    int GRID  = (N + BLOCK - 1) / BLOCK;   /* 向上取整 */
+    vecAdd&lt;&lt;&lt;GRID, BLOCK&gt;&gt;&gt;(d_A, d_B, d_C, N);
+
+    /* ⑥ Device → Host 取回結果 */
+    cudaMemcpy(h_C, d_C, bytes, cudaMemcpyDeviceToHost);
+
+    /* ⑦ 驗證 */
+    printf("h_C[0] = %.1f (期待 3.0)\n", h_C[0]);
+    printf("h_C[%d] = %.1f (期待 3.0)\n", N - 1, h_C[N - 1]);
+
+    /* ⑧ 釋放記憶體 */
+    cudaFree(d_A); cudaFree(d_B); cudaFree(d_C);
+    free(h_A); free(h_B); free(h_C);
+    return 0;
+}
+</code></pre>
+
+      <p>讓我們逐步拆解關鍵點：</p>
+
+      <ul>
+        <li>
+          <strong><code>__global__</code></strong>：告訴 nvcc 這個函式要在 GPU 上執行，但<em>只能</em>由 CPU 呼叫。
+          相對地，<code>__device__</code> 函式由 GPU 呼叫、在 GPU 上執行；
+          <code>__host__</code> 是預設，只在 CPU 上執行。
+        </li>
+        <li>
+          <strong>三層括號 <code>&lt;&lt;&lt;GRID, BLOCK&gt;&gt;&gt;</code></strong>：CUDA 的 kernel 啟動語法，
+          指定格子大小(grid)與 block 大小。例如 <code>&lt;&lt;&lt;4096, 256&gt;&gt;&gt;</code> 表示
+          啟動 4096 個 block、每個 block 256 個執行緒，總計 4096 × 256 = 1,048,576 個執行緒。
+        </li>
+        <li>
+          <strong><code>blockIdx.x * blockDim.x + threadIdx.x</code></strong>：這個公式計算出每個執行緒的
+          全域索引，是幾乎所有 CUDA kernel 的第一行。<code>blockIdx</code> 告訴你「我在第幾個 block」，
+          <code>blockDim</code> 是每個 block 的執行緒數，<code>threadIdx</code> 是在 block 內的位置。
+        </li>
+        <li>
+          <strong><code>if (i &lt; N)</code></strong>：當 N 不是 BLOCK 的整數倍時，最後一個 block
+          的部分執行緒索引會超界，需要這道防護牆。
+        </li>
+        <li>
+          <strong><code>cudaMalloc(&amp;d_A, bytes)</code></strong>：注意傳的是指標的指標(<code>float **</code>)，
+          因為函式需要修改指標本身的值。
+        </li>
+      </ul>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">CUDA 錯誤檢查</span>
+          <p>
+            生產環境中，每個 CUDA API 呼叫都應檢查回傳值。
+            慣用做法是包一個 <code>CUDA_CHECK</code> 巨集：
+            <code>cudaMalloc(&amp;ptr, size)</code> 成功時回傳 <code>cudaSuccess</code>(0)，失敗時回傳錯誤碼。
+            核心啟動後用 <code>cudaGetLastError()</code> 取得 async 錯誤。
+            錯誤若不處理，程式會靜默崩潰，極難偵錯。
+          </p>
+        </div>
+      </div>
+
+      <!-- ===== h2 ⑥ ===== -->
+      <h2>手刻矩陣乘法：Naive 版 → Tiled Shared Memory 版</h2>
+
+      <p>
+        矩陣乘法 $C = A \times B$，其中 $A, B, C$ 均為 $N \times N$ 的方陣，
+        在<a href="54-linear-algebra.html">第 54 章</a>你用 Python 算過。
+        現在我們用 CUDA 把它從 $O(N^3)$ 的計算量分散到數千個執行緒上平行完成。
+      </p>
+
+      <h3>Naive 版本</h3>
+      <p>
+        最直觀的想法：每個執行緒計算輸出矩陣的一個元素 <code>C[row][col]</code>。
+      </p>
+
+<pre><code class="language-c">/* Naive matmul：每個執行緒獨立算 C[row][col]，所有資料從 global memory 讀取 */
+__global__ void matMulNaive(float *A, float *B, float *C, int N) {
+    int row = blockIdx.y * blockDim.y + threadIdx.y;
+    int col = blockIdx.x * blockDim.x + threadIdx.x;
+    if (row &lt; N &amp;&amp; col &lt; N) {
+        float sum = 0.0f;
+        for (int k = 0; k &lt; N; k++)
+            sum += A[row * N + k] * B[k * N + col];
+        C[row * N + col] = sum;
+    }
+}
+/* 啟動：dim3 block(16,16); dim3 grid((N+15)/16, (N+15)/16);
+ *       matMulNaive&lt;&lt;&lt;grid, block&gt;&gt;&gt;(d_A, d_B, d_C, N);
+ */
+</code></pre>
+
+      <p>
+        問題在哪裡？以 block(16,16) 分析：<code>A[row*N + k]</code> 中 <code>row</code> 取決於
+        <code>threadIdx.y</code>，同一 warp 的不同執行緒 row 相差 1，位址間距 N×4 bytes——
+        造成 <strong>A 在 warp y 維度的 stride-N 非合併存取</strong>。此外，每個輸出 block
+        都各自重複從 global memory 載入 A、B(無 block 內共享)，記憶體交易量龐大。
+        tiled 版本把 A-tile、B-tile 載進 shared memory 供整個 block 重用，大幅減少 global memory 存取。
+      </p>
+
+      <h3>Tiled 版本：用共享記憶體切 Tile</h3>
+      <p>
+        改進的核心思路：把矩陣切成 <code>TILE × TILE</code> 的小塊(tile)，
+        每個 block 負責計算輸出的一個 tile；計算前先把對應的 A-tile 和 B-tile 搬進
+        <strong>共享記憶體</strong>，再從共享記憶體讀取做乘積。
+        共享記憶體只需~5個 cycles，而 global memory 需要 200–600 個 cycles——
+        tiling 把 global memory 存取次數從 $O(N^3)$ 降到 $O(N^3 / \text{TILE})$。
+      </p>
+
+<pre><code class="language-c">#define TILE 16
+
+/* Tiled matmul：用共享記憶體大幅降低 global memory 流量 */
+__global__ void matMulTiled(float *A, float *B, float *C, int N) {
+    /* 每個 block 在共享記憶體裡各放一個 A-tile 與 B-tile */
+    __shared__ float As[TILE][TILE];
+    __shared__ float Bs[TILE][TILE];
+
+    int row = blockIdx.y * TILE + threadIdx.y;
+    int col = blockIdx.x * TILE + threadIdx.x;
+    float sum = 0.0f;
+
+    /* 沿 K 維度分段走，每段載入一個 tile */
+    for (int t = 0; t &lt; (N + TILE - 1) / TILE; t++) {
+        /* 協作式載入：這個 block 的每個執行緒各搬一個元素進 shared memory */
+        int aCol = t * TILE + threadIdx.x;
+        int bRow = t * TILE + threadIdx.y;
+        As[threadIdx.y][threadIdx.x] = (row &lt; N &amp;&amp; aCol &lt; N) ? A[row * N + aCol] : 0.0f;
+        Bs[threadIdx.y][threadIdx.x] = (bRow &lt; N &amp;&amp; col &lt; N) ? B[bRow * N + col] : 0.0f;
+
+        __syncthreads();   /* 確保 tile 完全載入後再計算 */
+
+        /* 從共享記憶體讀取做點積 */
+        for (int k = 0; k &lt; TILE; k++)
+            sum += As[threadIdx.y][k] * Bs[k][threadIdx.x];
+
+        __syncthreads();   /* 確保計算完成後再載入下一個 tile */
+    }
+
+    if (row &lt; N &amp;&amp; col &lt; N)
+        C[row * N + col] = sum;
+}
+/* 啟動：dim3 block(TILE, TILE);
+ *       dim3 grid((N+TILE-1)/TILE, (N+TILE-1)/TILE);
+ *       matMulTiled&lt;&lt;&lt;grid, block&gt;&gt;&gt;(d_A, d_B, d_C, N);
+ */
+</code></pre>
+
+      <p>
+        關鍵：<code>__syncthreads()</code> 出現了兩次：
+      </p>
+      <ol>
+        <li>第一次：在載入 tile 後，確保 block 內所有執行緒都已把資料寫入共享記憶體，
+          才能安全開始讀取。</li>
+        <li>第二次：在計算完這個 tile 後，確保所有執行緒都用完了共享記憶體裡的資料，
+          才能讓其他執行緒覆蓋它(準備下一個 tile)。</li>
+      </ol>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">Tiling 加速的來源</span>
+          <p>
+            TILE=16 的 tiled matmul，每個 block 只需讀取 global memory $2N/\text{TILE}$ 次
+            (每個 tile 一次)，而 naive 版需讀 $2N$ 次。加速比 ≈ TILE。
+            TILE=32 帶來 32 倍的記憶體流量降低。這正是 cuBLAS 與 PyTorch 底層
+            gemm kernel 的核心技術。
+          </p>
+        </div>
+      </div>
+
+      <!-- ===== h2 ⑦ ===== -->
+      <h2>平行歸約：Tree Reduction 與 Bank Conflict</h2>
+
+      <p>
+        歸約(reduction)——把一個陣列的所有元素合併成單一值(如求和、求最大值)——
+        是 GPU 程式設計的另一個基礎模式，也是最容易踩雷的地方。
+      </p>
+
+      <h3>樹狀歸約(Tree Reduction)</h3>
+      <p>
+        直覺做法：每一輪讓一半的執行緒把相鄰的兩個值相加，如此經過 $\log_2(\text{blockDim})$ 輪，
+        block 的 <code>smem[0]</code> 就是區段的和。
+      </p>
+
+<pre><code class="language-c">/* reduction.cu：每個 block 把自己負責的段落求和，寫入 out[] */
+__global__ void reduceSum(float *in, float *out, int N) {
+    __shared__ float smem[256];           /* 每個 block 256 個執行緒 */
+    int tid = threadIdx.x;
+    int i   = blockIdx.x * blockDim.x + threadIdx.x;
+
+    /* ① 載入：每個執行緒把自己的元素放進 smem；超界補 0 */
+    smem[tid] = (i &lt; N) ? in[i] : 0.0f;
+    __syncthreads();
+
+    /* ② 樹狀歸約：stride 從 blockDim/2 開始，每輪減半 */
+    for (int stride = blockDim.x &gt;&gt; 1; stride &gt; 0; stride &gt;&gt;= 1) {
+        if (tid &lt; stride)
+            smem[tid] += smem[tid + stride];
+        __syncthreads();
+    }
+
+    /* ③ 只有 thread 0 把 block 的和寫到全域記憶體 */
+    if (tid == 0)
+        out[blockIdx.x] = smem[0];
+}
+/* 啟動：reduceSum&lt;&lt;&lt;GRID, 256&gt;&gt;&gt;(d_in, d_partial, N);
+ * 若 GRID &gt; 1，還需要再對 d_partial 做一次 reduction
+ */
+</code></pre>
+
+      <h3>為何不用連續 stride 的舊版寫法？</h3>
+      <p>
+        一個常見的錯誤版本是讓執行緒 0 跟執行緒 stride 配對，然後讓 tid 0 到 stride-1 工作——
+        這會讓只有 warp 0 工作，其他 warp 空轉，並且在 stride 變小後造成 warp 內發散。
+        上面的版本讓 <em>index 最小</em>的 tid 繼續工作，確保每一輪工作的執行緒都在連續的 warp 裡，
+        避免 warp 間的浪費。
+      </p>
+
+      <h3>Bank Conflict</h3>
+      <p>
+        共享記憶體被組織成 32 個「記憶體銀行(bank)」，每個銀行寬 4 bytes。
+        如果同一個 warp 的多個執行緒存取同一個 bank（但不是同一個位址，那是 broadcast），
+        就會發生 <strong>bank conflict</strong>，存取被序列化。
+        tiled matmul 中的 <code>Bs[k][threadIdx.x]</code> 若 TILE 恰好等於 32，
+        每輪 k 固定，所有執行緒存取 <code>Bs[k][0..31]</code>，它們散落在不同 bank，沒有 conflict——這是精心設計的。
+        本例 TILE=16 時同理(無 bank conflict)。
+      </p>
+
+      <!-- ===== h2 ⑧ ===== -->
+      <h2>同步原語：__syncthreads()、競態與原子操作</h2>
+
+      <h3><code>__syncthreads()</code> 的語意</h3>
+      <p>
+        <code>__syncthreads()</code> 是一個 block 層級的屏障(barrier)：
+        block 內所有執行緒都必須到達這個呼叫點，才能繼續往下執行。
+        它只對同一個 block 內有效——不同 block 的執行緒之間沒有直接同步機制
+        （因為它們可能在不同 SM 上，甚至不同時被調度）。
+      </p>
+
+      <div class="callout danger">
+        <div class="ico">⛔</div>
+        <div class="body">
+          <span class="c-title">__syncthreads() 不能在分支內呼叫</span>
+          <p>
+            若一個 block 內只有部分執行緒執行到 <code>__syncthreads()</code>
+            (例如它在 <code>if (tid &lt; 16)</code> 的分支裡)，行為是<strong>未定義</strong>的，
+            通常導致死鎖或資料損毀。請確保 <code>__syncthreads()</code>
+            在 block 內所有執行緒都會走到的路徑上。
+          </p>
+        </div>
+      </div>
+
+      <h3>競態條件(Race Condition)</h3>
+      <p>
+        在<a href="43-parallel.html">第 43 章</a>，你見過多執行緒在 CPU 上操作共享變數導致競態。
+        GPU 裡同樣有這個問題。若多個執行緒同時寫入同一個 global memory 位址而沒有同步，
+        結果是不確定的——取決於哪個 warp 最後寫入。
+      </p>
+
+      <h3>原子操作(Atomic Operations)</h3>
+      <p>
+        CUDA 提供原子操作函式，保證讀-改-寫的不可分割性：
+      </p>
+
+<pre><code class="language-c">/* atomicAdd：以原子方式把 val 加到 *address，回傳原值 */
+__global__ void countPositive(float *data, int *count, int N) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i &lt; N &amp;&amp; data[i] &gt; 0.0f)
+        atomicAdd(count, 1);   /* 多個執行緒安全地更新同一個計數器 */
+}
+</code></pre>
+
+      <p>
+        常用原子操作：<code>atomicAdd</code>、<code>atomicMax</code>、<code>atomicMin</code>、
+        <code>atomicExch</code>(exchange)、<code>atomicCAS</code>(compare-and-swap)。
+        原子操作對 global memory 或 shared memory 都有效；對 shared memory 的原子操作延遲更低。
+      </p>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">原子操作的代價</span>
+          <p>
+            原子操作會序列化競爭的存取，高競爭(hot spot)時吞吐大幅下降。
+            最佳實踐是先讓每個 block 用 shared memory 歸約出局部結果，
+            再以 <code>atomicAdd</code> 把局部結果合併到 global 計數器，
+            把原子競爭從「所有執行緒」降低到「每個 block 只發一次」。
+          </p>
+        </div>
+      </div>
+
+      <!-- ===== h2 ⑨ ===== -->
+      <h2>生態系：cuBLAS、cuDNN、Thrust 與 Tensor Core</h2>
+
+      <p>
+        手刻 CUDA kernel 是理解底層的必修課，但生產環境中你幾乎不需要自己寫 matmul——
+        因為 NVIDIA 已經有一整套高度優化的函式庫。
+      </p>
+
+      <h3>cuBLAS：GPU 版 BLAS</h3>
+      <p>
+        <strong>cuBLAS(CUDA Basic Linear Algebra Subroutines)</strong> 提供 GPU 加速的矩陣乘法、
+        向量操作等，相當於 CPU 上的 OpenBLAS / MKL。
+        單一個 <code>cublasSgemm</code>(single-precision general matrix multiply)呼叫，
+        底層可能用了幾十種針對不同矩陣尺寸優化的 kernel，
+        並利用 Tensor Core 達到接近理論峰值吞吐。
+      </p>
+
+      <h3>cuDNN：深度學習運算元函式庫</h3>
+      <p>
+        <strong>cuDNN(CUDA Deep Neural Network library)</strong> 提供卷積、池化、
+        批次正規化(batch normalization)、注意力(attention)等深度學習特有的運算——
+        並且針對不同輸入形狀自動選擇最快的 kernel。PyTorch 與 TensorFlow 的卷積與
+        transformer 層底層都呼叫 cuDNN。
+      </p>
+
+      <h3>Thrust：GPU 的 C++ STL</h3>
+      <p>
+        <strong>Thrust</strong> 提供 GPU 版的 sort、reduce、transform、scan 等演算法，
+        API 設計與 C++ STL 相同，讓 GPU 程式設計更像寫普通 C++ 程式：
+      </p>
+
+<pre><code class="language-cpp">#include &lt;thrust/device_vector.h&gt;
+#include &lt;thrust/reduce.h&gt;
+
+thrust::device_vector&lt;float&gt; d_vec(N, 1.0f);   /* 在 GPU 上分配並初始化 */
+float total = thrust::reduce(d_vec.begin(), d_vec.end(), 0.0f);
+/* total == N，完全不需要手寫 kernel */
+</code></pre>
+
+      <h3>Tensor Core：混合精度矩陣乘法的硬體加速器</h3>
+      <p>
+        從 Volta 架構(2017)開始，NVIDIA GPU 加入了 <strong>Tensor Core</strong>——
+        專門做 $D = A \times B + C$ 矩陣乘加的硬體單元，且在更低的精度下(FP16/BF16/INT8)
+        運算速度是傳統 CUDA core 的 8–16 倍。
+        深度學習的訓練和推論大量使用 <strong>FP16 或 BF16</strong>（brain float，犧牲精度換速度），
+        配合 Tensor Core 可以讓一塊 H100 達到 3,958 TFLOPS 的峰值算力。
+      </p>
+      <p>
+        你在<a href="38-machine-learning.html">第 38 章</a>學到的神經網路，
+        在<a href="99-gpt-from-scratch.html">第 93 章</a>自己打造的 GPT——
+        它們能在合理時間內訓練，全仰賴 cuDNN + Tensor Core 這一套硬體軟體協同設計的奇蹟。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">從 CUDA kernel 到 PyTorch 的距離</span>
+          <p>
+            呼叫 <code>torch.matmul(A, B)</code> 時，PyTorch 會判斷張量是否在 GPU 上，
+            若是則分派到 cuBLAS 的 <code>cublasSgemm</code>（或 Tensor Core 版本），
+            後者再呼叫對應的高度優化 CUDA kernel。
+            從你的 Python 程式碼，到最終在幾千個 CUDA core 上爆發出的計算，
+            中間就是這幾層分派。
+          </p>
+        </div>
+      </div>
+
+      <!-- ===== h2 ⑩ ===== -->
+      <h2>練習</h2>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 112.1 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>
+            撰寫一個 CUDA kernel <code>saxpy</code>，執行 SAXPY(Single-precision A·X Plus Y)運算：
+            <code>y[i] = alpha * x[i] + y[i]</code>，其中 <code>alpha</code> 是純量。
+            並撰寫對應的 host 端程式碼(cudaMalloc、Memcpy、kernel 啟動、結果驗證)。
+          </p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+<pre><code class="language-c">/* saxpy.cu */
+#include &lt;stdio.h&gt;
+#include &lt;cuda_runtime.h&gt;
+
+__global__ void saxpy(float alpha, float *x, float *y, int N) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i &lt; N)
+        y[i] = alpha * x[i] + y[i];
+}
+
+int main(void) {
+    int N = 1 &lt;&lt; 20;
+    size_t bytes = N * sizeof(float);
+    float alpha = 2.5f;
+
+    float *h_x = (float *)malloc(bytes);
+    float *h_y = (float *)malloc(bytes);
+    for (int i = 0; i &lt; N; i++) { h_x[i] = 1.0f; h_y[i] = 3.0f; }
+
+    float *d_x, *d_y;
+    cudaMalloc(&amp;d_x, bytes);
+    cudaMalloc(&amp;d_y, bytes);
+    cudaMemcpy(d_x, h_x, bytes, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_y, h_y, bytes, cudaMemcpyHostToDevice);
+
+    int BLOCK = 256;
+    int GRID  = (N + BLOCK - 1) / BLOCK;
+    saxpy&lt;&lt;&lt;GRID, BLOCK&gt;&gt;&gt;(alpha, d_x, d_y, N);
+
+    cudaMemcpy(h_y, d_y, bytes, cudaMemcpyDeviceToHost);
+    /* 期待：2.5 * 1.0 + 3.0 = 5.5 */
+    printf("h_y[0] = %.1f (期待 5.5)\n", h_y[0]);
+
+    cudaFree(d_x); cudaFree(d_y);
+    free(h_x); free(h_y);
+    return 0;
+}
+</code></pre>
+              <p>
+                SAXPY 是 cuBLAS 中 <code>cublasSaxpy</code> 的手刻版本，
+                也是 BLAS Level-1 中最經典的向量操作之一，
+                常被用作 GPU 記憶體頻寬的基準測試(benchmark)。
+              </p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 112.2 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>
+            假設你有一個 <code>N×N</code> 的 float 矩陣，以 row-major(C 語言預設)儲存在 GPU 的全域記憶體中。
+            考慮以下兩種存取模式（每個執行緒的索引公式）：
+          </p>
+          <ul>
+            <li>模式 A（按列走）：<code>val = mat[row * N + threadIdx.x]</code>，其中所有執行緒的 <code>row</code> 相同。</li>
+            <li>模式 B（按行走）：<code>val = mat[threadIdx.x * N + col]</code>，其中所有執行緒的 <code>col</code> 相同。</li>
+          </ul>
+          <p>哪個模式的記憶體存取更有效率？為什麼？</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>
+                <strong>模式 A 更有效率</strong>，因為它產生合併存取(coalesced access)。
+              </p>
+              <p>
+                分析：在一個 warp 的 32 個執行緒中，<code>threadIdx.x</code> 從 0 到 31 連續變化。
+              </p>
+              <ul>
+                <li>
+                  <strong>模式 A</strong>：32 個執行緒存取 <code>mat[row*N + 0]</code>、
+                  <code>mat[row*N + 1]</code>、…、<code>mat[row*N + 31]</code>——
+                  這是連續的記憶體位址，落在同一個(或少數幾個)128-byte 交易中，完美合併。
+                </li>
+                <li>
+                  <strong>模式 B</strong>：32 個執行緒存取 <code>mat[0*N + col]</code>、
+                  <code>mat[1*N + col]</code>、…、<code>mat[31*N + col]</code>——
+                  相鄰位址間距 N×4 bytes(可能是 4096 bytes)，觸發 32 次獨立的記憶體交易，
+                  頻寬利用率只有 4/(N×4) = 1/N。
+                </li>
+              </ul>
+              <p>
+                這正是 naive matmul 讀取矩陣 B 時的問題：B 以 row-major 儲存，
+                但 kernel 要讀 B 的一整行(column)，每個執行緒的存取 stride = N，
+                造成嚴重的非合併存取。tiled 版本把 B-tile 先搬進共享記憶體，
+                共享記憶體存取不受 DRAM 合併限制，才解決了這個問題。
+              </p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 112.3 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>
+            分析本章 <code>reduceSum</code> kernel 的以下版本，找出其中的<strong>分支發散問題</strong>，
+            並說明上面給出的版本如何避免它：
+          </p>
+<pre><code class="language-c">/* 有問題的舊版 reduction（連續執行緒版） */
+__global__ void reduceBad(float *in, float *out, int N) {
+    __shared__ float smem[256];
+    int tid = threadIdx.x;
+    int i   = blockIdx.x * blockDim.x + threadIdx.x;
+    smem[tid] = (i &lt; N) ? in[i] : 0.0f;
+    __syncthreads();
+
+    for (int stride = 1; stride &lt; blockDim.x; stride *= 2) {
+        if (tid % (2 * stride) == 0)          /* ← 問題在這裡 */
+            smem[tid] += smem[tid + stride];
+        __syncthreads();
+    }
+    if (tid == 0) out[blockIdx.x] = smem[0];
+}
+</code></pre>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>問題分析：</strong></p>
+              <p>
+                舊版以 <code>if (tid % (2 * stride) == 0)</code> 決定哪些執行緒工作。
+                第一輪(<code>stride=1</code>)只有偶數 tid(0,2,4,…)工作；
+                第二輪(<code>stride=2</code>)只有 0,4,8,… 工作；
+                每一輪都讓同一個 warp(warp 0)內有一半的執行緒「不做事」，但仍然佔用 lane，
+                這就是 warp 內的<strong>分支發散</strong>——warp 需要先讓工作的執行緒跑，
+                讓不工作的執行緒遮罩等待，再讓兩組都繼續。
+                越到後期，warp 0 裡工作的執行緒越來越少(1/4、1/8…)，效能持續下降。
+              </p>
+              <p><strong>改進版本（本章的寫法）的關鍵：</strong></p>
+              <p>
+                改進版以 <code>if (tid &lt; stride)</code> 決定哪些執行緒工作：
+              </p>
+              <ul>
+                <li>第一輪(<code>stride = 128</code>)：tid 0–127 工作，128–255 閒置。
+                  前 4 個 warp 全部工作，後 4 個 warp 完全閒置——warp 內沒有發散！</li>
+                <li>第二輪(<code>stride = 64</code>)：tid 0–63 工作，64–255 閒置。
+                  前 2 個 warp 全部工作，後 6 個 warp 完全閒置——仍無 warp 內發散！</li>
+                <li>最後幾輪 stride &lt; 32 時才有 warp 內發散，但此時只剩一個 warp 在工作，影響已很小。</li>
+              </ul>
+              <p>
+                這個改進把分支發散從「每一輪都發生在多個 warp 裡」縮減到「只有最後幾輪的最後一個 warp 裡發生」，
+                大幅提升了 SM 的利用率。
+              </p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ===== h2 ⑪(串起來) ===== -->
+      <h2>把這一章串起來</h2>
+
+      <p>
+        你在這一章走了一趟 GPU 的完整旅程：
+      </p>
+      <ul>
+        <li>從<strong>晶片設計哲學</strong>出發，理解 CPU(少數強核)與 GPU(海量弱核)
+          各自擅長什麼任務，以及為何矩陣乘法這種「高資料平行、低控制流依賴」的計算天生適合 GPU。</li>
+        <li>深入 <strong>GPU 硬體模型</strong>：SM 是 GPU 的基本計算單元；
+          warp(32 執行緒)是調度最小粒度；thread/block/grid 三層階層讓你把問題映射到 GPU 算力。</li>
+        <li>理解 <strong>SIMT 執行</strong>與分支發散的代價——寫好 GPU 程式的程式設計師，
+          腦子裡隨時都想著「這 32 個執行緒會不會走不同路徑？」</li>
+        <li>掌握 <strong>記憶體階層</strong>：register 最快但每執行緒數量有限；
+          shared memory 是 SM 內所有執行緒的高速暫存區，是優化的主要工具；
+          global memory 延遲高但容量大，合併存取是使用它時最重要的原則。</li>
+        <li>親手撰寫了三個 kernel：<strong>vector add</strong>(入門模板)、
+          <strong>tiled matmul</strong>(shared memory 的經典用法)、
+          <strong>reduction</strong>(避免分支發散的設計模式)。</li>
+        <li>理解 <strong>cuBLAS / cuDNN / Thrust</strong> 如何把這些低層技巧封裝成
+          高效函式庫，讓 PyTorch/TensorFlow 能站在它們的肩膀上。</li>
+      </ul>
+
+      <p>
+        這一章的知識，讓你能夠真正回答「為什麼一張 H100 能讓 GPT 的推論速度比 CPU 快 100 倍」——
+        答案不是魔法，而是 SIMT 並行、共享記憶體 tiling、Tensor Core 混合精度，
+        以及無數精心設計的 CUDA kernel，堆砌在一起的成果。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">延伸學習資源</span>
+          <p>
+            <strong>NVIDIA CUDA C Programming Guide</strong>（官方文件，最權威的 CUDA 參考）：
+            <a href="https://docs.nvidia.com/cuda/cuda-c-programming-guide/" target="_blank">docs.nvidia.com/cuda/cuda-c-programming-guide</a>。
+            <strong>Programming Massively Parallel Processors（PMPP）</strong>
+            by Kirk &amp; Hwu：大學 GPU 程式設計教材的首選，tiled matmul 就出自這本書。
+            <strong>cuda-mode</strong>（GitHub 社群讀書會）：
+            <a href="https://github.com/cuda-mode/lectures" target="_blank">github.com/cuda-mode/lectures</a>，
+            提供從零到高效能 CUDA 的實作課程影片與程式碼。
+            <strong>cuBLAS 文件</strong>：
+            <a href="https://docs.nvidia.com/cuda/cublas/" target="_blank">docs.nvidia.com/cuda/cublas</a>。
+          </p>
+        </div>
+      </div>

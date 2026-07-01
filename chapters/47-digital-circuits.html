@@ -1,0 +1,1116 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>數位電路與有限狀態機 · CS 自學聖經</title>
+<meta name="description" content="掀開邏輯閘的蓋子,看真實的數位電路:數位抽象與雜訊邊際、CMOS 電晶體、卡諾圖化簡、傳播延遲與關鍵路徑、setup/hold time、有限狀態機(Moore/Mealy、狀態圖、序列偵測器),以及資料路徑+控制如何構成 CPU。">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;700&family=Noto+Sans+TC:wght@400;700&family=Lora:ital,wght@0,400;0,600;0,700;1,400&family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <main class="main">
+    <article class="content">
+
+      <div class="eyebrow">第十一部 · 進階系統</div>
+      <h1>數位電路與有限狀態機</h1>
+      <p class="subtitle">第 19、20 章把邏輯閘當成乾淨俐落的理想黑盒子。但真實世界裡,閘是用電晶體做的,訊號是會抖動的電壓,而且——每一次計算,都要花時間。這一章,我們掀開那層蓋子,看看真正的數位電路,以及它如何長出「記憶與行為」:有限狀態機。</p>
+      <div class="byline">
+        <span class="tag">第 47 章</span>
+        <span>閱讀時間 ≈ 60 分鐘</span>
+        <span>難度:★★★★☆</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>為什麼數位電路堅持用離散的 0/1:電壓門檻、雜訊邊際(noise margin)與靜態規範(static discipline)</li>
+          <li>CMOS 怎麼把 NMOS/PMOS 電晶體當開關,組出反相器與 NAND,以及它為什麼那麼省電</li>
+          <li>用卡諾圖(Karnaugh map)以「畫圈圈」的方式視覺化地化簡布林函數</li>
+          <li>真實電路的時間維度:傳播延遲(propagation delay)、毛刺(glitch)、關鍵路徑(critical path)如何決定最高時脈</li>
+          <li>latch 與 flip-flop 的差別、建立/保持時間(setup/hold time)與時脈偏移(clock skew)</li>
+          <li>有限狀態機(FSM):Moore vs Mealy、狀態圖與轉移表,以及如何用「暫存器 + 組合邏輯」把它實作出來(序列偵測器實例)</li>
+          <li>從 FSM 到「資料路徑 + 控制」——一切複雜數位系統(包括 CPU)的組織原則</li>
+        </ul>
+      </div>
+
+      <h2>掀開閘的蓋子:從抽象回到物理</h2>
+      <p>
+        在第 19、20 章,我們做了一件非常「電腦科學」的事:把電晶體<strong>抽象</strong>成邏輯閘,然後就再也不去想電晶體了。
+        AND、OR、NOT、NAND 對我們來說是完美的數學函數——你餵它 0 和 1,它立刻、精準、毫不猶豫地吐出正確答案。
+        我們甚至只用一顆理想的 NAND,就在紙上蓋出了加法器、ALU、暫存器、RAM,一路堆到 CPU 的雛形。
+      </p>
+      <p>
+        這套抽象漂亮、好用,而且<strong>該這樣用</strong>——蓋大樓的時候,你不需要一邊想著水泥裡每顆砂石的位置。
+        但是,當你想<strong>真正理解一台電腦為什麼能可靠地運作、為什麼有速度上限、為什麼會有那些詭異的時序 bug</strong>,
+        你就得回頭,掀開那層蓋子,看看閘底下究竟發生了什麼事。
+      </p>
+      <p>
+        這一章,我們要從電腦科學家,暫時變回電子工程師。你會看到:所謂的「0 和 1」,其實是兩段<strong>電壓區間</strong>;
+        所謂的閘,其實是幾顆<strong>電晶體</strong>排成的小開關電路;而所謂「立刻」吐出答案,其實要花上幾十<strong>皮秒(picosecond)</strong>。
+        最後,我們會把這些真實的零件——會算的組合邏輯、會記的暫存器、滴答作響的時脈——組裝成這一章的重頭戲:
+        <strong>有限狀態機(finite state machine,FSM)</strong>,也就是讓硬體能「依當下狀態做出不同行為」的通用模型。
+      </p>
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">這一章站在抽象塔的哪一格</span>
+          <p>第 1 章說過,整個電腦世界是一座抽象高塔:電晶體 → 邏輯閘 → CPU → 組合語言 → C → Python。
+          第 19、20 章站在「邏輯閘」那一格往上看。這一章<strong>反過來,往下看一格</strong>:我們把「邏輯閘」這塊磚敲開,
+          看清它是怎麼由電晶體與電壓砌成的,以及這塊磚其實有<strong>重量(延遲)</strong>。
+          理解了下面這一層,你對上面所有層次的直覺都會更紮實。</p>
+        </div>
+      </div>
+
+      <h2>數位抽象:為什麼堅持只用 0 和 1</h2>
+      <p>
+        第 19 章給過一個直覺答案:用兩種狀態(高電壓/低電壓)最不容易被雜訊搞混。現在我們把這件事講精確——
+        因為這正是「數位」之所以能擊敗「類比」、之所以能堆疊到幾百億顆電晶體還不崩潰的<strong>根本原因</strong>。
+      </p>
+      <p>
+        一條電線上的電壓是<strong>連續</strong>的:它可以是 0V、0.31V、2.97V……任何值。所謂<strong>數位抽象(digital abstraction)</strong>,
+        就是我們<strong>人為地</strong>規定:「低於某個門檻就算 0,高於另一個門檻就算 1,中間那段不准用。」
+        我們把無限多種電壓,硬是壓縮成兩個符號。問題是:電子世界很吵——電源會波動、相鄰的線會互相干擾、
+        電阻會發熱產生熱雜訊。一個本來是「乾淨的 1」的訊號,傳著傳著就被推高推低了零點幾伏。怎麼確保它不會被誤讀成 0?
+      </p>
+
+      <h3>四個門檻與雜訊邊際</h3>
+      <p>
+        關鍵的巧思是:對<strong>輸出端</strong>和<strong>輸入端</strong>採取「<strong>不對稱</strong>」的標準。每個邏輯閘都遵守一份合約,用四個電壓門檻定義:
+      </p>
+      <ul>
+        <li><strong>$V_{OL}$</strong>(output low):閘輸出 0 時,保證電壓<strong>不高於</strong>這個值(壓得很低)。</li>
+        <li><strong>$V_{OH}$</strong>(output high):閘輸出 1 時,保證電壓<strong>不低於</strong>這個值(拉得很高)。</li>
+        <li><strong>$V_{IL}$</strong>(input low):閘讀到的電壓只要<strong>不高於</strong>這個值,就一律當成 0。</li>
+        <li><strong>$V_{IH}$</strong>(input high):閘讀到的電壓只要<strong>不低於</strong>這個值,就一律當成 1。</li>
+      </ul>
+      <p>
+        魔法藏在它們的大小關係:$V_{OL} &lt; V_{IL} &lt; V_{IH} &lt; V_{OH}$。也就是說,
+        <strong>輸出被要求得比輸入嚴格</strong>:輸出 1 一定拉得比「輸入願意接受為 1」的最低標準更高;輸出 0 一定壓得比「輸入願意接受為 0」的最高標準更低。
+        這中間多出來的兩段緩衝,就是<strong>雜訊邊際(noise margin)</strong>:
+      </p>
+      <p>$$NM_{H} = V_{OH} - V_{IH}, \qquad NM_{L} = V_{IL} - V_{OL}.$$</p>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 340" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="20" y="26" font-size="14" font-weight="800" fill="#1f2328">數位抽象:輸出端「拉得更滿」,留出雜訊邊際的緩衝</text>
+  <!-- voltage axis -->
+  <line x1="70" y1="50" x2="70" y2="300" stroke="#cbd2d8" stroke-width="1.5"/>
+  <text x="58" y="56" text-anchor="end" font-size="11" fill="#8a929b">高電壓 (V_DD)</text>
+  <text x="58" y="300" text-anchor="end" font-size="11" fill="#8a929b">0V (GND)</text>
+
+  <!-- OUTPUT bar (left) x 150..290 -->
+  <text x="220" y="44" text-anchor="middle" font-size="12" font-weight="700" fill="#2f6f6a">輸出端「保證」</text>
+  <rect x="150" y="50"  width="140" height="40"  fill="#d8efe9" stroke="#2f6f6a"/>
+  <text x="220" y="74" text-anchor="middle" font-size="11" fill="#1f6b63">穩穩輸出 1</text>
+  <rect x="150" y="90"  width="140" height="160" fill="#f0f1f2" stroke="#cbd2d8" stroke-dasharray="3 3"/>
+  <text x="220" y="172" text-anchor="middle" font-size="11" fill="#8a929b">輸出絕不停在這裡</text>
+  <rect x="150" y="250" width="140" height="40"  fill="#f6e2d6" stroke="#b4541f"/>
+  <text x="220" y="274" text-anchor="middle" font-size="11" fill="#9b481b">穩穩輸出 0</text>
+
+  <!-- INPUT bar (right) x 430..570 -->
+  <text x="500" y="44" text-anchor="middle" font-size="12" font-weight="700" fill="#8b5cf6">輸入端「接受」</text>
+  <rect x="430" y="50"  width="140" height="80"  fill="#ece7fb" stroke="#8b5cf6"/>
+  <text x="500" y="94" text-anchor="middle" font-size="11" fill="#5b3aa6">這範圍都讀成 1</text>
+  <rect x="430" y="130" width="140" height="80" fill="#f0f1f2" stroke="#cbd2d8" stroke-dasharray="3 3"/>
+  <text x="500" y="174" text-anchor="middle" font-size="11" fill="#8a929b">禁區(無法判讀)</text>
+  <rect x="430" y="210" width="140" height="80"  fill="#ece7fb" stroke="#8b5cf6"/>
+  <text x="500" y="254" text-anchor="middle" font-size="11" fill="#5b3aa6">這範圍都讀成 0</text>
+
+  <!-- threshold lines across -->
+  <g stroke="#8a929b" stroke-width="1" stroke-dasharray="4 3">
+    <line x1="290" y1="90"  x2="430" y2="130"/> <!-- V_OH -> V_IH -->
+    <line x1="290" y1="250" x2="430" y2="210"/> <!-- V_OL -> V_IL -->
+  </g>
+  <text x="296" y="88"  font-size="10" fill="#2f6f6a">V_OH</text>
+  <text x="296" y="252" font-size="10" fill="#b4541f">V_OL</text>
+  <text x="404" y="128" text-anchor="end" font-size="10" fill="#5b3aa6">V_IH</text>
+  <text x="404" y="214" text-anchor="end" font-size="10" fill="#5b3aa6">V_IL</text>
+
+  <!-- noise margin brackets -->
+  <line x1="360" y1="90"  x2="360" y2="130" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="368" y="114" font-size="10" font-weight="700" fill="#2f6f6a">NM_H(1 的雜訊緩衝)</text>
+  <line x1="360" y1="210" x2="360" y2="250" stroke="#b4541f" stroke-width="2"/>
+  <text x="368" y="234" font-size="10" font-weight="700" fill="#b4541f">NM_L(0 的雜訊緩衝)</text>
+</svg>
+        <figcaption>圖 47-1:數位抽象的核心。輸出端被要求把 1 拉到 $V_{OH}$ 以上、把 0 壓到 $V_{OL}$ 以下(比輸入端要求的更極端);輸入端則寬鬆,$V_{IH}$ 以上算 1、$V_{IL}$ 以下算 0。兩者之間多出的綠色與磚紅色區段,就是雜訊邊際——訊號就算被雜訊污染這麼多,仍能被正確判讀。中間的「禁區」沒有任何合法電壓會穩定停留。</figcaption>
+      </div>
+
+      <p>
+        舉個具體數字:假設 $V_{OH}=2.4\text{V}$、$V_{IH}=2.0\text{V}$,那麼高電壓的雜訊邊際就是 $0.4\text{V}$——
+        一個閘吐出 $2.4\text{V}$ 的「1」,就算路上被雜訊扣掉 $0.39\text{V}$,到達下一個閘還有 $2.01\text{V}$,仍穩穩在「讀成 1」的範圍內。
+        雜訊只要不超過這個邊際,就完全無害。
+      </p>
+
+      <h3>靜態規範:數位之所以可堆疊的祕密</h3>
+      <p>
+        把上面這份合約寫成一句話,就是<strong>靜態規範(static discipline)</strong>:
+      </p>
+      <blockquote>
+        只要你餵給一個元件的輸入是<strong>合法</strong>的(低於 $V_{IL}$ 或高於 $V_{IH}$),它就<strong>保證</strong>產生合法的輸出(低於 $V_{OL}$ 或高於 $V_{OH}$)。
+      </blockquote>
+      <p>
+        這條規範帶來一個驚人的後果,叫做<strong>訊號還原(signal restoration)</strong>:每經過一個閘,訊號就被「重新拉滿、推到位」一次。
+        一個被雜訊弄髒、降到 $2.05\text{V}$ 的「1」,進入下一個閘後,輸出又是漂亮的 $2.4\text{V}$。
+        於是雜訊<strong>不會累積</strong>——這正是類比訊號做不到的事。
+      </p>
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">這就是「數位」能贏的根本理由</span>
+          <p>類比電路裡,每經過一級放大,雜訊與失真就累積一點;串個幾十級,訊號早就面目全非。
+          但數位電路因為有<strong>雜訊邊際 + 靜態規範</strong>,每一級都把訊號「清乾淨、還原成標準的 0 或 1」。
+          所以你可以把<strong>幾百億顆</strong>電晶體串起來,訊號穿過成千上萬層閘,到最後一層依然是乾淨的 0 與 1。
+          「離散化」看似損失了資訊,換來的卻是<strong>無限可堆疊的可靠性</strong>——這是整個數位文明的地基。</p>
+        </div>
+      </div>
+      <p>
+        這也回扣第 19 章那句話:用 0/1 不是因為簡單,而是因為<strong>能抗雜訊</strong>。現在你看到的是它精確的工程版本。
+      </p>
+
+      <h2>CMOS:用電晶體當開關</h2>
+      <p>
+        閘底下是什麼?是<strong>電晶體(transistor)</strong>。今天幾乎所有數位晶片都用一種叫
+        <strong>CMOS(Complementary Metal-Oxide-Semiconductor,互補式金屬氧化物半導體)</strong>的技術。
+        我們不需要鑽進半導體物理,只要抓住一個直覺就夠了:
+      </p>
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">電晶體 = 一個用電壓控制的開關</span>
+          <p>一顆 MOS 電晶體有三隻腳:閘極(gate,控制端)、源極、汲極(兩端)。
+          <strong>閘極上的電壓,決定另外兩端之間是「通」還是「斷」</strong>——就像一個由電壓遙控的水龍頭。
+          數位電路裡的一切,歸根究柢都是這些小開關在「導通」與「截止」之間切換。</p>
+        </div>
+      </div>
+      <p>CMOS 用的是兩種<strong>互補</strong>的開關,個性正好相反:</p>
+      <ul>
+        <li><strong>NMOS</strong>:閘極為 <strong>1(高電壓)時導通</strong>,為 0 時截止。它擅長把輸出<strong>往下拉到 0(GND)</strong>,是好的「下拉(pull-down)」開關。</li>
+        <li><strong>PMOS</strong>:閘極為 <strong>0(低電壓)時導通</strong>,為 1 時截止(行為跟 NMOS 完全相反)。它擅長把輸出<strong>往上拉到 1(電源 $V_{DD}$)</strong>,是好的「上拉(pull-up)」開關。</li>
+      </ul>
+
+      <h3>用兩顆電晶體做一個反相器(NOT)</h3>
+      <p>
+        最小的 CMOS 閘是反相器(inverter,也就是 NOT),只要兩顆電晶體:一顆 PMOS 接在電源 $V_{DD}$ 與輸出之間,
+        一顆 NMOS 接在輸出與接地 GND 之間,兩顆的閘極接同一條輸入 $A$。
+      </p>
+      <div class="diagram">
+<svg viewBox="0 0 640 330" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- VDD rail -->
+  <line x1="220" y1="45" x2="460" y2="45" stroke="#b4541f" stroke-width="2.5"/>
+  <text x="468" y="49" font-size="12" font-weight="700" fill="#b4541f">V_DD(電源 = 1)</text>
+  <line x1="360" y1="45" x2="360" y2="80" stroke="#8a929b" stroke-width="2"/>
+  <!-- GND rail -->
+  <line x1="220" y1="300" x2="460" y2="300" stroke="#1f2328" stroke-width="2.5"/>
+  <text x="468" y="304" font-size="12" font-weight="700" fill="#1f2328">GND(接地 = 0)</text>
+  <line x1="360" y1="265" x2="360" y2="300" stroke="#8a929b" stroke-width="2"/>
+
+  <!-- PMOS box -->
+  <rect x="320" y="80" width="80" height="55" rx="6" fill="#f6e2d6" stroke="#b4541f" stroke-width="1.8"/>
+  <text x="360" y="103" text-anchor="middle" font-size="14" font-weight="800" fill="#b4541f">PMOS</text>
+  <text x="360" y="122" text-anchor="middle" font-size="9" fill="#9b481b">A=0 時導通(上拉)</text>
+  <!-- NMOS box -->
+  <rect x="320" y="210" width="80" height="55" rx="6" fill="#d8efe9" stroke="#2f6f6a" stroke-width="1.8"/>
+  <text x="360" y="233" text-anchor="middle" font-size="14" font-weight="800" fill="#2f6f6a">NMOS</text>
+  <text x="360" y="252" text-anchor="middle" font-size="9" fill="#1f6b63">A=1 時導通(下拉)</text>
+
+  <!-- output node -->
+  <line x1="360" y1="135" x2="360" y2="210" stroke="#8a929b" stroke-width="2"/>
+  <circle cx="360" cy="172" r="3.5" fill="#8b5cf6"/>
+  <line x1="360" y1="172" x2="560" y2="172" stroke="#8b5cf6" stroke-width="2.4"/>
+  <text x="566" y="176" font-size="13" font-weight="800" fill="#8b5cf6">Out = ¬A</text>
+
+  <!-- input to both gates -->
+  <line x1="120" y1="172" x2="220" y2="172" stroke="#8a929b" stroke-width="2.4"/>
+  <text x="110" y="176" text-anchor="end" font-size="13" font-weight="800" fill="#1f2328">A</text>
+  <circle cx="220" cy="172" r="3.5" fill="#8a929b"/>
+  <line x1="220" y1="107" x2="220" y2="237" stroke="#8a929b" stroke-width="2"/>
+  <line x1="220" y1="107" x2="320" y2="107" stroke="#8a929b" stroke-width="2"/>   <!-- to PMOS gate -->
+  <line x1="220" y1="237" x2="320" y2="237" stroke="#8a929b" stroke-width="2"/>   <!-- to NMOS gate -->
+
+  <!-- explanation -->
+  <text x="40" y="60" font-size="11" fill="#8a929b">A=0:PMOS 開、NMOS 關</text>
+  <text x="40" y="78" font-size="11" fill="#8a929b">→ 輸出接到 V_DD = 1</text>
+  <text x="40" y="290" font-size="11" fill="#8a929b">A=1:PMOS 關、NMOS 開</text>
+  <text x="40" y="308" font-size="11" fill="#8a929b">→ 輸出接到 GND = 0</text>
+</svg>
+        <figcaption>圖 47-2:CMOS 反相器。輸入 $A$ 同時控制上面的 PMOS 與下面的 NMOS。$A=0$ 時只有 PMOS 導通,把輸出拉到 $V_{DD}=1$;$A=1$ 時只有 NMOS 導通,把輸出拉到 $\text{GND}=0$。輸出永遠是輸入的相反——這就是 NOT。</figcaption>
+      </div>
+      <p>
+        注意一個關鍵:<strong>無論輸入是 0 還是 1,上下兩顆電晶體永遠「剛好一開一關」</strong>。
+        於是在穩定狀態下,從 $V_{DD}$ 到 GND<strong>絕不會有一條直接導通的路徑</strong>。這帶來 CMOS 最大的優點——
+      </p>
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">CMOS 為什麼省電:互補的代價是「幾乎不耗電」</span>
+          <p>因為上拉(PMOS)與下拉(NMOS)網路<strong>互補</strong>,穩態下總有一邊是斷的,電源到地之間沒有短路電流。
+          理想上,一個閘「靜靜待著不切換」時<strong>幾乎不耗電</strong>;只有在輸入<strong>翻轉</strong>的那一瞬間,
+          為了替線路上的電容充放電,才會流過電流。這就是為什麼你的手機能塞進幾十億顆電晶體卻不會立刻燒掉:
+          大部分電晶體在大部分時間都是「省電待命」的。也因此,晶片的功耗大致正比於<strong>時脈頻率</strong>(切換越頻繁越耗電)——
+          這也解釋了為什麼狂飆時脈會讓 CPU 發燙。</p>
+        </div>
+      </div>
+
+      <h3>NAND 在 CMOS 裡天生就比 AND 便宜</h3>
+      <p>
+        把反相器的概念推廣一下:任何 CMOS 閘都是「一個 PMOS 上拉網路 + 一個 NMOS 下拉網路」,兩者互補。
+        做一個 NAND 只要四顆電晶體:<strong>下拉網路是兩顆 NMOS 串聯,上拉網路是兩顆 PMOS 並聯</strong>。
+      </p>
+      <div class="diagram">
+<svg viewBox="0 0 640 360" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- VDD -->
+  <line x1="160" y1="40" x2="520" y2="40" stroke="#b4541f" stroke-width="2.5"/>
+  <text x="528" y="44" font-size="12" font-weight="700" fill="#b4541f">V_DD</text>
+  <!-- GND -->
+  <line x1="300" y1="330" x2="460" y2="330" stroke="#1f2328" stroke-width="2.5"/>
+  <text x="468" y="334" font-size="12" font-weight="700" fill="#1f2328">GND</text>
+
+  <!-- two PMOS in parallel (pull-up) -->
+  <rect x="220" y="70" width="70" height="44" rx="6" fill="#f6e2d6" stroke="#b4541f" stroke-width="1.6"/>
+  <text x="255" y="97" text-anchor="middle" font-size="11" font-weight="700" fill="#b4541f">PMOS(A)</text>
+  <rect x="380" y="70" width="70" height="44" rx="6" fill="#f6e2d6" stroke="#b4541f" stroke-width="1.6"/>
+  <text x="415" y="97" text-anchor="middle" font-size="11" font-weight="700" fill="#b4541f">PMOS(B)</text>
+  <!-- parallel wiring: both tops to VDD, both bottoms to out node -->
+  <line x1="255" y1="40" x2="255" y2="70" stroke="#8a929b" stroke-width="2"/>
+  <line x1="415" y1="40" x2="415" y2="70" stroke="#8a929b" stroke-width="2"/>
+  <line x1="255" y1="114" x2="255" y2="150" stroke="#8a929b" stroke-width="2"/>
+  <line x1="415" y1="114" x2="415" y2="150" stroke="#8a929b" stroke-width="2"/>
+  <line x1="255" y1="150" x2="415" y2="150" stroke="#8a929b" stroke-width="2"/>
+  <text x="120" y="95" font-size="10" fill="#9b481b">兩顆 PMOS 並聯</text>
+  <text x="120" y="110" font-size="10" fill="#9b481b">(上拉網路)</text>
+
+  <!-- output node -->
+  <circle cx="335" cy="150" r="3.5" fill="#8b5cf6"/>
+  <line x1="335" y1="150" x2="560" y2="150" stroke="#8b5cf6" stroke-width="2.4"/>
+  <text x="566" y="154" font-size="12" font-weight="800" fill="#8b5cf6">Out = ¬(A·B)</text>
+  <line x1="335" y1="150" x2="335" y2="190" stroke="#8a929b" stroke-width="2"/>
+
+  <!-- two NMOS in series (pull-down) -->
+  <rect x="300" y="190" width="70" height="44" rx="6" fill="#d8efe9" stroke="#2f6f6a" stroke-width="1.6"/>
+  <text x="335" y="217" text-anchor="middle" font-size="11" font-weight="700" fill="#2f6f6a">NMOS(A)</text>
+  <rect x="300" y="260" width="70" height="44" rx="6" fill="#d8efe9" stroke="#2f6f6a" stroke-width="1.6"/>
+  <text x="335" y="287" text-anchor="middle" font-size="11" font-weight="700" fill="#2f6f6a">NMOS(B)</text>
+  <line x1="335" y1="234" x2="335" y2="260" stroke="#8a929b" stroke-width="2"/>
+  <line x1="335" y1="304" x2="335" y2="330" stroke="#8a929b" stroke-width="2"/>
+  <text x="120" y="225" font-size="10" fill="#1f6b63">兩顆 NMOS 串聯</text>
+  <text x="120" y="240" font-size="10" fill="#1f6b63">(下拉網路)</text>
+</svg>
+        <figcaption>圖 47-3:CMOS NAND,只要四顆電晶體。只有當 $A$ 與 $B$ <strong>同時</strong>為 1,兩顆串聯的 NMOS 才一起導通,把輸出拉到 0;其餘情況至少有一顆 PMOS 導通,把輸出拉到 1。這恰好就是 NAND 的真值表(只有 1·1 才輸出 0)。</figcaption>
+      </div>
+      <p>
+        為什麼「下拉串聯、上拉並聯」?因為串聯要「全部導通」才通(對應 AND 的「都是 1」),
+        並聯只要「一個導通」就通(對應 OR)——而 NMOS 在輸入為 1 時導通。把這兩件事拼起來,下拉網路在「$A$ 且 $B$」時導通、把輸出拉成 0,
+        正是 $\neg(A\cdot B)$。上拉網路必須是下拉的<strong>互補(對偶)</strong>,於是用 PMOS 並聯——
+        你看,這個「串聯 ↔ 並聯、AND ↔ OR」的對調,骨子裡就是第 19 章的 <strong>De Morgan 定律</strong>長在矽晶片上的樣子。
+      </p>
+      <div class="callout note">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">原來 NAND 的萬能,不只是數學上的</span>
+          <p>第 19 章說 NAND 是「萬能閘」——只用它就能組出一切。現在你多懂一層:在 CMOS 裡,
+          <strong>NAND 與 NOR 是「天生」的閘,反而 AND 與 OR 比較貴</strong>。因為 CMOS 的下拉/上拉結構天生會<strong>反相</strong>,
+          所以「先算邏輯、再反相」的 NAND/NOR 各只要 4 顆電晶體;而 AND 必須是「NAND 之後再接一個反相器」,
+          反而要 6 顆。難怪晶圓廠超愛 NAND——它<strong>既在數學上萬能,又在物理上最省</strong>。
+          (你能想想 NOR 的 CMOS 接法嗎?那是本章的練習。)</p>
+        </div>
+      </div>
+
+      <h2>組合邏輯的化簡:卡諾圖</h2>
+      <p>
+        我們已經知道(第 19 章):任何布林函數都能寫成<strong>積之和(SOP)</strong>——把真值表裡每個輸出為 1 的列寫成一個最小項,再 OR 起來。
+        這保證正確,但常常臃腫。化簡一條布林式,在硬體上就是<strong>少用幾顆閘、省電晶體、省電、跑更快</strong>。
+        第 19 章用代數恆等式(交換律、分配律、De Morgan……)手動化簡;但代數化簡很吃靈感、容易漏。
+        有沒有一個<strong>機械化、用看的</strong>就能化簡的方法?有,它叫<strong>卡諾圖(Karnaugh map,K-map)</strong>。
+      </p>
+      <p>
+        卡諾圖的核心洞見是:布林代數有一條「合併律」——$X\cdot Y + X\cdot \neg Y = X$(不管 $Y$ 是 0 是 1,只要 $X$ 成立就成立,所以 $Y$ 可以消掉)。
+        卡諾圖把真值表重新排成一張<strong>方格圖</strong>,而且刻意讓<strong>相鄰格子只差一個變數</strong>。
+        於是「可以套用合併律的項」在圖上就是<strong>挨在一起的 1</strong>——你只要把它們<strong>圈起來</strong>,就完成了化簡。
+      </p>
+
+      <h3>實例:三人多數表決,再來一次</h3>
+      <p>
+        還記得第 19 章那個「三人投票,過半就亮燈」的多數函數 $M(A,B,C)$ 嗎?當時我們用代數把它從 4 個最小項硬湊成
+        $M = AB + BC + AC$。現在用卡諾圖,看它<strong>一眼</strong>就化出來。先把真值表填進方格:橫軸是 $BC$(用
+        <strong>格雷碼順序</strong> 00、01、11、10,確保相鄰只差一位),縱軸是 $A$。
+      </p>
+      <div class="diagram">
+<svg viewBox="0 0 560 280" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="20" y="26" font-size="13" font-weight="700" fill="#1f2328">多數函數 M 的卡諾圖:把相鄰的 1 圈成 2 的次方大的矩形</text>
+  <!-- column headers BC -->
+  <text x="140" y="70" text-anchor="middle" font-size="12" font-weight="700" fill="#8a929b">BC=00</text>
+  <text x="230" y="70" text-anchor="middle" font-size="12" font-weight="700" fill="#8a929b">BC=01</text>
+  <text x="320" y="70" text-anchor="middle" font-size="12" font-weight="700" fill="#8a929b">BC=11</text>
+  <text x="410" y="70" text-anchor="middle" font-size="12" font-weight="700" fill="#8a929b">BC=10</text>
+  <!-- row headers A -->
+  <text x="70" y="112" text-anchor="middle" font-size="12" font-weight="700" fill="#8a929b">A=0</text>
+  <text x="70" y="172" text-anchor="middle" font-size="12" font-weight="700" fill="#8a929b">A=1</text>
+
+  <!-- grid cells -->
+  <g font-size="20" font-weight="800" text-anchor="middle">
+    <!-- A=0 row: BC=00->0, 01->0, 11->1, 10->0 -->
+    <rect x="100" y="85" width="80" height="50" fill="#fff" stroke="#cbd2d8"/><text x="140" y="118" fill="#8a929b">0</text>
+    <rect x="190" y="85" width="80" height="50" fill="#fff" stroke="#cbd2d8"/><text x="230" y="118" fill="#8a929b">0</text>
+    <rect x="280" y="85" width="80" height="50" fill="#fff" stroke="#cbd2d8"/><text x="320" y="118" fill="#1f2328">1</text>
+    <rect x="370" y="85" width="80" height="50" fill="#fff" stroke="#cbd2d8"/><text x="410" y="118" fill="#8a929b">0</text>
+    <!-- A=1 row: BC=00->0, 01->1, 11->1, 10->1 -->
+    <rect x="100" y="135" width="80" height="50" fill="#fff" stroke="#cbd2d8"/><text x="140" y="168" fill="#8a929b">0</text>
+    <rect x="190" y="135" width="80" height="50" fill="#fff" stroke="#cbd2d8"/><text x="230" y="168" fill="#1f2328">1</text>
+    <rect x="280" y="135" width="80" height="50" fill="#fff" stroke="#cbd2d8"/><text x="320" y="168" fill="#1f2328">1</text>
+    <rect x="370" y="135" width="80" height="50" fill="#fff" stroke="#cbd2d8"/><text x="410" y="168" fill="#1f2328">1</text>
+  </g>
+
+  <!-- group 1: column BC=11 (both rows) -> B·C  (purple) -->
+  <rect x="285" y="90" width="70" height="90" rx="10" fill="none" stroke="#8b5cf6" stroke-width="3"/>
+  <text x="320" y="208" text-anchor="middle" font-size="11" font-weight="700" fill="#8b5cf6">B·C</text>
+  <!-- group 2: A=1, BC=01 and 11 -> A·C (teal) -->
+  <rect x="195" y="140" width="160" height="40" rx="10" fill="none" stroke="#2f6f6a" stroke-width="3"/>
+  <text x="230" y="230" text-anchor="middle" font-size="11" font-weight="700" fill="#2f6f6a">A·C</text>
+  <!-- group 3: A=1, BC=11 and 10 -> A·B (brick) -->
+  <rect x="285" y="145" width="160" height="32" rx="10" fill="none" stroke="#b4541f" stroke-width="3"/>
+  <text x="410" y="230" text-anchor="middle" font-size="11" font-weight="700" fill="#b4541f">A·B</text>
+
+  <text x="60" y="260" font-size="13" fill="#1f2328">三個圈各消去一個變數,讀出:<tspan font-weight="800">M = B·C + A·C + A·B</tspan></text>
+</svg>
+        <figcaption>圖 47-4:用卡諾圖化簡多數函數。把相鄰的 1 圈成「2 的次方」大小的矩形(這裡三個 1×2 的圈);每個圈裡「沒有變的變數」保留、「有變的變數」消去。三個圈分別讀出 $B\cdot C$、$A\cdot C$、$A\cdot B$,OR 起來就是答案——和第 19 章用代數硬湊的結果一模一樣,但這次是用看的。</figcaption>
+      </div>
+      <p>
+        規則就這麼幾條:(1) 圈起來的 1 必須是<strong>矩形</strong>,且格數是 <strong>2 的次方</strong>(1、2、4、8…);
+        (2) 圈<strong>越大越好</strong>(消去越多變數);(3) 圈<strong>可以重疊</strong>(同一個 1 可被多個圈覆蓋);
+        (4) 圖的<strong>邊緣會繞回去</strong>(最左欄與最右欄相鄰、最上列與最下列相鄰,因為格雷碼是環狀的)。
+        每個圈讀出一個 AND 項:圈內<strong>始終不變</strong>的變數保留(是 1 寫原樣、是 0 加否定),<strong>有變動</strong>的變數消去。
+      </p>
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">卡諾圖只是把代數「畫出來」</span>
+          <p>卡諾圖沒有任何新魔法——它只是把布林合併律 $XY + X\neg Y = X$ 變成「相鄰的兩個 1 可以合併」的<strong>視覺規則</strong>。
+          人腦很不擅長盯著一長串符號做代數,卻很擅長在圖上一眼看出「哪些方塊連在一起」。卡諾圖就是把化簡這件事,
+          從「考驗代數技巧」變成「考驗畫圈圈的眼力」。變數一多(超過 4、5 個)圖就畫不下了,那時就交給電腦——
+          晶片設計軟體裡跑的是 Quine–McCluskey、Espresso 這類演算法,本質上做的是同一件事:找最少、最大的「圈」。</p>
+        </div>
+      </div>
+      <p>稍後你會看到,卡諾圖在 FSM 裡會立刻派上用場:設計狀態機時,「次態邏輯」就是一坨組合邏輯,正好用卡諾圖化簡。</p>
+
+      <h2>時間維度:傳播延遲、毛刺與關鍵路徑</h2>
+      <p>
+        到目前為止,我們(還有第 19、20 章)都假裝閘是「瞬間」運作的:輸入一變,輸出立刻變。
+        但真實電晶體要替線路上的電容充放電,需要時間。這個「輸入改變」到「輸出穩定」之間的延遲,
+        叫<strong>傳播延遲(propagation delay,$t_{pd}$)</strong>,通常以皮秒($10^{-12}$ 秒)計。
+        一旦把時間考慮進來,兩個重要、且常常咬人的現象就冒出來了。
+      </p>
+
+      <h3>毛刺(glitch):輸出短暫地「說錯話」</h3>
+      <p>
+        一個訊號若經由<strong>長短不一的兩條路徑</strong>抵達同一個閘,它們到達的時間不同,輸出就可能在穩定下來之前,
+        先短暫地閃出一個<strong>錯誤的值</strong>——這個轉瞬即逝的錯誤脈衝叫<strong>毛刺(glitch)</strong>,也叫<strong>冒險(hazard)</strong>。
+      </p>
+      <div class="diagram">
+<svg viewBox="0 0 700 250" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="20" y="24" font-size="13" font-weight="700" fill="#1f2328">傳播延遲與毛刺:輸出落後輸入,還可能中途「閃錯」一下</text>
+  <!-- input wave -->
+  <text x="40" y="78" font-size="11" fill="#8a929b">輸入 A</text>
+  <polyline points="110,90 230,90 230,55 690,55" fill="none" stroke="#2f6f6a" stroke-width="2.4"/>
+  <line x1="230" y1="40" x2="230" y2="210" stroke="#cbd2d8" stroke-width="1" stroke-dasharray="3 3"/>
+  <text x="230" y="38" text-anchor="middle" font-size="10" fill="#8a929b">A 改變</text>
+
+  <!-- ideal output (no delay) -->
+  <text x="40" y="138" font-size="11" fill="#8a929b">理想輸出</text>
+  <polyline points="110,150 230,150 230,115 690,115" fill="none" stroke="#8a929b" stroke-width="2" stroke-dasharray="5 4"/>
+  <text x="300" y="110" font-size="10" fill="#8a929b">(假裝瞬間切換)</text>
+
+  <!-- real output with delay + glitch -->
+  <text x="40" y="200" font-size="11" fill="#b4541f">真實輸出</text>
+  <!-- stays low until 230+delay(=290), but a glitch spike between 290..330 -->
+  <polyline points="110,212 300,212 300,177 340,177 340,212 380,212 380,177 690,177" fill="none" stroke="#b4541f" stroke-width="2.4"/>
+  <!-- t_pd bracket -->
+  <line x1="230" y1="228" x2="300" y2="228" stroke="#8b5cf6" stroke-width="1.6"/>
+  <line x1="230" y1="223" x2="230" y2="233" stroke="#8b5cf6" stroke-width="1.6"/>
+  <line x1="300" y1="223" x2="300" y2="233" stroke="#8b5cf6" stroke-width="1.6"/>
+  <text x="265" y="245" text-anchor="middle" font-size="10" fill="#8b5cf6">t_pd(傳播延遲)</text>
+  <!-- glitch label -->
+  <text x="320" y="170" text-anchor="middle" font-size="10" fill="#b4541f">毛刺!</text>
+  <path d="M320 172 L320 188" stroke="#b4541f" stroke-width="1"/>
+</svg>
+        <figcaption>圖 47-5:真實的閘有傳播延遲 $t_{pd}$,輸出比輸入慢一步;若內部路徑長短不一,輸出在穩定到正確值之前,還可能先閃出一個錯誤的「毛刺」。組合邏輯最終一定會算出正確答案,但「中途那段」是不可信的。</figcaption>
+      </div>
+      <p>
+        毛刺不代表電路設計錯了——只要你<strong>等得夠久</strong>,組合邏輯最終一定會穩定到正確值。問題在於:在它穩定之前,
+        輸出是垃圾。如果某個記憶元件在「還沒穩定」時就去採樣它,就會存進錯誤的值。這正是<strong>時脈</strong>存在的理由
+        (第 20 章已經埋下這個伏筆):<strong>給組合邏輯足夠的時間把結果算穩,等穩了,才在時脈邊緣一次採樣。</strong>
+        問題是——「足夠的時間」到底是多久?這就帶出關鍵路徑。
+      </p>
+
+      <h3>關鍵路徑(critical path):決定你能跑多快</h3>
+      <p>
+        一塊組合邏輯裡,訊號從輸入到輸出有很多條路徑,每條經過的閘數、延遲都不同。其中<strong>延遲最長的那一條</strong>,
+        叫<strong>關鍵路徑(critical path)</strong>。整塊電路必須等到<strong>最慢</strong>的路徑也算完,輸出才算全部穩定。
+        所以,關鍵路徑的延遲,就決定了「一拍最少要多長」。
+      </p>
+      <div class="diagram">
+<svg viewBox="0 0 720 250" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs><marker id="cp-a" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/></marker>
+        <marker id="cp-r" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#b4541f"/></marker></defs>
+  <!-- left register -->
+  <rect x="40" y="90" width="80" height="70" rx="8" fill="#f6e7dd" stroke="#b4541f" stroke-width="1.6"/>
+  <text x="80" y="120" text-anchor="middle" font-size="12" font-weight="800" fill="#b4541f">暫存器</text>
+  <text x="80" y="138" text-anchor="middle" font-size="9" fill="#8a929b">R1</text>
+  <!-- right register -->
+  <rect x="600" y="90" width="80" height="70" rx="8" fill="#f6e7dd" stroke="#b4541f" stroke-width="1.6"/>
+  <text x="640" y="120" text-anchor="middle" font-size="12" font-weight="800" fill="#b4541f">暫存器</text>
+  <text x="640" y="138" text-anchor="middle" font-size="9" fill="#8a929b">R2</text>
+
+  <!-- combinational cloud (two paths) -->
+  <text x="360" y="40" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2328">中間的組合邏輯(兩條路徑)</text>
+  <!-- path 1 (short) -->
+  <rect x="240" y="70" width="90" height="36" rx="6" fill="#d8efe9" stroke="#2f6f6a"/>
+  <text x="285" y="93" text-anchor="middle" font-size="10" fill="#1f6b63">路徑1:90ps</text>
+  <line x1="120" y1="110" x2="240" y2="88" stroke="#8a929b" stroke-width="2" marker-end="url(#cp-a)"/>
+  <line x1="330" y1="88" x2="600" y2="110" stroke="#8a929b" stroke-width="2" marker-end="url(#cp-a)"/>
+  <!-- path 2 (critical) -->
+  <rect x="240" y="150" width="220" height="40" rx="6" fill="#f6e2d6" stroke="#b4541f" stroke-width="2"/>
+  <text x="350" y="175" text-anchor="middle" font-size="11" font-weight="700" fill="#b4541f">路徑2(關鍵路徑):140ps</text>
+  <line x1="120" y1="135" x2="240" y2="160" stroke="#b4541f" stroke-width="2.4" marker-end="url(#cp-r)"/>
+  <line x1="460" y1="170" x2="600" y2="140" stroke="#b4541f" stroke-width="2.4" marker-end="url(#cp-r)"/>
+
+  <!-- timing budget -->
+  <text x="360" y="228" text-anchor="middle" font-size="12" fill="#1f2328">一拍 ≥ t_pcq(40) + 關鍵路徑(140) + t_setup(20) = <tspan font-weight="800" fill="#b4541f">200 ps</tspan> → 最高 5 GHz</text>
+</svg>
+        <figcaption>圖 47-6:兩個暫存器之間夾著一塊組合邏輯。訊號在時脈邊緣從 R1 射出,穿過組合邏輯,必須在下一個邊緣前抵達並穩定,才能被 R2 正確採樣。最慢的「路徑2」就是關鍵路徑;它(加上暫存器本身的延遲與建立時間)決定了時脈週期的下限。</figcaption>
+      </div>
+      <p>一拍(時脈週期 $T$)至少要容納下面這串時間,訊號才來得及從一個暫存器穩穩送到下一個暫存器:</p>
+      <p>$$T \;\ge\; t_{pcq} \;+\; t_{pd}(\text{關鍵路徑}) \;+\; t_{setup}.$$</p>
+      <p>
+        其中 $t_{pcq}$ 是暫存器「時脈邊緣到輸出穩定」的延遲(clock-to-Q),$t_{setup}$ 是下一個暫存器要求資料提前穩定的時間(下一節談)。
+        最高時脈頻率就是 $f_{max} = 1/T$。以圖中的數字:$T = 40 + 140 + 20 = 200\text{ps}$,所以 $f_{max} = 1/(200\times 10^{-12}\text{s}) = 5\text{ GHz}$。
+      </p>
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">為什麼電路有速度上限</span>
+          <p>你常聽到「這顆 CPU 是 5 GHz」,意思就是它的時脈每秒跳 50 億次,而<strong>它跳這麼快的上限,正是被關鍵路徑卡住的</strong>。
+          你不能把時脈調得比「最慢那條路徑算完所需的時間」還快,否則暫存器會在訊號還是垃圾時就採樣,整台機器算出亂碼。
+          這就是為什麼晶片設計師會拼命去<strong>縮短關鍵路徑</strong>(例如第 20 章提過的前瞻進位加法器,就是為了縮短加法的進位鏈),
+          以及為什麼超頻會不穩定——你把時脈逼到比關鍵路徑還短,訊號就來不及穩定了。<strong>計算需要時間,而最慢的那一步,定義了你的極速。</strong></p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 47.1 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>用卡諾圖化簡這個四變數布林函數(以最小項編號給出,$A$ 是最高位、$D$ 是最低位):</p>
+          <p>$$F(A,B,C,D) = \sum m(0,2,5,7,8,10,13,15).$$</p>
+          <p>提示:畫一張 $4\times 4$ 的卡諾圖(列 $AB$、欄 $CD$,都用格雷碼 00、01、11、10),把這 8 個 1 填進去,別忘了<strong>四個角會繞回去相鄰</strong>。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>填好的卡諾圖長這樣(1 的位置):</p>
+              <div class="table-wrap">
+              <table>
+                <thead><tr><th></th><th>CD=00</th><th>CD=01</th><th>CD=11</th><th>CD=10</th></tr></thead>
+                <tbody>
+                  <tr><td><strong>AB=00</strong></td><td>1</td><td>0</td><td>0</td><td>1</td></tr>
+                  <tr><td><strong>AB=01</strong></td><td>0</td><td>1</td><td>1</td><td>0</td></tr>
+                  <tr><td><strong>AB=11</strong></td><td>0</td><td>1</td><td>1</td><td>0</td></tr>
+                  <tr><td><strong>AB=10</strong></td><td>1</td><td>0</td><td>0</td><td>1</td></tr>
+                </tbody>
+              </table>
+              </div>
+              <p>找最大的圈,只需要兩個 <strong>4 格</strong>的圈:</p>
+              <ul>
+                <li><strong>四個角</strong>(m0、m2、m8、m10):這四格繞回相鄰,構成一個 $2\times 2$ 的圈。它們共同點是 $B=0$ 且 $D=0$($A$、$C$ 都在變)→ 項為 $\neg B\cdot\neg D$。</li>
+                <li><strong>正中央的四格</strong>(m5、m7、m13、m15):共同點是 $B=1$ 且 $D=1$ → 項為 $B\cdot D$。</li>
+              </ul>
+              <p>所以化簡結果是:</p>
+              <p>$$F = \neg B\cdot \neg D \;+\; B\cdot D.$$</p>
+              <p>$A$ 和 $C$ <strong>完全被消掉了</strong>——它們對結果毫無影響!這個式子其實就是「$B$ 與 $D$ 相等時輸出 1」,也就是 $B$ 與 $D$ 的 XNOR(同或)。
+              原本 8 個四輸入最小項(每個要 3 個 AND + 一堆反相器),化簡後只剩 2 個兩輸入 AND 加一個 OR。用 Python 驗證一下:</p>
+              <pre><code class="language-python">def F_raw(a, b, c, d):           # 原始:列出 8 個最小項
+    m = (a&lt;&lt;3) | (b&lt;&lt;2) | (c&lt;&lt;1) | d
+    return 1 if m in (0,2,5,7,8,10,13,15) else 0
+
+def F_simplified(a, b, c, d):    # 化簡後:¬B·¬D + B·D
+    return ((1-b) &amp; (1-d)) | (b &amp; d)
+
+ok = all(F_raw(a,b,c,d) == F_simplified(a,b,c,d)
+         for a in (0,1) for b in (0,1) for c in (0,1) for d in (0,1))
+print(ok)    # True ← 16 種輸入全部吻合</code></pre>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>循序邏輯深化:latch、flip-flop 與時序限制</h2>
+      <p>
+        第 20 章把<strong>正反器(flip-flop,DFF)</strong>當成「循序邏輯的原語」直接用,記住它「在時脈邊緣鎖存一個位元」就好。
+        現在掀開它的蓋子,看看記憶元件在真實時間裡的細節——這些細節,正是真實電路最常出 bug 的地方。
+      </p>
+
+      <h3>latch vs flip-flop:準位觸發 vs 邊緣觸發</h3>
+      <p>
+        記憶元件有兩大類,差別在於「<strong>什麼時候</strong>聽輸入的話」:
+      </p>
+      <ul>
+        <li><strong>閂鎖(latch)</strong>:<strong>準位觸發(level-sensitive)</strong>。當致能訊號為高的<strong>一整段期間</strong>,它是「透明」的——輸出會跟著輸入一起變;致能變低後,才把當下的值「鎖住」。</li>
+        <li><strong>正反器(flip-flop)</strong>:<strong>邊緣觸發(edge-triggered)</strong>。它只在時脈<strong>跳變的那一瞬間</strong>(通常是上升邊緣)採樣一次輸入,其餘時間對輸入完全充耳不聞。</li>
+      </ul>
+      <p>
+        一個 D flip-flop 通常由<strong>兩個 latch 串接</strong>而成(主從架構,master-slave):前一個 latch 在時脈為低時接收輸入,後一個在時脈為高時放行——
+        兩者交棒的結果,就是「只有在邊緣那一刻,輸入才被放行一次」。為什麼工程上偏愛邊緣觸發的 flip-flop?
+        因為邊緣是一個<strong>明確的時間點</strong>,整台機器可以約定「大家都在這一刻、同時更新」,時序好分析得多;
+        而透明的 latch 在致能期間若輸入晃動,麻煩會傳得到處都是。本書其餘地方講「暫存器」「狀態」,指的都是邊緣觸發的 flip-flop。
+      </p>
+
+      <h3>建立時間與保持時間(setup / hold time)</h3>
+      <p>
+        flip-flop 要能在邊緣「乾淨地採樣」,有個前提:被採樣的資料,必須在邊緣<strong>前後一小段時間內保持穩定、不准亂動</strong>。
+        這段「禁止變動」的視窗由兩個參數界定:
+      </p>
+      <ul>
+        <li><strong>建立時間(setup time,$t_{su}$)</strong>:資料必須在時脈邊緣<strong>到來之前</strong>就穩定至少 $t_{su}$。</li>
+        <li><strong>保持時間(hold time,$t_{h}$)</strong>:資料必須在時脈邊緣<strong>過去之後</strong>繼續維持至少 $t_{h}$,才准改變。</li>
+      </ul>
+      <div class="diagram">
+<svg viewBox="0 0 700 250" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="20" y="24" font-size="13" font-weight="700" fill="#1f2328">setup / hold 視窗:資料在時脈邊緣前後這段時間必須穩定</text>
+  <!-- clock edge -->
+  <line x1="360" y1="45" x2="360" y2="210" stroke="#2f6f6a" stroke-width="2.5"/>
+  <text x="360" y="40" text-anchor="middle" font-size="11" font-weight="700" fill="#2f6f6a">↑ 時脈上升邊緣</text>
+  <!-- clock wave -->
+  <text x="40" y="78" font-size="11" fill="#8a929b">clk</text>
+  <polyline points="90,90 360,90 360,60 620,60" fill="none" stroke="#2f6f6a" stroke-width="2.2"/>
+
+  <!-- setup window (left of edge) -->
+  <rect x="290" y="120" width="70" height="80" fill="#ece7fb" stroke="#8b5cf6" stroke-dasharray="4 3"/>
+  <text x="325" y="218" text-anchor="middle" font-size="10" fill="#5b3aa6">t_su</text>
+  <!-- hold window (right of edge) -->
+  <rect x="360" y="120" width="50" height="80" fill="#f6e2d6" stroke="#b4541f" stroke-dasharray="4 3"/>
+  <text x="385" y="218" text-anchor="middle" font-size="10" fill="#9b481b">t_h</text>
+  <text x="350" y="235" text-anchor="middle" font-size="10" fill="#8a929b">這段視窗內,資料 D 不准變動</text>
+
+  <!-- data line: stable through window, allowed to change outside -->
+  <text x="40" y="165" font-size="11" fill="#8a929b">資料 D</text>
+  <polyline points="90,180 200,180 215,135 290,135 290,135 410,135 425,180 620,180" fill="none" stroke="#b4541f" stroke-width="2.4"/>
+  <text x="250" y="128" font-size="10" fill="#b4541f">穩定(可被安全採樣)</text>
+  <text x="140" y="174" font-size="10" fill="#8a929b">可變</text>
+  <text x="520" y="174" font-size="10" fill="#8a929b">可變</text>
+</svg>
+        <figcaption>圖 47-7:setup/hold 視窗。資料線 D 必須在時脈邊緣前 $t_{su}$ 就穩定,並在邊緣後再撐 $t_h$,中間這段「禁區」內不准變動。視窗之外,D 愛怎麼變都行。違反這個約定,flip-flop 就可能採樣到一個「半生不熟」的值。</figcaption>
+      </div>
+      <p>
+        違反 setup 或 hold 會發生什麼?flip-flop 可能進入<strong>亞穩態(metastability)</strong>:輸出卡在 0 與 1 之間的模糊地帶,
+        既不是乾淨的高、也不是乾淨的低,搖擺不定,而且要花<strong>不可預測</strong>的時間才(可能)塌縮到某一邊。
+        下游邏輯讀到這種值,有的判成 0、有的判成 1,整台機器的狀態就分裂錯亂——這是硬體裡最陰險的一種錯誤。
+      </p>
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">setup 違反可以靠「放慢時脈」救,hold 違反不行</span>
+          <p>注意這兩種違反的<strong>本質不同</strong>。<strong>setup 違反</strong>是「資料來得太晚」——通常是關鍵路徑太長,
+          資料在邊緣前還沒算穩;這可以靠<strong>把時脈調慢</strong>(拉長週期)來解決,給訊號更多時間。
+          但 <strong>hold 違反</strong>是「資料變得太早」——在邊緣剛過、舊值還沒被穩穩鎖住時,新資料就竄了進來;
+          這跟時脈快慢<strong>無關</strong>(週期再長也沒用),只能靠改電路(例如在太短的路徑上故意加緩衝延遲)來修。
+          這也是為什麼晶片設計裡 hold 違反特別讓人頭痛。</p>
+        </div>
+      </div>
+
+      <h3>時脈偏移(clock skew):節拍器不同步</h3>
+      <p>
+        第 20 章說「時脈是全電路的共同節拍」,理想上所有暫存器都在<strong>同一瞬間</strong>聽到那一聲滴答。
+        但時脈訊號也是電,得靠實體的線送到晶片各個角落,而線有長有短——於是時脈到達不同暫存器的時間會有微小差異,
+        這叫<strong>時脈偏移(clock skew)</strong>。偏移會<strong>吃掉</strong>原本的時序餘裕:如果接收端的時脈來得比較晚,
+        資料就得更早穩定(setup 更緊張);如果來得比較早,又更容易踩到 hold 違反。所以真實晶片會花大量心力設計
+        「<strong>時脈樹(clock tree)</strong>」,想盡辦法讓那一聲滴答盡量同時抵達每個角落。把時脈偏移納入後,前面的時序不等式會更嚴格:
+      </p>
+      <p>$$T \;\ge\; t_{pcq} + t_{pd}(\text{關鍵路徑}) + t_{setup} + t_{skew}.$$</p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 47.2 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>某條管線級在兩個 D flip-flop 之間夾著一塊組合邏輯。已知:flip-flop 的 clock-to-Q 延遲 $t_{pcq}=40\text{ps}$、建立時間 $t_{setup}=20\text{ps}$;
+          各類閘的傳播延遲為 NOT $=10\text{ps}$、AND $=50\text{ps}$、OR $=30\text{ps}$、XOR $=60\text{ps}$。
+          組合邏輯裡有兩條從輸入到輸出的路徑:</p>
+          <ul>
+            <li>路徑 1:NOT → AND → OR</li>
+            <li>路徑 2:XOR → AND → OR</li>
+          </ul>
+          <p>(a) 哪一條是關鍵路徑?它的延遲多少?<br>
+             (b) 這級電路的最小時脈週期與最高頻率是多少?<br>
+             (c) 假設又量到時脈偏移 $t_{skew}=10\text{ps}$,最高頻率會掉到多少?</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>(a)</strong> 路徑 1 = $10+50+30 = 90\text{ps}$;路徑 2 = $60+50+30 = 140\text{ps}$。
+              <strong>路徑 2 是關鍵路徑,延遲 140 ps</strong>(整塊組合邏輯必須等最慢的它算完)。</p>
+              <p><strong>(b)</strong> $T_{min} = t_{pcq} + t_{pd} + t_{setup} = 40 + 140 + 20 = \mathbf{200\,ps}$。
+              所以 $f_{max} = 1/200\text{ps} = 1/(200\times 10^{-12}\text{s}) = \mathbf{5\,GHz}$。</p>
+              <p><strong>(c)</strong> 加入偏移:$T_{min} = 40 + 140 + 20 + 10 = 210\text{ps}$,
+              $f_{max} = 1/210\text{ps} \approx \mathbf{4.76\,GHz}$。短短 10 ps 的偏移,就讓最高頻率掉了約 5%——這就是為什麼大廠要拼命壓低時脈偏移。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 47.3 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>用你自己的話解釋:(a) 違反 setup time 與違反 hold time 各自代表「資料相對於時脈邊緣」發生了什麼?
+          (b) 為什麼「把時脈調慢」能救 setup 違反,卻救不了 hold 違反?(c) 「亞穩態」為什麼比「單純存錯一個值」更危險?</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>(a)</strong> <strong>setup 違反 = 資料來得太晚</strong>:在時脈邊緣前 $t_{su}$ 的瞬間,資料還沒穩定(通常因為關鍵路徑太長)。
+              <strong>hold 違反 = 資料變得太早</strong>:邊緣剛過、舊值還沒被穩穩鎖進去,新資料就竄進來把它覆蓋了(通常因為某條路徑太短、或時脈偏移)。</p>
+              <p><strong>(b)</strong> 把時脈調慢 = 拉長週期 $T$。setup 的問題是「資料在<strong>下一個邊緣前</strong>來不及穩定」,週期拉長就給了訊號更多時間,自然解決。
+              但 hold 看的是「<strong>同一個邊緣之後</strong>資料有沒有撐住 $t_h$」——這完全發生在邊緣的瞬間附近,跟下一拍多久才來毫無關係,所以拉長週期一點忙也幫不上;只能改電路(例如在過快的路徑上加延遲緩衝)。</p>
+              <p><strong>(c)</strong> 存錯一個值,至少它是個<strong>確定</strong>的 0 或 1,後續行為雖然錯但一致、可重現、可除錯。
+              亞穩態則是輸出卡在 0 與 1 之間的模糊電壓,<strong>不同的下游閘可能把它判讀成不同的值</strong>(有的看成 0、有的看成 1),
+              於是系統狀態當場分裂;而且它要多久才塌縮到某一邊是<strong>機率性、不可預測</strong>的。一個本該同步的系統,從此各說各話——這種「薛丁格的位元」遠比一個明確的錯誤難抓。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>有限狀態機:讓硬體「依狀態行動」</h2>
+      <p>
+        現在,所有零件都到齊了:會算的<strong>組合邏輯</strong>(還能用卡諾圖化簡)、會記的<strong>暫存器</strong>(由 flip-flop 組成)、
+        當節拍器的<strong>時脈</strong>。把它們組合起來,就能造出這一章的重頭戲,也是所有循序數位系統的通用模型——
+        <strong>有限狀態機(finite state machine,FSM)</strong>。
+      </p>
+      <p>
+        FSM 的概念其實很生活化。想想一個十字路口的紅綠燈:它有幾個<strong>狀態</strong>(綠燈、黃燈、紅燈),
+        會依某些條件(時間到了、或偵測到車)<strong>轉移</strong>到下一個狀態,並在每個狀態做出對應的<strong>輸出</strong>(亮哪個燈)。
+        一台自動販賣機、一個轉門、一個電梯控制器、甚至你 App 裡的登入流程,本質上都是 FSM。
+      </p>
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">FSM 的四個要素</span>
+          <p>一台有限狀態機由四樣東西定義:<br>
+          <strong>① 一組有限的狀態(states)</strong>:機器「記得」自己現在處於哪一種情境。<br>
+          <strong>② 一個起始狀態(initial state)</strong>:開機時從哪裡開始。<br>
+          <strong>③ 轉移函數(transition):</strong> 給定「現在的狀態 + 現在的輸入」,決定「下一拍的狀態(次態)」。<br>
+          <strong>④ 輸出函數(output):</strong> 決定每個情境下機器對外吐出什麼。<br>
+          「有限」二字是重點:狀態的數目是固定、有限的——這正是它能用<strong>固定數量的 flip-flop</strong> 實作出來的原因。</p>
+        </div>
+      </div>
+
+      <h3>Moore 機 vs Mealy 機</h3>
+      <p>依「輸出取決於什麼」,FSM 分成兩種風格,值得分清楚:</p>
+      <ul>
+        <li><strong>Moore 機</strong>:輸出<strong>只</strong>取決於<strong>當前狀態</strong>。輸出寫在狀態(節點)上。好處是輸出穩定、不受輸入瞬間晃動影響;代價是有時需要多一些狀態。</li>
+        <li><strong>Mealy 機</strong>:輸出取決於<strong>當前狀態 + 當前輸入</strong>。輸出寫在轉移(箭頭)上。好處是常常用<strong>更少的狀態</strong>就能達成同樣行為,反應也快一拍;代價是輸出可能跟著輸入毛刺、時序較難分析。</li>
+      </ul>
+      <p>兩者沒有絕對好壞,是工程取捨。下面我們用同一個任務,先做 Moore 版,再(在練習裡)做 Mealy 版,你就能體會差異。</p>
+
+      <h3>實例:偵測序列 "101"</h3>
+      <p>
+        任務:一個位元一個位元地讀入一串 0/1,每當最近讀進的三個位元剛好是 <code>1 0 1</code> 時,就輸出 1(其餘時候輸出 0)。
+        而且要支援<strong>重疊</strong>:像 <code>10101</code> 裡有兩個 "101"(位置 1–3 與 3–5),兩個都要抓到。
+      </p>
+      <p>我們用 Moore 機,設計四個狀態,每個狀態代表「目前已經吻合到 '101' 的多長前綴」:</p>
+      <ul>
+        <li><strong>S0</strong>:還沒有任何有用的前綴(起始)。</li>
+        <li><strong>S1</strong>:剛看到 "1"。</li>
+        <li><strong>S2</strong>:剛看到 "10"。</li>
+        <li><strong>S3</strong>:剛看到 "101" → 偵測成功!(Moore:這個狀態的輸出 = 1)</li>
+      </ul>
+      <div class="diagram">
+<svg viewBox="0 0 760 320" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs><marker id="sm" markerWidth="11" markerHeight="11" refX="9" refY="3.2" orient="auto"><path d="M0,0 L9,3.2 L0,6.4 Z" fill="#4a5159"/></marker></defs>
+  <!-- start arrow -->
+  <line x1="30" y1="170" x2="76" y2="170" stroke="#4a5159" stroke-width="2" marker-end="url(#sm)"/>
+  <text x="40" y="160" font-size="10" fill="#8a929b">start</text>
+
+  <!-- states -->
+  <circle cx="120" cy="170" r="34" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="120" y="168" text-anchor="middle" font-size="15" font-weight="800" fill="#1f2328">S0</text>
+  <text x="120" y="184" text-anchor="middle" font-size="9" fill="#8a929b">out 0</text>
+
+  <circle cx="310" cy="170" r="34" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="310" y="168" text-anchor="middle" font-size="15" font-weight="800" fill="#1f2328">S1</text>
+  <text x="310" y="184" text-anchor="middle" font-size="9" fill="#8a929b">"1" · out 0</text>
+
+  <circle cx="500" cy="170" r="34" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="500" y="168" text-anchor="middle" font-size="15" font-weight="800" fill="#1f2328">S2</text>
+  <text x="500" y="184" text-anchor="middle" font-size="9" fill="#8a929b">"10" · out 0</text>
+
+  <!-- S3 double circle (accepting / output 1) -->
+  <circle cx="680" cy="170" r="38" fill="#f6e7dd" stroke="#b4541f" stroke-width="2"/>
+  <circle cx="680" cy="170" r="32" fill="none" stroke="#b4541f" stroke-width="1.5"/>
+  <text x="680" y="168" text-anchor="middle" font-size="15" font-weight="800" fill="#b4541f">S3</text>
+  <text x="680" y="184" text-anchor="middle" font-size="9" fill="#9b481b">"101" · out 1</text>
+
+  <!-- transitions on main line (input 1 chain S0->S1, S2->S3 ; S1->S2 input 0) -->
+  <line x1="154" y1="165" x2="276" y2="165" stroke="#4a5159" stroke-width="1.8" marker-end="url(#sm)"/>
+  <text x="215" y="156" text-anchor="middle" font-size="12" font-weight="700" fill="#2f6f6a">1</text>
+  <line x1="344" y1="165" x2="466" y2="165" stroke="#4a5159" stroke-width="1.8" marker-end="url(#sm)"/>
+  <text x="405" y="156" text-anchor="middle" font-size="12" font-weight="700" fill="#b4541f">0</text>
+  <line x1="534" y1="165" x2="642" y2="165" stroke="#4a5159" stroke-width="1.8" marker-end="url(#sm)"/>
+  <text x="588" y="156" text-anchor="middle" font-size="12" font-weight="700" fill="#2f6f6a">1</text>
+
+  <!-- self loops -->
+  <!-- S0 self loop on 0 -->
+  <path d="M104 140 C92 108, 148 108, 136 140" fill="none" stroke="#4a5159" stroke-width="1.6" marker-end="url(#sm)"/>
+  <text x="120" y="100" text-anchor="middle" font-size="12" font-weight="700" fill="#b4541f">0</text>
+  <!-- S1 self loop on 1 -->
+  <path d="M294 140 C282 108, 338 108, 326 140" fill="none" stroke="#4a5159" stroke-width="1.6" marker-end="url(#sm)"/>
+  <text x="310" y="100" text-anchor="middle" font-size="12" font-weight="700" fill="#2f6f6a">1</text>
+
+  <!-- back arrows (below) -->
+  <!-- S2 -> S0 on 0 (deep arc) -->
+  <path d="M478 200 C400 280, 200 280, 128 202" fill="none" stroke="#4a5159" stroke-width="1.6" marker-end="url(#sm)"/>
+  <text x="300" y="278" text-anchor="middle" font-size="12" font-weight="700" fill="#b4541f">0</text>
+  <!-- S3 -> S1 on 1 (mid arc) -->
+  <path d="M662 202 C560 250, 400 250, 322 200" fill="none" stroke="#4a5159" stroke-width="1.6" marker-end="url(#sm)"/>
+  <text x="500" y="244" text-anchor="middle" font-size="12" font-weight="700" fill="#2f6f6a">1</text>
+  <!-- S3 -> S2 on 0 (short arc above) -->
+  <path d="M656 146 C620 118, 560 118, 522 146" fill="none" stroke="#4a5159" stroke-width="1.6" marker-end="url(#sm)"/>
+  <text x="589" y="112" text-anchor="middle" font-size="12" font-weight="700" fill="#b4541f">0</text>
+</svg>
+        <figcaption>圖 47-8:偵測 "101" 的 Moore 狀態機(綠色箭頭代表輸入 1,磚紅色代表輸入 0)。雙圈的 S3 是「偵測成功」狀態,輸出 1。注意處理重疊的巧思:在 S3 偵測到 "101" 後,最後那個 "1" 還能當下一個 "101" 的開頭,所以 S3 的轉移和 S1 一樣(讀 1 去 S1、讀 0 去 S2)。</figcaption>
+      </div>
+      <p>把狀態圖整理成精確的<strong>狀態轉移表(state transition table)</strong>——這是真正拿去做電路的依據:</p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>現態</th><th>含意</th><th>輸入 = 0 → 次態</th><th>輸入 = 1 → 次態</th><th>輸出(Moore)</th></tr></thead>
+        <tbody>
+          <tr><td><strong>S0</strong></td><td>起始 / 無前綴</td><td>S0</td><td>S1</td><td>0</td></tr>
+          <tr><td><strong>S1</strong></td><td>看到 "1"</td><td>S2</td><td>S1</td><td>0</td></tr>
+          <tr><td><strong>S2</strong></td><td>看到 "10"</td><td>S0</td><td>S3</td><td>0</td></tr>
+          <tr><td><strong>S3</strong></td><td>看到 "101"</td><td>S2</td><td>S1</td><td><strong>1</strong></td></tr>
+        </tbody>
+      </table>
+      </div>
+
+      <h3>怎麼把 FSM 變成電路</h3>
+      <p>
+        這是把第 20 章的「算」與「記」正式合體的時刻。任何 FSM 都用同一個<strong>通用架構</strong>實作,只有三個方塊:
+      </p>
+      <ol>
+        <li>一個<strong>狀態暫存器(state register)</strong>(由 flip-flop 組成),用來「記住現態」。$n$ 個狀態就用 $\lceil\log_2 n\rceil$ 個 flip-flop 把狀態<strong>編碼</strong>成二進位。</li>
+        <li>一塊<strong>次態邏輯(next-state logic)</strong>:純組合邏輯,吃「現態 + 輸入」,算出「次態」。</li>
+        <li>一塊<strong>輸出邏輯(output logic)</strong>:純組合邏輯,算出輸出(Moore 只看現態;Mealy 還看輸入)。</li>
+      </ol>
+      <div class="diagram">
+<svg viewBox="0 0 720 300" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs><marker id="fa2" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/></marker>
+        <marker id="fr2" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#b4541f"/></marker></defs>
+  <text x="20" y="26" font-size="13" font-weight="700" fill="#1f2328">FSM 的通用架構:組合邏輯(算次態/輸出)+ 狀態暫存器(記現態)+ 時脈</text>
+
+  <!-- next-state logic -->
+  <rect x="150" y="80" width="150" height="80" rx="10" fill="#e3efed" stroke="#2f6f6a" stroke-width="1.6"/>
+  <text x="225" y="112" text-anchor="middle" font-size="13" font-weight="800" fill="#2f6f6a">次態邏輯</text>
+  <text x="225" y="132" text-anchor="middle" font-size="9" fill="#8a929b">組合邏輯</text>
+  <text x="225" y="146" text-anchor="middle" font-size="9" fill="#8a929b">(現態,輸入)→ 次態</text>
+
+  <!-- state register -->
+  <rect x="380" y="80" width="140" height="80" rx="10" fill="#f6e7dd" stroke="#b4541f" stroke-width="1.8"/>
+  <text x="450" y="112" text-anchor="middle" font-size="13" font-weight="800" fill="#b4541f">狀態暫存器</text>
+  <text x="450" y="132" text-anchor="middle" font-size="9" fill="#8a929b">flip-flop ×n</text>
+  <text x="450" y="146" text-anchor="middle" font-size="9" fill="#8a929b">記住「現態」</text>
+
+  <!-- output logic -->
+  <rect x="380" y="210" width="140" height="60" rx="10" fill="#e3efed" stroke="#2f6f6a" stroke-width="1.6"/>
+  <text x="450" y="238" text-anchor="middle" font-size="12" font-weight="800" fill="#2f6f6a">輸出邏輯</text>
+  <text x="450" y="254" text-anchor="middle" font-size="9" fill="#8a929b">組合邏輯</text>
+
+  <!-- input -->
+  <line x1="60" y1="105" x2="150" y2="105" stroke="#8a929b" stroke-width="2.2" marker-end="url(#fa2)"/>
+  <text x="50" y="100" text-anchor="end" font-size="12" font-weight="700" fill="#1f2328">輸入</text>
+  <!-- next-state -> register -->
+  <line x1="300" y1="120" x2="380" y2="120" stroke="#8a929b" stroke-width="2.2" marker-end="url(#fa2)"/>
+  <text x="340" y="112" text-anchor="middle" font-size="9" fill="#8a929b">次態</text>
+  <!-- register -> output line (current state) -->
+  <line x1="520" y1="120" x2="600" y2="120" stroke="#b4541f" stroke-width="2.4" marker-end="url(#fr2)"/>
+  <text x="565" y="112" text-anchor="middle" font-size="9" fill="#b4541f">現態</text>
+  <!-- feedback: current state back to next-state logic -->
+  <circle cx="560" cy="120" r="3.5" fill="#b4541f"/>
+  <path d="M560 120 L560 185 L120 185 L120 145 L150 145" fill="none" stroke="#b4541f" stroke-width="2" marker-end="url(#fr2)"/>
+  <text x="300" y="200" text-anchor="middle" font-size="9" fill="#b4541f">回授:把現態繞回去算次態</text>
+  <!-- current state to output logic -->
+  <line x1="450" y1="160" x2="450" y2="210" stroke="#b4541f" stroke-width="2" marker-end="url(#fr2)"/>
+  <!-- output -->
+  <line x1="520" y1="240" x2="640" y2="240" stroke="#2f6f6a" stroke-width="2.4" marker-end="url(#fa2)"/>
+  <text x="648" y="245" font-size="12" font-weight="700" fill="#2f6f6a">輸出</text>
+  <!-- clock into register -->
+  <polyline points="380,150 396,158 380,166" fill="none" stroke="#b4541f" stroke-width="1.6"/>
+  <line x1="345" y1="158" x2="380" y2="158" stroke="#8a929b" stroke-width="1.8" marker-end="url(#fa2)"/>
+  <text x="338" y="178" text-anchor="end" font-size="10" fill="#8a929b">clk</text>
+</svg>
+        <figcaption>圖 47-9:FSM 的通用架構。每一拍,次態邏輯依「現態 + 輸入」算出次態;時脈邊緣一到,狀態暫存器就把次態鎖存成新的現態,並透過回授繞回去,開始算下一拍。輸出邏輯則從現態(Moore)算出輸出。這正是第 20 章「組合邏輯負責算、循序邏輯負責記」的完整體現。</figcaption>
+      </div>
+      <p>
+        把狀態編碼成 2 個位元($Q_1Q_0$):S0 = 00、S1 = 01、S2 = 10、S3 = 11。代進轉移表,次態邏輯與輸出邏輯就變成
+        以 $Q_1, Q_0, x$(輸入)為變數的<strong>布林函數</strong>——而你已經會化簡布林函數了:用<strong>卡諾圖</strong>。
+        例如 Moore 輸出在這個編碼下特別漂亮:只有 S3(11)輸出 1,所以 <strong>輸出 $= Q_1 \cdot Q_0$</strong>,一個 AND 就搞定。
+        次態的兩個位元 $Q_1', Q_0'$ 各是 $(Q_1,Q_0,x)$ 的布林函數,把它們填成卡諾圖、圈一圈,就得到要接的閘。
+        <strong>FSM 設計,到頭來就是「畫狀態圖 → 列轉移表 → 編碼 → 用卡諾圖化簡次態/輸出邏輯 → 接上狀態暫存器」這條流水線。</strong>
+      </p>
+      <div class="callout history">
+        <div class="ico">📜</div>
+        <div class="body">
+          <span class="c-title">FSM 就是 DFA——只是這次它是硬體</span>
+          <p>如果你覺得這個「狀態 + 轉移 + 輸入」的模型有點眼熟,那是因為它和計算理論裡的
+          <strong>確定有限自動機(deterministic finite automaton,DFA)</strong>是<strong>同一個東西</strong>。
+          DFA 是計算理論用來定義「正規語言(regular language)」的抽象機器,我們會在<strong>第十二部第 49 章</strong>正式研究它;
+          它也正是你寫<strong>正規表示式(regex)</strong>時,引擎底層在跑的東西。換句話說,本章畫的 "101" 偵測器,
+          就是 regex <code>.*101</code> 的<strong>硬體化身</strong>。同一個數學模型,一邊是純理論的自動機,一邊是矽晶片上真實的電路——
+          這正是電腦科學最迷人的地方:抽象與實體,常常是同一枚硬幣的兩面。</p>
+        </div>
+      </div>
+
+      <h3>用 Python 模擬這台 FSM</h3>
+      <p>
+        在動手接電路前,先用 Python 把這台狀態機<strong>跑一遍</strong>驗證邏輯,是工程上的好習慣。最直接的寫法,就是把
+        <strong>狀態轉移表</strong>原封不動翻成一個字典——你會發現程式碼幾乎就是表格本身:
+      </p>
+      <pre><code class="language-python"># 把「狀態轉移表」直接寫成資料:transitions[現態][輸入] = 次態
+transitions = {
+    'S0': {'0': 'S0', '1': 'S1'},
+    'S1': {'0': 'S2', '1': 'S1'},
+    'S2': {'0': 'S0', '1': 'S3'},
+    'S3': {'0': 'S2', '1': 'S1'},
+}
+output = {'S0': 0, 'S1': 0, 'S2': 0, 'S3': 1}   # Moore:輸出只看現態
+
+def run_fsm(bits):
+    state = 'S0'                       # 起始狀態
+    hits = []
+    for i, b in enumerate(bits):
+        state = transitions[state][b] # 時脈邊緣:依(現態,輸入)更新狀態
+        if output[state] == 1:        # Moore 輸出:讀新的現態
+            hits.append(i)            # 在讀完第 i 個位元後,偵測到 "101"
+    return hits
+
+stream = "1101011010101"
+print(run_fsm(stream))   # [3, 5, 8, 10, 12] ← 每個索引都對應一個(可重疊的)"101"</code></pre>
+      <p>
+        輸出 <code>[3, 5, 8, 10, 12]</code> 告訴我們:在讀完第 3、5、8、10、12 個位元時各偵測到一次 "101"。
+        你可以自己對著字串 <code>1101011010101</code> 數一數,連<strong>重疊</strong>的那幾個都漂亮地抓到了——因為 S3 的轉移特意設計成「把最後的 '1' 留作下一輪的開頭」。
+      </p>
+      <p>再往前一步:把它寫成一個<strong>通用</strong>的 FSM 引擎,任何 Moore 機都能丟進去跑。這其實就是圖 47-9 那個架構的軟體版:</p>
+      <pre><code class="language-python">class MooreFSM:
+    """通用 Moore 有限狀態機:對應圖 47-9 的硬體架構"""
+    def __init__(self, transitions, output, start):
+        self.transitions = transitions   # 次態邏輯(查表)
+        self.output = output             # 輸出邏輯(查表)
+        self.state = start               # 狀態暫存器
+
+    def tick(self, inp):                 # 等同一個時脈邊緣
+        self.state = self.transitions[self.state][inp]   # 算次態並鎖存
+        return self.output[self.state]   # 回傳這一拍的輸出
+
+fsm = MooreFSM(transitions, output, 'S0')
+result = [fsm.tick(b) for b in "10101"]
+print(result)         # [0, 0, 1, 0, 1] ← "10101" 中兩個重疊的 101 都被抓到</code></pre>
+
+      <h2>從 FSM 到「資料路徑 + 控制」</h2>
+      <p>
+        "101" 偵測器很小,狀態少、輸出簡單。但真實系統(一台洗衣機、一顆 CPU)的「資料」動輒幾十上百個位元,
+        運算也複雜得多。難道要把每種情況都塞進一張巨大的狀態表嗎?那會爆炸。工程上的解法,是把系統<strong>拆成兩半</strong>:
+      </p>
+      <ul>
+        <li><strong>資料路徑(datapath)</strong>:負責<strong>實際的計算與搬運</strong>。它由第 20 章那些零件組成——ALU、暫存器、多工器、匯流排。它力氣大、會算會存,但<strong>自己不知道「現在該做哪一步」</strong>。</li>
+        <li><strong>控制(control)</strong>:一台<strong>FSM</strong>,負責<strong>指揮</strong>。它依當前狀態(與資料路徑回報的狀態旗標,例如「結果是不是 0」),每一拍送出一組<strong>控制訊號</strong>,告訴資料路徑:「這一拍,ALU 做減法、把結果寫進 R2、多工器選這條線。」</li>
+      </ul>
+      <div class="diagram">
+<svg viewBox="0 0 700 280" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs><marker id="dc-a" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/></marker>
+        <marker id="dc-b" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#b4541f"/></marker></defs>
+  <text x="20" y="26" font-size="13" font-weight="700" fill="#1f2328">複雜系統 = 資料路徑(肌肉)+ 控制 FSM(大腦)</text>
+
+  <!-- control FSM -->
+  <rect x="120" y="60" width="200" height="80" rx="12" fill="#ece7fb" stroke="#8b5cf6" stroke-width="2"/>
+  <text x="220" y="92" text-anchor="middle" font-size="15" font-weight="800" fill="#5b3aa6">控制(Control)</text>
+  <text x="220" y="114" text-anchor="middle" font-size="11" fill="#7a5bb5">一台 FSM:決定每一拍做什麼</text>
+
+  <!-- datapath -->
+  <rect x="120" y="190" width="460" height="70" rx="12" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="350" y="220" text-anchor="middle" font-size="15" font-weight="800" fill="#2f6f6a">資料路徑(Datapath)</text>
+  <text x="350" y="242" text-anchor="middle" font-size="11" fill="#1f6b63">ALU + 暫存器 + 多工器 + 匯流排:實際去算、去存</text>
+
+  <!-- control signals down -->
+  <line x1="260" y1="140" x2="260" y2="190" stroke="#8b5cf6" stroke-width="2.4" marker-end="url(#dc-a)"/>
+  <text x="268" y="168" font-size="10" font-weight="700" fill="#5b3aa6">控制訊號(命令)↓</text>
+  <!-- status flags up -->
+  <line x1="180" y1="190" x2="180" y2="140" stroke="#b4541f" stroke-width="2.2" marker-end="url(#dc-b)"/>
+  <text x="60" y="168" font-size="10" font-weight="700" fill="#b4541f">狀態旗標 ↑</text>
+
+  <!-- external -->
+  <line x1="400" y1="80" x2="480" y2="80" stroke="#8a929b" stroke-width="1.8"/>
+  <text x="420" y="72" font-size="9" fill="#8a929b">外部輸入/指令</text>
+  <line x1="480" y1="80" x2="480" y2="60" stroke="#8a929b" stroke-width="1.8"/>
+  <line x1="480" y1="60" x2="322" y2="60" stroke="#8a929b" stroke-width="1.8" marker-end="url(#dc-a)"/>
+  <line x1="580" y1="225" x2="650" y2="225" stroke="#8a929b" stroke-width="1.8" marker-end="url(#dc-a)"/>
+  <text x="615" y="218" font-size="9" fill="#8a929b">結果輸出</text>
+</svg>
+        <figcaption>圖 47-10:資料路徑 + 控制。資料路徑是「肌肉」,握有 ALU、暫存器等運算資源,但要被人指揮;控制是一台 FSM「大腦」,每一拍往下送控制訊號(命令),並接收資料路徑往上回報的狀態旗標(例如結果是否為零),據此決定下一個狀態與下一組命令。</figcaption>
+      </div>
+      <p>
+        這個「資料路徑 + 控制」的拆分,是<strong>所有複雜數位系統的組織原則</strong>——而它最重要的應用,你其實已經見過了:
+      </p>
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">這正是 CPU 的組織方式</span>
+          <p>第 20、21 章那台 CPU,骨子裡就是這個架構。<strong>資料路徑</strong>是 ALU + 暫存器堆 + RAM + PC;
+          而那個指揮一切的<strong>控制單元(control unit)</strong>——第 21 章說它負責「取指令 → 解碼 → 執行」——
+          本質上<strong>就是一台 FSM</strong>:它的狀態大致是「取指令」「解碼」「執行」「寫回」這些步驟,
+          每一拍依當前步驟與指令內容,送出一組控制訊號驅動資料路徑。
+          你之所以覺得 CPU 神奇,是因為它把「資料路徑會算」和「FSM 會依序指揮」這兩件你現在都懂的事,
+          合在一起放大到極致。我們會在<strong>第 48 章(計算機結構)</strong>把這台機器的組織與效能再往下挖一層。</p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 47.4 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>把本章的 "101" 偵測器改寫成 <strong>Mealy 機</strong>。Mealy 的輸出寫在<strong>轉移</strong>上(看現態 + 當下輸入)。
+          請:(a) 設計狀態(提示:只需要 <strong>3 個</strong>),畫出狀態圖的轉移(用「輸入 / 輸出」標在箭頭上);
+          (b) 列出 Mealy 的轉移表;(c) 說明為什麼 Mealy 版能比 Moore 版少一個狀態。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>(a) 三個狀態:</strong> A(起始)、B(看到 "1")、C(看到 "10")。「偵測成功」不再需要一個獨立狀態,
+              而是發生在「現態 C、讀到輸入 1」的那條<strong>轉移</strong>上(此時輸出 1,並回到 B,因為最後讀到的 '1' 可當下一個 "101" 的開頭)。</p>
+              <p><strong>(b) Mealy 轉移表</strong>(格式:次態 / 輸出):</p>
+              <div class="table-wrap">
+              <table>
+                <thead><tr><th>現態</th><th>含意</th><th>輸入 = 0(次態 / 輸出)</th><th>輸入 = 1(次態 / 輸出)</th></tr></thead>
+                <tbody>
+                  <tr><td><strong>A</strong></td><td>起始 / 無前綴</td><td>A / 0</td><td>B / 0</td></tr>
+                  <tr><td><strong>B</strong></td><td>看到 "1"</td><td>C / 0</td><td>B / 0</td></tr>
+                  <tr><td><strong>C</strong></td><td>看到 "10"</td><td>A / 0</td><td><strong>B / 1</strong></td></tr>
+                </tbody>
+              </table>
+              </div>
+              <p>那條粗體的 <code>C --1/1--&gt; B</code> 就是「偵測到 101」的瞬間:輸出 1。</p>
+              <p><strong>(c) 為什麼少一個狀態:</strong> Moore 機因為「輸出只能看現態」,必須<strong>專門騰出一個狀態 S3</strong> 來代表「剛剛達成 101,該輸出 1」。
+              Mealy 機允許「輸出看現態 + 輸入」,於是可以在 <code>C</code> 讀到 1 的<strong>轉移</strong>上直接吐出 1,
+              不必為這個結果單獨設一個狀態——省下的正是 S3。代價是 Mealy 的輸出和輸入綁在一起,輸入一抖,輸出可能跟著抖(毛刺),時序較難分析。用 Python 驗證 Mealy 版:</p>
+              <pre><code class="language-python">mealy = {                       # mealy[現態][輸入] = (次態, 輸出)
+    'A': {'0': ('A', 0), '1': ('B', 0)},
+    'B': {'0': ('C', 0), '1': ('B', 0)},
+    'C': {'0': ('A', 0), '1': ('B', 1)},
+}
+def run_mealy(bits):
+    state, outs = 'A', []
+    for b in bits:
+        state, y = mealy[state][b]   # 輸出在轉移當下就決定
+        outs.append(y)
+    return outs
+
+print(run_mealy("10101"))   # [0, 0, 1, 0, 1] ← 與 Moore 版抓到相同的兩個重疊 101</code></pre>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 47.5 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>設計並用 Python 實作一個<strong>交通號誌控制器</strong>的 FSM(這是「控制 FSM」的經典範例)。
+          規格:燈號循環 <strong>綠 → 黃 → 紅 → 綠 …</strong>,綠燈維持 3 拍、黃燈 1 拍、紅燈 2 拍。
+          請用「狀態 + 計時」的方式設計,讓 <code>tick()</code> 每呼叫一次代表一拍,回傳當前燈號。跑 12 拍驗證循環正確。</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>關鍵在於:除了「哪個燈」這個狀態,還需要一個<strong>計數器</strong>記住「在這個燈待了幾拍」——
+              這正是第 20 章的計數器在 FSM 裡的典型用途。時間到了才轉移到下一個燈,並把計數歸零。</p>
+              <pre><code class="language-python">class TrafficLight:
+    # 每個狀態:(燈號, 要維持幾拍, 下一個狀態)
+    PLAN = {
+        'GREEN':  ('綠', 3, 'YELLOW'),
+        'YELLOW': ('黃', 1, 'RED'),
+        'RED':    ('紅', 2, 'GREEN'),
+    }
+    def __init__(self):
+        self.state = 'GREEN'
+        self.elapsed = 0                 # 在當前狀態已待的拍數
+
+    def tick(self):
+        light, hold, nxt = self.PLAN[self.state]
+        self.elapsed += 1
+        if self.elapsed &gt;= hold:         # 時間到 → 轉移到下一個燈
+            self.state = nxt
+            self.elapsed = 0
+        return light
+
+tl = TrafficLight()
+print([tl.tick() for _ in range(12)])
+# ['綠','綠','綠','黃','紅','紅','綠','綠','綠','黃','紅','紅'] ← 3 綠 1 黃 2 紅,正確循環</code></pre>
+              <p>進階:把「行人按鈕」當成一個<strong>輸入</strong>加進來(按下時,綠燈提早結束),這台機器就從 Moore 機(輸出只看狀態)悄悄多了一點 Mealy 的味道(轉移看輸入)。你也可以把它畫成狀態圖,體會「控制 FSM 指揮真實裝置」的感覺。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 47.6 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>回到 CMOS。圖 47-3 展示了用 4 顆電晶體做 NAND(下拉 NMOS 串聯、上拉 PMOS 並聯)。
+          請設計一個 2 輸入的 <strong>NOR</strong> 閘的 CMOS 接法:下拉網路與上拉網路各該怎麼接(串聯還是並聯)?為什麼?</p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>NOR $= \neg(A + B)$:只有當 $A$、$B$ <strong>都為 0</strong> 時才輸出 1,只要有一個為 1 就輸出 0。順著「下拉網路決定何時輸出 0」來想:</p>
+              <ul>
+                <li><strong>下拉網路(NMOS):兩顆並聯。</strong> 只要 $A$ 或 $B$ 任一個為 1,對應的 NMOS 就導通,把輸出拉到 0——這正是 OR 的「至少一個」。</li>
+                <li><strong>上拉網路(PMOS):兩顆串聯。</strong> 它必須是下拉的互補:只有當 $A$、$B$ <strong>都為 0</strong> 時,兩顆 PMOS(輸入 0 才導通)才一起導通,把輸出拉到 1。</li>
+              </ul>
+              <p>對照一下就看出漂亮的對偶:<strong>NAND</strong> 是「下拉<strong>串聯</strong> / 上拉<strong>並聯</strong>」,
+              <strong>NOR</strong> 恰好相反,是「下拉<strong>並聯</strong> / 上拉<strong>串聯</strong>」。
+              兩者都只要 4 顆電晶體,而且天生帶反相——這再次印證了:在 CMOS 裡,NAND 與 NOR 是最「便宜」的原生閘,
+              這跟它們在邏輯上「萬能」(第 19 章)互為表裡。串聯對應 AND/「都要」,並聯對應 OR/「至少一個」,
+              而上拉永遠是下拉的對偶——這條規律,骨子裡就是 De Morgan 定律。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>把這一章串起來</h2>
+      <p>
+        我們從第 19、20 章那個乾淨的「理想閘」世界出發,掀開蓋子,看見了底下真實的電子工程,
+        最後又爬回抽象,抵達了通用的有限狀態機。回顧這趟旅程的路標:
+      </p>
+      <ul>
+        <li><strong>數位抽象</strong>:0/1 其實是兩段電壓區間。靠四個門檻撐出<strong>雜訊邊際</strong>、靠<strong>靜態規範</strong>讓每個閘都把訊號還原——雜訊因此不累積,數位電路才能堆疊到幾百億顆電晶體仍可靠。這是「為何用 0/1」最深刻的答案。</li>
+        <li><strong>CMOS</strong>:電晶體是電壓控制的開關;NMOS 下拉、PMOS 上拉,互補配對。反相器只要 2 顆、NAND 只要 4 顆電晶體。因為互補,穩態幾乎不耗電——這是 CMOS 的省電祕密。而「下拉串聯/上拉並聯」的對偶,正是 De Morgan 長在矽上;NAND/NOR 天生最便宜,呼應了第 19 章的 NAND 萬能。</li>
+        <li><strong>卡諾圖</strong>:把布林化簡從「拼代數技巧」變成「在方格上圈相鄰的 1」。圈越大、消去越多變數,電路越省。它只是把合併律 $XY+X\neg Y=X$ 畫出來。</li>
+        <li><strong>時間維度</strong>:真實的閘有<strong>傳播延遲</strong>,會產生<strong>毛刺</strong>;最慢的<strong>關鍵路徑</strong>(加上 $t_{pcq}+t_{setup}+t_{skew}$)決定了時脈週期下限,也就是<strong>為什麼電路有速度上限</strong>。</li>
+        <li><strong>循序邏輯細節</strong>:latch 是準位觸發、flip-flop 是邊緣觸發;資料必須在邊緣前後的 <strong>setup/hold 視窗</strong>內穩定,否則會掉進<strong>亞穩態</strong>。setup 違反可靠放慢時脈救,hold 違反不行。<strong>時脈偏移</strong>還會偷走時序餘裕。</li>
+        <li><strong>有限狀態機</strong>:狀態 + 轉移 + 輸入/輸出。<strong>Moore</strong>(輸出看狀態)vs <strong>Mealy</strong>(輸出看狀態+輸入)。任何 FSM 都用「狀態暫存器 + 次態邏輯 + 輸出邏輯」這個通用架構實作——也就是第 20 章「算 + 記」的合體。FSM 就是 DFA 的硬體版(第 49 章)。</li>
+        <li><strong>資料路徑 + 控制</strong>:複雜系統 = 會算的資料路徑 + 指揮的控制 FSM。這正是 CPU 的組織原則(第 21 章控制單元),也是第 48 章的起點。</li>
+      </ul>
+      <p>
+        最值得帶走的一句直覺是:<strong>抽象與物理,是同一件事的兩面。</strong>「0 與 1」是電壓,「閘」是電晶體,「立刻」其實要花皮秒,
+        而紙上的「狀態機」在矽晶片裡是真實會滴答跳動的 flip-flop 與閘。當你能在這兩個世界之間自由切換——
+        往上用抽象蓋大樓,往下用物理理解它為什麼站得住——你就真正讀懂了「數位」這兩個字。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">📚</div>
+        <div class="body">
+          <span class="c-title">想更深入?延伸資源</span>
+          <p>本章對應 OSSU 的 <a href="https://www.edx.org/learn/computer-programming/massachusetts-institute-of-technology-computation-structures-1-digital-circuits"><strong>MITx 6.004.1x — Computation Structures 1: Digital Circuits</strong></a>,
+          它從電晶體、數位抽象、CMOS、組合與循序邏輯,一路講到有限狀態機與管線化,是把「電路的物理真相」講得最透的入門課之一。
+          這也接續了第 19、20 章的 <a href="https://www.nand2tetris.org/">Nand2Tetris</a>:那邊把閘當理想元件「往上蓋」,
+          這邊則「往下挖」看閘怎麼由電晶體與電壓組成。若想要一本紮實又好讀的教科書,Harris &amp; Harris 的
+          <em>Digital Design and Computer Architecture</em> 把卡諾圖、時序、FSM 與資料路徑/控制講得極清楚,強烈推薦。
+          下一站,<strong>第 48 章</strong>我們會把「資料路徑 + 控制」放大,正式走進計算機結構(computer architecture),
+          看 CPU 如何用管線、快取等手法把效能榨到極限。</p>
+        </div>
+      </div>
+
+    </article>
+  </main>
+</div>
+<script src="../assets/book.js"></script>
+</body>
+</html>

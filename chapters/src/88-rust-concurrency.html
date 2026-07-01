@@ -1,0 +1,944 @@
+<!--meta
+title: 無懼並行與非同步
+description: Rust 的型別系統如何在編譯期消滅資料競爭——從 thread::spawn、mpsc channel、Arc/Mutex 到 async/await 與 tokio，寫出無懼並行的程式。
+-->
+
+      <div class="eyebrow">第二十部 · Rust 系統程式設計</div>
+      <h1>無懼並行與非同步</h1>
+      <p class="subtitle">其他語言讓你在執行時才踩到並行 bug；Rust 讓編譯器先一步攔下它——這就是「無懼並行」的真正含義。</p>
+      <div class="byline">
+        <span class="tag">第 82 章</span>
+        <span>閱讀時間 ≈ 65 分鐘</span>
+        <span>難度:★★★★☆</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章，你會知道</div>
+        <ul>
+          <li>用 <code>thread::spawn</code> 與 <code>move</code> 閉包把所有權搬進執行緒</li>
+          <li><code>Send</code>/<code>Sync</code> trait 如何在<strong>編譯期</strong>消滅資料競爭(data race)</li>
+          <li>用 <code>mpsc</code> channel 實現訊息傳遞並行（「以通訊共享記憶體」）</li>
+          <li><code>Arc&lt;Mutex&lt;T&gt;&gt;</code> 的組合邏輯：為什麼 Arc 與 Mutex 缺一不可</li>
+          <li>死結(deadlock)與 Mutex 毒化(poisoning)的成因與防禦</li>
+          <li>async/await 的心智模型：Future 是什麼、執行器(executor)如何驅動它</li>
+          <li>用 tokio 寫出非同步並發任務，理解 async 與多執行緒的差異</li>
+        </ul>
+      </div>
+
+      <!-- ==================== h2 ① ==================== -->
+      <h2>並行 bug 最難抓：從 §43 的 Python 視角到 Rust 的編譯期保證</h2>
+
+      <p>
+        在<a href="43-parallel.html">第 43 章</a>，我們用 Python 親眼見識了「共享記憶體 + 多執行緒」的危險：
+        <code>counter += 1</code> 不是原子操作，兩條執行緒同時跑會偷偷吃掉更新，印出比 2,000,000 小的怪數字。
+        修法是加 <code>threading.Lock()</code>——但鎖帶來新問題：死結、效能殺手、以及永遠不確定「這段程式碼有沒有加夠鎖」。
+      </p>
+      <p>
+        Python 的鎖是<strong>執行時工具</strong>——你忘了加，程式照樣編譯、照樣跑，只是答案偶爾錯。
+        這份「偶爾」是最危險的：它可能在 CI 測試時完全不出現，在生產環境高併發時突然炸出來。
+        並行 bug 比一般 bug 難抓，正因為它<strong>不確定、不可重現、依賴時序</strong>。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">Rust 的承諾：編譯期消滅資料競爭</span>
+          <p>
+            Rust 的型別系統加上 <code>Send</code>/<code>Sync</code> trait，讓編譯器能在程式跑起來之前，
+            就拒絕一切<strong>資料競爭(data race)</strong>——多個執行緒同時存取同一份資料、至少一方在寫入、
+            且沒有同步保護。這不是執行時的偵測，而是<strong>靜態保證</strong>。
+            犯了並行安全問題，程式根本無法通過編譯。
+          </p>
+        </div>
+      </div>
+
+      <p>
+        本章專注 Rust 特有的安全視角。Amdahl 定律、加速比、GIL 在 §43 已講透，不再重複；
+        這裡直接進入 Rust 的並行工具箱與背後的型別理論。
+      </p>
+
+      <!-- ==================== h2 ② ==================== -->
+      <h2><code>thread::spawn</code> 與 move 閉包：把所有權搬進執行緒</h2>
+
+      <p>
+        Rust 建立執行緒的方式直截了當：<code>std::thread::spawn</code> 接受一個閉包，在新執行緒上執行它。
+        但有個關鍵限制：閉包捕獲的任何資料，都必須能安全地「搬進」新執行緒。
+      </p>
+
+      <pre><code class="language-rust">use std::thread;
+
+fn main() {
+    let msg = String::from("hello from thread");
+
+    // move 關鍵字：把 msg 的所有權完整移進閉包（進而移進新執行緒）
+    let handle = thread::spawn(move || {
+        println!("{}", msg);   // msg 現在屬於這個執行緒，安全
+    });
+    // println!("{}", msg);   // ✗ 編譯錯誤：msg 已被 move 進執行緒
+
+    handle.join().unwrap();    // 等待子執行緒完成；子執行緒 panic 時 unwrap 向上傳播
+}</code></pre>
+
+      <p>
+        為什麼要 <code>move</code>？主執行緒可能在子執行緒完成前就結束。
+        如果閉包只「借用」<code>msg</code>，子執行緒的生命週期可能超過 <code>msg</code> 的生命週期——
+        懸空參考。<code>move</code> 強制閉包<strong>取得所有權</strong>，消除這個問題：
+        子執行緒擁有資料，資料的生命週期和執行緒綁在一起。
+      </p>
+
+      <h3>同時跑多條執行緒，收集 JoinHandle</h3>
+
+      <pre><code class="language-rust">use std::thread;
+
+fn main() {
+    let mut handles = Vec::new();   // Vec&lt;JoinHandle&lt;i32&gt;&gt;
+
+    for i in 0..5_i32 {
+        // i 是 i32（Copy），閉包直接複製一份；不需要 clone
+        let h = thread::spawn(move || {
+            println!("執行緒 {} 啟動", i);
+            i * i   // 閉包回傳值，讓 join() 拿到
+        });
+        handles.push(h);
+    }
+
+    for h in handles {
+        let result = h.join().unwrap();   // join() 回傳 Result&lt;i32, Box&lt;dyn Any&gt;&gt;
+        println!("子執行緒回傳 {}", result);
+    }
+    // 印出五個 i² 值（0, 1, 4, 9, 16），但執行緒啟動順序不保證
+}</code></pre>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">JoinHandle::join() 的語意</span>
+          <p>
+            <code>thread::spawn</code> 回傳 <code>JoinHandle&lt;T&gt;</code>，其中 <code>T</code> 是閉包的回傳型別。
+            呼叫 <code>join()</code> 會讓目前的執行緒<strong>阻塞</strong>，直到對應的子執行緒完成。
+            若子執行緒 panic，<code>join()</code> 回傳 <code>Err</code>；<code>.unwrap()</code> 會讓 panic 在目前執行緒重新拋出。
+            若不 join，主執行緒結束時子執行緒也會被強制終止。
+          </p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ③ ==================== -->
+      <h2><code>Send</code> 與 <code>Sync</code>：型別系統的並行護欄</h2>
+
+      <p>
+        Rust 怎麼「知道」某個型別能不能安全跨執行緒？答案是兩個 marker trait（標記 trait，不含任何方法，純粹標示能力）：
+      </p>
+
+      <ul>
+        <li>
+          <strong><code>Send</code></strong>：若 <code>T: Send</code>，代表 <code>T</code> 的值（所有權）
+          可以安全地<strong>轉移</strong>到另一個執行緒。大多數型別自動是 <code>Send</code>。
+          <code>thread::spawn</code> 的閉包與它捕獲的所有變數都必須是 <code>Send</code>。
+        </li>
+        <li>
+          <strong><code>Sync</code></strong>：若 <code>T: Sync</code>，代表 <code>&amp;T</code>（對 T 的不可變參考）
+          可以安全地跨執行緒<strong>共享</strong>。
+          換句話說，<code>T: Sync</code> 等價於 <code>&amp;T: Send</code>。
+        </li>
+      </ul>
+
+      <h3>哪些型別不是 Send 或 Sync？</h3>
+
+      <p>
+        最重要的非 <code>Send</code> 型別是 <code>Rc&lt;T&gt;</code>（引用計數指標）。
+        它的計數器是<strong>非原子</strong>的，多個執行緒同時增減計數會是資料競爭。
+        若你試著把 <code>Rc&lt;T&gt;</code> 傳進 <code>thread::spawn</code>，編譯器直接報錯：
+      </p>
+
+      <pre><code class="language-rust">use std::rc::Rc;
+use std::thread;
+
+fn main() {
+    let rc = Rc::new(42_i32);
+    let rc2 = Rc::clone(&amp;rc);
+
+    thread::spawn(move || {
+        println!("{}", rc2);
+        // ✗ error[E0277]: `Rc&lt;i32&gt;` cannot be sent between threads safely
+        //   the trait `Send` is not implemented for `Rc&lt;i32&gt;`
+    });
+}</code></pre>
+
+      <p>
+        同樣，<code>Cell&lt;T&gt;</code> 和 <code>RefCell&lt;T&gt;</code> 不是 <code>Sync</code>——
+        它們的「內部可變性」是<strong>非原子</strong>的，多執行緒共享 <code>&amp;RefCell&lt;T&gt;</code> 就是資料競爭。
+        編譯器阻止你把 <code>&amp;RefCell&lt;T&gt;</code> 送進另一條執行緒。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 680 330" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <rect width="680" height="330" fill="#f8fafb" rx="10"/>
+  <text x="340" y="26" text-anchor="middle" font-size="14" font-weight="bold" fill="#1f2328">Send 與 Sync：Rust 型別的跨執行緒安全分類</text>
+
+  <!-- Top-left quadrant: Send but not Sync -->
+  <rect x="20" y="46" width="306" height="130" rx="8" fill="#fef3ec" stroke="#b4541f" stroke-width="1.5"/>
+  <text x="173" y="70" text-anchor="middle" font-size="12" font-weight="bold" fill="#b4541f">Send ✓  /  Sync ✗</text>
+  <text x="173" y="89" text-anchor="middle" font-size="11" fill="#555">可移進執行緒，但不能跨執行緒共享 &amp;T</text>
+  <text x="40" y="112" font-size="11" fill="#b4541f">• Cell&lt;T&gt;</text>
+  <text x="40" y="131" font-size="11" fill="#b4541f">• RefCell&lt;T&gt;</text>
+  <text x="40" y="160" font-size="10" fill="#8a929b">（內部可變性非原子，不可共享）</text>
+
+  <!-- Top-right quadrant: Send + Sync -->
+  <rect x="354" y="46" width="306" height="130" rx="8" fill="#e3efed" stroke="#2f6f6a" stroke-width="1.5"/>
+  <text x="507" y="70" text-anchor="middle" font-size="12" font-weight="bold" fill="#2f6f6a">Send ✓  /  Sync ✓</text>
+  <text x="507" y="89" text-anchor="middle" font-size="11" fill="#555">最常見：可移進執行緒，也可共享 &amp;T</text>
+  <text x="374" y="112" font-size="11" fill="#2f6f6a">• i32, u64, f64, bool, char（基本型別）</text>
+  <text x="374" y="131" font-size="11" fill="#2f6f6a">• Arc&lt;T&gt;（T: Send+Sync）</text>
+  <text x="374" y="150" font-size="11" fill="#2f6f6a">• Mutex&lt;T&gt;、RwLock&lt;T&gt;、String, Vec&lt;T&gt;</text>
+  <text x="374" y="169" font-size="10" fill="#8a929b">（大多數你會用到的型別都在這裡）</text>
+
+  <!-- Bottom-left quadrant: neither -->
+  <rect x="20" y="196" width="306" height="120" rx="8" fill="#fde8e8" stroke="#c53030" stroke-width="1.5"/>
+  <text x="173" y="220" text-anchor="middle" font-size="12" font-weight="bold" fill="#c53030">Send ✗  /  Sync ✗</text>
+  <text x="173" y="238" text-anchor="middle" font-size="11" fill="#555">完全不能跨執行緒（非原子或含裸指標）</text>
+  <text x="40" y="262" font-size="11" fill="#c53030">• Rc&lt;T&gt;（引用計數非原子）</text>
+  <text x="40" y="281" font-size="11" fill="#c53030">• *const T, *mut T（裸指標）</text>
+  <text x="40" y="302" font-size="10" fill="#8a929b">（試著傳進 thread::spawn 會編譯錯誤）</text>
+
+  <!-- Bottom-right quadrant: Sync but not Send (extremely rare) -->
+  <rect x="354" y="196" width="306" height="120" rx="8" fill="#f0f4f8" stroke="#8a929b" stroke-width="1.5"/>
+  <text x="507" y="220" text-anchor="middle" font-size="12" font-weight="bold" fill="#8a929b">Send ✗  /  Sync ✓（當 T: Sync）</text>
+  <text x="507" y="238" text-anchor="middle" font-size="11" fill="#8a929b">鎖 guard：!Send 但可共享不可變參考</text>
+  <text x="374" y="258" font-size="11" fill="#8a929b">• MutexGuard&lt;'_, T&gt;</text>
+  <text x="374" y="278" font-size="11" fill="#8a929b">• RwLockWriteGuard&lt;'_, T&gt;</text>
+  <text x="374" y="300" font-size="10" fill="#8a929b">（鎖必須在取得它的同一執行緒釋放）</text>
+</svg>
+        <figcaption>圖 82-1：Rust 型別的 Send/Sync 安全矩陣。編譯器根據這兩個 marker trait 靜態決定每種型別能否跨執行緒移動或共享。嘗試把 <code>Rc&lt;T&gt;</code> 傳進 <code>thread::spawn</code>，編譯器直接拒絕——不需跑起來才發現問題。<code>MutexGuard</code>/<code>RwLockWriteGuard</code> 是少見的 <code>!Send</code> 但 <code>Sync</code> 型別——鎖必須在取得它的同一執行緒釋放。</figcaption>
+      </div>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">Send/Sync 由編譯器自動推導，幾乎不用手寫</span>
+          <p>
+            若一個 struct 的所有欄位都是 <code>Send</code>，這個 struct 自動是 <code>Send</code>；
+            <code>Sync</code> 同理。你很少需要手動 <code>impl Send for MyType</code>
+            （手動 impl 需要 <code>unsafe</code>，因為你在向編譯器保證某事）。
+            這套設計讓 Rust 能在<strong>零執行時開銷</strong>的情況下靜態消滅資料競爭——
+            不需任何執行時掃描或偵測。
+          </p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ④ ==================== -->
+      <h2>訊息傳遞：<code>mpsc</code> channel「以通訊共享記憶體」</h2>
+
+      <p>
+        共享記憶體的核心危險是「多人同時改」。有個完全不同的思路：
+        不讓執行緒直接共享資料——讓它們<strong>傳訊息</strong>。
+        Go 語言有句話說得很精準：「不要以共享記憶體來通訊，要以通訊來共享記憶體。」
+        Rust 標準庫內建了這個思路：<code>std::sync::mpsc</code>
+        （多生產者單消費者，multiple producer single consumer）。
+      </p>
+
+      <pre><code class="language-rust">use std::sync::mpsc;
+use std::thread;
+
+fn main() {
+    // channel() 回傳一對 (Sender&lt;T&gt;, Receiver&lt;T&gt;)
+    let (tx, rx) = mpsc::channel::&lt;String&gt;();
+
+    // Sender 可以 clone，做到「多生產者」
+    let tx2 = tx.clone();
+
+    // 生產者執行緒 1
+    thread::spawn(move || {
+        for word in ["Rust", "is", "great"] {
+            tx.send(String::from(word)).unwrap();
+        }
+    });
+
+    // 生產者執行緒 2
+    thread::spawn(move || {
+        tx2.send(String::from("hello from thread 2")).unwrap();
+    });
+
+    // 主執行緒是唯一的消費者（Receiver 不能 clone）
+    // for...in rx：阻塞直到所有 Sender 都 drop（channel 關閉）
+    for msg in rx {
+        println!("收到: {}", msg);
+    }
+    // 印出 4 條訊息（順序不確定）
+}</code></pre>
+
+      <p>
+        注意一個初學者最常踩的坑：
+        我們在主執行緒上 <code>clone</code> 了 <code>tx</code> 產生 <code>tx2</code>，
+        原始的 <code>tx</code> 被 move 進第一條執行緒（已會自動 drop）。
+        <code>tx2</code> 被 move 進第二條執行緒（也會自動 drop）。
+        主執行緒不再持有任何 <code>Sender</code>，所以 <code>for msg in rx</code> 最終能正常結束。
+        若主執行緒還持有一個多餘的 <code>Sender</code> 沒有 drop，<code>rx</code> 的迴圈將<strong>永遠阻塞</strong>。
+      </p>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">channel 天然無競爭：所有權轉移即同步</span>
+          <p>
+            <code>send(T)</code> 消耗 T 的所有權，把它移進 channel；
+            <code>recv()</code> 取出時，所有權從 channel 移交給接收方。
+            任何時刻，資料只有一個擁有者——Rust 型別系統在語言層面保證了這一點。
+            你根本不可能「發出去又繼續讀」，不是靠紀律，是靠編譯器。
+          </p>
+        </div>
+      </div>
+
+      <h3>同步通道：有界緩衝</h3>
+
+      <pre><code class="language-rust">use std::sync::mpsc;
+
+// sync_channel(n)：緩衝最多 n 個訊息
+// 若緩衝滿了，send() 會阻塞（與 channel() 的「永不阻塞」不同）
+let (tx, rx) = mpsc::sync_channel::&lt;i32&gt;(3);
+// 適合限制生產者速度，防止記憶體無限成長</code></pre>
+
+      <!-- ==================== h2 ⑤ ==================== -->
+      <h2>共享狀態：<code>Arc&lt;Mutex&lt;T&gt;&gt;</code></h2>
+
+      <p>
+        有些問題天生需要多個執行緒共同修改同一份資料——計數器、共用快取、累積結果。
+        channel 在這裡顯得繁瑣；Rust 提供了另一條路：<strong>用型別系統保護共享狀態</strong>。
+      </p>
+
+      <p>
+        在<a href="87-rust-collections-ds.html">第 81 章</a>我們看到 <code>Rc&lt;RefCell&lt;T&gt;&gt;</code>
+        可在單執行緒裡做「共享 + 可變」。多執行緒場景需要兩個對應的執行緒安全版本：
+      </p>
+
+      <ul>
+        <li><strong><code>Arc&lt;T&gt;</code></strong>（原子引用計數，Atomically Reference Counted）：
+            對應 <code>Rc&lt;T&gt;</code>，但用原子操作管理計數，可安全跨執行緒共享所有權（<code>Arc: Send + Sync</code>）。</li>
+        <li><strong><code>Mutex&lt;T&gt;</code></strong>（互斥鎖，mutual exclusion）：
+            對應 <code>RefCell&lt;T&gt;</code>，但用作業系統鎖——同時只有一個執行緒能持有 <code>MutexGuard</code> 並存取內部資料。</li>
+      </ul>
+
+      <h3>手刻：多執行緒計數器（先看錯誤版，再修正）</h3>
+
+      <p>先看一個<strong>無法編譯的版本</strong>——理解編譯器在說什麼：</p>
+
+      <pre><code class="language-rust">use std::sync::Mutex;
+use std::thread;
+
+fn main() {
+    let counter = Mutex::new(0_i32);
+    let mut handles = Vec::new();
+
+    for _ in 0..5 {
+        let h = thread::spawn(move || {
+            // ✗ error[E0382]: use of moved value: `counter`
+            // 第一次迴圈把 counter move 進閉包，第二次就失效了
+            // 根本問題：Mutex 只有一個擁有者，但五條執行緒都想擁有它
+            let mut num = counter.lock().unwrap();
+            *num += 1;
+        });
+        handles.push(h);
+    }
+}</code></pre>
+
+      <p>用 <code>Arc</code> 讓多個執行緒<strong>共同擁有</strong>同一個 <code>Mutex</code>：</p>
+
+      <pre><code class="language-rust">use std::sync::{Arc, Mutex};
+use std::thread;
+
+fn main() {
+    // Arc 讓五條執行緒共同持有同一個 Mutex&lt;i32&gt;
+    let counter = Arc::new(Mutex::new(0_i32));
+    let mut handles = Vec::new();
+
+    for _ in 0..5 {
+        let c = Arc::clone(&amp;counter);   // 原子遞增引用計數；不複製資料
+        let h = thread::spawn(move || {
+            let mut num = c.lock().unwrap();
+            // lock() 若 Mutex 被佔用則阻塞，直到前一個持有者釋放
+            // 回傳 MutexGuard&lt;i32&gt;，解參考後就是 &amp;mut i32
+            *num += 1;
+            // MutexGuard 離開作用域 → 自動解鎖（RAII）
+        });
+        handles.push(h);
+    }
+
+    for h in handles {
+        h.join().unwrap();
+    }
+
+    // 所有子執行緒結束後，主執行緒再取一次鎖讀出結果
+    println!("最終計數: {}", *counter.lock().unwrap());   // 5
+}</code></pre>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">Arc 管「誰擁有它」，Mutex 管「誰能用它」</span>
+          <p>
+            <code>Arc&lt;Mutex&lt;T&gt;&gt;</code> 是兩個正交問題的組合：
+            <code>Arc</code> 解決「多個執行緒需要共同持有」（所有權問題），
+            <code>Mutex</code> 解決「同時只能一人讀寫」（存取同步問題）。
+            二者缺一不可：沒有 <code>Arc</code>，你沒辦法讓多個執行緒都持有 <code>Mutex</code>；
+            沒有 <code>Mutex</code>，多個執行緒同時修改資料就是資料競爭。
+          </p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑥ ==================== -->
+      <h2>死結與 Mutex 毒化，以及 <code>RwLock</code></h2>
+
+      <p>
+        鎖是強大的工具，但帶來兩個新危險：<strong>死結(deadlock)</strong>與<strong>毒化(poisoning)</strong>。
+      </p>
+
+      <h3>死結：循環等待</h3>
+
+      <p>
+        <a href="24-operating-system.html">第 24 章</a>（作業系統）和 §43 都講過死結的原理：
+        執行緒 A 持有鎖 1、等鎖 2；執行緒 B 持有鎖 2、等鎖 1——兩者永遠互等。
+        Rust 的型別系統<strong>無法</strong>在編譯期消滅死結（只能消滅資料競爭）；
+        死結依然需要靠設計來防範：
+      </p>
+
+      <pre><code class="language-rust">use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
+
+fn main() {
+    let lock_a = Arc::new(Mutex::new("資源 A"));
+    let lock_b = Arc::new(Mutex::new("資源 B"));
+
+    let (a1, b1) = (Arc::clone(&amp;lock_a), Arc::clone(&amp;lock_b));
+    let t1 = thread::spawn(move || {
+        let _ga = a1.lock().unwrap();              // t1 先拿鎖 A
+        thread::sleep(Duration::from_millis(10));  // 模擬做了一些事
+        let _gb = b1.lock().unwrap();              // t1 再等鎖 B
+        println!("t1 同時持有 A 和 B");
+    });
+
+    let (a2, b2) = (Arc::clone(&amp;lock_a), Arc::clone(&amp;lock_b));
+    let t2 = thread::spawn(move || {
+        let _gb = b2.lock().unwrap();              // t2 先拿鎖 B
+        thread::sleep(Duration::from_millis(10));
+        let _ga = a2.lock().unwrap();              // t2 再等鎖 A — t1 還拿著！
+        println!("t2 同時持有 B 和 A");
+    });
+
+    // 以下兩行將永遠阻塞——這段程式會死結，請勿直接執行
+    t1.join().unwrap();
+    t2.join().unwrap();
+}</code></pre>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">防死結守則：鎖的取得順序必須全域一致</span>
+          <p>
+            最實用的防死結規則：<strong>替所有鎖編號，程式裡一律由編號小到大的順序取鎖</strong>。
+            上例的修法：兩條執行緒都先取鎖 A 再取鎖 B，循環就形不成了。
+            另一個選擇：用 <code>try_lock()</code>（非阻塞，若鎖忙就立刻回傳 <code>Err</code>）
+            並加上退讓策略，避免「傻等著形成循環」。
+          </p>
+        </div>
+      </div>
+
+      <h3>Mutex 毒化（Poisoning）</h3>
+
+      <p>
+        若一條執行緒在<strong>持有 Mutex 鎖的情況下 panic</strong>，Rust 會將該 Mutex 標記為
+        <strong>「毒化（poisoned）」</strong>。之後任何執行緒呼叫 <code>lock()</code> 都得到
+        <code>Err(PoisonError)</code>，<code>.unwrap()</code> 就會 panic。
+        這是一種防禦機制：被 panic 打斷的操作可能讓內部資料處於不一致狀態，
+        Rust 選擇讓後續存取明確地面對這個可能性。
+      </p>
+
+      <pre><code class="language-rust">use std::sync::{Arc, Mutex};
+use std::thread;
+
+fn main() {
+    let m = Arc::new(Mutex::new(0_i32));
+    let m2 = Arc::clone(&amp;m);
+
+    // 子執行緒拿鎖後 panic → Mutex 被毒化
+    let _ = thread::spawn(move || {
+        let _guard = m2.lock().unwrap();
+        panic!("子執行緒在持鎖時 panic！");
+    }).join();   // join() 回傳 Err，這裡用 let _ 忽略
+
+    // 主執行緒嘗試取鎖
+    match m.lock() {
+        Ok(val) =&gt; println!("取鎖成功，值={}", *val),
+        Err(e)  =&gt; {
+            // into_inner() 強行取出資料（你自己承擔資料可能不一致的風險）
+            let val = e.into_inner();
+            println!("Mutex 已毒化，強行恢復，值={}", *val);
+        }
+    }
+}</code></pre>
+
+      <h3>RwLock：讀多寫少場景</h3>
+
+      <p>
+        <code>Mutex&lt;T&gt;</code> 是悲觀的：就算只是讀，也要獨占，讓所有其他人等待。
+        若場景是「讀很多、寫很少」，<code>RwLock&lt;T&gt;</code>（讀寫鎖）更合適：
+        允許<strong>多個讀取者同時持鎖</strong>，但寫入者必須獨占。
+      </p>
+
+      <pre><code class="language-rust">use std::sync::{Arc, RwLock};
+use std::thread;
+
+fn main() {
+    let data = Arc::new(RwLock::new(vec![1_i32, 2, 3]));
+
+    // 多個讀取者可同時持鎖
+    let d1 = Arc::clone(&amp;data);
+    let d2 = Arc::clone(&amp;data);
+    let r1 = thread::spawn(move || println!("讀: {:?}", *d1.read().unwrap()));
+    let r2 = thread::spawn(move || println!("讀: {:?}", *d2.read().unwrap()));
+    r1.join().unwrap();
+    r2.join().unwrap();
+
+    // 寫入者獨占（等所有讀取者釋放後才能取得寫鎖）
+    let dw = Arc::clone(&amp;data);
+    let w = thread::spawn(move || dw.write().unwrap().push(4));
+    w.join().unwrap();
+
+    println!("寫後: {:?}", *data.read().unwrap());   // [1, 2, 3, 4]
+}</code></pre>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 82.1 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>
+            下面這段程式試圖用 <code>Rc&lt;Cell&lt;i32&gt;&gt;</code> 在多個執行緒間共享計數器，但無法通過編譯。
+            請改寫為能正確執行的版本，讓五條執行緒各遞增計數器一次，最後印出 <code>5</code>。
+          </p>
+          <pre><code class="language-rust">use std::rc::Rc;
+use std::cell::Cell;
+use std::thread;
+
+fn main() {
+    let counter = Rc::new(Cell::new(0_i32));
+    let mut handles = Vec::new();
+    for _ in 0..5 {
+        let c = Rc::clone(&amp;counter);
+        handles.push(thread::spawn(move || {
+            c.set(c.get() + 1);   // ✗ 編譯失敗
+        }));
+    }
+    for h in handles { h.join().unwrap(); }
+    println!("{}", counter.get());
+}</code></pre>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>
+                <code>Rc&lt;T&gt;</code> 不是 <code>Send</code>（引用計數非原子），<code>Cell&lt;T&gt;</code> 不是 <code>Sync</code>（內部可變性非原子）。
+                改用執行緒安全版本：<code>Arc&lt;Mutex&lt;i32&gt;&gt;</code>。
+              </p>
+              <pre><code class="language-rust">use std::sync::{Arc, Mutex};
+use std::thread;
+
+fn main() {
+    let counter = Arc::new(Mutex::new(0_i32));
+    let mut handles = Vec::new();
+
+    for _ in 0..5 {
+        let c = Arc::clone(&amp;counter);
+        handles.push(thread::spawn(move || {
+            *c.lock().unwrap() += 1;   // 取鎖、修改、MutexGuard 離開作用域自動解鎖
+        }));
+    }
+    for h in handles { h.join().unwrap(); }
+
+    println!("{}", *counter.lock().unwrap());   // 5
+}</code></pre>
+              <p>
+                核心替換：<code>Rc</code> → <code>Arc</code>（原子計數，可跨執行緒）；
+                <code>Cell</code> → <code>Mutex</code>（互斥保護，可變性安全）。
+              </p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 82.2 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>
+            你在設計一個多執行緒任務分配系統，有兩種選擇：
+          </p>
+          <ol>
+            <li><strong>mpsc channel</strong>：主執行緒把任務傳給工作者，工作者把結果傳回主執行緒。</li>
+            <li><strong><code>Arc&lt;Mutex&lt;VecDeque&lt;Task&gt;&gt;&gt;</code></strong>：共享任務佇列，工作者自己鎖定佇列、取出任務並放入結果佇列。</li>
+          </ol>
+          <p>
+            分析在以下兩個場景下，哪種設計更合適，並說明原因：<br>
+            (a) 任務量固定，主執行緒依序生成所有任務後再分發；<br>
+            (b) 任務量動態增長（工作者完成一個任務後，可能再生成新任務）。
+          </p>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p><strong>(a) 固定任務量：mpsc channel 更合適。</strong></p>
+              <p>
+                主執行緒生成所有任務，用 <code>Sender</code> 逐一發送；工作者接收、完成後用另一個 channel 傳回結果。
+                這套模式乾淨：資料有明確的所有權轉移，不需要鎖，無死結風險。
+                控制流清楚——「生產→傳遞→消費→回報」的單向管道。
+              </p>
+              <p><strong>(b) 動態任務：共享佇列（<code>Arc&lt;Mutex&lt;VecDeque&gt;&gt;</code>）更合適。</strong></p>
+              <p>
+                當工作者完成任務後還能生成新任務，channel 的單向流就不夠用了
+                （你需要把新任務送回佇列，channel 變迴路，設計複雜）。
+                共享可變佇列在此更自然：任何執行緒都能 push（生成新任務）或 pop（取任務）。
+                代價是鎖競爭可能成為瓶頸；工作者數量多時，可考慮 <code>crossbeam</code> 的 work-stealing deque。
+              </p>
+              <p><strong>結論：channel 適合單向、結構化的資料流；共享佇列適合動態、雙向的任務調度。</strong></p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑦ ==================== -->
+      <h2>async/await 心智模型：Future 是惰性的計算承諾</h2>
+
+      <p>
+        到目前為止，我們用的都是<strong>作業系統執行緒（OS thread）</strong>：
+        每條執行緒有自己的 stack（通常幾百 KB 到幾 MB）、由作業系統排程，
+        建立與切換的開銷相對較大。
+        如果你要同時處理數十萬條並發連線（HTTP 伺服器、資料庫代理），
+        開數十萬條 OS 執行緒成本太高。
+      </p>
+      <p>
+        Rust 的 <strong>async/await</strong> 提供另一條路：
+        <strong>用少量 OS 執行緒驅動大量並發任務</strong>，
+        任務在等待 I/O 時不佔用執行緒，其他任務趁機推進——
+        這就是<strong>非同步並發(asynchronous concurrency)</strong>。
+      </p>
+
+      <h3>Future 是什麼？</h3>
+
+      <p>
+        在 Rust 裡，每個 <code>async fn</code> 或 <code>async { ... }</code> 區塊都被編譯成一個
+        實作了 <code>Future</code> trait 的<strong>狀態機（state machine）</strong>：
+      </p>
+
+      <pre><code class="language-rust">// Future trait（簡化版，非原始碼）
+pub trait Future {
+    type Output;
+    // 執行器呼叫 poll 來推進這個 Future
+    // cx: 含有「喚醒器（Waker）」，I/O 完成時用來通知執行器再次 poll
+    fn poll(&amp;mut self, cx: &amp;mut Context&lt;'_&gt;) -&gt; Poll&lt;Self::Output&gt;;
+    //                                           ^^^^ Ready(val) 或 Pending
+}
+
+// 當你寫：
+// async fn fetch_data() -&gt; String { ... }
+// 編譯器自動展開成：
+// fn fetch_data() -&gt; impl Future&lt;Output = String&gt; { ... 狀態機 ... }</code></pre>
+
+      <p>完整版的 <code>poll</code> 第一參數是 <code>Pin&lt;&amp;mut Self&gt;</code>，用以保證 Future 首次 poll 後不會被移動——詳見 <a href="https://rust-lang.github.io/async-book/" target="_blank">async-book</a>。</p>
+
+      <p>
+        <strong>關鍵：Future 是惰性的。</strong>
+        建立一個 Future 本身什麼都不做——就像寫下一份待辦，但沒人去執行它。
+        要讓 Future 真正跑起來，你需要一個<strong>執行器（executor）</strong>不斷呼叫 <code>poll</code>：
+        若 Future 準備好（例如 I/O 回應了），回傳 <code>Poll::Ready(value)</code>；
+        若還在等（例如等網路），回傳 <code>Poll::Pending</code>，
+        執行器暫時讓出 CPU 去跑其他 Future，等 <code>Waker</code> 通知才再次 poll。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 680 290" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <rect width="680" height="290" fill="#f8fafb" rx="10"/>
+  <text x="340" y="26" text-anchor="middle" font-size="13" font-weight="bold" fill="#1f2328">async/await 執行模型：執行器 + Future 狀態機</text>
+
+  <defs>
+    <marker id="ch88-aw" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 Z" fill="#2f6f6a"/>
+    </marker>
+    <marker id="ch88-wk" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 Z" fill="#8b5cf6"/>
+    </marker>
+  </defs>
+
+  <!-- Executor box -->
+  <rect x="30" y="55" width="165" height="80" rx="8" fill="#2f6f6a"/>
+  <text x="113" y="88" text-anchor="middle" font-size="12" fill="#fff" font-weight="bold">執行器</text>
+  <text x="113" y="106" text-anchor="middle" font-size="10" fill="#cfe6e2">(Executor / Runtime)</text>
+  <text x="113" y="123" text-anchor="middle" font-size="10" fill="#cfe6e2">對每個 Future 呼叫 poll()</text>
+
+  <!-- Future A: Ready -->
+  <rect x="280" y="55" width="175" height="60" rx="8" fill="#e3efed" stroke="#2f6f6a" stroke-width="1.5"/>
+  <text x="368" y="80" text-anchor="middle" font-size="11" font-weight="bold" fill="#2f6f6a">Future A</text>
+  <text x="368" y="100" text-anchor="middle" font-size="10" fill="#555">Poll::Ready ✓（計算完成）</text>
+
+  <!-- Future B: Pending -->
+  <rect x="280" y="130" width="175" height="60" rx="8" fill="#fef3ec" stroke="#b4541f" stroke-width="1.5"/>
+  <text x="368" y="155" text-anchor="middle" font-size="11" font-weight="bold" fill="#b4541f">Future B</text>
+  <text x="368" y="175" text-anchor="middle" font-size="10" fill="#555">Poll::Pending（等待 I/O）</text>
+
+  <!-- Future C: Ready -->
+  <rect x="280" y="205" width="175" height="60" rx="8" fill="#e3efed" stroke="#2f6f6a" stroke-width="1.5"/>
+  <text x="368" y="230" text-anchor="middle" font-size="11" font-weight="bold" fill="#2f6f6a">Future C</text>
+  <text x="368" y="250" text-anchor="middle" font-size="10" fill="#555">Poll::Ready ✓（計算完成）</text>
+
+  <!-- poll arrows from executor to futures -->
+  <line x1="196" y1="88" x2="278" y2="82" stroke="#2f6f6a" stroke-width="1.8" marker-end="url(#ch88-aw)"/>
+  <line x1="196" y1="95" x2="278" y2="158" stroke="#2f6f6a" stroke-width="1.8" marker-end="url(#ch88-aw)"/>
+  <line x1="196" y1="102" x2="278" y2="232" stroke="#2f6f6a" stroke-width="1.8" marker-end="url(#ch88-aw)"/>
+
+  <!-- Waker wakeup arrow from B (Pending) back -->
+  <path d="M455 160 Q570 160 570 95 Q570 70 460 70" fill="none" stroke="#8b5cf6" stroke-width="1.8" stroke-dasharray="5,3" marker-end="url(#ch88-wk)"/>
+  <text x="570" y="125" font-size="9" fill="#8b5cf6" text-anchor="middle">I/O 完成</text>
+  <text x="570" y="138" font-size="9" fill="#8b5cf6" text-anchor="middle">Waker 通知</text>
+  <text x="570" y="151" font-size="9" fill="#8b5cf6" text-anchor="middle">→ 再次 poll()</text>
+
+  <text x="340" y="278" text-anchor="middle" font-size="10" fill="#8a929b">執行器在少量 OS 執行緒上輪流 poll；Pending 時讓出 CPU 跑其他任務，大量並發任務只需少量執行緒</text>
+</svg>
+        <figcaption>圖 82-2：async/await 執行模型。執行器 poll 每個 Future：Ready 表示完成；Pending 表示在等待 I/O，執行器讓出 CPU 跑其他任務，等 Waker 通知後再次 poll。整個過程可在少量 OS 執行緒上驅動數萬個並發任務。</figcaption>
+      </div>
+
+      <h3>.await 的意義</h3>
+
+      <p>
+        在 async 函式裡，<code>something.await</code> 的意思是：
+        「<strong>poll 這個 Future，直到它 Ready；在它 Pending 時，暫停我自己、讓執行器去跑其他任務</strong>。」
+        這就是 async/await 的核心：不用手寫 callback，不用管執行緒切換，
+        用<strong>順序寫法</strong>表達並發邏輯。
+      </p>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">async ≠ 多執行緒，也 ≠ 真正平行（預設情況下）</span>
+          <p>
+            單執行緒 async 執行器在一條執行緒上<strong>交錯</strong>執行多個 Future——
+            這是並發(concurrency)，不是平行(parallelism)。
+            tokio 預設使用多執行緒執行器（和 CPU 核心數相同的執行緒池），
+            讓 Future 能真正在多核上平行，但需要 Future 是 <code>Send</code>（可能在不同執行緒間轉移）。
+            CPU 密集任務在 async 裡應用 <code>tokio::task::spawn_blocking</code> 轉到執行緒池，
+            避免阻塞執行器的執行緒、餓死其他 Future。
+          </p>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑧ ==================== -->
+      <h2>tokio 入門：並發任務、計時與 join</h2>
+
+      <p>
+        Rust 標準庫只提供 <code>Future</code> trait 和 <code>async/await</code> 語法，
+        不包含執行器。<strong>tokio</strong> 是 Rust 生態最主流的非同步執行環境（async runtime），
+        提供執行器、非同步 I/O、計時器、通道等完整工具。在 <code>Cargo.toml</code> 加入：
+      </p>
+
+      <pre><code class="language-text">[dependencies]
+tokio = { version = "1", features = ["full"] }</code></pre>
+
+      <h3>Demo：三個並發計時任務</h3>
+
+      <pre><code class="language-rust">// Cargo.toml 需加: tokio = { version = "1", features = ["full"] }
+use tokio::time::{sleep, Duration, Instant};
+
+#[tokio::main]
+// 展開為: fn main() { tokio::runtime::Builder::new_multi_thread()...block_on(async_main()) }
+async fn main() {
+    let start = Instant::now();
+
+    // tokio::spawn 建立並發任務（立刻開始「排隊等執行」，不等 await）
+    // 三個任務在 spawn 後即並發進行
+    let t1 = tokio::spawn(async {
+        sleep(Duration::from_millis(300)).await;
+        "任務 A 完成（等了 300ms）"
+    });
+    let t2 = tokio::spawn(async {
+        sleep(Duration::from_millis(200)).await;
+        "任務 B 完成（等了 200ms）"
+    });
+    let t3 = tokio::spawn(async {
+        sleep(Duration::from_millis(100)).await;
+        "任務 C 完成（等了 100ms）"
+    });
+
+    // tokio::join! 同時等待多個 JoinHandle（並發等待，不是循序）
+    let (r1, r2, r3) = tokio::join!(t1, t2, t3);
+    println!("{}", r1.unwrap());   // 任務 A 完成（等了 300ms）
+    println!("{}", r2.unwrap());   // 任務 B 完成（等了 200ms）
+    println!("{}", r3.unwrap());   // 任務 C 完成（等了 100ms）
+
+    // 三個任務並發等待，總耗時約 300ms（最慢那個），不是 600ms（循序加總）
+    println!("總耗時: {:?}", start.elapsed());   // ~300ms
+}</code></pre>
+
+      <p>
+        這個例子說明了 async 並發的核心紅利：三個任務<strong>同時在等待</strong>，
+        等待期間執行緒可以跑其他任務，總耗時只由最慢的那個決定。
+        對 I/O 密集的服務（同時處理數千個 HTTP 請求），這個模式讓吞吐量大幅提升。
+      </p>
+
+      <h3>async 函式：所有權與借用</h3>
+
+      <pre><code class="language-rust">use tokio::time::{sleep, Duration};
+
+// async fn 回傳 impl Future&lt;Output = String&gt;
+// 注意：&amp;str 借用在 .await 跨點必須存活（tokio::spawn 需要 'static，不能借用外部變數）
+async fn greet(name: String, delay_ms: u64) -&gt; String {
+    sleep(Duration::from_millis(delay_ms)).await;
+    format!("Hello, {}!", name)   // name 的所有權在這個 Future 裡
+}
+
+#[tokio::main]
+async fn main() {
+    // tokio::join! 在目前任務內並發等待（可借用外部變數）
+    let (a, b) = tokio::join!(
+        greet(String::from("Alice"), 200),
+        greet(String::from("Bob"),   100)
+    );
+    println!("{}", a);   // Hello, Alice!
+    println!("{}", b);   // Hello, Bob!
+    // 總耗時約 200ms，不是 300ms（兩個並發）
+}</code></pre>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">tokio::spawn vs tokio::join!</span>
+          <p>
+            <code>tokio::spawn</code> 建立一個<strong>獨立任務</strong>（即刻開始，分離執行），
+            回傳 <code>JoinHandle&lt;T&gt;</code>。任務必須是 <code>'static + Send</code>（不能借用外部變數）。<br>
+            <code>tokio::join!(f1, f2, ...)</code> 在<strong>目前任務</strong>內並發地等待多個 Future，
+            不建立新任務，可以借用外部變數。<br>
+            簡單並發用 <code>join!</code>；需要「丟到背景跑、之後再等結果」用 <code>spawn</code>。
+          </p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 82.3 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>
+            把下面這段<strong>循序同步</strong>程式改寫成<strong>並發 async</strong> 版本。
+            原程式依序查詢 3 個使用者，每次耗時 100ms；改寫後三個查詢應並發進行，總耗時約 100ms 而非 300ms。
+          </p>
+          <pre><code class="language-rust">use std::thread::sleep;
+use std::time::Duration;
+
+fn fetch_user(id: u32) -&gt; String {
+    sleep(Duration::from_millis(100));   // 模擬查詢耗時（阻塞！）
+    format!("User #{}", id)
+}
+
+fn main() {
+    // 循序：三次查詢共耗時 ~300ms
+    let u1 = fetch_user(1);
+    let u2 = fetch_user(2);
+    let u3 = fetch_user(3);
+    println!("{} {} {}", u1, u2, u3);
+}</code></pre>
+          <details class="solution">
+            <summary>看解答</summary>
+            <div class="sol-body">
+              <p>
+                改用 tokio 的 <code>sleep</code> 模擬非同步查詢，用 <code>tokio::join!</code> 並發執行：
+              </p>
+              <pre><code class="language-rust">// Cargo.toml: tokio = { version = "1", features = ["full"] }
+use tokio::time::{sleep, Duration, Instant};
+
+// async fn：呼叫後回傳 Future，不會立刻執行
+async fn fetch_user(id: u32) -&gt; String {
+    sleep(Duration::from_millis(100)).await;   // 非阻塞等待（讓出執行緒給其他任務）
+    format!("User #{}", id)
+}
+
+#[tokio::main]
+async fn main() {
+    let start = Instant::now();
+
+    // 三個查詢並發進行：總耗時約 100ms（不是 300ms）
+    let (u1, u2, u3) = tokio::join!(
+        fetch_user(1),
+        fetch_user(2),
+        fetch_user(3)
+    );
+    println!("{} {} {}", u1, u2, u3);        // User #1 User #2 User #3
+    println!("耗時: {:?}", start.elapsed()); // ~100ms
+}</code></pre>
+              <p>
+                關鍵差異：<code>std::thread::sleep</code> 阻塞 OS 執行緒（期間執行緒完全停工）；
+                <code>tokio::time::sleep(...).await</code> 讓執行器暫停這個 Future 並去跑其他任務。
+                三個 Future 同時在等，整體只花 ~100ms。
+              </p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- ==================== h2 ⑨ ==================== -->
+      <h2>把這一章串起來</h2>
+
+      <p>
+        這一章從「並行 bug 為何難抓」出發，完整走過 Rust 的並行工具箱：
+      </p>
+
+      <ul>
+        <li>
+          <strong><code>thread::spawn</code> + move 閉包</strong>：建立 OS 執行緒，<code>move</code>
+          將所有權完整搬進執行緒，消除懸空參考。<code>JoinHandle::join()</code> 等待並取得結果。
+        </li>
+        <li>
+          <strong><code>Send</code>/<code>Sync</code></strong>：Rust 的並行護欄。
+          型別系統靜態保證「可以移入執行緒的型別」（Send）和「可以跨執行緒共享參考的型別」（Sync）。
+          <code>Rc&lt;T&gt;</code>、<code>RefCell&lt;T&gt;</code> 不過關；<code>Arc&lt;T&gt;</code>、<code>Mutex&lt;T&gt;</code> 過關。
+          這是 Rust 在<strong>零執行時開銷</strong>下消滅資料競爭的核心機制。
+        </li>
+        <li>
+          <strong>mpsc channel</strong>：以通訊代替共享記憶體。<code>Sender&lt;T&gt;</code> 可 clone（多生產者），
+          <code>Receiver&lt;T&gt;</code> 唯一（單消費者）。資料所有權從發送方移到接收方，天然無競爭。
+        </li>
+        <li>
+          <strong><code>Arc&lt;Mutex&lt;T&gt;&gt;</code></strong>：多執行緒共享可變狀態的標準組合。
+          <code>Arc</code> 管所有權（多個共同持有），<code>Mutex</code> 管存取（同時只能一人）。
+          <code>MutexGuard</code> 離開作用域自動解鎖（RAII）。
+        </li>
+        <li>
+          <strong>死結與毒化</strong>：型別系統無法消滅死結——靠設計防範（固定鎖順序、<code>try_lock</code>）。
+          Mutex 毒化是防禦機制，panic 後的鎖讓後續呼叫顯式面對可能損壞的資料。
+          <code>RwLock</code> 在讀多寫少場景優於 <code>Mutex</code>。
+        </li>
+        <li>
+          <strong>async/await + Future</strong>：每個 <code>async fn</code> 是惰性狀態機。
+          執行器 poll 它；<code>Pending</code> 時讓出 CPU，<code>Ready</code> 時完成。
+          適合 I/O 密集並發（少量執行緒驅動大量任務）。
+        </li>
+        <li>
+          <strong>tokio</strong>：Rust 最主流的非同步 runtime。
+          <code>#[tokio::main]</code>、<code>tokio::spawn</code>、<code>tokio::join!</code> 是最常用的三個工具。
+          CPU 密集任務用 <code>tokio::task::spawn_blocking</code> 轉到執行緒池。
+        </li>
+      </ul>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">Rust 並行的選型指南</span>
+          <p>
+            <strong>CPU 密集 + 真正平行</strong>：<code>thread::spawn</code>（OS 執行緒，多核並行）。<br>
+            <strong>多方共享可變狀態</strong>：<code>Arc&lt;Mutex&lt;T&gt;&gt;</code> 或 <code>Arc&lt;RwLock&lt;T&gt;&gt;</code>。<br>
+            <strong>結構化資料流（單向）</strong>：mpsc channel（天然無競爭，所有權清楚）。<br>
+            <strong>I/O 密集 + 大量並發</strong>：async/await + tokio（高吞吐、低執行緒開銷）。
+          </p>
+        </div>
+      </div>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">延伸學習資源</span>
+          <p>
+            <a href="https://doc.rust-lang.org/book/ch16-00-concurrency.html" target="_blank">《The Rust Programming Language》第 16 章</a>——標準函式庫並行工具完整說明。<br>
+            <a href="https://rust-lang.github.io/async-book/" target="_blank">《Asynchronous Programming in Rust》（async-book）</a>——深入 Future、Pin、async trait、執行器原理。<br>
+            <a href="https://course.rs/advance/concurrency-with-threads/concurrency-parallelism.html" target="_blank">rust-course（Rust 聖經）並行章節</a>——繁中，由淺入深，適合中文讀者。<br>
+            <a href="https://tokio.rs/tokio/tutorial" target="_blank">tokio 官方 Tutorial</a>——從 Hello World 到實作 Redis Client，學 tokio 最有效率的起點。
+          </p>
+        </div>
+      </div>
