@@ -88,5 +88,6 @@ class ExamGroup:
 class ExamPaper:
     week: int
     name: str       # "期中考" / "期末考"
+    name_en: str    # "Midterm Examination"
     minutes: int
     groups: list
