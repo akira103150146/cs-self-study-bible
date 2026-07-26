@@ -63,6 +63,7 @@ class Week:
     lesson: LessonPlan = None
     chips: list = field(default_factory=list)
     lab_suffix: str = "實作"   # W17 capstone 用 "Capstone",影響檔名與分頁連結
+    exam_name: str = ""        # W9/W18 填「期中考」「期末考」,讓教案分頁連到考卷
 
 
 # ---------- 考卷(W9 期中、W18 期末) ----------

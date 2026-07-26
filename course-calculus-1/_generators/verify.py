@@ -108,6 +108,11 @@ def check_html(path):
     for h in re.findall(r'(?:href|src)="([^"#:]+\.(?:html|css|ipynb))"', s):
         if not os.path.exists(os.path.normpath(os.path.join(d, h))):
             add("RED", path, f"連結壞掉: {h}")
+    # 有行內/行間數學式卻沒載 MathJax → 會直接顯示原始的 $...$
+    has_math = re.search(r"(?<!\$)\$[^$\n]{1,200}\$(?!\$)", body) is not None
+    if has_math and "MathJax" not in s:
+        add("RED", path, "頁面含數學式但沒有載入 MathJax,會顯示原始 $...$")
+
     if "例題-學生版" in path:
         css_path = os.path.join(ROOT, "assets/handout.css")
         if os.path.exists(css_path):

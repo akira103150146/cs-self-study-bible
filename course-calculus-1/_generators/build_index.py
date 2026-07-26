@@ -3,7 +3,7 @@
 import os, sys, importlib
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import chip, FONTS, THEME_JS
+from common import chip, FONTS, THEME_JS, MATHJAX
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -85,6 +85,7 @@ def main():
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="{FONTS}">
 <link rel="stylesheet" href="assets/handout.css">
+{MATHJAX}
 </head>
 <body>
 

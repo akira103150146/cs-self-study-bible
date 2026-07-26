@@ -52,9 +52,10 @@ def render(week):
     suffix = getattr(week, "lab_suffix", "實作")
     unit = "Part" if suffix == "Capstone" else "Lab"
     hw = list(L.homework)
-    hw.append(f'<strong>動手</strong>:到 <a href="W{wk}-{suffix}.html">{suffix}頁</a> '
-              f'把 {n_lab} 個 {unit} 跑完(頁內可下載 notebook)'
-              + (f",{n_todo} 題 TODO 自己填。" if n_todo else "。"))
+    if n_lab:                      # 沒有 Lab 的週(如 W18 總整理)就不加這一條
+        hw.append(f'<strong>動手</strong>:到 <a href="W{wk}-{suffix}.html">{suffix}頁</a> '
+                  f'把 {n_lab} 個 {unit} 跑完(頁內可下載 notebook)'
+                  + (f",{n_todo} 題 TODO 自己填。" if n_todo else "。"))
     parts.append("<h2>作業與預習</h2><ul>" + "".join(f"<li>{h}</li>" for h in hw) + "</ul>")
 
     chips = ([chip("理論 3 小時"), chip("搭配實作 3 小時"), chip("對應本書第 12 章")]
@@ -62,10 +63,14 @@ def render(week):
     mh = masthead(f"第 {wk} 週 · 理論教案", week.title, L.hook, chips)
     d = os.path.join(ROOT, f"week{wk:02d}")
     os.makedirs(d, exist_ok=True)
-    tabs = [("理論教案", "理論教案"), ("例題-學生版", "例題·學生"),
-            ("例題-教師版", "例題·教師"), (suffix, suffix)]
-    if not week.concepts:          # capstone 週沒有例題雙版,拿掉那兩個分頁
-        tabs = [("理論教案", "理論教案"), (suffix, suffix)]
+    # 分頁只列「這一週真的有產出」的頁面,避免死連結
+    tabs = [("理論教案", "理論教案")]
+    if week.concepts:
+        tabs += [("例題-學生版", "例題·學生"), ("例題-教師版", "例題·教師")]
+    if week.labs:
+        tabs.append((suffix, suffix))
+    if getattr(week, "exam_name", None):   # W9/W18 的考卷週
+        tabs += [(f"{week.exam_name}-考卷版", "考卷"), (f"{week.exam_name}-詳解版", "詳解")]
     open(os.path.join(d, f"W{wk}-理論教案.html"), "w", encoding="utf-8").write(
         page(f"第 {wk} 週 理論教案 · {week.title}", "教學腳本:節奏、講法、迷思、檢核",
              wk, "理論教案", mh, "\n".join(parts), tabs=tabs))
