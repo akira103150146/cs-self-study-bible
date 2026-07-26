@@ -12,8 +12,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # 固定的符號命名空間。刻意不用 e / N —— 它們在 sympy 是 E(自然底數)與 N()(數值化),
 # 直接寫會被解析成別的東西。用 eps / Nn。
 NS = {
-    "x": sp.Symbol("x"),
-    "h": sp.Symbol("h"),
+    # x 宣告為實數:這是微積分課,不宣告的話 sympy 為了顧慮複數,
+    # 連 sqrt(cosh(x)**2) = cosh(x) 這種顯然的化簡都不敢做。
+    "x": sp.Symbol("x", real=True),
+    "h": sp.Symbol("h", real=True),
     "d": sp.Symbol("d", positive=True),      # delta
     "eps": sp.Symbol("eps", positive=True),  # epsilon
     "M": sp.Symbol("M", positive=True),
