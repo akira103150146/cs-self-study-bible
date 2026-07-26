@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 15 週 實作 · 一階線性微分方程與 RK4</title>
+<meta name="description" content="Python 實作:把概念跑出來、畫出來">
+<script>(function(){try{var t=localStorage.getItem('handout-theme');if(t)document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;700&family=Noto+Sans+TC:wght@400;700&family=Lora:ital,wght@0,400;0,600;0,700;1,400&family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="../assets/handout.css">
+<script>
+window.MathJax = { tex: { inlineMath: [['$','$'],['\\(','\\)']], displayMath: [['$$','$$'],['\\[','\\]']] }, svg: { fontCache: 'global' } };
+</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" async></script>
+</head>
+<body>
+<nav class="packet-nav">
+  <a class="home" href="../index.html"><span class="dot">∫</span>微積分(一) · 第 15 週</a>
+  <a class="tab" href="W15-理論教案.html">理論教案</a>
+  <a class="tab" href="W15-例題-學生版.html">例題·學生</a>
+  <a class="tab" href="W15-例題-教師版.html">例題·教師</a>
+  <a class="tab" href="W15-實作.html" aria-current="page">實作</a>
+  <span class="spacer"></span>
+  <button class="theme-toggle" title="切換深淺色" aria-label="切換主題">☾</button>
+</nav>
+
+<main class="sheet">
+  <header class="masthead">
+    <div class="eyebrow">第 15 週 · 實作</div>
+    <h1>一階線性微分方程與 RK4</h1>
+    <p class="subtitle">可分離變數解決不了 $y'+p(t)y=q(t)$。這週的招式很聰明:乘上一個積分因子,讓左邊變成某個乘積的導數——而那個因子是<strong>推出來的</strong>,不是背的。</p>
+    <div class="chips"><span class="chip accent">3 個 Lab</span><span class="chip">3 題 TODO</span><span class="chip">Colab / Jupyter</span></div>
+  </header>
+<div class="callout note"><div class="ico">💻</div><div><span class="c-title">怎麼跑</span><p>這頁是<strong>可讀版</strong>;程式要實際執行,請下載 notebook,上傳到 <a href="https://colab.research.google.com/" target="_blank" rel="noopener">Google Colab</a>(或用本機 Jupyter),由上往下逐格執行。</p><p style="margin-top:10px"><a class="dl" href="W15-lab.ipynb" download>⬇ 下載 W15-lab.ipynb</a></p></div></div>
+<h2>環境設定</h2><p>先跑這格,把套件載進來。</p>
+<pre><code>import math
+import numpy as np
+import sympy as sp
+import matplotlib.pyplot as plt
+</code></pre>
+<h2>Lab 1｜手刻 RK4,和 Euler 比出三個數量級</h2><p>觀念 6、7 的核心驗證。這格寫出 RK4(<strong>W16、W17 會直接重用</strong>),量它的四階收斂,並和 Euler 正面對比。</p><pre><code>def euler(f, y0, t0, t1, h):
+    &quot;&quot;&quot;顯式尤拉法(W14 Lab2 的同一支)&quot;&quot;&quot;
+    ts, ys = [t0], [y0]
+    while ts[-1] &lt; t1 - 1e-12:
+        t, y = ts[-1], ys[-1]
+        ys.append(y + h * f(t, y)); ts.append(t + h)
+    return np.array(ts), np.array(ys)
+
+def rk4(f, y0, t0, t1, h):
+    &quot;&quot;&quot;四階 Runge-Kutta。W16(梯度流)與 W17(capstone)會重用。&quot;&quot;&quot;
+    ts, ys = [t0], [y0]
+    while ts[-1] &lt; t1 - 1e-12:
+        t, y = ts[-1], ys[-1]
+        k1 = f(t,       y)
+        k2 = f(t + h/2, y + h*k1/2)
+        k3 = f(t + h/2, y + h*k2/2)
+        k4 = f(t + h,   y + h*k3)
+        ys.append(y + h*(k1 + 2*k2 + 2*k3 + k4)/6)
+        ts.append(t + h)
+    return np.array(ts), np.array(ys)
+
+# 測試:y&#x27; = y, y(0)=1 → e^t
+f, exact = (lambda t, y: y), math.e
+
+print(f&quot;{&#x27;h&#x27;:&gt;9} {&#x27;Euler 誤差&#x27;:&gt;12} {&#x27;比值&#x27;:&gt;7} {&#x27;RK4 誤差&#x27;:&gt;12} {&#x27;比值&#x27;:&gt;7}&quot;)
+hs, ee, er = [], [], []
+pe = pr = None
+for k in range(1, 8):
+    h = 0.5**k
+    e1 = abs(euler(f, 1.0, 0, 1, h)[1][-1] - exact)
+    e2 = abs(rk4(f, 1.0, 0, 1, h)[1][-1] - exact)
+    hs.append(h); ee.append(e1); er.append(e2)
+    r1 = f&quot;{pe/e1:7.2f}&quot; if pe else &quot;      -&quot;
+    r2 = f&quot;{pr/e2:7.2f}&quot; if pr else &quot;      -&quot;
+    print(f&quot;{h:9.5f} {e1:12.3e} {r1} {e2:12.3e} {r2}&quot;)
+    pe, pr = e1, e2
+
+plt.loglog(hs, ee, &#x27;o-&#x27;, label=&#x27;Euler&#x27;)
+plt.loglog(hs, er, &#x27;s-&#x27;, label=&#x27;RK4&#x27;)
+plt.loglog(hs, np.array(hs)*ee[0]/hs[0], &#x27;k:&#x27;, label=&#x27;slope 1&#x27;)
+plt.loglog(hs, np.array(hs)**4*er[0]/hs[0]**4, &#x27;k--&#x27;, label=&#x27;slope 4&#x27;)
+plt.xlabel(&#x27;h&#x27;); plt.ylabel(&#x27;|error at t=1|&#x27;); plt.legend(fontsize=8)
+plt.title(&#x27;Euler O(h) vs RK4 O(h^4)&#x27;)
+plt.show()
+
+for name, e in [(&#x27;Euler&#x27;, ee), (&#x27;RK4&#x27;, er)]:
+    print(f&quot;{name:6s} log-log 斜率 = {np.polyfit(np.log10(hs), np.log10(e), 1)[0]:.3f}&quot;)
+
+# 成本效益:達到 1e-8 需要多少次函數求值
+# 由觀測到的誤差常數 C = E / h^p 外推,不真的跑 —— Euler 會是上億步
+print(&quot;\n要達到誤差 &lt; 1e-8(由觀測的誤差常數外推,不實跑):&quot;)
+target = 1e-8
+for name, elist, p, per_step in [(&#x27;Euler&#x27;, ee, 1, 1), (&#x27;RK4&#x27;, er, 4, 4)]:
+    C = elist[-1] / hs[-1]**p          # 用最小的 h 估誤差常數
+    h_need = (target / C)**(1/p)
+    steps = math.ceil(1/h_need)
+    print(f&quot;  {name:6s} 需要 h≈{h_need:.2e}  步數≈{steps:&gt;14,}  &quot;
+          f&quot;函數求值≈{steps*per_step:&gt;14,}&quot;)
+print(&quot;  → RK4 每步貴 4 倍,但總求值次數少了好幾個數量級&quot;)</code></pre>
+<div class="out"><span class="out-label">預期輸出</span>Euler  log-log 斜率 = 0.920
+RK4    log-log 斜率 = 3.913</div>
+<p><b>會看到</b>:誤差比值:Euler 穩定在 <strong>2</strong>、RK4 在 <strong>16</strong>;log-log 斜率量出 $0.92$ 與 $3.91$——與理論的 $1$ 與 $4$ 相符(略低是因為最小的幾個 $h$ 已開始受捨入誤差影響)。最後的成本比較最有說服力:同樣要達到 $10^{-8}$,RK4 的函數求值次數比 Euler 少<strong>好幾個數量級</strong>。「每步多算 4 次」換來的回報極為划算。</p>
+<p>換你試:</p><pre><code># TODO 學生練習:把 f 換成 lambda t, y: -2*y(精確解 e^(-2t))
+# 再試 h = 1.5 的 Euler。它會發散嗎?RK4 呢?(這是觀念 7 的穩定性)</code></pre>
+<h2>Lab 2｜混合問題與 RC 電路:同一條方程</h2><p>觀念 4、5 說兩者數學相同。這格把解析解與數值解對照,並驗證時間常數的 63% 規則。</p><pre><code>from scipy.integrate import solve_ivp
+
+# --- 混合問題:100 L 純水,2 g/L 鹽水以 5 L/min 進出 ---
+V, r, cin = 100.0, 5.0, 2.0
+mix = lambda t, y: r*cin - r*y[0]/V
+sol = solve_ivp(mix, [0, 120], [0.0], dense_output=True, rtol=1e-10, atol=1e-12)
+
+ts = np.linspace(0, 120, 300)
+exact_mix = 200*(1 - np.exp(-ts/20))
+plt.figure(figsize=(11, 4))
+plt.subplot(1, 2, 1)
+plt.plot(ts, exact_mix, lw=2, label=&#x27;exact 200(1-e^{-t/20})&#x27;)
+plt.plot(ts, sol.sol(ts)[0], &#x27;r--&#x27;, lw=1, label=&#x27;solve_ivp&#x27;)
+plt.axhline(200, color=&#x27;C2&#x27;, ls=&#x27;:&#x27;, label=&#x27;final = V*cin = 200 g&#x27;)
+plt.xlabel(&#x27;t (min)&#x27;); plt.ylabel(&#x27;salt (g)&#x27;); plt.legend(fontsize=8)
+plt.title(&#x27;Mixing tank&#x27;)
+
+print(f&quot;最大誤差 = {np.max(np.abs(sol.sol(ts)[0] - exact_mix)):.2e}&quot;)
+# 只在積分區間內取值 —— dense_output 對區間外會外插,給出毫無意義的數字
+y_end = sol.sol(120)[0]                    # 注意只索引一層
+print(f&quot;t=120 min 的鹽量 = {y_end:.4f} g   理論極限 V*cin = {V*cin} g&quot;)
+print(f&quot;t=120 min 的濃度 = {y_end/V:.4f} g/L  流入濃度 = {cin} g/L  ← 應趨於相等&quot;)
+print(f&quot;(120 min = 6 個時間常數,已達極限的 {y_end/200*100:.2f}%)&quot;)
+
+# --- RC 電路:同一條方程,換個名字 ---
+R, C, Vs = 1000.0, 100e-6, 5.0
+tau = R*C
+rc = lambda t, q: (Vs - q[0]/C)/R
+solrc = solve_ivp(rc, [0, 5*tau], [0.0], dense_output=True, rtol=1e-10, atol=1e-14)
+
+t2 = np.linspace(0, 5*tau, 300)
+plt.subplot(1, 2, 2)
+plt.plot(t2, Vs*(1 - np.exp(-t2/tau)), lw=2, label=&#x27;exact&#x27;)
+plt.plot(t2, solrc.sol(t2)[0]/C, &#x27;r--&#x27;, lw=1, label=&#x27;solve_ivp&#x27;)
+for n in [1, 2, 3, 5]:
+    plt.axvline(n*tau, color=&#x27;0.8&#x27;, lw=0.8)
+plt.axhline(Vs, color=&#x27;C2&#x27;, ls=&#x27;:&#x27;, label=&#x27;V = 5&#x27;)
+plt.xlabel(&#x27;t (s)&#x27;); plt.ylabel(&#x27;capacitor voltage (V)&#x27;); plt.legend(fontsize=8)
+plt.title(f&#x27;RC circuit, tau = {tau} s&#x27;)
+plt.tight_layout(); plt.show()
+
+print(f&quot;\n時間常數 tau = R*C = {tau} s&quot;)
+print(f&quot;{&#x27;t&#x27;:&gt;8} {&#x27;充電比例&#x27;:&gt;10} {&#x27;理論 1-e^-n&#x27;:&gt;14}&quot;)
+for n in [1, 2, 3, 5]:
+    frac = solrc.sol(n*tau)[0]/(C*Vs)
+    print(f&quot;{n}tau {frac:10.4f} {1-math.exp(-n):14.4f}&quot;)</code></pre>
+<div class="out"><span class="out-label">預期輸出</span>t=120 min 的濃度 = 1.9950 g/L  流入濃度 = 2.0 g/L  ← 應趨於相等
+1tau     0.6321         0.6321</div>
+<p><b>會看到</b>:兩張圖的數值解與解析解<strong>完全重疊</strong>。混合問題的最終濃度等於流入濃度(物理檢查通過);RC 電路一個時間常數後充到 <strong>63.21%</strong>,正是 $1-e^{-1}$。<strong>同一條微分方程,兩個完全不同的領域</strong>。</p>
+<p>換你試:</p><pre><code># TODO 學生練習:把混合問題改成「進 3 L/min、出 2 L/min」(體積會變!)
+# V(t) = 50 + t,方程變成 y&#x27; = 3*cin - 2*y/(50+t)
+# 這時 p(t) 不是常數 —— 用 solve_ivp 解,並和積分因子法的解析解對照</code></pre>
+<h2>Lab 3｜穩定性:步長太大會發散</h2><p>觀念 7 說「階數管精度,穩定性管會不會炸」。這格用 $y'=-\lambda y$ 演示:同一個方法,$h$ 過了門檻就完全爆掉。</p><pre><code>def euler(f, y0, t0, t1, h):
+    ts, ys = [t0], [y0]
+    while ts[-1] &lt; t1 - 1e-12:
+        t, y = ts[-1], ys[-1]
+        ys.append(y + h*f(t, y)); ts.append(t + h)
+    return np.array(ts), np.array(ys)
+
+lam = 10.0                                # y&#x27; = -10 y
+f = lambda t, y: -lam*y
+h_crit = 2/lam                            # Euler 的穩定門檻
+
+print(f&quot;y&#x27; = -{lam}y 的 Euler 穩定條件:|1 + h*(-{lam})| &lt; 1  →  h &lt; {h_crit}&quot;)
+print(f&quot;\n{&#x27;h&#x27;:&gt;7} {&#x27;|1+h*lam_neg|&#x27;:&gt;16} {&#x27;最終 |y|&#x27;:&gt;14} {&#x27;狀態&#x27;}&quot;)
+for h in [0.05, 0.1, 0.15, 0.19, 0.21, 0.25, 0.3]:
+    amp = abs(1 - h*lam)
+    ts, ys = euler(f, 1.0, 0, 2, h)
+    final = abs(ys[-1])
+    state = &quot;穩定&quot; if amp &lt; 1 else &quot;發散&quot;
+    print(f&quot;{h:7.2f} {amp:16.3f} {final:14.4e}   {state}&quot;
+          f&quot;{&#x27;  ← 剛好在門檻上&#x27; if abs(h-h_crit) &lt; 1e-9 else &#x27;&#x27;}&quot;)
+
+fig, ax = plt.subplots(1, 2, figsize=(11, 4))
+tt = np.linspace(0, 2, 300)
+for h, style in [(0.05, &#x27;C0&#x27;), (0.15, &#x27;C1&#x27;), (0.21, &#x27;C3&#x27;), (0.25, &#x27;C4&#x27;)]:
+    ts, ys = euler(f, 1.0, 0, 2, h)
+    which = 0 if abs(1-h*lam) &lt; 1 else 1
+    ax[which].plot(ts, ys, &#x27;o-&#x27;, ms=3, color=style, label=f&#x27;h={h}&#x27;)
+for a, title in zip(ax, [&#x27;Stable: h &lt; 0.2&#x27;, &#x27;Unstable: h &gt; 0.2  (note the y-scale!)&#x27;]):
+    a.plot(tt, np.exp(-lam*tt), &#x27;k--&#x27;, lw=1, label=&#x27;exact&#x27;)
+    a.set_title(title); a.legend(fontsize=8); a.set_xlabel(&#x27;t&#x27;)
+plt.tight_layout(); plt.show()
+
+print(&quot;\n→ h = 0.21 只比門檻大 5%,解卻整個震盪爆炸。&quot;)
+print(&quot;  這不是『不夠準』,是『完全錯』—— 而且不會有任何錯誤訊息。&quot;)
+print(&quot;  W16 會看到:learning rate 太大導致訓練發散,是同一件事。&quot;)</code></pre>
+<div class="out"><span class="out-label">預期輸出</span>   0.21            1.100     2.5937e+00   發散</div>
+<p><b>會看到</b>:$h=0.19$ 還乖乖收斂,$h=0.21$ 就<strong>震盪爆炸</strong>——門檻只差 $5\%$。注意右圖的 $y$ 軸尺度完全不同。<strong>這不是精度問題,是穩定性問題</strong>:不會報錯,只會給你一個完全錯的答案。下週會看到它就是「learning rate 太大」的數學本質。</p>
+<p>換你試:</p><pre><code># TODO 學生練習:把 lam 改成 100。穩定門檻變成多少?
+# 再試 RK4(用 Lab1 的函式)——它的穩定門檻比 Euler 大還是小?</code></pre>
+  <footer class="foot">微積分(一) · 第 15 週　|　風格延續《CS 自學聖經》設計系統</footer>
+</main>
+<script>
+(function(){var b=document.querySelector('.theme-toggle'),r=document.documentElement;
+function e(){return r.getAttribute('data-theme')||(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');}
+b.textContent=e()==='dark'?'☀':'☾';
+b.addEventListener('click',function(){var n=e()==='dark'?'light':'dark';r.setAttribute('data-theme',n);
+try{localStorage.setItem('handout-theme',n);}catch(x){}b.textContent=n==='dark'?'☀':'☾';});})();
+</script>
+</body>
+</html>
