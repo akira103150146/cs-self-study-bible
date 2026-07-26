@@ -35,12 +35,15 @@ def check(expr, expected, label=""):
     except (sp.SympifyError, SyntaxError, TypeError, AttributeError) as e:
         print(f"  ❌ {label or expr}  ->  無法解析: {e}")
         return False
-    ok = sp.simplify(a - b) == 0
-    if not ok:
-        try:
-            ok = abs(complex(a) - complex(b)) < 1e-9
-        except (TypeError, ValueError):
-            ok = False
+    # 先做直接相等比較:oo - oo 會化簡成 nan,不能只靠相減判斷
+    ok = (a == b)
+    if not ok and a.is_finite is not False and b.is_finite is not False:
+        ok = sp.simplify(a - b) == 0
+        if not ok:
+            try:
+                ok = abs(complex(a) - complex(b)) < 1e-9
+            except (TypeError, ValueError):
+                ok = False
     print(f"  {'✅' if ok else '❌'} {label or expr}  ->  got {a}, want {b}")
     return ok
 
