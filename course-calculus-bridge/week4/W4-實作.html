@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 4 週 實作 · 導數的應用 II</title>
+<meta name="description" content="銜接微積分第 4 週實作:手寫梯度下降找極值、用它做線性回歸、SymPy 自動曲線描繪;可下載 Colab notebook。">
+<script>(function(){try{var t=localStorage.getItem('handout-theme');if(t)document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;700&family=Noto+Sans+TC:wght@400;700&family=Lora:ital,wght@0,400;0,600;0,700;1,400&family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="../assets/handout.css">
+</head>
+<body>
+<nav class="packet-nav">
+  <a class="home" href="../index.html"><span class="dot">&#8747;</span>銜接微積分 &middot; 第 4 週</a>
+  <a class="tab" href="W4-理論教案.html">理論教案</a>
+  <a class="tab" href="W4-例題-學生版.html">例題&middot;學生</a>
+  <a class="tab" href="W4-例題-教師版.html">例題&middot;教師</a>
+  <a class="tab" href="W4-實作.html" aria-current="page">實作</a>
+  <span class="spacer"></span>
+  <button class="theme-toggle" title="切換深淺色" aria-label="切換主題">&#9790;</button>
+</nav>
+
+<main class="sheet">
+  <header class="masthead">
+    <div class="eyebrow">第 4 週 &middot; 實作</div>
+    <h1>用 Python 把「找極值」跑出來</h1>
+    <p class="subtitle">手算最佳化是解 $f'(x)=0$;這裡換成電腦的做法——<strong>梯度下降</strong>沿著下坡一步步走。三個 Lab:手寫 gradient descent(還會卡在局部最小)、用它做線性回歸(最佳化的實戰版)、SymPy 自動曲線描繪。看得懂就好,真的要跑請下載下面的 notebook。</p>
+    <div class="chips"><span class="chip accent">3 個 Lab</span><span class="chip">3 題 TODO</span><span class="chip">Colab / Jupyter</span><span class="chip">接到梯度下降 / ML</span></div>
+  </header>
+
+  <div class="callout note">
+    <div class="ico">&#128187;</div>
+    <div><span class="c-title">怎麼跑</span>
+      <p>這頁是<strong>可讀版</strong>;程式要實際執行,請下載 notebook,上傳到 <a href="https://colab.research.google.com/" target="_blank" rel="noopener">Google Colab</a>(或用本機 Jupyter),由上往下逐格執行。</p>
+      <p style="margin-top:10px"><a class="dl" href="W4-lab.ipynb" download>&#11015; 下載 W4-lab.ipynb</a></p>
+    </div>
+  </div>
+<h2>環境設定</h2><p>先跑這格,把套件載進來。</p><pre><code>import numpy as np
+import matplotlib.pyplot as plt
+import sympy as sp
+
+plt.rcParams[&#x27;figure.figsize&#x27;] = (7, 4.5)
+plt.rcParams[&#x27;axes.grid&#x27;] = True
+# 想在圖上顯示中文可另裝字型;預設用英文標籤避免變成豆腐字</code></pre>
+<h2>Lab 1｜梯度下降 gradient descent</h2><p>電腦不解 $f'(x)=0$,而是沿下坡走:$x \leftarrow x - \text{lr}\cdot f'(x)$。<code>gradient_descent(df, x0, lr, steps)</code> 回傳整條軌跡。先在碗形 $f(x)=x^2$ 上看它滾到谷底:</p><pre><code>def gradient_descent(df, x0, lr, steps):
+    &quot;&quot;&quot;沿 -df 方向走下山,回傳每一步的 x(軌跡)。df 是導函數 f&#x27;。&quot;&quot;&quot;
+    xs = [float(x0)]
+    x = float(x0)
+    for _ in range(steps):
+        x = x - lr * df(x)      # 往下坡走一步
+        xs.append(x)
+    return xs
+
+# 碗形 f(x)=x^2, f&#x27;(x)=2x
+f  = lambda x: x**2
+df = lambda x: 2*x
+path = gradient_descent(df, x0=5.0, lr=0.1, steps=30)
+print(&quot;從 x0=5 出發,最後停在 x =&quot;, round(path[-1], 6))
+
+xx = np.linspace(-5.5, 5.5, 400)
+plt.plot(xx, f(xx), label=&#x27;f(x) = x^2&#x27;)
+px = np.array(path)
+plt.plot(px, f(px), &#x27;o-&#x27;, color=&#x27;C3&#x27;, ms=4, label=&#x27;descent path&#x27;)
+plt.title(&#x27;Gradient descent on a convex bowl -&gt; global min&#x27;)
+plt.legend(); plt.show()</code></pre><div class="out"><span class="out-label">預期輸出</span>從 x0=5 出發,最後停在 x = 0.00619   &lt;- 逐步逼近 x=0</div><p><b>會看到</b>:紅點從 $x=5$ 沿拋物線一路滑到底部 $x=0$。</p><p>換一個<strong>多谷</strong>函數 $f(x)=3x^4-16x^3+18x^2$——淺谷($x=0$)與深谷($x=3$)。起點不同,會掉進不同的谷:</p><pre><code>g  = lambda x: 3*x**4 - 16*x**3 + 18*x**2
+dg = lambda x: 12*x**3 - 48*x**2 + 36*x      # g&#x27;(x)
+
+pathA = gradient_descent(dg, x0=0.5, lr=0.01, steps=40)   # 起點靠近淺谷
+pathB = gradient_descent(dg, x0=2.0, lr=0.01, steps=40)   # 起點靠近深谷
+print(&quot;從 x0=0.5 -&gt;&quot;, round(pathA[-1], 4), &quot; (局部最小)&quot;)
+print(&quot;從 x0=2.0 -&gt;&quot;, round(pathB[-1], 4), &quot; (全域最小)&quot;)
+
+xx = np.linspace(-0.7, 4.2, 500)
+plt.plot(xx, g(xx), &#x27;k&#x27;, label=&#x27;f(x)=3x^4-16x^3+18x^2&#x27;)
+for p, c, lab in [(pathA, &#x27;C0&#x27;, &#x27;start 0.5 -&gt; local min&#x27;),
+                  (pathB, &#x27;C3&#x27;, &#x27;start 2.0 -&gt; global min&#x27;)]:
+    p = np.array(p); plt.plot(p, g(p), &#x27;o-&#x27;, color=c, ms=3, label=lab)
+plt.title(&#x27;Same rule, different start -&gt; may get stuck in a local minimum&#x27;)
+plt.legend(fontsize=8); plt.ylim(-30, 40); plt.show()</code></pre><div class="out"><span class="out-label">預期輸出</span>從 x0=0.5 -&gt; 0.0    (局部最小,f=0)
+從 x0=2.0 -&gt; 3.0    (全域最小,f=-27)</div><p><b>會看到</b>:藍色軌跡從 $0.5$ 掉進淺谷(局部最小),紅色從 $2.0$ 掉進深谷(全域最小)。<strong>這正是梯度下降的罩門:只看腳邊下坡,可能卡在局部最小。</strong></p><p>換你試:</p><pre><code># TODO 把 lr 調大觀察震盪/發散;從 x0=0.9(靠近局部最大 x=1)出發會掉進哪個谷?
+# path = gradient_descent(dg, x0=0.9, lr=0.01, steps=40); print(round(path[-1], 4))</code></pre>
+<h2>Lab 2｜用梯度下降做線性回歸</h2><p>給雜訊資料,找直線 $y=wx+b$ 讓<strong>均方誤差 MSE</strong> $=\frac1N\sum(wx_i+b-y_i)^2$ 最小。對 $w,b$ 求偏導,套<strong>同一套梯度下降</strong>把 loss 壓低——這就是機器學習訓練的雛形。</p><pre><code># 造一組雜訊資料:真線是 y = 2x + 1
+rng = np.random.default_rng(0)
+N = 60
+xdat = np.linspace(0, 5, N)
+ydat = 2.0*xdat + 1.0 + rng.normal(0, 1.2, N)
+
+def mse(w, b):
+    return np.mean((w*xdat + b - ydat)**2)
+
+# 對 MSE 梯度下降:d/dw = 2*mean(err*x), d/db = 2*mean(err)
+w, b, lr = 0.0, 0.0, 0.02
+loss_hist = []
+for _ in range(400):
+    err = (w*xdat + b) - ydat
+    w -= lr * 2*np.mean(err*xdat)
+    b -= lr * 2*np.mean(err)
+    loss_hist.append(mse(w, b))
+
+print(&quot;w =&quot;, round(w,3), &quot; b =&quot;, round(b,3), &quot; MSE =&quot;, round(loss_hist[-1],3))
+
+fig, ax = plt.subplots(1, 2, figsize=(11, 4))
+ax[0].plot(loss_hist); ax[0].set_title(&#x27;MSE loss vs iteration&#x27;)
+ax[1].scatter(xdat, ydat, s=14, label=&#x27;noisy data&#x27;)
+ax[1].plot(xdat, w*xdat + b, &#x27;C3&#x27;, label=&#x27;GD fit&#x27;)
+ax[1].set_title(&#x27;Line fitted by gradient descent&#x27;); ax[1].legend()
+plt.tight_layout(); plt.show()</code></pre><div class="out"><span class="out-label">預期輸出</span>w = 2.132  b = 0.762  MSE = 1.123   (真值 w=2, b=1)</div><p><b>會看到</b>:左圖 MSE 快速下降後趨平;右圖擬合直線穿過雜訊點雲,斜率截距逼近真值 $(2,1)$。</p><p>換你試(調參數看它怎麼壞掉):</p><pre><code># TODO 學生練習:
+# (1) lr 改 0.001 跑同樣 400 步,loss 降得夠不夠?再改 0.05 看會不會震盪。
+# (2) 把雜訊 std 從 1.2 加大到 3.0,擬合的 w, b 還準嗎?</code></pre>
+<h2>Lab 3｜SymPy 自動曲線描繪</h2><p>理論課的描繪流程(求 $f'$、$f''$、解臨界點與反曲點)可完全自動化。<code>auto_sketch</code> 用 SymPy 算導數、解方程,再把臨界點(&#9679;)與反曲點(&#9632;)標到圖上:</p><pre><code>x = sp.symbols(&#x27;x&#x27;)
+
+def auto_sketch(expr, xmin=-1.5, xmax=3.5):
+    f1 = sp.diff(expr, x)
+    f2 = sp.diff(expr, x, 2)
+    crit = [c for c in sp.solve(f1, x) if c.is_real]
+    # inflection: f&#x27;&#x27;=0 and f&#x27;&#x27;&#x27; != 0(確保 f&#x27;&#x27; 真的變號)
+    infl = [c for c in sp.solve(f2, x) if c.is_real and sp.diff(expr, x, 3).subs(x, c) != 0]
+    print(&quot;f&#x27;  =&quot;, sp.factor(f1), &quot;  critical:&quot;, crit)
+    print(&quot;f&#x27;&#x27; =&quot;, sp.factor(f2), &quot;  inflection:&quot;, infl)
+    fpy = sp.lambdify(x, expr, &quot;numpy&quot;)
+    xs = np.linspace(xmin, xmax, 500)
+    plt.plot(xs, fpy(xs), &#x27;k&#x27;, label=&#x27;f(x)&#x27;)
+    for c in crit:
+        plt.plot(float(c), float(expr.subs(x, c)), &#x27;o&#x27;, color=&#x27;C3&#x27;, ms=9)
+    for c in infl:
+        plt.plot(float(c), float(expr.subs(x, c)), &#x27;s&#x27;, color=&#x27;C0&#x27;, ms=9)
+    plt.title(&#x27;Automatic curve sketching (SymPy)&#x27;); plt.legend(); plt.show()
+    return crit, infl
+
+auto_sketch(x**3 - 3*x**2 + 2, -1.5, 3.5)</code></pre><div class="out"><span class="out-label">預期輸出</span>f&#x27;  = 3*x*(x - 2)   critical: [0, 2]
+f&#x27;&#x27; = 6*(x - 1)     inflection: [1]</div><p><b>會看到</b>:三次曲線上,紅圓點標出局部極大 $(0,2)$、極小 $(2,-2)$,藍方點標出反曲點 $(1,0)$。</p><p>換你試:</p><pre><code># TODO 換函數自動描繪,和手算核對
+# auto_sketch(x**4 - 6*x**2, -3, 3)         # critical: 0, +-sqrt(3);inflection: +-1
+# auto_sketch(3*x**4 - 4*x**3, -0.8, 1.6)   # critical: 0(非極值), 1;inflection: 0, 2/3</code></pre>
+<h2>收尾 · 對應筆試與 CS</h2><div class="tbl-wrap"><table><thead><tr><th>這個 Lab</th><th>對應觀念</th><th>通向</th></tr></thead><tbody><tr><td>Lab 1 gradient descent</td><td>極值、最佳化(觀念 1、10)</td><td>深度學習訓練引擎</td></tr><tr><td>Lab 1 多谷函數</td><td>局部 vs 全域極值(觀念 3、4)</td><td>local minimum 難題</td></tr><tr><td>Lab 2 線性回歸 (MSE)</td><td>最佳化的數值版(觀念 10)</td><td>ML model fitting</td></tr><tr><td>Lab 3 SymPy 自動描繪</td><td>曲線描繪、$f'$/$f''$(觀念 5、9)</td><td>符號運算 / CAS</td></tr></tbody></table></div><div class="callout tip"><div class="ico">&#127894;</div><div><span class="c-title">進階徽章(選做)</span><p>1. 讓 <code>gradient_descent</code> 回傳每步的 $|f'(x)|$,畫出它如何趨近 $0$(收斂診斷)。<br>2. 幫 Lab 2 加一個「動量(momentum)」項,看 loss 是否降得更快。<br>3. 用 <code>sp.solve(sp.diff(expr, x), x)</code> 驗證你手算最佳化題(圍籬、罐頭)的臨界點。</p></div></div>
+  <footer class="foot">銜接微積分 · 第 4 週實作　|　風格延續《CS 自學聖經》設計系統</footer>
+</main>
+<script>window.MathJax={tex:{inlineMath:[["$","$"],["\\(","\\)"]],displayMath:[["$$","$$"],["\\[","\\]"]]},svg:{fontCache:"global"}};</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" async></script>
+
+<script>
+(function(){
+  var btn = document.querySelector('.theme-toggle'); var root = document.documentElement;
+  function eff(){ return root.getAttribute('data-theme') || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark':'light'); }
+  btn.textContent = eff()==='dark' ? '☀' : '☾';
+  btn.addEventListener('click', function(){
+    var next = eff()==='dark' ? 'light' : 'dark';
+    root.setAttribute('data-theme', next);
+    try{ localStorage.setItem('handout-theme', next); }catch(e){}
+    btn.textContent = next==='dark' ? '☀' : '☾';
+  });
+})();
+</script>
+</body></html>

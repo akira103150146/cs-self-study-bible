@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 2 週 實作 · 導數與微分法則</title>
+<meta name="description" content="銜接微積分第 2 週實作:數值微分、SymPy 驗證各法則、隱函數切線視覺化、手刻 mini-autodiff(反向傳播);可下載 Colab notebook。">
+<script>(function(){try{var t=localStorage.getItem('handout-theme');if(t)document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;700&family=Noto+Sans+TC:wght@400;700&family=Lora:ital,wght@0,400;0,600;0,700;1,400&family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="../assets/handout.css">
+</head>
+<body>
+<nav class="packet-nav">
+  <a class="home" href="../index.html"><span class="dot">&#8747;</span>銜接微積分 &middot; 第 2 週</a>
+  <a class="tab" href="W2-理論教案.html">理論教案</a>
+  <a class="tab" href="W2-例題-學生版.html">例題&middot;學生</a>
+  <a class="tab" href="W2-例題-教師版.html">例題&middot;教師</a>
+  <a class="tab" href="W2-實作.html" aria-current="page">實作</a>
+  <span class="spacer"></span>
+  <button class="theme-toggle" title="切換深淺色" aria-label="切換主題">&#9790;</button>
+</nav>
+
+<main class="sheet">
+  <header class="masthead">
+    <div class="eyebrow">第 2 週 &middot; 實作</div>
+    <h1>用 Python 把導數跑出來、驗出來</h1>
+    <p class="subtitle">理論課學的微分法則,這裡親手驗證:數值微分 &times; 理論值對照、用 SymPy 驗每一條法則、把隱函數的切線斜率畫出來,最後<strong>手刻一個 mini-autodiff</strong>——親眼看見鏈鎖法則就是反向傳播 (backpropagation)。看得懂就好,真的要跑請下載下面的 notebook。</p>
+    <div class="chips"><span class="chip accent">4 個 Lab</span><span class="chip">3 題 TODO</span><span class="chip">Colab / Jupyter</span></div>
+  </header>
+
+  <div class="callout note">
+    <div class="ico">&#128187;</div>
+    <div><span class="c-title">怎麼跑</span>
+      <p>這頁是<strong>可讀版</strong>;程式要實際執行,請下載 notebook,上傳到 <a href="https://colab.research.google.com/" target="_blank" rel="noopener">Google Colab</a>(或用本機 Jupyter),由上往下逐格執行。</p>
+      <p style="margin-top:10px"><a class="dl" href="W2-lab.ipynb" download>&#11015; 下載 W2-lab.ipynb</a></p>
+    </div>
+  </div>
+<h2>環境設定</h2><p>先跑這格,把套件載進來。</p><pre><code>import math
+import numpy as np
+import matplotlib.pyplot as plt
+import sympy as sp
+
+plt.rcParams[&#x27;figure.figsize&#x27;] = (7, 4.5)
+plt.rcParams[&#x27;axes.grid&#x27;] = True
+# 想在圖上顯示中文可另裝字型;預設用英文標籤避免變成豆腐字</code></pre>
+<h2>Lab 1｜數值微分(central difference)</h2><p>導數的定義是 <code>(f(x+h)-f(x))/h</code> 取極限。數值上,<strong>central difference</strong> <code>(f(x+h)-f(x-h))/(2h)</code> 收斂更快(誤差 <code>O(h^2)</code>)。拿它跟手算的理論導數對一對:</p><pre><code>def numerical_derivative(f, x, h=1e-5):
+    &quot;&quot;&quot;Central difference approximation of f&#x27;(x). Error ~ O(h^2).&quot;&quot;&quot;
+    return (f(x + h) - f(x - h)) / (2 * h)
+
+# compare numerical vs theoretical at one sample point each
+tests = [
+    (&quot;x^2   -&gt; 2x&quot;,           lambda x: x**2,  lambda x: 2*x,                  3.0),
+    (&quot;sin x -&gt; cos x&quot;,        math.sin,        math.cos,                       1.0),
+    (&quot;e^x   -&gt; e^x&quot;,          math.exp,        math.exp,                       0.5),
+    (&quot;x^x   -&gt; x^x(ln x+1)&quot;,  lambda x: x**x,  lambda x: x**x*(math.log(x)+1), 2.0),
+]
+print(f&quot;{&#x27;function&#x27;:22} {&#x27;numerical&#x27;:&gt;15} {&#x27;theory&#x27;:&gt;15} {&#x27;abs err&#x27;:&gt;11}&quot;)
+for name, f, fp, x0 in tests:
+    approx, exact = numerical_derivative(f, x0), fp(x0)
+    print(f&quot;{name:22} {approx:15.8f} {exact:15.8f} {abs(approx-exact):11.2e}&quot;)</code></pre><div class="out"><span class="out-label">預期輸出</span>function                     numerical          theory     abs err
+x^2   -&gt; 2x                 6.00000000      6.00000000    3.93e-11
+sin x -&gt; cos x              0.54030231      0.54030231    1.11e-11
+e^x   -&gt; e^x                1.64872127      1.64872127    1.93e-11
+x^x   -&gt; x^x(ln x+1)        6.77258872      6.77258872    5.52e-10</div><p>再畫出來看:數值算的 <code>d/dx sin x</code> 應該完美落在 <code>cos x</code> 上。</p><pre><code># and visually: numerical d/dx sin x should land on cos x
+xs  = np.linspace(-2*np.pi, 2*np.pi, 400)
+num = (np.sin(xs + 1e-5) - np.sin(xs - 1e-5)) / (2e-5)
+plt.plot(xs, num, lw=4, alpha=0.35, label=&quot;numerical d/dx sin x&quot;)
+plt.plot(xs, np.cos(xs), &#x27;r--&#x27;, label=&quot;cos x (exact)&quot;)
+plt.title(&quot;Central-difference derivative of sin x matches cos x&quot;)
+plt.legend(); plt.show()</code></pre><p><b>會看到</b>:粗的半透明曲線(數值導數)與紅色虛線 <code>cos x</code> 幾乎重疊——數值微分抓到了真正的導數。</p><p>換你試(對應例題:tan 的導數):</p><pre><code># TODO 學生練習:用 numerical_derivative 驗證 d/dx tan(x) = sec^2(x) 在 x = 1
+# 提示:sec^2(x) = 1 / cos(x)**2
+# print(numerical_derivative(math.tan, 1.0), 1/math.cos(1.0)**2)</code></pre>
+<h2>Lab 2｜用 SymPy 驗證各法則</h2><p>手算的每條法則,交給 <code>sympy.diff</code> 當「標準答案」核對。輸出跟你紙上的一致,就放心了。</p><pre><code>x = sp.symbols(&#x27;x&#x27;)
+
+rules = {
+    &quot;Power      d/dx x^5&quot;:       x**5,
+    &quot;Sum/Diff   d/dx 3x^4-5x^2+7&quot;: 3*x**4 - 5*x**2 + 7,
+    &quot;Product    d/dx x^2 e^x&quot;:   x**2*sp.exp(x),
+    &quot;Quotient   d/dx x/(x^2+1)&quot;: x/(x**2 + 1),
+    &quot;Chain      d/dx (x^2+1)^3&quot;: (x**2 + 1)**3,
+    &quot;sin/cos    d/dx sin x&quot;:     sp.sin(x),
+    &quot;tan        d/dx tan x&quot;:     sp.tan(x),
+    &quot;exp        d/dx e^x&quot;:       sp.exp(x),
+    &quot;log        d/dx ln x&quot;:      sp.log(x),
+    &quot;log-diff   d/dx x^x&quot;:       x**x,
+}
+for name, f in rules.items():
+    print(f&quot;{name:26} = {sp.simplify(sp.diff(f, x))}&quot;)</code></pre><div class="out"><span class="out-label">預期輸出</span>Power      d/dx x^5        = 5*x**4
+Sum/Diff   d/dx 3x^4-5x^2+7 = 12*x**3 - 10*x
+Product    d/dx x^2 e^x    = x*(x + 2)*exp(x)
+Quotient   d/dx x/(x^2+1)  = (1 - x**2)/(x**4 + 2*x**2 + 1)
+Chain      d/dx (x^2+1)^3  = 6*x*(x**2 + 1)**2
+sin/cos    d/dx sin x      = cos(x)
+tan        d/dx tan x      = cos(x)**(-2)
+exp        d/dx e^x        = exp(x)
+log        d/dx ln x       = 1/x
+log-diff   d/dx x^x        = x**x*(log(x) + 1)</div><p>也可以把「手算答案」丟給 SymPy 判對錯(相減化簡看是不是 0):</p><pre><code># cross-check a hand answer: d/dx x/(x^2+1)  ==  (1 - x^2)/(x^2+1)^2 ?
+hand = (1 - x**2) / (x**2 + 1)**2
+print(&quot;quotient-rule hand answer correct:&quot;,
+      sp.simplify(sp.diff(x/(x**2 + 1), x) - hand) == 0)
+
+# via log-diff by hand: d/dx x^x -&gt; x^x*(ln x + 1)
+print(&quot;log-diff hand answer correct:&quot;,
+      sp.simplify(sp.diff(x**x, x) - x**x*(sp.log(x) + 1)) == 0)</code></pre><div class="out"><span class="out-label">預期輸出</span>quotient-rule hand answer correct: True
+log-diff hand answer correct: True</div>
+<h2>Lab 3｜隱函數微分視覺化</h2><p>圓 <code>x^2 + y^2 = 1</code> 沒法簡單寫成 <code>y = f(x)</code>。隱函數微分給出切線斜率 <code>y&#x27; = -x/y</code>。畫出圓與某點的切線,順便驗證「切線 &perp; 半徑」。</p><pre><code># unit circle x^2 + y^2 = 1 ; implicit diff =&gt; y&#x27; = -x/y
+theta = np.linspace(0, 2*np.pi, 400)
+plt.plot(np.cos(theta), np.sin(theta), label=&quot;x^2 + y^2 = 1&quot;)
+
+px, py = math.cos(math.pi/4), math.sin(math.pi/4)   # a point on the circle (45 deg)
+slope  = -px / py                                    # y&#x27; = -x/y
+tx = np.linspace(px - 0.8, px + 0.8, 10)
+plt.plot(tx, py + slope*(tx - px), &#x27;r--&#x27;, label=f&quot;tangent, slope = {slope:.2f}&quot;)
+plt.plot([0, px], [0, py], &#x27;g:&#x27;, label=&quot;radius&quot;)
+plt.plot(px, py, &#x27;ko&#x27;)
+plt.gca().set_aspect(&#x27;equal&#x27;); plt.legend(loc=&#x27;upper right&#x27;)
+plt.title(&quot;Implicit diff: tangent slope = -x/y&quot;); plt.show()
+
+print(f&quot;point = ({px:.3f}, {py:.3f})   slope -x/y = {slope:.4f}&quot;)
+print(&quot;tangent-perp-radius check (should be -1):&quot;, slope * (py/px))</code></pre><div class="out"><span class="out-label">預期輸出</span>point = (0.707, 0.707)   slope -x/y = -1.0000
+tangent-perp-radius check (should be -1): -1.0</div><p><b>會看到</b>:單位圓、45&deg; 那點的紅色切線(斜率 <code>-1</code>)、以及指向該點的半徑;切線與半徑互相垂直。</p><p>換你試(對應例題:隱函數微分):</p><pre><code># TODO 學生練習:對橢圓 x^2/4 + y^2 = 1 隱函數微分,求 y&#x27;,並在點 (0,1) 或 (2,0) 討論斜率
+# 手算提示:2x/4 + 2y*y&#x27; = 0 =&gt; y&#x27; = -x/(4y)</code></pre>
+<h2>Lab 4｜手刻 mini-autodiff(鏈鎖法則 = 反向傳播)</h2><p>鏈鎖法則就是 <strong>backpropagation</strong> 的核心。這裡手刻一個極簡版(micrograd 精神):一個純量 <code>Value</code> 節點,支援 <code>+</code>、<code>*</code>,<code>forward</code> 記住怎麼算出來、<code>backward</code> 用鏈鎖把梯度<strong>反向</strong>傳回去。</p><pre><code>class Value:
+    &quot;&quot;&quot;A minimal scalar autodiff node (micrograd 精神). Supports + and *, plus backward().&quot;&quot;&quot;
+    def __init__(self, data, _children=(), _op=&quot;&quot;):
+        self.data = float(data)
+        self.grad = 0.0
+        self._backward = lambda: None      # local backprop closure
+        self._prev = set(_children)
+        self._op = _op
+
+    def __add__(self, other):
+        other = other if isinstance(other, Value) else Value(other)
+        out = Value(self.data + other.data, (self, other), &quot;+&quot;)
+        def _backward():                   # d(out)/d(self)=1, d(out)/d(other)=1
+            self.grad  += 1.0 * out.grad
+            other.grad += 1.0 * out.grad
+        out._backward = _backward
+        return out
+
+    def __mul__(self, other):
+        other = other if isinstance(other, Value) else Value(other)
+        out = Value(self.data * other.data, (self, other), &quot;*&quot;)
+        def _backward():                   # product rule, locally
+            self.grad  += other.data * out.grad
+            other.grad += self.data  * out.grad
+        out._backward = _backward
+        return out
+
+    __radd__ = __add__
+    __rmul__ = __mul__
+
+    def backward(self):
+        # 1) topological order of the graph, 2) apply chain rule in reverse
+        topo, seen = [], set()
+        def build(v):
+            if v not in seen:
+                seen.add(v)
+                for child in v._prev:
+                    build(child)
+                topo.append(v)
+        build(self)
+        self.grad = 1.0                    # d(output)/d(output) = 1
+        for v in reversed(topo):
+            v._backward()
+
+    def __repr__(self):
+        return f&quot;Value(data={self.data}, grad={self.grad})&quot;</code></pre><p>拿它算 <code>f = x*y + x*x</code> 在 <code>x=3, y=4</code> 的梯度,再跟 SymPy 對答案:</p><pre><code># forward:  f = x*y + x*x   at x=3, y=4   (expect f = 12 + 9 = 21)
+x = Value(3.0)
+y = Value(4.0)
+f = x*y + x*x
+f.backward()
+
+print(&quot;forward  f =&quot;, f.data)
+print(&quot;df/dx (autodiff) =&quot;, x.grad, &quot;  expected y + 2x = 10&quot;)
+print(&quot;df/dy (autodiff) =&quot;, y.grad, &quot;  expected x     = 3&quot;)
+
+# cross-check against SymPy
+sx, sy = sp.symbols(&#x27;sx sy&#x27;)
+expr = sx*sy + sx*sx
+print(&quot;df/dx (sympy)    =&quot;, sp.diff(expr, sx).subs({sx: 3, sy: 4}))
+print(&quot;df/dy (sympy)    =&quot;, sp.diff(expr, sy).subs({sx: 3, sy: 4}))</code></pre><div class="out"><span class="out-label">預期輸出</span>forward  f = 21.0
+df/dx (autodiff) = 10.0   expected y + 2x = 10
+df/dy (autodiff) = 3.0   expected x     = 3
+df/dx (sympy)    = 10
+df/dy (sympy)    = 3</div><div class="callout tip"><div class="ico">&#128279;</div><div><span class="c-title">看懂了嗎?</span><p><code>backward()</code> 把整張運算圖做拓撲排序,從輸出梯度 <code>1</code> 出發,用每個節點的<strong>區域導數</strong>(加法傳 <code>1</code>、乘法傳對方的值)沿鏈鎖<strong>反向相乘累加</strong>。把 <code>+</code>、<code>*</code> 換成矩陣乘與非線性、把幾個 <code>Value</code> 換成幾百萬個參數,就是深度學習的 backprop。第 6 週我們會用它訓練一個小模型。</p></div></div><p>換你試(自己搭一個式子驗證):</p><pre><code># TODO 學生練習:自己搭一個式子,例如 g = (x + y) * x,在 x=2, y=5 求 dg/dx, dg/dy
+# 先手算(dg/dx = 2x + y = 9, dg/dy = x = 2),再用 Value 驗證
+# x = Value(2.0); y = Value(5.0); g = (x + y) * x; g.backward(); print(x.grad, y.grad)</code></pre>
+<h2>收尾 · 對應筆試</h2><div class="tbl-wrap"><table><thead><tr><th>這個 Lab</th><th>對應觀念</th></tr></thead><tbody><tr><td>Lab 1 central-difference</td><td>導數定義、切線斜率(觀念 1、2)</td></tr><tr><td>Lab 2 SymPy 驗證各法則</td><td>冪 / 常數和差 / 積 / 商 / 三角 / 指 / 對 / 鏈鎖 / 對數微分(觀念 4&ndash;12、14)</td></tr><tr><td>Lab 3 圓的切線斜率</td><td>隱函數微分(觀念 13)</td></tr><tr><td>Lab 4 mini-autodiff</td><td>鏈鎖法則 = backpropagation(觀念 12)</td></tr></tbody></table></div><div class="callout tip"><div class="ico">&#127894;</div><div><span class="c-title">進階徽章(選做)</span><p>1. 把 <code>numerical_derivative</code> 的 <code>h</code> 從 <code>1e-1</code> 掃到 <code>1e-10</code>,畫誤差對 <code>h</code> 的 log-log 圖(會看到先降後升:截斷誤差 vs 浮點誤差)。<br>2. 給 <code>Value</code> 加上 <code>__pow__</code> 或 <code>relu()</code>,讓 mini-autodiff 能表示更多函數。<br>3. 用 Lab 4 的 <code>Value</code> 算 <code>f = x*x*x</code>(即 <code>x^3</code>)在 <code>x=2</code> 的導數,對照 <code>3x^2 = 12</code>。</p></div></div>
+  <footer class="foot">銜接微積分 · 第 2 週實作　|　風格延續《CS 自學聖經》設計系統</footer>
+</main>
+<script>window.MathJax={tex:{inlineMath:[["$","$"],["\\(","\\)"]],displayMath:[["$$","$$"],["\\[","\\]"]]},svg:{fontCache:"global"}};</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" async></script>
+
+<script>
+(function(){
+  var btn = document.querySelector('.theme-toggle'); var root = document.documentElement;
+  function eff(){ return root.getAttribute('data-theme') || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark':'light'); }
+  btn.textContent = eff()==='dark' ? '☀' : '☾';
+  btn.addEventListener('click', function(){
+    var next = eff()==='dark' ? 'light' : 'dark';
+    root.setAttribute('data-theme', next);
+    try{ localStorage.setItem('handout-theme', next); }catch(e){}
+    btn.textContent = next==='dark' ? '☀' : '☾';
+  });
+})();
+</script>
+</body></html>

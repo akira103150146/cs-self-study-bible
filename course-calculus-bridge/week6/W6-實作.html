@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 6 週 Capstone · 手刻深度學習引擎</title>
+<meta name="description" content="銜接微積分第 6 週 Capstone:純 numpy 從零手刻線性回歸、邏輯回歸、2 層神經網路,親眼看見 forward=合成、backward=鏈鎖法則、update=梯度下降。">
+<script>(function(){try{var t=localStorage.getItem('handout-theme');if(t)document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;700&family=Noto+Sans+TC:wght@400;700&family=Lora:ital,wght@0,400;0,600;0,700;1,400&family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="../assets/handout.css">
+</head>
+<body>
+<nav class="packet-nav">
+  <a class="home" href="../index.html"><span class="dot">&#8747;</span>銜接微積分 &middot; 第 6 週</a>
+  <a class="tab" href="W6-理論教案.html">監考教案</a>
+  <a class="tab" href="W6-模擬考-考卷版.html">模擬考&middot;考卷</a>
+  <a class="tab" href="W6-模擬考-詳解版.html">模擬考&middot;詳解</a>
+  <a class="tab" href="W6-實作.html" aria-current="page">Capstone</a>
+  <span class="spacer"></span>
+  <button class="theme-toggle" title="切換深淺色" aria-label="切換主題">&#9790;</button>
+</nav>
+
+<main class="sheet">
+  <header class="masthead">
+    <div class="eyebrow">第 6 週 &middot; Capstone</div>
+    <h1>手刻深度學習引擎的核心</h1>
+    <p class="subtitle">整個暑期的零件在這裡合體。純 numpy、從零,手刻三個會「學習」的模型:線性回歸、邏輯回歸、2 層神經網路。全程只有一條微積分骨架&mdash;&mdash;forward 是函數合成、backward 是鏈鎖法則(backprop)、update 是梯度下降。</p>
+    <div class="chips"><span class="chip accent">3 個模型</span><span class="chip">純 numpy 從零</span><span class="chip">forward / loss / backward / update</span><span class="chip">Colab / Jupyter</span></div>
+  </header>
+
+  <div class="callout note">
+    <div class="ico">&#128187;</div>
+    <div><span class="c-title">怎麼跑</span>
+      <p>這頁是<strong>可讀版</strong>;程式要實際執行,請下載 notebook,上傳到 <a href="https://colab.research.google.com/" target="_blank" rel="noopener">Google Colab</a>(或用本機 Jupyter),由上往下逐格執行。每個模型都是純 numpy,不用任何 ML 套件。</p>
+      <p style="margin-top:10px"><a class="dl" href="W6-lab.ipynb" download>&#11015; 下載 W6-lab.ipynb</a></p>
+    </div>
+  </div>
+
+  <div class="callout key">
+    <div class="ico">&#127919;</div>
+    <div><span class="c-title">一條骨架貫穿三個模型</span>
+      <p><strong>forward</strong>(把輸入代進一連串函數 = 合成)&rarr; <strong>loss</strong>(一個要最小化的純量)&rarr; <strong>backward</strong>(用鏈鎖法則逐層求偏導 = backprop)&rarr; <strong>update</strong>(沿負梯度下降一步)。這整條 pipeline,就是微積分。</p>
+    </div>
+  </div>
+<h2>環境設定</h2><p>先跑這格,把套件載進來,並定義數值穩定的 sigmoid。</p><pre><code>import numpy as np
+import matplotlib.pyplot as plt
+
+plt.rcParams[&#x27;figure.figsize&#x27;] = (6.5, 4)
+plt.rcParams[&#x27;axes.grid&#x27;] = True
+
+def sigmoid(z):
+    # 數值穩定的 sigmoid:把 z 夾住避免 exp 溢位
+    return 1.0 / (1.0 + np.exp(-np.clip(z, -500, 500)))</code></pre>
+<p>圖表預設用英文標籤以免中文變豆腐字;要中文座標可跑這格(選用):</p><pre><code># 想要中文圖標時,取消以下註解執行(Colab 適用;本機 Jupyter 需自備 CJK 字型)
+# !apt-get -qq install fonts-noto-cjk &gt; /dev/null
+# import matplotlib
+# matplotlib.rcParams[&#x27;font.sans-serif&#x27;] = [&#x27;Noto Sans CJK TC&#x27;]
+# matplotlib.rcParams[&#x27;axes.unicode_minus&#x27;] = False</code></pre>
+<h2>Part 1&#65372;Linear Regression by Gradient Descent</h2><p>給一堆帶雜訊的點,找一條直線 $\hat y=wx+b$ 擬合。骨架第一次登場:forward 是 $wx+b$、loss 是均方誤差 MSE、backward 是對 $w,b$ 偏微分、update 是沿負梯度走。先自生玩具資料(真直線 $y=2x-1$ 加雜訊):</p><pre><code># 自生 toy dataset:真直線 y = 2x - 1 + 雜訊
+rng = np.random.default_rng(0)
+N = 100
+X = np.linspace(-3, 3, N)
+true_w, true_b = 2.0, -1.0
+y = true_w * X + true_b + rng.normal(0, 0.8, N)</code></pre><p>接著手刻梯度下降迴圈,從 $w=b=0$ 開始一步步下坡:</p><pre><code># 手刻梯度下降:forward -&gt; loss -&gt; backward -&gt; update
+w, b = 0.0, 0.0          # 從零開始
+lr = 0.03                # learning rate (步長)
+losses = []
+for step in range(600):
+    y_hat = w * X + b                 # forward:線性函數
+    err = y_hat - y
+    loss = np.mean(err**2)            # loss:MSE
+    losses.append(loss)
+    dw = 2 * np.mean(err * X)         # backward:偏導(冪次 + 鏈鎖法則)
+    db = 2 * np.mean(err)
+    w -= lr * dw                      # update:沿負梯度走一步
+    b -= lr * db
+
+print(f&quot;learned:  w = {w:.4f}  (true 2.0),   b = {b:.4f}  (true -1.0)&quot;)
+print(f&quot;final MSE loss = {losses[-1]:.4f}&quot;)</code></pre><div class="out"><span class="out-label">預期輸出</span>learned:  w = 2.0194  (true 2.0),   b = -0.9351  (true -1.0)
+final MSE loss = 0.5913</div><p>學到的 $w\approx2$、$b\approx-1$,和真參數幾乎一樣;最終 MSE 大約就是雜訊的變異數。把擬合線與 loss 曲線畫出來,會看到 loss 單調下滑、直線穿過資料中心。</p>
+<h2>Part 2&#65372;Logistic Regression(2D 二元分類)</h2><p>資料變成兩類($0$/$1$)。把線性輸出 $z=w\cdot x+b$ 經過 <strong>sigmoid</strong> 壓成機率,用 <strong>cross-entropy</strong> 當 loss。神奇的是鏈鎖法則化簡後,梯度就是乾淨的 $p-y$。先自生兩坨高斯點:</p><pre><code># 自生 toy dataset:兩坨高斯點(線性可分)
+rng = np.random.default_rng(1)
+n = 150
+X0 = rng.normal(0, 0.8, (n, 2)) + np.array([-1.6, -1.6])   # class 0
+X1 = rng.normal(0, 0.8, (n, 2)) + np.array([ 1.6,  1.6])   # class 1
+Xl = np.vstack([X0, X1])
+yl = np.concatenate([np.zeros(n), np.ones(n)])</code></pre><p>手刻訓練:sigmoid + cross-entropy + 梯度下降:</p><pre><code># 手刻邏輯回歸:sigmoid + cross-entropy + 梯度下降
+w = np.zeros(2); b = 0.0
+lr = 0.1
+ce = []
+for step in range(3000):
+    z = Xl @ w + b                   # forward:線性
+    p = sigmoid(z)                   # forward:sigmoid -&gt; 機率
+    loss = -np.mean(yl*np.log(p+1e-9) + (1-yl)*np.log(1-p+1e-9))   # cross-entropy
+    ce.append(loss)
+    grad_w = Xl.T @ (p - yl) / len(yl)   # backward:鏈鎖化簡後 dL/dz = p - y
+    grad_b = np.mean(p - yl)
+    w -= lr * grad_w; b -= lr * grad_b   # update:gradient descent
+
+pred = (sigmoid(Xl @ w + b) &gt; 0.5).astype(float)
+acc = np.mean(pred == yl)
+print(f&quot;final cross-entropy = {ce[-1]:.4f},   accuracy = {acc:.4f}&quot;)</code></pre><div class="out"><span class="out-label">預期輸出</span>final cross-entropy = 0.0063,   accuracy = 0.9967</div><p>準確率約 $99.7\%$。把 decision boundary(sigmoid $=0.5$ 的等高線)畫出來:</p><pre><code># 畫出 decision boundary(sigmoid = 0.5 的那條線)
+xx, yy = np.meshgrid(np.linspace(-4, 4, 300), np.linspace(-4, 4, 300))
+grid = np.c_[xx.ravel(), yy.ravel()]
+zz = sigmoid(grid @ w + b).reshape(xx.shape)
+plt.contourf(xx, yy, zz, levels=20, cmap=&#x27;bwr&#x27;, alpha=0.6)
+plt.contour(xx, yy, zz, levels=[0.5], colors=&#x27;k&#x27;, linewidths=2)
+plt.scatter(Xl[:, 0], Xl[:, 1], c=yl, cmap=&#x27;bwr&#x27;, edgecolors=&#x27;k&#x27;, s=14)
+plt.title(&#x27;Part 2: logistic-regression decision boundary&#x27;)
+plt.xlabel(&#x27;x1&#x27;); plt.ylabel(&#x27;x2&#x27;); plt.show()</code></pre><p><b>會看到</b>:一條直線把兩坨點乾淨切開&mdash;&mdash;但注意,它只會畫<strong>直線</strong>。</p>
+<h2>Part 3&#65372;2 層神經網路 + Backpropagation</h2><p>同心圓資料(內圈一類、外圈一類)<strong>沒有任何直線</strong>切得開。解法:中間加一個隱藏層(input 2 &rarr; hidden $H$ 個 tanh &rarr; output 1 個 sigmoid),讓模型能彎折。forward 是一連串函數合成;要更新參數就一層層往回套鏈鎖法則,這正是 <strong>backpropagation</strong>。先自生同心圓:</p><pre><code># 自生 toy dataset:同心圓(非線性可分)——內圈 label 0、外圈 label 1
+rng = np.random.default_rng(2)
+m = 400
+angle = rng.uniform(0, 2*np.pi, m)
+radius = np.concatenate([rng.uniform(0.0, 1.0, m//2),      # 內圈
+                         rng.uniform(1.8, 2.8, m//2)])     # 外圈
+Xn = np.stack([radius*np.cos(angle), radius*np.sin(angle)], axis=1)
+Xn += rng.normal(0, 0.06, Xn.shape)
+yn = np.concatenate([np.zeros(m//2), np.ones(m//2)]).reshape(-1, 1)</code></pre><p>初始化參數(小隨機權重打破對稱):</p><pre><code># 初始化參數(小隨機權重打破對稱)
+H = 16                                  # 隱藏層神經元數
+rng = np.random.default_rng(2)
+W1 = rng.normal(0, 1, (2, H)) * 0.8; b1 = np.zeros(H)
+W2 = rng.normal(0, 1, (H, 1)) * 0.8; b2 = np.zeros(1)</code></pre><p>手刻訓練迴圈&mdash;&mdash;forward 合成、backward 鏈鎖、update 梯度下降,一格看完整條 pipeline:</p><pre><code># 手刻訓練迴圈:forward(合成)-&gt; loss -&gt; backward(鏈鎖/backprop)-&gt; update(GD)
+lr = 0.2
+nn_loss = []
+for epoch in range(4000):
+    # ---- forward:一連串函數合成 ----
+    Z1 = Xn @ W1 + b1
+    A1 = np.tanh(Z1)                    # 隱藏層 activation
+    Z2 = A1 @ W2 + b2
+    P  = sigmoid(Z2)                    # 輸出機率
+    loss = -np.mean(yn*np.log(P+1e-9) + (1-yn)*np.log(1-P+1e-9))
+    nn_loss.append(loss)
+    # ---- backward:鏈鎖法則一層層往回(backpropagation)----
+    dZ2 = (P - yn) / len(yn)            # dL/dZ2
+    dW2 = A1.T @ dZ2
+    db2 = dZ2.sum(0)
+    dA1 = dZ2 @ W2.T
+    dZ1 = dA1 * (1 - A1**2)            # 乘上 tanh 的導數 1 - tanh^2
+    dW1 = Xn.T @ dZ1
+    db1 = dZ1.sum(0)
+    # ---- update:gradient descent ----
+    W1 -= lr*dW1; b1 -= lr*db1; W2 -= lr*dW2; b2 -= lr*db2
+
+def nn_forward(A):
+    return sigmoid(np.tanh(A @ W1 + b1) @ W2 + b2)
+
+acc = np.mean((nn_forward(Xn) &gt; 0.5).astype(float) == yn)
+print(f&quot;final cross-entropy = {nn_loss[-1]:.4f},   accuracy = {acc:.4f}&quot;)</code></pre><div class="out"><span class="out-label">預期輸出</span>final cross-entropy = 0.0053,   accuracy = 1.0000</div><p><b>會看到</b>:準確率衝到 $100\%$;畫出來的 decision boundary 是一條<strong>彎曲的封閉曲線</strong>,恰好把內圈圈起來&mdash;&mdash;這是單靠邏輯回歸永遠做不到的。那個 <code>dZ1 = dA1 * (1 - A1**2)</code>,就是 tanh 的導數,也就是鏈鎖法則被寫成一行程式。</p>
+<h2>收尾 &middot; 你剛手刻了深度學習引擎的核心</h2><p>停下來看看你做了什麼。三個模型、從線性到非線性,骨架<strong>完全一樣</strong>:</p><div class="tbl-wrap"><table><thead><tr><th>步驟</th><th>微積分是什麼</th><th>三個模型共通</th></tr></thead><tbody><tr><td>forward</td><td>函數<strong>合成</strong></td><td>把輸入一層層代進函數</td></tr><tr><td>loss</td><td>一個要最小化的純量函數</td><td>MSE / cross-entropy</td></tr><tr><td>backward</td><td><strong>鏈鎖法則</strong></td><td>從 loss 往回逐層求偏導 = backprop</td></tr><tr><td>update</td><td>沿<strong>負梯度</strong>下降</td><td>$\theta\leftarrow\theta-\eta\nabla_\theta L$</td></tr></tbody></table></div><div class="callout key"><div class="ico">&#127881;</div><div><span class="c-title">你剛手刻了深度學習引擎的核心</span><p>那個 2 層網路的反向傳播,骨子裡就是第 2 週學的<strong>鏈鎖法則</strong>&mdash;&mdash;只是被排成矩陣、大規模自動化了。把 $H$ 加大、層數疊深,換個名字它就叫 <strong>deep learning</strong>。PyTorch / TensorFlow 幫你自動算的 <code>.backward()</code>,跟你手寫的 <code>dZ1 = dA1 * (1 - A1**2)</code> 是同一件事。微積分不是考完就丟的東西,它就是讓機器「學習」的那台引擎。整個暑期的極限、導數、鏈鎖法則、最佳化,在這一頁全部合體了。</p></div></div><div class="callout tip"><div class="ico">&#127894;</div><div><span class="c-title">進階徽章(選做)</span><p>1. 把 Part 3 的同心圓換成 <strong>XOR</strong>(<code>yn = ((Xn[:,0] &gt; 0) ^ (Xn[:,1] &gt; 0))</code>),看 boundary 變成什麼。<br>2. 把隱藏層 <code>H</code> 從 16 調到 2、再到 64,觀察 boundary 與最終 accuracy。<br>3. 幫 Part 1 加「每 100 步印一次 loss」,親眼看它單調下降。<br>4. 把 <code>tanh</code> 換成 <code>relu</code>(導數是 <code>(Z1 &gt; 0)</code>),比較收斂速度。</p></div></div>
+  <footer class="foot">銜接微積分 &middot; 第 6 週 Capstone&#12288;|&#12288;風格延續《CS 自學聖經》設計系統</footer>
+</main>
+<script>window.MathJax={tex:{inlineMath:[["$","$"],["\\(","\\)"]],displayMath:[["$$","$$"],["\\[","\\]"]]},svg:{fontCache:"global"}};</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" async></script>
+
+<script>
+(function(){
+  var btn = document.querySelector('.theme-toggle'); var root = document.documentElement;
+  function eff(){ return root.getAttribute('data-theme') || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark':'light'); }
+  btn.textContent = eff()==='dark' ? '☀' : '☾';
+  btn.addEventListener('click', function(){
+    var next = eff()==='dark' ? 'light' : 'dark';
+    root.setAttribute('data-theme', next);
+    try{ localStorage.setItem('handout-theme', next); }catch(e){}
+    btn.textContent = next==='dark' ? '☀' : '☾';
+  });
+})();
+</script>
+</body></html>
