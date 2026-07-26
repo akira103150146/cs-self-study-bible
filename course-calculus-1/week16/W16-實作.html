@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 16 週 實作 · 平衡點、穩定性與梯度流</title>
+<meta name="description" content="Python 實作:把概念跑出來、畫出來">
+<script>(function(){try{var t=localStorage.getItem('handout-theme');if(t)document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;700&family=Noto+Sans+TC:wght@400;700&family=Lora:ital,wght@0,400;0,600;0,700;1,400&family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="../assets/handout.css">
+<script>
+window.MathJax = { tex: { inlineMath: [['$','$'],['\\(','\\)']], displayMath: [['$$','$$'],['\\[','\\]']] }, svg: { fontCache: 'global' } };
+</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" async></script>
+</head>
+<body>
+<nav class="packet-nav">
+  <a class="home" href="../index.html"><span class="dot">∫</span>微積分(一) · 第 16 週</a>
+  <a class="tab" href="W16-理論教案.html">理論教案</a>
+  <a class="tab" href="W16-例題-學生版.html">例題·學生</a>
+  <a class="tab" href="W16-例題-教師版.html">例題·教師</a>
+  <a class="tab" href="W16-實作.html" aria-current="page">實作</a>
+  <span class="spacer"></span>
+  <button class="theme-toggle" title="切換深淺色" aria-label="切換主題">☾</button>
+</nav>
+
+<main class="sheet">
+  <header class="masthead">
+    <div class="eyebrow">第 16 週 · 實作</div>
+    <h1>平衡點、穩定性與梯度流</h1>
+    <p class="subtitle">整門課的匯合點。前半問「系統會停在哪」,後半揭穿:<strong>梯度下降就是在解微分方程,learning rate 就是步長</strong>——而「lr 太大會發散」和「Euler 步長太大會不穩定」是同一個數學。</p>
+    <div class="chips"><span class="chip accent">3 個 Lab</span><span class="chip">3 題 TODO</span><span class="chip">Colab / Jupyter</span></div>
+  </header>
+<div class="callout note"><div class="ico">💻</div><div><span class="c-title">怎麼跑</span><p>這頁是<strong>可讀版</strong>;程式要實際執行,請下載 notebook,上傳到 <a href="https://colab.research.google.com/" target="_blank" rel="noopener">Google Colab</a>(或用本機 Jupyter),由上往下逐格執行。</p><p style="margin-top:10px"><a class="dl" href="W16-lab.ipynb" download>⬇ 下載 W16-lab.ipynb</a></p></div></div>
+<h2>環境設定</h2><p>先跑這格,把套件載進來。</p>
+<pre><code>import math
+import numpy as np
+import sympy as sp
+import matplotlib.pyplot as plt
+</code></pre>
+<h2>Lab 1｜相線與穩定性:符號分析 vs 判準</h2><p>觀念 3、4 的驗證。這格對幾個方程自動找平衡點、算 $f'$、判定穩定性,並用數值積分確認預測正確。</p><pre><code>from scipy.integrate import solve_ivp
+y = sp.Symbol(&#x27;y&#x27;, real=True)
+
+cases = [
+    (&quot;y(1-y)&quot;,            y*(1-y)),
+    (&quot;(y-2)(y+1)&quot;,        (y-2)*(y+1)),
+    (&quot;y(1-y)(2-y)&quot;,       y*(1-y)*(2-y)),
+    (&quot;-y**3&quot;,             -y**3),
+]
+
+for name, expr in cases:
+    fp = sp.diff(expr, y)
+    eqs = sorted([e for e in sp.solve(sp.Eq(expr, 0), y) if e.is_real])
+    print(f&quot;\nf(y) = {name}     f&#x27;(y) = {sp.simplify(fp)}&quot;)
+    for e in eqs:
+        d = sp.simplify(fp.subs(y, e))
+        if d.is_number and d != 0:
+            verdict = &quot;穩定&quot; if d &lt; 0 else &quot;不穩定&quot;
+            extra = f&quot;  時間常數 τ={float(1/abs(d)):.3f}&quot;
+        else:
+            # 判準失效 → 回去看兩側符號
+            lo = float(expr.subs(y, e - sp.Rational(1,10)))
+            hi = float(expr.subs(y, e + sp.Rational(1,10)))
+            verdict = (&quot;穩定(判準失效,由符號判定)&quot; if lo &gt; 0 and hi &lt; 0
+                       else &quot;不穩定(判準失效,由符號判定)&quot; if lo &lt; 0 and hi &gt; 0
+                       else &quot;半穩定(判準失效)&quot;)
+            extra = f&quot;  兩側 f: {lo:+.4f} / {hi:+.4f}&quot;
+        print(f&quot;   y*={e}:  f&#x27;={d}  → {verdict}{extra}&quot;)
+
+# 數值驗證:y&#x27; = y(1-y)(2-y) 的三個起點命運
+f = lambda t, Y: Y[0]*(1-Y[0])*(2-Y[0])
+print(&quot;\n數值驗證 y&#x27; = y(1-y)(2-y):&quot;)
+for y0 in [0.5, 1.5, 2.5]:
+    s = solve_ivp(f, [0, 8], [y0], rtol=1e-9, atol=1e-12)
+    end = s.y[0, -1]
+    fate = &quot;→ 1&quot; if abs(end-1) &lt; 1e-3 else (&quot;→ 發散&quot; if end &gt; 10 else f&quot;→ {end:.4f}&quot;)
+    print(f&quot;  y0={y0}:  t=8 時 y={end:12.4f}   {fate}&quot;)
+
+ts = np.linspace(0, 8, 200)
+for y0, c in [(0.05, &#x27;C0&#x27;), (0.5, &#x27;C1&#x27;), (1.5, &#x27;C2&#x27;), (2.2, &#x27;C3&#x27;)]:
+    s = solve_ivp(f, [0, 8], [y0], dense_output=True, rtol=1e-9, atol=1e-12)
+    vals = s.sol(ts)[0]
+    plt.plot(ts, np.clip(vals, -0.5, 4), color=c, label=f&#x27;y0={y0}&#x27;)
+for e, style in [(0, &#x27;:&#x27;), (1, &#x27;--&#x27;), (2, &#x27;:&#x27;)]:
+    plt.axhline(e, color=&#x27;k&#x27;, ls=style, lw=1)
+plt.ylim(-0.3, 3.5); plt.xlabel(&#x27;t&#x27;); plt.ylabel(&#x27;y&#x27;); plt.legend(fontsize=8)
+plt.title(&quot;y=1 attracts (0,2); y=0 and y=2 repel&quot;)
+plt.show()</code></pre>
+<div class="out"><span class="out-label">預期輸出</span>   y*=1:  f&#x27;=-1  → 穩定  時間常數 τ=1.000</div>
+<p><b>會看到</b>:判準與符號分析<strong>結論一致</strong>,而且判準額外給出<strong>時間常數</strong>。$-y^{3}$ 那組展示了判準失效($f'(0)=0$)時要回頭看符號——它仍然穩定,只是收斂比指數慢。數值積分證實 $(0,2)$ 內的起點都收斂到 $1$、$y_0=2.5$ 發散。</p>
+<p>換你試:</p><pre><code># TODO 學生練習:加入 f(y) = y**2(半穩定的例子)
+# 判準會失效。兩側的符號是什麼?從左邊和從右邊出發的命運一樣嗎?</code></pre>
+<h2>Lab 2｜梯度下降就是 Euler:數值上完全一致</h2><p>觀念 6 的核心驗證。這格分別寫「Euler 解梯度流」與「梯度下降」兩支程式,確認它們產生<strong>逐位元相同</strong>的軌跡。</p><pre><code>def euler(f, y0, t0, t1, h):
+    &quot;&quot;&quot;W14 Lab2 的同一支 Euler&quot;&quot;&quot;
+    ts, ys = [t0], [y0]
+    while ts[-1] &lt; t1 - 1e-12:
+        t, y = ts[-1], ys[-1]
+        ys.append(y + h*f(t, y)); ts.append(t + h)
+    return np.array(ts), np.array(ys)
+
+def gradient_descent(dL, theta0, eta, steps):
+    &quot;&quot;&quot;標準梯度下降&quot;&quot;&quot;
+    th = [theta0]
+    for _ in range(steps):
+        th.append(th[-1] - eta*dL(th[-1]))
+    return np.array(th)
+
+# L(theta) = A/2 * theta^2  →  L&#x27;(theta) = A*theta
+A = 4.0
+L  = lambda th: A/2 * th**2
+dL = lambda th: A * th
+
+eta, steps = 0.2, 12
+_, euler_path = euler(lambda t, th: -dL(th), 1.0, 0, eta*steps, eta)
+gd_path = gradient_descent(dL, 1.0, eta, steps)
+
+print(f&quot;L = {A}/2 * theta^2,  eta = h = {eta}\n&quot;)
+print(f&quot;{&#x27;n&#x27;:&gt;3} {&#x27;Euler 解梯度流&#x27;:&gt;18} {&#x27;梯度下降&#x27;:&gt;18} {&#x27;逐位元相同?&#x27;:&gt;12}&quot;)
+for n in range(len(gd_path)):
+    same = euler_path[n] == gd_path[n]
+    print(f&quot;{n:3d} {euler_path[n]:18.15f} {gd_path[n]:18.15f} {str(same):&gt;12}&quot;)
+print(f&quot;\n全部逐位元相同? {np.array_equal(euler_path, gd_path)}&quot;)
+
+# --- 穩定門檻 eta &lt; 2/A ---
+print(f&quot;\n穩定門檻:eta &lt; 2/A = {2/A}&quot;)
+print(f&quot;{&#x27;eta&#x27;:&gt;6} {&#x27;|1-eta*A|&#x27;:&gt;11} {&#x27;40 步後 |theta|&#x27;:&gt;16} {&#x27;狀態&#x27;}&quot;)
+for e in [0.1, 0.25, 0.4, 0.49, 0.51, 0.6]:
+    p = gradient_descent(dL, 1.0, e, 40)
+    ratio = abs(1 - e*A)
+    print(f&quot;{e:6.2f} {ratio:11.3f} {abs(p[-1]):16.4e}   &quot;
+          f&quot;{&#x27;收斂&#x27; if ratio &lt; 1 else &#x27;發散&#x27;}&quot;
+          f&quot;{&#x27;  (單調)&#x27; if 0 &lt; 1-e*A else (&#x27;  (震盪)&#x27; if ratio &lt; 1 else &#x27;&#x27;)}&quot;)
+
+# 連續軌跡 vs 離散步伐
+tt = np.linspace(0, 2.4, 300)
+plt.plot(tt, np.exp(-A*tt), &#x27;k-&#x27;, lw=2, label=&#x27;gradient flow (exact)&#x27;)
+for e, c in [(0.1, &#x27;C0&#x27;), (0.25, &#x27;C1&#x27;), (0.45, &#x27;C3&#x27;)]:
+    p = gradient_descent(dL, 1.0, e, int(2.4/e))
+    plt.plot(np.arange(len(p))*e, p, &#x27;o--&#x27;, ms=4, color=c, label=f&#x27;GD eta={e}&#x27;)
+plt.xlabel(&#x27;t  (= n * eta)&#x27;); plt.ylabel(&#x27;theta&#x27;); plt.legend(fontsize=8)
+plt.title(&#x27;Gradient descent tracks the gradient flow&#x27;)
+plt.show()</code></pre>
+<div class="out"><span class="out-label">預期輸出</span>全部逐位元相同? True</div>
+<p><b>會看到</b>:兩支程式的軌跡<strong>逐位元完全相同</strong>——「梯度下降就是 Euler 法」不是類比,是<strong>同一個演算法</strong>。穩定門檻也精確吻合 $\eta&lt;\frac2A=0.5$:$\eta=0.49$ 收斂、$0.51$ 發散。圖上可以看到 $\eta$ 越大,離散步伐偏離連續軌跡越多。</p>
+<p>換你試:</p><pre><code># TODO 學生練習:把 A 改成 20。穩定門檻變成多少?
+# 再試 eta = 1/A(=0.05)。會發生什麼?(提示:公比 1-eta*A = ?)</code></pre>
+<h2>Lab 3｜momentum 的三種阻尼</h2><p>觀念 8 說 momentum 是帶阻尼的二階 ODE,臨界阻尼 $\gamma=2\sqrt A$ 最快。這格把過阻尼、臨界、欠阻尼三種情形一起跑出來。</p><pre><code>from scipy.integrate import solve_ivp
+
+A = 4.0
+gamma_crit = 2*math.sqrt(A)
+print(f&quot;A = {A},  臨界阻尼 gamma = 2*sqrt(A) = {gamma_crit}\n&quot;)
+
+# theta&#x27;&#x27; + gamma*theta&#x27; + A*theta = 0  →  一階系統 [theta, v]
+def damped(gamma):
+    return lambda t, Y: [Y[1], -gamma*Y[1] - A*Y[0]]
+
+ts = np.linspace(0, 6, 500)
+plt.figure(figsize=(11, 4))
+plt.subplot(1, 2, 1)
+print(f&quot;{&#x27;gamma&#x27;:&gt;7} {&#x27;判別式 g^2-4A&#x27;:&gt;14} {&#x27;類型&#x27;:&gt;10} {&#x27;t=6 時 |theta|&#x27;:&gt;16}&quot;)
+for gamma, label, c in [(6.0, &#x27;over-damped&#x27;, &#x27;C0&#x27;),
+                        (gamma_crit, &#x27;critical&#x27;, &#x27;C2&#x27;),
+                        (1.0, &#x27;under-damped&#x27;, &#x27;C3&#x27;)]:
+    s = solve_ivp(damped(gamma), [0, 6], [1.0, 0.0], dense_output=True,
+                  rtol=1e-10, atol=1e-12)
+    plt.plot(ts, s.sol(ts)[0], color=c, lw=1.8, label=f&#x27;{label} (g={gamma:.1f})&#x27;)
+    disc = gamma**2 - 4*A
+    print(f&quot;{gamma:7.2f} {disc:14.2f} {label:&gt;14} {abs(s.sol(6)[0]):16.3e}&quot;)
+plt.axhline(0, color=&#x27;k&#x27;, lw=0.6); plt.legend(fontsize=8)
+plt.xlabel(&#x27;t&#x27;); plt.ylabel(&#x27;theta&#x27;); plt.title(&#x27;Three damping regimes&#x27;)
+
+# --- 離散版:momentum vs 純梯度下降,在一個「長谷」上 ---
+# L(x,y) = (x^2 + 20*y^2)/2  —— 條件數 20 的 ill-conditioned 谷
+Ax, Ay = 1.0, 20.0
+dL = lambda p: np.array([Ax*p[0], Ay*p[1]])
+eta = 2/Ay * 0.9                        # 由最陡方向決定的上限
+
+def run(beta, steps=120):
+    p, v, path = np.array([10.0, 1.0]), np.zeros(2), []
+    for _ in range(steps):
+        v = beta*v - eta*dL(p)
+        p = p + v
+        path.append(p.copy())
+    return np.array(path)
+
+plt.subplot(1, 2, 2)
+for beta, c in [(0.0, &#x27;C0&#x27;), (0.9, &#x27;C3&#x27;)]:
+    path = run(beta)
+    lab = &#x27;plain GD&#x27; if beta == 0 else f&#x27;momentum beta={beta}&#x27;
+    plt.semilogy(np.abs(path[:, 0]), color=c, label=lab)
+plt.xlabel(&#x27;step&#x27;); plt.ylabel(&#x27;|x| (the flat direction)&#x27;)
+plt.legend(fontsize=8); plt.title(f&#x27;Flat direction: eta capped by the steep one&#x27;)
+plt.tight_layout(); plt.show()
+
+for beta in [0.0, 0.9]:
+    path = run(beta)
+    print(f&quot;beta={beta}: 120 步後 |x| = {abs(path[-1,0]):.4e}&quot;
+          f&quot;   {&#x27;(純梯度下降,平坦方向幾乎不動)&#x27; if beta==0 else &#x27;(momentum 累積速度,快得多)&#x27;}&quot;)</code></pre>
+<div class="out"><span class="out-label">預期輸出</span>   4.00           0.00       critical</div>
+<p><b>會看到</b>:左圖三種阻尼一目了然:過阻尼慢慢爬、臨界最快到底、欠阻尼衝過頭再回來。右圖是 momentum 的實際價值:在條件數 20 的長谷裡,$\eta$ 被最陡方向綁住,純梯度下降在平坦方向<strong>幾乎不動</strong>,momentum 靠累積速度快了好幾個數量級。</p>
+<p>換你試:</p><pre><code># TODO 學生練習:把 Ay 改成 100(條件數 100)
+# 純梯度下降需要多少步才能讓 |x| &lt; 0.1?momentum 呢?
+# 再試 beta = 0.99,會發生什麼?(提示:阻尼太小 → 欠阻尼震盪)</code></pre>
+  <footer class="foot">微積分(一) · 第 16 週　|　風格延續《CS 自學聖經》設計系統</footer>
+</main>
+<script>
+(function(){var b=document.querySelector('.theme-toggle'),r=document.documentElement;
+function e(){return r.getAttribute('data-theme')||(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');}
+b.textContent=e()==='dark'?'☀':'☾';
+b.addEventListener('click',function(){var n=e()==='dark'?'light':'dark';r.setAttribute('data-theme',n);
+try{localStorage.setItem('handout-theme',n);}catch(x){}b.textContent=n==='dark'?'☀':'☾';});})();
+</script>
+</body>
+</html>

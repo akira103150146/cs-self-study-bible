@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 17 週 Capstone · Capstone:最佳化即動力學</title>
+<meta name="description" content="Python 實作:把概念跑出來、畫出來">
+<script>(function(){try{var t=localStorage.getItem('handout-theme');if(t)document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;700&family=Noto+Sans+TC:wght@400;700&family=Lora:ital,wght@0,400;0,600;0,700;1,400&family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="../assets/handout.css">
+<script>
+window.MathJax = { tex: { inlineMath: [['$','$'],['\\(','\\)']], displayMath: [['$$','$$'],['\\[','\\]']] }, svg: { fontCache: 'global' } };
+</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" async></script>
+</head>
+<body>
+<nav class="packet-nav">
+  <a class="home" href="../index.html"><span class="dot">∫</span>微積分(一) · 第 17 週</a>
+  <a class="tab" href="W17-理論教案.html">理論教案</a>
+  <a class="tab" href="W17-Capstone.html" aria-current="page">Capstone</a>
+  <span class="spacer"></span>
+  <button class="theme-toggle" title="切換深淺色" aria-label="切換主題">☾</button>
+</nav>
+
+<main class="sheet">
+  <header class="masthead">
+    <div class="eyebrow">第 17 週 · Capstone</div>
+    <h1>Capstone:最佳化即動力學</h1>
+    <p class="subtitle">整學期在這裡合體。你會親手證明:梯度下降<strong>就是</strong>用一階數值方法解一個微分方程,而 learning rate 就是步長。</p>
+    <div class="chips"><span class="chip accent">4 個 Part</span><span class="chip">3 題 TODO</span><span class="chip">Colab / Jupyter</span></div>
+  </header>
+<div class="callout note"><div class="ico">💻</div><div><span class="c-title">怎麼跑</span><p>這頁是<strong>可讀版</strong>;程式要實際執行,請下載 notebook,上傳到 <a href="https://colab.research.google.com/" target="_blank" rel="noopener">Google Colab</a>(或用本機 Jupyter),由上往下逐格執行。</p><p style="margin-top:10px"><a class="dl" href="W17-capstone.ipynb" download>⬇ 下載 W17-capstone.ipynb</a></p></div></div>
+<h2>環境設定</h2><p>先跑這格,把套件載進來。</p>
+<pre><code>import math
+import numpy as np
+import sympy as sp
+import matplotlib.pyplot as plt
+</code></pre>
+<h2>Part 1｜梯度下降就是 Euler 法(逐位元驗證)</h2><p>W16 觀念 6 說梯度下降<strong>就是</strong>把 Euler 法套在梯度流上。這不是類比——這一格用兩支獨立寫出的程式,證明它們產生逐位元相同的軌跡。</p><pre><code># ============ 本 capstone 共用的兩個解算器(W14/W15 寫過,這裡重用) ============
+
+def euler(f, y0, t0, t1, h):
+    &quot;&quot;&quot;顯式尤拉法解 y&#x27; = f(t, y)&quot;&quot;&quot;
+    ts, ys = [t0], [y0]
+    while ts[-1] &lt; t1 - 1e-12:
+        t, y = ts[-1], ys[-1]
+        ys.append(y + h*f(t, y)); ts.append(t + h)
+    return np.array(ts), np.array(ys)
+
+def rk4(f, y0, t0, t1, h):
+    &quot;&quot;&quot;四階 Runge-Kutta&quot;&quot;&quot;
+    ts, ys = [t0], [y0]
+    while ts[-1] &lt; t1 - 1e-12:
+        t, y = ts[-1], ys[-1]
+        k1 = f(t,       y)
+        k2 = f(t + h/2, y + h*k1/2)
+        k3 = f(t + h/2, y + h*k2/2)
+        k4 = f(t + h,   y + h*k3)
+        ys.append(y + h*(k1 + 2*k2 + 2*k3 + k4)/6); ts.append(t + h)
+    return np.array(ts), np.array(ys)
+
+def gradient_descent(dL, theta0, eta, steps):
+    &quot;&quot;&quot;教科書版梯度下降 —— 刻意不參考上面兩支的寫法&quot;&quot;&quot;
+    th = [theta0]
+    for _ in range(steps):
+        th.append(th[-1] - eta*dL(th[-1]))
+    return np.array(th)
+
+# ============ 損失函數:L(θ) = A/2 · θ² ============
+A  = 4.0
+L  = lambda th: A/2 * th**2
+dL = lambda th: A * th
+theta_exact = lambda t, th0: th0*np.exp(-A*t)      # 梯度流的解析解
+
+# ---- 逐位元比較 ----
+eta, steps = 0.15, 15
+_, path_euler = euler(lambda t, th: -dL(th), 1.0, 0.0, eta*steps, eta)
+path_gd = gradient_descent(dL, 1.0, eta, steps)
+
+print(f&quot;L(θ) = {A}/2·θ²   梯度流 θ&#x27; = -{A}θ   η = h = {eta}\n&quot;)
+print(f&quot;{&#x27;n&#x27;:&gt;3} {&#x27;Euler 解梯度流&#x27;:&gt;20} {&#x27;梯度下降&#x27;:&gt;20} {&#x27;相同?&#x27;:&gt;7}&quot;)
+for n in range(0, len(path_gd), 3):
+    print(f&quot;{n:3d} {path_euler[n]:20.16f} {path_gd[n]:20.16f} &quot;
+          f&quot;{str(path_euler[n] == path_gd[n]):&gt;7}&quot;)
+print(f&quot;\n★ 全部 {len(path_gd)} 個點逐位元相同? &quot;
+      f&quot;{np.array_equal(path_euler, path_gd)}&quot;)
+print(&quot;  → 「梯度下降就是 Euler 法」不是類比,是同一個演算法&quot;)
+
+# ---- 離散步伐 vs 連續軌跡 ----
+tt = np.linspace(0, eta*steps, 300)
+plt.figure(figsize=(11, 4))
+plt.subplot(1, 2, 1)
+plt.plot(tt, theta_exact(tt, 1.0), &#x27;k-&#x27;, lw=2, label=&#x27;gradient flow (exact)&#x27;)
+for e, c in [(0.05, &#x27;C0&#x27;), (0.15, &#x27;C1&#x27;), (0.45, &#x27;C3&#x27;)]:
+    p = gradient_descent(dL, 1.0, e, int(2.25/e))
+    plt.plot(np.arange(len(p))*e, p, &#x27;o--&#x27;, ms=4, color=c, label=f&#x27;GD η={e}&#x27;)
+plt.xlabel(&#x27;t = n·η&#x27;); plt.ylabel(&#x27;θ&#x27;); plt.legend(fontsize=8)
+plt.title(&#x27;Larger η = coarser Euler steps&#x27;)
+
+# ---- 損失單調下降(W16 觀念 5 的 dL/dt = -(L&#x27;)² ≤ 0)----
+plt.subplot(1, 2, 2)
+for e, c in [(0.05, &#x27;C0&#x27;), (0.15, &#x27;C1&#x27;), (0.45, &#x27;C3&#x27;)]:
+    p = gradient_descent(dL, 1.0, e, int(2.25/e))
+    plt.semilogy(np.arange(len(p))*e, L(p), &#x27;o-&#x27;, ms=3, color=c, label=f&#x27;η={e}&#x27;)
+plt.xlabel(&#x27;t = n·η&#x27;); plt.ylabel(&#x27;L(θ)&#x27;); plt.legend(fontsize=8)
+plt.title(&#x27;Loss decreases monotonically (full-batch)&#x27;)
+plt.tight_layout(); plt.show()</code></pre>
+<div class="out"><span class="out-label">預期輸出</span>★ 全部 16 個點逐位元相同? True</div>
+<p><b>會看到</b>:兩支獨立寫的程式產生<strong>逐位元完全相同</strong>的軌跡。左圖顯示 $\eta$ 越大、離散步伐偏離連續軌跡越多(那就是 Euler 的截斷誤差);右圖顯示損失單調下降——正是 W16 證的 $\frac{dL}{dt}=-(L')^2\le0$。</p>
+<p>換你試:</p><pre><code># TODO 學生練習:把 A 改成 20,再把 η 設成 0.11(&gt; 2/A = 0.1)
+# 兩支程式還是逐位元相同嗎?軌跡會發生什麼事?
+# (提示:相同性與穩定性是兩回事 —— 它們會「一起」發散)</code></pre>
+<h2>Part 2｜momentum 是帶阻尼的二階 ODE(而且不一定更快)</h2><p>W16 觀念 8 說 momentum 對應 $\theta''+\gamma\theta'+L'=0$,等效阻尼 $\gamma\approx\frac{1-\beta}{\eta}$,臨界值是 $2\sqrt A$。這一格驗證這個對應——並發現一件反直覺的事。</p><pre><code>def momentum_gd(dL, theta0, eta, beta, steps):
+    &quot;&quot;&quot;標準 momentum:v ← βv - η∇L,  θ ← θ + v&quot;&quot;&quot;
+    th, v, path = theta0, 0.0, [theta0]
+    for _ in range(steps):
+        v = beta*v - eta*dL(th)
+        th = th + v
+        path.append(th)
+    return np.array(path)
+
+A, eta = 4.0, 0.2
+dL = lambda th: A*th
+gamma_crit = 2*math.sqrt(A)
+
+print(f&quot;A = {A},  η = {eta},  臨界阻尼 2√A = {gamma_crit}&quot;)
+print(f&quot;等效阻尼 γ ≈ (1-β)/η\n&quot;)
+print(f&quot;{&#x27;β&#x27;:&gt;6} {&#x27;γ≈(1-β)/η&#x27;:&gt;12} {&#x27;vs 臨界&#x27;:&gt;10} {&#x27;到 |θ|&lt;1e-6 的步數&#x27;:&gt;20}&quot;)
+
+results = {}
+for beta in [0.0, 0.3, 0.5, 0.9, 0.99]:
+    g = (1-beta)/eta
+    path = momentum_gd(dL, 1.0, eta, beta, 3000)
+    hit = np.argmax(np.abs(path) &lt; 1e-6) if np.any(np.abs(path) &lt; 1e-6) else None
+    results[beta] = path
+    kind = &quot;過阻尼&quot; if g &gt; gamma_crit else &quot;欠阻尼&quot;
+    print(f&quot;{beta:6.2f} {g:12.2f} {kind:&gt;10} {hit if hit else &#x27;未達成&#x27;:&gt;20}&quot;)
+
+print(&quot;\n★ 反直覺的發現:在這個「單變數、條件良好」的問題上,&quot;)
+print(&quot;  β 越大反而越慢 —— 因為 γ=(1-β)/η 遠低於臨界阻尼,嚴重欠阻尼、一直震盪。&quot;)
+print(&quot;  momentum 不是「免費加速」,它是「加入慣性」,而慣性會超調。\n&quot;)
+
+fig, ax = plt.subplots(1, 2, figsize=(11, 4))
+for beta, c in [(0.0, &#x27;C0&#x27;), (0.5, &#x27;C1&#x27;), (0.9, &#x27;C3&#x27;)]:
+    ax[0].plot(results[beta][:60], &#x27;o-&#x27;, ms=3, color=c, label=f&#x27;β={beta}&#x27;)
+ax[0].axhline(0, color=&#x27;k&#x27;, lw=0.6); ax[0].legend(fontsize=8)
+ax[0].set_xlabel(&#x27;step&#x27;); ax[0].set_ylabel(&#x27;θ&#x27;)
+ax[0].set_title(&#x27;1-D well-conditioned: momentum OVERSHOOTS&#x27;)
+
+# ---- 那 momentum 什麼時候才有用?條件數大的時候 ----
+# L(x,y) = (x² + κ·y²)/2,κ 是條件數
+kappa = 50.0
+dL2 = lambda p: np.array([p[0], kappa*p[1]])
+eta2 = 0.9 * 2/kappa                      # η 被最陡方向綁住
+
+def momentum_2d(beta, steps=400):
+    p, v, path = np.array([10.0, 1.0]), np.zeros(2), []
+    for _ in range(steps):
+        v = beta*v - eta2*dL2(p)
+        p = p + v
+        path.append(p.copy())
+    return np.array(path)
+
+print(f&quot;改成 2 維 ill-conditioned:L = (x² + {kappa}y²)/2,條件數 κ = {kappa}&quot;)
+print(f&quot;η 被最陡方向綁住:η = 0.9·2/κ = {eta2:.4f}&quot;)
+print(f&quot;{&#x27;β&#x27;:&gt;6} {&#x27;400 步後 |x|(平坦方向)&#x27;:&gt;26}&quot;)
+for beta, c in [(0.0, &#x27;C0&#x27;), (0.9, &#x27;C3&#x27;)]:
+    path = momentum_2d(beta)
+    ax[1].semilogy(np.abs(path[:, 0]), color=c,
+                   label=f&quot;{&#x27;plain GD&#x27; if beta == 0 else f&#x27;momentum β={beta}&#x27;}&quot;)
+    print(f&quot;{beta:6.2f} {abs(path[-1, 0]):26.4e}&quot;)
+ax[1].set_xlabel(&#x27;step&#x27;); ax[1].set_ylabel(&#x27;|x|  (flat direction)&#x27;)
+ax[1].legend(fontsize=8); ax[1].set_title(f&#x27;2-D ill-conditioned (κ={kappa}): momentum WINS&#x27;)
+plt.tight_layout(); plt.show()
+
+print(&quot;\n★ 結論:momentum 的價值不在「一律更快」,而在&lt;條件數大&gt;的時候。&quot;)
+print(&quot;  平坦方向靠慣性累積速度,陡峭方向的來回梯度互相抵消。&quot;)</code></pre>
+<div class="out"><span class="out-label">預期輸出</span>★ 反直覺的發現:在這個「單變數、條件良好」的問題上,</div>
+<p><b>會看到</b>:左圖是誠實的反例:單變數、條件良好時,$\beta=0.9$ 讓等效阻尼只有 $0.5$(臨界值 $4$),嚴重欠阻尼、一路震盪,<strong>比純梯度下降慢二十幾倍</strong>。右圖才是 momentum 的主場:條件數 $50$ 的長谷裡,$\eta$ 被最陡方向綁住,純梯度下降在平坦方向幾乎不動,momentum 快好幾個數量級。<strong>「β=0.9」不是魔法數字,它預設你的問題 ill-conditioned。</strong></p>
+<p>換你試:</p><pre><code># TODO 學生練習:在 1 維那個問題上,用理論找出「最好的 β」
+# 提示:臨界阻尼 γ = 2√A,而 γ ≈ (1-β)/η → 解出 β
+# 用你算出的 β 跑一次,步數比 β=0 少嗎?</code></pre>
+<h2>Part 3｜用 RK4 解梯度流:為什麼 ML 不這樣做</h2><p>既然梯度下降是「一階」的 Euler,為什麼不用四階的 RK4?這一格量出精度差距,然後回答那個更重要的問題:<strong>為什麼實務上不用</strong>。</p><pre><code>A = 4.0
+dL = lambda th: A*th
+f  = lambda t, th: -dL(th)                 # 梯度流
+exact = lambda t: math.exp(-A*t)           # θ0 = 1
+T = 2.0
+
+print(f&quot;追蹤梯度流 θ&#x27; = -{A}θ 到 t = {T}(精確值 {exact(T):.10e})\n&quot;)
+print(f&quot;{&#x27;h&#x27;:&gt;8} {&#x27;Euler(=GD)&#x27;:&gt;14} {&#x27;誤差&#x27;:&gt;11} {&#x27;比值&#x27;:&gt;7} &quot;
+      f&quot;{&#x27;RK4&#x27;:&gt;14} {&#x27;誤差&#x27;:&gt;11} {&#x27;比值&#x27;:&gt;7}&quot;)
+pe = pr = None
+hs, ee, er = [], [], []
+for h in [0.2, 0.1, 0.05, 0.025, 0.0125]:
+    ve = euler(f, 1.0, 0, T, h)[1][-1]
+    vr = rk4(f, 1.0, 0, T, h)[1][-1]
+    e1, e2 = abs(ve - exact(T)), abs(vr - exact(T))
+    hs.append(h); ee.append(e1); er.append(e2)
+    r1 = f&quot;{pe/e1:7.2f}&quot; if pe else &quot;      -&quot;
+    r2 = f&quot;{pr/e2:7.2f}&quot; if pr else &quot;      -&quot;
+    print(f&quot;{h:8.4f} {ve:14.10f} {e1:11.3e} {r1} {vr:14.10f} {e2:11.3e} {r2}&quot;)
+    pe, pr = e1, e2
+
+plt.loglog(hs, ee, &#x27;o-&#x27;, label=&#x27;Euler (= gradient descent)&#x27;)
+plt.loglog(hs, er, &#x27;s-&#x27;, label=&#x27;RK4&#x27;)
+plt.loglog(hs, np.array(hs)*ee[0]/hs[0], &#x27;k:&#x27;, lw=1, label=&#x27;slope 1&#x27;)
+plt.loglog(hs, np.array(hs)**4*er[0]/hs[0]**4, &#x27;k--&#x27;, lw=1, label=&#x27;slope 4&#x27;)
+plt.xlabel(&#x27;h  (= η)&#x27;); plt.ylabel(f&#x27;|error at t={T}|&#x27;); plt.legend(fontsize=8)
+plt.title(&#x27;Tracking the gradient flow: Euler vs RK4&#x27;)
+plt.show()
+
+for name, e in [(&#x27;Euler&#x27;, ee), (&#x27;RK4&#x27;, er)]:
+    print(f&quot;{name:6s} log-log 斜率 = {np.polyfit(np.log10(hs), np.log10(e), 1)[0]:.3f}&quot;)
+
+# ---- 關鍵問題:成本 ----
+print(&quot;\n&quot; + &quot;=&quot;*62)
+print(&quot;RK4 精確得多。那為什麼訓練神經網路不用它?\n&quot;)
+print(&quot;① 每步要算 4 次梯度。反向傳播是訓練最貴的操作 —— 成本直接 ×4。&quot;)
+print(&quot;② ML 的目標不是「精確追蹤軌跡」,只是「到達低點」。&quot;)
+print(&quot;   走哪條路無所謂,精度花在軌跡上是浪費。&quot;)
+print(&quot;③ 真實梯度有 mini-batch 雜訊(W12 觀念 8)。&quot;)
+print(&quot;   用四階方法精確積分一個帶雜訊的場,像用游標卡尺量海浪。&quot;)
+
+# 用「等成本」來比:給定固定的梯度計算次數,誰走得遠?
+budget = 240                                # 允許 240 次梯度計算
+print(f&quot;\n等成本比較:預算 {budget} 次梯度計算&quot;)
+h_e = T/budget                              # Euler 每步 1 次
+h_r = T/(budget//4)                         # RK4 每步 4 次
+ve = euler(f, 1.0, 0, T, h_e)[1][-1]
+vr = rk4(f, 1.0, 0, T, h_r)[1][-1]
+print(f&quot;  Euler h={h_e:.5f}({budget} 步)   誤差 = {abs(ve-exact(T)):.3e}&quot;)
+print(f&quot;  RK4   h={h_r:.5f}({budget//4} 步) 誤差 = {abs(vr-exact(T)):.3e}&quot;)
+print(&quot;\n→ 即使算等成本,RK4 在「追蹤軌跡」這件事上仍然大勝。&quot;)
+print(&quot;  所以不用它的理由是 ② 和 ③ ——「不需要那個精度」,不是「負擔不起」。&quot;)</code></pre>
+<div class="out"><span class="out-label">預期輸出</span>RK4    log-log 斜率 = 3.917</div>
+<p><b>會看到</b>:RK4 的誤差比 Euler 小好幾個數量級,log-log 斜率 $3.92$ 對 $1.0$——理論的 $O(h^4)$ 與 $O(h)$ 完全命中。但最後的等成本比較給出誠實的答案:<strong>不用 RK4 的真正理由不是成本,而是 ML 不需要軌跡精度</strong>,而且真實梯度本來就有雜訊。「知道為什麼不用」和「知道怎麼用」一樣重要。</p>
+<p>換你試:</p><pre><code># TODO 學生練習:把 exact 換成 L(θ) 的值,比較「損失下降得多快」而不是「軌跡多準」
+# RK4 的優勢還那麼明顯嗎?這說明了什麼?</code></pre>
+<h2>Part 4｜用泰勒收攏一切:learning rate 的完整圖像</h2><p>最後一格把整學期串起來:用<strong>泰勒展開</strong>解釋誤差階數與穩定門檻,並把 learning rate 的每一個現象對應到一個數學事實。</p><pre><code>A = 4.0
+dL = lambda th: A*th
+
+# ============ ① 泰勒預測單步誤差 ============
+# θ(t+h) = θ(t) + hθ&#x27;(t) + (h²/2)θ&#x27;&#x27;(ξ);Euler 只取前兩項
+# 對 θ&#x27; = -Aθ 而言 θ&#x27;&#x27; = A²θ,故單步誤差 ≈ (h²/2)A²θ
+print(&quot;① 泰勒預測 Euler 的單步誤差 ≈ (h²/2)·A²·θ\n&quot;)
+print(f&quot;{&#x27;h&#x27;:&gt;8} {&#x27;實測單步誤差&#x27;:&gt;16} {&#x27;泰勒預測&#x27;:&gt;14} {&#x27;比值&#x27;:&gt;8}&quot;)
+for h in [0.1, 0.05, 0.025, 0.0125]:
+    one_step  = 1.0 - h*A*1.0                  # Euler 走一步
+    true_step = math.exp(-A*h)                 # 精確走一步
+    measured  = abs(one_step - true_step)
+    predicted = h**2/2 * A**2 * 1.0
+    print(f&quot;{h:8.4f} {measured:16.3e} {predicted:14.3e} {measured/predicted:8.4f}&quot;)
+print(&quot;  → 比值趨近 1,泰勒的二階項確實是單步誤差的主項\n&quot;)
+
+# ============ ② 穩定門檻 η &lt; 2/A ============
+print(f&quot;② 穩定門檻:θ_{{n+1}} = (1-ηA)θ_n,需 |1-ηA| &lt; 1 → η &lt; 2/A = {2/A}\n&quot;)
+print(f&quot;{&#x27;η&#x27;:&gt;7} {&#x27;公比 1-ηA&#x27;:&gt;12} {&#x27;|公比|&#x27;:&gt;9} {&#x27;行為&#x27;:&gt;18}&quot;)
+for e in [0.1, 0.25, 0.3, 0.49, 0.5, 0.51]:
+    q = 1 - e*A
+    if abs(q) &gt;= 1:
+        beh = &quot;發散&quot;
+    elif q &gt; 0:
+        beh = &quot;單調收斂&quot;
+    elif q == 0:
+        beh = &quot;一步到位(最佳)&quot;
+    else:
+        beh = &quot;震盪收斂&quot;
+    print(f&quot;{e:7.3f} {q:12.3f} {abs(q):9.3f} {beh:&gt;18}&quot;)
+print(f&quot;\n  最佳 η = 1/A = {1/A}(公比 0,一步到位)&quot;)
+print(f&quot;  這正是牛頓法在二次函數上的行為:η = 1/L&#x27;&#x27;\n&quot;)
+
+# ============ ③ 整學期的對應表 ============
+print(&quot;③ learning rate 的每一個現象,都對應一個數學事實\n&quot;)
+rows = [
+    (&quot;η 就是步長 h&quot;,            &quot;梯度下降 = Euler 法解梯度流&quot;,        &quot;W14 + W16&quot;),
+    (&quot;η 太大會發散&quot;,            &quot;違反 |1-ηA| &lt; 1 的穩定條件&quot;,         &quot;W15 + W16&quot;),
+    (&quot;η 太小收斂慢&quot;,            &quot;公比接近 1,每步只縮一點&quot;,            &quot;W16&quot;),
+    (&quot;最佳 η ≈ 1/L&#x27;&#x27;&quot;,         &quot;公比為 0;等於牛頓法&quot;,                &quot;W4 + W16&quot;),
+    (&quot;η 上限由曲率決定&quot;,         &quot;2/λ_max,λ 是 Hessian 特徵值&quot;,       &quot;→ 線性代數&quot;),
+    (&quot;learning rate decay&quot;,     &quot;自適應步長:難處用小步&quot;,              &quot;W15&quot;),
+    (&quot;Adam 各方向不同步長&quot;,      &quot;預條件,壓低條件數&quot;,                  &quot;→ 線性代數&quot;),
+    (&quot;momentum 會超調&quot;,         &quot;二階 ODE 欠阻尼&quot;,                    &quot;W16&quot;),
+    (&quot;loss 單調下降(全批次)&quot;,   &quot;dL/dt = -(L&#x27;)² ≤ 0(鏈鎖法則)&quot;,      &quot;W2 + W16&quot;),
+    (&quot;mini-batch 讓 loss 抖&quot;,   &quot;期望損失的蒙地卡羅估計有變異數&quot;,       &quot;W12&quot;),
+]
+print(f&quot;{&#x27;ML 的現象&#x27;:&lt;26} {&#x27;數學事實&#x27;:&lt;36} {&#x27;哪一週&#x27;}&quot;)
+print(&quot;-&quot;*82)
+for a, b, c in rows:
+    print(f&quot;{a:&lt;26} {b:&lt;36} {c}&quot;)
+
+print(&quot;\n&quot; + &quot;=&quot;*82)
+print(&quot;你在銜接課手刻的梯度下降,數學上是「用一階數值方法解一個微分方程」。&quot;)
+print(&quot;整個學期的極限、導數、泰勒、積分、微分方程,在這一頁合體了。&quot;)</code></pre>
+<div class="out"><span class="out-label">預期輸出</span>  最佳 η = 1/A = 0.25(公比 0,一步到位)</div>
+<p><b>會看到</b>:① 實測單步誤差與泰勒預測的 $\frac{h^2}{2}A^2\theta$ 比值趨近 <strong>1</strong>——W3 學的泰勒展開精確預測了 Euler 的誤差。② 穩定門檻表清楚顯示四種行為,而<strong>最佳 $\eta=\frac{1}{A}=\frac{1}{L''}$ 恰好是牛頓法</strong>。③ 最後那張表把整學期的內容與 ML 的每一個現象對上——這就是這門課想給的東西:<strong>不是背公式,是看穿結構</strong>。</p>
+  <footer class="foot">微積分(一) · 第 17 週　|　風格延續《CS 自學聖經》設計系統</footer>
+</main>
+<script>
+(function(){var b=document.querySelector('.theme-toggle'),r=document.documentElement;
+function e(){return r.getAttribute('data-theme')||(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');}
+b.textContent=e()==='dark'?'☀':'☾';
+b.addEventListener('click',function(){var n=e()==='dark'?'light':'dark';r.setAttribute('data-theme',n);
+try{localStorage.setItem('handout-theme',n);}catch(x){}b.textContent=n==='dark'?'☀':'☾';});})();
+</script>
+</body>
+</html>

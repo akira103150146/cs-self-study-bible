@@ -28,10 +28,11 @@ def _pre(code):
     return f"<pre><code>{html.escape(code, quote=True)}</code></pre>"
 
 
-def _tabs(capstone):
-    lab_suffix = "Capstone" if capstone else "實作"
+def _tabs(suffix, has_examples=True):
+    if not has_examples:           # capstone 週沒有例題雙版
+        return [("理論教案", "理論教案"), (suffix, suffix)]
     return [("理論教案", "理論教案"), ("例題-學生版", "例題·學生"),
-            ("例題-教師版", "例題·教師"), (lab_suffix, lab_suffix)]
+            ("例題-教師版", "例題·教師"), (suffix, suffix)]
 
 
 def render(week, capstone=False):
@@ -39,8 +40,8 @@ def render(week, capstone=False):
     d = os.path.join(ROOT, f"week{wk:02d}")
     os.makedirs(d, exist_ok=True)
     n_todo = sum(1 for lab in week.labs if lab.todo.strip())
-    stem = "Capstone" if capstone else "實作"
-    unit = "Part" if capstone else "Lab"
+    stem = getattr(week, "lab_suffix", "Capstone" if capstone else "實作")
+    unit = "Part" if stem == "Capstone" else "Lab"
     nb_name = f"W{wk}-{'capstone' if capstone else 'lab'}.ipynb"
 
     # ---------- HTML 可讀版 ----------
@@ -67,7 +68,7 @@ def render(week, capstone=False):
     mh = masthead(f"第 {wk} 週 · {stem}", week.title, week.subtitle, chips)
     open(os.path.join(d, f"W{wk}-{stem}.html"), "w", encoding="utf-8").write(
         page(f"第 {wk} 週 {stem} · {week.title}", "Python 實作:把概念跑出來、畫出來",
-             wk, stem, mh, "\n".join(parts), tabs=_tabs(capstone)))
+             wk, stem, mh, "\n".join(parts), tabs=_tabs(stem, bool(week.concepts))))
 
     # ---------- ipynb ----------
     def md(src):

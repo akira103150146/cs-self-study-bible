@@ -62,6 +62,7 @@ class Week:
     labs: list = field(default_factory=list)
     lesson: LessonPlan = None
     chips: list = field(default_factory=list)
+    lab_suffix: str = "實作"   # W17 capstone 用 "Capstone",影響檔名與分頁連結
 
 
 # ---------- 考卷(W9 期中、W18 期末) ----------

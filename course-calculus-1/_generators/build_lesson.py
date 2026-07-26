@@ -49,9 +49,11 @@ def render(week):
                  + "".join(f"<li>{q}</li>" for q, _ in L.exit_check) + "</ol>")
     parts.append(callout("tip", "✅", "參考答案",
                          "<ol>" + "".join(f"<li>{a}</li>" for _, a in L.exit_check) + "</ol>"))
+    suffix = getattr(week, "lab_suffix", "實作")
+    unit = "Part" if suffix == "Capstone" else "Lab"
     hw = list(L.homework)
-    hw.append(f'<strong>動手</strong>:到 <a href="W{wk}-實作.html">實作頁</a> '
-              f'把 {n_lab} 個 Lab 跑完(頁內可下載 notebook)'
+    hw.append(f'<strong>動手</strong>:到 <a href="W{wk}-{suffix}.html">{suffix}頁</a> '
+              f'把 {n_lab} 個 {unit} 跑完(頁內可下載 notebook)'
               + (f",{n_todo} 題 TODO 自己填。" if n_todo else "。"))
     parts.append("<h2>作業與預習</h2><ul>" + "".join(f"<li>{h}</li>" for h in hw) + "</ul>")
 
@@ -60,6 +62,10 @@ def render(week):
     mh = masthead(f"第 {wk} 週 · 理論教案", week.title, L.hook, chips)
     d = os.path.join(ROOT, f"week{wk:02d}")
     os.makedirs(d, exist_ok=True)
+    tabs = [("理論教案", "理論教案"), ("例題-學生版", "例題·學生"),
+            ("例題-教師版", "例題·教師"), (suffix, suffix)]
+    if not week.concepts:          # capstone 週沒有例題雙版,拿掉那兩個分頁
+        tabs = [("理論教案", "理論教案"), (suffix, suffix)]
     open(os.path.join(d, f"W{wk}-理論教案.html"), "w", encoding="utf-8").write(
         page(f"第 {wk} 週 理論教案 · {week.title}", "教學腳本:節奏、講法、迷思、檢核",
-             wk, "理論教案", mh, "\n".join(parts)))
+             wk, "理論教案", mh, "\n".join(parts), tabs=tabs))

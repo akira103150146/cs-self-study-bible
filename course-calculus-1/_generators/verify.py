@@ -119,9 +119,13 @@ def check_html(path):
 
 def check_counts(wk):
     """實作頁 chip 宣稱的 Lab/TODO 數 == 頁面實印 == notebook。"""
-    hp = f"week{wk:02d}/W{wk}-實作.html"
-    nbp = f"week{wk:02d}/W{wk}-lab.ipynb"
-    if not os.path.exists(os.path.join(ROOT, hp)):
+    # 一般週是 實作/lab,capstone 週(W17)是 Capstone/capstone
+    for suffix, nbstem in (("實作", "lab"), ("Capstone", "capstone")):
+        hp = f"week{wk:02d}/W{wk}-{suffix}.html"
+        nbp = f"week{wk:02d}/W{wk}-{nbstem}.ipynb"
+        if os.path.exists(os.path.join(ROOT, hp)):
+            break
+    else:
         return
     import html as _html
     s = rd(hp)
@@ -139,8 +143,8 @@ def check_counts(wk):
         add("YEL", f"W{wk}", f"chip 宣稱 {claim.group(1)} 題 TODO,頁面實印 {page}")
     if page != nbt:
         add("YEL", f"W{wk}", f"實作頁 TODO {page} != notebook {nbt}")
-    labs_page = len(re.findall(r"<h2[^>]*>Lab ", s))
-    claim_lab = re.search(r"(\d+)\s*個\s*Lab", s)
+    labs_page = len(re.findall(r"<h2[^>]*>(?:Lab|Part) ", s))
+    claim_lab = re.search(r"(\d+)\s*個\s*(?:Lab|Part)", s)
     if claim_lab and int(claim_lab.group(1)) != labs_page:
         add("YEL", f"W{wk}", f"chip 宣稱 {claim_lab.group(1)} 個 Lab,頁面實有 {labs_page}")
 
