@@ -4,7 +4,7 @@
 每一行是一個會得到 True 的 Python 運算式,在 sympy 命名空間裡執行,例如:
     Matrix([[1, 1, 5], [1, -1, 1]]).rref()[0] == Matrix([[1, 0, 3], [0, 1, 2]])
     simplify(A*x - b) == zeros(2, 1)
-可用的符號:x1..x6、x、y、z、t、s、h、k(實數)。
+可用的符號:x1..x6、x、y、z、t、s、h、k,以及係數用的 a、b、c、d、f、g(實數)。
 """
 import os
 import sys
@@ -17,7 +17,8 @@ from mdtools import ContentError
 
 NS = {k: getattr(sp, k) for k in dir(sp) if not k.startswith("_")}
 NS.update({name: sp.Symbol(name, real=True)
-           for name in ["x1", "x2", "x3", "x4", "x5", "x6", "x", "y", "z", "t", "s", "h", "k"]})
+           for name in ["x1", "x2", "x3", "x4", "x5", "x6", "x", "y", "z", "t", "s", "h", "k",
+                        "a", "b", "c", "d", "f", "g"]})
 
 
 def run(label, expr):

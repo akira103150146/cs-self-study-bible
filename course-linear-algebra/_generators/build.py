@@ -102,7 +102,7 @@ def render_week(course, week):
                  f"第 {wk} 週 · 例題·{who}", week.title, sub,
                  [(who, True), (f"{nc} 個觀念", False), (f"{nw} 題老師講解", False),
                   (f"{nd} 題練習", False)] + ([("含證明時刻", False)] if week.proof else []),
-                 teacher=teacher)
+                 teacher=teacher, glossary=C.week_glossary(week.concepts))
 
     for quiz, stem in ((week.prereq, "先備檢測"), (week.quiz, "診斷考")):
         if quiz is None:

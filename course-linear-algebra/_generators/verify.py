@@ -37,6 +37,12 @@ def problems(s):
     return [text(x) for x in re.findall(r'<div class="problem">(.*?)</div>', s, re.S)]
 
 
+def stems_for_language(s):
+    """檢查「題目一律英文」用:圖(含中文圖說)屬於說明,不算題幹。"""
+    return [text(re.sub(r"<figure.*?</figure>", "", x, flags=re.S))
+            for x in re.findall(r'<div class="problem">(.*?)</div>', s, re.S)]
+
+
 def concepts(s):
     return [b for b in re.split(r'(?=<section class="concept")', s) if b.startswith('<section class="concept"')]
 
@@ -51,7 +57,7 @@ def check_examples(wk):
     S, T = rd(sp), rd(tp)
     if problems(S) != problems(T):
         add("RED", f"W{wk}", "例題兩版的題幹不一致")
-    for cls in ("ans-body", "deep", "misstep", "teach-tip"):
+    for cls in ("ans-body", "deep", "misstep", "teach-tip", "t-note"):
         if f'class="{cls}"' in S:
             add("RED", sp, f"學生版出現教師專用區塊 .{cls}")
     cs, ct = concepts(S), concepts(T)
@@ -64,7 +70,7 @@ def check_examples(wk):
             add("RED", sp, f"觀念{i}:{n} 題練習,但作答區有 {ws} 個")
         if ans != n:
             add("RED", tp, f"觀念{i}:{n} 題練習,但解答有 {ans} 個")
-    for i, p in enumerate(problems(S), 1):
+    for i, p in enumerate(stems_for_language(S), 1):
         if CJK.search(p):
             add("YEL", sp, f"第 {i} 個題幹含中文(題目一律英文):{p[:50]}")
     if '<section class="proof-moment"' in S and 'class="workspace tall"' not in S:
@@ -87,7 +93,7 @@ def check_quiz(wk, stem):
     n, ans = S.count('<div class="problem">'), T.count('class="answer"')
     if ans != n:
         add("RED", tp, f"{n} 題但答案有 {ans} 個")
-    for i, p in enumerate(problems(S), 1):
+    for i, p in enumerate(stems_for_language(S), 1):
         if CJK.search(p):
             add("YEL", sp, f"Q{i} 題幹含中文(題目一律英文):{p[:50]}")
 

@@ -19,9 +19,10 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONTENT = os.path.join(ROOT, "content")
 
 LEVEL_ZH = {"basic": "基礎", "mid": "進階", "hard": "挑戰"}
-TIER_OF = {"照做": "do", "變化": "vary", "挑戰": "challenge"}
+TIER_OF = {"照做": "do", "是非": "tf", "變化": "vary", "應用": "app", "挑戰": "challenge"}
 TIER_ZH = {v: k for k, v in TIER_OF.items()}
-TIER_RANK = {"do": 1, "vary": 2, "challenge": 3}
+TIER_RANK = {"do": 1, "tf": 2, "vary": 3, "app": 4, "challenge": 5}
+TIER_ORDER_ZH = " → ".join(TIER_OF)
 STAGE_OF = {"①": "predict", "②": "compute", "③": "interpret", "④": "apply"}
 STAGE_ZH = {"predict": "① 預測", "compute": "② 計算", "interpret": "③ 解讀", "apply": "④ 應用"}
 STAGE_RANK = {"predict": 1, "compute": 2, "interpret": 3, "apply": 4}
@@ -31,15 +32,20 @@ STAGE_RANK = {"predict": 1, "compute": 2, "interpret": 3, "apply": 4}
 
 @dataclass
 class Walkthrough:
+    label: str         # 「例 1」
+    source: str        # 出處,例如 Lay 1.1 Example 1;空字串 = 沒標
     stem: str          # 英文題幹 HTML
     steps: str         # 中文逐步講解 HTML(<ol>)
+    note: str = ""     # 教師備註(只在教師版)
 
 
 @dataclass
 class Drill:
-    tier: str          # do / vary / challenge
+    tier: str          # do / tf / vary / app / challenge
+    source: str
     stem: str
     sol: str
+    note: str = ""     # 教師備註(只在教師版)
 
 
 @dataclass
@@ -49,12 +55,17 @@ class Concept:
     title_zh: str
     sub: str
     level: str
+    source: str        # 課本節次,例如 Lay 1.1
+    supplement: bool   # 補充觀念(可略、可自學)
     lab_hook: str
-    figure: str
-    figure_caption: str
     idea: str
+    glossary: list     # [[英文, 中文, 說明]](HTML)
     plain: str
+    geometry: str      # 選填
     cs_use: str
+    applications: str  # 選填
+    numerical: str     # 選填:數值筆記(Numerical Note)
+    reasonable: str    # 選填:合理性檢查(Reasonable Answers)
     deep: str
     walkthroughs: list
     misstep: str
@@ -200,79 +211,132 @@ def _checks(text, path):
 
 # ---------------------------------------------------------------- 觀念
 
-CONCEPT_SECTIONS = ["觀念", "白話說", "在資工哪裡用", "原理", "老師講解",
-                    "易錯點", "教學提示", "練習", "驗算"]
+CONCEPT_SECTIONS = ["觀念", "名詞對照", "白話說", "幾何意義", "在資工哪裡用", "實際應用",
+                    "數值筆記", "合理性檢查", "原理", "老師講解", "易錯點", "教學提示", "練習", "驗算"]
+CONCEPT_REQUIRED = ["觀念", "名詞對照", "白話說", "在資工哪裡用", "原理", "老師講解",
+                    "易錯點", "教學提示", "練習"]
 
 
-def _walkthroughs(text, path):
+def _title_source(title):
+    """'照做 · Lay 1.1 Exercise 1' → ('照做', 'Lay 1.1 Exercise 1')。"""
+    head, _, src = title.partition("·")
+    return head.strip(), src.strip()
+
+
+def _subparts(body, path, where, allowed):
+    """#### 小節切段 → {None: 本文, '解答': …, '備註': …}。"""
+    parts = {}
+    for t, b in split_sections(body, 4):
+        if t is not None and t not in allowed:
+            raise ContentError(f"{path}: 「### {where}」底下只能有 "
+                               f"{'、'.join('#### ' + a for a in allowed)},得到「#### {t}」")
+        parts[t] = b
+    return parts
+
+
+def _walkthroughs(text, path, figdir):
     out = []
     for title, body in split_sections(text, 3):
         if title is None:
             if body.strip():
                 raise ContentError(f"{path}: 「## 老師講解」要用 ### 例 1、### 例 2 分題")
             continue
-        m = re.search(r"^1\.\s", body, re.M)
+        label, source = _title_source(title)
+        parts = _subparts(body, path, title, ["備註"])
+        main = parts.get(None, "")
+        m = re.search(r"^1\.\s", main, re.M)
         if not m:
             raise ContentError(f"{path}: 「### {title}」沒有逐步講解(1. 2. 3. 的編號清單)")
-        stem, steps = body[:m.start()], body[m.start():]
+        stem, steps = main[:m.start()], main[m.start():]
         if not stem.strip():
             raise ContentError(f"{path}: 「### {title}」缺題幹(寫在編號清單之前)")
         if len(re.findall(r"^\d+\.\s", steps, re.M)) < 2:
             raise ContentError(f"{path}: 「### {title}」的講解至少要兩步")
-        out.append(Walkthrough(render(stem), render(steps)))
+        out.append(Walkthrough(label, source, render(stem, figdir), render(steps, figdir),
+                               render(parts.get("備註", ""))))
     if not out:
         raise ContentError(f"{path}: 「## 老師講解」至少要有一題 ### 例")
     return out
 
 
-def _drills(text, path):
+def _glossary(text, path):
+    head, rows = pipe_table(text, path, "名詞對照")
+    if len(head) != 3:
+        raise ContentError(f"{path}: 「名詞對照」表格要三欄:English | 中文 | 說明")
+    return [[render_inline(c) for c in r] for r in rows]
+
+
+def _drills(text, path, figdir):
     out = []
     for title, body in split_sections(text, 3):
         if title is None:
             if body.strip():
-                raise ContentError(f"{path}: 「## 練習」要用 ### 照做 / ### 變化 / ### 挑戰 分題")
+                raise ContentError(f"{path}: 「## 練習」要用 ### 照做 / 是非 / 變化 / 應用 / 挑戰 分題")
             continue
-        if title not in TIER_OF:
-            raise ContentError(f"{path}: 練習標題只能是 照做/變化/挑戰,得到「### {title}」")
-        parts = dict((t, b) for t, b in split_sections(body, 4))
+        tier, source = _title_source(title)
+        if tier not in TIER_OF:
+            raise ContentError(f"{path}: 練習標題開頭只能是 {'/'.join(TIER_OF)},得到「### {title}」")
+        parts = _subparts(body, path, title, ["解答", "備註"])
         stem, sol = parts.get(None, ""), parts.get("解答", "")
-        if set(parts) - {None, "解答"}:
-            raise ContentError(f"{path}: 「### {title}」底下只能有 #### 解答")
         if not stem.strip() or not sol.strip():
             raise ContentError(f"{path}: 「### {title}」要有題幹與 #### 解答")
-        out.append(Drill(TIER_OF[title], render(stem), render(sol)))
+        out.append(Drill(TIER_OF[tier], source, render(stem, figdir), render(sol, figdir),
+                         render(parts.get("備註", ""))))
     if not out:
         raise ContentError(f"{path}: 「## 練習」至少要有一題")
     if out[0].tier != "do":
         raise ContentError(f"{path}: 練習第一題必須是「照做」")
     for a, b in zip(out, out[1:]):
         if TIER_RANK[b.tier] < TIER_RANK[a.tier]:
-            raise ContentError(f"{path}: 練習順序必須是 照做 → 變化 → 挑戰,出現 {TIER_ZH[a.tier]} → {TIER_ZH[b.tier]}")
+            raise ContentError(f"{path}: 練習順序必須是 {TIER_ORDER_ZH},"
+                               f"出現 {TIER_ZH[a.tier]} → {TIER_ZH[b.tier]}")
     return out
 
 
 def load_concept(path, figures_dir):
+    try:
+        return _load_concept(path, figures_dir)
+    except ContentError as e:           # mdtools 丟出的錯誤不帶檔名,這裡補上
+        msg = str(e)
+        raise ContentError(msg if msg.startswith(path) else f"{path}: {msg}")
+
+
+def _load_concept(path, figdir):
     meta, body = split_front_matter(_read(path), path)
     _need(meta, ["title_en", "title_zh", "level"], path)
     if meta["level"] not in LEVEL_ZH:
         raise ContentError(f"{path}: level 只能是 basic/mid/hard,得到 {meta['level']!r}")
-    s = _sections(body, path, CONCEPT_SECTIONS, CONCEPT_SECTIONS[:-1])
-    figure = ""
-    if meta.get("figure"):
-        fp = os.path.join(figures_dir, meta["figure"])
-        if not os.path.exists(fp):
-            raise ContentError(f"{path}: 找不到圖檔 figures/{meta['figure']}")
-        figure = re.sub(r"<\?xml[^>]*>\s*", "", _read(fp)).strip()
-    slug = os.path.splitext(os.path.basename(path))[0]
+    if "figure" in meta:
+        raise ContentError(f"{path}: front matter 的 figure 已停用,改在段落裡寫 ![圖說](檔名.svg)")
+    s = _sections(body, path, CONCEPT_SECTIONS, CONCEPT_REQUIRED)
+
+    def r(name):
+        return render(s.get(name, ""), figdir)
+
     return Concept(
-        slug=slug, title_en=meta["title_en"], title_zh=meta["title_zh"],
+        slug=os.path.splitext(os.path.basename(path))[0],
+        title_en=meta["title_en"], title_zh=meta["title_zh"],
         sub=render_inline(meta.get("sub", "")), level=meta["level"],
+        source=str(meta.get("source", "")), supplement=bool(meta.get("supplement", False)),
         lab_hook=render_inline(meta.get("lab_hook", "")),
-        figure=figure, figure_caption=render_inline(meta.get("figure_caption", "")),
-        idea=render(s["觀念"]), plain=render(s["白話說"]), cs_use=render(s["在資工哪裡用"]),
-        deep=render(s["原理"]), walkthroughs=_walkthroughs(s["老師講解"], path),
-        misstep=render(s["易錯點"]), teach_tip=render(s["教學提示"]),
-        drills=_drills(s["練習"], path), checks=_checks(s.get("驗算"), path))
+        idea=r("觀念"), glossary=_glossary(s["名詞對照"], path), plain=r("白話說"),
+        geometry=r("幾何意義"), cs_use=r("在資工哪裡用"), applications=r("實際應用"),
+        numerical=r("數值筆記"), reasonable=r("合理性檢查"), deep=r("原理"),
+        walkthroughs=_walkthroughs(s["老師講解"], path, figdir),
+        misstep=r("易錯點"), teach_tip=r("教學提示"),
+        drills=_drills(s["練習"], path, figdir), checks=_checks(s.get("驗算"), path))
+
+
+def week_glossary(concepts):
+    """整週的名詞對照:依出現順序,英文相同只留第一次,並附上出自哪個觀念。"""
+    seen, out = set(), []
+    for i, c in enumerate(concepts, 1):
+        for en, zh, note in c.glossary:
+            key = re.sub(r"<[^>]+>", "", en).strip().lower()
+            if key not in seen:
+                seen.add(key)
+                out.append([en, zh, note, f"觀念 {i}"])
+    return out
 
 
 # ---------------------------------------------------------------- 證明時刻
