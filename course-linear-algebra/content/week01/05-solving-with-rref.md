@@ -177,7 +177,7 @@ Find the general solutions of the systems whose augmented matrices are given.
 #### 解答
 (9) 先交換兩列:$\left[\begin{array}{rrr|r} 1 & -2 & 7 & -4 \\ 0 & 1 & -6 & 5 \end{array}\right]$;$R_1 \leftarrow R_1 + 2R_2$:$[\,1 \;\; 0 \;\; {-5} \mid 6\,]$。
 $$x_1 = 6 + 5x_3, \quad x_2 = 5 + 6x_3, \quad x_3 \text{ is free.}$$
-(書後解答相同。Lay Exercise 15 要求代回驗算:$x_2 - 6x_3 = (5 + 6x_3) - 6x_3 = 5$ ✓;$x_1 - 2x_2 + 7x_3 = (6 + 5x_3) - 2(5 + 6x_3) + 7x_3 = -4$ ✓。)
+(書後解答相同。代回驗算見 Exercise 15。)
 
 (10) $R_2 \leftarrow R_2 - 3R_1$:$[\,0 \;\; 0 \;\; 1 \mid {-7}\,]$;$R_1 \leftarrow R_1 + R_2$:$[\,1 \;\; {-2} \;\; 0 \mid {-4}\,]$。pivot 在第 1、3 行:
 $$x_1 = -4 + 2x_2, \quad x_2 \text{ is free}, \quad x_3 = -7.$$
@@ -240,6 +240,37 @@ $$x_1 = -3 + 3x_5, \quad x_2 = 1 + 4x_5, \quad x_3 \text{ is free}, \quad x_4 = 
 
 (14) $R_1 \leftarrow R_1 - 2R_2$:$[\,1 \;\; 0 \;\; 7 \;\; 4 \;\; 0 \mid {-9}\,]$。pivot 在第 1、2、5 行:
 $$x_1 = -9 - 7x_3 - 4x_4, \quad x_2 = 2 + 6x_3 + 4x_4, \quad x_3 \text{ is free}, \quad x_4 \text{ is free}, \quad x_5 = 0.$$
+
+### 變化 · Lay 1.2 Exercises 15–18
+You may find it helpful to review the information in the Reasonable Answers box from this section before answering Exercises 15–18.
+
+(15) Write down the equations corresponding to the augmented matrix in Exercise 9 and verify your answer to Exercise 9 is correct by substituting the solutions you obtained back into the original equations.
+
+(16) Write down the equations corresponding to the augmented matrix in Exercise 10 and verify your answer to Exercise 10 is correct by substituting the solutions you obtained back into the original equations.
+
+(17) Write down the equations corresponding to the augmented matrix in Exercise 11 and verify your answer to Exercise 11 is correct by substituting the solutions you obtained back into the original equations.
+
+(18) Write down the equations corresponding to the augmented matrix in Exercise 12 and verify your answer to Exercise 12 is correct by substituting the solutions you obtained back into the original equations.
+
+#### 解答
+做法和本觀念的「合理性檢查」一樣:**把一般解整個代回原方程式,自由變數留著**,看它們會不會全部消掉。
+
+(15) Exercise 9 的方程式是 $x_2 - 6x_3 = 5$、$x_1 - 2x_2 + 7x_3 = -4$。代入 $x_1 = 6 + 5x_3$、$x_2 = 5 + 6x_3$:
+$$\begin{aligned} (5 + 6x_3) - 6x_3 &= 5 \;\checkmark \\ (6 + 5x_3) - 2(5 + 6x_3) + 7x_3 &= 6 + 5x_3 - 10 - 12x_3 + 7x_3 = -4 \;\checkmark \end{aligned}$$
+(書後解答相同)
+
+(16) Exercise 10 的方程式是 $x_1 - 2x_2 - x_3 = 3$、$3x_1 - 6x_2 - 2x_3 = 2$。代入 $x_1 = -4 + 2x_2$、$x_3 = -7$:
+$$\begin{aligned} (-4 + 2x_2) - 2x_2 - (-7) &= 3 \;\checkmark \\ 3(-4 + 2x_2) - 6x_2 - 2(-7) &= -12 + 14 = 2 \;\checkmark \end{aligned}$$
+
+(17) Exercise 11 的方程式是 $3x_1 - 4x_2 + 2x_3 = 0$、$-9x_1 + 12x_2 - 6x_3 = 0$、$-6x_1 + 8x_2 - 4x_3 = 0$。代入 $x_1 = \tfrac43 x_2 - \tfrac23 x_3$:
+$$\begin{aligned} 3\left(\tfrac43 x_2 - \tfrac23 x_3\right) - 4x_2 + 2x_3 &= 4x_2 - 2x_3 - 4x_2 + 2x_3 = 0 \;\checkmark \\ -9\left(\tfrac43 x_2 - \tfrac23 x_3\right) + 12x_2 - 6x_3 &= -12x_2 + 6x_3 + 12x_2 - 6x_3 = 0 \;\checkmark \\ -6\left(\tfrac43 x_2 - \tfrac23 x_3\right) + 8x_2 - 4x_3 &= -8x_2 + 4x_3 + 8x_2 - 4x_3 = 0 \;\checkmark \end{aligned}$$
+(書後解答相同)
+
+(18) Exercise 12 的方程式是 $x_1 - 7x_2 + 6x_4 = 5$、$x_3 - 2x_4 = -3$、$-x_1 + 7x_2 - 4x_3 + 2x_4 = 7$。代入 $x_1 = 5 + 7x_2 - 6x_4$、$x_3 = -3 + 2x_4$:
+$$\begin{aligned} (5 + 7x_2 - 6x_4) - 7x_2 + 6x_4 &= 5 \;\checkmark \\ (-3 + 2x_4) - 2x_4 &= -3 \;\checkmark \\ -(5 + 7x_2 - 6x_4) + 7x_2 - 4(-3 + 2x_4) + 2x_4 &= -5 + 12 = 7 \;\checkmark \end{aligned}$$
+
+#### 備註
+學生最常犯的錯是代入時只代一個數字(例如 $x_3 = 0$)就說驗完了。要強調:自由變數要**整個留著**,消得掉才代表對所有的解都成立。
 
 ### 變化 · Lay 1.2 Practice Problems 2–3
 (2) Find the general solution of the system $x_1 - 2x_2 - x_3 + 3x_4 = 0,\;\; -2x_1 + 4x_2 + 5x_3 - 5x_4 = 3,\;\; 3x_1 - 6x_2 - 6x_3 + 8x_4 = 2$.
@@ -357,6 +388,10 @@ Matrix([[1, 2, 3, 4], [4, 8, 9, 4]]).rref() == (Matrix([[1, 2, 0, -8], [0, 0, 1,
 Matrix([[1, 4, 0, 7], [2, 7, 0, 11]]).rref() == (Matrix([[1, 0, 0, -5], [0, 1, 0, 3]]), (0, 1))
 Matrix([[0, 1, -6, 5], [1, -2, 7, -4]]).rref()[0] == Matrix([[1, 0, -5, 6], [0, 1, -6, 5]])
 simplify(Matrix([[0, 1, -6], [1, -2, 7]]) * Matrix([6 + 5*t, 5 + 6*t, t]) - Matrix([5, -4])) == zeros(2, 1)
+# Exercises 16–18:一般解整個代回,自由變數留著
+simplify(Matrix([[1, -2, -1], [3, -6, -2]]) * Matrix([-4 + 2*s, s, -7]) - Matrix([3, 2])) == zeros(2, 1)
+simplify(Matrix([[3, -4, 2], [-9, 12, -6], [-6, 8, -4]]) * Matrix([Rational(4, 3)*s - Rational(2, 3)*t, s, t])) == zeros(3, 1)
+simplify(Matrix([[1, -7, 0, 6], [0, 0, 1, -2], [-1, 7, -4, 2]]) * Matrix([5 + 7*s - 6*t, s, -3 + 2*t, t]) - Matrix([5, -3, 7])) == zeros(3, 1)
 Matrix([[1, -2, -1, 3], [3, -6, -2, 2]]).rref() == (Matrix([[1, -2, 0, -4], [0, 0, 1, -7]]), (0, 2))
 Matrix([[3, -4, 2, 0], [-9, 12, -6, 0], [-6, 8, -4, 0]]).rref()[0][0, :] == Matrix([[1, Rational(-4, 3), Rational(2, 3), 0]])
 Matrix([[1, -7, 0, 6, 5], [0, 0, 1, -2, -3], [-1, 7, -4, 2, 7]]).rref() == (Matrix([[1, -7, 0, 6, 5], [0, 0, 1, -2, -3], [0, 0, 0, 0, 0]]), (0, 2))

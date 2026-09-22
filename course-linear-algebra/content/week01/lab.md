@@ -291,6 +291,45 @@ p(7.5) = 64.84  (約 6484 lb)
 # 最後一行是不是 pivot 行?這代表什麼?(第 14 週的「最小平方法」就是在處理這種情況)
 ```
 
+## ④ 應用 · 化學配平:為什麼課本要求「精確算術」
+**Lay 1.6 Exercise 9**(課本標 **T**):配平 $\mathrm{PbN_6} + \mathrm{CrMn_2O_8} \rightarrow \mathrm{Pb_3O_4} + \mathrm{Cr_2O_3} + \mathrm{MnO_2} + \mathrm{NO}$。每種原子寫一列「左邊 − 右邊 = 0」,這是一個齊次方程組(常數行全是 0,所以只寫係數)。
+
+SymPy 用**分數**精確計算,NumPy 用**浮點數**。題目要求「use exact arithmetic or rational format」,就是因為係數要化成整數,分數一旦被截斷成小數就很難還原。
+
+```python
+# 未知數 x1..x6 依序是 PbN6, CrMn2O8, Pb3O4, Cr2O3, MnO2, NO 的係數
+atoms = Matrix([
+    [1, 0, -3,  0,  0,  0],   # Pb:x1 = 3x3
+    [6, 0,  0,  0,  0, -1],   # N :6x1 = x6
+    [0, 1,  0, -2,  0,  0],   # Cr:x2 = 2x4
+    [0, 2,  0,  0, -1,  0],   # Mn:2x2 = x5
+    [0, 8, -4, -3, -2, -1],   # O :8x2 = 4x3 + 3x4 + 2x5 + x6
+])
+R, pivots = atoms.rref()
+print(R)
+print("pivot 行:", [p + 1 for p in pivots])
+
+# x6 是自由變數。分母 6、45、18 的最小公倍數是 90,取 x6 = 90 讓全部變整數
+x6 = 90
+sol = [-R[i, 5] * x6 for i in range(5)] + [x6]
+print("係數:", sol)
+print("浮點數版的 x2 / x6:", float(-R[1, 5]))
+```
+
+```text expected
+Matrix([[1, 0, 0, 0, 0, -1/6], [0, 1, 0, 0, 0, -22/45], [0, 0, 1, 0, 0, -1/18], [0, 0, 0, 1, 0, -11/45], [0, 0, 0, 0, 1, -44/45]])
+pivot 行: [1, 2, 3, 4, 5]
+係數: [15, 44, 5, 22, 88, 90]
+浮點數版的 x2 / x6: 0.4888888888888889
+```
+
+**會看到**:$15\,\mathrm{PbN_6} + 44\,\mathrm{CrMn_2O_8} \rightarrow 5\,\mathrm{Pb_3O_4} + 22\,\mathrm{Cr_2O_3} + 88\,\mathrm{MnO_2} + 90\,\mathrm{NO}$,和書後解答一樣。精確版直接看得出 $\tfrac{22}{45}$;浮點數版只給你 $0.48888\ldots$,要反推回分數就難多了。
+
+```python todo
+# TODO 應用:照同樣的方法配平 Lay 1.6 Exercise 10(答案的係數會大到三位數)
+# MnS + As2Cr10O35 + H2SO4 → HMnO4 + AsH3 + CrS3O12 + H2O,原子依序:Mn, S, As, Cr, O, H
+```
+
 ## 驗算
 ```check
 Matrix([[1, 1, 1, 11], [1, 2, 4, 16], [1, 3, 9, 19]]).rref()[0][:, 3] == Matrix([4, 8, -1])

@@ -213,7 +213,7 @@ Solve the system: $x_2 + 4x_3 = -4,\;\; x_1 + 3x_2 + 3x_3 = -2,\;\; 3x_1 + 7x_2 
 #### 解答
 第 1 式沒有 $x_1$,先交換第 1、2 式。接著 $R_3 \leftarrow R_3 - 3R_1$ 得 $[\,0 \;\; {-2} \;\; {-4} \mid 12\,]$;$R_3 \leftarrow R_3 + 2R_2$ 得 $[\,0 \;\; 0 \;\; 4 \mid 4\,]$,$x_3 = 1$。往上:$x_2 = -4 - 4(1) = -8$;$x_1 = -2 - 3(-8) - 3(1) = 19$。
 
-解是 $(19, -8, 1)$(書後解答相同)。驗算(Lay Exercise 15):$-8 + 4 = -4$ ✓;$19 - 24 + 3 = -2$ ✓;$57 - 56 + 5 = 6$ ✓。
+解是 $(19, -8, 1)$(書後解答相同)。代回驗算見 Exercise 15。
 
 ### 變化 · Lay 1.1 Exercise 12
 Solve the system: $x_1 - 3x_2 + 4x_3 = -4,\;\; 3x_1 - 7x_2 + 7x_3 = -8,\;\; -4x_1 + 6x_2 + 2x_3 = 4$.
@@ -221,7 +221,7 @@ Solve the system: $x_1 - 3x_2 + 4x_3 = -4,\;\; 3x_1 - 7x_2 + 7x_3 = -8,\;\; -4x_
 #### 解答
 $R_2 \leftarrow R_2 - 3R_1$:$[\,0 \;\; 2 \;\; {-5} \mid 4\,]$;$R_3 \leftarrow R_3 + 4R_1$:$[\,0 \;\; {-6} \;\; 18 \mid {-12}\,]$;$R_3 \leftarrow R_3 + 3R_2$:$[\,0 \;\; 0 \;\; 3 \mid 0\,]$,$x_3 = 0$。往上:$2x_2 = 4$,$x_2 = 2$;$x_1 = -4 + 3(2) - 0 = 2$。
 
-解是 $(2, 2, 0)$。驗算(Lay Exercise 16):$2 - 6 + 0 = -4$ ✓;$6 - 14 + 0 = -8$ ✓;$-8 + 12 + 0 = 4$ ✓。
+解是 $(2, 2, 0)$。代回驗算見 Exercise 16。
 
 ### 變化 · Lay 1.1 Exercise 13
 Solve the system: $x_1 - 3x_3 = 8,\;\; 2x_1 + 2x_2 + 9x_3 = 7,\;\; x_2 + 5x_3 = -2$.
@@ -229,7 +229,7 @@ Solve the system: $x_1 - 3x_3 = 8,\;\; 2x_1 + 2x_2 + 9x_3 = 7,\;\; x_2 + 5x_3 = 
 #### 解答
 $R_2 \leftarrow R_2 - 2R_1$:$[\,0 \;\; 2 \;\; 15 \mid {-9}\,]$;交換第 2、3 列讓 $x_2$ 係數為 1:$[\,0 \;\; 1 \;\; 5 \mid {-2}\,]$、$[\,0 \;\; 2 \;\; 15 \mid {-9}\,]$;$R_3 \leftarrow R_3 - 2R_2$:$[\,0 \;\; 0 \;\; 5 \mid {-5}\,]$,$x_3 = -1$。往上:$x_2 = -2 - 5(-1) = 3$;$x_1 = 8 + 3(-1) = 5$。
 
-解是 $(5, 3, -1)$(書後解答相同)。驗算(Lay Exercise 17):$5 + 3 = 8$ ✓;$10 + 6 - 9 = 7$ ✓;$3 - 5 = -2$ ✓。
+解是 $(5, 3, -1)$(書後解答相同)。代回驗算見 Exercise 17。
 
 ### 變化 · Lay 1.1 Exercise 14
 Solve the system: $x_1 - 3x_2 = 5,\;\; -x_1 + x_2 + 5x_3 = 2,\;\; x_2 + x_3 = 0$.
@@ -237,10 +237,34 @@ Solve the system: $x_1 - 3x_2 = 5,\;\; -x_1 + x_2 + 5x_3 = 2,\;\; x_2 + x_3 = 0$
 #### 解答
 $R_2 \leftarrow R_2 + R_1$:$[\,0 \;\; {-2} \;\; 5 \mid 7\,]$;交換第 2、3 列:$[\,0 \;\; 1 \;\; 1 \mid 0\,]$、$[\,0 \;\; {-2} \;\; 5 \mid 7\,]$;$R_3 \leftarrow R_3 + 2R_2$:$[\,0 \;\; 0 \;\; 7 \mid 7\,]$,$x_3 = 1$。往上:$x_2 = -1$;$x_1 = 5 + 3(-1) = 2$。
 
-解是 $(2, -1, 1)$。驗算(Lay Exercise 18):$2 + 3 = 5$ ✓;$-2 - 1 + 5 = 2$ ✓;$-1 + 1 = 0$ ✓。
+解是 $(2, -1, 1)$。代回驗算見 Exercise 18。
 
 #### 備註
-Exercises 11–14 份量相同,課堂挑一題,其餘作業。Exercises 15–18(代回驗算)已併入各題解答最後一行。
+Exercises 11–14 份量相同,課堂挑一題,其餘作業。
+
+### 變化 · Lay 1.1 Exercises 15–18
+(15) Verify that the solution you found to Exercise 11 is correct by substituting the values you obtained back into the original equations.
+
+(16) Verify that the solution you found to Exercise 12 is correct by substituting the values you obtained back into the original equations.
+
+(17) Verify that the solution you found to Exercise 13 is correct by substituting the values you obtained back into the original equations.
+
+(18) Verify that the solution you found to Exercise 14 is correct by substituting the values you obtained back into the original equations.
+
+#### 解答
+每一條方程式都要代,負數記得加括號(這就是觀念 2 的「合理性檢查」)。
+
+(15) $(x_1, x_2, x_3) = (19, -8, 1)$ 代入 Exercise 11:
+$$\begin{aligned} (-8) + 4(1) &= -4 \;\checkmark \\ 19 + 3(-8) + 3(1) &= -2 \;\checkmark \\ 3(19) + 7(-8) + 5(1) &= 57 - 56 + 5 = 6 \;\checkmark \end{aligned}$$
+
+(16) $(2, 2, 0)$ 代入 Exercise 12:$2 - 3(2) + 4(0) = -4$ ✓;$3(2) - 7(2) + 7(0) = -8$ ✓;$-4(2) + 6(2) + 2(0) = 4$ ✓。
+
+(17) $(5, 3, -1)$ 代入 Exercise 13:$5 - 3(-1) = 8$ ✓;$2(5) + 2(3) + 9(-1) = 7$ ✓;$3 + 5(-1) = -2$ ✓(書後解答相同)。
+
+(18) $(2, -1, 1)$ 代入 Exercise 14:$2 - 3(-1) = 5$ ✓;$-2 + (-1) + 5(1) = 2$ ✓;$(-1) + 1 = 0$ ✓。
+
+#### 備註
+建議和 Exercises 11–14 綁在一起出:算完一題就代回一題,讓「驗算」變成解題的最後一步,而不是額外的作業。
 
 ### 變化 · Lay 1.1 Exercises 39–40
 Find the elementary row operation that transforms the first matrix into the second, and then find the reverse row operation that transforms the second matrix into the first.
@@ -288,6 +312,11 @@ Matrix([[0, 1, 4, -4], [1, 3, 3, -2], [3, 7, 5, 6]]).rref()[0][:, 3] == Matrix([
 Matrix([[1, -3, 4, -4], [3, -7, 7, -8], [-4, 6, 2, 4]]).rref()[0][:, 3] == Matrix([2, 2, 0])
 Matrix([[1, 0, -3, 8], [2, 2, 9, 7], [0, 1, 5, -2]]).rref()[0][:, 3] == Matrix([5, 3, -1])
 Matrix([[1, -3, 0, 5], [-1, 1, 5, 2], [0, 1, 1, 0]]).rref()[0][:, 3] == Matrix([2, -1, 1])
+# Exercises 15–18:代回驗算
+[(-8) + 4*1, 19 + 3*(-8) + 3*1, 3*19 + 7*(-8) + 5*1] == [-4, -2, 6]
+[2 - 3*2 + 4*0, 3*2 - 7*2 + 7*0, -4*2 + 6*2 + 2*0] == [-4, -8, 4]
+[5 - 3*(-1), 2*5 + 2*3 + 9*(-1), 3 + 5*(-1)] == [8, 7, -2]
+[2 - 3*(-1), -2 + (-1) + 5*1, (-1) + 1] == [5, 2, 0]
 Matrix([[5, -7, 8, -9]]) - 5*Matrix([[1, -3, 2, 0]]) == Matrix([[0, 8, -2, -9]])
 Matrix([[0, -3, 9, 5]]) + 3*Matrix([[0, 1, -3, -2]]) == Matrix([[0, 0, 0, -1]])
 Matrix([[1, 1, 0, -1], [0, 1, 0, 1], [2, 2, 1, -2]]).rref()[0] == Matrix([[1, 0, 0, -2], [0, 1, 0, 1], [0, 0, 1, 0]])

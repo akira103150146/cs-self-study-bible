@@ -93,4 +93,92 @@ svg = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 235" width="480
        'aria-label="Metal plate with four interior nodes and boundary temperatures">'
        + "".join(parts) + "</svg>\n")
 open(os.path.join(OUT, "heat-plate.svg"), "w", encoding="utf-8").write(svg)
+
+
+def write_network(name, w, h, aria, mid_id, nodes, branches, extra=()):
+    """nodes: {名稱: (x, y, 標籤dx, 標籤dy)};branches: [(起點, 終點, 流量標籤, 標籤位置)]。"""
+    pos = {k: (v[0], v[1]) for k, v in nodes.items()}
+    parts = [marker(mid_id)]
+    for p, q, lab, (lx, ly) in branches:
+        p, q = pos.get(p, p), pos.get(q, q)
+        parts.append(arrow_branch(*p, *q, mid_id))
+        parts.append(label(lx, ly, lab))
+    parts += list(extra)
+    parts += [node(x, y, k, dx, dy) for k, (x, y, dx, dy) in nodes.items()]
+    svg = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" width="{w}" role="img" '
+           f'aria-label="{aria}">' + "".join(parts) + "</svg>\n")
+    open(os.path.join(OUT, name), "w", encoding="utf-8").write(svg)
+
+
+# ---------- Lay 1.6 Exercise 12(高速公路網,cars/minute)----------
+write_network(
+    "network-ex12.svg", 500, 270, "Freeway network for Lay 1.6 Exercise 12", "ah-net12",
+    {"A": (120, 140, -20, -8), "B": (200, 60, 10, -6), "C": (400, 140, 6, -10), "D": (260, 200, 8, 22)},
+    [((200, 8), "B", "200", (218, 22)),       # 200 由上方流入 B
+     ("A", (30, 140), "40", (52, 132)),       # A → 西邊流出 40
+     ("C", (480, 140), "100", (458, 132)),    # C → 東邊流出 100
+     ("D", (260, 262), "60", (276, 252)),     # D → 南邊流出 60
+     ("B", "A", "x1", (146, 94)),             # B → A
+     ("B", "C", "x2", (312, 88)),             # B → C
+     ("A", "C", "x3", (262, 132)),            # A → C
+     ("A", "D", "x4", (176, 186)),            # A → D
+     ("C", "D", "x5", (344, 186))])           # C → D
+
+# ---------- Lay 1.6 Exercise 13 ----------
+write_network(
+    "network-ex13.svg", 460, 230, "Network for Lay 1.6 Exercise 13 with junctions A to E", "ah-net13",
+    {"A": (120, 80, -20, -8), "E": (120, 150, -20, 22), "B": (230, 115, -5, -12),
+     "C": (340, 80, 8, -10), "D": (340, 150, 8, 22)},
+    [((120, 12), "A", "30", (136, 24)),       # 30 由上方流入 A
+     ("A", (20, 80), "80", (42, 72)),         # A → 西邊流出 80
+     ((20, 150), "E", "60", (42, 142)),       # 60 由西流入 E
+     ("E", (120, 218), "20", (136, 210)),     # E → 南邊流出 20
+     ("C", (340, 12), "40", (356, 24)),       # C → 北邊流出 40
+     ((440, 80), "C", "100", (418, 72)),      # 100 由東流入 C
+     ("D", (440, 150), "90", (418, 142)),     # D → 東邊流出 90
+     ((340, 218), "D", "40", (356, 210)),     # 40 由南流入 D
+     ("A", "E", "x1", (104, 120)),            # A → E
+     ("B", "A", "x2", (176, 84)),             # B → A
+     ("E", "B", "x3", (176, 150)),            # E → B
+     ("B", "D", "x4", (286, 150)),            # B → D
+     ("C", "B", "x5", (286, 84)),             # C → B
+     ("D", "C", "x6", (356, 120))])           # D → C
+
+# ---------- Lay 1.6 Exercise 14(環形交叉路口,順時針行駛)----------
+import math
+
+cx, cy, r = 240, 150, 90
+
+
+def on_circle(deg):
+    t = math.radians(deg)
+    return (round(cx + r * math.cos(t), 1), round(cy - r * math.sin(t), 1))
+
+
+angle = {"A": 200, "B": 160, "C": 105, "D": 75, "E": 20, "F": -20}
+P = {k: on_circle(a) for k, a in angle.items()}
+arcs = []
+for a, b, lab, (lx, ly) in [("F", "A", "x1", (240, 262)), ("A", "B", "x2", (132, 154)),
+                            ("B", "C", "x3", (170, 80)), ("C", "D", "x4", (240, 84)),
+                            ("D", "E", "x5", (312, 80)), ("E", "F", "x6", (350, 154))]:
+    a0, a1 = angle[a], angle[b]
+    if a1 > a0:                               # 順時針(螢幕上)= 數學角度遞減
+        a1 -= 360
+    mid = on_circle((a0 + a1) / 2)
+    # SVG 弧線 sweep-flag=1 是螢幕上的順時針;前半段帶箭頭,後半段不帶
+    arcs.append(f'<path class="l1" d="M{P[a][0]},{P[a][1]} A{r},{r} 0 0 1 {mid[0]},{mid[1]}" '
+                f'marker-end="url(#ah-net14)"/>')
+    arcs.append(f'<path class="l1" d="M{mid[0]},{mid[1]} A{r},{r} 0 0 1 {P[b][0]},{P[b][1]}"/>')
+    arcs.append(label(lx, ly, lab))
+write_network(
+    "roundabout-ex14.svg", 480, 280, "Roundabout for Lay 1.6 Exercise 14", "ah-net14",
+    {"A": (*P["A"], -20, 14), "B": (*P["B"], -20, -6), "C": (*P["C"], -20, -4),
+     "D": (*P["D"], 8, -4), "E": (*P["E"], 8, -6), "F": (*P["F"], 8, 16)},
+    [("A", (50, P["A"][1]), "100", (72, P["A"][1] - 8)),     # A → 西邊流出 100
+     ((50, P["B"][1]), "B", "50", (72, P["B"][1] - 8)),      # 50 由西流入 B
+     ("C", (P["C"][0], 12), "120", (P["C"][0] - 20, 24)),    # C → 北邊流出 120
+     ((P["D"][0], 12), "D", "150", (P["D"][0] + 22, 24)),    # 150 由北流入 D
+     ("E", (430, P["E"][1]), "80", (410, P["E"][1] - 8)),    # E → 東邊流出 80
+     ((430, P["F"][1]), "F", "100", (408, P["F"][1] - 8))],  # 100 由東流入 F
+    extra=arcs)
 print("ok")
