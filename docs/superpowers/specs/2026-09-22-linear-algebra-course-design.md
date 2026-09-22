@@ -167,19 +167,21 @@ Lay, Lay & McDonald，*Linear Algebra and Its Applications*，6e Global Edition�
 
 沿用微一的教案結構（快轉表、節奏表、逐段講法、迷思清單、出門檢核）。3 小時節奏表照三步循環排：每個觀念約「觀念 10 分 → 講解 15 分 → 練習 20 分」，再加一個 15–20 分鐘的證明時刻。
 
-### 6.3 產生器的資料模型調整
+### 6.3 內容與排版分離（2026-09-22 改為 Markdown）
 
-沿用微一「內容資料與排版分離」的 `_generators/` 架構，`Concept` 要改：
+使用者要求**先把排版抽出來、資料與 UI 分離、內容用 Markdown 寫**，避免之後各週的版面飄移。所以線代**不沿用**微一「內容寫在 Python 資料檔」的做法：
 
-| 欄位 | 變動 |
-|---|---|
-| `idea_zh` | 新增：中文白話解釋 |
-| `cs_use` | 新增：在資工哪裡用 |
-| `figure` | 新增：選填，內嵌 SVG |
-| `guide` | **移除**，改成 `walkthroughs: list[(英文題幹, 中文逐步講解)]` |
-| `drills` | 每題加 `tier`（照做 / 變化 / 挑戰） |
-| `lab_hook` | 新增：「Lab 會用到」的函式名 |
-| `teach_tip` | 新增：教師版教學提示 |
+| 層 | 位置 | 誰來改 |
+|---|---|---|
+| 內容 | `content/weekNN/*.md`（一個觀念一個檔）、`content/course.yaml` | 老師改內容只動這裡 |
+| 排版 | `_layout/templates/*.html`（Jinja2）、`assets/handout.css` | 改這裡，所有週一起變 |
+| 程式 | `_generators/`：`mdtools.py`（Markdown→HTML）、`content.py`（解析＋格式檢查）、`build.py`（套模板） | — |
+
+- 各檔寫法見 `content/README.md`。固定的 `##` 段落名稱拼錯會直接報錯，避免內容悄悄消失。
+- **學生版與教師版共用同一份模板**，只用 `teacher` 旗標切換，所以兩版題幹在結構上不可能不一致。
+- **數學式照常寫**，`< > &` 由 `mdtools.py` 自動跳脫——原本靠人記的鐵律改由程式保證。
+- 格式規則在 build 階段就擋：練習順序必須 照做→變化→挑戰、老師講解至少兩步、診斷考每個錯誤選項都要有迷思對照、節奏表剛好 180 分、Lab 四階段齊全且順序正確、每個 todo 區塊剛好一行 `# TODO`。
+- `## 驗算` 區塊寫在各內容檔裡，改題目時順手改驗算。
 
 ### 6.4 每週診斷考
 
@@ -243,21 +245,28 @@ Lab 的 TODO 以「預測」與「解讀」為主（填空、選擇、一句話�
 
 ```
 course-linear-algebra/
-  index.html
-  assets/handout.css         # 沿用設計系統
-  _generators/               # 產生器必須版控
-  week01/ … week18/
+  index.html                 # 產出：課程首頁(18 張週卡)
+  content/                   # 內容(Markdown),見 content/README.md
+    course.yaml  index.md  README.md
+    week01/  week.md  lesson.md  01-*.md …  proof.md  prereq.md  quiz.md  lab.md  figures/*.svg
+  _layout/templates/         # 排版(Jinja2)
+  assets/handout.css         # 樣式(沿用設計系統,另加線代新增的區塊)
+  _generators/               # 程式(必須版控)
+  week01/ … week18/          # 產出,不要手改
     WN-理論教案.html
-    WN-例題-學生版.html
-    WN-例題-教師版.html
-    WN-實作.html
-    WN-lab.ipynb
-    WN-診斷考-學生版.html     # 不含答案
-    WN-診斷考-教師版.html     # 答案 + 迷思對照表
-  week01/W1-先備檢測-學生版.html、W1-先備檢測-教師版.html   # 只有 W1
+    WN-例題-學生版.html / WN-例題-教師版.html
+    WN-診斷考-學生版.html / WN-診斷考-教師版.html
+    WN-實作.html  WN-lab.ipynb
+    W1-先備檢測-學生版.html / W1-先備檢測-教師版.html   # 只有 W1
 ```
 
-沿用三道閘門，每批教材全過才算完成：`verify.py`（結構）／`verify_math.py`（sympy 逐題驗算）／`run_notebooks.py`（headless 實跑）。沿用鐵律：數學式的 `< > &` 一律跳脫、圖表標籤用英文、學生版作答區 `min-height: 130px`、考卷作答區依配分給高度。
+三道閘門，每批教材全過才算完成：
+
+1. `verify.py`（產出結構）：兩版題幹一致、學生版不洩答案（例題與診斷考）、每題練習都有作答區、證明時刻有跟寫區、TODO 與步驟數和 chip 一致、連結、數學式跳脫、題幹不含中文。
+2. `verify_math.py`：執行每個內容檔 `## 驗算` 裡的 sympy 式子。
+3. `run_notebooks.py`：notebook 逐格實跑，**並核對實作頁上印的「預期輸出」和實際輸出一致**（預期輸出存在 cell metadata）。
+
+沿用鐵律：圖表標籤用英文、學生版作答區 `min-height: 130px`、考卷作答區依配分給高度。W1 另做了反向測試（故意改壞內容與產出），確認每道閘門都會攔下。
 
 ---
 
@@ -265,7 +274,7 @@ course-linear-algebra/
 
 | 批次 | 範圍 | 狀態 |
 |---|---|---|
-| 1 | Lay 第 1 章 = W1–W4 | **下一步**：寫實作計畫 → 建置 → 使用者審 |
+| 1 | Lay 第 1 章 = W1–W4 | **W1 已產出（範本週）**，待使用者審；確認版面與份量後再做 W2–W4 |
 | 2 以後 | 依使用者審完第一批的回饋再排 | — |
 
 第一批同時要把 `_generators/` 骨架與新版 `Concept` 資料模型建好，後面各批沿用。
