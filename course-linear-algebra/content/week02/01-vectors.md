@@ -85,7 +85,7 @@ Given $\mathbf{u} = \begin{bmatrix} 1 \\ -2 \end{bmatrix}$ and $\mathbf{v} = \be
 4. 這種「先各自放大縮小、再相加」的組合,下一個觀念會正式命名為**線性組合**。
 
 ### 例 2 · Lay 1.3 Example 2
-The vectors $\mathbf{u} = \begin{bmatrix} 2 \\ 2 \end{bmatrix}$, $\mathbf{v} = \begin{bmatrix} -6 \\ 1 \end{bmatrix}$, and $\mathbf{u} + \mathbf{v}$ are displayed in the figure. Verify the parallelogram rule.
+The vectors $\mathbf{u} = \begin{bmatrix} 2 \\ 2 \end{bmatrix}$, $\mathbf{v} = \begin{bmatrix} -6 \\ 1 \end{bmatrix}$, and $\mathbf{u} + \mathbf{v} = \begin{bmatrix} -4 \\ 3 \end{bmatrix}$ are displayed in the figure (Lay 1.3, Figure 4). Verify the parallelogram rule for these vectors.
 
 1. **先用代數算**:$\mathbf{u} + \mathbf{v} = \begin{bmatrix} 2 + (-6) \\ 2 + 1 \end{bmatrix} = \begin{bmatrix} -4 \\ 3 \end{bmatrix}$。
 2. **再用圖驗證**:從 $\mathbf{u} = (2, 2)$ 出發,往 $\mathbf{v}$ 的方向走「左 6、上 1」,到達 $(2 - 6, 2 + 1) = (-4, 3)$。
@@ -111,7 +111,7 @@ Let $\mathbf{u} = \begin{bmatrix} 3 \\ -1 \end{bmatrix}$. Display the vectors $\
 
 ℝⁿ 可以用資工例子帶:「一張 28×28 的圖片,就是 ℝ⁷⁸⁴ 的一個向量」,學生會意識到 $n$ 不只是 2 或 3。
 
-課堂建議做:照做 1–2;是非題口頭問;Exercises 3–4 的畫圖留作業。
+課堂建議做:Exercises 1–2;是非 Exercises 23、24、26 口頭問;Exercises 3–4 的畫圖留作業。
 
 ## 練習
 ### 照做 · Lay 1.3 Exercises 1–2

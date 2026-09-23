@@ -62,7 +62,7 @@ $$\mathbf{x} + \mathbf{y} = (c_1 + d_1)\mathbf{u} + (c_2 + d_2)\mathbf{v},$$
 
 ## 老師講解
 ### 例 1 · Lay 1.3(p. 56,Figures 10–11)
-Let $\mathbf{v}$ be a nonzero vector in $\mathbb{R}^3$, and let $\mathbf{u}$ be another nonzero vector in $\mathbb{R}^3$ that is not a multiple of $\mathbf{v}$. Describe $\operatorname{Span}\{\mathbf{v}\}$ and $\operatorname{Span}\{\mathbf{u}, \mathbf{v}\}$ geometrically.
+Let $\mathbf{u}$ and $\mathbf{v}$ be nonzero vectors in $\mathbb{R}^3$, with $\mathbf{v}$ not a multiple of $\mathbf{u}$. Describe $\operatorname{Span}\{\mathbf{v}\}$ and $\operatorname{Span}\{\mathbf{u}, \mathbf{v}\}$ geometrically.
 
 1. **Span$\{\mathbf{v}\}$**:只有一個向量,線性組合就只有 $c\mathbf{v}$ 這一種。所有的倍數 $c\mathbf{v}$,就是通過 $\mathbf{0}$ 和 $\mathbf{v}$ 的**直線**(觀念 1 例 3 看過)。
 2. **Span$\{\mathbf{u}, \mathbf{v}\}$ 一定包含兩條直線**:取 $c_2 = 0$ 得到所有 $c_1\mathbf{u}$(通過 $\mathbf{u}$ 的直線),取 $c_1 = 0$ 得到所有 $c_2\mathbf{v}$(通過 $\mathbf{v}$ 的直線)。
@@ -91,7 +91,7 @@ Let $\mathbf{a}_1 = \begin{bmatrix} 1 \\ -2 \\ 3 \end{bmatrix}$, $\mathbf{a}_2 =
 
 例 2 做完,讓學生意識到:**判斷「在不在平面上」和判斷「方程組有沒有解」用的是同一招**。這個對應會在觀念 4、5 反覆出現。
 
-課堂建議做:照做 1–2;是非全部;變化 Exercises 17 與 21。
+課堂建議做:Exercises 15–16;是非 Exercises 25、30–32;Exercises 17 與 21。
 
 ## 練習
 ### 照做 · Lay 1.3 Exercises 15–16
@@ -197,7 +197,7 @@ Let $A = \begin{bmatrix} 2 & 0 & 6 \\ -1 & 8 & 5 \\ 1 & -2 & 1 \end{bmatrix}$, l
 (b) $\mathbf{a}_3 = 0\mathbf{a}_1 + 0\mathbf{a}_2 + 1\mathbf{a}_3$。
 
 ### 挑戰 · Lay 1.3 Practice Problem 3
-Let $\mathbf{w}_1, \mathbf{w}_2, \mathbf{w}_3, \mathbf{u}$, and $\mathbf{v}$ be vectors in $\mathbb{R}^n$. Suppose the vectors $\mathbf{u}$ and $\mathbf{v}$ are in $\operatorname{Span}\{\mathbf{w}_1, \mathbf{w}_2, \mathbf{w}_3\}$. Show that $\mathbf{u} + \mathbf{v}$ is also in $\operatorname{Span}\{\mathbf{w}_1, \mathbf{w}_2, \mathbf{w}_3\}$. [*Hint:* The solution requires the use of the definition of the span of a set of vectors.]
+Let $\mathbf{w}_1, \mathbf{w}_2, \mathbf{w}_3, \mathbf{u}$, and $\mathbf{v}$ be vectors in $\mathbb{R}^n$. Suppose the vectors $\mathbf{u}$ and $\mathbf{v}$ are in $\operatorname{Span}\{\mathbf{w}_1, \mathbf{w}_2, \mathbf{w}_3\}$. Show that $\mathbf{u} + \mathbf{v}$ is also in $\operatorname{Span}\{\mathbf{w}_1, \mathbf{w}_2, \mathbf{w}_3\}$. [*Hint:* The solution requires the use of the definition of the span of a set of vectors. It is useful to review this definition before starting this exercise.]
 
 #### 解答
 因為 $\mathbf{u}$、$\mathbf{v}$ 在 Span 裡,依定義存在純量 $c_1, c_2, c_3$ 與 $d_1, d_2, d_3$ 使得

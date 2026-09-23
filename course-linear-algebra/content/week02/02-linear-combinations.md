@@ -44,7 +44,7 @@ $$x_1\begin{bmatrix} 1 \\ -2 \\ -5 \end{bmatrix} + x_2\begin{bmatrix} 2 \\ 5 \\ 
 ## 幾何意義
 在 ℝ² 裡,兩個不平行的向量 $\mathbf{v}_1$、$\mathbf{v}_2$ 的所有線性組合,可以畫成一張斜的格子紙:沿 $\mathbf{v}_1$ 方向走幾格、再沿 $\mathbf{v}_2$ 方向走幾格。
 
-![課本 Example 4 的格線:v1 = (−1, 1)、v2 = (2, 1)。每個格點都是 v1、v2 的整數倍組合;格線之間的點則是非整數權重的組合。](lincomb-grid.svg)
+格線畫在 $\mathbf{v}_1$、$\mathbf{v}_2$ 的整數倍上,每個格點都是它們的整數倍組合,格線之間的點則是非整數權重的組合(圖見下面老師講解的例 1,那就是課本 Example 4 的格線)。
 
 權重就是「走幾格」:$\mathbf{u} = 3\mathbf{v}_1 - 2\mathbf{v}_2$ 代表沿 $\mathbf{v}_1$ 走 3 格、再沿 $\mathbf{v}_2$ 退 2 格。格子紙能鋪滿整個平面,所以**平面上每一點都能由 $\mathbf{v}_1$、$\mathbf{v}_2$ 組合出來**(只要它們不平行)。
 
@@ -97,7 +97,7 @@ Let $\mathbf{a}_1 = \begin{bmatrix} 1 \\ -2 \\ -5 \end{bmatrix}$, $\mathbf{a}_2 
 
 例 1 的格線圖,讓學生上台用手指「走」一次:沿 $\mathbf{v}_1$ 走 3 格、沿 $\mathbf{v}_2$ 退 2 格。
 
-課堂建議做:照做 Exercises 5–6、7;是非全部;變化挑 Exercise 11 或 13。
+課堂建議做:Exercises 5–7;是非 Exercises 27–29;再挑 Exercise 11 或 13。
 
 ## 練習
 ### 照做 · Lay 1.3 Exercises 5–6

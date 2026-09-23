@@ -56,7 +56,7 @@ Theorem 5 則是 $A\mathbf{x}$ 最重要的性質:**先加再乘 = 先乘再加*
 ## 在資工哪裡用
 - **機器學習的輸出層**:一個線性層 $W\mathbf{x}$ 能不能產生**任意**的目標輸出?就是問 $W$ 的行能不能生成輸出空間,也就是 $W$ 的每一列有沒有 pivot。輸出維度比輸入維度大時(行比列少),一定做不到。
 - **控制與機器人**:「用這幾個馬達(行向量),能不能把機械手臂推到任何位置(每個 $\mathbf{b}$)?」就是 Theorem 4。
-- **Theorem 5 讓程式可以平行化**:$A(\mathbf{u} + \mathbf{v}) = A\mathbf{u} + A\mathbf{v}$,所以一大批輸入可以拆開分給不同機器算,結果再加起來。GPU 能一次處理整批資料,背後就是線性。
+- **Theorem 5 = 疊加原理,讓大問題可以拆開算**:$A(\mathbf{u} + \mathbf{v}) = A\mathbf{u} + A\mathbf{v}$,所以一個很大的輸入可以切成幾段($\mathbf{x} = \mathbf{x}_1 + \mathbf{x}_2 + \cdots$,每段只留自己那幾個分量、其餘補 0),各台機器算自己那一段的 $A\mathbf{x}_i$,最後**加起來**就是答案。這正是分散式矩陣乘向量的做法。訊號處理也用同一招:輸入訊號拆成幾個成分,各自算出反應再相加。
 
 ## 原理
 **Theorem 4 的 (a)(b)(c) 為什麼等價?** 依 $A\mathbf{x}$ 的定義,「$A\mathbf{x} = \mathbf{b}$ 有解」⇔「$\mathbf{b}$ 是 $A$ 各行的線性組合」,所以 (a)⇔(b)。(b)⇔(c) 則是「生成 ℝᵐ」的定義。
@@ -94,7 +94,7 @@ Prove Theorem 5 for $n = 3$: if $A = [\,\mathbf{a}_1 \;\; \mathbf{a}_2 \;\; \mat
 
 ## 易錯點
 - 對**增廣矩陣** $[\,A \;\; \mathbf{b}\,]$ 數 pivot,然後用 Theorem 4。Theorem 4 只講**係數矩陣**(課本的 Warning,是非題 27、34)。
-- 以為「行數比列數多」就一定生成 ℝᵐ。行多只是**可能**,還是要看每一列有沒有 pivot(Exercise 17 的 $4 \times 4$ 就不行)。
+- 以為行數夠多(行數 $\ge$ 列數)就一定生成 ℝᵐ。行夠多只是**有機會**,還是要看每一列有沒有 pivot:Exercise 17 的 $4 \times 4$ 方陣行不比列少,只有 3 個 pivot,照樣不行。
 - 問「$B$ 的行能不能生成 ℝ³」,但 $B$ 的行在 ℝ⁴ 裡——問題本身就不成立(Exercise 20)。
 - 化簡時把 $b_1, b_2, b_3$ 的符號算錯。建議每一步都把 $\mathbf{b}$ 那一欄完整寫出來。
 
@@ -103,7 +103,7 @@ Theorem 4 的四句話寫成一個框,整個學期會一直擴充(第 6 週的�
 
 例 1 一定要把 $b_1, b_2, b_3$ 帶著走完,並停在第 4 步問學生:「你能挑一個讓它無解的 $\mathbf{b}$ 嗎?」學生自己挑出 $(1, 0, 0)$,就真的懂了。
 
-課堂建議做:照做 Exercises 15、17–18;是非全部(尤其 27、34);挑戰題 41–42 很適合當討論題。T 題(47–52)留給實作課。
+課堂建議做:Exercises 15、17–18;是非 Exercises 27、28、31、33、34(尤其 27、34);Exercises 41–42 很適合當討論題。T 題(Exercises 47–52)留給實作課。
 
 ## 練習
 ### 照做 · Lay 1.4 Exercises 15–16
@@ -230,7 +230,7 @@ $[\,A \;\; \mathbf{b}\,]$ 的最後一列是 $0 = 0$,有解;$[\,A \;\; \mathbf{c
 (40) Construct a $3 \times 3$ matrix, not in echelon form, whose columns do *not* span $\mathbb{R}^3$. Show that the matrix you construct has the desired property.
 
 #### 解答
-(39) 從一個有 3 個 pivot 的梯形矩陣出發,做一次列運算打亂它(書後提示)。例如把 $I_3$ 的第 1、3 列交換:$\begin{bmatrix} 0 & 0 & 1 \\ 0 & 1 & 0 \\ 1 & 0 & 0 \end{bmatrix}$。它不是梯形,但換回來就是 $I_3$,3 列都有 pivot,所以生成 ℝ³。
+(39) 書後提示是「從一個有 3 個 pivot 的梯形矩陣 $B$ 出發」;接著做一次列運算把它打亂(這一步書上沒寫)。例如把 $I_3$ 的第 1、3 列交換:$\begin{bmatrix} 0 & 0 & 1 \\ 0 & 1 & 0 \\ 1 & 0 & 0 \end{bmatrix}$。它不是梯形,但換回來就是 $I_3$,3 列都有 pivot,所以生成 ℝ³。
 
 (40) 讓某一列是另一列的倍數:$\begin{bmatrix} 1 & 2 & 3 \\ 2 & 4 & 6 \\ 1 & 1 & 1 \end{bmatrix}$。不是梯形;$R_2 \leftarrow R_2 - 2R_1$ 得全 0 列,最多 2 個 pivot,所以不能生成 ℝ³。
 

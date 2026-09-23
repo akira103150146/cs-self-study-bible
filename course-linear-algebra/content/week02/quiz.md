@@ -7,9 +7,9 @@ minutes: 10
 Let $\mathbf{u} = \begin{bmatrix} 1 \\ -2 \end{bmatrix}$ and $\mathbf{v} = \begin{bmatrix} 3 \\ 1 \end{bmatrix}$. Compute $\mathbf{u} - 2\mathbf{v}$.
 
 - A. $\begin{bmatrix} -5 \\ -4 \end{bmatrix}$
-- B. $\begin{bmatrix} -5 \\ -1 \end{bmatrix}$
+- B. $\begin{bmatrix} -5 \\ -3 \end{bmatrix}$
 - C. $\begin{bmatrix} -2 \\ -3 \end{bmatrix}$
-- D. $\begin{bmatrix} -4 & -5 \end{bmatrix}$
+- D. $[\,-5 \;\; -4\,]$
 
 ### 答案
 A
@@ -18,9 +18,9 @@ A
 $2\mathbf{v} = (6, 2)$,每個分量都乘 2。$\mathbf{u} - 2\mathbf{v} = (1 - 6,\ -2 - 2) = (-5, -4)$。
 
 ### 迷思對照
-- **B** 純量倍數只乘了第一個分量,$2\mathbf{v}$ 寫成 $(6, 1)$ → 觀念 1:純量倍數是**每個**分量都乘
+- **B** 純量倍數只乘了第一個分量,$2\mathbf{v}$ 寫成 $(6, 1)$,得 $(1 - 6, -2 - 1)$ → 觀念 1:純量倍數是**每個**分量都乘
 - **C** 忘了乘 2,算成 $\mathbf{u} - \mathbf{v}$ → 觀念 1 例 1:先算純量倍數再相減
-- **D** 把向量寫成橫的,分量順序也顛倒 → 觀念 1:$(a, b)$ 是直的行向量的省略寫法
+- **D** 數字對,但寫成橫的列矩陣 → 觀念 1:$(a, b)$ 是**直的**行向量的省略寫法,和 $1 \times 2$ 的列矩陣不同(是非題 23)
 
 ## Q2 · 觀念 2
 Which augmented matrix has the same solution set as the vector equation
@@ -102,6 +102,8 @@ C
 ## 驗算
 ```check
 Matrix([1, -2]) - 2 * Matrix([3, 1]) == Matrix([-5, -4])
+Matrix([1, -2]) - Matrix([6, 1]) == Matrix([-5, -3])
+Matrix([1, -2]) - Matrix([3, 1]) == Matrix([-2, -3])
 Matrix([[1, 2], [0, 1], [3, 4]]) * Matrix([1, -1]) == Matrix([-1, -1, -1])
 Matrix([[1, 2], [0, 1], [3, 4]]) * Matrix([1, 1]) == Matrix([3, 1, 7])
 Matrix([[1, 2, 3], [4, 5, 6]]).rref()[0] == Matrix([[1, 0, -1], [0, 1, 2]])

@@ -49,7 +49,7 @@ Asking "how many units of each product give this total?" is then a vector equati
 質心公式 $\bar{\mathbf{v}} = \frac{m_1}{m}\mathbf{v}_1 + \cdots + \frac{m_k}{m}\mathbf{v}_k$ 的權重非負而且加起來是 1,這種組合叫**凸組合**,結果一定落在這些點圍成的形狀裡面(Exercise 39 的質心落在三角形內)。
 
 ## 在資工哪裡用
-- **Alpha 混色**:畫面上半透明的視窗、遊戲裡的淡入淡出,每個像素的顏色都是 $(1 - \alpha)\,\text{前景} + \alpha\,\text{背景}$,兩個 RGB 向量的線性組合(例 2)。
+- **Alpha 混色**:畫面上半透明的視窗、遊戲裡的淡入淡出,每個像素的顏色都是 $\alpha\,\text{前景} + (1 - \alpha)\,\text{背景}$,兩個 RGB 向量的線性組合(例 2)。$\alpha$ 是前景的**不透明度**,和 RGBA 的 A、CSS 的 `opacity` 是同一個東西:$\alpha = 1$ 完全蓋住背景、$\alpha = 0$ 完全透明。
 - **動畫內插**:角色從位置 $\mathbf{p}$ 移到 $\mathbf{q}$,中間每一格是 $(1 - t)\mathbf{p} + t\mathbf{q}$。
 - **資源規劃**:雲端服務每台 A 型主機提供 (CPU, 記憶體, 頻寬) = 某個向量,B 型主機是另一個向量;要湊出需求量,就是解向量方程式。
 - **遊戲物理**:剛體的重心就是各部件位置以質量為權重的組合(Exercises 37–39)。
@@ -94,17 +94,17 @@ Then $\mathbf{b}$ and $\mathbf{c}$ represent the "costs per dollar of income" fo
 第 6 步不是課本的內容,是補上的「反問」,讓學生看到應用題的兩個方向:已知份數求總量(乘法)、已知總量求份數(解方程組)。
 
 ### 例 2 · 補充:Alpha 混色
-In computer graphics a color is a vector $(R, G, B)$ with entries from 0 to 255. Drawing a semi-transparent foreground color $\mathbf{f}$ over a background color $\mathbf{g}$ gives the pixel color $(1 - \alpha)\mathbf{f} + \alpha\mathbf{g}$, where $0 \le \alpha \le 1$. Let $\mathbf{f} = (255, 0, 0)$ (red) and $\mathbf{g} = (0, 0, 255)$ (blue).
+In computer graphics a color is a vector $(R, G, B)$ with entries from 0 to 255. Drawing a semi-transparent foreground color $\mathbf{f}$ over a background color $\mathbf{g}$ gives the pixel color $\alpha\mathbf{f} + (1 - \alpha)\mathbf{g}$, where $\alpha$ is the **opacity** of the foreground, $0 \le \alpha \le 1$. Let $\mathbf{f} = (255, 0, 0)$ (red) and $\mathbf{g} = (0, 0, 255)$ (blue).
 
 - **a.** Compute the pixel color when $\alpha = 0.25$.
 - **b.** Which $\alpha$ gives the color $(102, 0, 153)$?
 - **c.** Can the color $(100, 100, 100)$ (gray) be obtained as a linear combination of $\mathbf{f}$ and $\mathbf{g}$?
 
-1. **(a) 代入權重**:$\alpha = 0.25$,權重是 $0.75$ 和 $0.25$,
-   $$0.75\begin{bmatrix} 255 \\ 0 \\ 0 \end{bmatrix} + 0.25\begin{bmatrix} 0 \\ 0 \\ 255 \end{bmatrix} = \begin{bmatrix} 191.25 \\ 0 \\ 63.75 \end{bmatrix}.$$
-   偏紅的紫色(螢幕實際顯示時會四捨五入成整數)。
-2. **(b) 列出向量方程式**:$(1 - \alpha)(255, 0, 0) + \alpha(0, 0, 255) = (102, 0, 153)$。
-3. **(b) 逐分量解**:R 分量 $255(1 - \alpha) = 102$,得 $\alpha = 0.6$;B 分量 $255\alpha = 153$,也得 $\alpha = 0.6$;G 分量 $0 = 0$ 自動成立。三個分量一致,所以 $\alpha = 0.6$。
+1. **(a) 代入權重**:$\alpha = 0.25$ 代表前景只有四分之一的不透明度,權重是 $0.25$(前景)和 $0.75$(背景),
+   $$0.25\begin{bmatrix} 255 \\ 0 \\ 0 \end{bmatrix} + 0.75\begin{bmatrix} 0 \\ 0 \\ 255 \end{bmatrix} = \begin{bmatrix} 63.75 \\ 0 \\ 191.25 \end{bmatrix}.$$
+   偏藍的紫色(螢幕實際顯示時會四捨五入成整數)。$\alpha$ 越大,前景的紅色越強。
+2. **(b) 列出向量方程式**:$\alpha(255, 0, 0) + (1 - \alpha)(0, 0, 255) = (102, 0, 153)$。
+3. **(b) 逐分量解**:R 分量 $255\alpha = 102$,得 $\alpha = 0.4$;B 分量 $255(1 - \alpha) = 153$,也得 $\alpha = 0.4$;G 分量 $0 = 0$ 自動成立。三個分量一致,所以 $\alpha = 0.4$。
 4. **(c) 問的是 Span**:$\mathbf{f}$ 和 $\mathbf{g}$ 的 G 分量都是 0,所以任何組合 $x_1\mathbf{f} + x_2\mathbf{g}$ 的 G 分量都是 0。灰色的 G 分量是 100,**不在** $\operatorname{Span}\{\mathbf{f}, \mathbf{g}\}$ 裡。
 5. **用列化簡確認**:$\left[\begin{array}{rr|r} 255 & 0 & 100 \\ 0 & 0 & 100 \\ 0 & 255 & 100 \end{array}\right]$ 的第二列是 $0 = 100$,無解。
 6. **結論**:只用紅、藍兩種光,永遠混不出含綠色的顏色。這就是螢幕需要**三種**子像素的原因——三個不共面的向量才能生成 ℝ³。
@@ -159,6 +159,9 @@ $2\mathbf{v}_1 = (10, -8, 6)$,$5\mathbf{v}_2 = (20, 15, -10)$,$2\mathbf{v}_3 = (
 
 $\bar{\mathbf{v}} = \frac{1}{10}(13, 9, 0) = (1.3,\ 0.9,\ 0)$(書後解答相同)。
 
+#### 備註
+課本這題附了一張立體圖標出四個質點的位置,講義沒有重畫——表格已經把座標寫全,不影響作答。
+
 ### 變化 · Lay 1.3 Exercise 36
 A steam plant burns two types of coal: anthracite (A) and bituminous (B). For each ton of A burned, the plant produces 27.6 million Btu of heat, 3100 grams (g) of sulfur dioxide, and 250 g of particulate matter (solid-particle pollutants). For each ton of B burned, the plant produces 30.2 million Btu, 6400 g of sulfur dioxide, and 360 g of particulate matter.
 
@@ -176,7 +179,7 @@ A steam plant burns two types of coal: anthracite (A) and bituminous (B). For ea
 驗算三個分量:$27.6(3.9) + 30.2(1.8) = 107.64 + 54.36 = 162$ ✓;$3100(3.9) + 6400(1.8) = 12090 + 11520 = 23610$ ✓;$250(3.9) + 360(1.8) = 975 + 648 = 1623$ ✓。
 
 #### 備註
-三個方程式、兩個未知數,本來可能無解;這題剛好相容(第三個分量是「多出來的檢查」)。可以問學生:如果量測到的微粒是 1700 g,會發生什麼事?(無解,代表量測有誤差——這就是第 6 章最小平方法要處理的情況。)
+三個方程式、兩個未知數,本來可能無解;這題剛好相容(第三個分量是「多出來的檢查」)。可以問學生:如果量測到的微粒是 1700 g,會發生什麼事?(無解,代表量測有誤差——這就是第 14 週(Lay 第 6 章)最小平方法要處理的情況。)
 
 ### 變化 · Lay 1.3 Exercise 38
 Let $\mathbf{v}$ be the center of mass of a system of point masses located at $\mathbf{v}_1, \dots, \mathbf{v}_k$ as in Exercise 37. Is $\mathbf{v}$ in $\operatorname{Span}\{\mathbf{v}_1, \dots, \mathbf{v}_k\}$? Explain.
@@ -214,7 +217,7 @@ $$\begin{aligned} 8w_2 + 2w_3 &= 8 \\ w_1 + w_2 + 4w_3 &= 12 \\ w_1 + w_2 + w_3 
 ```check
 100 * Matrix([Rational(45, 100), Rational(25, 100), Rational(15, 100)]) == Matrix([45, 25, 15])
 Matrix([[Rational(45, 100), Rational(40, 100), 85], [Rational(25, 100), Rational(30, 100), 55], [Rational(15, 100), Rational(15, 100), 30]]).rref()[0] == Matrix([[1, 0, 100], [0, 1, 100], [0, 0, 0]])
-Rational(3, 4) * Matrix([255, 0, 0]) + Rational(1, 4) * Matrix([0, 0, 255]) == Matrix([Rational(765, 4), 0, Rational(255, 4)])
+Rational(1, 4) * Matrix([255, 0, 0]) + Rational(3, 4) * Matrix([0, 0, 255]) == Matrix([Rational(255, 4), 0, Rational(765, 4)])
 Rational(2, 5) * Matrix([255, 0, 0]) + Rational(3, 5) * Matrix([0, 0, 255]) == Matrix([102, 0, 153])
 2 in Matrix([[255, 0, 100], [0, 0, 100], [0, 255, 100]]).rref()[1]
 Matrix([[20, 30, 150], [550, 500, 2825]]).rref()[0] == Matrix([[1, 0, Rational(3, 2)], [0, 1, 4]])

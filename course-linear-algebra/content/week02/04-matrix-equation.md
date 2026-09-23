@@ -116,7 +116,7 @@ Compute $A\mathbf{x}$, where $A = \begin{bmatrix} 2 & 3 & 4 \\ -1 & 5 & -3 \\ 6 
 
 例 1 和例 4 要**同一題用兩種方法各算一次**,讓學生看到答案一樣,再說明:「定義讓我們**理解**,列向量規則讓我們**算得快**。」
 
-課堂建議做:照做 Exercises 1–4(含兩題「沒有定義」)、5–6;是非口頭問;變化挑 Exercise 11 或 13。
+課堂建議做:Exercises 1–4(含兩題「沒有定義」)、5–6;是非 Exercises 23–26、29–30、32 口頭問;再挑 Exercise 11 或 13。
 
 ## 練習
 ### 照做 · Lay 1.4 Exercises 1–2
@@ -253,6 +253,8 @@ Given $A$ and $\mathbf{b}$, write the augmented matrix for the linear system tha
 (14) 化簡 $[\,A \;\; \mathbf{u}\,]$,最後一行是 pivot 行(出現 $0 = $ 非零數)→ **不是**。原因是 $A$ 的三行其實只張成一個平面:第三行 $\mathbf{a}_3 = 3\mathbf{a}_1 - \mathbf{a}_2$ 沒有帶來新方向,而 $\mathbf{u}$ 不在這個平面上。
 
 #### 備註
+課本 Exercise 13 附了一張圖($A$ 兩行張出的平面與 $\mathbf{u}$),講義沒有重畫;這題用列化簡判斷即可,不需要看圖。
+
 Exercise 14 的 $A$ 三行線性相依:$3\mathbf{a}_1 - \mathbf{a}_2 = (7, -1, 0) = \mathbf{a}_3$,所以 Span 只是平面。這是第 3 週「線性相依」的伏筆。
 
 ### 變化 · Lay 1.4 Exercises 35–36

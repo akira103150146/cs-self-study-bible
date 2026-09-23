@@ -57,6 +57,18 @@ class Plot:
         x, y = self.P(*p)
         self.parts.append(f'<text class="{cls}" x="{x + dx}" y="{y + dy}" text-anchor="{anchor}">{text}</text>')
 
+    def out_label(self, q, text, dist=16, cls="t", perp=False):
+        """標籤放在箭頭尖端的外側(沿 q 的方向);perp=True 改放在垂直方向。
+        固定放右上角會被往左下指的箭頭壓到(−v、−2v 的負號會不見),所以依方向決定。"""
+        n = math.hypot(*q) or 1
+        d = (-q[1] / n, q[0] / n) if perp else (q[0] / n, q[1] / n)
+        if perp and d[1] < 0:                      # 垂直方向一律取偏上的那一側
+            d = (-d[0], -d[1])
+        dx, dy = d[0] * dist, -d[1] * dist + 4     # SVG 的 y 軸向下
+        anchor = "start" if d[0] > 0.25 else ("end" if d[0] < -0.25 else "middle")
+        self.label(q, text, dx=dx + (3 if anchor == "start" else -3 if anchor == "end" else 0),
+                   dy=dy, cls=cls, anchor=anchor)
+
     def svg(self, aria, extra_w=0):
         head = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {self.w + extra_w} {self.h}" '
                 f'width="{self.w + extra_w}" role="img" aria-label="{aria}">'
@@ -130,7 +142,7 @@ def grid(name, aria, a, b, rng, pts, labels_ab, win, s=30, mid="ah-grid"):
         q = add(mul(ca, a), mul(cb, b))
         p.dot(q, r=4.5); p.label(q, lab, dx=dx, dy=dy)
     for la, pa in labels_ab:
-        p.label(pa, la, dx=5, dy=-5, cls="")
+        p.out_label(pa, la, dist=14, cls="", perp=True)   # 垂直於格線放,才不會被格線穿過
     save(name, p.svg(aria))
 
 
@@ -201,9 +213,11 @@ body.append(seg3d((0, 0, 0), u, o2, cls="l2", arrow=True))
 body.append(seg3d((0, 0, 0), v, o2, cls="l2", arrow=True))
 uv = tuple(a + b for a, b in zip(u, v))
 body.append(seg3d(u, uv, o2, cls="ax")); body.append(seg3d(v, uv, o2, cls="ax"))
-for X, lab, dx, dy in ((u, "u", -12, 12), (v, "v", 6, -6), (uv, "u + v", 6, 4)):
+# u + v 原本放右下、v 放右上,兩個標籤會疊在一起;改成 u + v 往左上(靠右對齊)、v 往右下
+for X, lab, dx, dy, anchor in ((u, "u", -12, 12, "end"), (v, "v", 10, 16, "start"), (uv, "u + v", -10, -8, "end")):
     q = proj(X, o2)
-    body.append(f'<circle class="pt" cx="{q[0]}" cy="{q[1]}" r="3.5"/><text class="t" x="{q[0] + dx}" y="{q[1] + dy}">{lab}</text>')
+    body.append(f'<circle class="pt" cx="{q[0]}" cy="{q[1]}" r="3.5"/>'
+                f'<text class="t" x="{q[0] + dx}" y="{q[1] + dy}" text-anchor="{anchor}">{lab}</text>')
 pc = proj(corners[2], o2)
 body.append(f'<text class="t" x="{pc[0] - 4}" y="{pc[1] - 8}" text-anchor="end">Span{{u, v}}</text>')
 body.append(f'<text x="{o2[0]}" y="258" text-anchor="middle">a plane through 0</text>')
@@ -219,7 +233,7 @@ def ex34(name, u, v, win):
     for q, lab, cls in items:
         p.arrow(q, cls=cls)
         p.dot(q, r=3)
-        p.label(q, lab, dx=5, dy=-5, cls="t")
+        p.out_label(q, lab)
     save(name, p.svg("Vectors u, v, −v, −2v, u+v, u−v, u−2v drawn as arrows"))
 
 
@@ -228,9 +242,9 @@ ex34("ex4-vectors.svg", (3, 2), (2, 3), (-7, 7, -7, 7))
 
 # ---------- Lay 1.3 Exercise 40 ----------
 p = Plot(-0.5, 4.8, -0.6, 2.9, s=60, pad=24, mid="ah-ex40")
-for q, lab, dx, dy in (((1.0, -0.12), "v1", 4, 16), ((0.9, 0.9), "v2", 4, -6), ((0.8, 2.6), "v3", 6, -4)):
-    p.arrow(q); p.dot(q, r=3.5); p.label(q, lab, dx=dx, dy=dy)
-p.arrow((4.1, 1.45), cls="l2"); p.dot((4.1, 1.45), r=4); p.label((4.1, 1.45), "b", dx=6, dy=4)
+for q, lab in (((1.0, -0.12), "v1"), ((0.9, 0.9), "v2"), ((0.8, 2.6), "v3")):
+    p.arrow(q); p.dot(q, r=3.5); p.out_label(q, lab)
+p.arrow((4.1, 1.45), cls="l2"); p.dot((4.1, 1.45), r=4); p.out_label((4.1, 1.45), "b")
 p.dot((0, 0), r=2.5); p.label((0, 0), "0", dx=-12, dy=4, cls="")
 save("ex40.svg", p.svg("Vectors v1, v2, v3 and b in the plane"))
 
