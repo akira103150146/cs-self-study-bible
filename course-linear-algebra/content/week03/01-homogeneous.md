@@ -36,7 +36,7 @@ The solution set of a homogeneous equation $A\mathbf{x} = \mathbf{0}$ can always
 而且齊次方程組的解集一定是一個 **Span**:一個自由變數是一條通過原點的直線,兩個自由變數是一個通過原點的平面。
 
 ## 幾何意義
-![課本 Figures 1–2:一個自由變數時,解集是通過原點的直線 Span{v};兩個自由變數時,是通過原點的平面 Span{u, v}。](homog-line-plane.svg)
+![課本 1.5 Figures 1–2:一個自由變數時,解集是通過原點的直線 Span{v};兩個自由變數時,是通過原點的平面 Span{u, v}。](homog-line-plane.svg)
 
 解集**一定通過原點**,因為 $\mathbf{0}$ 永遠是解。這點和下一個觀念的非齊次方程組不同。
 
@@ -208,10 +208,10 @@ $$\begin{bmatrix} 1 & 5 & 0 & 8 & 1 & 0 \\ 0 & 0 & 1 & -7 & 4 & 0 \\ 0 & 0 & 0 &
 $$\mathbf{x} = x_2\begin{bmatrix} -5 \\ 1 \\ 0 \\ 0 \\ 0 \\ 0 \end{bmatrix} + x_4\begin{bmatrix} -8 \\ 0 \\ 7 \\ 1 \\ 0 \\ 0 \end{bmatrix} + x_5\begin{bmatrix} -1 \\ 0 \\ -4 \\ 0 \\ 1 \\ 0 \end{bmatrix}$$
 
 #### 備註
-書後解答提到 Study Guide 討論了這類題常見的兩個錯:忘了 $x_4$ 是自由變數(它的行全是 0),以及 (12) 忘了 $x_6 = 0$ 也要寫進向量。
+書後解答只寫到「基本變數是 $x_1, x_3, x_5$,其餘是自由變數」,並說 Study Guide 討論了這類題常見的兩個錯,但沒有寫出是哪兩個。依經驗最常見的是:忘了 $x_4$ 是自由變數(它的行全是 0),以及 (12) 忘了 $x_6 = 0$ 也要寫進向量。
 
 ### 變化 · Lay 1.5 Exercises 13–16
-Review the Reasonable Answers box before answering. (13) Verify that the solutions you found to Exercise 9 are indeed homogeneous solutions. (14) Verify that the solutions you found to Exercise 10 are indeed homogeneous solutions. (15) Verify that the solutions you found to Exercise 11 are indeed homogeneous solutions. (16) Verify that the solutions you found to Exercise 12 are indeed homogeneous solutions.
+You may find it helpful to review the information in the Reasonable Answers box from this section before answering Exercises 13–16. (13) Verify that the solutions you found to Exercise 9 are indeed homogeneous solutions. (14) Verify that the solutions you found to Exercise 10 are indeed homogeneous solutions. (15) Verify that the solutions you found to Exercise 11 are indeed homogeneous solutions. (16) Verify that the solutions you found to Exercise 12 are indeed homogeneous solutions.
 
 #### 解答
 方法(課本 Reasonable Answers):把矩陣乘上一般解裡的**每一個**向量,都要得到 $\mathbf{0}$;再用 $A\mathbf{x}$ 的線性性質(上週的 Theorem 5)推到整個組合。

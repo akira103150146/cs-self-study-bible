@@ -26,6 +26,7 @@ In geometric terms, two vectors are linearly dependent if and only if they lie o
 | scalar multiple | 純量倍數 | $c\mathbf{v}$;兩個向量相依 ⇔ 其中一個是另一個的倍數 |
 | characterization | 刻畫(等價描述) | 換一種說法、但意思完全相同的條件 |
 | preceding vectors | 前面的向量 | $\mathbf{v}_1, \dots, \mathbf{v}_{j-1}$,排在 $\mathbf{v}_j$ 之前的 |
+| (T/F-C) | 是非題 + 反例 | 課本對 Exercises 39–44 的標記:判斷真假,**假的要造一個具體反例**(C = counterexample) |
 
 ## 白話說
 **一個向量**:只要不是 $\mathbf{0}$ 就獨立。
@@ -42,11 +43,11 @@ In geometric terms, two vectors are linearly dependent if and only if they lie o
 ## 幾何意義
 **兩個向量**相依 ⇔ 在同一條通過原點的直線上:
 
-![課本 Figure 1:(3, 1) 與 (6, 2) 在同一條直線上,相依;(3, 2) 與 (6, 2) 不在同一條直線上,獨立。](two-vectors.svg)
+![課本 1.7 Figure 1:(3, 1) 與 (6, 2) 在同一條直線上,相依;(3, 2) 與 (6, 2) 不在同一條直線上,獨立。](two-vectors.svg)
 
 **三個向量**(ℝ³ 中,$\mathbf{u}$、$\mathbf{v}$ 獨立):$\{\mathbf{u}, \mathbf{v}, \mathbf{w}\}$ 相依 ⇔ $\mathbf{w}$ 落在 $\mathbf{u}$、$\mathbf{v}$ 張成的平面上。
 
-![課本 Figure 2:左圖 w 在 Span{u, v} 平面上,三個向量相依;右圖 w 伸出平面外,三個向量獨立。](dep-in-r3.svg)
+![課本 1.7 Figure 2:左圖 w 在 Span{u, v} 平面上,三個向量相依;右圖 w 伸出平面外,三個向量獨立。](dep-in-r3.svg)
 
 ## 在資工哪裡用
 - **特徵選取**:資料裡如果有一欄可以由其他欄組合出來(Theorem 7 說的「多餘」),它不提供新資訊,可以直接丟掉。實作課就是用 pivot 行找出該留哪些欄位。
@@ -59,8 +60,11 @@ In geometric terms, two vectors are linearly dependent if and only if they lie o
 **Theorem 7 的證明**(課本 p. 88):
 
 - **(⇐)** 若 $\mathbf{v}_j$ 是其他向量的組合,移項後 $\mathbf{v}_j$ 的權重是 $-1 \neq 0$,就是一條相依關係。
-- **(⇒)** 若 $S$ 相依,取一條相依關係 $c_1\mathbf{v}_1 + \cdots + c_p\mathbf{v}_p = \mathbf{0}$,令 $j$ 是 $c_j \neq 0$ 的**最大**下標。$j = 1$ 不可能(那會變成 $c_1\mathbf{v}_1 = \mathbf{0}$,與 $\mathbf{v}_1 \neq \mathbf{0}$ 矛盾),所以 $j > 1$。把 $c_j\mathbf{v}_j$ 以外的項移到右邊再除以 $c_j$:
-  $$\mathbf{v}_j = \left(-\frac{c_1}{c_j}\right)\mathbf{v}_1 + \cdots + \left(-\frac{c_{j-1}}{c_j}\right)\mathbf{v}_{j-1}.$$
+- **(⇒)** 若 $S$ 相依,**先分兩種情況**(課本就是這樣分的,少了這一步只證到定理的後半句):
+  - **$\mathbf{v}_1 = \mathbf{0}$**:那麼 $\mathbf{v}_1$ 本身就是其他向量的(平凡)線性組合 $0\mathbf{v}_2 + \cdots + 0\mathbf{v}_p$,已經符合「至少有一個是其他的組合」。
+  - **$\mathbf{v}_1 \neq \mathbf{0}$**:取一條相依關係 $c_1\mathbf{v}_1 + \cdots + c_p\mathbf{v}_p = \mathbf{0}$,令 $j$ 是 $c_j \neq 0$ 的**最大**下標。$j = 1$ 不可能(那會變成 $c_1\mathbf{v}_1 = \mathbf{0}$,與 $\mathbf{v}_1 \neq \mathbf{0}$ 矛盾),所以 $j > 1$。把 $c_j\mathbf{v}_j$ 以外的項移到右邊再除以 $c_j$:
+    $$\mathbf{v}_j = \left(-\frac{c_1}{c_j}\right)\mathbf{v}_1 + \cdots + \left(-\frac{c_{j-1}}{c_j}\right)\mathbf{v}_{j-1}.$$
+    這一段同時證出定理的後半句:**$\mathbf{v}_1 \neq \mathbf{0}$ 時,那個「多餘的」向量可以挑在前面向量的組合裡**。
 
 ## 老師講解
 ### 例 1 · Lay 1.7 Example 3
@@ -152,7 +156,7 @@ Exercises 15、17、18、20 屬於同一組題目,放在觀念 5(它們要用 Th
 ### 挑戰 · Lay 1.7 Exercise 39
 Each statement is either true (in all cases) or false (for at least one example). If false, construct a specific example to show that the statement is not always true. Such an example is called a *counterexample* to the statement. If a statement is true, give a justification.
 
-**(T/F)** If $\mathbf{v}_1, \dots, \mathbf{v}_4$ are in $\mathbb{R}^4$ and $\mathbf{v}_3 = 2\mathbf{v}_1 + \mathbf{v}_2$, then $\{\mathbf{v}_1, \mathbf{v}_2, \mathbf{v}_3, \mathbf{v}_4\}$ is linearly dependent.
+**(T/F-C)** If $\mathbf{v}_1, \dots, \mathbf{v}_4$ are in $\mathbb{R}^4$ and $\mathbf{v}_3 = 2\mathbf{v}_1 + \mathbf{v}_2$, then $\{\mathbf{v}_1, \mathbf{v}_2, \mathbf{v}_3, \mathbf{v}_4\}$ is linearly dependent.
 
 #### 解答
 **True**,由 Theorem 7(書後解答相同)。具體的相依關係:$2\mathbf{v}_1 + \mathbf{v}_2 - \mathbf{v}_3 + 0\mathbf{v}_4 = \mathbf{0}$,$\mathbf{v}_3$ 的權重 $-1 \neq 0$。
@@ -160,7 +164,7 @@ Each statement is either true (in all cases) or false (for at least one example)
 ### 挑戰 · Lay 1.7 Exercise 41
 Each statement is either true (in all cases) or false (for at least one example). If false, construct a counterexample. If true, give a justification.
 
-**(T/F)** If $\mathbf{v}_1$ and $\mathbf{v}_2$ are in $\mathbb{R}^4$ and $\mathbf{v}_2$ is not a scalar multiple of $\mathbf{v}_1$, then $\{\mathbf{v}_1, \mathbf{v}_2\}$ is linearly independent.
+**(T/F-C)** If $\mathbf{v}_1$ and $\mathbf{v}_2$ are in $\mathbb{R}^4$ and $\mathbf{v}_2$ is not a scalar multiple of $\mathbf{v}_1$, then $\{\mathbf{v}_1, \mathbf{v}_2\}$ is linearly independent.
 
 #### 解答
 **False.** $\mathbf{v}_1$ 可能是零向量(書後解答相同)。反例:$\mathbf{v}_1 = \mathbf{0}$、$\mathbf{v}_2 = (1, 0, 0, 0)$。$\mathbf{v}_2$ 不是 $\mathbf{0}$ 的倍數,但 $1\mathbf{v}_1 + 0\mathbf{v}_2 = \mathbf{0}$ 是相依關係。
@@ -171,7 +175,7 @@ Each statement is either true (in all cases) or false (for at least one example)
 ### 挑戰 · Lay 1.7 Exercise 42
 Each statement is either true (in all cases) or false (for at least one example). If false, construct a counterexample. If true, give a justification.
 
-**(T/F)** If $\mathbf{v}_1, \dots, \mathbf{v}_4$ are in $\mathbb{R}^4$ and $\mathbf{v}_3$ is *not* a linear combination of $\mathbf{v}_1, \mathbf{v}_2, \mathbf{v}_4$, then $\{\mathbf{v}_1, \mathbf{v}_2, \mathbf{v}_3, \mathbf{v}_4\}$ is linearly independent.
+**(T/F-C)** If $\mathbf{v}_1, \dots, \mathbf{v}_4$ are in $\mathbb{R}^4$ and $\mathbf{v}_3$ is *not* a linear combination of $\mathbf{v}_1, \mathbf{v}_2, \mathbf{v}_4$, then $\{\mathbf{v}_1, \mathbf{v}_2, \mathbf{v}_3, \mathbf{v}_4\}$ is linearly independent.
 
 #### 解答
 **False.** 反例:$\mathbf{v}_1 = \mathbf{v}_2 = \mathbf{e}_1$、$\mathbf{v}_3 = \mathbf{e}_2$、$\mathbf{v}_4 = \mathbf{e}_3$。$\mathbf{v}_3 = \mathbf{e}_2$ 不在 $\operatorname{Span}\{\mathbf{e}_1, \mathbf{e}_3\}$ 裡,但 $\mathbf{v}_1 - \mathbf{v}_2 = \mathbf{0}$,整組相依。

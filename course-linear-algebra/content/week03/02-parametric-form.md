@@ -52,11 +52,11 @@ When a nonhomogeneous linear system has many solutions, the general solution can
 ## 幾何意義
 向量加法可以看成**平移**:把 $A\mathbf{x} = \mathbf{0}$ 的解集(通過原點的直線或平面)整個搬動 $\mathbf{p}$,就得到 $A\mathbf{x} = \mathbf{b}$ 的解集。
 
-![課本 Figure 5:Ax = 0 的解集是通過原點、方向為 v 的直線;Ax = b 的解集是把它平移 p 的平行線。直線上每一點都是 p + tv。](translate.svg)
+![課本 1.5 Figure 5:Ax = 0 的解集是通過原點、方向為 v 的直線;Ax = b 的解集是把它平移 p 的平行線。直線上每一點都是 p + tv。](translate.svg)
 
 兩個自由變數時是兩個**平行的平面**,只有 $A\mathbf{x} = \mathbf{0}$ 那個通過原點:
 
-![課本 Figure 6:Ax = 0 與 Ax = b 的解集是兩個平行的平面。](parallel-planes.svg)
+![課本 1.5 Figure 6:Ax = 0 與 Ax = b 的解集是兩個平行的平面。](parallel-planes.svg)
 
 ## 在資工哪裡用
 - **欠定系統(underdetermined system)**:方程式比未知數少時,解有無限多個。機器學習的參數常常比資料點多,「所有讓訓練誤差為 0 的參數」就是 $\mathbf{p}$ + 一整個齊次解空間;演算法挑的是其中「最短」的那個(第 14 週的最小平方與第 16 週的偽逆)。
@@ -119,8 +119,6 @@ Let $A = \begin{bmatrix} 1 & -2 & 1 & 2 \\ 1 & -1 & 2 & 5 \\ 0 & 1 & 1 & 3 \end{
 
 ## 練習
 ### 照做 · Lay 1.5 Exercises 17–18
-Use vectors to describe the solution set as a line.
-
 (17) Suppose the solution set of a certain system of linear equations can be described as $x_1 = 5 + 4x_3$, $x_2 = -2 - 7x_3$, with $x_3$ free. Use vectors to describe this set as a line in $\mathbb{R}^3$. (18) Suppose the solution set of a certain system of linear equations can be described as $x_1 = 3x_4$, $x_2 = 8 + x_4$, $x_3 = 2 - 5x_4$, with $x_4$ free. Use vectors to describe this set as a line in $\mathbb{R}^4$.
 
 #### 解答
@@ -129,8 +127,6 @@ Use vectors to describe the solution set as a line.
 (18) $\mathbf{x} = \begin{bmatrix} 3x_4 \\ 8 + x_4 \\ 2 - 5x_4 \\ x_4 \end{bmatrix} = \begin{bmatrix} 0 \\ 8 \\ 2 \\ 0 \end{bmatrix} + x_4\begin{bmatrix} 3 \\ 1 \\ -5 \\ 1 \end{bmatrix}$:ℝ⁴ 中通過 $(0, 8, 2, 0)$、平行 $(3, 1, -5, 1)$ 的直線。
 
 ### 照做 · Lay 1.5 Exercises 19–20
-Describe the solutions of the system in parametric vector form, and give a geometric comparison with the solution set of the homogeneous system with the same coefficients.
-
 (19) Follow the method of Example 3 to describe the solutions of the following system in parametric vector form. Also, give a geometric description of the solution set and compare it to that in Exercise 5.
 $$\begin{aligned} x_1 + 3x_2 + x_3 &= 1 \\ -4x_1 - 9x_2 + 2x_3 &= -1 \\ -3x_2 - 6x_3 &= -3 \end{aligned}$$
 
@@ -147,9 +143,7 @@ $x_1 = -2 + 5x_3$、$x_2 = 1 - 2x_3$,所以 $\mathbf{x} = \begin{bmatrix} -2 \\ 
 (20) 化到 RREF $\left[\begin{array}{rrr|r} 1 & 0 & 4 & -5 \\ 0 & 1 & -3 & 3 \\ 0 & 0 & 0 & 0 \end{array}\right]$,$x_1 = -5 - 4x_3$、$x_2 = 3 + 3x_3$,所以 $\mathbf{x} = \begin{bmatrix} -5 \\ 3 \\ 0 \end{bmatrix} + x_3\begin{bmatrix} -4 \\ 3 \\ 1 \end{bmatrix}$:通過 $(-5, 3, 0)$、平行於 Exercise 6 解集的直線。
 
 ### 照做 · Lay 1.5 Exercises 21–22
-Describe and compare the solution sets of the two equations.
-
-(21) $x_1 + 9x_2 - 4x_3 = 0$ and $x_1 + 9x_2 - 4x_3 = -2$. (22) $x_1 - 3x_2 + 5x_3 = 0$ and $x_1 - 3x_2 + 5x_3 = 4$.
+(21) Describe and compare the solution sets of $x_1 + 9x_2 - 4x_3 = 0$ and $x_1 + 9x_2 - 4x_3 = -2$. (22) Describe and compare the solution sets of $x_1 - 3x_2 + 5x_3 = 0$ and $x_1 - 3x_2 + 5x_3 = 4$.
 
 #### 解答
 (21) 令 $\mathbf{u} = (-9, 1, 0)$、$\mathbf{v} = (4, 0, 1)$、$\mathbf{p} = (-2, 0, 0)$。齊次方程式的解是 $\mathbf{x} = x_2\mathbf{u} + x_3\mathbf{v}$,通過原點的平面;非齊次的解是 $\mathbf{x} = \mathbf{p} + x_2\mathbf{u} + x_3\mathbf{v}$,通過 $\mathbf{p}$、和前者平行的平面(書後解答相同)。
@@ -215,7 +209,7 @@ Find a parametric equation of the line $M$ through $\mathbf{p}$ and $\mathbf{q}$
 
 (25) $\mathbf{p} = \begin{bmatrix} 2 \\ -5 \end{bmatrix}$, $\mathbf{q} = \begin{bmatrix} -3 \\ 1 \end{bmatrix}$  (26) $\mathbf{p} = \begin{bmatrix} -6 \\ 3 \end{bmatrix}$, $\mathbf{q} = \begin{bmatrix} 0 \\ -4 \end{bmatrix}$
 
-![The line through p and q is parallel to q − p.](line-pq.svg)
+![課本 1.5 Exercises 25–26 的圖(書 p. 76):通過 p 與 q 的直線 M,平行於 q − p。](line-pq.svg)
 
 #### 解答
 (25) $\mathbf{q} - \mathbf{p} = \begin{bmatrix} -5 \\ 6 \end{bmatrix}$,所以 $\mathbf{x} = \mathbf{p} + t(\mathbf{q} - \mathbf{p}) = \begin{bmatrix} 2 \\ -5 \end{bmatrix} + t\begin{bmatrix} -5 \\ 6 \end{bmatrix}$。$t = 0$ 得 $\mathbf{p}$,$t = 1$ 得 $\mathbf{q}$(書後解答相同)。
@@ -291,7 +285,7 @@ Construct a $2 \times 2$ matrix $A$ such that the solution set of the equation $
 不矛盾:Theorem 6 只適用於**相容**的 $A\mathbf{x} = \mathbf{b}$。
 
 #### 備註
-書後解答這題最後一句印成「translating the solution set of $A\mathbf{x} = \mathbf{b}$」,應該是 $A\mathbf{x} = \mathbf{0}$(印刷錯誤)。
+書後解答這題倒數第二句印成「translating the solution set of $A\mathbf{x} = \mathbf{b}$」,應該是 $A\mathbf{x} = \mathbf{0}$(印刷錯誤)。
 
 ### 挑戰 · Lay 1.5 Exercise 50
 Suppose $A$ is a $3 \times 3$ matrix and $\mathbf{y}$ is a vector in $\mathbb{R}^3$ such that the equation $A\mathbf{x} = \mathbf{y}$ does *not* have a solution. Does there exist a vector $\mathbf{z}$ in $\mathbb{R}^3$ such that the equation $A\mathbf{x} = \mathbf{z}$ has a unique solution? Discuss.

@@ -273,7 +273,8 @@ def _glossary(text, path):
 # 數學式先拿掉,避免 $(x_1, x_2)$ 之類被誤算。
 LABEL = r"(\d{1,2}[a-z]?|[a-h])"
 SUBPART = re.compile(r"(?:^|\s)\(" + LABEL + r"\)(?=\s)")
-SUBPART_LIST = re.compile(r"(?m)^\s*[-*]\s+\*\*" + LABEL + r"\.\*\*|<li>\s*<strong>" + LABEL + r"\.</strong>")
+SUBPART_LIST = re.compile(r"(?m)^\s*[-*]\s+\*\*" + LABEL + r"\.\*\*"
+                          r"|<li>\s*(?:<p>\s*)?<strong>" + LABEL + r"\.</strong>")   # 清單項之間有空行時會多一層 <p>
 
 
 def count_parts(src):

@@ -157,16 +157,20 @@ body.append(seg3d((0, 0, 0), v, o1, cls="l2", arrow="ah-3d"))
 body.append(dot3d(v, o1, "v", -4, 18))
 pe = proj(mul(1.6, v), o1)
 body.append(f'<text class="t" x="{pe[0] - 4}" y="{pe[1] - 8}" text-anchor="middle">Span{{v}}</text>')
+body.append(dot3d((0, 0, 0), o1, "0", -14, 14, r=2.5))
 body.append(f'<text x="{o1[0]}" y="262" text-anchor="middle">one free variable: a line through 0</text>')
-u, v = mul(1.8, (0.3, 1, 0)), mul(1.8, (0.2, 0, 1))   # 課本 Example 2 的 u、v,放大 1.8 倍畫
-poly, corners = plane3d((0, 0, 0), u, v, -0.3, 1.5, -0.3, 1.4, o2)
+# 示意用的 u、v(課本 Figure 2 也是示意圖)。不要用 Example 2 的 (.3,1,0)、(.2,0,1):
+# 它們在這個投影下幾乎貼著 x2、x3 軸,平面會畫成一面「牆」,看不出是平面。
+u, v = (1.4, 0.3, 0.9), (-0.2, 1.6, 0.5)
+poly, corners = plane3d((0, 0, 0), u, v, -1.1, 1.5, -1.0, 1.4, o2)
 body.append(poly)
 body += axes3d(o2)
-body.append(seg3d((0, 0, 0), u, o2, cls="l2", arrow="ah-3d"))
-body.append(seg3d((0, 0, 0), v, o2, cls="l2", arrow="ah-3d"))
-body.append(dot3d(u, o2, "u", 2, 18)); body.append(dot3d(v, o2, "v", -18, 2))
+body.append(seg3d((0, 0, 0), u, o2, cls="l1", arrow="ah-3d"))
+body.append(seg3d((0, 0, 0), v, o2, cls="l1", arrow="ah-3d"))
+body.append(dot3d(u, o2, "u", -14, 14)); body.append(dot3d(v, o2, "v", 8, 14))
+body.append(dot3d((0, 0, 0), o2, "0", -14, 14, r=2.5))
 pc = proj(corners[2], o2)
-body.append(f'<text class="t" x="{pc[0] + 6}" y="{pc[1]}">Span{{u, v}}</text>')
+body.append(f'<text class="t" x="{pc[0] + 8}" y="{pc[1] - 6}">Span{{u, v}}</text>')   # 靠右放,不要壓到 x3 軸
 body.append(f'<text x="{o2[0]}" y="262" text-anchor="middle">two free variables: a plane through 0</text>')
 svg("homog-line-plane.svg", "Solution set of Ax = 0: a line through 0 (one free variable) or a plane through 0 (two free variables)",
     640, 272, "".join(body), ["ah-3d"])
@@ -182,6 +186,8 @@ p.arrow(pp, cls="l2")
 p.arrow(mul(t, v), cls="l1")
 p.arrow(add(pp, mul(t, v)), q=mul(t, v), cls="ax", dashed=True)
 p.dot(pp); p.dot(mul(t, v)); p.dot(add(pp, mul(t, v))); p.dot((0, 0), r=3)
+p.dot(v, r=3)                                  # 圖說提到「方向為 v」,v 本身也要標出來
+p.label(v, "v", dx=2, dy=-8)
 p.label(pp, "p", dx=-16, dy=-2)
 p.label(mul(t, v), "tv", dx=2, dy=18)
 p.label(add(pp, mul(t, v)), "p + tv", dx=-2, dy=-10, anchor="middle")
@@ -226,17 +232,20 @@ pair("two-vectors.svg", "Left: (3, 1) and (6, 2) lie on one line, linearly depen
 
 # ---------- 觀念 4:ℝ³ 中 w 在不在 Span{u, v} 裡(Lay 1.7 Figure 2)----------
 o1, o2 = (150, 140), (470, 140)
-u, v = (1.5, 0.5, 0), (0.5, 3, 0)
+# u、v 都放在 z = 0 的平面上,但都要離 x1、x2 軸夠遠、長度相當:
+# 舊的 v = (0.5, 3, 0) 投影後幾乎和 x2 軸重疊,u 又只有 v 的四分之一長。
+u, v = (2.6, 0.3, 0), (1.0, 2.6, 0)
 body = []
-for o, w, cap in ((o1, (1.6, 1.8, 0), "dependent: w in Span{u, v}"),
-                  (o2, (0.8, 2.0, 2.2), "independent: w not in Span{u, v}")):
-    poly, _ = plane3d((0, 0, 0), u, v, -0.2, 1.4, -0.2, 1.25, o)
+for o, w, cap in ((o1, (1.93, 1.47, 0), "dependent: w in Span{u, v}"),
+                  (o2, (1.2, 1.2, 2.0), "independent: w not in Span{u, v}")):
+    poly, _ = plane3d((0, 0, 0), u, v, -0.2, 1.3, -0.2, 1.15, o)
     body.append(poly)
     body += axes3d(o)
     body.append(seg3d((0, 0, 0), u, o, cls="l1", arrow="ah-3d7"))
     body.append(seg3d((0, 0, 0), v, o, cls="l1", arrow="ah-3d7"))
     body.append(seg3d((0, 0, 0), w, o, cls="l2", arrow="ah-3d7"))
     body.append(dot3d(u, o, "u", -14, 12)); body.append(dot3d(v, o, "v", 6, 12)); body.append(dot3d(w, o, "w", 6, -4))
+    body.append(dot3d((0, 0, 0), o, "0", -14, 14, r=2.5))
     if w[2]:
         body.append(seg3d(w, (w[0], w[1], 0), o, cls="ax", extra=' stroke-dasharray="4 4"'))
     body.append(f'<text x="{o[0]}" y="262" text-anchor="middle">{cap}</text>')
@@ -246,9 +255,13 @@ svg("dep-in-r3.svg", "Left: w lies in the plane spanned by u and v, so {u, v, w}
 # ---------- 觀念 5:ℝ² 中三個向量一定相依(Lay 1.7 Figure 4)----------
 p = Plot(-3, 5, -1.8, 3, s=40, mid="ah-thm8")
 p.axes(ticks=True)
+def num(v):
+    return str(v).replace("-", "−")          # 標籤用真正的減號,和圖說、題幹一致
+
+
 for q, dx, dy, anchor in (((2, 1), 4, -6, "start"), ((4, -1), 4, 16, "start"), ((-2, 2), -4, -6, "end")):
     p.arrow(q); p.dot(q, r=3.5)
-    p.label(q, f"({q[0]}, {q[1]})", dx=dx, dy=dy, anchor=anchor)
+    p.label(q, f"({num(q[0])}, {num(q[1])})", dx=dx, dy=dy, anchor=anchor)
 single("three-in-r2.svg", "Three vectors (2, 1), (4, −1), (−2, 2) in the plane: a linearly dependent set", p)
 
 # ---------- 觀念 2:通過 p、q 的直線 M(Lay 1.5 Exercises 25–26 的示意圖)----------
@@ -257,10 +270,12 @@ P, Q = (-5, 1.6), (-2.6, -0.8)
 QP = (Q[0] - P[0], Q[1] - P[1])
 p.poly([(0, 0), Q, QP, (-P[0], -P[1])], cls="hl", opacity=0.45)
 p.axes(ticks=False)
-p.line(add(P, mul(-0.45, QP)), add(P, mul(1.7, QP)), cls="l2", extra=' style="stroke-width:2.5"')
+# M 和 q − p 要同一個顏色(平行才看得出來,這正是題目提示的重點);p、q、−p 用磚紅,
+# 不要用 ax(和座標軸同色同粗細,會被當成輔助線)。
+p.line(add(P, mul(-0.45, QP)), add(P, mul(1.7, QP)), cls="l1", extra=' style="stroke-width:2.5"')
 for X, lab, dx, dy, anc in ((P, "p", -8, 16, "end"), (Q, "q", -6, 16, "end"),
                             ((-P[0], -P[1]), "−p", 6, 14, "start")):
-    p.arrow(X, cls="ax"); p.dot(X, r=3.5); p.label(X, lab, dx=dx, dy=dy, anchor=anc)
+    p.arrow(X, cls="l2"); p.dot(X, r=3.5); p.label(X, lab, dx=dx, dy=dy, anchor=anc)
 p.arrow(QP, cls="l1"); p.dot(QP, r=3.5); p.label(QP, "q − p", dx=6, dy=16)
 p.label(add(P, mul(1.7, QP)), "M", dx=6, dy=4)
 single("line-pq.svg", "The line M through p and q is parallel to the vector q minus p", p)

@@ -4,7 +4,7 @@ title_zh: 一定相依的兩種情況:向量太多,或含零向量
 sub: More vectors than entries, or a zero vector, means dependent
 level: mid
 source: Lay 1.7
-lab_hook: '`A.shape[1] > A.shape[0]`:行比列多,不用算就知道各行相依'
+lab_hook: '`V3.rank()`:ℝ² 裡的 3 個向量,rank 最多 2,不可能等於行數 3 → 一定相依(Theorem 8)'
 ---
 ## 觀念
 The next two theorems describe special cases in which the linear dependence of a set is automatic.
@@ -43,7 +43,7 @@ The next two theorems describe special cases in which the linear dependence of a
 ## 幾何意義
 ℝ² 是平面,最多只能有兩個「真正不同方向」的向量。第三個向量一定落在前兩個張成的平面(就是整個 ℝ²)裡:
 
-![課本 Figure 4:ℝ² 中的三個向量 (2, 1)、(4, −1)、(−2, 2) 兩兩都不是倍數,但整組相依。](three-in-r2.svg)
+![課本 1.7 Figure 4:ℝ² 中的三個向量 (2, 1)、(4, −1)、(−2, 2) 兩兩都不是倍數,但整組相依。](three-in-r2.svg)
 
 同理,ℝ³ 最多三個獨立的方向;第四個向量一定可以由前面的組出來。
 
@@ -55,7 +55,7 @@ The next two theorems describe special cases in which the linear dependence of a
 ## 原理
 **Theorem 8 的關鍵**:$n \times p$ 的矩陣最多 $n$ 個 pivot(每列最多一個)。$p > n$ 時,$p$ 行裡至少有 $p - n$ 行不是 pivot 行 → 自由變數 → 非平凡解。
 
-**矩陣的樣子**(課本 Figure 3):一個「矮胖」的矩陣(行比列多),各行一定相依。
+**矩陣的樣子**(課本 1.7 Figure 3):一個「矮胖」的矩陣(行比列多),各行一定相依。
 $$\underbrace{\begin{bmatrix} * & * & * & * & * \\ * & * & * & * & * \\ * & * & * & * & * \end{bmatrix}}_{p = 5 \text{ columns in } \mathbb{R}^3}$$
 
 **子集與超集**(Practice Problem 2、Exercises 43–44):
@@ -180,7 +180,7 @@ Let $\mathbf{u} = \begin{bmatrix} 3 \\ 2 \\ -4 \end{bmatrix}$, $\mathbf{v} = \be
 ### 挑戰 · Lay 1.7 Exercise 40
 Each statement is either true (in all cases) or false (for at least one example). If false, construct a counterexample. If true, give a justification.
 
-**(T/F)** If $\mathbf{v}_1, \dots, \mathbf{v}_4$ are in $\mathbb{R}^4$ and $\mathbf{v}_3 = \mathbf{0}$, then $\{\mathbf{v}_1, \mathbf{v}_2, \mathbf{v}_3, \mathbf{v}_4\}$ is linearly dependent.
+**(T/F-C)** If $\mathbf{v}_1, \dots, \mathbf{v}_4$ are in $\mathbb{R}^4$ and $\mathbf{v}_3 = \mathbf{0}$, then $\{\mathbf{v}_1, \mathbf{v}_2, \mathbf{v}_3, \mathbf{v}_4\}$ is linearly dependent.
 
 #### 解答
 **True**,由 Theorem 9:$0\mathbf{v}_1 + 0\mathbf{v}_2 + 1\mathbf{v}_3 + 0\mathbf{v}_4 = \mathbf{0}$ 是一條相依關係。
@@ -196,9 +196,9 @@ $c_1, c_2, c_3, 0$ 不全為 0,所以 $\{\mathbf{v}_1, \mathbf{v}_2, \mathbf{v}_
 ### 挑戰 · Lay 1.7 Exercises 43–44
 Each statement is either true (in all cases) or false (for at least one example). If false, construct a counterexample. If true, give a justification.
 
-(43) **(T/F)** If $\mathbf{v}_1, \dots, \mathbf{v}_4$ are in $\mathbb{R}^4$ and $\{\mathbf{v}_1, \mathbf{v}_2, \mathbf{v}_3\}$ is linearly dependent, then $\{\mathbf{v}_1, \mathbf{v}_2, \mathbf{v}_3, \mathbf{v}_4\}$ is also linearly dependent.
+(43) **(T/F-C)** If $\mathbf{v}_1, \dots, \mathbf{v}_4$ are in $\mathbb{R}^4$ and $\{\mathbf{v}_1, \mathbf{v}_2, \mathbf{v}_3\}$ is linearly dependent, then $\{\mathbf{v}_1, \mathbf{v}_2, \mathbf{v}_3, \mathbf{v}_4\}$ is also linearly dependent.
 
-(44) **(T/F)** If $\mathbf{v}_1, \dots, \mathbf{v}_4$ are linearly independent vectors in $\mathbb{R}^4$, then $\{\mathbf{v}_1, \mathbf{v}_2, \mathbf{v}_3\}$ is also linearly independent. [*Hint:* Think about $x_1\mathbf{v}_1 + x_2\mathbf{v}_2 + x_3\mathbf{v}_3 + 0 \cdot \mathbf{v}_4 = \mathbf{0}$.]
+(44) **(T/F-C)** If $\mathbf{v}_1, \dots, \mathbf{v}_4$ are linearly independent vectors in $\mathbb{R}^4$, then $\{\mathbf{v}_1, \mathbf{v}_2, \mathbf{v}_3\}$ is also linearly independent. [*Hint:* Think about $x_1\mathbf{v}_1 + x_2\mathbf{v}_2 + x_3\mathbf{v}_3 + 0 \cdot \mathbf{v}_4 = \mathbf{0}$.]
 
 #### 解答
 (43) **True.** $\mathbf{v}_1, \mathbf{v}_2, \mathbf{v}_3$ 之間的相依關係,在 $\mathbf{v}_4$ 前面放權重 0,就成為 $\mathbf{v}_1, \dots, \mathbf{v}_4$ 之間的相依關係(書後解答相同;就是 Practice Problem 2)。

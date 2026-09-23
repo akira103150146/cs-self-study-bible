@@ -153,7 +153,7 @@ $$\left[\begin{array}{rr|r} 1 & -3 & 2 \\ -3 & 10 & -7 \\ 2 & -6 & h \end{array}
 - (a) 看成增廣矩陣:相容 ⇔ $h - 4 = 0$,所以 $\mathbf{v}_3 \in \operatorname{Span}\{\mathbf{v}_1, \mathbf{v}_2\}$ ⇔ $h = 4$。
 - (b) 看成係數矩陣:第三行沒有 pivot(出現自由變數)⇔ $h = 4$。所以相依 ⇔ $h = 4$(書後解答:兩小題都是 $h = 4$)。
 
-(10) 化簡得 $\left[\begin{array}{rr|r} 1 & -2 & 2 \\ 0 & 0 & 0 \\ 0 & 0 & h + 6 \end{array}\right]$。
+(10) $R_2 \leftarrow R_2 + 5R_1$ 得到全 0 列、$R_3 \leftarrow R_3 + 3R_1$ 得到 $[\,0 \;\; 0 \mid h + 6\,]$;把全 0 列換到最下面才是梯形:$\left[\begin{array}{rr|r} 1 & -2 & 2 \\ 0 & 0 & h + 6 \\ 0 & 0 & 0 \end{array}\right]$。
 - (a) 相容 ⇔ $h = -6$(此時 $\mathbf{v}_3 = 2\mathbf{v}_1$)。
 - (b) **不管 $h$ 是多少都相依**:$\mathbf{v}_2 = -2\mathbf{v}_1$,所以 $2\mathbf{v}_1 + \mathbf{v}_2 + 0\mathbf{v}_3 = \mathbf{0}$ 永遠是一條相依關係。
 
@@ -223,7 +223,7 @@ Exercise 31 的第二種形狀($\mathbf{a}_1 = \mathbf{0}$)幾乎沒有學生想
 (36) a. **$n$ 個**。b. 各行獨立 ⇔ $A\mathbf{x} = \mathbf{0}$ 只有平凡解 ⇔ 沒有自由變數 ⇔ $n$ 個變數全是基本變數 ⇔ $n$ 行全是 pivot 行。
 
 ### 變化 · Lay 1.7 Exercises 37–38
-Solve these *without performing row operations*. [*Hint:* Write $A\mathbf{x} = \mathbf{0}$ as a vector equation.]
+Exercises 37 and 38 should be solved *without performing row operations*. [*Hint:* Write $A\mathbf{x} = \mathbf{0}$ as a vector equation.]
 
 (37) Given $A = \begin{bmatrix} 2 & 3 & 5 \\ -5 & 1 & -4 \\ -3 & -1 & -4 \\ 1 & 0 & 1 \end{bmatrix}$, observe that the third column is the sum of the first two columns. Find a nontrivial solution of $A\mathbf{x} = \mathbf{0}$.
 
@@ -238,7 +238,7 @@ Solve these *without performing row operations*. [*Hint:* Write $A\mathbf{x} = \
 這兩題最能讓學生體會「$A\mathbf{x} = \mathbf{0}$ 的解 = 各行之間的相依關係」:看出行之間的關係,解就直接寫得出來,完全不用化簡。
 
 ### 應用 · Lay 1.7 Exercises 47–48
-**[T]** Use as many columns of $A$ as possible to construct a matrix $B$ with the property that the equation $B\mathbf{x} = \mathbf{0}$ has only the trivial solution. Solve $B\mathbf{x} = \mathbf{0}$ to verify your work.
+**[T]** In Exercises 47 and 48, use as many columns of $A$ as possible to construct a matrix $B$ with the property that the equation $B\mathbf{x} = \mathbf{0}$ has only the trivial solution. Solve $B\mathbf{x} = \mathbf{0}$ to verify your work.
 
 (47) $A = \begin{bmatrix} 8 & -3 & 0 & -7 & 2 \\ -9 & 4 & 5 & 11 & -7 \\ 6 & -2 & 2 & -4 & 4 \\ 5 & -1 & 7 & 0 & 10 \end{bmatrix}$
 
