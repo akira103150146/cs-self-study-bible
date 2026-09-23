@@ -12,6 +12,9 @@ import re
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from content import count_parts   # noqa: E402  與產生器用同一條「小題怎麼數」的規則
+
 ISSUES = []
 CJK = re.compile(r"[一-鿿]")
 
@@ -70,11 +73,30 @@ def check_examples(wk):
             add("RED", sp, f"觀念{i}:{n} 題練習,但作答區有 {ws} 個")
         if ans != n:
             add("RED", tp, f"觀念{i}:{n} 題練習,但解答有 {ans} 個")
+        check_workspace_size(sp, i, a)
     for i, p in enumerate(stems_for_language(S), 1):
         if CJK.search(p):
             add("YEL", sp, f"第 {i} 個題幹含中文(題目一律英文):{p[:50]}")
     if '<section class="proof-moment"' in S and 'class="workspace tall"' not in S:
         add("RED", sp, "證明時刻缺學生跟寫的作答區")
+
+
+def check_workspace_size(sp, i, block):
+    """學生版每張練習卡:是非題要 short;有 k ≥ 2 個小題就要 data-parts="k"(否則多題擠一格寫不下)。"""
+    for n, card in enumerate(block.split('<li><div class="drill-head">')[1:], 1):
+        tier = re.search(r'<span class="tier (\w+)"', card)
+        prob = card.split('<div class="problem">', 1)[-1].split('<div class="workspace', 1)[0]
+        ws = re.search(r'<div class="workspace"([^>]*)>', card)
+        if not (tier and ws):
+            continue
+        if tier.group(1) == "tf":
+            if 'data-size="short"' not in ws.group(1):
+                add("YEL", sp, f"觀念{i} 第 {n} 題是非題,作答區沒有標 short")
+            continue
+        k = count_parts(_html.unescape(prob))
+        got = re.search(r'data-parts="(\d+)"', ws.group(1))
+        if k > 1 and (not got or int(got.group(1)) != k):
+            add("RED", sp, f"觀念{i} 第 {n} 題有 {k} 個小題,作答區卻是 {got.group(1) if got else 1} 格的高度")
 
 
 def check_quiz(wk, stem):
@@ -141,7 +163,9 @@ def check_page(rel):
 
 def check_css():
     css = rd("assets/handout.css")
-    for sel, need in ((".workspace {", "min-height"), (".workspace.tall", "min-height")):
+    for sel, need in ((".workspace {", "min-height"), (".workspace.tall", "min-height"),
+                      ('.workspace[data-size="short"]', "min-height"),
+                      (".workspace[data-parts]", "--parts")):
         i = css.find(sel)
         if i < 0 or need not in css[i:i + 300]:
             add("RED", "assets/handout.css", f"{sel} 缺 {need},印出來沒有作答空間")

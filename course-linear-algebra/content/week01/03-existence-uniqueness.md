@@ -92,7 +92,7 @@ Determine if the following system is consistent: $x_2 - 4x_3 = 8,\;\; 2x_1 - 3x_
 
 例 2 做完後,給學生看課本 p. 32 的立體圖:三個平面兩兩相交成三條平行的線,但沒有共同點。「$0 = 15$」在圖上就是「找不到三個平面的共同點」。
 
-課堂建議做:照做 1–3、是非 1;變化挑 Exercises 23–26 其中兩題;挑戰題留作業。
+課堂建議做:Practice Problem 2、Exercises 7–10;是非題 33;變化挑 Exercises 23–26 其中兩題;挑戰題(Exercises 35、37–38)留作業。
 
 ## 練習
 ### 照做 · Lay 1.1 Practice Problem 2
@@ -114,7 +114,7 @@ In each case, the augmented matrix of a linear system has been reduced by row op
 (8) 已是三角形式。$R_3 \leftarrow \tfrac17 R_3$ 得 $x_3 = -1$;往上:$x_2 = -9x_3 = 9$;$x_1 = -x_2 - 5x_3 = -9 + 5 = -4$。**唯一解** $(-4, 9, -1)$。
 
 ### 照做 · Lay 1.1 Exercises 9–10
-Continue the appropriate row operations and describe the solution set of the original system.
+In each case, the augmented matrix of a linear system has been reduced by row operations to the form shown. Continue the appropriate row operations and describe the solution set of the original system.
 
 (9) $\left[\begin{array}{rrrr|r} 1 & -1 & 0 & 0 & -4 \\ 0 & 1 & -3 & 0 & -7 \\ 0 & 0 & 1 & -3 & -1 \\ 0 & 0 & 0 & 0 & 4 \end{array}\right]$  (10) $\left[\begin{array}{rrrr|r} 1 & -2 & 0 & 3 & 0 \\ 0 & 1 & 0 & -4 & 0 \\ 0 & 0 & 1 & 0 & 0 \\ 0 & 0 & 0 & 1 & 0 \end{array}\right]$
 

@@ -50,7 +50,7 @@ If a linear system is consistent, then the solution set contains either (i) a un
 ## 幾何意義
 一般解就是解集的「形狀」:
 
-- 一個自由變數 → 解集是一條**直線**。例 1 的解 $x_1 = 1 + 5x_3$、$x_2 = 4 - x_3$ 在三維空間裡是一條線:$x_3 = 0$ 時在 $(1, 4, 0)$,$x_3 = 1$ 時在 $(6, 3, 1)$,每多 1,就往同一個方向走一步。這條線正是兩個平面 $x_1 - 5x_3 = 1$ 與 $x_2 + x_3 = 4$ 的**交線**(課本 p. 49 的立體圖)。
+- 一個自由變數 → 解集是一條**直線**。例 1 的解 $x_1 = 1 + 5x_3$、$x_2 = 4 - x_3$ 在三維空間裡是一條線:$x_3 = 0$ 時在 $(1, 4, 0)$,$x_3 = 1$ 時在 $(6, 3, 1)$,每多 1,就往同一個方向走一步。這條線正是兩個平面 $x_1 - 5x_3 = 1$ 與 $x_2 + x_3 = 4$ 的**交線**(課本 p. 49 有一張同類的立體圖,畫的是 Practice Problem 1 的兩個平面與它們的交線)。
 - 兩個自由變數 → 解集是一個**平面**。
 - 沒有自由變數 → 解集是一個**點**。
 
@@ -62,7 +62,7 @@ If a linear system is consistent, then the solution set contains either (i) a un
 未知數比方程式多的時候(例如模型參數比資料點多),一定會有自由變數——這正是機器學習裡「參數太多、答案不唯一」的根源。實務上會再加條件(例如要求參數越小越好)從無限多解裡挑一個,第 14 週會再遇到。
 
 ## 數值筆記
-一般來說,列化簡的**前進階段比回代階段花更多時間**。演算法的計算量通常用 **flop**(浮點運算次數)衡量,一個 flop 是兩個浮點數的一次 $+, -, \times, \div$。
+一般來說,列化簡的**前進階段比後退階段花更多時間**。演算法的計算量通常用 **flop**(浮點運算次數)衡量,一個 flop 是兩個浮點數的一次 $+, -, \times, \div$。
 
 對一個 $n \times (n+1)$ 的矩陣,化成梯形大約需要 $\tfrac{2n^3}{3} + \tfrac{n^2}{2} - \tfrac{7n}{6}$ 個 flop;$n$ 稍大(例如 $n \geq 30$)時約為 $\tfrac{2n^3}{3}$。相比之下,再化成 RREF 最多只需要 $n^2$ 個 flop。(改寫自 Lay 1.2 Numerical Note)
 
@@ -86,12 +86,12 @@ $x_3$ 全部消掉、三條都成立,就可以確定答案是對的。(改寫自
 
 **為什麼一定要用自由變數當參數?** 同一個解集可以有很多種參數表示(課本 p. 44 的例子:也可以拿 $x_2$ 當參數)。課本約定**一律用自由變數當參數**,書後解答也照這個慣例,這樣答案才比得起來。
 
-**回代(back-substitution)**:電腦通常不做完整的 RREF,而是從梯形由下往上代入(課本 p. 44)。計算量和我們的回代階段一樣,但手算時用矩陣格式做回代階段比較不容易出錯。
+**回代(back-substitution)**:電腦通常不做完整的 RREF,而是從梯形由下往上代入(課本 p. 44)。計算量和我們的後退階段一樣,但手算時用矩陣格式做後退階段比較不容易出錯。
 
 **pivot 個數的上限**:每一列最多一個 pivot,每一行也最多一個 pivot。所以 pivot 個數 $\le$ 列數,也 $\le$ 行數。這是挑戰題 35–43 的共同工具。
 
 ## 老師講解
-### 例 1 · Lay 1.2(p. 42–43)
+### 例 1 · Lay 1.2(p. 43)
 Suppose the augmented matrix of a linear system has been changed into the equivalent reduced echelon form $\left[\begin{array}{rrr|r} 1 & 0 & -5 & 1 \\ 0 & 1 & 1 & 4 \\ 0 & 0 & 0 & 0 \end{array}\right]$. Describe the solution set.
 
 1. **有幾個未知數?** 增廣矩陣有 4 行,最後一行是常數,所以有 3 個未知數 $x_1, x_2, x_3$。
@@ -132,7 +132,7 @@ Determine the existence and uniqueness of the solutions to the system $3x_2 - 6x
 - 把全 0 列 $[\,0 \;\; 0 \;\; 0 \mid 0\,]$ 誤當成無解。$0 = 0$ 永遠成立;真正的無解是 $[\,0 \;\cdots\; 0 \mid b\,]$ 而且 $b \neq 0$。
 - 以為「有自由變數代表題目算錯了」。自由變數是很正常的結果,表示解有無限多個。
 - 一般解漏掉某個未知數,尤其是完全沒出現在方程式裡的(Exercise 8 的 $x_3$)。
-- 把自由變數寫成別的自由變數的函數,例如 $x_3 = 1 + x_2$(課本 p. 48 的「Incorrect solution」):這樣會讓人以為 $x_2$、$x_3$ 都是自由的。
+- 把自由變數寫成別的自由變數的函數,例如 $x_3 = 1 + x_2$(課本 p. 49 Practice Problem 1 解答裡的「Incorrect solution」):這樣會讓人以為 $x_2$、$x_3$ 都是自由的。
 - 在**梯形**(還沒化到 RREF)上直接寫一般解,基本變數還會互相牽連。
 
 ## 教學提示
@@ -140,7 +140,7 @@ Determine the existence and uniqueness of the solutions to the system $3x_2 - 6x
 
 一般解寫完,一定要讓學生做一次「合理性檢查」:把一般解整個代回原方程式,自由變數留著,看它們會不會全部消掉。這會讓「自由變數真的可以隨便選」變得具體。
 
-課堂建議做:照做 1–3;是非全部;變化挑 Exercises 19–20(符號題)與 21–24 其中兩題;挑戰題 35–38 很適合當討論題。
+課堂建議做:Practice Problem 1、Exercises 7–10;是非題 29、31–34 全部;變化挑 Exercises 19–20(符號題)與 21–24 其中兩題;挑戰題 35–38 很適合當討論題。
 
 ## 練習
 ### 照做 · Lay 1.2 Practice Problem 1
@@ -186,7 +186,7 @@ $$x_1 = -4 + 2x_2, \quad x_2 \text{ is free}, \quad x_3 = -7.$$
 **(T/F)** A basic variable in a linear system is a variable that corresponds to a pivot column in the coefficient matrix.
 
 #### 解答
-**True.** 課本 p. 42:對應到 pivot 行的變數叫基本變數。
+**True.** 課本 p. 43:對應到 pivot 行的變數叫基本變數。
 
 ### 是非 · Lay 1.2 Exercise 31
 **(T/F)** Finding a parametric description of the solution set of a linear system is the same as *solving* the system.
@@ -195,7 +195,7 @@ $$x_1 = -4 + 2x_2, \quad x_2 \text{ is free}, \quad x_3 = -7.$$
 **False.** 課本 p. 44:「解方程組」是**找出解集的參數表示,或判定解集是空集合**。方程組不相容時沒有參數表示可寫,但仍然算是解完了。
 
 #### 備註
-這題有爭議空間,課堂上可以讓學生說出自己的理由;關鍵是有沒有想到「無解」的情況。
+這題有爭議空間。出版社的教師解答手冊可能判 **True**(書後解答不給 25–33 題,這點未查證):理由是 p. 44 那句的前半「Solving a system amounts to finding a parametric description of the solution set」——只看有解的情況,兩者確實是同一件事。講義判 False,依據的是同一句的後半「or determining that the solution set is empty」:不相容的方程組沒有參數表示可寫,卻仍然算解完了。課堂上可以讓學生說出自己的理由;關鍵是有沒有想到「無解」的情況。
 
 ### 是非 · Lay 1.2 Exercise 32
 **(T/F)** Whenever a system has free variables, the solution set contains a unique solution.
@@ -351,7 +351,7 @@ Choose $h$ and $k$ such that the system has (a) no solution, (b) a unique soluti
 (43) A system of linear equations with more equations than unknowns is sometimes called an *overdetermined system*. Can such a system be consistent? Illustrate your answer with a specific system of three equations in two unknowns.
 
 #### 解答
-(39) 「……the solution is unique if and only if **every column of the coefficient matrix is a pivot column**; otherwise, there are infinitely many solutions.」(書後解答相同)
+(39) 「……the solution is unique if and only if **every column in the coefficient matrix is a pivot column**; otherwise, there are infinitely many solutions.」(書後解答相同)
 
 (40) 要知道兩件事:**增廣矩陣的最後一行不是 pivot 行**(相容),而且**其他每一行都是 pivot 行**(沒有自由變數,解唯一)。
 
@@ -365,12 +365,12 @@ Choose $h$ and $k$ such that the system has (a) no solution, (b) a unique soluti
 Suppose an $n \times (n+1)$ matrix is row reduced to reduced echelon form. Approximately what fraction of the total number of operations (flops) is involved in the backward phase of the reduction when $n = 30$? when $n = 300$?
 
 #### 解答
-用數值筆記的數字:前進階段 $\tfrac{2n^3}{3} + \tfrac{n^2}{2} - \tfrac{7n}{6}$ flop,回代階段最多 $n^2$ flop。
+用數值筆記的數字:前進階段 $\tfrac{2n^3}{3} + \tfrac{n^2}{2} - \tfrac{7n}{6}$ flop,後退階段最多 $n^2$ flop。
 
-- $n = 30$:前進 $18000 + 450 - 35 = 18415$,回代 $900$。比例約 $\tfrac{900}{18415 + 900} \approx 4.7\%$。
-- $n = 300$:前進 $18{,}000{,}000 + 45{,}000 - 350 = 18{,}044{,}650$,回代 $90{,}000$。比例約 $\tfrac{90000}{18134650} \approx 0.5\%$。
+- $n = 30$:前進 $18000 + 450 - 35 = 18415$,後退 $900$。比例約 $\tfrac{900}{18415 + 900} \approx 4.7\%$。
+- $n = 300$:前進 $18{,}000{,}000 + 45{,}000 - 350 = 18{,}044{,}650$,後退 $90{,}000$。比例約 $\tfrac{90000}{18134650} \approx 0.5\%$。
 
-$n$ 越大,回代階段佔的比例越小(大約 $\tfrac{3}{2n}$):**計算時間幾乎全花在前進階段**。
+$n$ 越大,後退階段佔的比例越小(大約 $\tfrac{3}{2n}$):**計算時間幾乎全花在前進階段**。
 
 #### 備註
 實作課「解讀」階段會實際量 `np.linalg.solve` 的時間,看到 $n$ 變 2 倍、時間約變 8 倍。

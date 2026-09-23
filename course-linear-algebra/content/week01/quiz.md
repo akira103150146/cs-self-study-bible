@@ -41,7 +41,20 @@ Scaling 必須乘一個**不為 0** 的數,乘 0 會讓方程式變成 $0 = 0$,�
 - **B** 以為只能乘正整數,乘負數或分數不合法 → 觀念 2:scaling 只要求不為 0
 - **C** 以為 replacement 只能用相鄰的列 → 觀念 2:replacement 可以用任何一列的倍數
 
-## Q3 · 觀念 4
+## Q3 · 觀念 3
+For which value of $h$ is the system with augmented matrix $\left[\begin{array}{rr|r} 1 & 2 & h \\ 3 & 6 & 9 \end{array}\right]$ consistent?
+
+### 答案
+$h = 3$
+
+### 為什麼
+$R_2 \leftarrow R_2 - 3R_1$ 得 $[\,0 \;\; 0 \mid 9 - 3h\,]$。要有解,這一列必須是 $0 = 0$,所以 $h = 3$。
+
+### 迷思對照
+- **$h \neq 3$** 把條件寫反,以為最後一列不是 0 才有解 → 觀念 3:三角形式裡的 $0 = b$ 什麼時候矛盾
+- **任何 $h$ 都可以** 沒化簡就判斷,以為兩條方程式一定有解 → 觀念 1:平行線無解
+
+## Q4 · 觀念 4
 Which matrix is in reduced echelon form?
 
 - A. $\begin{bmatrix} 1 & 2 & 0 \\ 0 & 0 & 1 \end{bmatrix}$
@@ -60,7 +73,7 @@ A 的首項都是 1、一列比一列靠右、所在的行其他位置都是 0�
 - **C** 沒檢查首項要一列比一列靠右 → 觀念 4:樓梯形狀(條件 2)
 - **D** 忘了 RREF 的首項必須是 1 → 觀念 4:RREF 多出來的條件 4、5
 
-## Q4 · 觀念 5
+## Q5 · 觀念 5
 The reduced echelon form of an augmented matrix is $\left[\begin{array}{rrr|r} 1 & 0 & 2 & 3 \\ 0 & 1 & -1 & 4 \\ 0 & 0 & 0 & 0 \end{array}\right]$. How many solutions does the system have?
 
 - A. none
@@ -78,19 +91,6 @@ C
 - **A** 把全 0 列 $[\,0 \;\; 0 \;\; 0 \mid 0\,]$ 當成「$0 = $ 非零數」 → 觀念 5 的流程圖第一個問題
 - **B** 看到兩個 pivot 就以為唯一解,沒有去數自由變數 → 觀念 5:基本變數與自由變數
 - **D** 不知道 RREF 和原矩陣的解集相同 → 證明時刻:列運算不改變解集
-
-## Q5 · 觀念 3
-For which value of $h$ is the system with augmented matrix $\left[\begin{array}{rr|r} 1 & 2 & h \\ 3 & 6 & 9 \end{array}\right]$ consistent?
-
-### 答案
-$h = 3$
-
-### 為什麼
-$R_2 \leftarrow R_2 - 3R_1$ 得 $[\,0 \;\; 0 \mid 9 - 3h\,]$。要有解,這一列必須是 $0 = 0$,所以 $h = 3$。
-
-### 迷思對照
-- **$h \neq 3$** 把條件寫反,以為最後一列不是 0 才有解 → 觀念 3:三角形式裡的 $0 = b$ 什麼時候矛盾
-- **任何 $h$ 都可以** 沒化簡就判斷,以為兩條方程式一定有解 → 觀念 1:平行線無解
 
 ## 驗算
 ```check

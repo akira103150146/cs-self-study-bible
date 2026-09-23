@@ -60,7 +60,7 @@ Two matrices are **row equivalent** if there is a sequence of elementary row ope
 矩陣大小「$m \times n$、列數在前」也和 NumPy 的 `A.shape` 回傳 `(列數, 行數)` 完全一致。
 
 ## 數值筆記
-實務上,方程組都是交給電腦解。電腦幾乎都用這一節和下一節的消去法,只是稍微修改以提高準確度。
+實務上,方程組都是交給電腦解。係數矩陣是方陣(方程式和未知數一樣多)時,電腦程式幾乎都用這一節和下一節的消去法,只是稍微修改以提高準確度。
 
 大多數商業與工業上的線代問題,都是用**浮點數**運算:數字以 $\pm .d_1 \cdots d_p \times 10^r$ 的形式儲存,小數位數 $p$ 通常在 8 到 16 之間。所以運算結果通常不精確,要捨入到能儲存的位數;像 $1/3$ 這種數,一輸入電腦就已經有捨入誤差。幸好浮點數的誤差很少造成問題,本書的數值筆記會提醒你少數需要注意的情況。(改寫自 Lay 1.1 Numerical Note)
 
@@ -128,7 +128,7 @@ Solve the system $x_1 - 2x_2 + x_3 = 0,\;\; 2x_2 - 8x_3 = 8,\;\; 5x_1 - 5x_3 = 1
 
 例 2 做完一定要驗算,並把「合理性檢查」那個例子帶一遍:讓學生看到代回原題是確認答案的唯一方法。
 
-課堂建議做:照做 1、2、3;是非全部(每題 30 秒);變化題挑一題 3×3 的完整消去。
+課堂建議做:Exercises 1–2、Practice Problem 1;是非題 27–30 全部(每題 30 秒);變化題從 Exercises 11–14 挑一題 3×3 的完整消去。
 
 ## 練習
 ### 照做 · Lay 1.1 Exercise 1
@@ -277,7 +277,7 @@ Find the elementary row operation that transforms the first matrix into the seco
 (40) 第 2 列乘 $-\tfrac12$;反向運算:第 2 列乘 $-2$。
 
 ### 變化 · Lay 1.1 Exercises 41–42
-Find the elementary row operation that transforms the first matrix into the second, and then find the reverse row operation.
+Find the elementary row operation that transforms the first matrix into the second, and then find the reverse row operation that transforms the second matrix into the first.
 
 (41) $\begin{bmatrix} 1 & -3 & 2 & 0 \\ 0 & 4 & -5 & 6 \\ 5 & -7 & 8 & -9 \end{bmatrix},\; \begin{bmatrix} 1 & -3 & 2 & 0 \\ 0 & 4 & -5 & 6 \\ 0 & 8 & -2 & -9 \end{bmatrix}$  (42) $\begin{bmatrix} 1 & 2 & -5 & 0 \\ 0 & 1 & -3 & -2 \\ 0 & -3 & 9 & 5 \end{bmatrix},\; \begin{bmatrix} 1 & 2 & -5 & 0 \\ 0 & 1 & -3 & -2 \\ 0 & 0 & 0 & -1 \end{bmatrix}$
 

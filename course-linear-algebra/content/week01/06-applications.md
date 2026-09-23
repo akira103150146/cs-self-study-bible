@@ -51,7 +51,7 @@ Many applied problems lead to linear systems because something **balances** or i
 
 經濟模型的解集也是一條通過原點的線:把一組均衡價格全部乘以 2,還是均衡價格。所以真正有意義的是「方向」(價格比例),不是長度。
 
-內插的幾何很直觀:兩個點決定一條直線(一次多項式),三個點決定一條拋物線(二次多項式)。$k$ 個 $x$ 座標不同的點,剛好決定一個 $k-1$ 次多項式。
+內插的幾何很直觀:兩個點決定一條直線(一次多項式),三個點決定一條拋物線(二次多項式)。$k$ 個 $x$ 座標不同的點,剛好決定一個次數不超過 $k-1$ 的多項式——「不超過」是因為三個點如果剛好共線,得到的就是一條直線($t^2$ 的係數是 0)。
 
 ## 在資工哪裡用
 - **經濟交換表**:「每一行加起來是 1、表示東西怎麼分出去」的矩陣,和第 12 週 Google **PageRank** 用的矩陣是同一種結構——網頁把自己的重要性「分給」它連出去的網頁,均衡時每個網頁的重要性就是它的排名。
@@ -61,7 +61,9 @@ Many applied problems lead to linear systems because something **balances** or i
 - **化學配平**:大型係數(Exercise 10 的係數到 374)要用**精確分數**運算,這是符號運算(SymPy)和浮點運算(NumPy)的差別。
 
 ## 實際應用
-Leontief 用 500 個方程式、500 個未知數的模型分析美國經濟,並因此獲得 1973 年諾貝爾經濟學獎(課本第 1 章開頭)。第 5 週的 2.6 會再回到他的「投入產出模型」;1.10 還有營養配方、電路等應用。
+**一台電腦跑了 56 小時。** 1949 年,Leontief 把美國經濟分成 500 個部門,每個部門一條方程式,得到 500 個方程式、500 個未知數的方程組。當時哈佛的 Mark II 電腦解不動這麼大的方程組,他只好把問題濃縮成 42 個方程式、42 個未知數;光是替 Mark II 寫程式就花了好幾個月,機器還是跑了 56 小時才算出答案。他後來因此獲得 1973 年諾貝爾經濟學獎(課本第 1 章開頭)。今天一台筆電用 `np.linalg.solve` 解 500 × 500 的方程組不用一秒——實作課會量給你看,計算量怎麼隨 $n$ 長大。
+
+課本 2.6 有完整的 Leontief 投入產出模型,1.10 還有營養配方、電路等應用;本課不在課堂上教,有興趣可以自己讀。
 
 ## 原理
 **為什麼經濟模型一定有無限多解?** 方程組是**齊次**的(右邊全是 0),而交換表每一行加起來是 1,代表「把所有方程式加起來」會得到 $0 = 0$——有一條方程式是多餘的,所以一定有自由變數。
@@ -257,7 +259,7 @@ Suppose an economy has four sectors, Agriculture (A), Energy (E), Manufacturing 
 偶數題,書後沒有答案;上面的分數由 SymPy 精確計算。四個未知數用手算很容易出錯,建議在實作課做。
 
 ### 變化 · Lay 1.6 Exercise 5
-Boron sulfide reacts violently with water to form boric acid and hydrogen sulfide gas (the smell of rotten eggs). The unbalanced equation is $\mathrm{B_2S_3} + \mathrm{H_2O} \rightarrow \mathrm{H_3BO_3} + \mathrm{H_2S}$. [For each compound, construct a vector that lists the numbers of atoms of boron, sulfur, hydrogen, and oxygen.]
+Boron sulfide reacts violently with water to form boric acid and hydrogen sulfide gas (the smell of rotten eggs). The unbalanced equation is $\mathrm{B_2S_3} + \mathrm{H_2O} \rightarrow \mathrm{H_3BO_3} + \mathrm{H_2S}$. Balance the equation. [For each compound, construct a vector that lists the numbers of atoms of boron, sulfur, hydrogen, and oxygen.]
 
 #### 解答
 設 $x_1\,\mathrm{B_2S_3} + x_2\,\mathrm{H_2O} \rightarrow x_3\,\mathrm{H_3BO_3} + x_4\,\mathrm{H_2S}$。每種原子一條方程式(和提示說的「向量」是同一件事):
@@ -273,8 +275,11 @@ $$\mathrm{B_2S_3} + 6\,\mathrm{H_2O} \rightarrow 2\,\mathrm{H_3BO_3} + 3\,\mathr
 
 (書後解答相同。驗算 H:左 12、右 $6 + 6 = 12$ ✓。)
 
+#### 備註
+課本在 Exercises 5–10 前有一句共用的指示:「Balance the chemical equations in Exercises 5–10 using the vector equation approach discussed in this section.」W1 還沒教向量方程式(W2 才教),所以講義在 Exercises 5–8 的題幹各補一句「Balance the equation.」,用例 2 的「每種原子一條方程式」來做;題目裡「construct a vector」的提示,現階段當成「把每種原子的個數列成一串數字」即可。Exercises 9–10 題幹本身就有指示,沒有改。
+
 ### 變化 · Lay 1.6 Exercise 6
-When solutions of sodium phosphate and barium nitrate are mixed, the result is barium phosphate (as a precipitate) and sodium nitrate. The unbalanced equation is $\mathrm{Na_3PO_4} + \mathrm{Ba(NO_3)_2} \rightarrow \mathrm{Ba_3(PO_4)_2} + \mathrm{NaNO_3}$. [For each compound, construct a vector that lists the numbers of atoms of sodium (Na), phosphorus, oxygen, barium, and nitrogen. For instance, barium nitrate corresponds to $(0, 0, 6, 1, 2)$.]
+When solutions of sodium phosphate and barium nitrate are mixed, the result is barium phosphate (as a precipitate) and sodium nitrate. The unbalanced equation is $\mathrm{Na_3PO_4} + \mathrm{Ba(NO_3)_2} \rightarrow \mathrm{Ba_3(PO_4)_2} + \mathrm{NaNO_3}$. Balance the equation. [For each compound, construct a vector that lists the numbers of atoms of sodium (Na), phosphorus, oxygen, barium, and nitrogen. For instance, barium nitrate corresponds to $(0, 0, 6, 1, 2)$.]
 
 #### 解答
 設係數 $x_1, x_2, x_3, x_4$(依序)。注意括號:$\mathrm{Ba(NO_3)_2}$ 有 2 個 N、6 個 O;$\mathrm{Ba_3(PO_4)_2}$ 有 2 個 P、8 個 O。
@@ -309,7 +314,7 @@ $$3\,\mathrm{NaHCO_3} + \mathrm{H_3C_6H_5O_7} \rightarrow \mathrm{Na_3C_6H_5O_7}
 (書後解答相同。)
 
 ### 變化 · Lay 1.6 Exercise 8
-The following reaction between potassium permanganate ($\mathrm{KMnO_4}$) and manganese sulfate in water produces manganese dioxide, potassium sulfate, and sulfuric acid: $\mathrm{KMnO_4} + \mathrm{MnSO_4} + \mathrm{H_2O} \rightarrow \mathrm{MnO_2} + \mathrm{K_2SO_4} + \mathrm{H_2SO_4}$. [For each compound, construct a vector that lists the numbers of atoms of potassium (K), manganese, oxygen, sulfur, and hydrogen.]
+The following reaction between potassium permanganate ($\mathrm{KMnO_4}$) and manganese sulfate in water produces manganese dioxide, potassium sulfate, and sulfuric acid: $\mathrm{KMnO_4} + \mathrm{MnSO_4} + \mathrm{H_2O} \rightarrow \mathrm{MnO_2} + \mathrm{K_2SO_4} + \mathrm{H_2SO_4}$. Balance the equation. [For each compound, construct a vector that lists the numbers of atoms of potassium (K), manganese, oxygen, sulfur, and hydrogen.]
 
 #### 解答
 設係數 $x_1, \dots, x_6$(依序)。

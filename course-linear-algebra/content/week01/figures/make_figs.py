@@ -13,8 +13,9 @@ def arrow_branch(x1, y1, x2, y2, mid_id):
 
 
 def marker(mid_id):
-    return (f'<defs><marker id="{mid_id}" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="9" '
-            f'markerHeight="9" orient="auto"><path class="arrowhead" d="M0,0 L10,5 L0,10 z"/></marker></defs>')
+    # userSpaceOnUse:箭頭固定 12 單位,不跟線寬(2.4)放大,否則會壓到旁邊的 x1、x3 標籤
+    return (f'<defs><marker id="{mid_id}" viewBox="0 0 10 10" refX="5" refY="5" markerUnits="userSpaceOnUse" '
+            f'markerWidth="12" markerHeight="12" orient="auto"><path class="arrowhead" d="M0,0 L10,5 L0,10 z"/></marker></defs>')
 
 
 def node(x, y, name, dx, dy):
@@ -23,6 +24,9 @@ def node(x, y, name, dx, dy):
 
 
 def label(x, y, s, cls="m"):
+    # 流量變數 x1…x6 畫成斜體 x 加下標,和題幹的 $x_1$ 一致;數字與溫度照原樣
+    if len(s) == 2 and s[0] == "x" and s[1].isdigit():
+        s = f'<tspan style="font-family: var(--font-serif); font-style: italic">x</tspan><tspan dy="4" font-size="11">{s[1]}</tspan>'
     return f'<text class="{cls}" x="{x}" y="{y}" text-anchor="middle">{s}</text>'
 
 
@@ -159,7 +163,7 @@ angle = {"A": 200, "B": 160, "C": 105, "D": 75, "E": 20, "F": -20}
 P = {k: on_circle(a) for k, a in angle.items()}
 arcs = []
 for a, b, lab, (lx, ly) in [("F", "A", "x1", (240, 262)), ("A", "B", "x2", (132, 154)),
-                            ("B", "C", "x3", (170, 80)), ("C", "D", "x4", (240, 84)),
+                            ("B", "C", "x3", (162, 84)), ("C", "D", "x4", (240, 84)),
                             ("D", "E", "x5", (312, 80)), ("E", "F", "x6", (350, 154))]:
     a0, a1 = angle[a], angle[b]
     if a1 > a0:                               # 順時針(螢幕上)= 數學角度遞減

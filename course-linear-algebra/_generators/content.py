@@ -46,6 +46,7 @@ class Drill:
     stem: str
     sol: str
     note: str = ""     # 教師備註(只在教師版)
+    parts: int = 1     # 題幹裡有幾個小題((15)、(a)、(19a)…),學生版作答區依此給高度
 
 
 @dataclass
@@ -266,6 +267,24 @@ def _glossary(text, path):
     return [[render_inline(c) for c in r] for r in rows]
 
 
+# 小題標號有兩種寫法:
+#   行內  (15)、(a)、(19a) —— 前面是行首或空白、後面是空白;「possible in (a).」後面接句點,不算
+#   清單  - **a.** …(Markdown)/ <li><strong>a.</strong> …(產出的 HTML)
+# 數學式先拿掉,避免 $(x_1, x_2)$ 之類被誤算。
+LABEL = r"(\d{1,2}[a-z]?|[a-h])"
+SUBPART = re.compile(r"(?:^|\s)\(" + LABEL + r"\)(?=\s)")
+SUBPART_LIST = re.compile(r"(?m)^\s*[-*]\s+\*\*" + LABEL + r"\.\*\*|<li>\s*<strong>" + LABEL + r"\.</strong>")
+
+
+def count_parts(src):
+    """題幹(Markdown 或產出的 HTML 皆可)裡有幾個不同的小題標號;沒有就是 1。verify.py 也用這個。"""
+    src = re.sub(r"\$\$.*?\$\$|\$[^$]*\$", " ", src, flags=re.S)
+    labels = {a or b for a, b in SUBPART_LIST.findall(src)}
+    prose = re.sub(r"<[^>]+>", " ", src)
+    labels |= set(SUBPART.findall(prose))
+    return max(1, len(labels))
+
+
 def _drills(text, path, figdir):
     out = []
     for title, body in split_sections(text, 3):
@@ -281,7 +300,7 @@ def _drills(text, path, figdir):
         if not stem.strip() or not sol.strip():
             raise ContentError(f"{path}: 「### {title}」要有題幹與 #### 解答")
         out.append(Drill(TIER_OF[tier], source, render(stem, figdir), render(sol, figdir),
-                         render(parts.get("備註", ""))))
+                         render(parts.get("備註", "")), count_parts(stem)))
     if not out:
         raise ContentError(f"{path}: 「## 練習」至少要有一題")
     if out[0].tier != "do":

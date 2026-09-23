@@ -34,7 +34,7 @@ A **pivot position** in a matrix $A$ is a location in $A$ that corresponds to a 
 | pivot | 樞紐(主元) | 放在 pivot 位置、拿來消去其他列的那個非 0 數 |
 | row reduction algorithm | 列化簡演算法 | 課本的五個步驟;又叫高斯消去法(Gaussian elimination) |
 | forward phase | 前進階段 | 步驟 1–4,做出列梯形 |
-| backward phase | 回代階段 | 步驟 5,做出 RREF |
+| backward phase | 後退階段 | 步驟 5,做出 RREF |
 | partial pivoting | 部分樞紐選取 | 電腦挑該行絕對值最大的數當 pivot,減少捨入誤差 |
 
 ## 白話說
@@ -58,7 +58,7 @@ SymPy 的 `Matrix(A).rref()` 會直接回傳 RREF 和 pivot 所在的行號。�
 數值計算函式庫(NumPy 底層的 LAPACK)解方程組用的就是這個演算法的變形,只是會做 partial pivoting 以減少誤差。
 
 ## 實際應用
-**兩千年前的演算法。** 課本腳註提到,類似的消去法約在公元前 250 年就被中國數學家使用;西方直到 19 世紀由高斯重新發現,1888 年德國工程師 Jordan 在大地測量的書裡推廣。中國的《九章算術》「方程」章,正是把係數排成直行、用算籌做列運算——和本觀念的做法幾乎一樣,只是當時是「直的」寫。
+**兩千年前的演算法。** 課本腳註提到,類似的消去法約在公元前 250 年就被中國數學家使用;西方直到 19 世紀才由高斯發現,1888 年德國工程師 Jordan 在大地測量的書裡推廣。補充一點課本沒寫的:中國的《九章算術》「方程」章,正是把係數排成直行、用算籌做列運算——和本觀念的做法幾乎一樣,只是當時是「直的」寫。
 
 ## 數值筆記
 課本步驟 2 可以任選該行一個非 0 的數當 pivot。電腦程式通常會挑該行**絕對值最大**的數,這個策略叫 **partial pivoting**,因為它能減少計算中的捨入誤差。實作課的「解讀」階段會親眼看到:拿很小的數當 pivot,答案可以錯得離譜。(改寫自 Lay 1.2 Numerical Note)
@@ -72,7 +72,7 @@ SymPy 的 `Matrix(A).rref()` 會直接回傳 RREF 和 pivot 所在的行號。�
 4. 蓋住(忽略)pivot 所在的列以及上面所有列,對剩下的子矩陣重複步驟 1–3,直到沒有非 0 列可處理。
 5. 從**最右邊**的 pivot 開始,往上、往左:把每個 pivot 上方消成 0;pivot 不是 1 就用 scaling 變成 1。
 
-步驟 1–4 叫**前進階段**,步驟 5 叫**回代階段**。
+步驟 1–4 叫**前進階段**,步驟 5 叫**後退階段**。(不要和觀念 5 的「回代 back-substitution」搞混:回代是從梯形直接往上代入數字,不再化成 RREF。)
 
 **為什麼往回要從最右下角開始?** 最下面的列 0 最多,拿它去消上面的列,不會把已經清好的位置弄亂,計算量也最少。
 
@@ -81,7 +81,7 @@ SymPy 的 `Matrix(A).rref()` 會直接回傳 RREF 和 pivot 所在的行號。�
 **注意**:pivot(拿來消去的那個數)不一定等於原矩陣在 pivot 位置上的數。例 2 的 pivot 是 1、2、$-5$,但原矩陣在那三個位置上的數是 0、$-2$、3(課本 p. 40)。
 
 ## 老師講解
-### 例 1 · Lay 1.2(p. 37)
+### 例 1 · Lay 1.2(p. 38)
 Which of the following matrices are in echelon form? Which are in reduced echelon form?
 
 (a) $\begin{bmatrix} 2 & -3 & 2 & 1 \\ 0 & 1 & -4 & 8 \\ 0 & 0 & 0 & 5/2 \end{bmatrix}$  (b) $\begin{bmatrix} 1 & 0 & 0 & 29 \\ 0 & 1 & 0 & 16 \\ 0 & 0 & 1 & 3 \end{bmatrix}$  (c) $\begin{bmatrix} 0 & 1 & 2 \\ 1 & 0 & 3 \end{bmatrix}$
@@ -92,7 +92,7 @@ Which of the following matrices are in echelon form? Which are in reduced echelo
 4. (c) 第 1 列的首項在第 2 行,第 2 列的首項卻在第 1 行,**往左退了**,違反條件 2 → **不是列梯形**。交換兩列就會是。
 
 #### 備註
-(a)(b) 是課本 p. 37 的兩個矩陣;(c) 是補充的反例,專門示範「往左退」。
+(a)(b) 是課本 p. 38 的兩個矩陣;(c) 是補充的反例,專門示範「往左退」。
 
 ### 例 2 · Lay 1.2 Example 2
 Row reduce the matrix $A$ below to echelon form, and locate the pivot columns of $A$.
@@ -145,7 +145,7 @@ $$\begin{bmatrix} 0 & 3 & -6 & 6 & 4 & -5 \\ 3 & -7 & 8 & -5 & 8 & 9 \\ 3 & -9 &
 
 往前、往回兩個階段在黑板上用兩種顏色寫,學生比較記得住「先消下面、再消上面」的順序。
 
-課堂建議做:照做 1–3(判斷題快速過,Exercise 3 完整做);是非全部;Exercise 4 當作業。
+課堂建議做:Exercises 1–3(1、2 是判斷題,快速過;Exercise 3 完整做);是非題 25–28、30 全部;Exercise 4 當作業。
 
 ## 練習
 ### 照做 · Lay 1.2 Exercise 1
@@ -231,7 +231,7 @@ pivot 位置在 $(1,1)$、$(2,2)$、$(3,4)$,**pivot 行是第 1、2、4 行**(�
 **(T/F)** Reducing a matrix to echelon form is called the *forward phase* of the row reduction process.
 
 #### 解答
-**True.** 步驟 1–4 產生梯形,叫前進階段;步驟 5 叫回代階段(課本 p. 42)。
+**True.** 步驟 1–4 產生梯形,叫前進階段;步驟 5 叫後退階段(課本 p. 42)。
 
 ### 變化 · Lay 1.2 Exercise 5
 Describe the possible echelon forms of a nonzero $2 \times 2$ matrix. Use the symbols $\blacksquare$, $*$, and $0$, as in the first part of Example 1.
