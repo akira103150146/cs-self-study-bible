@@ -1,7 +1,8 @@
 import os
 import shutil
-import subprocess
 import tempfile
+
+import labkit
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 COMMON = os.path.join(HERE, "..", "..", "labs", "common")
@@ -23,9 +24,7 @@ def run_selftest():
     lf_copy(os.path.join(COMMON, "ctest.h"), os.path.join(d, "include", "ctest.h"))
     lf_copy(os.path.join(COMMON, "Makefile.c"), os.path.join(d, "Makefile"))
     try:
-        return subprocess.run(["docker", "run", "--rm", "-v", f"{d}:/work", "cs-intro-env",
-                               "make", "-s", "test", "CTEST_TIMEOUT=2"],
-                              capture_output=True, text=True, encoding="utf-8", timeout=180)
+        return labkit.docker_make(d, "test CTEST_TIMEOUT=2", timeout=180)
     finally:
         shutil.rmtree(d, ignore_errors=True)
 

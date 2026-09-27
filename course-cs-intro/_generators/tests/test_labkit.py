@@ -117,7 +117,7 @@ def test_docker_make_timeout_kills_container():
     d = tempfile.mkdtemp(prefix="csintro-")
     with open(os.path.join(d, "Makefile"), "w", newline="\n") as f:
         f.write("slow:\n\tsleep 60\n")
-    p = labkit.docker_make(d, "slow", timeout=5)
+    p = labkit.docker_make(d, "slow", timeout=5, retries=0)
     assert p.returncode == 124 and "逾時" in p.stderr
     ps = subprocess.run(["docker", "ps", "--filter", "name=csintro-", "-q"],
                         capture_output=True, text=True).stdout.strip()

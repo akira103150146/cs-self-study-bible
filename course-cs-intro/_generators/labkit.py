@@ -9,10 +9,12 @@ assemble() 把它組成學生看到的樣子:
 run_labs.py 與 build.py(打包 zip)都用同一個 assemble(),所以「老師驗過的」就是「學生拿到的」。
 組裝一律放在系統暫存目錄(ASCII 路徑):repo 路徑含中文,直接掛進 Docker 不保險。
 """
+import io
 import os
 import re
 import shutil
 import subprocess
+import tarfile
 import tempfile
 import uuid
 import zipfile
@@ -106,17 +108,41 @@ def make_zip(root, num, zip_path):
     return zip_path
 
 
-def docker_make(workdir, target, timeout=600):
-    """在 cs-intro-env 裡跑 make -s <target>。逾時就砍掉容器,回傳 returncode 124(不讓整個閘門卡住)。"""
+def _tar_of(workdir):
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as t:
+        for name in sorted(os.listdir(workdir)):
+            t.add(os.path.join(workdir, name), arcname=name)
+    return buf.getvalue()
+
+
+def docker_make(workdir, target, timeout=180, retries=1):
+    """在 cs-intro-env 裡跑 make -s <target>。
+
+    不用 -v 掛載:把整個資料夾打包成 tar 從標準輸入送進容器、在容器裡解開再 make
+    (避開 Windows 檔案共享與中文路徑)。
+    Windows 的 Docker Desktop 偶爾會讓容器整個卡住(實測:同一步驟平常 1 秒,偶爾卡到逾時),
+    所以逾時就砍掉容器並重試;重試用完仍逾時才回傳 returncode 124。
+    """
+    for _ in range(retries + 1):
+        p = _docker_make_once(workdir, target, timeout)
+        if p.returncode != 124:
+            return p
+    return p
+
+
+def _docker_make_once(workdir, target, timeout):
     name = f"csintro-{uuid.uuid4().hex[:12]}"
-    cmd = ["docker", "run", "--rm", "--name", name, "-v", f"{workdir}:/work", IMAGE, "make", "-s", target]
+    cmd = ["docker", "run", "--rm", "-i", "--name", name, IMAGE, "sh", "-c",
+           f"mkdir -p /work && cd /work && tar -xf - && make -s {target}"]
     try:
-        return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                              timeout=timeout)
+        p = subprocess.run(cmd, input=_tar_of(workdir), capture_output=True, timeout=timeout)
     except subprocess.TimeoutExpired as e:
         subprocess.run(["docker", "kill", name], capture_output=True)
-        out = e.stdout.decode("utf-8", "replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
-        return subprocess.CompletedProcess(cmd, 124, out, f"逾時 {timeout} 秒,容器已砍掉")
+        return subprocess.CompletedProcess(cmd, 124, (e.stdout or b"").decode("utf-8", "replace"),
+                                           f"逾時 {timeout} 秒,容器已砍掉")
+    return subprocess.CompletedProcess(cmd, p.returncode, p.stdout.decode("utf-8", "replace"),
+                                       p.stderr.decode("utf-8", "replace"))
 
 
 def parse_results(stdout):
