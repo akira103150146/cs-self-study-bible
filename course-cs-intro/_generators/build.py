@@ -14,12 +14,8 @@ from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import content as C  # noqa: E402
+import labkit  # noqa: E402
 from mdtools import ContentError  # noqa: E402
-
-try:
-    import labkit  # noqa: E402
-except ImportError:          # Task 6 之前還沒有 labkit
-    labkit = None
 
 
 def make_env(root):
@@ -105,7 +101,7 @@ def render_chapter(root, env, course, ch):
                            (f"{len(ch.lab.tasks)} 個任務", False), ("make test", False)],
              zip_name=zip_name)
         lab_dir = os.path.join(root, "labs", f"ch{num:02d}")
-        if labkit is not None and os.path.isdir(lab_dir):
+        if os.path.isdir(lab_dir):
             zp = os.path.join(d, zip_name)
             labkit.make_zip(root, num, zp)
             written.append(zp)
