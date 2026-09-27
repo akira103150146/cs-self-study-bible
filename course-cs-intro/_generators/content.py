@@ -516,6 +516,10 @@ def load_course(root=ROOT):
     for k in ("name", "dot", "book", "audience", "tagline", "parts", "outline"):
         if k not in c:
             raise ContentError(f"{_rel(root, path)}: 缺 {k}")
+    for n, entry in c["outline"].items():
+        if not (isinstance(entry, list) and len(entry) == 2):
+            raise ContentError(f"{_rel(root, path)}: outline 第 {n} 章要寫成 [英文標題, 中文說明],得到 {entry!r}"
+                               "(標題裡有逗號時要加引號)")
     intro = os.path.join(root, "content", "index.md")
     c["intro"] = render(_read(intro)) if os.path.exists(intro) else ""
     return c

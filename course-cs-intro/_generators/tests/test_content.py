@@ -47,3 +47,13 @@ def test_format_errors_are_reported(rel, old, new, msg):
     break_file(root, rel, old, new)
     with pytest.raises(ContentError, match=msg):
         load_chapter(root, 9)
+
+
+def test_course_outline_entries_must_be_pairs():
+    import os
+    root = fixture_root()
+    p = os.path.join(root, "content", "course.yaml")
+    s = open(p, encoding="utf-8").read().replace("9: [Fixture Chapter, 測試用]", "9: [Fixture, Chapter, 測試用]")
+    open(p, "w", encoding="utf-8").write(s)
+    with pytest.raises(ContentError, match="outline"):
+        load_course(root)

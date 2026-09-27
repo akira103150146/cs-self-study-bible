@@ -14,6 +14,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import uuid
 import zipfile
 
 IMAGE = "cs-intro-env"
@@ -105,9 +106,17 @@ def make_zip(root, num, zip_path):
     return zip_path
 
 
-def docker_make(workdir, target, timeout=900):
-    return subprocess.run(["docker", "run", "--rm", "-v", f"{workdir}:/work", IMAGE, "make", "-s", target],
-                          capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout)
+def docker_make(workdir, target, timeout=600):
+    """在 cs-intro-env 裡跑 make -s <target>。逾時就砍掉容器,回傳 returncode 124(不讓整個閘門卡住)。"""
+    name = f"csintro-{uuid.uuid4().hex[:12]}"
+    cmd = ["docker", "run", "--rm", "--name", name, "-v", f"{workdir}:/work", IMAGE, "make", "-s", target]
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                              timeout=timeout)
+    except subprocess.TimeoutExpired as e:
+        subprocess.run(["docker", "kill", name], capture_output=True)
+        out = e.stdout.decode("utf-8", "replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
+        return subprocess.CompletedProcess(cmd, 124, out, f"逾時 {timeout} 秒,容器已砍掉")
 
 
 def parse_results(stdout):

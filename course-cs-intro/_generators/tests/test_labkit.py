@@ -109,3 +109,16 @@ def test_verify_catches_zip_with_hidden_test():
         z.writestr("ch09/tests/test_demo_hidden.c", "x")
     errs = verify.run(root, [9])
     assert any("hidden" in e or "隱藏" in e for e in errs), errs
+
+
+def test_docker_make_timeout_kills_container():
+    import subprocess
+    import tempfile
+    d = tempfile.mkdtemp(prefix="csintro-")
+    with open(os.path.join(d, "Makefile"), "w", newline="\n") as f:
+        f.write("slow:\n\tsleep 60\n")
+    p = labkit.docker_make(d, "slow", timeout=5)
+    assert p.returncode == 124 and "逾時" in p.stderr
+    ps = subprocess.run(["docker", "ps", "--filter", "name=csintro-", "-q"],
+                        capture_output=True, text=True).stdout.strip()
+    assert ps == ""
