@@ -168,7 +168,7 @@ course-cs-intro/
   _generators/                # 必須版控
   ch01/ … ch18/               # 產出,不要手改
     CN-講義-學生版.html / CN-講義-教師版.html
-    CN-題庫-教師版.html
+    CN-題庫-學生版.html / CN-題庫-教師版.html
     CN-Lab.html  CN-專案.html
     CN-starter.zip            # 不含 solution/ 與 tests/hidden/
   exams/                      # build_exam.py 的產出
