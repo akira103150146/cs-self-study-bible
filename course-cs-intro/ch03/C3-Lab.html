@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 3 章 Lab · Data Representation</title>
+<meta name="description" content="核心 Lab 規格書">
+<script>(function(){try{var t=localStorage.getItem('handout-theme');if(t)document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;700&family=Noto+Sans+TC:wght@400;700&family=Lora:ital,wght@0,400;0,600;0,700;1,400&family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="../assets/handout.css">
+<script>
+window.MathJax = { tex: { inlineMath: [['$','$'],['\\(','\\)']], displayMath: [['$$','$$'],['\\[','\\]']] }, svg: { fontCache: 'global' } };
+</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" async></script>
+</head>
+<body>
+<nav class="packet-nav">
+  <a class="home" href="../index.html"><span class="dot">01</span>計算機概論 · 第 3 章</a>
+  <a class="tab" href="C3-講義-學生版.html">講義·學生</a>
+  <a class="tab" href="C3-講義-教師版.html">講義·教師</a>
+  <a class="tab" href="C3-題庫-學生版.html">題庫·學生</a>
+  <a class="tab" href="C3-題庫-教師版.html">題庫·教師</a>
+  <a class="tab" href="C3-Lab.html" aria-current="page">Lab</a>
+  <a class="tab" href="C3-專案.html">專案</a>
+  <span class="spacer"></span>
+  <button class="theme-toggle" title="切換深淺色" aria-label="切換主題">☾</button>
+</nav>
+
+<main class="sheet">
+  <header class="masthead">
+    <div class="eyebrow">第 3 章 · 核心 Lab</div>
+    <h1>Data Representation｜核心 Lab</h1>
+    <p class="subtitle">數字、文字、聲音、影像、影片——全部變成位元,再想辦法變少</p>
+    <div class="chips"><span class="chip accent">C</span><span class="chip">9 個任務</span><span class="chip">make test</span></div>
+  </header>
+
+
+<div class="callout note"><div class="ico">💻</div><div><span class="c-title">怎麼開始</span>
+<p><a class="dl" href="C3-starter.zip" download>⬇ 下載起始碼 C3-starter.zip</a></p>
+<p>解壓縮後在 Docker 環境裡進入資料夾,執行 <code>make test</code>。一開始測試會失敗;把每個任務完成到<strong>全部測試通過</strong>就完成了。
+公開測試只是一部分,老師另有隱藏測試,所以請自己多想邊界情況。</p>
+</div></div>
+
+<h2>概要</h2>
+<p>你要用 C 寫一個資料表示的函式庫 <code>datarep</code>,把第 3 章的每一種表示法都親手實作一次:數位化、負數與溢位、IEEE 754 浮點數、UTF-8、三種文字壓縮(其中 Huffman 要做成<strong>真的能壓縮檔案</strong>的 <code>hzip</code>)、聲音、BMP 影像、影片的差異影格、位元組順序。</p>
+<p>每個任務對應一個標頭檔(<code>src/*.h</code>,已寫好,不要改)和一個你要完成的 <code>.c</code> 檔。另外有三個已經寫好的指令列工具,做完對應的任務就能用:</p>
+<pre><code class="language-text">$ ./build/floatdump -6.25                    # 任務 3
+bits     1 10000001 10010000000000000000000
+hex      0xC0C80000
+binary   -1.1001 x 2^2
+$ ./build/hzip c data/english.txt e.hz        # 任務 5
+4389 -&gt; 2632 bytes (ratio 0.600)
+$ ./build/wavgen 440 44100 16 2 a440.wav      # 任務 6:用耳機聽聽看
+</code></pre>
+<p><code>data/</code> 裡有測試用的檔案:一篇英文文章、全部同一個位元組的檔案、隨機位元組、幾張小 BMP。</p>
+
+<h2>環境</h2>
+<pre><code class="language-text">docker run --rm -it -v &quot;$PWD:/work&quot; cs-intro-env bash
+make build                                  # 編譯函式庫、三個工具與測試
+make test                                   # 跑全部公開測試(三個測試檔)
+./build/test_text C3_6_rle_encode_basic     # 只跑一個測試
+</code></pre>
+<p>編譯時開了 AddressSanitizer 與 UndefinedBehaviorSanitizer:越界、記憶體洩漏、<strong>有號整數溢位</strong>都會讓測試失敗。任務 2 要特別小心——模擬「繞回」時不能讓 C 的有號整數真的溢位。</p>
+
+
+<section class="task" id="task1">
+  <h2>任務 1 · 類比與數位 <span class="task-ids"><span class="cid">C3.1</span></span></h2>
+  <pre><code class="language-c">int bits_for_items(uint64_t k);                  /* 要區分 k 樣東西至少要幾個位元;k = 1 → 1 */
+int digitize(double v, double vmax, int bits);   /* 0..vmax 均分成 2^bits 級,回傳最接近的等級(夾在範圍內) */
+</code></pre>
+<p>等級的算法:<code>floor(v / vmax * (2^bits − 1) + 0.5)</code>。</p>
+</section>
+
+<section class="task" id="task2">
+  <h2>任務 2 · 負數與溢位 <span class="task-ids"><span class="cid">C3.2</span><span class="cid">C3.3</span></span></h2>
+  <p>三種負數表示法,以及二補數的溢位偵測與繞回。</p>
+<pre><code class="language-c">int to_signmag(int64_t v, int bits, char *out);   /* 成功 0;v 超出範圍或 bits 不在 2–64 → -1 */
+int to_ones(int64_t v, int bits, char *out);
+int to_twos(int64_t v, int bits, char *out);
+int64_t from_twos(const char *s);                 /* 1–64 位的 '0'/'1' 字串 */
+int64_t sign_extend(uint64_t raw, int bits);      /* 取低 bits 位當二補數,延伸成 64 位元 */
+int add_overflows(int64_t a, int64_t b, int bits);
+int64_t wrap_add(int64_t a, int64_t b, int bits);
+</code></pre>
+<p>範例:<code>to_twos(-37, 8, buf)</code> → <code>"11011011"</code>;<code>wrap_add(100, 100, 8)</code> → −56;<code>add_overflows(127, 1, 8)</code> → 1。</p>
+<p>提示:<code>(uint64_t)a + (uint64_t)b</code> 保證繞回,再用 <code>sign_extend</code> 取低 <code>bits</code> 位。</p>
+</section>
+
+<section class="task" id="task3">
+  <h2>任務 3 · IEEE 754 浮點數 <span class="task-ids"><span class="cid">C3.4</span></span></h2>
+  <pre><code class="language-c">uint32_t f32_to_bits(float x);
+float f32_from_bits(uint32_t b);
+struct f32info f32_decode(uint32_t b);                         /* 拆出 sign / exp_bits / frac / unbiased / kind */
+uint32_t f32_encode(int sign, int exp_bits, uint32_t frac);
+int f32_binary_sci(uint32_t b, char *out, size_t cap);         /* &quot;-1.1001 x 2^2&quot;、&quot;+0&quot;、&quot;-inf&quot;、&quot;nan&quot; … */
+</code></pre>
+<p><code>kind</code> 是 <code>F_ZERO</code>、<code>F_DENORMAL</code>、<code>F_NORMAL</code>、<code>F_INF</code>、<code>F_NAN</code> 之一;非正規數的 <code>unbiased</code> 是 −126。取位元請用 <code>memcpy</code>,不要用 <code>*(uint32_t *)&amp;x</code>(違反 strict aliasing)。完整的輸出格式寫在 <code>src/floats.h</code>。</p>
+</section>
+
+<section class="task" id="task4">
+  <h2>任務 4 · UTF-8 <span class="task-ids"><span class="cid">C3.5</span></span></h2>
+  <pre><code class="language-c">int utf8_encode(uint32_t cp, uint8_t out[4]);                  /* 回傳 1–4;surrogate 或 &gt; U+10FFFF → -1 */
+int utf8_decode(const uint8_t *s, size_t n, uint32_t *cp);     /* 回傳用掉的位元組數;不合法 → -1 */
+long utf8_count(const uint8_t *s, size_t n);
+int ascii_toggle_case(int c);
+</code></pre>
+<p><code>utf8_decode</code> 必須拒絕:延續位元組當開頭、<code>F8</code>–<code>FF</code>、序列不完整、延續位元組不是 <code>10xxxxxx</code>、<strong>過長編碼</strong>(例如 <code>C0 80</code>)、surrogate、超過 U+10FFFF。</p>
+</section>
+
+<section class="task" id="task5">
+  <h2>任務 5 · 文字壓縮與 hzip <span class="task-ids"><span class="cid">C3.6</span></span></h2>
+  <pre><code class="language-c">long keyword_encode(const char *in, const struct keyword *kw, size_t nkw, char *out, size_t cap);
+long rle_encode(const char *in, char *out, size_t cap);
+long rle_decode(const char *in, char *out, size_t cap);
+int huff_code_lengths(const uint64_t freq[256], uint8_t len[256]);
+uint64_t huff_total_bits(const uint64_t freq[256], const uint8_t len[256]);
+long huff_compress(const uint8_t *in, size_t n, uint8_t *out, size_t cap);
+long huff_decompress(const uint8_t *in, size_t n, uint8_t *out, size_t cap);
+</code></pre>
+<ul>
+<li>關鍵字編碼只取代<strong>完整的單字</strong>(<code>the</code> 不取代 <code>there</code> 裡的 the)。</li>
+<li>RLE 照講義 C3.6 的規則(<code>*</code> + 字元 + 個數,4–9 個)。</li>
+<li>壓縮檔格式:4 位元組原始長度(little-endian)+ 256 位元組的碼長表 + canonical Huffman 位元流(由每個位元組的最高位開始填)。canonical 碼只由碼長決定,所以只要存碼長表,解壓縮端就能重建出一模一樣的碼。碼長不會超過 32。</li>
+<li>解壓縮要拒絕壞檔:檔頭不完整、碼長表不可能是前綴碼(Kraft 不等式不成立)、位元流不夠。</li>
+</ul>
+<p>驗收:<code>data/english.txt</code> 壓縮後要小於原本的 70%;空檔案、只有一種位元組、隨機位元組都要能正確往返。</p>
+</section>
+
+<section class="task" id="task6">
+  <h2>任務 6 · 聲音 <span class="task-ids"><span class="cid">C3.7</span></span></h2>
+  <pre><code class="language-c">int32_t quantize(double x, int bits);
+size_t synth_sine(double freq, int rate, double secs, int bits, int32_t *out, size_t cap);
+double snr_db(const double *orig, const double *approx, size_t n);
+uint64_t pcm_bytes(int rate, int bits, int channels, double secs);
+double alias_freq(double f, int rate);
+int wav_write(const char *path, const int32_t *s, size_t n, int rate, int bits);
+</code></pre>
+<p>WAV 檔頭(44 位元組,全部 little-endian):<code>"RIFF"</code>、<code>36 + 資料長度</code>、<code>"WAVE"</code>、<code>"fmt "</code>、<code>16</code>、格式 <code>1</code>(PCM,2 位元組)、聲道數(2 位元組)、取樣率、byte rate、block align(2 位元組)、位元數(2 位元組)、<code>"data"</code>、資料長度,然後是樣本。8 位元的樣本是<strong>無號</strong>的(存 <code>s + 128</code>)。</p>
+<p>實驗:用 <code>wavgen</code> 產生 8 位元與 16 位元的同一個音,聽聽看差別;隱藏測試會檢查 8 位元量化的 SNR 是否接近理論值 $6.02 \times 8 + 1.76$ dB。</p>
+</section>
+
+<section class="task" id="task7">
+  <h2>任務 7 · BMP 影像 <span class="task-ids"><span class="cid">C3.8</span></span></h2>
+  <pre><code class="language-c">int bmp_read(const char *path, struct image *img);
+int bmp_write(const char *path, const struct image *img);
+void image_free(struct image *img);
+void to_gray(struct image *img);
+void invert(struct image *img);
+uint64_t raw_image_bytes(int w, int h, int bpp);
+int palette_index(const struct image *img, const uint8_t (*pal)[3], int n, uint8_t *idx);
+int svg_rect(char *buf, size_t cap, int x, int y, int w, int h, uint32_t rgb);
+</code></pre>
+<p><code>struct image</code> 的像素一律是<strong>由上而下、RGB</strong>;BMP 檔案裡是由下而上(高度為負時由上而下)、BGR、每列補齊到 4 的倍數。只需支援 24 位元未壓縮的 BMP,其他一律回傳 −1。</p>
+</section>
+
+<section class="task" id="task8">
+  <h2>任務 8 · 影片的差異影格 <span class="task-ids"><span class="cid">C3.9</span></span></h2>
+  <pre><code class="language-c">long delta_encode(const uint8_t *prev, const uint8_t *cur, size_t n, uint8_t *out, size_t cap);
+long delta_decode(const uint8_t *prev, const uint8_t *delta, size_t dn, uint8_t *cur, size_t n);
+double compression_ratio(uint64_t original, uint64_t compressed);
+</code></pre>
+<p>差異的格式是一串區段:起點(4 位元組 LE)、長度(2 位元組 LE)、新的位元組。一個區段是一段<strong>連續改變</strong>的位元組,長度超過 65535 要切開。解碼要拒絕超出範圍或不完整的區段。</p>
+</section>
+
+<section class="task" id="task9">
+  <h2>任務 9 · 位元組順序 <span class="task-ids"><span class="cid">C3.10</span></span></h2>
+  <pre><code class="language-c">int host_is_little(void);
+uint32_t bswap32(uint32_t x);
+uint32_t read_le32(const uint8_t *p);
+uint32_t read_be32(const uint8_t *p);
+void write_le32(uint8_t *p, uint32_t x);
+</code></pre>
+<p>任務 6、7 讀寫檔頭時就用這幾個函式。</p>
+</section>
+
+
+<h2>繳交</h2>
+<p><code>make test</code> 全部通過後,把 <code>src/*.c</code> 提交到你的 git repo。隱藏測試會檢查大量邊界情況,例如:<code>INT64_MIN</code>、<code>-128</code> 的一補數、最小的非正規數、<code>C0 80</code> 與 <code>ED A0 80</code>、一段 70,000 位元組的連續改變、寬 101 像素(每列要補 1 個位元組)的 BMP、高度為負的 BMP、壞掉的壓縮檔,以及三個指令列工具的輸出。</p>
+
+
+  <footer class="foot">計算機概論 · 第 3 章　|　教材:Dale & Lewis《Computer Science Illuminated》7e(以目錄為大綱,內容自編)　|　風格延續《CS 自學聖經》設計系統</footer>
+</main>
+<script>
+(function(){var b=document.querySelector('.theme-toggle'),r=document.documentElement;
+function e(){return r.getAttribute('data-theme')||(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');}
+b.textContent=e()==='dark'?'☀':'☾';
+b.addEventListener('click',function(){var n=e()==='dark'?'light':'dark';r.setAttribute('data-theme',n);
+try{localStorage.setItem('handout-theme',n);}catch(x){}b.textContent=n==='dark'?'☀':'☾';});})();
+</script>
+</body>
+</html>
