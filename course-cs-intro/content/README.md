@@ -121,3 +121,13 @@ front matter `lang`、`dir`(例 `labs/ch03`)。段落:`## 概要`、`## 環境`�
 - Python:`def test_C2_4_add_carry():`
 
 `run_labs.py` 會確認:參考解通過全部公開與隱藏測試;起始碼能編譯,而且每個任務至少有一個對應觀念的測試失敗(證明測試真的在測東西)。
+
+## 踩過的坑(Batch 1)
+
+- **`## 驗算` 的結果必須恰好是 `True`**:寫成 `twos(-5, 8)`(忘了 `== ANS`)會被判定失敗,這是故意的。
+- **出題避開剛好 .5 的四捨五入**:浮點誤差可能讓 `floor(x + 0.5)` 往任一邊偏(例如 0.7 × 15)。
+- **`course.yaml` 的 outline 標題含逗號時要加引號**,否則 YAML 會把它拆成好幾個欄位。
+- **Lab 的標頭不要和系統標頭同名**(例如 `endian.h`):Makefile 用了 `-Isrc`,glibc 的 `#include <endian.h>` 會誤抓你的檔案。
+- **C Lab 模擬溢位時先轉成 `uint64_t` 再算**:有號溢位是未定義行為,`-fno-sanitize-recover` 會讓測試直接失敗。
+- **Windows 的 Docker Desktop 偶爾會讓容器卡住**:`run_labs.py` 已改成把 Lab 打包成 tar 從標準輸入送進容器、逾時 180 秒就砍掉重試一次。若某個 Lab 真的需要更久,調整 `labkit.docker_make` 的 `timeout`。
+- **寫包含反斜線的檔案(C 字串、LaTeX)一律用檔案寫入工具**:Bash heredoc 會出錯。
