@@ -37,5 +37,7 @@ def test_ctest_isolation():
     assert "FAIL C9_1_segfault" in out and "crashed" in out
     assert "FAIL C9_1_infinite" in out and "timeout" in out
     assert "PASS C9_1_after_crash" in out          # 前面當掉不影響後面
-    assert "ctest: 2 passed, 3 failed" in out
+    assert "FAIL C9_1_leaks" in out and "leak" in out          # 記憶體洩漏要算失敗
+    assert "FAIL C9_1_exits_early" in out and "early" in out   # 提早 exit(0) 不能算通過
+    assert "ctest: 2 passed, 5 failed" in out
     assert r.returncode != 0

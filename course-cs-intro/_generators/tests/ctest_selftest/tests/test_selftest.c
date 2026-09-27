@@ -16,3 +16,11 @@ TEST(C9_1_infinite) {
     }
 }
 TEST(C9_1_after_crash) { ASSERT_TRUE(1); }
+TEST(C9_1_leaks) {
+    void *volatile p = malloc(100);
+    p = NULL;
+}
+TEST(C9_1_exits_early) {
+    exit(0);
+    ASSERT_TRUE(0);
+}

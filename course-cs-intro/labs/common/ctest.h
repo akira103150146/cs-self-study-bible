@@ -27,6 +27,11 @@
 #endif
 #define CTEST_MAX 512
 #define CTEST_ASSERT_EXIT 77   /* 斷言失敗用這個結束碼;其他非零 = 當掉(例如 sanitizer 報錯) */
+#define CTEST_PASS_EXIT 78     /* 測試函式跑完才用這個結束碼;被測程式提早 exit(0) 不會被當成通過 */
+#define CTEST_LEAK_EXIT 79     /* 測試跑完但有記憶體洩漏 */
+
+/* 有開 AddressSanitizer 時由它提供;沒開時是 NULL(weak),就不檢查洩漏 */
+extern int __lsan_do_recoverable_leak_check(void) __attribute__((weak));
 
 typedef void (*ctest_fn)(void);
 struct ctest_case {
@@ -105,13 +110,21 @@ int main(int argc, char **argv) {
             alarm(CTEST_TIMEOUT);
             ctest_cases[i].fn();
             fflush(stdout);
-            _exit(0);
+            /* _exit 會跳過 LeakSanitizer 在結束時的檢查,所以在這裡主動檢查一次 */
+            if (__lsan_do_recoverable_leak_check && __lsan_do_recoverable_leak_check()) _exit(CTEST_LEAK_EXIT);
+            _exit(CTEST_PASS_EXIT);
         }
         int st = 0;
         waitpid(pid, &st, 0);
-        if (WIFEXITED(st) && WEXITSTATUS(st) == 0) {
+        if (WIFEXITED(st) && WEXITSTATUS(st) == CTEST_PASS_EXIT) {
             printf("PASS %s\n", ctest_cases[i].name);
             passed++;
+        } else if (WIFEXITED(st) && WEXITSTATUS(st) == CTEST_LEAK_EXIT) {
+            printf("FAIL %s (memory leak: see the LeakSanitizer report above)\n", ctest_cases[i].name);
+            failed++;
+        } else if (WIFEXITED(st) && WEXITSTATUS(st) == 0) {
+            printf("FAIL %s (exited early: exit(0) was called before the test finished)\n", ctest_cases[i].name);
+            failed++;
         } else if (WIFSIGNALED(st) && WTERMSIG(st) == SIGALRM) {
             printf("FAIL %s (timeout after %ds)\n", ctest_cases[i].name, CTEST_TIMEOUT);
             failed++;
