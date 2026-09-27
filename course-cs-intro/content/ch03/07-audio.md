@@ -30,7 +30,8 @@ $$\text{bytes} = \text{rate} \times \frac{\text{bit depth}}{8} \times \text{chan
 | sampling | 取樣 | 每隔固定時間量一次振幅 |
 | sampling rate | 取樣率 | 每秒取樣次數,單位 Hz |
 | bit depth / quantization | 位元深度/量化 | 每個樣本的位元數;把連續值捨入到有限等級 |
-| Nyquist rate | 奈奎斯特頻率 | 取樣率至少要是最高頻率的兩倍 |
+| Nyquist rate | 奈奎斯特率 | 最高頻率的兩倍;取樣率必須**大於**它 |
+| Nyquist frequency | 奈奎斯特頻率 | 取樣率的一半;超過它的頻率會混疊 |
 | aliasing | 混疊 | 取樣不足時,高頻被誤認成低頻 |
 | PCM | 脈碼調變 | 未壓縮的原始樣本序列 |
 | SNR | 訊雜比 | 訊號與雜訊的功率比,以 dB 表示 |

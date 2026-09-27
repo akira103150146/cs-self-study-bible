@@ -122,3 +122,16 @@ def test_docker_make_timeout_kills_container():
     ps = subprocess.run(["docker", "ps", "--filter", "name=csintro-", "-q"],
                         capture_output=True, text=True).stdout.strip()
     assert ps == ""
+
+
+def test_zip_is_reproducible():
+    root = fixture_root()
+    a, b = os.path.join(root, "a.zip"), os.path.join(root, "b.zip")
+    labkit.make_zip(root, 9, a)
+    import time
+    time.sleep(2.1)                     # zip 的時間戳記精度是 2 秒
+    labkit.make_zip(root, 9, b)
+    assert open(a, "rb").read() == open(b, "rb").read()
+    z = zipfile.ZipFile(a)
+    info = z.getinfo("ch09/Makefile")
+    assert (info.external_attr >> 16) & 0o777 == 0o644

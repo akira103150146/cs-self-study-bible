@@ -98,11 +98,16 @@ def make_zip(root, num, zip_path):
             f.write("build/\n__pycache__/\n")
         os.makedirs(os.path.dirname(zip_path), exist_ok=True)
         top = f"ch{num:02d}"
+        paths = sorted(os.path.relpath(os.path.join(dp, fn), d).replace(os.sep, "/")
+                       for dp, _, files in os.walk(d) for fn in files)
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
-            for dirpath, _, files in os.walk(d):
-                for fn in sorted(files):
-                    p = os.path.join(dirpath, fn)
-                    z.write(p, f"{top}/{os.path.relpath(p, d).replace(os.sep, '/')}")
+            for rel in paths:
+                # 固定時間戳記與權限:同樣的內容每次打包出一模一樣的 zip(git 才不會每次重建都顯示有變更)
+                info = zipfile.ZipInfo(f"{top}/{rel}", date_time=(2026, 1, 1, 0, 0, 0))
+                info.external_attr = (0o755 if rel.endswith(".sh") else 0o644) << 16
+                info.compress_type = zipfile.ZIP_DEFLATED
+                with open(os.path.join(d, rel), "rb") as f:
+                    z.writestr(info, f.read())
     finally:
         shutil.rmtree(d, ignore_errors=True)
     return zip_path
