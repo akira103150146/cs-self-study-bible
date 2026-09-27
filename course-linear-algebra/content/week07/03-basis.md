@@ -11,11 +11,15 @@ lab_hook: '`A.columnspace()` 回傳的是 **A 自己的**樞軸行,不是階梯�
 
 **Theorem 13.** The pivot columns of a matrix $A$ form a basis for the column space of $A$.
 
-> ***Warning:*** Be careful to use *pivot columns of $A$ itself* for the basis of $\operatorname{Col} A$. The columns of an echelon form $B$ are often not in the column space of $A$.
+> ***Warning:*** Be careful to use *pivot columns of $A$ itself* for the basis of $\operatorname{Col} A$. The columns of an echelon form $B$ are often not in the column space of $A$. (For instance, in Examples 7 and 8, the columns of $B$ all have zeros in their last entries and cannot generate the columns of $A$.)
 
-For $\operatorname{Nul} A$ there is no theorem to quote — the method is the one from Section 1.5: write the solution of $A\mathbf{x} = \mathbf{0}$ in parametric vector form. The vectors that appear in that form are automatically a basis for $\operatorname{Nul} A$.
+$\operatorname{Nul} A$ 這一邊沒有定理可引用,課本給的是一個做法(p. 181):
 
-The columns of an invertible $n \times n$ matrix form a basis for all of $\mathbb{R}^n$ because they are linearly independent and they span $\mathbb{R}^n$, by the Invertible Matrix Theorem. One such matrix is the identity matrix; its columns $\mathbf{e}_1, \dots, \mathbf{e}_n$ are called the **standard basis** for $\mathbb{R}^n$.
+> To create an explicit description of $\operatorname{Nul} A$, solve the equation $A\mathbf{x} = \mathbf{0}$ and write the solution in parametric vector form. (See Example 6.)
+
+**那個參數向量形式裡出現的向量,自動就是 $\operatorname{Nul} A$ 的一組基底**(理由見下面的原理)。
+
+**Example 5.** The columns of an invertible $n \times n$ matrix form a basis for all of $\mathbb{R}^n$ because they are linearly independent and span $\mathbb{R}^n$, by the Invertible Matrix Theorem. One such matrix is the $n \times n$ identity matrix. Its columns are denoted by $\mathbf{e}_1, \dots, \mathbf{e}_n$. The set $\{\mathbf{e}_1, \dots, \mathbf{e}_n\}$ is called the **standard basis** for $\mathbb{R}^n$.
 
 ## 名詞對照
 | English | 中文 | 說明 |
@@ -179,7 +183,7 @@ Determine which sets in Exercises 15–20 are bases for $\mathbb{R}^2$ or $\math
 #### 備註
 (19)(20) 是**數量檢查**:$\mathbb{R}^n$ 的基底恰好要 $n$ 個向量,少了張不滿、多了必相依。這兩題**不必計算**就能答,要讓學生看出這一點。
 
-(15)(17)(18) 的書後解答都特別提到「Let $A$ be the matrix whose columns are the vectors given」——把向量排成矩陣再用 IMT,是本組題目的標準寫法。
+(15)(17)(19) 的書後解答都特別提到「Let $A$ be the matrix whose columns are the vectors given」(書後只給奇數題,(16)(18)(20) 沒有解答)——把向量排成矩陣再用 IMT,是本組題目的標準寫法。
 
 ### 是非 · Lay 2.8 Exercises 27、29–30
 (27) **(T/F)** The columns of an invertible $n \times n$ matrix form a basis for $\mathbb{R}^n$.

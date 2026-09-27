@@ -91,7 +91,7 @@ $\blacksquare$
 **為什麼「含 $\mathbf{0}$」不能省?** 邏輯上,若 $H$ **非空**且對純量乘法封閉,取 $c = 0$ 即得 $\mathbf{0} \in H$。課本仍然把它列為條件 (a),一來是為了排除空集合,二來是因為它是實務上最快的檢查——不含原點就直接出局。
 
 ## 老師講解
-### 例 1 · Lay 2.8 Example 1 與 Exercises 1–2
+### 例 1 · 補充例 與 Lay 2.8 Exercises 1–2
 Is the set $H$ of all vectors of the form $(a, b, 0)$ a subspace of $\mathbb{R}^3$? Then explain why the first quadrant of $\mathbb{R}^2$ is *not* a subspace, and why the union of the first and third quadrants is *not* either.
 
 1. **第一個集合**:$H$ 裡的向量長成 $(a, b, 0)$,也就是 $xy$ 平面。

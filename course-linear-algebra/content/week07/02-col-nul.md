@@ -11,11 +11,13 @@ lab_hook: '`A.columnspace()` 與 `A.nullspace()`:注意兩者的向量長度不�
 
 If $A = [\,\mathbf{a}_1 \;\cdots\; \mathbf{a}_n\,]$ with the columns in $\mathbb{R}^m$, then $\operatorname{Col} A$ is the same as $\operatorname{Span}\{\mathbf{a}_1, \dots, \mathbf{a}_n\}$. So $\operatorname{Col} A$ is a subspace of $\mathbb{R}^m$.
 
-Note that a typical vector in $\operatorname{Col} A$ can be written as $A\mathbf{x}$ for some $\mathbf{x}$, because $A\mathbf{x}$ is a linear combination of the columns of $A$. That is,
+Example 4 shows that the column space of an $m \times n$ matrix is a subspace of $\mathbb{R}^m$. Note that $\operatorname{Col} A$ equals $\mathbb{R}^m$ only when the columns of $A$ span $\mathbb{R}^m$. Otherwise, $\operatorname{Col} A$ is only part of $\mathbb{R}^m$.
+
+The solution of Example 4 shows that when a system of linear equations is written in the form $A\mathbf{x} = \mathbf{b}$, the column space of $A$ is the set of all $\mathbf{b}$ for which the system has a solution.
+
+寫成集合就是下面這個式子(這個寫法出自課本 4.2 節,本講義先借用,因為它最好記):
 
 $$\operatorname{Col} A = \{\mathbf{b} : \mathbf{b} = A\mathbf{x} \text{ for some } \mathbf{x} \text{ in } \mathbb{R}^n\}$$
-
-The column space of an $m \times n$ matrix $A$ is all of $\mathbb{R}^m$ if and only if the equation $A\mathbf{x} = \mathbf{b}$ has a solution for each $\mathbf{b}$ in $\mathbb{R}^m$.
 
 **Definition.** The **null space** of a matrix $A$ is the set $\operatorname{Nul} A$ of all solutions of the homogeneous equation $A\mathbf{x} = \mathbf{0}$.
 
@@ -213,7 +215,7 @@ In Exercises 11 and 12, give integers $p$ and $q$ such that $\operatorname{Nul} 
 #### 備註
 (9) 和 (7c) 用的是同一個 $A$ 與 $\mathbf{p}$:$\mathbf{p}$ **在 $\operatorname{Col} A$ 裡卻不在 $\operatorname{Nul} A$ 裡**。這一對題目最能說明「兩個空間毫不相干」,務必連著做。
 
-(13)(14) 的零空間向量**不唯一**(任何非零倍數或組合都可以);課本 (14) 若寫成 $(1/3, -5/3, 1)$ 也對,本講義取整數倍。
+(13)(14) 的零空間向量**不唯一**(任何非零倍數或組合都可以):(14) 寫成 $(1/3, -5/3, 1)$ 一樣對,本講義取整數倍比較好檢查。(14) 是偶數題,**書後無解答**。
 
 $\operatorname{Col} A$ 的向量「取一行就好」是本題最該學到的偷懶技巧。
 

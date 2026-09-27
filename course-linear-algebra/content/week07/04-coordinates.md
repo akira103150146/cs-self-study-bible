@@ -19,7 +19,7 @@ is called the **coordinate vector of $\mathbf{x}$ (relative to $\mathcal{B}$)** 
 
 $$\mathbf{x} \longmapsto [\,\mathbf{x}\,]_{\mathcal{B}}$$
 
-是 $H$ 與 $\mathbb{R}^p$ 之間保持線性組合的一對一對應;課本說這使得 $H$「looks and acts the same as $\mathbb{R}^p$」(p. 188)。
+是 $H$ 與 $\mathbb{R}^p$ 之間保持線性組合的一對一對應;課本 p. 188 的原話是這個對應「makes $H$ look and act the same as $\mathbb{R}^p$」。
 
 ## 名詞對照
 | English | 中文 | 說明 |
@@ -27,7 +27,7 @@ $$\mathbf{x} \longmapsto [\,\mathbf{x}\,]_{\mathcal{B}}$$
 | coordinate vector | 座標向量 | $[\,\mathbf{x}\,]_{\mathcal{B}}$:$\mathbf{x}$ 在基底 $\mathcal{B}$ 下的「地址」 |
 | coordinates relative to $\mathcal{B}$ | 相對於 $\mathcal{B}$ 的座標 | 那組唯一的權重 $c_1, \dots, c_p$ |
 | $\mathcal{B}$-coordinate vector | $\mathcal{B}$ 座標向量 | 同上,較短的講法 |
-| change-of-coordinates matrix | 座標轉換矩陣 | $P_{\mathcal{B}} = [\,\mathbf{b}_1 \; \cdots \; \mathbf{b}_p\,]$,滿足 $\mathbf{x} = P_{\mathcal{B}}[\,\mathbf{x}\,]_{\mathcal{B}}$ |
+| change-of-coordinates matrix | 座標轉換矩陣 | $P_{\mathcal{B}} = [\,\mathbf{b}_1 \; \cdots \; \mathbf{b}_p\,]$,滿足 $\mathbf{x} = P_{\mathcal{B}}[\,\mathbf{x}\,]_{\mathcal{B}}$(課本 4.4 節的名詞,此處先借用) |
 | isomorphism | 同構 | 兩個空間「長得一樣、運算也一樣」的一對一對應 |
 | estimate from the figure | 由圖估計 | 從格線上數格子讀出座標(Ex 7、8) |
 
@@ -45,7 +45,7 @@ $$\mathbf{x} \longmapsto [\,\mathbf{x}\,]_{\mathcal{B}}$$
 | 找 $\mathbf{x}$ | 座標 $[\,\mathbf{x}\,]_{\mathcal{B}}$ | **乘進去**:$\mathbf{x} = c_1\mathbf{b}_1 + \cdots + c_p\mathbf{b}_p$ | 加減乘,一行算完 |
 | 找 $[\,\mathbf{x}\,]_{\mathcal{B}}$ | 向量 $\mathbf{x}$ | **解方程**:$P_{\mathcal{B}}\,\mathbf{c} = \mathbf{x}$ | 要列化簡 |
 
-其中 $P_{\mathcal{B}} = [\,\mathbf{b}_1 \; \cdots \; \mathbf{b}_p\,]$ 就是把基底向量排成的矩陣,課本稱它**座標轉換矩陣**。
+其中 $P_{\mathcal{B}} = [\,\mathbf{b}_1 \; \cdots \; \mathbf{b}_p\,]$ 就是把基底向量排成的矩陣。課本 2.9 節沒有給它名字,4.4 節才稱它 **change-of-coordinates matrix**(座標轉換矩陣);本講義先借這個名詞來用。
 
 $$\mathbf{x} = P_{\mathcal{B}}\,[\,\mathbf{x}\,]_{\mathcal{B}} \qquad \Longleftrightarrow \qquad [\,\mathbf{x}\,]_{\mathcal{B}} = P_{\mathcal{B}}^{-1}\mathbf{x} \;\;(\text{$P_{\mathcal{B}}$ 可逆時})$$
 

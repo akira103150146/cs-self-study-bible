@@ -27,7 +27,7 @@ $$\operatorname{rank} A + \dim \operatorname{Nul} A = n$$
 | dimension | 維度 | 基底裡向量的個數;$\dim H$ |
 | rank | 秩 | $\operatorname{rank} A = \dim \operatorname{Col} A = $ 樞軸行的個數 |
 | the Rank Theorem | 秩定理 | $\operatorname{rank} A + \dim \operatorname{Nul} A = n$($n$ = **行**數) |
-| nullity | 零度 | $\dim \operatorname{Nul} A$,自由變數的個數(課本未用此詞,他書常見) |
+| nullity | 零度 | $\dim \operatorname{Nul} A$,自由變數的個數(2.9 節未用此詞,課本 4.6 節才引入) |
 | zero subspace | 零子空間 | $\{\mathbf{0}\}$,維度定義為 0,且**沒有基底** |
 | full rank | 滿秩 | $\operatorname{rank} A = \min(m, n)$,能有的最大秩 |
 
@@ -290,7 +290,7 @@ In Exercises 21–24, mark each statement True or False. Justify each answer. He
 PP3 與這兩題是同一件事的不同方向:**維度受所在空間限制**。
 
 ### 變化 · Lay 2.9 Exercises 27–29
-In Exercises 27–29, justify each answer.
+In Exercises 27–32, justify each answer or construction.
 
 (27) If the subspace of all solutions of $A\mathbf{x} = \mathbf{0}$ has a basis consisting of three vectors and if $A$ is a $5 \times 7$ matrix, what is the rank of $A$?
 
@@ -306,16 +306,16 @@ In Exercises 27–29, justify each answer.
 (29) $A$ 有 6 **行**,$\dim \operatorname{Nul} A = 6 - \operatorname{rank} A = 6 - 4 = 2$。
 
 #### 備註
-(27)(29) 書後有解答且與上面一致;(28) 書後無解答。
+(27)(29) 書後有解答且與上面一致;(28) 書後無解答。書上的共同指示涵蓋 27–32,本講義拆成兩張卡片:這裡做 27–29,30–32 放在下一張挑戰卡。
 
-**(28) 是 Global Edition 的印刷錯誤**:美國版(5e)對應題是「$4 \times 5$ 矩陣、零空間三維」⇒ rank $= 2$。改成 $3 \times 7$ 之後題目自相矛盾。
+**(28) 的數字自相矛盾**(用 $\operatorname{rank} A \le \min(m, n)$ 一驗就知道),推測是改動題目數字時沒有重新檢查;手邊只有 Global Edition,無從比對美國版。
 
 **建議照原樣出給學生**,把它當成「$\operatorname{rank} A \le \min(m,n)$ 這個合理性檢查什麼時候會救你」的教材;願意改題的話,改成「$4 \times 7$ 矩陣」(答案 4)或「零空間是**四**維」(答案 3)都可以。
 
 (27) 與 (29) 的陷阱都是**用列數代替行數**:$5 \times 7$ 要用 7、$7 \times 6$ 要用 6。批改時先看學生用哪個數字。
 
 ### 挑戰 · Lay 2.9 Exercises 30–32
-In Exercises 30–32, justify each answer or construction.
+In Exercises 27–32, justify each answer or construction.
 
 (30) Show that a set of vectors $\{\mathbf{v}_1, \mathbf{v}_2, \dots, \mathbf{v}_5\}$ in $\mathbb{R}^n$ is linearly dependent when $\dim \operatorname{Span}\{\mathbf{v}_1, \mathbf{v}_2, \dots, \mathbf{v}_5\} = 4$.
 
@@ -337,7 +337,7 @@ $$A = \begin{bmatrix} 1 & 2 & 3 \\ 2 & 4 & 6 \\ 3 & 6 & 9 \\ 4 & 8 & 12 \end{bma
 三個行都在同一條過原點的直線上,所以 $\dim \operatorname{Col} A = 1$。
 
 #### 備註
-(30)(32) 書後無解答;(31) 書後給的作法是「任取 $\mathbb{R}^3$ 中兩個明顯不成比例的向量,各複製一份湊成 4 行」,並特別指出「There is no need to worry about whether $\operatorname{Nul} A$ has the correct dimension, since this is guaranteed by the Rank Theorem」——**這句話就是本題的教學重點**:構造時只要顧 rank,零空間會自己對。
+本卡是上一張卡共同指示(27–32)的後半。(30)(32) 書後無解答;(31) 書後給的作法是「任取 $\mathbb{R}^3$ 中兩個明顯不成比例的向量,各複製一份湊成 4 行」,並特別指出「There is no need to worry about whether $\operatorname{Nul} A$ has the correct dimension, since this is guaranteed by the Rank Theorem」——**這句話就是本題的教學重點**:構造時只要顧 rank,零空間會自己對。
 
 **(32) 書上印成「Construct a $4 \times 3$ matrix with rank l.」(小寫字母 L),應為數字 1**,講義已改正。
 
