@@ -23,9 +23,6 @@ pred = {
 可逆矩陣定理說十二條同真同假。這一格用三種不同的方式問同一個問題(秩、行列式、最簡列梯形),看它們是不是真的一致;再用一個非方陣的例子說明「為什麼只對方陣」。
 
 ```python
-import scipy.linalg as sla
-from sympy import Rational
-
 # ---- Lay 2.3 Exercises 9–10(T 題):三種判斷方式必須一致 ----
 mats = {
     9: Matrix([[4, 0, -7, -7], [-6, 1, 11, 9], [7, -5, 10, 19], [-1, 2, 3, -1]]),
@@ -82,6 +79,8 @@ Exercise 10: 5×5  rank = 5  det = 2  rref 是 I 嗎? True  可逆? True
 這一格是本週最重要的實驗。同一個「可逆」的矩陣,答案可以完全不能用。
 
 ```python
+from sympy import Rational
+
 # ---- Lay 2.3 Exercise 49:右端動 0.05%,解動 300% ----
 Ae = Matrix([[Rational(9, 2), Rational(31, 10)], [Rational(8, 5), Rational(11, 10)]])
 b1 = Matrix([Rational(19249, 1000), Rational(6843, 1000)])     # 原始資料
@@ -97,7 +96,7 @@ print(f"x2 的相對誤差 = {float(abs(x2[1]-x1[1])/x1[1])*100:.0f}%")
 for k, M in mats.items():
     Mf = Matrix(M.rows, M.cols, lambda i, j: float(M[i, j]))
     c = float(Mf.condition_number())
-    print(f"Exercise {k}: det = {M.det()}  cond ≈ {c:.0f}  → 約損失 {np.log10(c):.1f} 位")
+    print(f"Exercise {k}: det = {M.det()}  cond ≈ {c:.2e}  → 約損失 {np.log10(c):.1f} 位")
 
 # 先造一個已知答案,再解回來,看掉了幾位
 rng = np.random.default_rng(6)
@@ -129,8 +128,8 @@ det = -1/100
 精確解(四捨五入後): [2.9, 2.0]
 x1 的相對誤差 = 26%
 x2 的相對誤差 = 308%
-Exercise 9: det = 1  cond ≈ 23683  → 約損失 4.4 位
-Exercise 10: det = 2  cond ≈ 68622  → 約損失 4.8 位
+Exercise 9: det = 1  cond ≈ 2.37e+04  → 約損失 4.4 位
+Exercise 10: det = 2  cond ≈ 6.86e+04  → 約損失 4.8 位
 精確解(Rational): [630, -12600, 56700, -88200, 44100]
 ```
 
@@ -138,7 +137,7 @@ Exercise 10: det = 2  cond ≈ 68622  → 約損失 4.8 位
 # TODO 解讀:回答三個問題
 obs = {
     "det_tells_stability": None,  # True / False:det 的大小能不能看出矩陣好不好算?
-    "h12_worst_entry": None,      # 填 H12 @ inv(H12) 離單位矩陣最遠那一格的量級,例如 1e-2
+    "h12_worst_entry": None,      # 填 H12 @ inv(H12) 離單位矩陣最遠那一格的量級,格式像 1e-9
     "why_rational": "",           # 一句話:Hilbert 矩陣為什麼一定要用 Rational?
 }
 ```
@@ -156,6 +155,7 @@ obs = {
 
 ```python
 import time
+import scipy.linalg as sla
 
 # ---- scipy 的 LU:那個 P 是什麼? ----
 A4 = np.array([[2., 4, -1, 5, -2], [-4, -5, 3, -8, 1],

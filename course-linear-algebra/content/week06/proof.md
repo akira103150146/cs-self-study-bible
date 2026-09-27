@@ -27,7 +27,7 @@ Let $A$ be a square $n \times n$ matrix. Then the following statements are equiv
 
 $$\text{(a)} \Rightarrow \text{(j)} \Rightarrow \text{(d)} \Rightarrow \text{(c)} \Rightarrow \text{(b)} \Rightarrow \text{(a)}$$
 
-四個箭頭各靠一件事:
+五個箭頭各靠一件事:
 
 | 箭頭 | 靠什麼 |
 |---|---|

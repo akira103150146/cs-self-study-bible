@@ -29,13 +29,13 @@ A **pivot position** in a matrix $A$ is a location in $A$ that corresponds to a 
 | echelon form / row echelon form | 列梯形 | 首項像樓梯一樣往右下走,首項底下全是 0 |
 | reduced echelon form (RREF) | 簡化列梯形 | 再要求首項都是 1,且首項所在的行其他位置全是 0 |
 | echelon matrix | 梯形矩陣 | 已經是列梯形的矩陣 |
-| pivot position | 樞紐位置(pivot 位置) | RREF 裡首項 1 所在的位置 |
-| pivot column | 樞紐行(pivot 行) | 含有 pivot 位置的行 |
-| pivot | 樞紐(主元) | 放在 pivot 位置、拿來消去其他列的那個非 0 數 |
+| pivot position | 樞軸位置(pivot 位置) | RREF 裡首項 1 所在的位置 |
+| pivot column | 樞軸行(pivot 行) | 含有 pivot 位置的行 |
+| pivot | 樞軸(主元) | 放在 pivot 位置、拿來消去其他列的那個非 0 數 |
 | row reduction algorithm | 列化簡演算法 | 課本的五個步驟;又叫高斯消去法(Gaussian elimination) |
 | forward phase | 前進階段 | 步驟 1–4,做出列梯形 |
 | backward phase | 後退階段 | 步驟 5,做出 RREF |
-| partial pivoting | 部分樞紐選取 | 電腦挑該行絕對值最大的數當 pivot,減少捨入誤差 |
+| partial pivoting | 部分樞軸選取 | 電腦挑該行絕對值最大的數當 pivot,減少捨入誤差 |
 
 ## 白話說
 列化簡的目標永遠是同一個形狀:**像樓梯一樣往右下走**。

@@ -22,8 +22,6 @@ pred = {
 這一格把理論課的規則逐條跑一次。其中第 3 段用**隨機矩陣**測試兩個看起來很像的恆等式——這正是課本 Lay 2.1 Exercises 43–46 要學生做的事。
 
 ```python
-import time
-
 # ---- 尺寸規則(Lay 2.1 Example 3–4)----
 A = np.array([[2, 3], [1, -5]])
 B = np.array([[4, 3, 6], [1, -2, 3]])
@@ -131,11 +129,21 @@ rng2 = np.random.default_rng(7)
 n = 500
 P = rng2.random((n, n)) + n * np.eye(n)
 b = rng2.random(n)
-np.linalg.solve(P, b); np.linalg.inv(P)                # 先跑一次暖機,不計時
-t0 = time.perf_counter(); x1 = np.linalg.solve(P, b); t1 = time.perf_counter()
-t2 = time.perf_counter(); x2 = np.linalg.inv(P) @ b;  t3 = time.perf_counter()
-print(f"solve   花 {t1-t0:.4f} 秒")
-print(f"inv @ b 花 {t3-t2:.4f} 秒(是 solve 的 {(t3-t2)/(t1-t0):.0f} 倍)")
+import time
+from statistics import median
+
+def timeit(f, rounds=20):                              # 量 20 次取中位數,壓掉 OS 的排程雜訊
+    f()                                                # 暖機一次,不計時
+    ts = []
+    for _ in range(rounds):
+        t0 = time.perf_counter(); f(); ts.append(time.perf_counter() - t0)
+    return median(ts)
+
+t_solve = timeit(lambda: np.linalg.solve(P, b))
+t_inv = timeit(lambda: np.linalg.inv(P) @ b)
+x1, x2 = np.linalg.solve(P, b), np.linalg.inv(P) @ b
+print(f"solve   的中位數 {t_solve:.4f} 秒")
+print(f"inv @ b 的中位數 {t_inv:.4f} 秒(在這台機器上是 solve 的 {t_inv/t_solve:.0f} 倍)")
 print("兩個答案幾乎一樣嗎?", np.allclose(x1, x2))
 print("solve 的殘差 :", f"{np.abs(P @ x1 - b).max():.3e}")
 print("inv   的殘差 :", f"{np.abs(P @ x2 - b).max():.3e}")
@@ -196,7 +204,7 @@ shear = np.array([[1, .25, 0], [0, 1, 0], [0, 0, 1.]])
 print("剪切後的前三個頂點:")
 print(np.round((shear @ Dh)[:2, :3], 3))
 print("再壓窄後的前三個頂點:")
-print(np.round((Sc(.75, 1) @ shear @ Dh)[:2, :3], 4))
+print(np.round((Sc(.75, 1) @ shear @ Dh)[:2, :3], 3))
 
 # ---- 課本 2.7 Practice Problem / Exercise 7:繞任意點旋轉 ----
 p = np.array([6., 8.])
@@ -241,7 +249,7 @@ plt.show()
 [[0.    0.5   2.105]
  [0.    0.    6.42 ]]
 再壓窄後的前三個頂點:
-[[0.     0.375  1.5787]
+[[0.    0.375 1.579]
  [0.     0.     6.42  ]]
 繞 (6, 8) 轉 60° 的矩陣 =
 [[ 0.5    -0.866   9.9282]

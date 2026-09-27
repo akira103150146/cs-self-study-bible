@@ -279,8 +279,8 @@ Matrix([[5, 10], [-2, -3]]).det() == 5
 Matrix([[-4, 2], [6, -3]]).det() == 0
 Matrix([[0, 5, 6], [1, -7, 3], [-2, 4, 5]]).det() == -115
 Matrix([[1, -5, 7], [1, -1, 0], [-2, 2, -5]]).det() == -20
-Matrix([[3, 6], [-8, 2], [1, -5]]).rank() < 3
-Matrix([[1, 3, -2, 0], [-6, -4, 7, 8], [-7, 7, 5, 9]]).rank() < 4
+Matrix([[3, 6], [-8, 2], [1, -5]]).rank() == 2
+Matrix([[1, 3, -2, 0], [-6, -4, 7, 8], [-7, 7, 5, 9]]).rank() == 3
 (lambda a, b, c: (a * b).is_zero_matrix and b.rank() == b.cols == a.cols - a.rank() and c.rank() == c.cols == a.rank() and a.row_join(c).rank() == a.rank())(Matrix([[-3, 9, -2, -7], [2, -6, 4, 8], [3, -9, -2, 2]]), Matrix([[3, -6], [1, 0], [0, -5], [0, 4]]), Matrix([[-3, -2], [2, 4], [3, -2]]))
 (lambda a, b, c: (a * b).is_zero_matrix and b.rank() == b.cols == a.cols - a.rank() and c.rank() == c.cols == a.rank() and a.row_join(c).rank() == a.rank())(Matrix([[1, 4, 8, -3, -7], [-1, 2, 7, 3, 4], [-2, 2, 9, 5, 5], [3, 6, 9, -5, -2]]), Matrix([[2, -7], [Rational(-5,2), Rational(1,2)], [1, 0], [0, -4], [0, 1]]), Matrix([[1, 4, -3], [-1, 2, 3], [-2, 2, 5], [3, 6, -5]]))
 (lambda a, b, c: (a * b).is_zero_matrix and b.rank() == b.cols == a.cols - a.rank() and c.rank() == c.cols == a.rank() and a.row_join(c).rank() == a.rank())(Matrix([[3, -1, 7, 3, 9], [-2, 2, -2, 7, 5], [-5, 9, 3, 3, 4], [-2, 6, 6, 3, 7]]), Matrix([[-3, Rational(-5,2)], [-2, Rational(-3,2)], [1, 0], [0, -1], [0, 1]]), Matrix([[3, -1, 3], [-2, 2, 7], [-5, 9, 3], [-2, 6, 3]]))

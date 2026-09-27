@@ -416,7 +416,7 @@ $$(5A)\left(\tfrac15 C\right) = 5 \cdot \tfrac15 (AC) = I, \qquad \left(\tfrac15
 #### 備註
 Exercises 35–36 合起來就是 Theorem 4 的完整證明,而且兩半用的是完全不同的招數:(36) 直接驗證公式,(35) 用反證(找到非零解 ⇒ 不可能可逆)。適合當「證明的兩種典型寫法」的示範。
 
-Practice Problem 3 很短,可以當堂做,重點是**純量可以搬到乘積外面**(第 1 個觀念的 Theorem 2(d))。
+Practice Problem 3 很短,可以當堂做,重點是**純量可以搬到乘積外面**(觀念 2 的 Theorem 2(d))。
 
 ## 驗算
 ```check

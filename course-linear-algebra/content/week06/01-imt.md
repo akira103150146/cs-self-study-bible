@@ -144,7 +144,7 @@ Determine if $A = \begin{bmatrix} 2 & 3 & 4 \\ 2 & 3 & 4 \\ 2 & 3 & 4 \end{bmatr
 
 ## 易錯點
 - **用在非方陣上**。這是本節第一名的錯誤。$4 \times 3$ 矩陣的行獨立,推不出任何關於 $A\mathbf{x} = \mathbf{b}$ 的事。
-- **把「有平凡解」當成 (d)**。(d) 是「**只有**平凡解」。任何齊次方程都有平凡解,那句話沒有資訊(Exercise 32 就在考這個)。
+- **把「有平凡解」當成 (d)**。(d) 是「**只有**平凡解」。任何齊次方程都有平凡解,那句話沒有資訊(觀念 2 的 Exercise 32 就在考這個)。
 - **把 into 當成 onto**。(i) 是 **onto**;「maps $\mathbb{R}^n$ into $\mathbb{R}^n$」對任何 $n \times n$ 矩陣都成立(Exercise 18 的陷阱)。
 - **以為「$A$ 是方陣」就能推出 (g)**。IMT 的條件是「$A$ 可逆」,不是「$A$ 是方陣」(Exercise 15)。
 - **寫答案時不說理由**。本節的題目幾乎都要求 Justify;只寫「可逆」沒有分數,要寫出引用的是哪一條。
@@ -160,7 +160,7 @@ Determine if $A = \begin{bmatrix} 2 & 3 & 4 \\ 2 & 3 & 4 \\ 2 & 3 & 4 \end{bmatr
 
 例 2 的「一眼判準」要整理成一個小清單寫在黑板角落:整行為 0、兩行相同、兩行成比例、某行是其他行的和。
 
-課堂建議做:Exercises 1、3、4、5(判斷可逆,練「最少計算」);是非 Exercises 15、18、32(三個典型陷阱);Exercise 23、Practice Problem 1。Exercises 21–22(三角矩陣)很適合當作業,它們的結論後面一直會用到。
+課堂建議做:Exercises 1、3、4、5(判斷可逆,練「最少計算」);是非 Exercises 15、18、19(三個典型陷阱;同型的 Exercise 32 收在觀念 2);Exercise 23、Practice Problem 1。Exercises 21–22(三角矩陣)很適合當作業,它們的結論後面一直會用到。
 
 T 題 Exercises 9、10 放進實作課,和條件數一起做。
 

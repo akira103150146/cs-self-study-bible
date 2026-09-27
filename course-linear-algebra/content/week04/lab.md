@@ -127,6 +127,7 @@ def T_shift(x):
     """老師提供:平移(每個點往右移 1 格)。"""
     return np.array([x[0] + 1.0, x[1]])
 
+I2 = np.eye(2)                                  # 單位矩陣的兩行就是 e1、e2
 B = np.column_stack([T_shift(I2[:, j]) for j in range(2)])
 print("用 e1、e2 組出來的矩陣 B =")
 print(B)

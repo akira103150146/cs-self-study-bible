@@ -35,7 +35,7 @@
 | 02:55–03:00 | 收尾:預告實作課開頭的診斷考 | — |
 
 ## 證明時刻
-**每個線性變換 $T : \mathbb{R}^n \to \mathbb{R}^m$ 都是矩陣乘法**(Theorem 10,課本 p. 100)。關鍵只有兩步:把 $\mathbf{x}$ 拆成 $x_1\mathbf{e}_1 + \cdots + x_n\mathbf{e}_n$,再用線性把 $T$ 分配進去,得到 $T(\mathbf{x}) = x_1T(\mathbf{e}_1) + \cdots + x_nT(\mathbf{e}_n)$——正好是以 $T(\mathbf{e}_j)$ 為行的矩陣乘向量。唯一性:$B\mathbf{e}_j$ 就是 $B$ 的第 $j$ 行,所以任何代表 $T$ 的矩陣都和 $A$ 同行。要特別點出「線性用在哪一步」,並對照平移為什麼寫不成矩陣乘法。
+**每個線性變換 $T : \mathbb{R}^n \to \mathbb{R}^m$ 都是矩陣乘法**(15 分,排在觀念 2 之後、觀念 3 之前:先推出 Theorem 10,下一節再正式給它名字)。Theorem 10 在課本 p. 100。關鍵只有兩步:把 $\mathbf{x}$ 拆成 $x_1\mathbf{e}_1 + \cdots + x_n\mathbf{e}_n$,再用線性把 $T$ 分配進去,得到 $T(\mathbf{x}) = x_1T(\mathbf{e}_1) + \cdots + x_nT(\mathbf{e}_n)$——正好是以 $T(\mathbf{e}_j)$ 為行的矩陣乘向量。唯一性:$B\mathbf{e}_j$ 就是 $B$ 的第 $j$ 行,所以任何代表 $T$ 的矩陣都和 $A$ 同行。要特別點出「線性用在哪一步」,並對照平移為什麼寫不成矩陣乘法。
 
 ## 逐段講法
 ### 份量說明

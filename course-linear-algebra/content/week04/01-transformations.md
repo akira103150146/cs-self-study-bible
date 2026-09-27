@@ -252,7 +252,7 @@ Let $A = \begin{bmatrix} 1 & 0 \\ 0 & -1 \end{bmatrix}$. Give a geometric descri
 ```check
 Matrix([[1, -3], [3, 5], [-1, 7]]) * Matrix([2, -1]) == Matrix([5, 1, -9])
 Matrix([[1, -3, 3], [3, 5, 2], [-1, 7, -5]]).rref()[0] == Matrix([[1, 0, Rational(3, 2)], [0, 1, Rational(-1, 2)], [0, 0, 0]])
-3 in Matrix([[1, -3, 3], [3, 5, 2], [-1, 7, 5]]).rref()[1] or 2 in Matrix([[1, -3, 3], [3, 5, 2], [-1, 7, 5]]).rref()[1]
+2 in Matrix([[1, -3, 3], [3, 5, 2], [-1, 7, 5]]).rref()[1]
 Matrix([[1, 0, 0], [0, 1, 0], [0, 0, 0]]) * Matrix([x1, x2, x3]) == Matrix([x1, x2, 0])
 Matrix([[1, 2], [0, 1]]) * Matrix([[0, 2, 2, 0], [0, 0, 2, 2]]) == Matrix([[0, 2, 6, 4], [0, 0, 2, 2]])
 Matrix([[2, 0], [0, 2]]) * Matrix([a, b]) == Matrix([2*a, 2*b])

@@ -29,6 +29,16 @@ $$(AB)_{ij} = a_{i1}b_{1j} + a_{i2}b_{2j} + \cdots + a_{in}b_{nj}$$
 
 Also, $\operatorname{row}_i(AB) = \operatorname{row}_i(A) \cdot B$.
 
+**Theorem 2.** Let $A$ be an $m \times n$ matrix, and let $B$ and $C$ have sizes for which the indicated sums and products are defined.
+
+- **a.** $A(BC) = (AB)C$ (associative law of multiplication)
+- **b.** $A(B + C) = AB + AC$ (left distributive law)
+- **c.** $(B + C)A = BA + CA$ (right distributive law)
+- **d.** $r(AB) = (rA)B = A(rB)$ for any scalar $r$
+- **e.** $I_m A = A = A I_n$ (identity for matrix multiplication)
+
+課本把 (b)–(e) 的證明留成習題(就是本觀念的 Exercises 37–40),(a) 則由「矩陣乘法 = 變換的合成」直接得到——那正是本週證明時刻要講的事。
+
 ## 名詞對照
 | English | 中文 | 說明 |
 |---|---|---|

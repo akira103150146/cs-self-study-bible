@@ -80,11 +80,11 @@ $x_1$ 錯了 $26\%$,$x_2$ 錯了 $308\%$。**輸入只動萬分之幾,答案卻�
 - **條件數**:最直接的指標。
 
 ## 原理
-**條件數在量什麼?** 直觀地說,它是「輸出的相對變動」與「輸入的相對變動」的最大比值:
+**條件數在量什麼?** 直觀地說,它是「輸出的相對變動」與「輸入的相對變動」的最大比值。**嚴格的不等式要用範數來量**:
 
-$$\frac{\text{解的相對誤差}}{\mathbf{b} \text{ 的相對誤差}} \;\le\; \operatorname{cond}(A)$$
+$$\frac{\lVert \delta\mathbf{x} \rVert / \lVert \mathbf{x} \rVert}{\lVert \delta\mathbf{b} \rVert / \lVert \mathbf{b} \rVert} \;\le\; \operatorname{cond}(A)$$
 
-用 Exercise 49 的數字驗一下:$\mathbf{b}$ 的相對變動約 $0.04\%$,解的相對變動約 $308\%$,比值約 $7700$——和條件數 $3363$ 同一個數量級。書後解答說的就是這件事:
+用 Exercise 49 的數字驗一下:範數版的比值是 $2983 \le 3363$ ✓。**但如果改用「哪一個分量錯最多」這種逐分量的百分比**,比值會到約 $7000$,**比條件數還大**——所以條件數是「誤差放大倍率的量級指標」,不是逐分量百分比的上界。課本自己也只說 same order of magnitude:$\mathbf{b}$ 的相對變動約 $0.04\%$、解的相對變動約 $308\%$,比值約 $7700$,和條件數 $3363$ 同一個數量級。書後解答說的就是這件事:
 
 > The percentage change in the solution from (3) to (4) is about 7700 times the percentage change in the right side of the equation. This is the same order of magnitude as the condition number. The condition number gives a rough measure of how sensitive the solution of $A\mathbf{x} = \mathbf{b}$ can be to changes in $\mathbf{b}$.
 
@@ -109,7 +109,7 @@ $$\begin{aligned} 4.5x_1 + 3.1x_2 &= 19.25 \\ 1.6x_1 + 1.1x_2 &= 6.84 \end{align
 5. **解變了多少?**
    $$\frac{|2.90 - 3.94|}{3.94} \approx 26\%, \qquad \frac{|2.00 - 0.49|}{0.49} \approx 308\%$$
 6. **對比**:輸入動 $0.04\%$,輸出動 $308\%$——放大了約 7700 倍。
-7. **條件數**:$\operatorname{cond}(A) \approx 3363$,和 7700 同一個數量級。這就是條件數的意義:**它是誤差放大倍率的上界**。
+7. **條件數**:$\operatorname{cond}(A) \approx 3363$,和 7700 同一個數量級。這就是條件數的意義:**它是誤差放大倍率的量級指標**(嚴格的上界要用範數來量,見原理那一段)。
 8. **給學生的結論**:這個系統**是可逆的**(IMT 十二條全成立),但**在數值上不可靠**。可逆與可算是兩件事。
 
 ### 例 2 · Lay 2.3 Exercises 50–51
@@ -235,6 +235,8 @@ Matrix([[Rational(9,2), Rational(31,10)], [Rational(8,5), Rational(11,10)]]).sol
 Matrix([[Rational(9,2), Rational(31,10)], [Rational(8,5), Rational(11,10)]]).solve(Matrix([Rational(77,4), Rational(171,25)])) == Matrix([Rational(29,10), 2])
 abs(Rational(29,10) - Rational(197,50)) / Rational(197,50) > Rational(1,4)
 abs(2 - Rational(49,100)) / Rational(49,100) > 3
+round(float(Matrix([[4.5, 3.1], [1.6, 1.1]]).condition_number())) == 3363
+float(Matrix([Rational(29,10) - Rational(197,50), 2 - Rational(49,100)]).norm() / Matrix([Rational(197,50), Rational(49,100)]).norm()) / float(Matrix([Rational(77,4) - Rational(19249,1000), Rational(171,25) - Rational(6843,1000)]).norm() / Matrix([Rational(19249,1000), Rational(6843,1000)]).norm()) < 3363
 round(float(Matrix([[4.0, 0.0, -7.0, -7.0], [-6.0, 1.0, 11.0, 9.0], [7.0, -5.0, 10.0, 19.0], [-1.0, 2.0, 3.0, -1.0]]).condition_number())) == 23683
 round(float(Matrix([[5, 3, 1, 7, 9], [6, 4, 2, 8, -8], [7, 5, 3, 10, 9], [9, 6, 4, -9, -5], [8, 5, 2, 11, 4]]).condition_number()) / 1000) == 69
 Matrix(5, 5, lambda t, s: Rational(1, t + s + 1)).inv()[:, 4] == Matrix([630, -12600, 56700, -88200, 44100])

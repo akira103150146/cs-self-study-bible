@@ -106,7 +106,7 @@ Find the standard matrix $A$ for the dilation transformation $T(\mathbf{x}) = 3\
 
 Exercises 15–16(填空缺的矩陣)可以當快問快答;Exercises 17–20 是「證明線性」的標準寫法:找出矩陣就證完了。
 
-課堂建議做:Exercises 1、3、15、17、21;是非 Exercises 23、26;Exercise 13 用圖做。
+課堂建議做:Exercises 1、2、15、17、21;是非 Exercises 23、26;Exercise 13 用圖做。(Lay 1.9 Exercise 3 收在觀念 4。)
 
 ## 練習
 ### 照做 · Lay 1.9 Exercises 1–2
