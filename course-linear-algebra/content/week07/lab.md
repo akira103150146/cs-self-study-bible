@@ -188,6 +188,8 @@ H = np.array([[1, 1, 1, 0, 1, 0, 0],
 G = np.vstack([np.eye(4, dtype=int), H[:, :4]])
 
 Hs = Matrix(H.tolist())
+# 註:sympy 的 rank 在有理數體上算。這個 H 的後三行是 I₃、G 的上半是 I₄,
+# 所以 ℚ 上與 GF(2) 上的 rank 剛好相同;換成別的碼就不一定了。
 print("rank H =", Hs.rank(), " dim Nul H = 7 -", Hs.rank(), "=", 7 - Hs.rank())
 print("H G mod 2 是零矩陣嗎?", not (H @ G % 2).any(), " → Col G ⊆ Nul H")
 print("rank G =", Matrix(G.tolist()).rank(), " → 兩個 4 維子空間,必相等")
@@ -195,6 +197,7 @@ print("rank G =", Matrix(G.tolist()).rank(), " → 兩個 4 維子空間,必相�
 data = np.array([[int(b) for b in f"{i:04b}"] for i in range(16)])
 code = (G @ data.T % 2).T
 print("碼字個數 =", len(code), " 每個都滿足 Hx = 0 嗎?", not (H @ code.T % 2).any())
+# 線性碼「最小重量 = 最小距離」:任兩碼字之差仍是碼字(子空間對減法封閉)
 print("非零碼字的最小 1 的個數(最小距離)=", int(min(w for w in code.sum(1) if w > 0)))
 print("d = (1,0,1,1) 的碼字 =", [int(v) for v in code[0b1011]])
 
@@ -248,6 +251,11 @@ task = {
     "why_16": "",            # 一句話:為什麼不用列舉就知道有 16 個碼字?
     "two_error_bits": None,  # 兩個錯誤修完之後,和原碼字差幾位?
 }
+# 動手:把編碼與解碼各寫成一個函式,再隨機翻一個位元測 1000 次,印出成功率
+def encode(d):
+    return None              # ← 用 G,記得 % 2
+def decode(y):
+    return None              # ← 算 syndrome、查表、翻回來
 # 挑戰(選做):把第 8 個位元 p4 = 前 7 位的總和加進去,寫出 4×8 的 H',
 # 並讓解碼器能區分「1 個錯」與「2 個錯」(SEC-DED)。
 ```

@@ -21,23 +21,24 @@ B
 - **C** 以為獨立和樞軸數無關 → 觀念 1:(e) 與 (c) 是同一件事
 - **D** 以為「化成 $I$」是更強的條件 → 觀念 1 的等價鏈:(c) ⇒ (b)
 
-## Q2 · 觀念 1
-$A$ is a $4 \times 3$ matrix whose columns are linearly independent. What can you conclude about the equation $A\mathbf{x} = \mathbf{b}$?
+## Q2 · 觀念 2
+$M$ is an $n \times n$ matrix and there is a matrix $D$ with $MD = I$. Which conclusion is correct, and which statement of the Invertible Matrix Theorem justifies it?
 
-- A. It has a unique solution for every $\mathbf{b}$ in $\mathbb{R}^4$.
-- B. It has at least one solution for every $\mathbf{b}$ in $\mathbb{R}^4$.
-- C. It has infinitely many solutions.
-- D. Nothing about existence of solutions; but if a solution exists it is unique.
+- A. Nothing follows: $MD = I$ is weaker than $DM = I$, so $M$ need not be invertible.
+- B. $M$ is invertible by (k), and moreover $D = M^{-1}$, so $DM = I$ as well.
+- C. $M$ is invertible by (j), because $D$ is a left inverse of $M$.
+- D. $D$ is invertible by (k), but nothing follows about $M$.
 
 ### 答案
-D
+B
+
 ### 為什麼
-$A$ **不是方陣**,不能用可逆矩陣定理。各行獨立只告訴我們 $A\mathbf{x} = \mathbf{0}$ 只有零解(第 3 週),也就是「有解時解唯一」;**存在性要另外判斷**($4 \times 3$ 最多 3 個樞軸,不可能每一列都有樞軸,所以一定有某些 $\mathbf{b}$ 無解)。
+條款 **(k)** 就是「存在 $D$ 使 $MD = I$」。對**方陣**而言它等價於可逆,所以 $M$ 可逆;再把 $MD = I$ 兩邊左乘 $M^{-1}$ 就得到 $D = M^{-1}$,因此 $DM = I$ 也成立。
 
 ### 迷思對照
-- **A** 把 IMT 套在非方陣上 → 觀念 1:可逆矩陣定理只對方陣成立
-- **B** 同上,把「獨立」當成「張成」→ 觀念 1 的幾何意義:非方陣時兩者是不同的事
-- **C** 把「獨立」記反成「相依」→ 第 3 週:獨立 ⇒ 沒有自由變數 ⇒ 不會有無窮多解
+- **A** 以為單邊的 $I$ 不夠 → 觀念 2:對**方陣**而言 (k) 就足夠;非方陣才需要兩邊都驗
+- **C** 把 (j)(左反矩陣 $CA = I$)與 (k)(右反矩陣 $AD = I$)記反 → 觀念 1 的清單:$D$ 在 $M$ 的**右邊**
+- **D** 只看到 $D$ 可逆就停住 → 觀念 2:(k) 講的是 $M$ 可逆,而且兩者互為反矩陣
 
 ## Q3 · 觀念 4
 A square matrix $A$ satisfies $\det A = 1$ and $\operatorname{cond}(A) \approx 10^4$. Using double precision (about 16 significant digits), roughly how many digits of the computed solution of $A\mathbf{x} = \mathbf{b}$ can be trusted?

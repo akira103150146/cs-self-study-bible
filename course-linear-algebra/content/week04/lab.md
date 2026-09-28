@@ -9,7 +9,8 @@ A1 = np.array([[0, -1], [1, 0]])          # ?
 A2 = np.array([[1, 1.5], [0, 1]])         # ?
 A3 = np.array([[1, 0], [0, 0]])           # ?
 A4 = np.array([[-1, 0], [0, 1]])          # ?
-A1, A2, A3, A4
+for name, M in (("A1", A1), ("A2", A2), ("A3", A3), ("A4", A4)):
+    print(name, "=", M.tolist())
 ```
 
 ```python todo

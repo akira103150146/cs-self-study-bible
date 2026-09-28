@@ -21,24 +21,28 @@ $(3 \times 5)(5 \times 2)$:中間兩個數都是 5,對得上,所以 $AB$ 有定�
 - **B** 以為兩個矩陣要一樣大才能相乘(那是**加法**的規則)→ 觀念 1 的加法 vs 觀念 2 的乘法
 - **D** 把「內側相消、外側留下」記反了 → 觀念 2 的尺寸圖
 
-## Q2 · 觀念 2
-Let $A = \begin{bmatrix} 2 & 3 \\ 1 & -5 \end{bmatrix}$ and $B = \begin{bmatrix} 4 & 3 \\ 1 & -2 \end{bmatrix}$. What is the entry in row 2, column 1 of $AB$?
+## Q2 · 觀念 5
+You are finding $A^{-1}$ by row reducing $[\,A \;\; I\,]$. After several steps you reach
 
-- A. $-1$
-- B. $8$
-- C. $11$
-- D. $4$
+$$\left[\begin{array}{ccc|ccc} 1 & 2 & 0 & 3 & -1 & 0 \\ 0 & 0 & 0 & -2 & 1 & 0 \\ 0 & 0 & 1 & 4 & 0 & 1 \end{array}\right]$$
+
+What should you conclude?
+
+- A. Keep going; you still have to clear the entry above the pivot in column 3.
+- B. $A$ is not invertible, so $A^{-1}$ does not exist.
+- C. $A^{-1} = \begin{bmatrix} 3 & -1 & 0 \\ -2 & 1 & 0 \\ 4 & 0 & 1 \end{bmatrix}$, since the right half is already filled in.
+- D. You made an arithmetic error, because the right half can never contain a zero row.
 
 ### 答案
-A
+B
 
 ### 為什麼
-列乘行規則:拿 $A$ 的**第 2 列** $[\,1 \;\; {-5}\,]$ 乘 $B$ 的**第 1 行** $\begin{bmatrix} 4 \\ 1 \end{bmatrix}$,得到 $1(4) + (-5)(1) = -1$。
+**左半邊出現了一整列 0**,表示 $A$ 最多只有 2 個樞軸,不可能化成 $I_3$ ⇒ 由 IMT 的 (b)(c),$A$ 不可逆。**這時就可以停手**,右半邊算到哪裡都沒有意義。
 
 ### 迷思對照
-- **B** 逐格相乘又取錯格:$2 \times 4 = 8$(算成 $(1,1)$ 格)→ 觀念 2 的數值筆記:`A * B` 不是矩陣乘法,而且要看 $(2,1)$ 格
-- **C** 算成第 1 列第 1 行 $= 2(4) + 3(1) = 11$(位置記反)→ 觀念 1:$(i, j)$ 是「第 $i$ 列、第 $j$ 行」
-- **D** 逐格相乘取 $(2,1)$ 格:$1 \times 4 = 4$ → 觀念 2 的數值筆記:`A * B` 是逐格運算,不是矩陣乘法
+- **A** 沒注意到左半邊的零列,只看樞軸位置 → 觀念 5:演算法的終止條件是「左半邊變成 $I$」或「出現零列」
+- **C** 以為右半邊自動就是 $A^{-1}$ → 觀念 5:只有**左半邊真的變成 $I$**時,右半邊才是反矩陣
+- **D** 把零列當成計算錯誤 → 觀念 5:零列是正常的結果,它正是「不可逆」的訊號
 
 ## Q3 · 觀念 3
 Which formula is correct for all matrices $A$ and $B$ of appropriate sizes?
