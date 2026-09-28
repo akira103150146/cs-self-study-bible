@@ -114,33 +114,33 @@ $$A = \begin{bmatrix} 1 & 0 & -2 \\ 3 & 1 & -2 \\ -5 & -1 & 9 \end{bmatrix}$$
 5. **注意我們沒做的事**:沒有求 $A^{-1}$、沒有算行列式、沒有化到最簡列梯形。**題目只問可不可逆,就做到能判斷為止**。
 6. **順便讀出更多資訊**:既然 (a) 成立,十二條全成立——各行線性獨立、$A\mathbf{x} = \mathbf{b}$ 對每個 $\mathbf{b}$ 恰有一解、$\mathbf{x} \mapsto A\mathbf{x}$ 一對一且映成。一次列化簡換到這麼多結論。
 
-### 例 2 · Lay 2.3 Exercises 3–4
-Determine which of the following matrices are invertible. Use as few calculations as possible. Justify your answers.
+### 例 2 · 補充:用最少的計算判斷可逆
+Determine which of the following matrices are invertible. Use as few calculations as possible.
 
-$$\begin{bmatrix} 5 & 0 & 0 \\ -3 & -7 & 0 \\ 8 & 5 & -1 \end{bmatrix} \qquad\text{and}\qquad \begin{bmatrix} -7 & 0 & 4 \\ 3 & 0 & -1 \\ 2 & 0 & 9 \end{bmatrix}$$
+$$A = \begin{bmatrix} 3 & 6 \\ 7 & 14 \end{bmatrix}, \qquad B = \begin{bmatrix} 2 & 0 & 0 \\ 5 & -3 & 0 \\ 1 & 4 & 7 \end{bmatrix}, \qquad C = \begin{bmatrix} 1 & 2 & 3 \\ 0 & 1 & 1 \\ 4 & -1 & 3 \end{bmatrix}$$
 
-1. **第一個矩陣是下三角**(主對角線上方全是 0)。這種矩陣不必動手消,對角線上的 $5$、$-7$、$-1$ 就是三個樞軸的位置。
-2. **三個樞軸 = $n$**,由 (c) ⇒ **可逆**。(順帶一提 $\det = 5(-7)(-1) = 35$,但不必算。)
-3. **第二個矩陣的第二行整行是 0**。一整行是零向量時,取 $\mathbf{x} = \mathbf{e}_2$ 就有 $A\mathbf{x} = \mathbf{0}$——這是非零解。
-4. **(d) 不成立** ⇒ 十二條全部不成立 ⇒ **不可逆**。不必列化簡,一眼就看得出來。
-5. **這題在訓練什麼?** 題目說「Use as few calculations as possible」。可逆矩陣定理的價值就在這裡:**挑最省力的那一條去驗**。
-6. **常見的一眼判準**:某一行(或某一列)全是 0、兩行相同或成比例、某行是其他行的和——這些都直接違反 (e),不必計算。
+1. **看到「use as few calculations as possible」就不要動手化簡**,先用眼睛掃一遍。
+2. **$A$:第 2 行 $= 2 \times$ 第 1 行** ⇒ 兩行成比例 ⇒ 線性相依 ⇒ IMT (e) 不成立 ⇒ **不可逆**。(算 $\det = 42 - 42 = 0$ 也對,但慢。)
+3. **$B$:下三角矩陣**,對角線是 $2, -3, 7$,**全部非零**。
+4. **三角矩陣的樞軸就在對角線上**,所以有 3 個樞軸 ⇒ (c) 成立 ⇒ **可逆**。完全不必化簡。
+5. **$C$ 沒有明顯的相依關係嗎?** 再看一次:第 1 行加第 2 行 $= (1+2,\; 0+1,\; 4-1) = (3, 1, 3)$——**正好是第 3 行**。
+6. **所以 $\mathbf{c}_1 + \mathbf{c}_2 - \mathbf{c}_3 = \mathbf{0}$**,各行相依 ⇒ **不可逆**。而且這個組合直接給出 $C\mathbf{x} = \mathbf{0}$ 的一個非零解 $\mathbf{x} = (1, 1, -1)$。
+7. **一眼判準清單**(寫黑板不要擦):整行(列)為 0、兩行相同、兩行成比例、**某行是其他行的和**、三角矩陣看對角線。
+8. **最後強調**:判斷「不可逆」通常比判斷「可逆」快——找到**一個**相依關係就結束了。
 
-### 例 3 · Lay 2.3 Practice Problem 1 與 Exercise 23
-Determine if $A = \begin{bmatrix} 2 & 3 & 4 \\ 2 & 3 & 4 \\ 2 & 3 & 4 \end{bmatrix}$ is invertible. Then answer: can a square matrix with two identical columns be invertible? Why or why not?
+### 例 3 · 補充:一條倒,全部倒
+Let $M = \begin{bmatrix} 4 & 1 & 7 \\ 0 & 0 & 0 \\ 2 & 5 & 3 \end{bmatrix}$. Is $M$ invertible? Then decide: can a square matrix with a row of zeros ever be invertible?
 
-1. **先看 $A$ 的行**:第 2 行是第 1 行的 $\tfrac32$ 倍,第 3 行是第 1 行的 2 倍。
-2. **所以各行線性相依**,(e) 不成立 ⇒ **不可逆**。
-3. **也可以看列**:三列完全一樣,列化簡後一定出現兩列全零,樞軸只有 1 個,(c) 不成立。兩條路殊途同歸。
-4. **一般的問題:兩行相同的方陣可逆嗎?** 設第 $i$ 行與第 $j$ 行相同($i \ne j$)。
-5. **造一個非零解**:取 $\mathbf{x} = \mathbf{e}_i - \mathbf{e}_j$,則
-   $$A\mathbf{x} = \mathbf{a}_i - \mathbf{a}_j = \mathbf{0}$$
-   而 $\mathbf{x} \ne \mathbf{0}$。(d) 不成立 ⇒ **不可逆**。
-6. **答題的寫法**:「兩行相同 ⇒ 各行線性相依 ⇒ 由 IMT 的 (e),$A$ 不可逆。」一句話,清楚指出用了哪一條。
-7. **這就是本週寫證明的標準格式**:先說觀察到哪一條(不)成立,再說由 IMT 推到哪一條。
-
-#### 備註
-例 3 的第 6 步要板書出來當範本。本週的寫作題幾乎全部是這個格式,學生只要學會「引用條款編號」就能寫出合格的答案。
+1. **先看具體的 $M$**:第 2 **列**整列是 0。
+2. **列運算不會把零列變成非零列**,所以化簡後那一列還是 0 ⇒ **至多 2 個樞軸** ⇒ (c) 不成立($3 \times 3$ 需要 3 個)⇒ **不可逆**。
+3. **接著用「一條倒,全部倒」把其他條也讀出來**:
+   - (b) 不成立:$M$ 化不到 $I_3$。
+   - (d) 不成立:$M\mathbf{x} = \mathbf{0}$ 有非零解。
+   - (g) 不成立:有些 $\mathbf{b}$ 讓 $M\mathbf{x} = \mathbf{b}$ 無解——**具體來說,任何第 2 個分量不是 0 的 $\mathbf{b}$ 都無解**(因為 $M\mathbf{x}$ 的第 2 格永遠是 0)。
+4. **第 3 步的括號很重要**:IMT 只說「存在某個 $\mathbf{b}$ 無解」,但這題可以**指出是哪些 $\mathbf{b}$**,學生會更有感。
+5. **再回答一般性的問題**:有零列的方陣**永遠不可逆**,理由同第 2 步——零列吃掉一個樞軸,而方陣需要每列都有樞軸。
+6. **換個角度看同一件事**:零列表示「輸出的某一個分量恆為 0」,所以那個變換**打不到**整個 $\mathbb{R}^n$,(i) 映成不成立。
+7. **答題格式**:「第 2 列為零 ⇒ 樞軸數 $< 3$ ⇒ (c) 不成立 ⇒ $M$ 不可逆 ⇒ 由 (g),存在 $\mathbf{b}$ 使 $M\mathbf{x} = \mathbf{b}$ 無解。」**每一步都要寫出引用的條款。**
 
 ## 易錯點
 - **用在非方陣上**。這是本節第一名的錯誤。$4 \times 3$ 矩陣的行獨立,推不出任何關於 $A\mathbf{x} = \mathbf{b}$ 的事。
@@ -321,4 +321,7 @@ Matrix([[1, 1, 5], [2, 2, 6], [3, 3, 7]]) * (Matrix([1, 0, 0]) - Matrix([0, 1, 0
 Matrix([[2, 3, 4], [2, 3, 4], [2, 3, 4]]).rank() == 1
 Matrix(5, 5, lambda t, s: t + s).rank() < 5
 zeros(3, 3).rank() == 0
+Matrix([[3, 6], [7, 14]]).det() == 0 and Matrix([[2, 0, 0], [5, -3, 0], [1, 4, 7]]).det() == -42
+(lambda c: c.det() == 0 and (c * Matrix([1, 1, -1])).is_zero_matrix)(Matrix([[1, 2, 3], [0, 1, 1], [4, -1, 3]]))
+Matrix([[4, 1, 7], [0, 0, 0], [2, 5, 3]]).rank() == 2
 ```

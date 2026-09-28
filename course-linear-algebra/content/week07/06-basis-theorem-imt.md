@@ -96,38 +96,28 @@ $$(\text{g}) \Rightarrow (\text{n}) \Rightarrow (\text{o}) \Rightarrow (\text{p}
 **注意這條鏈的走法**:它不是一條一條與「可逆」對證,而是**串成一圈**——這是上週證明時刻用過的技巧,這裡只是把圈接得更長。
 
 ## 老師講解
-### 例 1 · Lay 2.9 Exercise 33
-Let $A$ be an $n \times p$ matrix whose column space is $p$-dimensional. Explain why the columns of $A$ must be linearly independent.
+### 例 1 · 補充:數量對了,只驗一半
+Let $A = \begin{bmatrix} 1 & 2 & 0 \\ 0 & 1 & 1 \\ 2 & 0 & -1 \\ 1 & 1 & 0 \end{bmatrix}$ and suppose you are told that $\dim \operatorname{Col} A = 3$. Explain why the columns of $A$ must be linearly independent, without doing any row reduction.
 
-1. **先把已知翻譯成維度語言**:$A$ 有 **$p$ 行**,且 $\dim \operatorname{Col} A = p$。
-2. **找「恰好 $p$ 個」**:$A$ 的 $p$ 個行依定義**張成** $\operatorname{Col} A$。個數 $p$、空間維度 $p$——**數量剛好對上**。
-3. **套基底定理的第二半**:$p$ 維空間裡恰好 $p$ 個張成的向量,自動是基底。
-4. **基底必線性獨立**,所以 $A$ 的行線性獨立。$\blacksquare$
-5. **課本原話**:「The $p$ columns of $A$ span $\operatorname{Col} A$ by definition. If $\dim \operatorname{Col} A = p$, then the spanning set of $p$ columns is automatically a basis for $\operatorname{Col} A$, by the Basis Theorem. In particular, the columns are linearly independent.」
-6. **不用基底定理行不行?** 可以:$\operatorname{rank} A = p$ 表示 $p$ 行全是樞軸行,所以獨立。但**這題的用意就是練基底定理**,請照定理寫。
+1. **先讀題目給了什麼**:$A$ 有 **3 行**,而且 $\dim \operatorname{Col} A = 3$。
+2. **那 3 行在哪裡?** 依定義,$\operatorname{Col} A = \operatorname{Span}\{\mathbf{a}_1, \mathbf{a}_2, \mathbf{a}_3\}$ ⇒ **這 3 行張成 $\operatorname{Col} A$**。
+3. **數量對上了嗎?** 張成集有 3 個元素,空間維度是 3。**恰好 $p$ 個。**
+4. **套基底定理的第二半**:$p$ 維子空間裡恰好 $p$ 個**張成**的向量,自動是基底。
+5. **基底必線性獨立** ⇒ $A$ 的三行線性獨立。$\blacksquare$
+6. **注意我們一次列化簡都沒做**。若改用「算 rank」的路,得先化簡再數樞軸——**基底定理讓我們用「個數」換掉了「計算」**。
+7. **反過來也成立**:如果題目給的是「三行線性獨立」,由第一半可以推出它們張成 $\operatorname{Col} A$、是基底、而且 $\dim \operatorname{Col} A = 3$。**兩個方向都好用。**
 
-### 例 2 · Lay 2.9 Exercise 34
-Suppose columns 1, 3, 5, and 6 of a matrix $A$ are linearly independent (but are not necessarily pivot columns) and the rank of $A$ is 4. Explain why the four columns mentioned must be a basis for the column space of $A$.
+### 例 2 · 補充:不是樞軸行也可以是基底
+Suppose $A$ is a $6 \times 9$ matrix with $\operatorname{rank} A = 3$, and suppose columns 2, 5, and 8 of $A$ happen to be linearly independent. Must $\{\mathbf{a}_2, \mathbf{a}_5, \mathbf{a}_8\}$ be a basis for $\operatorname{Col} A$? What if columns 2, 5, 8, and 9 were linearly independent?
 
-1. **注意題目的括號**:「**not necessarily pivot columns**」——這句話是刻意堵住「樞軸行是基底」那條路。
-2. **收集已知**:這 4 行都在 $\operatorname{Col} A$ 裡(任何行都在);它們**線性獨立**;而 $\dim \operatorname{Col} A = \operatorname{rank} A = 4$。
-3. **數量剛好**:4 個獨立向量,空間 4 維。
-4. **套基底定理的第一半**:$p$ 維空間裡恰好 $p$ 個獨立的向量,自動是基底。故這 4 行是 $\operatorname{Col} A$ 的基底。$\blacksquare$
-5. **為什麼不能說「它們是樞軸行」?** 因為樞軸行是**列化簡決定**的,不見得就是第 1、3、5、6 行。這題告訴我們:**$\operatorname{Col} A$ 的基底不唯一**,樞軸行只是「其中一組」,不是「唯一一組」。
-6. **這一點在實務上很重要**:挑基底時可以挑「有意義的那幾行」(例如可解釋的特徵),不必被列化簡的結果綁死。
-
-### 例 3 · 補充:用新條款判斷可逆
-Let $A = \begin{bmatrix} 1 & 2 & 3 \\ 4 & 5 & 6 \\ 7 & 8 & 9 \end{bmatrix}$. Decide whether $A$ is invertible, using only statements (m)–(q).
-
-1. **不算行列式,先算 rank**:列化簡
-   $$\begin{bmatrix} 1 & 2 & 3 \\ 4 & 5 & 6 \\ 7 & 8 & 9 \end{bmatrix} \sim \begin{bmatrix} 1 & 2 & 3 \\ 0 & -3 & -6 \\ 0 & -6 & -12 \end{bmatrix} \sim \begin{bmatrix} 1 & 2 & 3 \\ 0 & -3 & -6 \\ 0 & 0 & 0 \end{bmatrix}$$
-2. **$\operatorname{rank} A = 2 \ne 3$** ⇒ 條款 (o) 不成立 ⇒ **$A$ 不可逆**。
-3. **交叉確認其他條款**:$\dim \operatorname{Nul} A = 3 - 2 = 1 \ne 0$ ⇒ (p) 不成立;$\operatorname{Nul} A$ 含非零向量 $(1, -2, 1)$ ⇒ (q) 不成立;$\operatorname{Col} A$ 只有 2 維,不是 $\mathbb{R}^3$ ⇒ (n) 不成立;各行相依 ⇒ (m) 不成立。**五條同時倒**,這就是「等價」的意思。
-4. **驗證那個零空間向量**:$1 \cdot (1,4,7) - 2 \cdot (2,5,8) + 1 \cdot (3,6,9) = (0,0,0)$ ✓ 也就是「第 1 行 $-$ 2 倍第 2 行 $+$ 第 3 行 $= \mathbf{0}$」。
-5. **為什麼建議用 rank 而不是 $\det$?** 這題的 $\det = 0$ 剛好乾淨,但在浮點下 $\det$ 常算出 $10^{-16}$ 這種「看起來不是 0」的數,rank 與奇異值的判斷穩定得多。
-
-#### 備註
-例 3 的矩陣是最著名的降秩例子(1 到 9 依序排)。學生若已經知道 $\det = 0$,請要求他們**改用 (o) 或 (q) 重寫一次理由**——本節的目的是熟悉新條款,不是再練行列式。
+1. **第一問的已知**:這 3 行都在 $\operatorname{Col} A$ 裡(任何一行都在)、它們**線性獨立**、而 $\dim \operatorname{Col} A = \operatorname{rank} A = 3$。
+2. **數量對上**:3 個獨立向量,空間 3 維。
+3. **套基底定理的第一半** ⇒ **是** $\operatorname{Col} A$ 的基底。$\blacksquare$
+4. **重點來了:它們是樞軸行嗎?** **不一定。** 樞軸行是列化簡決定的,可能是第 1、3、7 行。但那不影響結論——**基底定理不管你是不是樞軸行,只管「獨立 + 個數對」**。
+5. **所以 $\operatorname{Col} A$ 的基底不唯一**:樞軸行是其中一組(最容易算的一組),但絕不是唯一一組。
+6. **第二問:4 行獨立可能嗎?** **不可能。** $\operatorname{Col} A$ 只有 3 維,裡面任何 4 個向量**必定線性相依**(多於維度就相依)。
+7. **所以題目的假設本身就矛盾**——這正是「數量檢查」的威力:**不必算,看個數就知道不可能**。
+8. **實務上的意義**:挑基底時可以挑「有意義的那幾行」(例如可解釋的特徵、感測器編號),只要獨立、個數對,就是合法的基底。
 
 ## 易錯點
 - **忘了「恰好 $p$ 個」**。3 維子空間裡 4 個張成的向量不是基底;2 個獨立的也不是。**基底定理只在個數等於維度時可用。**
@@ -257,4 +247,5 @@ Matrix([[1, 2, 3], [4, 5, 6], [7, 8, 9]]) * Matrix([1, -2, 1]) == Matrix([0, 0, 
 (lambda b, c, u: ((b * c) * u).is_zero_matrix and (c * u).is_zero_matrix and not u.is_zero_matrix)(Matrix([[1, 0], [2, 0]]), Matrix([[1, 3], [0, 0]]), Matrix([3, -1]))
 Matrix([[1, 2, 3], [0, 1, 4], [5, 6, 0]]).rref()[1] == (0, 1, 2)
 Matrix([[1, 2, 3], [4, 5, 6], [7, 8, 9]]).rref()[1] == (0, 1)
+Matrix([[1, 2, 0], [0, 1, 1], [2, 0, -1], [1, 1, 0]]).rank() == 3
 ```

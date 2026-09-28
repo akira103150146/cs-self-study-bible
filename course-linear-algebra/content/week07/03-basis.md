@@ -103,37 +103,41 @@ $$A = \begin{bmatrix} -3 & 6 & -1 & 1 & -7 \\ 1 & -2 & 2 & 3 & -1 \\ 2 & -4 & 5 
 6. **這三個向量就是基底**。張成:任何解都寫得成它們的組合(上式就是)。獨立:看第 2、4、5 格的「1 和 0」的位置就知道。
 7. **檢查個數**:3 個自由變數 → 3 個基底向量。而樞軸有 2 個,$2 + 3 = 5 = $ 行數——這個巧合不是巧合,是下下個觀念的 Rank Theorem。
 
-### 例 2 · Lay 2.8 Exercise 31
-The matrix $A$ and an echelon form of $A$ are shown. Find a basis for $\operatorname{Col} A$ and a basis for $\operatorname{Nul} A$.
+### 例 2 · Lay 2.8 Examples 7–8(書上 pp. 182–183)
+It can be verified that the matrix
 
-$$A = \begin{bmatrix} 4 & 5 & 9 & -2 \\ 6 & 5 & 1 & 12 \\ 3 & 4 & 8 & -3 \end{bmatrix} \sim \begin{bmatrix} 1 & 2 & 6 & -5 \\ 0 & 1 & 5 & -6 \\ 0 & 0 & 0 & 0 \end{bmatrix}$$
+$$A = [\,\mathbf{a}_1 \;\; \mathbf{a}_2 \;\; \cdots \;\; \mathbf{a}_5\,] = \begin{bmatrix} 1 & 3 & 3 & 2 & -9 \\ -2 & -2 & 2 & -8 & 2 \\ 2 & 3 & 0 & 7 & 1 \\ 3 & 4 & -1 & 11 & -8 \end{bmatrix}$$
 
-1. **先從階梯形讀出樞軸在哪**:第 1、2 行。(只讀位置,不讀數值!)
-2. **回去取 $A$ 自己的第 1、2 行**:
-   $$\operatorname{Col} A \text{ 的基底} = \left\{\begin{bmatrix} 4 \\ 6 \\ 3 \end{bmatrix}, \begin{bmatrix} 5 \\ 5 \\ 4 \end{bmatrix}\right\}$$
-3. **絕對不要寫成 $(1,0,0)$ 與 $(2,1,0)$**(那是階梯形的行)。用那兩個向量組不出 $A$ 的任何一行——它們的第三格都是 0,而 $A$ 的行不是。
-4. **再求 $\operatorname{Nul} A$**:把 $A$ 化到**最簡**列梯形
-   $$A \sim \begin{bmatrix} 1 & 0 & -4 & 7 \\ 0 & 1 & 5 & -6 \\ 0 & 0 & 0 & 0 \end{bmatrix}$$
-5. **自由變數是 $x_3, x_4$**,基本變數 $x_1 = 4x_3 - 7x_4$、$x_2 = -5x_3 + 6x_4$。
-6. **寫成參數向量形式**:
-   $$\operatorname{Nul} A \text{ 的基底} = \left\{\begin{bmatrix} 4 \\ -5 \\ 1 \\ 0 \end{bmatrix}, \begin{bmatrix} -7 \\ 6 \\ 0 \\ 1 \end{bmatrix}\right\}$$
-7. **驗算**:$A$ 乘這兩個向量都要得到 $\mathbf{0}$;而且 $2 + 2 = 4 = $ 行數 ✓。
-8. **注意兩組基底的向量長度不同**:$\operatorname{Col} A$ 的是 3 維($A$ 有 3 列)、$\operatorname{Nul} A$ 的是 4 維($A$ 有 4 行)。
+is row equivalent to $B = \begin{bmatrix} 1 & 0 & -3 & 5 & 0 \\ 0 & 1 & 2 & -1 & 0 \\ 0 & 0 & 0 & 0 & 1 \\ 0 & 0 & 0 & 0 & 0 \end{bmatrix}$. Find a basis for $\operatorname{Col} A$.
 
-### 例 3 · Lay 2.8 Exercises 15、19 與 Example 5
-Determine which sets are bases for $\mathbb{R}^2$ or $\mathbb{R}^3$: (a) $\begin{bmatrix} 5 \\ -2 \end{bmatrix}, \begin{bmatrix} 10 \\ -3 \end{bmatrix}$; (b) $\begin{bmatrix} 3 \\ -8 \\ 1 \end{bmatrix}, \begin{bmatrix} 6 \\ 2 \\ -5 \end{bmatrix}$.
+1. **先處理簡單的 $B$(課本 Example 7)**。$B$ 已經是最簡列梯形,樞軸在第 **1、2、5** 行。
+2. **看出 $B$ 的行之間的關係**:$\mathbf{b}_3 = -3\mathbf{b}_1 + 2\mathbf{b}_2$、$\mathbf{b}_4 = 5\mathbf{b}_1 - \mathbf{b}_2$。**第 3、4 行是多餘的**,任何組合都可以只用 $\mathbf{b}_1, \mathbf{b}_2, \mathbf{b}_5$ 寫出來。
+3. **而且 $\mathbf{b}_1, \mathbf{b}_2, \mathbf{b}_5$ 就是單位矩陣的三行**,顯然線性獨立 ⇒ 它們是 $\operatorname{Col} B$ 的基底。
+4. **現在跳到 $A$(課本 Example 8)**。關鍵句是:**列運算不改變行之間的相依關係**,所以 $A$ 的各行應該有**一模一樣**的關係:
+   $$\mathbf{a}_3 = -3\mathbf{a}_1 + 2\mathbf{a}_2, \qquad \mathbf{a}_4 = 5\mathbf{a}_1 - \mathbf{a}_2$$
+5. **親手驗一個**:$-3(1,-2,2,3) + 2(3,-2,3,4) = (-3+6,\; 6-4,\; -6+6,\; -9+8) = (3, 2, 0, -1) = \mathbf{a}_3$ ✓ 課本在這裡寫了一句「Check that this is true!」,務必當場算給學生看。
+6. **所以 $A$ 的第 3、4 行也是多餘的**,而 $\{\mathbf{a}_1, \mathbf{a}_2, \mathbf{a}_5\}$ 線性獨立(任何相依關係都會在 $B$ 那邊出現同樣的關係,但 $B$ 那三行是獨立的)。
+7. **答案**:
+   $$\operatorname{Col} A \text{ 的基底} = \left\{\begin{bmatrix} 1 \\ -2 \\ 2 \\ 3 \end{bmatrix}, \begin{bmatrix} 3 \\ -2 \\ 3 \\ 4 \end{bmatrix}, \begin{bmatrix} -9 \\ 2 \\ 1 \\ -8 \end{bmatrix}\right\}$$
+8. **最後看清楚那個 Warning 在講什麼**:$B$ 的三行是 $(1,0,0,0)$、$(0,1,0,0)$、$(0,0,1,0)$——**最後一格全是 0**,而 $A$ 的行最後一格是 $3, 4, -8$。用 $B$ 的行**永遠組不出** $A$ 的行,所以它們根本不在 $\operatorname{Col} A$ 裡。
 
-1. **要判斷「是不是 $\mathbb{R}^n$ 的基底」,最快的路是可逆矩陣定理**(上週學的)。
-2. **(a) 兩個 $\mathbb{R}^2$ 的向量**,湊成方陣:
-   $$A = \begin{bmatrix} 5 & 10 \\ -2 & -3 \end{bmatrix}, \qquad \det A = -15 + 20 = 5 \ne 0$$
-3. **$A$ 可逆** ⇒ 由 IMT,各行線性獨立((e))且張成 $\mathbb{R}^2$((h))⇒ **是基底**。
-4. **(b) 只有兩個 $\mathbb{R}^3$ 的向量**,湊成的是 $3 \times 2$ 矩陣——**不是方陣,不能用 IMT**。
-5. **用樞軸數論證**:$3 \times 2$ 矩陣最多 2 個樞軸,不可能每一列都有樞軸,所以各行**張不成** $\mathbb{R}^3$。⇒ **不是 $\mathbb{R}^3$ 的基底**。
-6. **但它們是什麼?** 這兩個向量線性獨立,所以它們是 $\mathbb{R}^3$ 裡**某個平面**的基底——書後解答特別加了這一句。
-7. **數量的通則**(先預告下下個觀念):$\mathbb{R}^n$ 的基底**恰好**要 $n$ 個向量。**少了張不滿、多了必相依**(Exercise 20 就是 4 個向量在 $\mathbb{R}^3$,必定相依)。
+### 例 3 · 補充:是不是 $\mathbb{R}^3$ 的基底?
+Determine whether each set is a basis for $\mathbb{R}^3$:
+(a) $\left\{\begin{bmatrix} 1 \\ 0 \\ 2 \end{bmatrix}, \begin{bmatrix} 3 \\ 1 \\ 0 \end{bmatrix}, \begin{bmatrix} 0 \\ 1 \\ 4 \end{bmatrix}\right\}$ (b) $\left\{\begin{bmatrix} 2 \\ 1 \\ -1 \end{bmatrix}, \begin{bmatrix} 4 \\ 2 \\ -2 \end{bmatrix}, \begin{bmatrix} 0 \\ 3 \\ 5 \end{bmatrix}\right\}$
+
+1. **先數個數**:兩組都是 **3 個 $\mathbb{R}^3$ 的向量**,個數對得上,所以**不能用「數量檢查」直接刷掉**,要真的算。
+2. **(a) 排成矩陣算行列式**:
+   $$\det\begin{bmatrix} 1 & 3 & 0 \\ 0 & 1 & 1 \\ 2 & 0 & 4 \end{bmatrix} = 1(4 - 0) - 3(0 - 2) + 0 = 4 + 6 = 10 \ne 0$$
+3. **$\det \ne 0$ ⇒ 可逆 ⇒ 由 IMT (e)(h),各行獨立且張成 $\mathbb{R}^3$ ⇒ 是基底** ✓
+4. **(b) 先別急著算**:第 2 行 $= 2 \times$ 第 1 行!
+5. **兩行成比例 ⇒ 線性相依 ⇒ 不可逆 ⇒ 不是基底**。連行列式都不必算(算出來也會是 0)。
+6. **這一步就是「用最少的計算」**(上週觀念 1 的技巧):整行為 0、兩行相同、兩行成比例、某行是其他行的和——看到就直接判定。
+7. **補一句幾何意義**:(b) 的三個向量只張出一個**平面**(因為只有 2 個獨立方向),所以它們是那個平面的生成集,但**不是** $\mathbb{R}^3$ 的基底,連張成都做不到。
 
 #### 備註
-例 3 的第 7 點是 Basis Theorem 的雛形,這裡先當「數量檢查」用:看到 $\mathbb{R}^3$ 裡有 2 個或 4 個向量,不必計算就能判斷「不是基底」。
+例 2 是課本 Examples 7–8 的合併版,**它就是 Theorem 13 的證明骨架**,也是 Warning 的來源。第 5 步的手算驗證一定要當場做,學生才會相信「相依關係真的一樣」。
+
+例 3 是自編的,兩題各示範一條路:$\det \ne 0$ 走 IMT、成比例則一眼判定。練習卡的 Exercises 15–20 用的是同樣兩條路,但數字不同,學生得自己判斷該走哪一條。
 
 ## 易錯點
 - **拿階梯形 $B$ 的行當 $\operatorname{Col} A$ 的基底**。這是本節第一名的錯誤,課本專門加了 Warning。
@@ -297,4 +301,6 @@ Matrix([[1, 3, -2, 0], [-6, -4, 7, 8], [-7, 7, 5, 9]]).rank() == 3
 (lambda a, b, c: (a * b).is_zero_matrix and b.rank() == b.cols == a.cols - a.rank() and c.rank() == c.cols == a.rank() and a.row_join(c).rank() == a.rank())(Matrix([[3, -5, 0, -1, 3], [-7, 9, -4, 9, -11], [-5, 7, -2, 5, -7], [3, -7, -3, 4, 0]]), Matrix([[Rational(-5,2), Rational(9,2), Rational(-7,2)], [Rational(-3,2), Rational(5,2), Rational(-3,2)], [1, 0, 0], [0, 1, 0], [0, 0, 1]]), Matrix([[3, -5], [-7, 9], [-5, 7], [3, -7]]))
 (lambda a, b, c: (a * b).is_zero_matrix and b.rank() == b.cols == a.cols - a.rank() and c.rank() == c.cols == a.rank() and a.row_join(c).rank() == a.rank())(Matrix([[5, 2, 0, -8, -8], [4, 1, 2, -8, -9], [5, 1, 3, 5, 19], [-8, -5, 6, 8, 5]]), Matrix([[-60, -122], [154, 309], [47, 94], [1, 0], [0, 1]]), Matrix([[5, 2, 0], [4, 1, 2], [5, 1, 3], [-8, -5, 6]]))
 Matrix([[4, 5, 9, -2], [6, 5, 1, 12], [3, 4, 8, -3]]).columnspace() == [Matrix([4, 6, 3]), Matrix([5, 5, 4])]
+(lambda a: a.rref()[1] == (0, 1, 4) and a.col(2) == -3 * a.col(0) + 2 * a.col(1) and a.col(3) == 5 * a.col(0) - a.col(1))(Matrix([[1, 3, 3, 2, -9], [-2, -2, 2, -8, 2], [2, 3, 0, 7, 1], [3, 4, -1, 11, -8]]))
+Matrix([[1, 3, 0], [0, 1, 1], [2, 0, 4]]).det() == 10 and Matrix([[2, 4, 0], [1, 2, 3], [-1, -2, 5]]).rank() == 2
 ```

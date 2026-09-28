@@ -70,42 +70,46 @@ The Invertible Matrix Theorem can be applied to *any* square matrix — not only
 **這裡有個值得講的細節**:$A(BW) = I$ 本身只說「$A$ 有右反矩陣」,對一般矩陣**不足以**推出可逆——必須靠 IMT 的 (k) ⇒ (a),而那一步需要方陣。課本在 Exercise 35 的解答特別反問 "Why not?",問的就是這件事。
 
 ## 老師講解
-### 例 1 · Lay 2.3 Practice Problems 2–3
-Suppose that for a certain $n \times n$ matrix $A$, statement (g) of the Invertible Matrix Theorem is *not* true. What can you say about equations of the form $A\mathbf{x} = \mathbf{b}$? Then: suppose that $A$ and $B$ are $n \times n$ matrices and the equation $AB\mathbf{x} = \mathbf{0}$ has a nontrivial solution. What can you say about the matrix $AB$?
+### 例 1 · 補充:從一條推到另一條
+Suppose $M$ is a $5 \times 5$ matrix and the equation $M\mathbf{x} = \mathbf{0}$ has only the trivial solution. Explain why the columns of $M$ span $\mathbb{R}^5$, and why $M\mathbf{x} = \mathbf{b}$ has exactly one solution for every $\mathbf{b}$ in $\mathbb{R}^5$.
 
-1. **先把 (g) 唸出來**:「$A\mathbf{x} = \mathbf{b}$ 對每個 $\mathbf{b} \in \mathbb{R}^n$ 至少有一解」。
-2. **它不成立,意思是什麼?** 「不是對每個 $\mathbf{b}$ 都有解」,也就是**至少存在一個 $\mathbf{b}$ 使 $A\mathbf{x} = \mathbf{b}$ 無解(不相容)**。這就是書後給的答案。
-3. **還能多說什麼?** (g) 不成立 ⇒ $A$ 不可逆 ⇒ (d) 也不成立 ⇒ $A\mathbf{x} = \mathbf{0}$ 有非零解。所以對那些**有解**的 $\mathbf{b}$,解一定不唯一(特解加上整條零空間)。
-4. **結論一句話**:$A\mathbf{x} = \mathbf{b}$ 不是無解、就是有無窮多解,**永遠不會恰好一解**。
-5. **第二題:$AB\mathbf{x} = \mathbf{0}$ 有非零解。** 關鍵是把 $AB$ **當成一個方陣**,套 IMT。
-6. **(d) 對 $AB$ 不成立** ⇒ 十二條對 $AB$ 全部不成立 ⇒ **$AB$ 不可逆**。
-7. **可以再多推一步**(Exercises 35–36):$AB$ 不可逆 ⇒ $A$、$B$ 至少有一個不可逆。
+1. **先確認前提**:$M$ 是**方陣**($5 \times 5$)⇒ 可以用 IMT。**這一步一定要先寫。**
+2. **翻譯已知**:「$M\mathbf{x} = \mathbf{0}$ 只有平凡解」就是條款 **(d)**。
+3. **一條成立,全部成立** ⇒ $M$ 可逆 ⇒ 由 **(h)**,各行張成 $\mathbb{R}^5$ ✓
+4. **第二問**:由 **(g)**,$M\mathbf{x} = \mathbf{b}$ 對每個 $\mathbf{b}$ **至少有一個解**。
+5. **唯一性**:由 (d),齊次方程只有零解 ⇒ 若 $M\mathbf{u} = M\mathbf{v} = \mathbf{b}$,則 $M(\mathbf{u} - \mathbf{v}) = \mathbf{0}$ ⇒ $\mathbf{u} - \mathbf{v} = \mathbf{0}$ ⇒ **解唯一**。
+6. **也可以直接用反矩陣**:$\mathbf{x} = M^{-1}\mathbf{b}$,存在且唯一(第 5 週 Theorem 5)。
+7. **答題範本**(板書):「$M$ 是方陣。由題意 (d) 成立 ⇒ $M$ 可逆 ⇒ 由 (h),各行張成 $\mathbb{R}^5$;由 (g) 與 Theorem 5,每個 $\mathbf{b}$ 恰有一個解。」
+8. **常見扣分**:只寫「因為可逆所以都對」,**沒有指出用的是哪一條**。
 
-### 例 2 · Lay 2.3 Exercises 35–36
-Show that if $AB$ is invertible, so is $A$. You cannot use Theorem 6(b), because you cannot *assume* that $A$ and $B$ are invertible. [*Hint:* There is a matrix $W$ such that $ABW = I$. Why?] Then show that if $AB$ is invertible, so is $B$.
+### 例 2 · 補充:$A^2$ 可逆,$A$ 一定可逆嗎?
+Suppose $A$ is an $n \times n$ matrix and $A^2$ is invertible. Show that $A$ is invertible. (You may not assume that $A$ is invertible — that is what you are proving.)
 
-1. **為什麼不能用 Theorem 6(b)?** 那條說的是「$A$、$B$ 都可逆 ⇒ $AB$ 可逆」,方向相反。這題要走回頭路。
-2. **先造出提示裡的 $W$**:$AB$ 可逆,所以 $W = (AB)^{-1}$ 存在,且 $(AB)W = I$。
-3. **用結合律換括號**:
-   $$(AB)W = A(BW) = I$$
-4. **讀出這是 IMT 的哪一條**:存在一個 $n \times n$ 矩陣(就是 $BW$)使 $A \cdot (BW) = I$——這正是 **(k)**。
-5. **由 IMT,(k) ⇒ (a)**,所以 $A$ 可逆。$\blacksquare$
-6. **第二半用左邊**:由 $W(AB) = I$ 與結合律得 $(WA)B = I$,這是 IMT 的 **(j)** 對 $B$ 成立 ⇒ $B$ 可逆。$\blacksquare$
-7. **最容易被扣分的地方**:只寫到第 3 步就說「所以 $A$ 可逆」。$A(BW) = I$ 只是右反矩陣,**必須引用 IMT 的 (k) ⇒ (a)**,而這一步用到了「方陣」。書後解答特別問 "Why not?" 就是在提醒這件事。
+1. **先看清楚陷阱**:不能寫「$A^2 = AA$ 可逆所以 $A$ 可逆」,那等於**假設了結論**(第 5 週的 Theorem 6(b) 要求 $A$、$B$ 都先可逆)。
+2. **把已知寫成式子**:$A^2$ 可逆表示存在 $W$ 使
+   $$A^2 W = I$$
+3. **關鍵一步:重新括號。**
+   $$A^2 W = (AA)W = A(AW) = I$$
+4. **讀出這個式子的意思**:存在一個矩陣($AW$)乘在 $A$ 的**右邊**會得到 $I$,也就是 IMT 的條款 **(k)**。
+5. **由 (k) ⇒ $A$ 可逆**。$\blacksquare$
+6. **為什麼這樣就夠了?** 因為 (k) 是 IMT 的一條,而 IMT 說十二條同真同假——**不必再找左反矩陣**。
+7. **同樣的手法可以證什麼?** $A^3$ 可逆 ⇒ $A$ 可逆(把 $A^3W = I$ 括號成 $A(A^2W) = I$);更一般地 $A^k$ 可逆 ⇒ $A$ 可逆。
+8. **這題的心法**:**看到「某個乘積可逆」,就把它括號成「$A$ 乘某個東西 = $I$」**。
 
-### 例 3 · Lay 2.3 Exercises 39–40
-Suppose $A$ is an $n \times n$ matrix with the property that the equation $A\mathbf{x} = \mathbf{b}$ has at least one solution for each $\mathbf{b}$ in $\mathbb{R}^n$. **Without using Theorems 5 or 8**, explain why each equation $A\mathbf{x} = \mathbf{b}$ has in fact exactly one solution.
+### 例 3 · 補充:$AB = I$ 就夠了嗎?
+Suppose $A$ and $B$ are $n \times n$ matrices with $AB = I$. Show that $BA = I$ as well, so $B = A^{-1}$.
 
-1. **題目不准用 IMT**,所以要回到第 1 章的工具,一步一步走。
-2. **先用第 2 週的 Theorem 4**:「$A\mathbf{x} = \mathbf{b}$ 對每個 $\mathbf{b}$ 都相容 ⟺ $A$ 的**每一列**都有樞軸位置」。所以 $A$ 有 $n$ 個樞軸(列數是 $n$)。
-3. **樞軸分布在相異的行**,而 $A$ 只有 $n$ 行,所以**每一行都是樞軸行**。
-4. **沒有非樞軸行 ⇒ 沒有自由變數**(第 3 週)。
-5. **增廣矩陣化簡後每個變數都被唯一決定**,所以解存在且唯一。$\blacksquare$
-6. **反過來的 Exercise 40** 走同一條路的反方向:「只有平凡解 ⇒ 無自由變數 ⇒ 每一行都是樞軸行 ⇒ $n$ 個樞軸 ⇒ 每一列都有樞軸 ⇒ 對每個 $\mathbf{b}$ 都有解」。
-7. **這兩題在做什麼?** 它們手工重走了 IMT 中 (d) ⟺ (g) 這一段,也就是**「唯一」與「存在」在方陣上為什麼會連動**。理解了這兩題,就理解了 IMT 為什麼只對方陣成立——關鍵是第 3 步的「$n$ 個樞軸塞進 $n$ 行」。
-
-#### 備註
-例 3 是本週最值得講的證明之一,建議在黑板上畫一個 $n \times n$ 的方格,把「每列一個樞軸」與「每行一個樞軸」畫出來,學生會馬上看懂為什麼方陣時兩者等價。
+1. **先看這題在問什麼**:反矩陣的定義要求**兩邊**都是 $I$。這題只給了一邊,問另一邊是否自動成立。
+2. **對方陣,答案是「會」**——但要用 IMT,不能直接說「顯然」。
+3. **第一步**:$AB = I$ 表示 $B$ 是 $A$ 的右反矩陣 ⇒ 由條款 **(k)**,$A$ 可逆。
+4. **第二步**:既然 $A$ 可逆,$A^{-1}$ 存在。把 $AB = I$ 兩邊**左乘** $A^{-1}$:
+   $$A^{-1}(AB) = A^{-1}I \quad \Longrightarrow \quad (A^{-1}A)B = A^{-1} \quad \Longrightarrow \quad B = A^{-1}$$
+5. **第三步**:既然 $B = A^{-1}$,當然 $BA = A^{-1}A = I$ ✓ $\blacksquare$
+6. **為什麼「方陣」這個前提不能拿掉?** 舉個反例:
+   $$A = \begin{bmatrix} 1 & 0 & 0 \\ 0 & 1 & 0 \end{bmatrix}, \qquad B = \begin{bmatrix} 1 & 0 \\ 0 & 1 \\ 0 & 0 \end{bmatrix}$$
+   則 $AB = I_2$,但 $BA = \begin{bmatrix} 1 & 0 & 0 \\ 0 & 1 & 0 \\ 0 & 0 & 0 \end{bmatrix} \ne I_3$。
+7. **所以「一邊是 $I$ 就夠」是方陣**才有的性質,非方陣完全不成立——這正是 IMT 只談方陣的原因。
+8. **程式上的意義**:檢查 `A @ B == I` 時,若 $A$ 是方陣就不必再檢查另一邊;若不是方陣,兩邊都要檢查。
 
 ## 易錯點
 - **推論只寫一半**。(g) 不成立時,不只是「有些 $\mathbf{b}$ 無解」,還包括「有解時解不唯一」。
@@ -124,7 +128,7 @@ Suppose $A$ is an $n \times n$ matrix with the property that the equation $A\mat
 
 > 「由題意,(x) 不成立 ⇒ $M$ 不可逆 ⇒ 由 (y),得到 ___。」
 
-課堂建議做:Exercises 25、27、29、31(四題寫作,格式一樣);Exercise 35(證明,一定要講為什麼需要 IMT);Practice Problems 2、3。Exercises 39–40 建議留作業,或只講其中一題。
+課堂建議做:Exercises 25、27、29、31(四題寫作,格式一樣);Exercise 35(證明,和例 2 同一個手法,示範完讓學生自己寫);Practice Problems 2、3。Exercises 39–40 建議留作業,或只講其中一題。
 
 Exercises 33、34、37、38 難度較高,標為選做。
 
@@ -253,4 +257,5 @@ eye(2) * Matrix([1, 0]) == Matrix([1, 0]) and eye(2).rank() == 2
 (lambda k: k.rref()[0] != eye(2) and k.rank() < 2)(Matrix([[1, 2], [2, 4]]))
 (lambda a, b: ((a*b).rank() == 2) and a.rank() == 2 and b.rank() == 2)(Matrix([[1, 2], [3, 7]]), Matrix([[2, 1], [1, 1]]))
 Matrix([[1, 1, 1], [0, 1, 1], [0, 0, 1]]).rank() == 3 and Matrix([[1, 1, 1], [0, 1, 1], [0, 0, 1]]).nullspace() == []
+(lambda a, b: a * b == eye(2) and b * a != eye(3))(Matrix([[1, 0, 0], [0, 1, 0]]), Matrix([[1, 0], [0, 1], [0, 0]]))
 ```

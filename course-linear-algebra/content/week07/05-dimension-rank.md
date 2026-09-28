@@ -118,53 +118,50 @@ $$A = \begin{bmatrix} 1 & 2 \\ 2 & 4.000000001 \end{bmatrix}$$
 **Lab 會做一次對照**:同一個矩陣加上 $10^{-12}$ 的擾動,sympy 說 rank 變了、NumPy 說沒變——這不是誰錯了,是兩者回答的問題不同。
 
 ## 老師講解
-### 例 1 · Lay 2.9 Practice Problem 1
-Determine the dimension of the subspace $H$ of $\mathbb{R}^3$ spanned by the vectors $\mathbf{v}_1, \mathbf{v}_2, \mathbf{v}_3$. (First, find a basis for $H$.)
+### 例 1 · Lay 2.9 Example 2(書上 p. 188)
+Recall that the null space of the matrix $A$ in Example 6 of Section 2.8 had a basis of 3 vectors. What is $\dim \operatorname{Nul} A$?
 
-$$\mathbf{v}_1 = \begin{bmatrix} 2 \\ -8 \\ 6 \end{bmatrix}, \quad \mathbf{v}_2 = \begin{bmatrix} 3 \\ -7 \\ -1 \end{bmatrix}, \quad \mathbf{v}_3 = \begin{bmatrix} -1 \\ 6 \\ -7 \end{bmatrix}$$
+1. **先回到那個矩陣**(就是上一個觀念例 1 做過的那題):
+   $$A = \begin{bmatrix} -3 & 6 & -1 & 1 & -7 \\ 1 & -2 & 2 & 3 & -1 \\ 2 & -4 & 5 & 8 & -4 \end{bmatrix}$$
+   我們解出過它的零空間基底有 **3 個**向量 $\mathbf{u}, \mathbf{v}, \mathbf{w}$。
+2. **套定義**:維度 = 基底裡向量的個數 ⇒ $\dim \operatorname{Nul} A = 3$。
+3. **但課本真正要你看的是「為什麼是 3」**:那 3 個基底向量**一個對應一個自由變數**($x_2, x_4, x_5$)。
+4. **這個對應永遠成立**:參數向量形式每遇到一個自由變數,就生出一個基底向量,不多也不少。
+5. **所以求 $\dim \operatorname{Nul} A$ 根本不必寫出基底**——**數自由變數就好**。課本原話:「simply identify and count the number of free variables in $A\mathbf{x} = \mathbf{0}$」。
+6. **順手數另一邊**:這個 $A$ 的樞軸在第 1、3 行,所以 $\operatorname{rank} A = 2$。
+7. **加起來**:$2 + 3 = 5$,正好是 $A$ 的**行數**。這個巧合就是下面要證的 Rank Theorem。
 
-1. **「求 Span 的維度」要先把它變成一個矩陣的行空間**:令 $A = [\,\mathbf{v}_1 \;\; \mathbf{v}_2 \;\; \mathbf{v}_3\,]$,則 $H = \operatorname{Col} A$。
-2. **列化簡找樞軸位置**:
-   $$\begin{bmatrix} 2 & 3 & -1 \\ -8 & -7 & 6 \\ 6 & -1 & -7 \end{bmatrix} \sim \begin{bmatrix} 2 & 3 & -1 \\ 0 & 5 & 2 \\ 0 & -10 & -4 \end{bmatrix} \sim \begin{bmatrix} 2 & 3 & -1 \\ 0 & 5 & 2 \\ 0 & 0 & 0 \end{bmatrix}$$
-3. **只有第 1、2 行是樞軸行**,所以 $\{\mathbf{v}_1, \mathbf{v}_2\}$ 是 $H$ 的基底(記得:取 **$A$ 自己**的行)。
-4. **$\dim H = 2$**——基底有 2 個向量。$H$ 是 $\mathbb{R}^3$ 裡的一個**平面**。
-5. **$\mathbf{v}_3$ 去哪了?** 它是 $\mathbf{v}_1, \mathbf{v}_2$ 的線性組合,是多餘的。三個向量只張出 2 維。
-6. **不要把「3 個向量」當成「3 維」**。這是本節第一號錯誤:**維度看的是獨立的方向數,不是手上有幾個向量**。
+### 例 2 · Lay 2.9 Example 3(書上 p. 188)
+Determine the rank of the matrix
 
-### 例 2 · Lay 2.9 Exercise 9
-The matrix $A$ and an echelon form of $A$ are shown. Find bases for $\operatorname{Col} A$ and $\operatorname{Nul} A$, and then state the dimensions of these subspaces.
+$$A = \begin{bmatrix} 2 & 5 & -3 & -4 & 8 \\ 4 & 7 & -4 & -3 & 9 \\ 6 & 9 & -5 & 2 & 4 \\ 0 & -9 & 6 & 5 & -6 \end{bmatrix}$$
 
-$$A = \begin{bmatrix} 1 & -3 & 2 & -4 \\ -3 & 9 & -1 & 5 \\ 2 & -6 & 4 & -3 \\ -4 & 12 & 2 & 7 \end{bmatrix} \sim \begin{bmatrix} 1 & -3 & 2 & -4 \\ 0 & 0 & 5 & -7 \\ 0 & 0 & 0 & 5 \\ 0 & 0 & 0 & 0 \end{bmatrix}$$
+1. **rank 的定義是 $\dim \operatorname{Col} A$**,而樞軸行構成 $\operatorname{Col} A$ 的基底 ⇒ **rank = 樞軸行的個數**。所以這題就是「數樞軸」。
+2. **化到階梯形**(不必化到最簡,數樞軸用階梯形就夠):
+   $$A \sim \begin{bmatrix} 2 & 5 & -3 & -4 & 8 \\ 0 & -3 & 2 & 5 & -7 \\ 0 & -6 & 4 & 14 & -20 \\ 0 & -9 & 6 & 5 & -6 \end{bmatrix} \sim \cdots \sim \begin{bmatrix} 2 & 5 & -3 & -4 & 8 \\ 0 & -3 & 2 & 5 & -7 \\ 0 & 0 & 0 & 4 & -6 \\ 0 & 0 & 0 & 0 & 0 \end{bmatrix}$$
+3. **數樞軸**:第 1、2、4 行有樞軸 ⇒ **$\operatorname{rank} A = 3$**。
+4. **注意第 3 行沒有樞軸**,而且它夾在有樞軸的兩行中間——**不要養成「取前 $k$ 行」的習慣**。
+5. **順手把另一邊也讀出來**:5 行裡有 3 個樞軸行 ⇒ **2 個自由變數** ⇒ $\dim \operatorname{Nul} A = 2$。
+6. **驗一次 Rank Theorem**:$3 + 2 = 5 = $ 行數 ✓
+7. **這題只要求 rank,但我們順手得到了零空間的維度**——**一次列化簡,兩個答案**,這就是 Rank Theorem 最實用的地方。
 
-1. **先讀樞軸位置**:第 1 行有樞軸、**第 2 行沒有**(它整列都被消掉了)、第 3 行、第 4 行有。⇒ 樞軸在第 **1、3、4** 行。
-2. **$\operatorname{Col} A$ 的基底 = $A$ 的第 1、3、4 行**:
-   $$\left\{\begin{bmatrix} 1 \\ -3 \\ 2 \\ -4 \end{bmatrix}, \begin{bmatrix} 2 \\ -1 \\ 4 \\ 2 \end{bmatrix}, \begin{bmatrix} -4 \\ 5 \\ -3 \\ 7 \end{bmatrix}\right\}, \qquad \dim \operatorname{Col} A = 3$$
-3. **自由變數只有 $x_2$**(唯一的非樞軸行)。⇒ 預告:$\dim \operatorname{Nul} A = 1$。
-4. **回代求零空間**:由第三列 $5x_4 = 0 \Rightarrow x_4 = 0$;第二列 $5x_3 - 7x_4 = 0 \Rightarrow x_3 = 0$;第一列 $x_1 - 3x_2 + 2x_3 - 4x_4 = 0 \Rightarrow x_1 = 3x_2$。
-5. **參數向量形式**:$\mathbf{x} = x_2(3, 1, 0, 0)$,所以
-   $$\operatorname{Nul} A \text{ 的基底} = \left\{\begin{bmatrix} 3 \\ 1 \\ 0 \\ 0 \end{bmatrix}\right\}, \qquad \dim \operatorname{Nul} A = 1$$
-6. **用 Rank Theorem 檢查**:$3 + 1 = 4 = $ 行數 ✓。**這一步一定要做**,它幾乎不花時間卻能抓到大部分錯誤。
-7. **注意兩個空間住在不同地方**:$\operatorname{Col} A \subseteq \mathbb{R}^4$、$\operatorname{Nul} A \subseteq \mathbb{R}^4$——這題剛好都是 $\mathbb{R}^4$(因為 $A$ 是方陣),但它們是**不同的** 3 維與 1 維子空間。
+### 例 3 · 補充:「$\dim = k$」不等於「$= \mathbb{R}^k$」
+Suppose $A$ is a $6 \times 9$ matrix with $\operatorname{rank} A = 4$. Is $\operatorname{Col} A = \mathbb{R}^4$? Is $\operatorname{Col} A = \mathbb{R}^6$? What is $\dim \operatorname{Nul} A$, and is $\operatorname{Nul} A = \mathbb{R}^5$?
 
-### 例 3 · Lay 2.9 Exercises 15、27
-**(Ex 15)** Suppose a $5 \times 8$ matrix $A$ has five pivot columns. Is $\operatorname{Col} A = \mathbb{R}^5$? Is $\operatorname{Nul} A = \mathbb{R}^3$? Explain your answers.
-
-1. **先數形狀**:$m = 5$(列)、$n = 8$(行)、樞軸 5 個。
-2. **第一問:$\operatorname{Col} A = \mathbb{R}^5$?** **是。** 5 個樞軸行表示每一**列**都有樞軸 ⇒ 各行張成 $\mathbb{R}^5$(第 3 週的定理)。用維度講也一樣:$\dim \operatorname{Col} A = 5$,而 $\mathbb{R}^5$ 裡唯一的 5 維子空間就是 $\mathbb{R}^5$ 自己。
-3. **第二問:$\operatorname{Nul} A = \mathbb{R}^3$?** **不是**——但理由不是維度不對!$\operatorname{Nul} A$ 的向量有 **8** 個分量,它是 $\mathbb{R}^8$ 的子空間,**不可能等於** $\mathbb{R}^3$。
-4. **然而它確實是 3 維的**:由 Rank Theorem,$\dim \operatorname{Nul} A = 8 - 5 = 3$。
-5. **「3 維」與「$= \mathbb{R}^3$」的差別**就是這題的全部重點。課本原話:「$\operatorname{Nul} A$ *cannot* equal $\mathbb{R}^3$, because $\operatorname{Nul} A$ is a subspace of $\mathbb{R}^8$. It is true, however, that $\operatorname{Nul} A$ is three-dimensional.」
-
-**(Ex 27)** If the subspace of all solutions of $A\mathbf{x} = \mathbf{0}$ has a basis consisting of three vectors and if $A$ is a $5 \times 7$ matrix, what is the rank of $A$?
-
-6. **翻譯題目**:「$A\mathbf{x} = \mathbf{0}$ 的解集」就是 $\operatorname{Nul} A$;「基底有 3 個向量」就是 $\dim \operatorname{Nul} A = 3$。
-7. **抓行數**:$5 \times 7$ ⇒ $n = 7$(**不是 5**)。
-8. **套定理**:$\operatorname{rank} A = 7 - 3 = 4$。
-9. **合理性檢查**:$\operatorname{rank} A \le \min(5, 7) = 5$,而 $4 \le 5$,沒有矛盾 ✓。
-10. **這個檢查不是多餘的**——下一組題目裡的 Exercise 28 就是因為沒通過這個檢查而**無解**(見該題備註)。
+1. **先把形狀寫清楚**:$m = 6$(列)、$n = 9$(行)、$\operatorname{rank} A = 4$。
+2. **$\operatorname{Col} A$ 的向量有幾個分量?** 每一行都是 $\mathbb{R}^6$ 的向量 ⇒ $\operatorname{Col} A$ 是 **$\mathbb{R}^6$ 的子空間**。
+3. **所以 $\operatorname{Col} A = \mathbb{R}^4$ 是不可能的**——它的向量根本不是 4 個分量。**這是形狀的問題,不是維度的問題。**
+4. **那 $\operatorname{Col} A = \mathbb{R}^6$ 呢?** 要相等就得 $\dim \operatorname{Col} A = 6$,但 $\operatorname{rank} A = 4 < 6$ ⇒ **不是**。$\operatorname{Col} A$ 只是 $\mathbb{R}^6$ 裡的一個 4 維子空間。
+5. **零空間**:由 Rank Theorem,$\dim \operatorname{Nul} A = 9 - 4 = 5$。**用行數 9,不是列數 6。**
+6. **$\operatorname{Nul} A = \mathbb{R}^5$ 嗎?** **不是**——解向量有 **9** 個分量,$\operatorname{Nul} A$ 是 $\mathbb{R}^9$ 的子空間,只是**維度**是 5。
+7. **把這四個答案排在一起**,學生就會看懂本節最容易混的一句話:
+   $$\dim \operatorname{Col} A = 4 \;(\text{住在 } \mathbb{R}^6), \qquad \dim \operatorname{Nul} A = 5 \;(\text{住在 } \mathbb{R}^9)$$
+8. **一句口訣**:**維度是「幾個獨立方向」,所在空間是「幾個分量」**,兩者沒有關係。
 
 #### 備註
-例 3 的第 3 點請務必板書:學生最常見的錯是看到「$\dim = 3$」就寫「$= \mathbb{R}^3$」。反問一句「那些向量有幾個分量?」通常就能點破。
+例 1、例 2 都是課本原例,而且**共用同一條主線**:例 1 數自由變數、例 2 數樞軸,合起來正好把 Rank Theorem 的兩邊都數了一次,接著就可以進證明時刻。
+
+例 3 是自編的,刻意用「一題四問」把 $\dim = k$ 與 $= \mathbb{R}^k$ 的混淆一次打掉。練習卡的 Exercises 15–16 是同型的兩問版本,課堂上做完例 3 再讓學生自己做那兩題。
 
 ## 易錯點
 - **把向量個數當維度**(例 1 的第 6 點):3 個向量可能只張出 2 維。
@@ -372,4 +369,6 @@ $$A = \begin{bmatrix} 1 & 2 & 3 \\ 2 & 4 & 6 \\ 3 & 6 & 9 \\ 4 & 8 & 12 \end{bma
 (lambda a: a.rank() == 2 and len(a.nullspace()) == 2 and a.rank() + len(a.nullspace()) == a.cols)(Matrix([[1, 0, 1, 0], [0, 1, 0, 1], [0, 0, 0, 0]]))
 (lambda a: a.rank() == 1 and len(a.nullspace()) == 2)(Matrix([[1, 2, 3], [2, 4, 6], [3, 6, 9], [4, 8, 12]]))
 Matrix([[1, 2, 3], [2, 4, 6], [3, 6, 9], [4, 8, 12]]) == Matrix([1, 2, 3, 4]) * Matrix([[1, 2, 3]])
+(lambda a: a.rank() == 3 and a.rref()[1] == (0, 1, 3) and len(a.nullspace()) == 2)(Matrix([[2, 5, -3, -4, 8], [4, 7, -4, -3, 9], [6, 9, -5, 2, 4], [0, -9, 6, 5, -6]]))
+9 - 4 == 5 and 4 < 6
 ```

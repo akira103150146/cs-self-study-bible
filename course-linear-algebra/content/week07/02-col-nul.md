@@ -105,34 +105,38 @@ Let $A = \begin{bmatrix} 1 & -1 & 5 \\ 2 & 0 & 7 \\ -3 & -5 & -3 \end{bmatrix}$ 
 6. **這題的重點**:同一個向量,**在一個子空間裡、不在另一個裡**。兩個空間毫不相干,不要以為「在 $\operatorname{Nul}$ 裡就一定在 $\operatorname{Col}$ 裡」。
 7. **順便記下兩種判斷的成本**:$\operatorname{Nul}$ 乘一次就好,$\operatorname{Col}$ 要列化簡。考試時先做便宜的那個。
 
-### 例 2 · Lay 2.8 Exercises 11、13
-Give integers $p$ and $q$ such that $\operatorname{Nul} A$ is a subspace of $\mathbb{R}^p$ and $\operatorname{Col} A$ is a subspace of $\mathbb{R}^q$, and then find a nonzero vector in each, where
+### 例 2 · Lay 2.8 Example 4(書上 p. 180)
+Let $A = \begin{bmatrix} 1 & -3 & -4 \\ -4 & 6 & -2 \\ -3 & 7 & 6 \end{bmatrix}$ and $\mathbf{b} = \begin{bmatrix} 3 \\ 3 \\ -4 \end{bmatrix}$. Determine whether $\mathbf{b}$ is in the column space of $A$.
 
-$$A = \begin{bmatrix} 3 & 2 & 1 & -5 \\ -9 & -4 & 1 & 7 \\ 9 & 2 & -5 & 1 \end{bmatrix}$$
+1. **先把問題翻譯成方程式**。$\mathbf{b} \in \operatorname{Col} A$ 的意思是「$\mathbf{b}$ 是各行的線性組合」,也就是**存在** $\mathbf{x}$ 使 $A\mathbf{x} = \mathbf{b}$。
+2. **所以這題等於在問:$A\mathbf{x} = \mathbf{b}$ 相容嗎?** 不必解出 $\mathbf{x}$,只要判斷有沒有解。
+3. **列化簡增廣矩陣**:
+   $$[\,A \;\; \mathbf{b}\,] = \begin{bmatrix} 1 & -3 & -4 & 3 \\ -4 & 6 & -2 & 3 \\ -3 & 7 & 6 & -4 \end{bmatrix} \sim \begin{bmatrix} 1 & -3 & -4 & 3 \\ 0 & -6 & -18 & 15 \\ 0 & -2 & -6 & 5 \end{bmatrix} \sim \begin{bmatrix} 1 & -3 & -4 & 3 \\ 0 & -6 & -18 & 15 \\ 0 & 0 & 0 & 0 \end{bmatrix}$$
+4. **讀結論**:最後一列是全 0(不是 $[0\ 0\ 0\ \ast]$ 那種矛盾列)⇒ **相容** ⇒ $\mathbf{b} \in \operatorname{Col} A$ ✓
+5. **注意我們沒有算出 $\mathbf{x}$**。題目只問「在不在」,**判斷相容性就夠了**,這是最省力的做法。
+6. **如果最後一列變成 $[\,0\ 0\ 0\ \ast\,]$($\ast \ne 0$)呢?** 那就不相容,$\mathbf{b}$ 不在 $\operatorname{Col} A$ 裡——這正是課本圖裡「$\mathbf{b}$ 落在平面外面」的情形。
+7. **對比一下**:如果題目問的是「$\mathbf{b}$ 在不在 $\operatorname{Nul} A$ 裡」,做法完全不同——直接算 $A\mathbf{b}$ 看是不是 $\mathbf{0}$,一次乘法就結束。**兩個空間,兩種檢查。**
 
-1. **先數形狀**:$A$ 是 $3 \times 4$。
-2. **$\operatorname{Nul} A$ 住在哪?** 解 $\mathbf{x}$ 要能被 $A$ 乘,所以 $\mathbf{x}$ 有 **4** 個分量(等於**行**數)。$p = 4$。
-3. **$\operatorname{Col} A$ 住在哪?** $A$ 的每一行都是 $\mathbb{R}^3$ 的向量,所以 $q = 3$(等於**列**數)。
-4. **$\operatorname{Col} A$ 的非零向量最好找**:隨便取一行就是,例如 $(3, -9, 9)$。**因為各行依定義就在 $\operatorname{Col} A$ 裡。**
-5. **$\operatorname{Nul} A$ 要解方程組**。列化簡得
-   $$A \sim \begin{bmatrix} 1 & 0 & -1 & 1 \\ 0 & 1 & 2 & -4 \\ 0 & 0 & 0 & 0 \end{bmatrix}$$
-6. **自由變數是 $x_3, x_4$**。取 $x_3 = 1, x_4 = 0$ 得 $x_1 = 1, x_2 = -2$,所以 $(1, -2, 1, 0) \in \operatorname{Nul} A$;取 $x_3 = 0, x_4 = 1$ 得 $(-1, 4, 0, 1)$。
-7. **驗算**:$A(1,-2,1,0)^T = (3 - 4 + 1, -9 + 8 + 1, 9 - 4 - 5)^T = \mathbf{0}$ ✓ 每次算完都該乘回去檢查。
-8. **這題的口訣**:**行數決定 $\operatorname{Nul}$、列數決定 $\operatorname{Col}$**。學生最常把這兩個弄反。
+### 例 3 · 補充:同一個矩陣,兩個空間各找一個向量
+For $A = \begin{bmatrix} 2 & 4 & -2 \\ -1 & -2 & 1 \\ 3 & 6 & -3 \end{bmatrix}$, find a nonzero vector in $\operatorname{Nul} A$ and a nonzero vector in $\operatorname{Col} A$, and state which space each one lives in.
 
-### 例 3 · Lay 2.8 Exercises 39、41
-Suppose $F$ is a $5 \times 5$ matrix whose column space is not equal to $\mathbb{R}^5$. What can you say about $\operatorname{Nul} F$? Then: if $Q$ is a $4 \times 4$ matrix and $\operatorname{Col} Q = \mathbb{R}^4$, what can you say about solutions of $Q\mathbf{x} = \mathbf{b}$?
-
-1. **第一題的關鍵字是「方陣」**——只要看到方陣,就可以用上週的可逆矩陣定理。
-2. **翻譯題目**:$\operatorname{Col} F \ne \mathbb{R}^5$ 表示 $F$ 的各行**不張成** $\mathbb{R}^5$,也就是 IMT 的 (h) 不成立。
-3. **一條倒,全部倒**(上週的技巧):$F$ 不可逆,所以 (d) 也不成立——$F\mathbf{x} = \mathbf{0}$ **有非平凡解**。
-4. **換成本週的語言**:$\operatorname{Nul} F$ 含有非零向量,即 $\operatorname{Nul} F \ne \{\mathbf{0}\}$。
-5. **第二題反過來**:$\operatorname{Col} Q = \mathbb{R}^4$ 就是 (h) 成立 ⇒ $Q$ 可逆 ⇒ 由 (g),$Q\mathbf{x} = \mathbf{b}$ 對每個 $\mathbf{b}$ **都有解**;再由第 5 週的 Theorem 5,解還**唯一**($\mathbf{x} = Q^{-1}\mathbf{b}$)。
-6. **這一組題目在做什麼?** 把上週的 IMT 用本週的新名詞重講一遍。$\operatorname{Col} A = \mathbb{R}^n$ 與 $\operatorname{Nul} A = \{\mathbf{0}\}$ 其實就是 IMT 的兩條——下下個觀念會把它們正式加進定理裡(條款 (n) 與 (q))。
-7. **答題格式**(延續上週):「由題意,(h) 不成立 ⇒ $F$ 不可逆 ⇒ 由 (d),$\operatorname{Nul} F \ne \{\mathbf{0}\}$。」
+1. **先看形狀**:$A$ 是 $3 \times 3$,所以兩個空間都是 $\mathbb{R}^3$ 的子空間——但它們**不是同一個子空間**。
+2. **$\operatorname{Col} A$ 的向量最好找**:隨便取一行就是,例如 $\mathbf{a}_1 = (2, -1, 3)$。**各行依定義就在 $\operatorname{Col} A$ 裡**,不必算。
+3. **看出這個矩陣的特別之處了嗎?** 第 2 行 $= 2 \times$ 第 1 行,第 3 行 $= -1 \times$ 第 1 行。**三行都在同一條直線上**,所以 $\operatorname{Col} A$ 只是一條直線(不是平面,更不是 $\mathbb{R}^3$)。
+4. **$\operatorname{Nul} A$ 要解 $A\mathbf{x} = \mathbf{0}$**。因為三行成比例,相依關係一眼可見:
+   $$\mathbf{a}_2 - 2\mathbf{a}_1 = \mathbf{0} \quad \Longrightarrow \quad (-2)\mathbf{a}_1 + 1 \cdot \mathbf{a}_2 + 0 \cdot \mathbf{a}_3 = \mathbf{0}$$
+   **係數就是零空間的向量**:$\mathbf{u} = (-2, 1, 0)$。
+5. **驗算**:$A\mathbf{u} = -2(2,-1,3) + 1(4,-2,6) = (0,0,0)$ ✓
+6. **再找一個**:$\mathbf{a}_3 + \mathbf{a}_1 = \mathbf{0}$ ⇒ $\mathbf{v} = (1, 0, 1)$ 也在 $\operatorname{Nul} A$ 裡。
+7. **這題的心法**:**$\operatorname{Col} A$ 看「行張出什麼」,$\operatorname{Nul} A$ 看「行之間有什麼相依關係」**——相依關係的係數直接就是零空間的向量,連列化簡都不必。
+8. **最後確認兩者不同**:$(2,-1,3)$ 乘進去得 $A(2,-1,3)^T = (2 \cdot 2 - 4 - 6, \dots) = (-6, 3, -9) \ne \mathbf{0}$,所以它**不在** $\operatorname{Nul} A$ 裡。兩個空間確實是不同的集合。
 
 #### 備註
-例 3 要提醒:**這一組題目全部是方陣**,所以能用 IMT。Exercise 43 的 $B$ 是 $5 \times 4$(非方陣),就**不能**用——那題只能用「線性獨立 ⇔ 齊次方程只有平凡解」這個對任何矩陣都成立的事實。
+例 2 是課本的原例,示範「判斷相容性」這個最省力的檢查法;例 3 是自編的,刻意挑**三行全部成比例**的矩陣,讓 $\operatorname{Col} A$ 塌成一條直線、相依關係一眼可見。
+
+兩例合起來涵蓋了本節所有題型的做法,但**都不是練習卡上的題目**——練習時學生要自己再走一次流程。
+
+若時間不夠,例 3 可以只做第 2、4 兩步(各找一個向量),第 8 步的「兩者不同」留給練習。
 
 ## 易錯點
 - **把 $\operatorname{Col}$ 與 $\operatorname{Nul}$ 住的空間弄反**。$m \times n$ 矩陣:$\operatorname{Col} A \subseteq \mathbb{R}^m$、$\operatorname{Nul} A \subseteq \mathbb{R}^n$。
@@ -305,4 +309,6 @@ not (Matrix([[2, -3, -4], [-8, 8, 6], [6, -7, -7]]) * Matrix([6, -10, 11])).is_z
 (lambda a: a.rank() == 3 and a.nullspace() == [])(Matrix([[1, 0, 0], [0, 2, 0], [0, 0, 3]]))
 (lambda b: b.rank() == b.cols and b.nullspace() == [])(Matrix([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1], [0, 0, 0, 0]]))
 (lambda a, u, v: (a * (u + v)).is_zero_matrix and (a * (3 * u)).is_zero_matrix)(Matrix([[3, 2, 1, -5], [-9, -4, 1, 7], [9, 2, -5, 1]]), Matrix([1, -2, 1, 0]), Matrix([-1, 4, 0, 1]))
+(lambda a, b: a.rank() == a.row_join(b).rank())(Matrix([[1, -3, -4], [-4, 6, -2], [-3, 7, 6]]), Matrix([3, 3, -4]))
+(lambda a: a.rank() == 1 and (a * Matrix([-2, 1, 0])).is_zero_matrix and (a * Matrix([1, 0, 1])).is_zero_matrix and not (a * Matrix([2, -1, 3])).is_zero_matrix)(Matrix([[2, 4, -2], [-1, -2, 1], [3, 6, -3]]))
 ```

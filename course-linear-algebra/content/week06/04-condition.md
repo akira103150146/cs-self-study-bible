@@ -93,52 +93,43 @@ $$\frac{\lVert \delta\mathbf{x} \rVert / \lVert \mathbf{x} \rVert}{\lVert \delta
 第 16 週學 SVD 之後會看到條件數的精確定義($\sigma_{\max}/\sigma_{\min}$),現在只要有這個直覺就夠了。
 
 ## 老師講解
-### 例 1 · Lay 2.3 Exercise 49
-Suppose an experiment leads to the following system of equations:
+### 例 1 · 補充:兩條幾乎重合的線
+Solve $\begin{bmatrix} 1 & 1 \\ 1 & 1.0001 \end{bmatrix}\mathbf{x} = \begin{bmatrix} 2 \\ 2.0001 \end{bmatrix}$. Then solve the same system with the right side changed to $(2,\; 2.0002)$, and compare.
 
-$$\begin{aligned} 4.5x_1 + 3.1x_2 &= 19.249 \\ 1.6x_1 + 1.1x_2 &= 6.843 \end{aligned} \tag{3}$$
+1. **先解原系統**。第二式減第一式:
+   $$0.0001\,x_2 = 0.0001 \quad \Longrightarrow \quad x_2 = 1, \quad x_1 = 2 - 1 = 1$$
+   所以 $\mathbf{x} = (1, 1)$。
+2. **再解擾動後的系統**(右端第二格從 $2.0001$ 改成 $2.0002$,只動了 **0.005%**):
+   $$0.0001\,x_2 = 0.0002 \quad \Longrightarrow \quad x_2 = 2, \quad x_1 = 2 - 2 = 0$$
+   所以 $\mathbf{x} = (0, 2)$。
+3. **對照兩個答案**:$(1, 1)$ 變成 $(0, 2)$。$x_1$ 錯了 **100%**、$x_2$ 錯了 **100%**。
+4. **輸入動 0.005%、輸出動 100%** ⇒ 放大了約 **2 萬倍**。
+5. **但這個矩陣可逆嗎?** $\det = 1.0001 - 1 = 0.0001 \ne 0$ ⇒ **可逆**,IMT 十二條全部成立。
+6. **所以「可逆」與「算得準」是兩件事**。這就是本節唯一要講的觀念。
+7. **幾何上**:兩條直線的斜率是 $-1$ 與 $-1/1.0001$,**幾乎平行**。交點是兩線相交處,而兩條幾乎重合的線,交點會沿著線滑很遠。
+8. **程式上的警告**:這種矩陣拿去給 `numpy.linalg.solve` 也一樣會出事——**問題出在矩陣本身,不是演算法**。
 
-Solve system (3), and then solve system (4), below, in which the data on the right have been rounded to two decimal places. In each case, find the *exact* solution. Then find the percentage error when using the solution of (4) as an approximation for the solution of (3).
+### 例 2 · 補充:條件數與損失的位數
+For the matrix $A = \begin{bmatrix} 1 & 1 \\ 1 & 1.0001 \end{bmatrix}$ in Example 1, a matrix program reports $\operatorname{cond}(A) \approx 4 \times 10^4$. Using double precision (about 16 significant digits), how many digits of the computed solution can you trust?
 
-$$\begin{aligned} 4.5x_1 + 3.1x_2 &= 19.25 \\ 1.6x_1 + 1.1x_2 &= 6.84 \end{aligned} \tag{4}$$
+1. **先讀條件數的量級**:$4 \times 10^4$,也就是 $\log_{10}(4 \times 10^4) \approx 4.6$。
+2. **估算法則**:$\operatorname{cond}(A) \approx 10^k$ 時,大約**損失 $k$ 位**精度。
+3. **所以這題損失約 4.6 位**,$16 - 4.6 \approx 11$ ⇒ **大約 11 位可信**。
+4. **和例 1 對照**:例 1 的誤差放大約 2 萬倍($\approx 10^{4.3}$),和條件數 $4 \times 10^4$ **同一個數量級** ✓ 這正是條件數的意義。
+5. **注意行列式完全不是指標**:這個 $A$ 的 $\det = 10^{-4}$ 很小,看起來「快要奇異」;但把 $A$ 整個乘以 100,$\det$ 會變成 $10^{-4} \times 100^2 = 1$,**條件數卻一點都沒變**。
+6. **為什麼?** 條件數是**比值**(奇異值之比),對整體縮放免疫;行列式是**乘積**,會被縮放放大或縮小。
+7. **一句結論**:**要判斷「這個系統算不算得準」,看條件數,不要看行列式。**
 
-1. **先看係數矩陣**:$\det = 4.5(1.1) - 3.1(1.6) = 4.95 - 4.96 = -0.01$。非常接近 0,**警訊**。
-2. **精確解 (3)**(用分數算,不要用小數):$x_1 = 3.94$、$x_2 = 0.49$。
-3. **精確解 (4)**:$x_1 = 2.90$、$x_2 = 2.00$。
-4. **右端變了多少?** $19.249 \to 19.25$ 變了 $0.001$,相對變動 $0.005\%$;$6.843 \to 6.84$ 變了 $0.003$,相對變動 $0.04\%$。都不到 $0.05\%$。
-5. **解變了多少?**
-   $$\frac{|2.90 - 3.94|}{3.94} \approx 26\%, \qquad \frac{|2.00 - 0.49|}{0.49} \approx 308\%$$
-6. **對比**:輸入動 $0.04\%$,輸出動 $308\%$——放大了約 7700 倍。
-7. **條件數**:$\operatorname{cond}(A) \approx 3363$,和 7700 同一個數量級。這就是條件數的意義:**它是誤差放大倍率的量級指標**(嚴格的上界要用範數來量,見原理那一段)。
-8. **給學生的結論**:這個系統**是可逆的**(IMT 十二條全成立),但**在數值上不可靠**。可逆與可算是兩件事。
+### 例 3 · 補充:Hilbert 矩陣,教科書等級的壞矩陣
+Let $H = \begin{bmatrix} 1 & 1/2 & 1/3 \\ 1/2 & 1/3 & 1/4 \\ 1/3 & 1/4 & 1/5 \end{bmatrix}$ (the $3 \times 3$ Hilbert matrix). Its inverse is $H^{-1} = \begin{bmatrix} 9 & -36 & 30 \\ -36 & 192 & -180 \\ 30 & -180 & 180 \end{bmatrix}$, and $\operatorname{cond}(H) \approx 524$. What does this tell you?
 
-### 例 2 · Lay 2.3 Exercises 50–51
-Find the condition number of the matrix $A$ in Exercise 9. Construct a random vector $\mathbf{x}$ in $\mathbb{R}^4$ and compute $\mathbf{b} = A\mathbf{x}$. Then use your matrix program to compute the solution $\mathbf{x}_1$ of $A\mathbf{x} = \mathbf{b}$. To how many digits do $\mathbf{x}$ and $\mathbf{x}_1$ agree? Report how many digits of accuracy are lost.
-
-1. **這題的手法很聰明**:先隨便挑一個 $\mathbf{x}$(我們**知道**正確答案),算出 $\mathbf{b} = A\mathbf{x}$,再叫程式從 $\mathbf{b}$ 解回去。把解出來的 $\mathbf{x}_1$ 和原本的 $\mathbf{x}$ 比,就知道程式掉了幾位精度。
-2. **Exercise 9 的矩陣**($4 \times 4$,$\det = 1$)的條件數約 $2.4 \times 10^4$,也就是 $k \approx 4$。
-3. **估算**:雙精度約 16 位,所以答案大約只剩 $16 - 4 = 12$ 位可信。實測 $\mathbf{x}$ 與 $\mathbf{x}_1$ 大約吻合到第 11–12 位。
-4. **Exercise 51 的 $5 \times 5$ 矩陣**條件數約 $6.9 \times 10^4$,同樣損失 4–5 位,吻合到 11–12 位。
-5. **最值得講的一點**:Exercise 9 的矩陣 $\det = 1$。若用行列式判斷「這個矩陣健不健康」,會得到完全錯誤的印象。**行列式不是穩定性的指標。**
-6. **怎麼觀察**:實作課會用 `np.linalg.cond` 算條件數,再用這個「先造答案再解回去」的方法量實際損失。
-
-### 例 3 · Lay 2.3 Exercise 52
-Solve an equation $A\mathbf{x} = \mathbf{b}$ for a suitable $\mathbf{b}$ to find the last column of the inverse of the *fifth-order Hilbert matrix*
-
-$$A = \begin{bmatrix} 1 & 1/2 & 1/3 & 1/4 & 1/5 \\ 1/2 & 1/3 & 1/4 & 1/5 & 1/6 \\ 1/3 & 1/4 & 1/5 & 1/6 & 1/7 \\ 1/4 & 1/5 & 1/6 & 1/7 & 1/8 \\ 1/5 & 1/6 & 1/7 & 1/8 & 1/9 \end{bmatrix}$$
-
-How many digits in each entry of $\mathbf{x}$ do you expect to be correct? Explain. [*Note:* The exact solution is $(630, -12600, 56700, -88200, 44100)$.]
-
-1. **要的是 $A^{-1}$ 的最後一行**,所以解 $A\mathbf{x} = \mathbf{e}_5$(第 5 週觀念 5 的技巧)。
-2. **精確解**是 $(630,\, -12600,\, 56700,\, -88200,\, 44100)$——全是整數,而且非常大。
-3. **為什麼這麼大?** 因為 $\det A = \tfrac{1}{266716800000} \approx 3.75 \times 10^{-12}$,小得驚人。反矩陣的元素和 $1/\det$ 同量級,所以爆大。
-4. **條件數**約 $4.8 \times 10^5$($k \approx 5$–$6$),所以每個分量大約只能相信前 $10$–$11$ 位。
-5. **實作課的陷阱**:若在程式裡直接寫 `1/3`、`1/7`,這些數字**本身就已經有捨入誤差**了,還沒開始算就先錯。用 SymPy 的 `Rational(1,3)` 才能得到整數精確解。
-6. **Hilbert 矩陣是經典教材例子**:它每一格都很「乖」(都是簡單分數),卻是最病態的矩陣之一。**病態看不出來,要算才知道。**
-7. **Exercise 53 更誇張**:12 階以上的 Hilbert 矩陣,浮點求出來的 $A^{-1}$ 乘回去,$AA^{-1}$ 的非對角線會出現離 0 很遠的數字。
-
-#### 備註
-例 3 的第 5 步要當場示範:`np.linalg.inv` 對 Hilbert(5) 的結果和精確值差多少。這是全週最震撼的畫面,也是實作課的重頭戲。
+1. **先看 $H$ 本身**:每一格都是 $1/(i+j-1)$,數字都很小、很溫和,**看不出有什麼問題**。
+2. **再看 $H^{-1}$**:出現了 $192$、$-180$ 這種大數字。**原矩陣的格子都小於 1,反矩陣卻到上百**——這就是病態的徵兆。
+3. **條件數 $\approx 524$**,只有三階就已經這樣;$5$ 階約 $4.8 \times 10^5$、$12$ 階超過 $10^{16}$(實作課會算)。
+4. **$10^{16}$ 是什麼概念?** 雙精度只有約 16 位,**條件數吃光了全部精度**——算出來的答案一位都不能信。
+5. **為什麼 Hilbert 矩陣這麼壞?** 因為相鄰兩列非常相似($1/2, 1/3, 1/4$ 與 $1/3, 1/4, 1/5$),**幾乎成比例**,就像例 1 那兩條幾乎重合的線。
+6. **實務上會遇到嗎?** 會。多項式擬合時,若直接用 $1, t, t^2, \dots$ 當基底,得到的正規方程矩陣就是 Hilbert 型的——這是第 14 週要改用正交多項式的原因。
+7. **驗算方式**:$H \cdot H^{-1}$ 應該得到 $I$。用精確分數算會剛好;用浮點算會看到 $10^{-13}$ 這種殘渣——**殘渣的大小正好反映條件數**。
 
 ## 易錯點
 - **以為「可逆」就代表「算得準」**。這是本節唯一要打破的迷思。
@@ -243,4 +234,6 @@ Matrix(5, 5, lambda t, s: Rational(1, t + s + 1)).inv()[:, 4] == Matrix([630, -1
 Matrix(5, 5, lambda t, s: Rational(1, t + s + 1)).solve(Matrix([0, 0, 0, 0, 1])) == Matrix([630, -12600, 56700, -88200, 44100])
 Matrix(5, 5, lambda t, s: Rational(1, t + s + 1)).det() == Rational(1, 266716800000)
 eye(4).condition_number() == 1
+(lambda a: a.solve(Matrix([2, Rational(20001,10000)])) == Matrix([1, 1]) and a.solve(Matrix([2, Rational(20002,10000)])) == Matrix([0, 2]))(Matrix([[1, 1], [1, Rational(10001,10000)]]))
+Matrix(3, 3, lambda i, j: Rational(1, i + j + 1)).inv() == Matrix([[9, -36, 30], [-36, 192, -180], [30, -180, 180]])
 ```

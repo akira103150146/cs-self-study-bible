@@ -87,38 +87,31 @@ What can you say about a one-to-one linear transformation $T$ from $\mathbb{R}^n
 5. **這題的震撼點**:題目只說「一對一」,結論卻多了「映成」與「可逆」。**方陣的世界裡,一對一就送映成**。
 6. **提醒**:$\mathbb{R}^2 \to \mathbb{R}^3$ 的一對一變換就沒有這個好處(標準矩陣不是方陣,IMT 不適用)。
 
-### 例 2 · Lay 2.3 Exercise 41
-$T$ is a linear transformation from $\mathbb{R}^2$ into $\mathbb{R}^2$. Show that $T$ is invertible and find a formula for $T^{-1}$.
+### 例 2 · 補充:求反變換的公式
+Let $T : \mathbb{R}^2 \to \mathbb{R}^2$ be given by $T(x_1, x_2) = (5x_1 + 3x_2,\; 3x_1 + 2x_2)$. Show that $T$ is invertible and find a formula for $T^{-1}$.
 
-$$T(x_1, x_2) = (-9x_1 + 7x_2,\; 4x_1 - 3x_2)$$
+1. **先寫出標準矩陣**(第 4 週的技巧:把 $T(\mathbf{e}_1)$、$T(\mathbf{e}_2)$ 排成行):
+   $$A = \begin{bmatrix} 5 & 3 \\ 3 & 2 \end{bmatrix}$$
+2. **判斷可逆**:$\det A = 5(2) - 3(3) = 10 - 9 = 1 \ne 0$ ⇒ $A$ 可逆 ⇒ 由 Theorem 9,**$T$ 可逆**。
+3. **用第 5 週的 $2 \times 2$ 公式**:
+   $$A^{-1} = \frac{1}{\det A}\begin{bmatrix} 2 & -3 \\ -3 & 5 \end{bmatrix} = \begin{bmatrix} 2 & -3 \\ -3 & 5 \end{bmatrix}$$
+   (這題的 $\det = 1$,所以連除都不必除——刻意挑的數字。)
+4. **反變換的公式就是「乘 $A^{-1}$」**:
+   $$T^{-1}(y_1, y_2) = (2y_1 - 3y_2,\; -3y_1 + 5y_2)$$
+5. **一定要驗算**。取 $\mathbf{x} = (1, 2)$:$T(1,2) = (5 + 6,\; 3 + 4) = (11, 7)$。
+6. **再送回去**:$T^{-1}(11, 7) = (22 - 21,\; -33 + 35) = (1, 2)$ ✓ 回到原點。
+7. **答題格式**:寫出標準矩陣 → 算 $\det$ → 引用 Theorem 9 → 用公式求 $A^{-1}$ → **把反矩陣翻譯回變換的語言**。最後這一步最常被忘記:題目問的是 $T^{-1}$ 的**公式**,不是 $A^{-1}$ 這個矩陣。
 
-1. **先寫標準矩陣**(第 4 週的技巧:把係數抄下來):
-   $$A = \begin{bmatrix} -9 & 7 \\ 4 & -3 \end{bmatrix}$$
-2. **檢查可逆**:$\det A = (-9)(-3) - 7(4) = 27 - 28 = -1 \ne 0$,由第 5 週 Theorem 4,$A$ 可逆。
-3. **由 Theorem 9**,$T$ 可逆——這一步要寫出來,不能只說「矩陣可逆所以變換可逆」。
-4. **算 $A^{-1}$**(第 5 週的 $2 \times 2$ 公式):
-   $$A^{-1} = \frac{1}{-1}\begin{bmatrix} -3 & -7 \\ -4 & -9 \end{bmatrix} = \begin{bmatrix} 3 & 7 \\ 4 & 9 \end{bmatrix}$$
-5. **寫回變換的語言**:
-   $$T^{-1}(x_1, x_2) = (3x_1 + 7x_2,\; 4x_1 + 9x_2)$$
-6. **檢查**:$T^{-1}(T(1, 0)) = T^{-1}(-9, 4) = (-27 + 28, -36 + 36) = (1, 0)$ ✓。做一個點的檢查只要 10 秒,務必養成習慣。
-7. **注意分母的負號**:$\det = -1$,所以整個伴隨矩陣都要變號。這是最常掉分的地方。
+### 例 3 · 補充:壓扁了就回不來
+Let $S : \mathbb{R}^2 \to \mathbb{R}^2$ be given by $S(x_1, x_2) = (x_1 + 2x_2,\; 2x_1 + 4x_2)$. Is $S$ invertible? Describe geometrically what $S$ does, and explain why no linear transformation can undo it.
 
-### 例 3 · Lay 2.3 Exercises 43–44
-Let $T : \mathbb{R}^n \to \mathbb{R}^n$ be an invertible linear transformation. Explain why $T$ is both one-to-one and onto $\mathbb{R}^n$. Use equations (1) and (2). Then give a second explanation using one or more theorems.
-
-1. **第一種寫法:純函數論證,只用 (1)(2)。**
-2. **一對一**:設 $T(\mathbf{u}) = T(\mathbf{v})$。兩邊作用 $S$,由 (1):
-   $$\mathbf{u} = S(T(\mathbf{u})) = S(T(\mathbf{v})) = \mathbf{v}$$
-   所以不同輸入不會有相同輸出。
-3. **映成**:任給 $\mathbf{y} \in \mathbb{R}^n$,取 $\mathbf{x} = S(\mathbf{y})$。由 (2):
-   $$T(\mathbf{x}) = T(S(\mathbf{y})) = \mathbf{y}$$
-   所以 $\mathbf{y}$ 在值域裡。
-4. **第二種寫法:用定理。** 由 Theorem 9,$T$ 可逆 ⇒ 標準矩陣 $A$ 可逆 ⇒ 由 IMT 的 (f) 與 (i),$T$ 既一對一又映成。三行寫完。
-5. **兩種寫法的差別**:第一種**完全不需要矩陣**,只用函數的性質,所以它在更一般的場合(例如無限維空間)也成立;第二種借用了 IMT,快得多但限定方陣。
-6. **課本為什麼要求兩種都寫?** 因為它們訓練不同的能力:一種是「從定義推」,一種是「引用定理」。考試兩種都可能考。
-
-#### 備註
-例 3 的兩種寫法建議並排寫在黑板左右兩半,讓學生直接比較長度與依賴的工具。
+1. **標準矩陣**:$A = \begin{bmatrix} 1 & 2 \\ 2 & 4 \end{bmatrix}$,$\det A = 4 - 4 = 0$ ⇒ **不可逆**。
+2. **幾何上發生了什麼?** 算幾個像看看:$S(1,0) = (1,2)$、$S(0,1) = (2,4) = 2(1,2)$、$S(2,-1) = (0,0)$。
+3. **所有的像都是 $(1, 2)$ 的倍數** ⇒ 整個平面被**壓成一條直線**。
+4. **為什麼回不來?** $S(2,-1) = \mathbf{0} = S(0,0)$——**兩個不同的輸入給出同一個輸出**。反變換如果存在,$\mathbf{0}$ 該送回哪一個?無法決定。
+5. **用第 4 週的語言**:$S$ 不是一對一(它把一整條直線壓成 $\mathbf{0}$),也不是映成(打不到直線以外的點)。
+6. **用本週的語言**:(e)(d) 不成立 ⇒ $A$ 不可逆 ⇒ 由 Theorem 9,$S$ 不可逆。**同一件事的三種說法。**
+7. **值得強調的一句**:**線性變換可逆 ⇔ 不壓扁**。壓扁一次,資訊就永遠回不來——這和影像縮小再放大會糊掉是同一個道理。
 
 ## 易錯點
 - **只驗一個方向就說可逆**。定義要求 (1) **和** (2)(不過對方陣的**矩陣**而言,第 5 週的方框說驗一邊就夠——別把這兩件事混在一起)。
@@ -226,4 +219,6 @@ Matrix([[6, -8], [-5, 7]]).inv() * Matrix([[6, -8], [-5, 7]]) == eye(2)
 (lambda p, q: p * q == eye(2) and q * p == eye(2))(Matrix([[1, 2], [3, 7]]), Matrix([[7, -2], [-3, 1]]))
 Matrix([[1, 0], [0, 0]]).rank() < 2 and Matrix([[1, 0], [0, 0]]).nullspace() != []
 (lambda a: a.inv().rank() == 2 and a.inv().nullspace() == [])(Matrix([[-9, 7], [4, -3]]))
+(lambda a: a.det() == 1 and a.inv() == Matrix([[2, -3], [-3, 5]]) and a.inv() * Matrix([11, 7]) == Matrix([1, 2]))(Matrix([[5, 3], [3, 2]]))
+(lambda s: s.det() == 0 and (s * Matrix([2, -1])).is_zero_matrix)(Matrix([[1, 2], [2, 4]]))
 ```

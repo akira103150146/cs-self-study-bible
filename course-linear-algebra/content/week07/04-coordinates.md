@@ -109,40 +109,40 @@ Consider the basis $\mathcal{B} = \left\{\begin{bmatrix} 1 \\ .2 \end{bmatrix}, 
 5. **對照上面的格線圖**:$\mathbf{x}$ 在 $\mathbf{b}_1$ 方向 3 格、在 $\mathbf{b}_2$ 方向 2 格。課本原話:「Note how $\mathbf{x}$ is 3 units in the $\mathbf{b}_1$-direction and 2 units in the $\mathbf{b}_2$-direction.」
 6. **兩組數字都對**:$(3.4, 2.6)$ 是標準基底下的地址,$(3, 2)$ 是 $\mathcal{B}$ 下的地址,**同一個點**。
 
-### 例 2 · Lay 2.9 Exercises 3、5
-The vector $\mathbf{x}$ is in a subspace $H$ with a basis $\mathcal{B} = \{\mathbf{b}_1, \mathbf{b}_2\}$. Find the $\mathcal{B}$-coordinate vector of $\mathbf{x}$.
+### 例 2 · Lay 2.9 Example 1(書上 p. 187)
+Let $\mathbf{v}_1 = \begin{bmatrix} 3 \\ 6 \\ 2 \end{bmatrix}$, $\mathbf{v}_2 = \begin{bmatrix} -1 \\ 0 \\ 1 \end{bmatrix}$, $\mathbf{x} = \begin{bmatrix} 3 \\ 12 \\ 7 \end{bmatrix}$, and $\mathcal{B} = \{\mathbf{v}_1, \mathbf{v}_2\}$. Then $\mathcal{B}$ is a basis for $H = \operatorname{Span}\{\mathbf{v}_1, \mathbf{v}_2\}$ because $\mathbf{v}_1$ and $\mathbf{v}_2$ are linearly independent. Determine if $\mathbf{x}$ is in $H$, and if it is, find the coordinate vector of $\mathbf{x}$ relative to $\mathcal{B}$.
 
-**(Ex 3)** $\mathbf{b}_1 = \begin{bmatrix} 1 \\ -4 \end{bmatrix}$, $\mathbf{b}_2 = \begin{bmatrix} -2 \\ 7 \end{bmatrix}$, $\mathbf{x} = \begin{bmatrix} -3 \\ 7 \end{bmatrix}$
+1. **這題一次問兩件事**:先問「在不在 $H$ 裡」,再問「座標是多少」。兩件事其實是**同一個方程組**。
+2. **寫成向量方程式**:
+   $$c_1\begin{bmatrix} 3 \\ 6 \\ 2 \end{bmatrix} + c_2\begin{bmatrix} -1 \\ 0 \\ 1 \end{bmatrix} = \begin{bmatrix} 3 \\ 12 \\ 7 \end{bmatrix}$$
+   **如果這個方程組有解,$\mathbf{x}$ 就在 $H$ 裡,而那組解就是座標。**
+3. **注意它有 3 條方程式、只有 2 個未知數**——超定系統,很可能無解。所以「在不在」這個問題是有意義的。
+4. **列化簡**:
+   $$\begin{bmatrix} 3 & -1 & 3 \\ 6 & 0 & 12 \\ 2 & 1 & 7 \end{bmatrix} \sim \begin{bmatrix} 1 & 0 & 2 \\ 0 & 1 & 3 \\ 0 & 0 & 0 \end{bmatrix}$$
+5. **讀結論**:最後一列是全 0 ⇒ **相容** ⇒ $\mathbf{x} \in H$ ✓,而且 $c_1 = 2$、$c_2 = 3$。
+6. **答案寫成向量**:$[\,\mathbf{x}\,]_{\mathcal{B}} = \begin{bmatrix} 2 \\ 3 \end{bmatrix}$。
+7. **看清楚分量個數變了**:$\mathbf{x}$ 有 **3** 個分量,座標只有 **2** 個。課本圖 1 把這件事畫成「$\mathbb{R}^3$ 裡的一個平面上鋪了格線」,$\mathbf{x} = 2\mathbf{v}_1 + 3\mathbf{v}_2$ 就是格線上的一個交點。
+8. **這就是壓縮的雛形**:住在 $\mathbb{R}^3$ 裡的點,只要 2 個數字就記得住——**前提是你知道那個平面的基底**。
 
-1. **這次是反方向**:給向量、求座標 ⇒ **要解方程** $c_1\mathbf{b}_1 + c_2\mathbf{b}_2 = \mathbf{x}$。
-2. **寫成方程組**:$c_1 - 2c_2 = -3$、$-4c_1 + 7c_2 = 7$。
-3. **解**:第一式 $c_1 = -3 + 2c_2$,代入第二式 $-4(-3 + 2c_2) + 7c_2 = 7 \Rightarrow 12 - c_2 = 7 \Rightarrow c_2 = 5$,回代 $c_1 = 7$。
-4. **答案要寫成向量**:$[\,\mathbf{x}\,]_{\mathcal{B}} = \begin{bmatrix} 7 \\ 5 \end{bmatrix}$。不是 $c_1 = 7, c_2 = 5$ 兩個數字散著寫。
-5. **驗算**:$7\begin{bmatrix} 1 \\ -4 \end{bmatrix} + 5\begin{bmatrix} -2 \\ 7 \end{bmatrix} = \begin{bmatrix} 7 - 10 \\ -28 + 35 \end{bmatrix} = \begin{bmatrix} -3 \\ 7 \end{bmatrix}$ ✓
+### 例 3 · 補充:從格線上讀出座標
+![用 b1、b2 畫出的座標格線,x 在 b1 方向 3 格、b2 方向 2 格,y 在 b1 方向 −1 格、b2 方向 2 格](coord-pp2.svg)
 
-**(Ex 5)** $\mathbf{b}_1 = \begin{bmatrix} 1 \\ 5 \\ -3 \end{bmatrix}$, $\mathbf{b}_2 = \begin{bmatrix} -3 \\ -7 \\ 5 \end{bmatrix}$, $\mathbf{x} = \begin{bmatrix} 4 \\ 10 \\ -7 \end{bmatrix}$
+Use the grid above, drawn from $\mathbf{b}_1 = \begin{bmatrix} 1 \\ .2 \end{bmatrix}$ and $\mathbf{b}_2 = \begin{bmatrix} .2 \\ 1 \end{bmatrix}$, to estimate $[\,\mathbf{y}\,]_{\mathcal{B}}$ for the point $\mathbf{y}$ marked on it. Then confirm your estimate algebraically.
 
-6. **這裡有 3 條方程式、只有 2 個未知數**——超定系統。做法一樣:先用其中兩式解出 $c_1, c_2$,再用第三式**檢查**。
-7. **用前兩列**:$c_1 - 3c_2 = 4$、$5c_1 - 7c_2 = 10$。由第一式 $c_1 = 4 + 3c_2$,代入得 $20 + 8c_2 = 10 \Rightarrow c_2 = -\tfrac54$,$c_1 = 4 - \tfrac{15}{4} = \tfrac14$。
-8. **第三式檢查**:$-3(\tfrac14) + 5(-\tfrac54) = -\tfrac34 - \tfrac{25}{4} = -7$ ✓ 相容,所以 $\mathbf{x}$ 真的在 $H = \operatorname{Span}\{\mathbf{b}_1, \mathbf{b}_2\}$ 裡。
-9. $[\,\mathbf{x}\,]_{\mathcal{B}} = \begin{bmatrix} 1/4 \\ -5/4 \end{bmatrix}$。**注意分量數變了**:$\mathbf{x}$ 有 3 個分量,座標只有 2 個——因為 $\dim H = 2$。
-10. **如果第三式不成立**呢?那表示 $\mathbf{x} \notin H$,題目就沒有答案。題幹已經保證 $\mathbf{x} \in H$,所以第三式一定會過;但**電腦題 37、38 就是要自己驗這件事**。
-
-### 例 3 · Lay 2.9 Exercise 7
-Let $\mathbf{b}_1 = \begin{bmatrix} 3 \\ 0 \end{bmatrix}$, $\mathbf{b}_2 = \begin{bmatrix} -1 \\ 2 \end{bmatrix}$, $\mathbf{w} = \begin{bmatrix} 7 \\ -2 \end{bmatrix}$, $\mathbf{x} = \begin{bmatrix} 4 \\ 1 \end{bmatrix}$, and $\mathcal{B} = \{\mathbf{b}_1, \mathbf{b}_2\}$. Use the figure to estimate $[\,\mathbf{w}\,]_{\mathcal{B}}$ and $[\,\mathbf{x}\,]_{\mathcal{B}}$.
-
-![由 b1 = (3,0)、b2 = (-1,2) 畫出的座標格線,上面標出 w 與 x](coord-ex7.svg)
-
-1. **先看懂格線**:兩組虛線分別平行於 $\mathbf{b}_1$ 與 $\mathbf{b}_2$。要讀 $\mathbf{w}$ 的座標,就看它落在**哪兩條線的交點上**。
-2. **讀 $\mathbf{w}$**:從原點沿 $\mathbf{b}_1$ 走 2 格、再沿 $\mathbf{b}_2$ **倒退** 1 格,就到 $\mathbf{w}$。所以估計 $[\,\mathbf{w}\,]_{\mathcal{B}} = \begin{bmatrix} 2 \\ -1 \end{bmatrix}$。
-3. **代數驗證**:$2\mathbf{b}_1 - \mathbf{b}_2 = \begin{bmatrix} 6 + 1 \\ 0 - 2 \end{bmatrix} = \begin{bmatrix} 7 \\ -2 \end{bmatrix}$ ✓
-4. **讀 $\mathbf{x}$**:它不在格線交點上,落在**格子中間**——沿 $\mathbf{b}_1$ 約 1.5 格、沿 $\mathbf{b}_2$ 約 0.5 格。$[\,\mathbf{x}\,]_{\mathcal{B}} = \begin{bmatrix} 1.5 \\ .5 \end{bmatrix}$。
-5. **題目要求確認**:$1.5\mathbf{b}_1 + 0.5\mathbf{b}_2 = \begin{bmatrix} 4.5 - 0.5 \\ 0 + 1 \end{bmatrix} = \begin{bmatrix} 4 \\ 1 \end{bmatrix}$ ✓
-6. **這題也可以純代數做**:$\mathbf{b}_1$ 的第二分量是 0,所以 $2c_2 = x_2$ 直接給出 $c_2$,再回第一式求 $c_1$。**遇到有 0 的基底,先從那一列下手。**
-7. **為什麼要練「讀圖」?** 因為座標的意義是幾何的。只會解方程的學生,下學期看到特徵向量基底、正交基底時會完全沒有畫面。
+1. **先認格線**:兩組虛線分別平行於 $\mathbf{b}_1$ 與 $\mathbf{b}_2$。**每一個交點都是整數座標的點。**
+2. **找 $\mathbf{y}$ 的位置**:從原點出發,先沿 $\mathbf{b}_1$ **往反方向走 1 格**,再沿 $\mathbf{b}_2$ 走 2 格,就到 $\mathbf{y}$。
+3. **所以估計 $[\,\mathbf{y}\,]_{\mathcal{B}} = \begin{bmatrix} -1 \\ 2 \end{bmatrix}$**。負號代表「往反方向」——這是讀圖時最容易看錯的地方。
+4. **代數確認**(這是「乘進去」的方向):
+   $$-1\begin{bmatrix} 1 \\ .2 \end{bmatrix} + 2\begin{bmatrix} .2 \\ 1 \end{bmatrix} = \begin{bmatrix} -1 + .4 \\ -.2 + 2 \end{bmatrix} = \begin{bmatrix} -.6 \\ 1.8 \end{bmatrix}$$
+   和圖上 $\mathbf{y}$ 的標準座標 $(-0.6, 1.8)$ 相符 ✓
+5. **對照同一張圖上的 $\mathbf{x}$**:它的 $\mathcal{B}$ 座標是 $(3, 2)$、標準座標是 $(3.4, 2.6)$。**兩個點、四組數字,但只有兩個點。**
+6. **為什麼要練讀圖?** 因為座標的意義是幾何的。只會解方程的學生,到了第 13 週的正交基底、第 16 週的 SVD 基底時,腦中不會有任何畫面。
+7. **反過來想**:如果格線畫得越歪(基底越不垂直),同一個點的座標就差越多——這也預告了「為什麼大家偏愛正交基底」。
 
 #### 備註
-例 3 的圖是自繪的,與課本 p. 191 的圖同一組數據。課堂上可先只給圖不給數字,讓學生猜 $[\,\mathbf{w}\,]_{\mathcal{B}}$,再公布 $\mathbf{b}_1, \mathbf{b}_2$ 驗算。
+例 2 是課本原例,它同時示範「判斷 $\mathbf{x} \in H$」與「求座標」——**兩件事一個方程組解決**,這是本節最重要的技術。
+
+例 3 用的是 2.9 Practice Problem 2 的那張格線圖(本講義自繪),但讀的是**另一個點** $\mathbf{y}$;練習卡的 Exercises 7–8 是不同的基底與不同的點,學生得自己再讀一次。
 
 ## 易錯點
 - **把兩個方向搞反**:給座標求向量是**乘**,給向量求座標是**解**。看到 $[\,\mathbf{x}\,]_{\mathcal{B}}$ 出現在題目的「已知」還是「未知」,決定要做哪件事。
@@ -289,4 +289,6 @@ Matrix([[12, 15], [-4, -7], [9, 12], [5, 8]]).rank() == 2
 5 * Matrix([-5, 4, -3, 2]) + 6 * Matrix([7, -5, 3, -3]) + 3 * Matrix([-8, 6, -4, 3]) == Matrix([-7, 8, -9, 1])
 Matrix([[-5, 7, -8], [4, -5, 6], [-3, 3, -4], [2, -3, 3]]).rank() == 3
 Matrix([[1, Rational(1,5)], [Rational(1,5), 1]]).det() != 0
+Matrix([[3, -1], [6, 0], [2, 1]]).gauss_jordan_solve(Matrix([3, 12, 7]))[0] == Matrix([2, 3])
+-1 * Matrix([1, Rational(1,5)]) + 2 * Matrix([Rational(1,5), 1]) == Matrix([Rational(-3,5), Rational(9,5)])
 ```

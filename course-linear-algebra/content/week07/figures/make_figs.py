@@ -199,7 +199,7 @@ def coord_grid(name, b1, b2, pts, rng, aria, caption, s=30, k=4):
     single(name, aria, p, caption=caption)
 
 
-coord_grid("coord-pp2.svg", (1, 0.2), (0.2, 1), [((3.4, 2.6), "x")], (-1.5, 4.5, -1.5, 4.5),
+coord_grid("coord-pp2.svg", (1, 0.2), (0.2, 1), [((3.4, 2.6), "x"), ((-0.6, 1.8), "y")], (-1.5, 4.5, -1.5, 4.5),
            "A coordinate grid drawn from the basis vectors b1 and b2, with x at 3 units along b1 and 2 along b2",
            "課本 2.9 Practice Problem 2 的格線")
 

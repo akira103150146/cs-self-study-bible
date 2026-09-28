@@ -97,28 +97,22 @@ $$A = \begin{bmatrix} 2 & 4 & -1 & 5 & -2 \\ -4 & -5 & 3 & -8 & 1 \\ 2 & -5 & -4
    $$L = \begin{bmatrix} 1 & 0 & 0 & 0 \\ -2 & 1 & 0 & 0 \\ 1 & -3 & 1 & 0 \\ -3 & 4 & 2 & 1 \end{bmatrix}$$
 9. **驗算**:$LU = A$ ✓。**每次做完一定要乘回去檢查**,這是最容易出錯的計算之一。
 
-### 例 2 · Lay 2.5 Practice Problem
-Find an LU factorization of
+### 例 2 · 補充:自己做一次 LU 分解
+Find an LU factorization of $A = \begin{bmatrix} 2 & 4 & -2 \\ 4 & 9 & -3 \\ -2 & -3 & 7 \end{bmatrix}$.
 
-$$A = \begin{bmatrix} 2 & -4 & -2 & 3 \\ 6 & -9 & -5 & 8 \\ 2 & -7 & -3 & 9 \\ 4 & -2 & -2 & -1 \\ -6 & 3 & 3 & 4 \end{bmatrix}$$
-
-*[Note:* It will turn out that $A$ has only three pivot columns, so the method of Example 2 will produce only the first three columns of $L$. The remaining two columns of $L$ come from $I_5$.*]*
-
-1. **尺寸**:$A$ 是 $5 \times 4$,所以 $L$ 是 $5 \times 5$、$U$ 是 $5 \times 4$。
-2. **第一行樞軸 2**,整行除以 2 得 $L$ 第一行 $(1, 3, 1, 2, -3)$。
-3. **消完第一行**:
-   $$\sim \begin{bmatrix} 2 & -4 & -2 & 3 \\ 0 & 3 & 1 & -1 \\ 0 & -3 & -1 & 6 \\ 0 & 6 & 2 & -7 \\ 0 & -9 & -3 & 13 \end{bmatrix}$$
-4. **第二行樞軸 3**,標記元素 $(3, -3, 6, -9)$ 除以 3 得 $(1, -1, 2, -3)$——$L$ 第二行的下半。
-5. **消完第二行**:
-   $$\sim \begin{bmatrix} 2 & -4 & -2 & 3 \\ 0 & 3 & 1 & -1 \\ 0 & 0 & 0 & 5 \\ 0 & 0 & 0 & -5 \\ 0 & 0 & 0 & 10 \end{bmatrix}$$
-   **第三行整行變成 0**,不是樞軸行。
-6. **第四行樞軸 5**,標記元素 $(5, -5, 10)$ 除以 5 得 $(1, -1, 2)$——$L$ 第三行的下半。
-7. **消完得到**
-   $$U = \begin{bmatrix} 2 & -4 & -2 & 3 \\ 0 & 3 & 1 & -1 \\ 0 & 0 & 0 & 5 \\ 0 & 0 & 0 & 0 \\ 0 & 0 & 0 & 0 \end{bmatrix}$$
-8. **只做出 $L$ 的前三行**,第 4、5 行直接抄 $I_5$:
-   $$L = \begin{bmatrix} 1 & 0 & 0 & 0 & 0 \\ 3 & 1 & 0 & 0 & 0 \\ 1 & -1 & 1 & 0 & 0 \\ 2 & 2 & -1 & 1 & 0 \\ -3 & -3 & 2 & 0 & 1 \end{bmatrix}$$
-9. **為什麼可以隨便抄?** 因為 $U$ 的第 4、5 列全是 0,$L$ 的第 4、5 行在乘法裡只會乘到 0。填 $I$ 的那兩行是為了保證 $L$ 可逆。
-10. **驗算**:$LU = A$ ✓。
+1. **把 $A$ 與 $L$ 並排畫**。左邊列化簡成 $U$,右邊同步填乘數——**兩邊一起走才看得出 $L$ 從哪來**。
+2. **第 1 行的樞軸是 2**。把第 1 行「樞軸與它下方的元素」除以樞軸,就得到 $L$ 的第 1 行:
+   $$\begin{bmatrix} 2 \\ 4 \\ -2 \end{bmatrix} \div 2 = \begin{bmatrix} 1 \\ 2 \\ -1 \end{bmatrix} \quad \Longrightarrow \quad L \text{ 的第 1 行}$$
+3. **做對應的列運算**:$R_2 \leftarrow R_2 - 2R_1$、$R_3 \leftarrow R_3 + R_1$:
+   $$A \sim \begin{bmatrix} 2 & 4 & -2 \\ 0 & 1 & 1 \\ 0 & 1 & 5 \end{bmatrix}$$
+4. **第 2 行的樞軸是 1**。同樣把「樞軸與下方」除以樞軸:
+   $$\begin{bmatrix} 1 \\ 1 \end{bmatrix} \div 1 = \begin{bmatrix} 1 \\ 1 \end{bmatrix} \quad \Longrightarrow \quad L \text{ 的第 2 行(從對角線往下)}$$
+5. **做列運算** $R_3 \leftarrow R_3 - R_2$:
+   $$\sim \begin{bmatrix} 2 & 4 & -2 \\ 0 & 1 & 1 \\ 0 & 0 & 4 \end{bmatrix} = U$$
+6. **把 $L$ 拼起來**(對角線全是 1,上三角全是 0):
+   $$L = \begin{bmatrix} 1 & 0 & 0 \\ 2 & 1 & 0 \\ -1 & 1 & 1 \end{bmatrix}$$
+7. **驗算 $LU = A$**:第 2 列 $= 2(2,4,-2) + (0,1,1) = (4, 9, -3)$ ✓;第 3 列 $= -(2,4,-2) + (0,1,1) + (0,0,4) = (-2, -3, 7)$ ✓
+8. **注意 $L$ 的元素符號**:第 3 列第 1 行是 $-1$(我們做的是「加 $R_1$」),**$L$ 記的是還原用的乘數,符號和列運算相反**。這是本節最常錯的地方。
 
 ### 例 3 · 補充:需要換列的時候
 Show that the matrix $A = \begin{bmatrix} 0 & 1 \\ 2 & 3 \end{bmatrix}$ has no LU factorization with $L$ unit lower triangular, and explain what a matrix program does instead.
@@ -146,7 +140,7 @@ Show that the matrix $A = \begin{bmatrix} 0 & 1 \\ 2 & 3 \end{bmatrix}$ has no L
 ## 教學提示
 這是本週計算量最大的 25 分鐘。**例 1 的板書不能省**,而且要把「標記的那一行」用彩色筆圈起來,讓學生看清楚「除以樞軸」是在對哪些數字做。
 
-建議節奏:例 1 完整做(12 分)→ 例 2 只講「秩不足時 $L$ 怎麼補」(5 分)→ 例 3 的換列(5 分)→ 學生練習 Exercise 7 或 9(3 分)。
+建議節奏:例 1 完整做(12 分)→ 例 2 讓學生跟著再走一次整數版(5 分)→ 例 3 的換列(5 分)→ 學生練習 Exercise 7 或 9(3 分)。
 
 一個有效的板書技巧:把 $A$ 與 $L$ **並排**畫,每消一行就在兩邊同步寫,學生才會相信「同一串運算把 $A$ 化成 $U$、把 $L$ 化成 $I$」。
 
@@ -266,4 +260,5 @@ $$P = \begin{bmatrix} 0 & 1 \\ 1 & 0 \end{bmatrix}, \qquad PA = \begin{bmatrix} 
 (lambda l, u, m: l.is_lower and all(l[i, i] == 1 for i in range(l.rows)) and l * u == m)(Matrix([[1,0,0,0,0],[-2,1,0,0,0],[Rational(3,2),-2,1,0,0],[-3,2,0,1,0],[4,-3,0,0,1]]), Matrix([[2,-6,6],[0,-7,5],[0,0,0],[0,0,0],[0,0,0]]), Matrix([[2,-6,6],[-4,5,-7],[3,5,-1],[-6,4,-8],[8,-3,9]]))
 Matrix([[0, 1], [2, 3]])[0, 0] == 0 and Matrix([[0, 1], [1, 0]]) * Matrix([[0, 1], [2, 3]]) == Matrix([[2, 3], [0, 1]])
 Matrix([[2, 3], [0, 1]]).is_upper
+Matrix([[1, 0, 0], [2, 1, 0], [-1, 1, 1]]) * Matrix([[2, 4, -2], [0, 1, 1], [0, 0, 4]]) == Matrix([[2, 4, -2], [4, 9, -3], [-2, -3, 7]])
 ```

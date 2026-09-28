@@ -91,52 +91,51 @@ $\blacksquare$
 **為什麼「含 $\mathbf{0}$」不能省?** 邏輯上,若 $H$ **非空**且對純量乘法封閉,取 $c = 0$ 即得 $\mathbf{0} \in H$。課本仍然把它列為條件 (a),一來是為了排除空集合,二來是因為它是實務上最快的檢查——不含原點就直接出局。
 
 ## 老師講解
-### 例 1 · 補充例 與 Lay 2.8 Exercises 1–2
-Is the set $H$ of all vectors of the form $(a, b, 0)$ a subspace of $\mathbb{R}^3$? Then explain why the first quadrant of $\mathbb{R}^2$ is *not* a subspace, and why the union of the first and third quadrants is *not* either.
+### 例 1 · Lay 2.8 Example 1(書上 p. 179)
+If $\mathbf{v}_1$ and $\mathbf{v}_2$ are in $\mathbb{R}^n$ and $H = \operatorname{Span}\{\mathbf{v}_1, \mathbf{v}_2\}$, then $H$ is a subspace of $\mathbb{R}^n$.
 
-1. **第一個集合**:$H$ 裡的向量長成 $(a, b, 0)$,也就是 $xy$ 平面。
-2. **最快的證法:寫成 Span。**
+1. **要證的是三條性質,就一條一條驗**——這是本節所有題目的標準流程,務必示範一次完整的。
+2. **(a) 零向量在 $H$ 裡**:$\mathbf{0} = 0\mathbf{v}_1 + 0\mathbf{v}_2$,權重都取 0 就得到,所以 $\mathbf{0} \in H$ ✓
+3. **(b) 加法封閉**:任取 $H$ 裡的兩個向量,它們長這樣
+   $$\mathbf{u} = s_1\mathbf{v}_1 + s_2\mathbf{v}_2, \qquad \mathbf{v} = t_1\mathbf{v}_1 + t_2\mathbf{v}_2$$
+   相加得
+   $$\mathbf{u} + \mathbf{v} = (s_1 + t_1)\mathbf{v}_1 + (s_2 + t_2)\mathbf{v}_2$$
+   **還是 $\mathbf{v}_1, \mathbf{v}_2$ 的線性組合**,所以還在 $H$ 裡 ✓
+4. **(c) 純量乘法封閉**:$c\mathbf{u} = (cs_1)\mathbf{v}_1 + (cs_2)\mathbf{v}_2$,同樣是線性組合 ✓
+5. **三條都過,所以 $H$ 是子空間**。$\blacksquare$
+6. **看出這個證明的形狀了嗎?** 每一步都只是「把係數合併」。這就是為什麼 **Span 永遠是子空間**——線性組合的組合還是線性組合。
+7. **實用價值**:以後看到一個集合,只要能把它寫成 $\operatorname{Span}\{\dots\}$,就**一個字都不用再驗**。
+
+### 例 2 · Lay 2.8 Example 2 與補充:差一點就是子空間
+A line $L$ *not* through the origin is *not* a subspace. Compare with $H = \{(a, b, 0) : a, b \text{ real}\}$ and $K = \{(a, b, 1) : a, b \text{ real}\}$ in $\mathbb{R}^3$.
+
+1. **課本 Example 2 的理由只有一句**:$L$ 不含原點,**第一條就破了**,不必再看加法與純量。
+2. **但課本圖 2 還多畫了兩件事**:$L$ 上取兩點 $\mathbf{u}, \mathbf{v}$,$\mathbf{u} + \mathbf{v}$ 不在 $L$ 上;取 $\mathbf{w} \in L$,$2\mathbf{w}$ 也不在 $L$ 上。**三條全破。**
+3. **再看 $H = \{(a, b, 0)\}$**:能不能寫成 Span?
    $$\begin{bmatrix} a \\ b \\ 0 \end{bmatrix} = a\begin{bmatrix} 1 \\ 0 \\ 0 \end{bmatrix} + b\begin{bmatrix} 0 \\ 1 \\ 0 \end{bmatrix}$$
-   所以 $H = \operatorname{Span}\{\mathbf{e}_1, \mathbf{e}_2\}$,由上面的原理,**是**子空間。
-3. **第一象限為什麼不是?** 先檢查它含不含原點——含。加法呢?兩個第一象限的向量相加還在第一象限,也沒問題。
-4. **所以要找純量的反例**:取 $\mathbf{u} = (1, 1) \in H$,$(-1)\mathbf{u} = (-1, -1)$ 落在第三象限,$\notin H$。**條件 (c) 破了**,不是子空間。
-5. **第一 + 第三象限呢?** 這次純量乘法沒問題:乘正數留在同一象限,乘負數跑到對面那個象限——**也還在 $H$ 裡**。
-6. **所以要找加法的反例**:取 $\mathbf{u} = (1, 3)$(第一象限)、$\mathbf{v} = (-3, -1)$(第三象限),兩個都在 $H$ 裡,但
-   $$\mathbf{u} + \mathbf{v} = (-2, 2)$$
-   落在第二象限,$\notin H$。**條件 (b) 破了**。
-7. **這兩題的教訓**:不是子空間的原因**不只一種**,要看清楚是哪一條壞掉。答題時必須寫出**具體的反例向量**,不能只說「不封閉」。
+   所以 $H = \operatorname{Span}\{\mathbf{e}_1, \mathbf{e}_2\}$,**由例 1 直接得到:是子空間**,一條都不必驗。
+4. **最後看 $K = \{(a, b, 1)\}$**:它和 $H$ 只差最後一格的 0 換成 1。
+5. **它不含原點**($(0,0,0)$ 的最後一格是 0,不是 1)⇒ **不是子空間**。
+6. **也可以用加法看**:$(0,0,1) + (0,0,1) = (0,0,2) \notin K$。
+7. **這組對照要學生記住的是**:$H$ 是「過原點的平面」、$K$ 是「平移過的平面」。**平移一下就不是子空間了**——這是本節最常見的錯誤來源。
 
-### 例 2 · Lay 2.8 Exercise 3
-The set $H$ is a band of fixed width along the line $x_2 = x_1$ (including the two bounding lines). Give a specific reason why $H$ is *not* a subspace of $\mathbb{R}^2$.
+### 例 3 · 補充:含原點也不一定是子空間
+Decide whether each set is a subspace of $\mathbb{R}^2$: (a) $P = \{(t, t^2) : t \text{ real}\}$; (b) $Q = \{(x_1, x_2) : x_1 + x_2 = 0\}$.
 
-1. **先看含不含原點**:原點在中線上,當然在帶子裡。第一條沒問題。
-2. **這個集合的特徵是「有寬度上限」**。把離中線最遠的點再放大,就會撐出去。
-3. **具體反例**:設帶子的條件是 $|x_2 - x_1| \le d$。取邊界上的 $\mathbf{u}$,也就是 $x_2 - x_1 = d$ 的點。那麼 $2\mathbf{u}$ 滿足
-   $$x_2 - x_1 = 2d > d$$
-   所以 $2\mathbf{u} \notin H$,**條件 (c) 破了**。
-4. **加法也一樣壞**:$\mathbf{u} + \mathbf{u} = 2\mathbf{u} \notin H$,所以 (b) 也不成立。這題是**兩條都壞**的例子。
-5. **最重要的陷阱**(書後解答特別提醒):帶子的**中線** $x_2 = x_1$ 本身是一個子空間。如果你挑中線上的點當反例,不管怎麼加、怎麼乘都還在帶子裡,**永遠舉不出反例**。
-6. **所以答題時要強調**:反例必須用**不在中線上**的點。這一點是本題真正在考的東西。
-
-### 例 3 · Lay 2.8 Exercises 35–37
-Construct a nonzero $3 \times 3$ matrix $A$ and a nonzero vector $\mathbf{b}$ such that $\mathbf{b}$ is in $\operatorname{Col} A$ but $\mathbf{b}$ is not the same as any one of the columns of $A$. Then construct $A$ and $\mathbf{b}$ with $\mathbf{b}$ *not* in $\operatorname{Col} A$. Finally construct a nonzero $A$ and nonzero $\mathbf{b}$ with $\mathbf{b}$ in $\operatorname{Nul} A$.
-
-1. **構造題的通則:挑最簡單的矩陣。** 不要隨便寫一個亂數矩陣再去算,而是**先想好要什麼性質,再挑一個明顯有那個性質的例子**。
-2. **第一題**($\mathbf{b} \in \operatorname{Col} A$ 但不等於任何一行):取
-   $$A = \begin{bmatrix} 1 & 0 & 0 \\ 0 & 1 & 0 \\ 0 & 0 & 0 \end{bmatrix}, \qquad \mathbf{b} = \mathbf{a}_1 + \mathbf{a}_2 = \begin{bmatrix} 1 \\ 1 \\ 0 \end{bmatrix}$$
-   $\mathbf{b}$ 是各行的線性組合(所以在 $\operatorname{Col} A$ 裡),但它不等於 $(1,0,0)$、$(0,1,0)$、$(0,0,0)$ 任何一個。
-3. **關鍵在「係數不要只挑一個 1」**:只要用兩個以上的行去組合,答案就不會剛好等於某一行。
-4. **第二題**($\mathbf{b} \notin \operatorname{Col} A$):同一個 $A$,它的行只張出 $xy$ 平面,所以取
-   $$\mathbf{b} = \begin{bmatrix} 0 \\ 0 \\ 1 \end{bmatrix}$$
-   就跑到平面外面去了。**做法是先讓 $A$ 的行張不滿 $\mathbb{R}^3$,再挑一個外面的點。**
-5. **第三題**($\mathbf{b} \in \operatorname{Nul} A$):這次要讓 $A$ 的行**線性相依**,而相依關係的係數就是零空間的向量。取
-   $$A = \begin{bmatrix} 1 & 1 & 0 \\ 1 & 1 & 0 \\ 1 & 1 & 0 \end{bmatrix}, \qquad \mathbf{b} = \begin{bmatrix} 1 \\ -1 \\ 0 \end{bmatrix}$$
-   因為第 1 行減第 2 行等於零向量,所以 $A\mathbf{b} = \mathbf{0}$。
-6. **三題的共同心法**:$\operatorname{Col} A$ 的題目去想「行張出什麼」,$\operatorname{Nul} A$ 的題目去想「行之間有什麼相依關係」。
-7. 答案都**不唯一**,只要合乎條件都算對。
+1. **先看 (a) 的拋物線 $P$**:含原點嗎?取 $t = 0$ 得 $(0,0)$,**含**。所以第一條過了——但**過了不代表是子空間**。
+2. **驗加法**:取 $t = 1$ 得 $(1, 1) \in P$,取 $t = 2$ 得 $(2, 4) \in P$。相加得 $(3, 5)$。
+3. **$(3,5)$ 在 $P$ 裡嗎?** 要在的話必須 $5 = 3^2 = 9$,不成立 ⇒ $(3,5) \notin P$。**加法破了**,不是子空間。
+4. **純量也破**:$2 \cdot (1,1) = (2,2)$,但 $2 \ne 2^2 = 4$ ⇒ $\notin P$。
+5. **再看 (b) 的直線 $Q$**:解出 $x_2 = -x_1$,所以
+   $$\begin{bmatrix} x_1 \\ -x_1 \end{bmatrix} = x_1\begin{bmatrix} 1 \\ -1 \end{bmatrix} \quad \Longrightarrow \quad Q = \operatorname{Span}\left\{\begin{bmatrix} 1 \\ -1 \end{bmatrix}\right\}$$
+   **由例 1,是子空間**(而且是一條過原點的直線)。
+6. **兩者的差別在哪?** $Q$ 的條件是**線性方程式**($x_1 + x_2 = 0$),$P$ 的條件是**二次的**($x_2 = x_1^2$)。
+7. **一句話的判準**:**過原點、而且條件是「齊次的線性等式」的集合才是子空間**;只要出現平方、絕對值、不等式、或等號右邊不是 0,就要提高警覺。
 
 #### 備註
-例 3 用到下一個觀念的 $\operatorname{Col} A$ 與 $\operatorname{Nul} A$,建議講完觀念 2 再回頭做,或只講第一、二題(它們其實就是「Span 裡面 / 外面」)。
+例 1 是本節唯一需要完整驗三條的證明,建議完整板書一次;後面所有題目都可以說「寫成 Span 就結束」或「舉一個反例就結束」。
+
+例 3 的 (a) 是**刻意挑含原點的反例**:學生最常見的錯誤就是「含原點 ⇒ 是子空間」。(b) 則示範「把條件解開、寫成 Span」這個最省力的做法,練習的 Exercises 1–4 也可以用同樣的眼光看。
 
 ## 易錯點
 - **忘記檢查含不含 $\mathbf{0}$**。不過原點的直線、不含原點的任何區域,一律出局。
@@ -234,4 +233,6 @@ Matrix([[1, 0, 0], [0, 1, 0], [0, 0, 0]]) * Matrix([1, 1, 0]) == Matrix([1, 1, 0
 (lambda m, b: not m.is_zero_matrix and not b.is_zero_matrix and (m * b).is_zero_matrix)(Matrix([[1, 1, 0], [1, 1, 0], [1, 1, 0]]), Matrix([1, -1, 0]))
 (lambda v1, v2: (0 * v1 + 0 * v2).is_zero_matrix)(Matrix([1, 0, 0]), Matrix([0, 1, 0]))
 Matrix([[1, 0], [0, 1], [0, 0]]) * Matrix([a, b]) == Matrix([a, b, 0])
+5 != 3**2 and 2*Matrix([1,1]) != Matrix([2,4])
+(lambda q: q.rank() == 1 and (q * Matrix([3])) == Matrix([3, -3]))(Matrix([[1], [-1]]))
 ```
