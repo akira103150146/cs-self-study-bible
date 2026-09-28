@@ -82,34 +82,36 @@ Suppose $M$ is a $5 \times 5$ matrix and the equation $M\mathbf{x} = \mathbf{0}$
 7. **答題範本**(板書):「$M$ 是方陣。由題意 (d) 成立 ⇒ $M$ 可逆 ⇒ 由 (h),各行張成 $\mathbb{R}^5$;由 (g) 與 Theorem 5,每個 $\mathbf{b}$ 恰有一個解。」
 8. **常見扣分**:只寫「因為可逆所以都對」,**沒有指出用的是哪一條**。
 
-### 例 2 · 補充:$A^2$ 可逆,$A$ 一定可逆嗎?
-Suppose $A$ is an $n \times n$ matrix and $A^2$ is invertible. Show that $A$ is invertible. (You may not assume that $A$ is invertible — that is what you are proving.)
+### 例 2 · 補充:冪零矩陣與幾何級數
+Suppose $N$ is an $n \times n$ matrix with $N^3 = O$ (the zero matrix). Show that $I - N$ is invertible, and find its inverse.
 
-1. **先看清楚陷阱**:不能寫「$A^2 = AA$ 可逆所以 $A$ 可逆」,那等於**假設了結論**(第 5 週的 Theorem 6(b) 要求 $A$、$B$ 都先可逆)。
-2. **把已知寫成式子**:$A^2$ 可逆表示存在 $W$ 使
-   $$A^2 W = I$$
-3. **關鍵一步:重新括號。**
-   $$A^2 W = (AA)W = A(AW) = I$$
-4. **讀出這個式子的意思**:存在一個矩陣($AW$)乘在 $A$ 的**右邊**會得到 $I$,也就是 IMT 的條款 **(k)**。
-5. **由 (k) ⇒ $A$ 可逆**。$\blacksquare$
-6. **為什麼這樣就夠了?** 因為 (k) 是 IMT 的一條,而 IMT 說十二條同真同假——**不必再找左反矩陣**。
-7. **同樣的手法可以證什麼?** $A^3$ 可逆 ⇒ $A$ 可逆(把 $A^3W = I$ 括號成 $A(A^2W) = I$);更一般地 $A^k$ 可逆 ⇒ $A$ 可逆。
-8. **這題的心法**:**看到「某個乘積可逆」,就把它括號成「$A$ 乘某個東西 = $I$」**。
+1. **先看這題給了什麼**:$N^3 = O$。這種矩陣叫**冪零矩陣**(nilpotent),例如 $N = \begin{bmatrix} 0 & 1 & 2 \\ 0 & 0 & 3 \\ 0 & 0 & 0 \end{bmatrix}$ 就滿足 $N^3 = O$。
+2. **不能說「$N$ 不可逆所以 $I - N$ 也怎樣」**——兩者沒有關係,要另想辦法。
+3. **想想數字的情況**:$\dfrac{1}{1 - x} = 1 + x + x^2 + \cdots$。如果 $x^3 = 0$,這個級數就只剩三項。
+4. **照抄到矩陣上**,猜 $(I - N)^{-1} = I + N + N^2$,然後**驗證**:
+   $$(I - N)(I + N + N^2) = I + N + N^2 - N - N^2 - N^3 = I - N^3 = I$$
+5. **中間全部消掉了**,只剩 $I - N^3$,而 $N^3 = O$,所以乘積是 $I$。
+6. **引用條款**:我們找到了一個矩陣 $D = I + N + N^2$ 使 $(I - N)D = I$ ⇒ 由 **(k)**,$I - N$ 可逆,而且 $D$ 就是它的反矩陣。
+7. **用具體的 $N$ 檢查**:$I + N + N^2 = \begin{bmatrix} 1 & 1 & 5 \\ 0 & 1 & 3 \\ 0 & 0 & 1 \end{bmatrix}$,乘上 $I - N = \begin{bmatrix} 1 & -1 & -2 \\ 0 & 1 & -3 \\ 0 & 0 & 1 \end{bmatrix}$ 確實得到 $I_3$ ✓
+8. **這題在資工哪裡用?** 迭代法的收斂分析((I − N)⁻¹ 的級數展開)、還有第 12 週 Markov 鏈的 $(I - P)^{-1}$ 都靠這個手法。
 
-### 例 3 · 補充:$AB = I$ 就夠了嗎?
-Suppose $A$ and $B$ are $n \times n$ matrices with $AB = I$. Show that $BA = I$ as well, so $B = A^{-1}$.
+### 例 3 · 補充:非方陣為什麼不行
+Let $A$ be $3 \times 5$ and $B$ be $5 \times 3$, and suppose $AB = I_3$. Can $BA = I_5$? Can either $A$ or $B$ be called "invertible"?
 
-1. **先看這題在問什麼**:反矩陣的定義要求**兩邊**都是 $I$。這題只給了一邊,問另一邊是否自動成立。
-2. **對方陣,答案是「會」**——但要用 IMT,不能直接說「顯然」。
-3. **第一步**:$AB = I$ 表示 $B$ 是 $A$ 的右反矩陣 ⇒ 由條款 **(k)**,$A$ 可逆。
-4. **第二步**:既然 $A$ 可逆,$A^{-1}$ 存在。把 $AB = I$ 兩邊**左乘** $A^{-1}$:
-   $$A^{-1}(AB) = A^{-1}I \quad \Longrightarrow \quad (A^{-1}A)B = A^{-1} \quad \Longrightarrow \quad B = A^{-1}$$
-5. **第三步**:既然 $B = A^{-1}$,當然 $BA = A^{-1}A = I$ ✓ $\blacksquare$
-6. **為什麼「方陣」這個前提不能拿掉?** 舉個反例:
-   $$A = \begin{bmatrix} 1 & 0 & 0 \\ 0 & 1 & 0 \end{bmatrix}, \qquad B = \begin{bmatrix} 1 & 0 \\ 0 & 1 \\ 0 & 0 \end{bmatrix}$$
-   則 $AB = I_2$,但 $BA = \begin{bmatrix} 1 & 0 & 0 \\ 0 & 1 & 0 \\ 0 & 0 & 0 \end{bmatrix} \ne I_3$。
-7. **所以「一邊是 $I$ 就夠」是方陣**才有的性質,非方陣完全不成立——這正是 IMT 只談方陣的原因。
-8. **程式上的意義**:檢查 `A @ B == I` 時,若 $A$ 是方陣就不必再檢查另一邊;若不是方陣,兩邊都要檢查。
+1. **先確認尺寸**:$AB$ 是 $3 \times 3$、$BA$ 是 $5 \times 5$。**兩個乘積連大小都不一樣**,所以「$AB = I$ 就推得出 $BA = I$」這句話在非方陣的世界連寫都寫不出來。
+2. **$AB = I_3$ 有可能嗎?** 有。取
+   $$A = \begin{bmatrix} 1 & 0 & 0 & 0 & 0 \\ 0 & 1 & 0 & 0 & 0 \\ 0 & 0 & 1 & 0 & 0 \end{bmatrix}, \qquad B = A^T$$
+   則 $AB = I_3$ ✓
+3. **那 $BA$ 呢?** 算出來是 $\begin{bmatrix} I_3 & O \\ O & O \end{bmatrix}$,一個 $5 \times 5$ 但**右下角全是 0** 的矩陣,**不是 $I_5$**。
+4. **為什麼不可能是 $I_5$?** 因為 $\operatorname{rank}(BA) \le \operatorname{rank} A \le \min(3, 5) = 3 < 5$,而 $I_5$ 的 rank 是 5。**用秩就能一刀切死。**
+5. **能說 $A$「可逆」嗎?** 不能。可逆是**方陣**才有的詞;$A$ 有的只是一個**右反矩陣**。
+6. **回頭看 IMT**:它的每一條都預設 $n \times n$。第 2 步那個 $A$ 的各行線性相依(5 行在 $\mathbb{R}^3$ 裡),但它仍然「映成」——**非方陣時獨立與張成是兩件事**,IMT 把它們綁在一起的前提正是方陣。
+7. **一句話**:看到 IMT 就先問「是方陣嗎?」——不是的話,只能用對任何矩陣都成立的那些事實(秩、樞軸、自由變數)。
+
+#### 備註
+例 2 的手法(猜一個 $D$ 使 $AD = I$,再引用 (k))和練習卡 Exercise 35 完全一樣,但題目骨架不同:那裡是 $AB$ 可逆,這裡是冪零。**示範完再讓學生自己寫 Exercise 35**。
+
+例 3 的第 3 步建議當場算給學生看——$BA$ 長什麼樣子比任何文字說明都有力。
 
 ## 易錯點
 - **推論只寫一半**。(g) 不成立時,不只是「有些 $\mathbf{b}$ 無解」,還包括「有解時解不唯一」。
@@ -122,7 +124,7 @@ Suppose $A$ and $B$ are $n \times n$ matrices with $AB = I$. Show that $BA = I$ 
 ## 教學提示
 這個觀念是**寫作訓練**,不是計算訓練。30 分鐘裡至少留 10 分鐘讓學生自己寫一題、再互相看。
 
-建議的節奏:例 1 示範「一條倒全部倒」(5 分)→ 例 2 示範「套在別的矩陣上 + 為什麼需要方陣」(8 分)→ 例 3 示範「不准用 IMT 時怎麼走」(7 分)→ 學生練習(5 分)。
+建議的節奏:例 1 示範「一條倒全部倒」(5 分)→ 例 2 用冪零矩陣示範「猜一個 $D$ 再驗證」(8 分)→ 例 3 用非方陣說明為什麼 IMT 只談方陣(7 分)→ 學生練習(5 分)。
 
 **板書一個答題範本**,整堂課不要擦:
 
@@ -258,4 +260,6 @@ eye(2) * Matrix([1, 0]) == Matrix([1, 0]) and eye(2).rank() == 2
 (lambda a, b: ((a*b).rank() == 2) and a.rank() == 2 and b.rank() == 2)(Matrix([[1, 2], [3, 7]]), Matrix([[2, 1], [1, 1]]))
 Matrix([[1, 1, 1], [0, 1, 1], [0, 0, 1]]).rank() == 3 and Matrix([[1, 1, 1], [0, 1, 1], [0, 0, 1]]).nullspace() == []
 (lambda a, b: a * b == eye(2) and b * a != eye(3))(Matrix([[1, 0, 0], [0, 1, 0]]), Matrix([[1, 0], [0, 1], [0, 0]]))
+(lambda n: (n**3).is_zero_matrix and (eye(3) - n) * (eye(3) + n + n**2) == eye(3) and eye(3) + n + n**2 == Matrix([[1, 1, 5], [0, 1, 3], [0, 0, 1]]))(Matrix([[0, 1, 2], [0, 0, 3], [0, 0, 0]]))
+(lambda a: a * a.T == eye(3) and a.T * a != eye(5) and (a.T * a).rank() == 3)(Matrix([[1, 0, 0, 0, 0], [0, 1, 0, 0, 0], [0, 0, 1, 0, 0]]))
 ```

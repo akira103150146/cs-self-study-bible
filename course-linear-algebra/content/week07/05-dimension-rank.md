@@ -166,7 +166,7 @@ Suppose $A$ is a $6 \times 9$ matrix with $\operatorname{rank} A = 4$. Is $\oper
 例 3 是自編的,刻意用「一題四問」把 $\dim = k$ 與 $= \mathbb{R}^k$ 的混淆一次打掉。練習卡的 Exercises 15–16 是同型的兩問版本,課堂上做完例 3 再讓學生自己做那兩題。
 
 ## 易錯點
-- **把向量個數當維度**(例 1 的第 6 點):3 個向量可能只張出 2 維。
+- **把向量個數當維度**:3 個向量可能只張出 2 維(練習的 Exercises 13–14 與 Practice Problem 1 就是這一型)。
 - **Rank Theorem 用錯數字**:要用**行數 $n$**。$7 \times 6$ 用 6、$5 \times 7$ 用 7。
 - **「$\dim = k$」寫成「$= \mathbb{R}^k$」**(Exercises 15、16)。要先問「向量有幾個分量」。
 - **忘了 $\operatorname{rank} A \le \min(m, n)$**。算出來的 rank 若超過列數就是錯了(或題目本身有問題,如 Exercise 28)。
@@ -176,7 +176,7 @@ Suppose $A$ is a $6 \times 9$ matrix with $\operatorname{rank} A = 4$. Is $\oper
 ## 教學提示
 這個觀念 25 分鐘,是本週的重心,也是期中考必考(Rank Theorem 的證明另外排 15 分鐘的證明時刻)。
 
-建議先講維度(10 分鐘,用 PP1 立刻示範「3 個向量、2 維」),再講 rank(5 分鐘,強調它只是 $\dim \operatorname{Col} A$ 的別名),最後用長條圖把 Rank Theorem **講清楚結論**(5 分鐘)。**長條圖務必畫在黑板上**:$n$ 個格子,一部分塗色叫樞軸行、剩下叫自由行,學生看一眼就懂為什麼會加起來等於 $n$。剩下 5 分鐘做 Exercise 9 與 27。
+建議先講維度(10 分鐘,用例 1 示範「自由變數幾個、基底就幾個」),再講 rank(5 分鐘,強調它只是 $\dim \operatorname{Col} A$ 的別名),最後用長條圖把 Rank Theorem **講清楚結論**(5 分鐘)。**長條圖務必畫在黑板上**:$n$ 個格子,一部分塗色叫樞軸行、剩下叫自由行,學生看一眼就懂為什麼會加起來等於 $n$。剩下 5 分鐘做 Exercise 9 與 27。
 
 **Exercises 15、16 這對題目建議一定要在課堂上做**,因為「3 維」與「$=\mathbb{R}^3$」的混淆若不當場打掉,期中考一定重演。
 
@@ -372,5 +372,5 @@ $$A = \begin{bmatrix} 1 & 2 & 3 \\ 2 & 4 & 6 \\ 3 & 6 & 9 \\ 4 & 8 & 12 \end{bma
 (lambda a: a.rank() == 1 and len(a.nullspace()) == 2)(Matrix([[1, 2, 3], [2, 4, 6], [3, 6, 9], [4, 8, 12]]))
 Matrix([[1, 2, 3], [2, 4, 6], [3, 6, 9], [4, 8, 12]]) == Matrix([1, 2, 3, 4]) * Matrix([[1, 2, 3]])
 (lambda a: a.rank() == 3 and a.rref()[1] == (0, 1, 3) and len(a.nullspace()) == 2)(Matrix([[2, 5, -3, -4, 8], [4, 7, -4, -3, 9], [6, 9, -5, 2, 4], [0, -9, 6, 5, -6]]))
-9 - 4 == 5 and 4 < 6
+(lambda a: a.rows == 6 and a.cols == 9 and a.rank() == 4 and len(a.nullspace()) == 5)(Matrix(6, 9, lambda i, j: (i + 1) * (j + 1) if i < 2 else (i - 1) * j + (1 if (i, j) in ((2, 0), (3, 1)) else 0)))
 ```

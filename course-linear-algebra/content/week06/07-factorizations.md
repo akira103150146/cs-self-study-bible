@@ -108,35 +108,37 @@ Compute the transfer matrix of the ladder network in Figure 4 (a series circuit 
 7. **結論**:先接一個 8 ohms 的串聯電阻,再接一個 2 ohms 的並聯電阻。
 8. **這題在示範什麼?** **分解 = 設計**。把目標矩陣拆成基本零件的乘積,拆出來的每個因子就對應一個實體零件。
 
-### 例 2 · 補充:照著目標矩陣設計電路
-Design a ladder network (one series resistor followed by one shunt resistor) whose transfer matrix is $\begin{bmatrix} 1 & -6 \\ -.5 & 4 \end{bmatrix}$.
+### 例 2 · 補充:做不出來的目標矩陣
+Can you design a ladder network (one series resistor followed by one shunt resistor) whose transfer matrix is $\begin{bmatrix} 1 & -6 \\ -.5 & 3 \end{bmatrix}$?
 
-1. **先回想例 1 的結論**:串聯電阻 $R_1$ 的轉移矩陣是 $\begin{bmatrix} 1 & -R_1 \\ 0 & 1 \end{bmatrix}$,並聯電阻 $R_2$ 的是 $\begin{bmatrix} 1 & 0 \\ -1/R_2 & 1 \end{bmatrix}$。
-2. **接起來就是相乘**(先串聯、再並聯,矩陣寫在左邊):
+1. **先寫出這種網路的轉移矩陣長什麼樣**(例 1 算過):
    $$\begin{bmatrix} 1 & 0 \\ -1/R_2 & 1 \end{bmatrix}\begin{bmatrix} 1 & -R_1 \\ 0 & 1 \end{bmatrix} = \begin{bmatrix} 1 & -R_1 \\ -1/R_2 & 1 + R_1/R_2 \end{bmatrix}$$
-3. **和目標矩陣逐格比對**:
-   - $(1,2)$ 格:$-R_1 = -6 \Rightarrow R_1 = 6$
-   - $(2,1)$ 格:$-1/R_2 = -0.5 \Rightarrow R_2 = 2$
-4. **用第四格檢查**(這一步是必要的,不能跳):$1 + R_1/R_2 = 1 + 6/2 = 4$ ✓ 和目標的 $(2,2)$ 格相符。
-5. **所以答案是:串聯 6 歐姆、再並聯 2 歐姆。**
-6. **第 4 步為什麼重要?** 如果第四格對不上,表示**這個目標矩陣做不出來**(至少不能只用一組串並聯),得改用三段或更多段。
-7. **這題在做什麼?** 把「矩陣分解」當成**設計工具**:你要的整體行為是那個矩陣,分解告訴你要串哪些零件。**電路設計 = 矩陣分解**,這就是本節的主旨。
+2. **逐格比對**:$(1,2)$ 格給出 $R_1 = 6$,$(2,1)$ 格給出 $R_2 = 2$。
+3. **到這裡看起來很順利**——但還有一格沒用到。
+4. **用第 $(2,2)$ 格檢查**:$1 + R_1/R_2 = 1 + 6/2 = 4$,而目標矩陣要的是 **3**。
+5. **對不上 ⇒ 這個目標矩陣做不出來**:一段串聯加一段並聯,只有**兩個**自由的參數($R_1$、$R_2$),卻要滿足**三個**條件(第 $(1,1)$ 格恆為 1,不算),**超定了**。
+6. **那要怎麼辦?** 加段數。三段(串、並、串)有三個參數,就有機會;或者接受一個近似的設計。
+7. **這一步為什麼不能跳?** 因為前三格都對得上,很容易誤以為做完了。**矩陣分解的存在性不是理所當然的**——這正是第 6 週 LU 分解也要問「一定存在嗎?」的原因(答案:不一定,有時要先換列)。
 
-### 例 3 · 補充:$A = PDP^{-1}$ 為什麼好用
-Let $P = \begin{bmatrix} 1 & 1 \\ 1 & 2 \end{bmatrix}$ and $D = \begin{bmatrix} 2 & 0 \\ 0 & 3 \end{bmatrix}$, and let $A = PDP^{-1}$. Compute $A$, then compute $A^2$ two ways.
+### 例 3 · 補充:用分解算一個大冪次
+Let $A = PDP^{-1}$ with $P = \begin{bmatrix} 1 & 1 \\ 1 & 2 \end{bmatrix}$ and $D = \begin{bmatrix} 2 & 0 \\ 0 & 3 \end{bmatrix}$, so that $A = \begin{bmatrix} 1 & 1 \\ -2 & 4 \end{bmatrix}$. Compute the $(1,2)$ entry of $A^5$.
 
-1. **先算 $P^{-1}$**:$\det P = 2 - 1 = 1$,所以 $P^{-1} = \begin{bmatrix} 2 & -1 \\ -1 & 1 \end{bmatrix}$。
-2. **算 $A$**:
-   $$A = PDP^{-1} = \begin{bmatrix} 1 & 1 \\ 1 & 2 \end{bmatrix}\begin{bmatrix} 2 & 0 \\ 0 & 3 \end{bmatrix}\begin{bmatrix} 2 & -1 \\ -1 & 1 \end{bmatrix} = \begin{bmatrix} 2 & 3 \\ 2 & 6 \end{bmatrix}\begin{bmatrix} 2 & -1 \\ -1 & 1 \end{bmatrix} = \begin{bmatrix} 1 & 1 \\ -2 & 4 \end{bmatrix}$$
-3. **第一種算 $A^2$:直接乘**。
-   $$A^2 = \begin{bmatrix} 1 & 1 \\ -2 & 4 \end{bmatrix}\begin{bmatrix} 1 & 1 \\ -2 & 4 \end{bmatrix} = \begin{bmatrix} -1 & 5 \\ -10 & 14 \end{bmatrix}$$
-4. **第二種:用分解**。中間的 $P^{-1}P$ 會消掉:
-   $$A^2 = (PDP^{-1})(PDP^{-1}) = PD(P^{-1}P)DP^{-1} = PD^2P^{-1}$$
-5. **而 $D^2$ 好算到不行**(對角線各自平方):$D^2 = \begin{bmatrix} 4 & 0 \\ 0 & 9 \end{bmatrix}$,乘回去得
-   $$PD^2P^{-1} = \begin{bmatrix} 4 & 9 \\ 4 & 18 \end{bmatrix}\begin{bmatrix} 2 & -1 \\ -1 & 1 \end{bmatrix} = \begin{bmatrix} -1 & 5 \\ -10 & 14 \end{bmatrix}$$
-   **兩種算法一致** ✓
-6. **把 2 換成 100 就看出差別了**:$A^{100} = PD^{100}P^{-1}$,而 $D^{100}$ 只要算 $2^{100}$ 與 $3^{100}$ 兩個數。直接乘要做 99 次矩陣乘法。
-7. **$D$ 的對角線元素叫什麼?** 特徵值。**這就是第 10–11 週的主題**,而且第 12 週的 PageRank、第 11 週的動態系統全都靠 $A^k = PD^kP^{-1}$ 這一招。
+1. **先問一句:要不要真的乘五次?** 直接乘要做 4 次矩陣乘法,而且數字越乘越大,手算很容易錯。
+2. **用分解**:中間的 $P^{-1}P$ 會消掉,所以
+   $$A^5 = (PDP^{-1})^5 = PD^5P^{-1}$$
+3. **$D^5$ 好算**:對角線各自五次方,$D^5 = \begin{bmatrix} 32 & 0 \\ 0 & 243 \end{bmatrix}$。
+4. **$P^{-1}$ 也好算**($\det P = 1$):$P^{-1} = \begin{bmatrix} 2 & -1 \\ -1 & 1 \end{bmatrix}$。
+5. **只要 $(1,2)$ 那一格**,就只算那一格:$(PD^5P^{-1})_{12} = (\text{$P$ 的第 1 列}) \cdot (\text{$D^5P^{-1}$ 的第 2 行})$。
+   - $D^5P^{-1}$ 的第 2 行 $= \begin{bmatrix} 32 \\ 243 \end{bmatrix} \odot \begin{bmatrix} -1 \\ 1 \end{bmatrix} = \begin{bmatrix} -32 \\ 243 \end{bmatrix}$
+   - $P$ 的第 1 列是 $(1, 1)$,所以答案 $= -32 + 243 = \mathbf{211}$
+6. **完整的 $A^5$ 是 $\begin{bmatrix} -179 & 211 \\ -422 & 454 \end{bmatrix}$**(想確認可以自己補完),但題目只問一格,**我們就只算一格**。
+7. **把 5 換成 100 呢?** $D^{100}$ 只是 $2^{100}$ 與 $3^{100}$ 兩個數,公式一樣;直接乘則要 99 次矩陣乘法。**分解把「乘很多次」變成「算兩個數的次方」。**
+8. **$D$ 的對角線元素叫特徵值**——第 10–11 週的主角,第 11 週的動態系統與第 12 週的 PageRank 全靠 $A^k = PD^kP^{-1}$。
+
+#### 備註
+例 2 是刻意設計成**做不出來**的:前三格都對得上,第四格才穿幫。學生若沒做第 4 步就交卷,正好可以講「分解不一定存在」。
+
+例 3 只算一格,把「推出 $A^k$ 的一般公式」留給練習卡的 Exercise 26。
 
 ## 易錯點
 - **電路的順序寫反**:先經過的寫在**右邊**。和第 5 週的合成變換同一個規則。
@@ -150,9 +152,9 @@ Let $P = \begin{bmatrix} 1 & 1 \\ 1 & 2 \end{bmatrix}$ and $D = \begin{bmatrix} 
 
 若完全略過,要記得跟學生說:Exercises 22–30 是自學題,Exercises 31–32 會在實作課做。
 
-真的要講的話,**例 3(譜分解)的優先度高於電路**,因為它直接接到第 11 週,而且那個「中間消掉」的技巧在後面用非常多次。
+真的要講的話,**例 3(用分解算大冪次)的優先度高於電路**,因為它直接接到第 11 週,而且那個「中間消掉」的技巧之後會一直用。練習卡的 Exercise 26 要學生自己推出 $A^k$ 的一般公式,例 3 只示範具體算一格,留了空間。
 
-電路的部分若要講,建議做例 1(算出轉移矩陣)與例 2(反過來設計電路);練習卡的 Exercise 29 是三段版本,代數比較繁瑣,留作業。
+電路的部分若要講,建議做例 1(算出轉移矩陣)與例 2(**做不出來**的目標矩陣);練習卡的 Exercise 29 才是「成功設計出來」的三段版本,留作業。
 
 ## 練習
 ### 照做 · Lay 2.5 Exercise 22
@@ -326,5 +328,7 @@ Matrix([[4,-1,-1,0,0,0,0,0],[-1,4,0,-1,0,0,0,0],[-1,0,4,-1,-1,0,0,0],[0,-1,-1,4,
 (lambda a, t: a.solve(t) == Matrix([59,87,94,87,59]) / 9)(Matrix([[3,-1,0,0,0],[-1,3,-1,0,0],[0,-1,3,-1,0],[0,0,-1,3,-1],[0,0,0,-1,3]]), Matrix([10,12,12,12,10]))
 (lambda a, t: a.solve(a.solve(a.solve(a.solve(t)))) == Matrix([1357,2322,2666,2322,1357]) / 486)(Matrix([[3,-1,0,0,0],[-1,3,-1,0,0],[0,-1,3,-1,0],[0,0,-1,3,-1],[0,0,0,-1,3]]), Matrix([10,12,12,12,10]))
 Matrix([[1, 0], [Rational(-1,2), 1]]) * Matrix([[1, -6], [0, 1]]) == Matrix([[1, -6], [Rational(-1,2), 4]])
-(lambda p, d: p * d * p.inv() == Matrix([[1, 1], [-2, 4]]) and (p * d * p.inv())**2 == p * d**2 * p.inv())(Matrix([[1, 1], [1, 2]]), diag(2, 3))
+(lambda p, d: p * d * p.inv() == Matrix([[1, 1], [-2, 4]]) and (p * d * p.inv())**2 == Matrix([[-1, 5], [-10, 14]]))(Matrix([[1, 1], [1, 2]]), diag(2, 3))
+(lambda r1, r2: Matrix([[1, 0], [-Rational(1, r2), 1]]) * Matrix([[1, -r1], [0, 1]]) != Matrix([[1, -6], [Rational(-1,2), 3]]) and 1 + Rational(r1, r2) == 4)(6, 2)
+(lambda p, d: (p * d**5 * p.inv())[0, 1] == 211 and p * d**5 * p.inv() == Matrix([[-179, 211], [-422, 454]]))(Matrix([[1, 1], [1, 2]]), diag(2, 3))
 ```

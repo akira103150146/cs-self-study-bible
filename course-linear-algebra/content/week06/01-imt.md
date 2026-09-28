@@ -117,22 +117,22 @@ $$A = \begin{bmatrix} 1 & 0 & -2 \\ 3 & 1 & -2 \\ -5 & -1 & 9 \end{bmatrix}$$
 ### 例 2 · 補充:用最少的計算判斷可逆
 Determine which of the following matrices are invertible. Use as few calculations as possible.
 
-$$A = \begin{bmatrix} 3 & 6 \\ 7 & 14 \end{bmatrix}, \qquad B = \begin{bmatrix} 2 & 0 & 0 \\ 5 & -3 & 0 \\ 1 & 4 & 7 \end{bmatrix}, \qquad C = \begin{bmatrix} 1 & 2 & 3 \\ 0 & 1 & 1 \\ 4 & -1 & 3 \end{bmatrix}$$
+$$A = \begin{bmatrix} 3 & 6 \\ 7 & 14 \end{bmatrix}, \qquad B = \begin{bmatrix} 0 & 1 & 0 \\ 0 & 0 & 1 \\ 1 & 0 & 0 \end{bmatrix}, \qquad C = \begin{bmatrix} 1 & 2 & 3 \\ 0 & 1 & 1 \\ 4 & -1 & 3 \end{bmatrix}$$
 
 1. **看到「use as few calculations as possible」就不要動手化簡**,先用眼睛掃一遍。
 2. **$A$:第 2 行 $= 2 \times$ 第 1 行** ⇒ 兩行成比例 ⇒ 線性相依 ⇒ IMT (e) 不成立 ⇒ **不可逆**。(算 $\det = 42 - 42 = 0$ 也對,但慢。)
-3. **$B$:下三角矩陣**,對角線是 $2, -3, 7$,**全部非零**。
-4. **三角矩陣的樞軸就在對角線上**,所以有 3 個樞軸 ⇒ (c) 成立 ⇒ **可逆**。完全不必化簡。
+3. **$B$:每一行都是某個 $\mathbf{e}_i$**(第 1 行是 $\mathbf{e}_3$、第 2 行是 $\mathbf{e}_1$、第 3 行是 $\mathbf{e}_2$)。
+4. **這是置換矩陣**:各行就是標準基底換個順序,線性獨立 ⇒ (e) 成立 ⇒ **可逆**。完全不必化簡。(它做的事只是把座標重新排列,第 6 週 `scipy.linalg.lu` 回傳的那個 $P$ 就是這種矩陣。)
 5. **$C$ 沒有明顯的相依關係嗎?** 再看一次:第 1 行加第 2 行 $= (1+2,\; 0+1,\; 4-1) = (3, 1, 3)$——**正好是第 3 行**。
 6. **所以 $\mathbf{c}_1 + \mathbf{c}_2 - \mathbf{c}_3 = \mathbf{0}$**,各行相依 ⇒ **不可逆**。而且這個組合直接給出 $C\mathbf{x} = \mathbf{0}$ 的一個非零解 $\mathbf{x} = (1, 1, -1)$。
-7. **一眼判準清單**(寫黑板不要擦):整行(列)為 0、兩行相同、兩行成比例、**某行是其他行的和**、三角矩陣看對角線。
+7. **一眼判準清單**(寫黑板不要擦):整行(列)為 0、兩行相同、兩行成比例、**某行是其他行的和**、各行是標準基底的重排。(三角矩陣有沒有一眼判準?練習的 Exercises 21–22 就在問這件事,先別破梗。)
 8. **最後強調**:判斷「不可逆」通常比判斷「可逆」快——找到**一個**相依關係就結束了。
 
 ### 例 3 · 補充:一條倒,全部倒
 Let $M = \begin{bmatrix} 4 & 1 & 7 \\ 0 & 0 & 0 \\ 2 & 5 & 3 \end{bmatrix}$. Is $M$ invertible? Then decide: can a square matrix with a row of zeros ever be invertible?
 
 1. **先看具體的 $M$**:第 2 **列**整列是 0。
-2. **列運算不會把零列變成非零列**,所以化簡後那一列還是 0 ⇒ **至多 2 個樞軸** ⇒ (c) 不成立($3 \times 3$ 需要 3 個)⇒ **不可逆**。
+2. **有零列表示三列線性相依**(零列是另外兩列的「0 倍組合」),而列運算不改變秩,所以 $\operatorname{rank} M \le 2$ ⇒ **至多 2 個樞軸** ⇒ (c) 不成立($3 \times 3$ 需要 3 個)⇒ **不可逆**。(注意不能說「零列永遠留著」——$R_2 \leftarrow R_2 + R_1$ 就會把零列變成非零列;不變的是**秩**。)
 3. **接著用「一條倒,全部倒」把其他條也讀出來**:
    - (b) 不成立:$M$ 化不到 $I_3$。
    - (d) 不成立:$M\mathbf{x} = \mathbf{0}$ 有非零解。
@@ -321,7 +321,8 @@ Matrix([[1, 1, 5], [2, 2, 6], [3, 3, 7]]) * (Matrix([1, 0, 0]) - Matrix([0, 1, 0
 Matrix([[2, 3, 4], [2, 3, 4], [2, 3, 4]]).rank() == 1
 Matrix(5, 5, lambda t, s: t + s).rank() < 5
 zeros(3, 3).rank() == 0
-Matrix([[3, 6], [7, 14]]).det() == 0 and Matrix([[2, 0, 0], [5, -3, 0], [1, 4, 7]]).det() == -42
+Matrix([[3, 6], [7, 14]]).det() == 0
 (lambda c: c.det() == 0 and (c * Matrix([1, 1, -1])).is_zero_matrix)(Matrix([[1, 2, 3], [0, 1, 1], [4, -1, 3]]))
 Matrix([[4, 1, 7], [0, 0, 0], [2, 5, 3]]).rank() == 2
+(lambda b: b.det() == 1 and b.rank() == 3)(Matrix([[0, 1, 0], [0, 0, 1], [1, 0, 0]]))
 ```

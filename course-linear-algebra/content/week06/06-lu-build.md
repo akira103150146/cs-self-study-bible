@@ -220,7 +220,7 @@ $$A = \begin{bmatrix} 2 & -4 & -2 & 3 \\ 6 & -9 & -5 & 8 \\ 2 & -7 & -3 & 9 \\ 4
 *[Note:* It will turn out that $A$ has only three pivot columns, so the method of Example 2 will produce only the first three columns of $L$. The remaining two columns of $L$ come from $I_5$.*]*
 
 #### 解答
-見上方例 2 的完整過程:
+依照演算法逐行做(樞軸下方的元素除以樞軸,就是 $L$ 的那一行):
 
 $$L = \begin{bmatrix} 1 & 0 & 0 & 0 & 0 \\ 3 & 1 & 0 & 0 & 0 \\ 1 & -1 & 1 & 0 & 0 \\ 2 & 2 & -1 & 1 & 0 \\ -3 & -3 & 2 & 0 & 1 \end{bmatrix}, \qquad U = \begin{bmatrix} 2 & -4 & -2 & 3 \\ 0 & 3 & 1 & -1 \\ 0 & 0 & 0 & 5 \\ 0 & 0 & 0 & 0 \\ 0 & 0 & 0 & 0 \end{bmatrix}$$
 
@@ -230,14 +230,20 @@ $$L = \begin{bmatrix} 1 & 0 & 0 & 0 & 0 \\ 3 & 1 & 0 & 0 & 0 \\ 1 & -1 & 1 & 0 &
 這題是「秩不足時 $L$ 怎麼補完」的標準示範,也是下一個觀念 Exercise 22(reduced LU)的前置題——那題要把 $L$ 的前三行與 $U$ 的前三列切出來。
 
 ### 挑戰 · 補充:沒有 LU 分解的矩陣
-Show that $A = \begin{bmatrix} 0 & 1 \\ 2 & 3 \end{bmatrix}$ has no LU factorization with $L$ unit lower triangular. Then find a permutation matrix $P$ such that $PA$ does have one, and write down $P$, $L$, and $U$.
+Show that $A = egin{bmatrix} 0 & 1 & 2 \ 1 & 1 & 0 \ 2 & 0 & 3 \end{bmatrix}$ has no LU factorization with $L$ unit lower triangular. Then find a permutation matrix $P$ such that $PA$ does have one, and write down $P$, $L$, and $U$.
 
 #### 解答
-**沒有 LU 分解**:假設 $\begin{bmatrix} 1 & 0 \\ c & 1 \end{bmatrix}\begin{bmatrix} u_{11} & u_{12} \\ 0 & u_{22} \end{bmatrix} = \begin{bmatrix} 0 & 1 \\ 2 & 3 \end{bmatrix}$。比對 $(1,1)$ 格得 $u_{11} = 0$;比對 $(2,1)$ 格得 $cu_{11} = 2$,即 $0 = 2$,矛盾。
+**沒有 LU 分解**:若 $A = LU$ 且 $L$ 是單位下三角,比對 $(1,1)$ 格得 $u_{11} = a_{11} = 0$;再比對 $(2,1)$ 格得 $\ell_{21}u_{11} = 1$,也就是 $0 = 1$,矛盾。(關鍵是**第一個樞軸位置是 0**。)
 
-**換列之後就有**:取
-$$P = \begin{bmatrix} 0 & 1 \\ 1 & 0 \end{bmatrix}, \qquad PA = \begin{bmatrix} 2 & 3 \\ 0 & 1 \end{bmatrix}$$
-已經是上三角,所以 $L = I_2$、$U = \begin{bmatrix} 2 & 3 \\ 0 & 1 \end{bmatrix}$,即 $PA = LU$。
+**換列之後就有**:把第 1、2 列對調,取
+
+$$P = egin{bmatrix} 0 & 1 & 0 \ 1 & 0 & 0 \ 0 & 0 & 1 \end{bmatrix}, \qquad PA = egin{bmatrix} 1 & 1 & 0 \ 0 & 1 & 2 \ 2 & 0 & 3 \end{bmatrix}$$
+
+再照演算法做($R_3 \leftarrow R_3 - 2R_1$、$R_3 \leftarrow R_3 + 2R_2$):
+
+$$L = egin{bmatrix} 1 & 0 & 0 \ 0 & 1 & 0 \ 2 & -2 & 1 \end{bmatrix}, \qquad U = egin{bmatrix} 1 & 1 & 0 \ 0 & 1 & 2 \ 0 & 0 & 7 \end{bmatrix}$$
+
+驗算:$LU$ 的第 3 列 $= 2(1,1,0) - 2(0,1,2) + (0,0,7) = (2, 0, 3)$ ✓ 等於 $PA$ 的第 3 列。
 
 #### 備註
 這是本講義補充的題目(課本沒有),但它解釋了實作課會看到的東西:`scipy.linalg.lu` 回傳三個矩陣 `P, L, U`,那個 $P$ 就是這裡的換列紀錄。
@@ -261,4 +267,5 @@ $$P = \begin{bmatrix} 0 & 1 \\ 1 & 0 \end{bmatrix}, \qquad PA = \begin{bmatrix} 
 Matrix([[0, 1], [2, 3]])[0, 0] == 0 and Matrix([[0, 1], [1, 0]]) * Matrix([[0, 1], [2, 3]]) == Matrix([[2, 3], [0, 1]])
 Matrix([[2, 3], [0, 1]]).is_upper
 Matrix([[1, 0, 0], [2, 1, 0], [-1, 1, 1]]) * Matrix([[2, 4, -2], [0, 1, 1], [0, 0, 4]]) == Matrix([[2, 4, -2], [4, 9, -3], [-2, -3, 7]])
+(lambda a, p, l, u: a[0, 0] == 0 and p * a == l * u and l * u == Matrix([[1, 1, 0], [0, 1, 2], [2, 0, 3]]))(Matrix([[0, 1, 2], [1, 1, 0], [2, 0, 3]]), Matrix([[0, 1, 0], [1, 0, 0], [0, 0, 1]]), Matrix([[1, 0, 0], [0, 1, 0], [2, -2, 1]]), Matrix([[1, 1, 0], [0, 1, 2], [0, 0, 7]]))
 ```

@@ -96,28 +96,36 @@ $$(\text{g}) \Rightarrow (\text{n}) \Rightarrow (\text{o}) \Rightarrow (\text{p}
 **注意這條鏈的走法**:它不是一條一條與「可逆」對證,而是**串成一圈**——這是上週證明時刻用過的技巧,這裡只是把圈接得更長。
 
 ## 老師講解
-### 例 1 · 補充:數量對了,只驗一半
-Let $A = \begin{bmatrix} 1 & 2 & 0 \\ 0 & 1 & 1 \\ 2 & 0 & -1 \\ 1 & 1 & 0 \end{bmatrix}$ and suppose you are told that $\dim \operatorname{Col} A = 3$. Explain why the columns of $A$ must be linearly independent, without doing any row reduction.
+### 例 1 · 補充:用 (m)–(q) 判斷可逆
+Decide whether each matrix is invertible, using only statements (m)–(q) of the Invertible Matrix Theorem:
 
-1. **先讀題目給了什麼**:$A$ 有 **3 行**,而且 $\dim \operatorname{Col} A = 3$。
-2. **那 3 行在哪裡?** 依定義,$\operatorname{Col} A = \operatorname{Span}\{\mathbf{a}_1, \mathbf{a}_2, \mathbf{a}_3\}$ ⇒ **這 3 行張成 $\operatorname{Col} A$**。
-3. **數量對上了嗎?** 張成集有 3 個元素,空間維度是 3。**恰好 $p$ 個。**
-4. **套基底定理的第二半**:$p$ 維子空間裡恰好 $p$ 個**張成**的向量,自動是基底。
-5. **基底必線性獨立** ⇒ $A$ 的三行線性獨立。$\blacksquare$
-6. **注意我們一次列化簡都沒做**。若改用「算 rank」的路,得先化簡再數樞軸——**基底定理讓我們用「個數」換掉了「計算」**。
-7. **反過來也成立**:如果題目給的是「三行線性獨立」,由第一半可以推出它們張成 $\operatorname{Col} A$、是基底、而且 $\dim \operatorname{Col} A = 3$。**兩個方向都好用。**
+$$P = \begin{bmatrix} 0 & 1 & 0 \\ 0 & 0 & 1 \\ 1 & 0 & 0 \end{bmatrix}, \qquad Q = \begin{bmatrix} 1 & 5 & 1 \\ 2 & 7 & 2 \\ 3 & 9 & 3 \end{bmatrix}$$
 
-### 例 2 · 補充:不是樞軸行也可以是基底
-Suppose $A$ is a $6 \times 9$ matrix with $\operatorname{rank} A = 3$, and suppose columns 2, 5, and 8 of $A$ happen to be linearly independent. Must $\{\mathbf{a}_2, \mathbf{a}_5, \mathbf{a}_8\}$ be a basis for $\operatorname{Col} A$? What if columns 2, 5, 8, and 9 were linearly independent?
+1. **先看 $P$**:它的三行分別是 $\mathbf{e}_3, \mathbf{e}_1, \mathbf{e}_2$——**就是單位矩陣的三行換了順序**。
+2. **換順序不影響「是不是基底」**:$\{\mathbf{e}_1, \mathbf{e}_2, \mathbf{e}_3\}$ 是 $\mathbb{R}^3$ 的標準基底,重排之後還是同一組向量 ⇒ 條款 **(m)** 成立 ⇒ **$P$ 可逆**。
+3. **交叉確認其他三條**:$\operatorname{rank} P = 3$ ⇒ (o) ✓;$\dim \operatorname{Nul} P = 3 - 3 = 0$ ⇒ (p) ✓;$\operatorname{Col} P = \mathbb{R}^3$ ⇒ (n) ✓。**四條同時成立**,這就是「等價」的意思。
+4. **這種矩陣叫置換矩陣**,它做的事是把座標重新排列——第 6 週 `scipy.linalg.lu` 回傳的那個 $P$ 正是它。
+5. **再看 $Q$**:第 3 行和第 1 行**一模一樣**。
+6. **兩行相同 ⇒ 線性相依 ⇒ 不是基底** ⇒ (m) 不成立 ⇒ **$Q$ 不可逆**。
+7. **其他條款也同時倒**:$\operatorname{rank} Q = 2 \ne 3$ ⇒ (o) 倒;$\dim \operatorname{Nul} Q = 1 \ne 0$ ⇒ (p) 倒;$\mathbf{x} = (1, 0, -1)$ 滿足 $Q\mathbf{x} = \mathbf{0}$ ⇒ (q) 倒;$\operatorname{Col} Q$ 只有 2 維 ⇒ (n) 倒。
+8. **注意第 7 步的 $\mathbf{x}$ 怎麼來的**:「第 1 行減第 3 行 $= \mathbf{0}$」這個相依關係,**係數直接就是零空間的向量**,不必解方程。
 
-1. **第一問的已知**:這 3 行都在 $\operatorname{Col} A$ 裡(任何一行都在)、它們**線性獨立**、而 $\dim \operatorname{Col} A = \operatorname{rank} A = 3$。
-2. **數量對上**:3 個獨立向量,空間 3 維。
-3. **套基底定理的第一半** ⇒ **是** $\operatorname{Col} A$ 的基底。$\blacksquare$
-4. **重點來了:它們是樞軸行嗎?** **不一定。** 樞軸行是列化簡決定的,可能是第 1、3、7 行。但那不影響結論——**基底定理不管你是不是樞軸行,只管「獨立 + 個數對」**。
-5. **所以 $\operatorname{Col} A$ 的基底不唯一**:樞軸行是其中一組(最容易算的一組),但絕不是唯一一組。
-6. **第二問:4 行獨立可能嗎?** **不可能。** $\operatorname{Col} A$ 只有 3 維,裡面任何 4 個向量**必定線性相依**(多於維度就相依)。
-7. **所以題目的假設本身就矛盾**——這正是「數量檢查」的威力:**不必算,看個數就知道不可能**。
-8. **實務上的意義**:挑基底時可以挑「有意義的那幾行」(例如可解釋的特徵、感測器編號),只要獨立、個數對,就是合法的基底。
+### 例 2 · 補充:在一個具體的子空間裡用基底定理
+Let $H = \operatorname{Span}\left\{\begin{bmatrix} 1 \\ 0 \\ 1 \\ 2 \end{bmatrix}, \begin{bmatrix} 0 \\ 1 \\ 1 \\ -1 \end{bmatrix}, \begin{bmatrix} 2 \\ 3 \\ 5 \\ 1 \end{bmatrix}\right\}$ in $\mathbb{R}^4$, and suppose you are told that $\dim H = 2$. Are the first two vectors a basis for $H$? Are all three?
+
+1. **先確認「數量」**:題目直接給了 $\dim H = 2$,所以**恰好 2 個**的集合才有資格套基底定理。
+2. **前兩個向量獨立嗎?** $\mathbf{v}_2$ 不是 $\mathbf{v}_1$ 的倍數(看第 2 格:一個是 0、一個是 1)⇒ **獨立** ✓
+3. **個數 2 = 維度 2、而且獨立** ⇒ 由基底定理的**第一半**,它們**自動**是 $H$ 的基底。
+4. **注意我們沒有驗「張成」**——那正是基底定理省掉的工作。不用定理的話,就得證明 $\mathbf{v}_3$ 也組得出來。
+5. **三個向量呢?** 個數 3 > 維度 2 ⇒ **必定線性相依** ⇒ **不是基底**,不必計算。
+6. **實際確認一下**:$\mathbf{v}_3 = 2\mathbf{v}_1 + 3\mathbf{v}_2$(逐格驗:$2 + 0 = 2$、$0 + 3 = 3$、$2 + 3 = 5$、$4 - 3 = 1$)✓ 果然多餘。
+7. **但它們仍然張成 $H$**——生成集可以有多餘的向量,基底不行。**「張成」與「基底」差的就是這件事。**
+8. **一句話收尾**:$p$ 維子空間裡,**少於 $p$ 個張不滿、多於 $p$ 個必相依、恰好 $p$ 個只要驗一個條件**。
+
+#### 備註
+觀念裡新增的 (m)–(q) 五條,例 1 一次把四條都用上了;而且那個置換矩陣在第 6 週的 LU 分解出現過,學生看到「原來那個 $P$ 是可逆的」會把兩週接起來。
+
+例 2 的第 5、6 步是關鍵:**先用數量刷掉,再實際找出相依關係**。練習卡的 Exercises 33、34 是同一個定理的抽象版(沒有具體數字),做完這兩例再去寫會順很多。
 
 ## 易錯點
 - **忘了「恰好 $p$ 個」**。3 維子空間裡 4 個張成的向量不是基底;2 個獨立的也不是。**基底定理只在個數等於維度時可用。**
@@ -248,4 +256,7 @@ Matrix([[1, 2, 3], [4, 5, 6], [7, 8, 9]]) * Matrix([1, -2, 1]) == Matrix([0, 0, 
 Matrix([[1, 2, 3], [0, 1, 4], [5, 6, 0]]).rref()[1] == (0, 1, 2)
 Matrix([[1, 2, 3], [4, 5, 6], [7, 8, 9]]).rref()[1] == (0, 1)
 Matrix([[1, 2, 0], [0, 1, 1], [2, 0, -1], [1, 1, 0]]).rank() == 3
+(lambda p: p.det() == 1 and p.rank() == 3 and p.nullspace() == [])(Matrix([[0, 1, 0], [0, 0, 1], [1, 0, 0]]))
+(lambda q: q.rank() == 2 and (q * Matrix([1, 0, -1])).is_zero_matrix and q.cols - q.rank() == 1)(Matrix([[1, 5, 1], [2, 7, 2], [3, 9, 3]]))
+(lambda a, b, c: 2 * a + 3 * b == c and Matrix.hstack(a, b, c).rank() == 2)(Matrix([1, 0, 1, 2]), Matrix([0, 1, 1, -1]), Matrix([2, 3, 5, 1]))
 ```

@@ -130,7 +130,7 @@ Decide whether each set is a subspace of $\mathbb{R}^2$: (a) $P = \{(t, t^2) : t
    $$\begin{bmatrix} x_1 \\ -x_1 \end{bmatrix} = x_1\begin{bmatrix} 1 \\ -1 \end{bmatrix} \quad \Longrightarrow \quad Q = \operatorname{Span}\left\{\begin{bmatrix} 1 \\ -1 \end{bmatrix}\right\}$$
    **由例 1,是子空間**(而且是一條過原點的直線)。
 6. **兩者的差別在哪?** $Q$ 的條件是**線性方程式**($x_1 + x_2 = 0$),$P$ 的條件是**二次的**($x_2 = x_1^2$)。
-7. **一句話的判準**:**過原點、而且條件是「齊次的線性等式」的集合才是子空間**;只要出現平方、絕對值、不等式、或等號右邊不是 0,就要提高警覺。
+7. **兩條好用的判準**:(i) **寫得成 $\operatorname{Span}\{\dots\}$** ⇒ 是子空間(例 1);(ii) **條件是「齊次的線性等式」** ⇒ 解出來就能寫成 Span,也是子空間。反過來,只要出現平方、絕對值、不等式、或等號右邊不是 0,就要提高警覺。
 
 #### 備註
 例 1 是本節唯一需要完整驗三條的證明,建議完整板書一次;後面所有題目都可以說「寫成 Span 就結束」或「舉一個反例就結束」。
@@ -233,6 +233,6 @@ Matrix([[1, 0, 0], [0, 1, 0], [0, 0, 0]]) * Matrix([1, 1, 0]) == Matrix([1, 1, 0
 (lambda m, b: not m.is_zero_matrix and not b.is_zero_matrix and (m * b).is_zero_matrix)(Matrix([[1, 1, 0], [1, 1, 0], [1, 1, 0]]), Matrix([1, -1, 0]))
 (lambda v1, v2: (0 * v1 + 0 * v2).is_zero_matrix)(Matrix([1, 0, 0]), Matrix([0, 1, 0]))
 Matrix([[1, 0], [0, 1], [0, 0]]) * Matrix([a, b]) == Matrix([a, b, 0])
-5 != 3**2 and 2*Matrix([1,1]) != Matrix([2,4])
-(lambda q: q.rank() == 1 and (q * Matrix([3])) == Matrix([3, -3]))(Matrix([[1], [-1]]))
+(lambda f: f(1) + f(2) != f(3) and 2 * f(1) != f(2))(lambda t: Matrix([t, t**2]))
+(lambda q, t: q.rank() == 1 and sum(q * Matrix([t])) == 0)(Matrix([[1], [-1]]), Symbol('t'))
 ```

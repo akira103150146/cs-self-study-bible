@@ -130,7 +130,7 @@ Find the inverse of $A = \begin{bmatrix} 1 & 2 & 3 \\ 2 & 5 & 7 \\ 3 & 7 & 11 \e
    **右半邊要跟著做**——這是本節第一名的失誤來源。
 3. **用第 2 列消掉第 3 列**($R_3 - R_2$):
    $$\sim \left[\begin{array}{ccc|ccc} 1 & 2 & 3 & 1 & 0 & 0 \\ 0 & 1 & 1 & -2 & 1 & 0 \\ 0 & 0 & 1 & -1 & -1 & 1 \end{array}\right]$$
-4. **到這裡先停一下**:左半邊已經是階梯形,**三個樞軸都在**,所以 $A$ 可逆(上週 IMT 的 (c))。**如果這時出現零列,就可以直接宣告不可逆、收工。**
+4. **到這裡先停一下**:左半邊已經是階梯形,**三個樞軸都在**,所以它化得到 $I_3$ ⇒ 由本週的 Theorem 7,$A$ 可逆。**如果這時左半邊出現零列,就可以直接宣告不可逆、收工。**
 5. **往回消(第 3 列)**:$R_2 - R_3$、$R_1 - 3R_3$:
    $$\sim \left[\begin{array}{ccc|ccc} 1 & 2 & 0 & 4 & 3 & -3 \\ 0 & 1 & 0 & -1 & 2 & -1 \\ 0 & 0 & 1 & -1 & -1 & 1 \end{array}\right]$$
 6. **再往回消(第 2 列)**:$R_1 - 2R_2$:
@@ -159,7 +159,7 @@ Find the inverse of $A = \begin{bmatrix} 1 & 2 & 3 \\ 2 & 5 & 7 \\ 3 & 7 & 11 \e
 
 $3 \times 3$ 的反矩陣算起來很長,可以讓學生兩兩一組:一人算、一人監督每一步右半邊有沒有跟著做。
 
-課堂建議做:Exercises 39、41(一個 $2 \times 2$、一個 $3 \times 3$);Exercise 42(不可逆的情形,練習「什麼時候停手」);Practice Problem 2(和例 3 同型,可以讓學生自己走一次)。是非 Exercises 18、19、20 可以口頭快問快答。Exercise 45(只求一行)一定要講,它連到實作課。
+課堂建議做:Exercises 39、41(一個 $2 \times 2$、一個 $3 \times 3$);Exercise 42(不可逆的情形,練習「什麼時候停手」);Practice Problem 2(不可逆的情形,和例 3 正好相反,可以讓學生自己走一次)。是非 Exercises 18、19、20 可以口頭快問快答。Exercise 45(只求一行)一定要講,它連到實作課。
 
 T 題 Exercises 46、51、52 放進實作課。
 
@@ -218,10 +218,14 @@ In Exercises 11–20, mark each statement True or False (T/F). Justify each answ
 Find the inverse of the matrix $A = \begin{bmatrix} 1 & -2 & -1 \\ -1 & 5 & 6 \\ 5 & -4 & 5 \end{bmatrix}$, if it exists.
 
 #### 解答
-見上方「老師講解」的例 3:化簡到第二步時左半邊出現全零列,所以 $A$ **不可逆**($\det A = 0$)。
+$[\,A \;\; I\,]$ 化簡到第二步時左半邊出現**全零列**:
+
+$$\left[\begin{array}{ccc|ccc} 1 & -2 & -1 & 1 & 0 & 0 \\ -1 & 5 & 6 & 0 & 1 & 0 \\ 5 & -4 & 5 & 0 & 0 & 1 \end{array}\right] \sim \left[\begin{array}{ccc|ccc} 1 & -2 & -1 & 1 & 0 & 0 \\ 0 & 3 & 5 & 1 & 1 & 0 \\ 0 & 6 & 10 & -5 & 0 & 1 \end{array}\right] \sim \left[\begin{array}{ccc|ccc} 1 & -2 & -1 & 1 & 0 & 0 \\ 0 & 3 & 5 & 1 & 1 & 0 \\ 0 & 0 & 0 & -7 & -2 & 1 \end{array}\right]$$
+
+左半邊只有 2 個樞軸、化不到 $I_3$,所以 **$A$ 不可逆**,$A^{-1}$ 不存在。
 
 #### 備註
-這題和老師講解的例 3 是同一題。學生版把它再列一次當練習,是刻意的——先看老師做一次,再自己從頭做一次,對「什麼時候可以停手」的印象最深。
+這題和例 3 正好是一對:**例 3 示範可逆時怎麼走完,這題示範不可逆時怎麼提早收工**。建議連著做。
 
 ### 變化 · Lay 2.2 Exercises 45–46
 (45) Let $A = \begin{bmatrix} -2 & -7 & -9 \\ 2 & 5 & 6 \\ 1 & 3 & 4 \end{bmatrix}$. Find the third column of $A^{-1}$ without computing the other columns.
