@@ -82,7 +82,11 @@ Describe all solutions of $A\mathbf{x} = \mathbf{b}$, where
 $$A = \begin{bmatrix} 3 & 5 & -4 \\ -3 & -2 & 4 \\ 6 & 1 & -8 \end{bmatrix} \quad \text{and} \quad \mathbf{b} = \begin{bmatrix} 7 \\ -1 \\ -4 \end{bmatrix}.$$
 
 1. **$A$ 就是觀念 1 例 1 的係數矩陣**,只是右邊換成 $\mathbf{b}$。化簡 $[\,A \;\; \mathbf{b}\,]$ 到 RREF:
-   $$\left[\begin{array}{rrr|r} 3 & 5 & -4 & 7 \\ -3 & -2 & 4 & -1 \\ 6 & 1 & -8 & -4 \end{array}\right] \sim \left[\begin{array}{rrr|r} 1 & 0 & -\tfrac43 & -1 \\ 0 & 1 & 0 & 2 \\ 0 & 0 & 0 & 0 \end{array}\right] \qquad \begin{aligned} x_1 - \tfrac43 x_3 &= -1 \\ x_2 &= 2 \end{aligned}$$
+   $$\left[\begin{array}{rrr|r} 3 & 5 & -4 & 7 \\ -3 & -2 & 4 & -1 \\ 6 & 1 & -8 & -4 \end{array}\right] \sim \left[\begin{array}{rrr|r} 1 & 0 & -\tfrac43 & -1 \\ 0 & 1 & 0 & 2 \\ 0 & 0 & 0 & 0 \end{array}\right]$$
+
+   讀回方程式:
+
+   $$\begin{aligned} x_1 - \tfrac43 x_3 &= -1 \\ x_2 &= 2 \end{aligned}$$
 2. **先確認相容**:最後一行不是 pivot 行,有解。
 3. **基本變數用自由變數表示**:$x_1 = -1 + \tfrac43 x_3$、$x_2 = 2$,$x_3$ 自由。
 4. **寫成向量,再把常數項和含 $x_3$ 的項拆開**:

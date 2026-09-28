@@ -65,7 +65,9 @@ $$\operatorname{rank} A + \dim \operatorname{Nul} A = n$$
 
 把兩件事合起來看:一個 $m \times n$ 矩陣把 $\mathbb{R}^n$ 送進 $\mathbb{R}^m$,其中
 
-$$\underbrace{n}_{\text{進來的維度}} = \underbrace{\operatorname{rank} A}_{\text{活下來的維度}} + \underbrace{\dim \operatorname{Nul} A}_{\text{被壓扁的維度}}$$
+$$n = \operatorname{rank} A + \dim \operatorname{Nul} A$$
+
+三項各自的意思是:$n$ 是**進來的維度**、$\operatorname{rank} A$ 是**活下來的維度**、$\dim \operatorname{Nul} A$ 是**被壓扁的維度**。
 
 **這就是為什麼 Rank Theorem 有時被稱為「維度守恆」**:輸入的維度不會消失,只會分成「留下」與「壓扁」兩部分。
 

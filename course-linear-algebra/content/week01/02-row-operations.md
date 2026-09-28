@@ -137,7 +137,9 @@ Solve the system by using elementary row operations on the equations or on the a
 $$x_1 + 5x_2 = 7, \qquad -2x_1 - 7x_2 = -5$$
 
 #### 解答
-$$\left[\begin{array}{rr|r} 1 & 5 & 7 \\ -2 & -7 & -5 \end{array}\right] \xrightarrow{R_2 + 2R_1} \left[\begin{array}{rr|r} 1 & 5 & 7 \\ 0 & 3 & 9 \end{array}\right] \xrightarrow{\frac13 R_2} \left[\begin{array}{rr|r} 1 & 5 & 7 \\ 0 & 1 & 3 \end{array}\right] \xrightarrow{R_1 - 5R_2} \left[\begin{array}{rr|r} 1 & 0 & -8 \\ 0 & 1 & 3 \end{array}\right]$$
+$$\left[\begin{array}{rr|r} 1 & 5 & 7 \\ -2 & -7 & -5 \end{array}\right] \xrightarrow{R_2 + 2R_1} \left[\begin{array}{rr|r} 1 & 5 & 7 \\ 0 & 3 & 9 \end{array}\right] \xrightarrow{\frac13 R_2} \left[\begin{array}{rr|r} 1 & 5 & 7 \\ 0 & 1 & 3 \end{array}\right]$$
+
+$$\xrightarrow{R_1 - 5R_2} \left[\begin{array}{rr|r} 1 & 0 & -8 \\ 0 & 1 & 3 \end{array}\right]$$
 
 解是 $(x_1, x_2) = (-8, 3)$(書後解答相同)。驗算:$-2(-8) - 7(3) = 16 - 21 = -5$ ✓。
 

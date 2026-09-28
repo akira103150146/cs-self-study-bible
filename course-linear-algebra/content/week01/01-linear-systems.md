@@ -184,7 +184,9 @@ Do the three planes $x_1 + 2x_2 + x_3 = 4$, $x_2 - x_3 = 1$, and $x_1 + 3x_2 = 0
 #### 解答
 寫成增廣矩陣並化簡:
 
-$$\left[\begin{array}{rrr|r} 1 & 2 & 1 & 4 \\ 0 & 1 & -1 & 1 \\ 1 & 3 & 0 & 0 \end{array}\right] \xrightarrow{R_3 - R_1} \left[\begin{array}{rrr|r} 1 & 2 & 1 & 4 \\ 0 & 1 & -1 & 1 \\ 0 & 1 & -1 & -4 \end{array}\right] \xrightarrow{R_3 - R_2} \left[\begin{array}{rrr|r} 1 & 2 & 1 & 4 \\ 0 & 1 & -1 & 1 \\ 0 & 0 & 0 & -5 \end{array}\right]$$
+$$\left[\begin{array}{rrr|r} 1 & 2 & 1 & 4 \\ 0 & 1 & -1 & 1 \\ 1 & 3 & 0 & 0 \end{array}\right] \xrightarrow{R_3 - R_1} \left[\begin{array}{rrr|r} 1 & 2 & 1 & 4 \\ 0 & 1 & -1 & 1 \\ 0 & 1 & -1 & -4 \end{array}\right]$$
+
+$$\xrightarrow{R_3 - R_2} \left[\begin{array}{rrr|r} 1 & 2 & 1 & 4 \\ 0 & 1 & -1 & 1 \\ 0 & 0 & 0 & -5 \end{array}\right]$$
 
 最後一列代表 $0 = -5$,矛盾。所以**沒有**共同點——三個平面沒有同時交於任何一點。
 

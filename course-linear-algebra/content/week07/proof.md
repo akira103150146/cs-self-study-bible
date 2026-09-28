@@ -27,7 +27,14 @@ $$\operatorname{rank} A + \dim \operatorname{Nul} A = n$$
 ## 關鍵想法
 把 $A$ 化到最簡列梯形 $B$,然後**替每一行貼一張標籤**:
 
-$$\underbrace{n \text{ 行}}_{\text{全部}} = \underbrace{\text{樞軸行}}_{\to \; \operatorname{Col} A \text{ 的基底}} \; + \; \underbrace{\text{非樞軸行}}_{\to \; \text{自由變數} \; \to \; \operatorname{Nul} A \text{ 的基底}}$$
+$$n \;(\text{全部的行}) = \text{樞軸行的個數} + \text{非樞軸行的個數}$$
+
+而這兩種行各自通往一個基底:
+
+| 這一行是 | 通往哪個基底 |
+|---|---|
+| 樞軸行 | $\operatorname{Col} A$ 的基底(Theorem 13) |
+| 非樞軸行 | 一個自由變數 → $\operatorname{Nul} A$ 的基底 |
 
 要讓這筆帳成立,必須確認**兩邊都是「一對一」**:
 
