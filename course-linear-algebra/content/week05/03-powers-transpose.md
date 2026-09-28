@@ -144,7 +144,7 @@ Show how $\mathbf{x}^TM\mathbf{x}$ tells whether or not a $2 \times 2$ block mat
 
 $\mathbf{u}^T\mathbf{v}$ 與 $\mathbf{u}\mathbf{v}^T$ 這一組一定要講,並在黑板上寫下兩者的大小。第 13 週(cosine similarity)與第 16 週(SVD)都會回來用。
 
-課堂建議做:Practice Problem 1(整題,含「$A^T\mathbf{x}^T$ 有沒有定義」);是非題 Exercises 22、23(反序);Exercise 35(符號版的內積與外積)。Exercises 47、48 是 T 題,放進實作課看 $A^k$ 的長期行為。
+課堂建議做:例 2 已經完整示範 Practice Problem 1(含「$A^T\mathbf{x}^T$ 有沒有定義」),課堂練習直接做是非題 Exercises 22、23(反序);Exercise 35(符號版的內積與外積)。Exercises 47、48 是 T 題,放進實作課看 $A^k$ 的長期行為。
 
 Exercises 31–34 比較抽象($CA = I$ 推出什麼),數理弱的班級可以只講 Exercise 31,其餘標為選做。
 

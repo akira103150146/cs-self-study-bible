@@ -92,7 +92,7 @@ Exercise 38: B 是基底嗎(rank = 行數)? True
 - Exercise 38 多做一件事:先確認 $\operatorname{rank} B = 3 = $ 行數,所以 $\mathcal{B}$ 真的是基底、座標才唯一。
 
 ## ③ 解讀 · 浮點下的 rank 會騙你
-理論上 rank = 樞軸的個數,但**浮點運算下這個定義不可用**。這一格用同一個 rank 1 的矩陣做三種擾動,看 sympy(精確)與 NumPy(奇異值門檻)給出的答案怎麼分家。
+理論上 rank = 樞軸的個數,但**浮點運算下這個定義不可用**。這一格用同一個 rank 1 的矩陣做兩種擾動,看 sympy(精確)與 NumPy(奇異值門檻)給出的答案怎麼分家。
 
 ```python
 from sympy import Rational
@@ -112,7 +112,44 @@ for p in (16, 12):
     print(f"  奇異值 = {[f'{v:.2e}' for v in s]}")
     print(f"  預設門檻 ≈ {tol:.2e} → numpy matrix_rank = {np.linalg.matrix_rank(Apf)}")
     print(f"  改用 tol=1e-10 再問一次 → {np.linalg.matrix_rank(Apf, tol=1e-10)}")
+```
 
+```text expected
+原矩陣:sympy rank = 1  numpy matrix_rank = 1
+右下角加 1e-16:
+  sympy rank = 2(精確運算:rank 從 1 變成 2)
+  浮點存得下嗎? Apf[2,2] == 9.0 → True
+  預設門檻 ≈ 9.33e-15 → numpy matrix_rank = 1
+  改用 tol=1e-10 再問一次 → 1
+右下角加 1e-12:
+  sympy rank = 2(精確運算:rank 從 1 變成 2)
+  浮點存得下嗎? Apf[2,2] == 9.0 → False
+  改用 tol=1e-10 再問一次 → 1
+```
+
+```python todo
+# TODO 解讀:回答三個問題
+obs = {
+    "rank_1e12_numpy": None,   # 加 1e-12 時 numpy 說 rank 幾?(看你跑出來的數字)
+    "who_is_right": "",        # 一句話:sympy 與 numpy 誰對?為什麼這個問題問錯了?
+    "when_use_tol": "",        # 一句話:什麼情況下你會自己指定 tol?
+}
+# 動手:把擾動從 1e-12 慢慢變小(1e-13、1e-14、1e-15),找出 numpy 從說 rank 2 改口說
+# rank 1 的那個分界,並和印出來的預設門檻對照
+flip_at = None
+```
+
+**會看到**:
+
+- **加 $10^{-16}$ 時,浮點根本存不下**:`Apf[2,2] == 9.0` 是 `True`,擾動在轉成 float 的那一刻就消失了。sympy 用有理數,所以它看到 rank 2;NumPy 看到的矩陣**與原本完全相同**,說 rank 1。
+- **加 $10^{-12}$ 時**,浮點存得下了,第二個奇異值約 $3.6 \times 10^{-13}$,**超過預設門檻**($\approx 9.3 \times 10^{-15}$),所以 NumPy 也說 rank 2。
+- **但把 `tol` 調到 $10^{-10}$,又變回 rank 1。** 這說明一件重要的事:**浮點下的 rank 不是矩陣的性質,而是「矩陣 + 門檻」的性質**。問「這個矩陣的 rank 是多少」在浮點世界是個沒有唯一答案的問題;要問的是「在多大的容忍度下,它算幾階」。
+- 誰對?**兩邊都對,只是回答不同的問題**:sympy 回答「數學上」,NumPy 回答「以我的精度看起來」。資料有雜訊時,NumPy 的答案才是你要的。
+
+## ③ 解讀 · 兩種地址,兩個空間
+這一格把本週兩個最容易混的東西畫出來、算出來:同一個點在兩組基底下的兩組座標,以及「$\dim = k$」與「$= \mathbb{R}^k$」的差別。
+
+```python
 # ---- 同一個點,兩種地址:標準格線 vs B 格線(觀念 4)----
 b1, b2 = np.array([3., 0]), np.array([-1., 2])
 xv = np.array([4., 1])
@@ -143,16 +180,6 @@ print("  所以「dim Nul B = 3」不等於「Nul B = R^3」:它的向量有 8 �
 ```
 
 ```text expected
-原矩陣:sympy rank = 1  numpy matrix_rank = 1
-右下角加 1e-16:
-  sympy rank = 2(精確運算:rank 從 1 變成 2)
-  浮點存得下嗎? Apf[2,2] == 9.0 → True
-  預設門檻 ≈ 9.33e-15 → numpy matrix_rank = 1
-  改用 tol=1e-10 再問一次 → 1
-右下角加 1e-12:
-  sympy rank = 2(精確運算:rank 從 1 變成 2)
-  浮點存得下嗎? Apf[2,2] == 9.0 → False
-  改用 tol=1e-10 再問一次 → 1
 同一個點:標準座標 (4, 1),B 座標 (1.5, 0.5)
 B 是 5×8,rank = 5
   dim Col B = 5,基底向量長度 5 → Col B 是 R^5 的子空間
@@ -162,20 +189,16 @@ B 是 5×8,rank = 5
 ```
 
 ```python todo
-# TODO 解讀:回答三個問題
-obs = {
-    "rank_1e12_numpy": None,   # 加 1e-12 時 numpy 說 rank 幾?(看你跑出來的數字)
-    "who_is_right": "",        # 一句話:sympy 與 numpy 誰對?為什麼這個問題問錯了?
-    "when_use_tol": "",        # 一句話:什麼情況下你會自己指定 tol?
-}
+# TODO 解讀:換一組基底 b1 = (1, 1)、b2 = (1, -1),同一個點 x = (4, 1) 的 B 座標是多少?
+# 把上面的格線圖重畫一次,並說明格線的形狀變成什麼樣子
+c_new = None
+grid_shape = ""                   # 一句話
 ```
 
 **會看到**:
 
-- **加 $10^{-16}$ 時,浮點根本存不下**:`Apf[2,2] == 9.0` 是 `True`,擾動在轉成 float 的那一刻就消失了。sympy 用有理數,所以它看到 rank 2;NumPy 看到的矩陣**與原本完全相同**,說 rank 1。
-- **加 $10^{-12}$ 時**,浮點存得下了,第二個奇異值約 $3.6 \times 10^{-13}$,**超過預設門檻**($\approx 9.3 \times 10^{-15}$),所以 NumPy 也說 rank 2。
-- **但把 `tol` 調到 $10^{-10}$,又變回 rank 1。** 這說明一件重要的事:**浮點下的 rank 不是矩陣的性質,而是「矩陣 + 門檻」的性質**。問「這個矩陣的 rank 是多少」在浮點世界是個沒有唯一答案的問題;要問的是「在多大的容忍度下,它算幾階」。
-- 誰對?**兩邊都對,只是回答不同的問題**:sympy 回答「數學上」,NumPy 回答「以我的精度看起來」。資料有雜訊時,NumPy 的答案才是你要的。
+- **左右兩張圖是同一個點**:左邊用方格紙報地址 $(4, 1)$,右邊用歪的格線報地址 $(1.5, 0.5)$。**點沒有動,只是報路的方式換了。**
+- $\mathbf{b}_1 = (3, 0)$ 比標準基底長三倍,所以同一段距離在 $\mathcal{B}$ 座標裡只算 $1.5$ 格——**座標的大小跟基底的長度有關**。
 - **$5 \times 8$ 的例子**:$\operatorname{Col} B$ 的基底向量長 5、$\operatorname{Nul} B$ 的長 8,維度 $5 + 3 = 8$。「$\dim \operatorname{Nul} B = 3$」與「$\operatorname{Nul} B = \mathbb{R}^3$」差得遠——後者的向量只有 3 個分量。
 
 ## ④ 應用 · 漢明碼:碼本就是一個零空間

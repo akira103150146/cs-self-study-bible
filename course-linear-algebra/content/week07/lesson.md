@@ -73,7 +73,7 @@ $3 \times 2$ 的那個矩陣要讓學生**自己算**,不要老師代算。重�
 
 那張對照表(誰住哪裡、怎麼檢查、成本多少)抄黑板不要擦:**檢查 $\operatorname{Nul}$ 只要一次乘法,檢查 $\operatorname{Col}$ 要解方程**。
 
-課堂做 Practice Problem 1、Exercises 11、13;是非 Exercise 25;Exercises 39、41。
+課堂做 Exercises 5、7(判斷屬於哪個空間)、Exercises 11、13;是非 Exercises 25、26;Exercises 39–44 挑兩題。Practice Problem 1 已由例 1 示範。
 
 ### 觀念 3:基底(25 分)
 先問「$\operatorname{Col} A$ 的基底怎麼取?」讓學生答「取階梯形的樞軸行」,**再用 $\begin{bmatrix} 1 & 2 \\ 1 & 2 \end{bmatrix}$ 這個極小反例打臉**:階梯形的第一行 $(1,0)$ 根本不在 $\operatorname{Col} A$ 那條線上。撞過一次牆就不會忘。
@@ -87,14 +87,14 @@ $\operatorname{Nul} A$ 的基底是第 3 週的舊技巧,快轉;重點只有「�
 
 白話說裡那張「兩個方向」的表要抄黑板:**給座標求向量是乘、給向量求座標是解**。期中考最常見的錯就是方向搞反。
 
-課堂做 Practice Problem 2、Exercise 3、Exercise 5(超定要檢查第三列)、Exercise 7(讀圖)。
+課堂做 Exercise 3(解方程)、Exercise 5(超定要檢查第三列)、Exercises 7–8(讀圖)。Practice Problem 2 已由例 1 示範過。
 
 ### 觀念 5:維度與 rank(25 分)
-維度 10 分鐘(用 Practice Problem 1 立刻示範「3 個向量、2 維」)、rank 5 分鐘、長條圖講 Rank Theorem 的結論 5 分鐘、練習 5 分鐘。證明留給證明時刻。
+維度 10 分鐘(用例 1 的課本 Example 2 立刻示範「自由變數幾個、基底就幾個」)、rank 5 分鐘、長條圖講 Rank Theorem 的結論 5 分鐘、練習 5 分鐘。證明留給證明時刻。
 
 **Exercises 15、16 這對題目一定要當場做**:「$\dim = 3$」不等於「$= \mathbb{R}^3$」。反問一句「那些向量有幾個分量?」通常就能點破。
 
-課堂做 Practice Problem 1、Exercise 9、Exercise 15、Exercise 27。
+課堂做 Exercises 9–12 挑一題、Exercise 15、Exercise 27,以及照做卡裡的 Practice Problem 1。
 
 ### 證明時刻(15 分)
 見上。**Exercise 28 可以接在證明之後講**:它算出 rank 4 卻只有 3 列,正好示範推論 1(合理性檢查)救了你一次;順便說明這是 Global Edition 的印刷錯誤。

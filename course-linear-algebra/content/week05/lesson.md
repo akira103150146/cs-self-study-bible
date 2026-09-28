@@ -71,7 +71,7 @@
 
 $\mathbf{u}^T\mathbf{v}$(一個數)與 $\mathbf{u}\mathbf{v}^T$(一個矩陣)要並排寫在黑板上,這一組第 13、16 週還會回來。
 
-課堂做 Practice Problem 1、是非 Exercises 22–23。
+課堂做 Exercises 35–36(照做)、是非 Exercises 22–23。Practice Problem 1 已由例 2 完整示範。
 
 ### 觀念 4:反矩陣(25 分)
 定義與唯一性 5 分鐘、$2 \times 2$ 公式與 $\det$ 10 分鐘、Theorem 5 與例 2 五分鐘、Theorem 6 的反序 5 分鐘。
@@ -83,7 +83,7 @@ $\mathbf{u}^T\mathbf{v}$(一個數)與 $\mathbf{u}\mathbf{v}^T$(一個矩陣)要
 ### 觀念 5:$[\,A \;\; I\,]$ 演算法(25 分)
 例 2 的 $3 \times 3$ 至少板書 10 分鐘,**每一步右半邊都要寫出來**。接著馬上做例 3(不可逆的情形),讓學生知道什麼時候停手。
 
-課堂做 Exercises 39、41、42、Practice Problem 2。
+課堂做 Exercises 39、41、42、Practice Problem 2(它與例 3 同型,可以讓學生自己走一次)。
 
 ### 觀念 6:齊次座標(30 分)
 先問「往右移兩格是乘哪個 $2 \times 2$ 矩陣?」讓學生試著寫、發現寫不出來(原點會被移走),再引出多加一個 1。**這個撞牆的過程不能省**。

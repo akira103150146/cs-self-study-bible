@@ -153,7 +153,7 @@ For $A = \begin{bmatrix} 2 & 4 & -2 \\ -1 & -2 & 1 \\ 3 & 6 & -3 \end{bmatrix}$,
 
 那張對照表(誰住哪、怎麼判斷、成本)一定要抄黑板,學生的錯誤 80% 來自這張表。
 
-課堂建議做:Practice Problem 1(一個向量、兩個判斷,最有代表性);Exercises 5、7、11、13;是非 Exercises 25、26(把 $m$、$n$ 寫反的對照題)。Exercises 39–44 建議挑兩題當堂寫,格式沿用上週的 IMT 寫法。
+課堂建議做:例 1 已示範 Practice Problem 1(一個向量、兩個判斷),課堂練習做 Exercises 5、7、11、13;是非 Exercises 25、26(把 $m$、$n$ 寫反的對照題)。Exercises 39–44 建議挑兩題當堂寫,格式沿用上週的 IMT 寫法。
 
 ## 練習
 ### 照做 · Lay 2.8 Exercises 5–8

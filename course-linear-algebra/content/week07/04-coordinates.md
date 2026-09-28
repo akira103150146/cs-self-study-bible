@@ -159,7 +159,7 @@ Use the grid above, drawn from $\mathbf{b}_1 = \begin{bmatrix} 1 \\ .2 \end{bmat
 
 兩個方向務必分開講清楚(白話說的那張表建議抄在黑板上留著),因為期中考最常見的錯就是方向搞反。
 
-課堂建議做:Practice Problem 2(乘進去);Exercise 3(解方程);Exercise 5(超定 + 檢查);Exercise 7(讀圖)。Exercises 1、2 要求學生自己畫格線圖,很適合當作業——**畫過一次圖的學生,才真的懂座標**。
+課堂建議做:例 1 已示範 Practice Problem 2(乘進去),課堂練習做 Exercise 3(解方程)、Exercise 5(超定 + 檢查)、Exercises 7–8(讀圖)。Exercises 1、2 要求學生自己畫格線圖,很適合當作業——**畫過一次圖的學生,才真的懂座標**。
 
 是非 Exercises 17–20 可以口頭快問快答,其中 19(直線)與 20(同構)最有價值。
 
