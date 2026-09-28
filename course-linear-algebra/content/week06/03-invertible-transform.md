@@ -4,7 +4,7 @@ title_zh: 可逆的線性變換:把動作倒回去的那個函數
 sub: T is invertible exactly when its standard matrix is
 level: mid
 source: Lay 2.3
-lab_hook: '滑鼠點在螢幕上 → 乘上管線矩陣的反矩陣 → 世界座標'
+lab_hook: '$T$ 可逆 ⇔ 標準矩陣可逆;Lab 用 rank 而不是行列式判斷這件事'
 ---
 ## 觀念
 Recall from Section 2.1 that matrix multiplication corresponds to composition of linear transformations. When a matrix $A$ is invertible, the equation $A^{-1}A\mathbf{x} = \mathbf{x}$ can be viewed as a statement about linear transformations.

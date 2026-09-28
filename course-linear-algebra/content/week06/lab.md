@@ -199,6 +199,15 @@ print("L、U 各有幾格非零?", int(np.count_nonzero(np.round(Lp, 12))),
       int(np.count_nonzero(np.round(Up, 12))))
 print("A 的反矩陣有幾格非零?", int(np.count_nonzero(np.round(np.linalg.inv(Ap), 12))))
 
+# ---- 觀念 7(補充):QR 與 SVD 先看一眼,第 14、16 週的主角 ----
+Mq = np.array([[1., -1, 4], [1, 4, -2], [1, 4, 2], [1, -1, 0]])
+Qq, Rq = np.linalg.qr(Mq)
+print("QR:Q 的各行互相正交嗎?", np.allclose(Qq.T @ Qq, np.eye(3)),
+      " R 是上三角嗎?", np.allclose(Rq, np.triu(Rq)),
+      " QR 還原 A 嗎?", np.allclose(Qq @ Rq, Mq))
+sv = np.linalg.svd(Mq, compute_uv=False)
+print("SVD:奇異值 =", np.round(sv, 4), " → rank =", int((sv > 1e-10).sum()))
+
 # ---- Lay 2.5 Exercise 32(T):桿上的非穩態熱傳導,同一個 A 解四次 ----
 C = 1.0
 Ar = np.diag([1 + 2 * C] * 5) + np.diag([-C] * 4, 1) + np.diag([-C] * 4, -1)
@@ -218,6 +227,8 @@ P @ L @ U == A 嗎? True
 A 有幾格非零? 28
 L、U 各有幾格非零? 21 21
 A 的反矩陣有幾格非零? 64
+QR:Q 的各行互相正交嗎? True  R 是上三角嗎? True  QR 還原 A 嗎? True
+SVD:奇異值 = [6.0033 4.9112 1.3567]  → rank = 3
 t1 = [ 6.5556  9.6667 10.4444  9.6667  6.5556]
 t2 = [4.7407 7.6667 8.5926 7.6667 4.7407]
 t3 = [3.5988 6.0556 6.9012 6.0556 3.5988]
@@ -241,3 +252,17 @@ ans = {
 - **桿子那題**:溫度隨時間單調下降、左右對稱,符合兩端固定 $0°$ 的物理直覺。而且四個時間點共用同一個分解。
 
 **本週的兩條規矩**:要解方程組**不要算反矩陣**;矩陣大又稀疏時**更不要**。
+
+## 驗算
+```check
+Matrix([[4, 0, -7, -7], [-6, 1, 11, 9], [7, -5, 10, 19], [-1, 2, 3, -1]]).det() == 1
+Matrix([[5, 3, 1, 7, 9], [6, 4, 2, 8, -8], [7, 5, 3, 10, 9], [9, 6, 4, -9, -5], [8, 5, 2, 11, 4]]).det() == 2
+(lambda a: a.rref()[0] == eye(4) and len(a.rref()[1]) == 4 and a.nullspace() == [] and a.T.rank() == 4)(Matrix([[1, 0, -2], [3, 1, -2], [-5, -1, 9]]).row_join(Matrix([0, 0, 0])).col_join(Matrix([[0, 0, 0, 1]])))
+Matrix([[1, 0], [0, 1], [0, 0]]).rank() == 2 and Matrix([[1, 0], [0, 1], [0, 0]]).rank() < 3
+Matrix([[Rational(9,2), Rational(31,10)], [Rational(8,5), Rational(11,10)]]).det() == Rational(-1,100)
+round(float(Matrix([[4.5, 3.1], [1.6, 1.1]]).condition_number())) == 3363
+Matrix(5, 5, lambda i, j: Rational(1, i + j + 1)).solve(Matrix([0, 0, 0, 0, 1])) == Matrix([630, -12600, 56700, -88200, 44100])
+(lambda l, u, a: l * u == a)(Matrix([[1, 0, 0, 0], [-2, 1, 0, 0], [1, -3, 1, 0], [-3, 4, 2, 1]]), Matrix([[2, 4, -1, 5, -2], [0, 3, 1, 2, -3], [0, 0, 0, 2, 1], [0, 0, 0, 0, 5]]), Matrix([[2, 4, -1, 5, -2], [-4, -5, 3, -8, 1], [2, -5, -4, 1, 8], [-6, 0, 7, -3, 1]]))
+(lambda a: len([1 for i in range(a.rows) for j in range(a.cols) if a[i, j] != 0]) == 28 and len([1 for i in range(a.rows) for j in range(a.cols) if a.inv()[i, j] != 0]) == 64)(Matrix([[4, -1, -1, 0, 0, 0, 0, 0], [-1, 4, 0, -1, 0, 0, 0, 0], [-1, 0, 4, -1, -1, 0, 0, 0], [0, -1, -1, 4, 0, -1, 0, 0], [0, 0, -1, 0, 4, -1, -1, 0], [0, 0, 0, -1, -1, 4, 0, -1], [0, 0, 0, 0, -1, 0, 4, -1], [0, 0, 0, 0, 0, -1, -1, 4]]))
+(lambda a, t: [round(float(v), 4) for v in a.solve(t)] == [6.5556, 9.6667, 10.4444, 9.6667, 6.5556])(Matrix([[3, -1, 0, 0, 0], [-1, 3, -1, 0, 0], [0, -1, 3, -1, 0], [0, 0, -1, 3, -1], [0, 0, 0, -1, 3]]), Matrix([10, 12, 12, 12, 10]))
+```

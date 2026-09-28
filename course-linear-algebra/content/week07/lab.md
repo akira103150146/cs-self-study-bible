@@ -37,6 +37,12 @@ for k, A in [(45, A45), (46, A46)]:
     print("  基底取的是 A 自己的行嗎?", all(list(v) in own for v in col))
     print("  每個零空間基底向量都滿足 Ax = 0 嗎?", all((A * v).is_zero_matrix for v in nul))
 
+# ---- 觀念 6:用 rank 判斷可逆(而不是算行列式)----
+for name, B in (("[[1,2,3],[0,1,4],[5,6,0]]", np.array([[1., 2, 3], [0, 1, 4], [5, 6, 0]])),
+                ("[[1,2,3],[4,5,6],[7,8,9]]", np.array([[1., 2, 3], [4, 5, 6], [7, 8, 9]]))):
+    r = np.linalg.matrix_rank(B)
+    print(f"{name}: rank = {r}  det = {np.linalg.det(B):.3e}  → 可逆? {r == B.shape[0]}")
+
 # ---- Lay 2.9 Exercises 37–38(T 題):先證 x 在 H 裡,再求座標 ----
 for k, vs, x in [
     (37, [Matrix([12, -4, 9, 5]), Matrix([15, -7, 12, 8])], Matrix([19, -11, 16, 12])),
@@ -65,6 +71,8 @@ Exercise 46: 樞軸在第 [1, 2, 3] 行
   rank 3 + dim Nul 2 = 5(行數 5)
   基底取的是 A 自己的行嗎? True
   每個零空間基底向量都滿足 Ax = 0 嗎? True
+[[1,2,3],[0,1,4],[5,6,0]]: rank = 3  det = 1.000e+00  → 可逆? True
+[[1,2,3],[4,5,6],[7,8,9]]: rank = 2  det = 0.000e+00  → 可逆? False
 Exercise 37: B 是基底嗎(rank = 行數)? True
   x 在 H 裡嗎(增廣後 rank 沒變)? True
   [x]_B = [-4/3, 7/3]
@@ -105,6 +113,24 @@ for p in (16, 12):
     print(f"  預設門檻 ≈ {tol:.2e} → numpy matrix_rank = {np.linalg.matrix_rank(Apf)}")
     print(f"  改用 tol=1e-10 再問一次 → {np.linalg.matrix_rank(Apf, tol=1e-10)}")
 
+# ---- 同一個點,兩種地址:標準格線 vs B 格線(觀念 4)----
+b1, b2 = np.array([3., 0]), np.array([-1., 2])
+xv = np.array([4., 1])
+c = np.linalg.solve(np.column_stack([b1, b2]), xv)      # [x]_B
+fig, axes = plt.subplots(1, 2, figsize=(8, 3.6))
+for ax, (e1, e2, title, coord) in zip(axes, [
+        (np.array([1., 0]), np.array([0., 1]), "標準基底:x = (4, 1)", xv),
+        (b1, b2, f"B 基底:[x]_B = ({c[0]:.1f}, {c[1]:.1f})", c)]):
+    for i in range(-2, 5):                              # 畫出該基底的格線
+        ax.plot(*zip(*[(i * e1 + t * e2)[:2] for t in (-2, 4)]), lw=.6, color="#9bb", zorder=1)
+        ax.plot(*zip(*[(t * e1 + i * e2)[:2] for t in (-2, 4)]), lw=.6, color="#9bb", zorder=1)
+    ax.arrow(0, 0, *e1, head_width=.18, color="#245b57", length_includes_head=True, zorder=3)
+    ax.arrow(0, 0, *e2, head_width=.18, color="#245b57", length_includes_head=True, zorder=3)
+    ax.scatter(*xv, color="#9a4416", zorder=4)
+    ax.set_title(title, fontsize=9); ax.set_xlim(-2, 8); ax.set_ylim(-2, 5); ax.set_aspect("equal")
+plt.tight_layout(); plt.show()
+print(f"同一個點:標準座標 (4, 1),B 座標 ({c[0]:.1f}, {c[1]:.1f})")
+
 # ---- 「dim = 3」不等於「= R³」:一個 5×8 的例子 ----
 rng = np.random.default_rng(7)
 B = Matrix(5, 8, lambda i, j: int(rng.integers(-3, 4)))
@@ -127,6 +153,7 @@ print("  所以「dim Nul B = 3」不等於「Nul B = R^3」:它的向量有 8 �
   sympy rank = 2(精確運算:rank 從 1 變成 2)
   浮點存得下嗎? Apf[2,2] == 9.0 → False
   改用 tol=1e-10 再問一次 → 1
+同一個點:標準座標 (4, 1),B 座標 (1.5, 0.5)
 B 是 5×8,rank = 5
   dim Col B = 5,基底向量長度 5 → Col B 是 R^5 的子空間
   dim Nul B = 3,基底向量長度 8 → Nul B 是 R^8 的子空間
@@ -233,3 +260,18 @@ task = {
 - **syndrome 對照表就是 $H$ 的七個行**,而且是全部 7 個非零的三位元向量——所以任何單一錯誤都能被唯一定位。1000 次隨機測試 **1000 次都修對**。
 - **兩個錯誤時解碼器會做錯事**:syndrome $(0,1,1)$ 看起來像「第 4 位錯」,它翻掉第 4 位,結果從差 2 位變成**差 3 位**。這不是 bug,是最小距離 3 的極限。**加了 ECC 不代表不會錯,只是錯誤率低很多。**
 - 做完選做的 SEC-DED:$\operatorname{rank} H' = 4$、$\dim \operatorname{Nul} H' = 8 - 4 = 4$,資料位元還是 4 個,但多了一個「這是 2 個錯、我不修」的判斷能力——這就是伺服器記憶體的做法。
+
+## 驗算
+```check
+(lambda a: a.columnspace() == [Matrix([3, -7, -5, 3]), Matrix([-5, 9, 7, -7])] and a.rank() + len(a.nullspace()) == a.cols)(Matrix([[3, -5, 0, -1, 3], [-7, 9, -4, 9, -11], [-5, 7, -2, 5, -7], [3, -7, -3, 4, 0]]))
+(lambda a: a.nullspace() == [Matrix([-60, 154, 47, 1, 0]), Matrix([-122, 309, 94, 0, 1])] and a.rank() == 3)(Matrix([[5, 2, 0, -8, -8], [4, 1, 2, -8, -9], [5, 1, 3, 5, 19], [-8, -5, 6, 8, 5]]))
+(lambda b, x: b.gauss_jordan_solve(x)[0] == Matrix([Rational(-4,3), Rational(7,3)]) and b.rank() == 2)(Matrix([[12, 15], [-4, -7], [9, 12], [5, 8]]), Matrix([19, -11, 16, 12]))
+(lambda b, x: b.gauss_jordan_solve(x)[0] == Matrix([5, 6, 3]) and b.rank() == 3)(Matrix([[-5, 7, -8], [4, -5, 6], [-3, 3, -4], [2, -3, 3]]), Matrix([-7, 8, -9, 1]))
+Matrix([[1, 2, 3], [2, 4, 6], [3, 6, 9]]).rank() == 1
+(Matrix([[1, 2, 3], [2, 4, 6], [3, 6, 9]]) + Matrix([[0, 0, 0], [0, 0, 0], [0, 0, 1]]) * Rational(1, 10**16)).rank() == 2
+(lambda h: h.rank() == 3 and h.cols - h.rank() == 4)(Matrix([[1, 1, 1, 0, 1, 0, 0], [1, 1, 0, 1, 0, 1, 0], [1, 0, 1, 1, 0, 0, 1]]))
+(lambda h, g: (h * g).applyfunc(lambda v: v % 2).is_zero_matrix and g.rank() == 4)(Matrix([[1, 1, 1, 0, 1, 0, 0], [1, 1, 0, 1, 0, 1, 0], [1, 0, 1, 1, 0, 0, 1]]), Matrix([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1], [1, 1, 1, 0], [1, 1, 0, 1], [1, 0, 1, 1]]))
+(lambda h: sum(1 for i in range(128) if (h * Matrix([int(b) for b in format(i, '07b')])).applyfunc(lambda v: v % 2).is_zero_matrix) == 16)(Matrix([[1, 1, 1, 0, 1, 0, 0], [1, 1, 0, 1, 0, 1, 0], [1, 0, 1, 1, 0, 0, 1]]))
+(lambda h: min(sum(int(b) for b in format(i, '07b')) for i in range(1, 128) if (h * Matrix([int(b) for b in format(i, '07b')])).applyfunc(lambda v: v % 2).is_zero_matrix) == 3)(Matrix([[1, 1, 1, 0, 1, 0, 0], [1, 1, 0, 1, 0, 1, 0], [1, 0, 1, 1, 0, 0, 1]]))
+(lambda h, y: (h * y).applyfunc(lambda v: v % 2) == Matrix([0, 1, 1]))(Matrix([[1, 1, 1, 0, 1, 0, 0], [1, 1, 0, 1, 0, 1, 0], [1, 0, 1, 1, 0, 0, 1]]), Matrix([1, 1, 0, 1, 0, 0, 1]))
+```
