@@ -87,10 +87,13 @@ def svg(name, aria, w, h, body, mids):
 
 
 def single(name, aria, p, caption=None):
-    extra = 22 if caption else 0
+    extra = 26 if caption else 0
     body = p.body()
     if caption:
-        body += f'<text x="{p.w / 2}" y="{p.h + 12}" text-anchor="middle">{caption}</text>'
+        # 圖說底下先鋪一塊底色:格線(虛線)會畫出圖框,不鋪的話字會被線穿過
+        body += (f'<rect x="0" y="{p.h}" width="{p.w}" height="26" '
+                 f'style="fill:var(--bg);stroke:none"/>')
+        body += f'<text x="{p.w / 2}" y="{p.h + 16}" text-anchor="middle">{caption}</text>'
     svg(name, aria, p.w, p.h + extra, body, [p.mid])
 
 
@@ -237,7 +240,9 @@ svg("rank-bar.svg",
     W, H, body, [])
 
 # ---------- 補充觀念:Hamming(7,4) 的三圈圖 ----------
-W, H = 380, 330
+# 位元的位置是算過的:每個位元離「它不該碰到」的那條圈弧至少 28px(位元半徑 15),
+# 所以「這個位元在哪幾個圈裡」一眼可判。校驗位元畫成方形,灰階列印時也分得出來。
+W, H = 380, 342
 cx, cy, r = 190, 150, 92
 offs = [(0, -46), (-42, 34), (42, 34)]
 body = ""
@@ -245,16 +250,24 @@ for (dx, dy) in offs:
     body += (f'<circle cx="{cx + dx}" cy="{cy + dy}" r="{r}" class="l1" '
              f'style="fill:none;stroke-width:1.6"/>')
 spots = {
-    "d1": (cx, cy + 6), "d2": (cx - 40, cy - 26), "d3": (cx + 40, cy - 26), "d4": (cx, cy + 54),
-    "p1": (cx, cy - 74), "p2": (cx - 74, cy + 52), "p3": (cx + 74, cy + 52),
+    "d1": (190, 155), "d2": (129, 123), "d3": (251, 123), "d4": (190, 227),
+    "p1": (190, 55), "p2": (100, 202), "p3": (280, 202),
 }
 for lab, (x, y) in spots.items():
-    cls = "hl" if lab.startswith("d") else "bad"
-    body += f'<circle cx="{x}" cy="{y}" r="15" class="{cls}" style="opacity:0.85"/>'
-    body += f'<circle cx="{x}" cy="{y}" r="15" class="ax" style="fill:none"/>'
+    data = lab.startswith("d")
+    cls = "hl" if data else "bad"
+    if data:
+        body += f'<circle cx="{x}" cy="{y}" r="15" class="{cls}" style="opacity:0.85"/>'
+        body += f'<circle cx="{x}" cy="{y}" r="15" class="ax" style="fill:none"/>'
+    else:
+        body += (f'<rect x="{x - 14}" y="{y - 14}" width="28" height="28" rx="3" '
+                 f'class="{cls}" style="opacity:0.85"/>')
+        body += (f'<rect x="{x - 14}" y="{y - 14}" width="28" height="28" rx="3" '
+                 f'class="ax" style="fill:none"/>')
     body += f'<text class="m" x="{x}" y="{y + 5}" text-anchor="middle">{sub(lab)}</text>'
-body += f'<text x="{cx}" y="26" text-anchor="middle">每一圈裡的四個位元,1 的個數必須是偶數</text>'
-body += f'<text class="t" x="{cx}" y="{H - 14}" text-anchor="middle">藍 = 資料位元 d₁–d₄,紅 = 校驗位元 p₁–p₃</text>'
+body += f'<text x="{cx}" y="{H - 30}" text-anchor="middle">每一圈裡的四個位元,1 的個數必須是偶數</text>'
+body += (f'<text class="t" x="{cx}" y="{H - 10}" text-anchor="middle">'
+         f'圓 = 資料位元 d₁–d₄,方 = 校驗位元 p₁–p₃</text>')
 svg("hamming.svg",
     "Three overlapping circles: four data bits and three parity bits arranged so that each circle "
     "contains an even number of ones",

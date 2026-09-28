@@ -90,10 +90,13 @@ def svg(name, aria, w, h, body, mids):
 
 
 def single(name, aria, p, caption=None):
-    extra = 22 if caption else 0
+    extra = 26 if caption else 0
     body = p.body()
     if caption:
-        body += f'<text x="{p.w / 2}" y="{p.h + 12}" text-anchor="middle">{caption}</text>'
+        # 圖說底下先鋪一塊底色:線或格線可能畫到圖框外,不鋪的話字會被穿過
+        body += (f'<rect x="0" y="{p.h}" width="{p.w}" height="26" '
+                 f'style="fill:var(--bg);stroke:none"/>')
+        body += f'<text x="{p.w / 2}" y="{p.h + 16}" text-anchor="middle">{caption}</text>'
     svg(name, aria, p.w, p.h + extra, body, [p.mid])
 
 

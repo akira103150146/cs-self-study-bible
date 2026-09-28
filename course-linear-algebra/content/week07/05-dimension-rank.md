@@ -201,16 +201,24 @@ Exercises 9–12 display a matrix $A$ and an echelon form of $A$. Find bases for
 
 #### 解答
 (9) 樞軸在第 1、3、4 行。
-$$\operatorname{Col} A: \left\{\begin{bmatrix} 1 \\ -3 \\ 2 \\ -4 \end{bmatrix}, \begin{bmatrix} 2 \\ -1 \\ 4 \\ 2 \end{bmatrix}, \begin{bmatrix} -4 \\ 5 \\ -3 \\ 7 \end{bmatrix}\right\} \; (\dim = 3), \qquad \operatorname{Nul} A: \left\{\begin{bmatrix} 3 \\ 1 \\ 0 \\ 0 \end{bmatrix}\right\} \; (\dim = 1)$$
+$$\operatorname{Col} A: \left\{\begin{bmatrix} 1 \\ -3 \\ 2 \\ -4 \end{bmatrix}, \begin{bmatrix} 2 \\ -1 \\ 4 \\ 2 \end{bmatrix}, \begin{bmatrix} -4 \\ 5 \\ -3 \\ 7 \end{bmatrix}\right\} \; (\dim = 3)$$
+
+$$\operatorname{Nul} A: \left\{\begin{bmatrix} 3 \\ 1 \\ 0 \\ 0 \end{bmatrix}\right\} \; (\dim = 1)$$
 
 (10) 樞軸在第 1、2、4 行。
-$$\operatorname{Col} A: \left\{\begin{bmatrix} 1 \\ 1 \\ -2 \\ 4 \end{bmatrix}, \begin{bmatrix} -2 \\ -1 \\ 0 \\ 1 \end{bmatrix}, \begin{bmatrix} 5 \\ 5 \\ 1 \\ 1 \end{bmatrix}\right\} \; (\dim = 3), \qquad \operatorname{Nul} A: \left\{\begin{bmatrix} -3 \\ 3 \\ 1 \\ 0 \\ 0 \end{bmatrix}, \begin{bmatrix} 0 \\ 7 \\ 0 \\ 2 \\ 1 \end{bmatrix}\right\} \; (\dim = 2)$$
+$$\operatorname{Col} A: \left\{\begin{bmatrix} 1 \\ 1 \\ -2 \\ 4 \end{bmatrix}, \begin{bmatrix} -2 \\ -1 \\ 0 \\ 1 \end{bmatrix}, \begin{bmatrix} 5 \\ 5 \\ 1 \\ 1 \end{bmatrix}\right\} \; (\dim = 3)$$
+
+$$\operatorname{Nul} A: \left\{\begin{bmatrix} -3 \\ 3 \\ 1 \\ 0 \\ 0 \end{bmatrix}, \begin{bmatrix} 0 \\ 7 \\ 0 \\ 2 \\ 1 \end{bmatrix}\right\} \; (\dim = 2)$$
 
 (11) 樞軸在第 1、2、4 行。
-$$\operatorname{Col} A: \left\{\begin{bmatrix} 1 \\ 2 \\ -3 \\ 3 \end{bmatrix}, \begin{bmatrix} 2 \\ 5 \\ -9 \\ 10 \end{bmatrix}, \begin{bmatrix} 0 \\ 4 \\ -7 \\ 11 \end{bmatrix}\right\} \; (\dim = 3), \qquad \operatorname{Nul} A: \left\{\begin{bmatrix} 9 \\ -2 \\ 1 \\ 0 \\ 0 \end{bmatrix}, \begin{bmatrix} -5 \\ 3 \\ 0 \\ -2 \\ 1 \end{bmatrix}\right\} \; (\dim = 2)$$
+$$\operatorname{Col} A: \left\{\begin{bmatrix} 1 \\ 2 \\ -3 \\ 3 \end{bmatrix}, \begin{bmatrix} 2 \\ 5 \\ -9 \\ 10 \end{bmatrix}, \begin{bmatrix} 0 \\ 4 \\ -7 \\ 11 \end{bmatrix}\right\} \; (\dim = 3)$$
+
+$$\operatorname{Nul} A: \left\{\begin{bmatrix} 9 \\ -2 \\ 1 \\ 0 \\ 0 \end{bmatrix}, \begin{bmatrix} -5 \\ 3 \\ 0 \\ -2 \\ 1 \end{bmatrix}\right\} \; (\dim = 2)$$
 
 (12) 樞軸在第 1、3、5 行。
-$$\operatorname{Col} A: \left\{\begin{bmatrix} 1 \\ 5 \\ 4 \\ -2 \end{bmatrix}, \begin{bmatrix} -4 \\ -9 \\ -9 \\ 5 \end{bmatrix}, \begin{bmatrix} 3 \\ 8 \\ 7 \\ -6 \end{bmatrix}\right\} \; (\dim = 3), \qquad \operatorname{Nul} A: \left\{\begin{bmatrix} -2 \\ 1 \\ 0 \\ 0 \\ 0 \end{bmatrix}, \begin{bmatrix} 5 \\ 0 \\ 2 \\ 1 \\ 0 \end{bmatrix}\right\} \; (\dim = 2)$$
+$$\operatorname{Col} A: \left\{\begin{bmatrix} 1 \\ 5 \\ 4 \\ -2 \end{bmatrix}, \begin{bmatrix} -4 \\ -9 \\ -9 \\ 5 \end{bmatrix}, \begin{bmatrix} 3 \\ 8 \\ 7 \\ -6 \end{bmatrix}\right\} \; (\dim = 3)$$
+
+$$\operatorname{Nul} A: \left\{\begin{bmatrix} -2 \\ 1 \\ 0 \\ 0 \\ 0 \end{bmatrix}, \begin{bmatrix} 5 \\ 0 \\ 2 \\ 1 \\ 0 \end{bmatrix}\right\} \; (\dim = 2)$$
 
 #### 備註
 (9)(11) 書後有解答;(10)(12) 書後無解答,答案為本講義計算並以 sympy 驗過。

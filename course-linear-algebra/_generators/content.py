@@ -267,12 +267,16 @@ def _glossary(text, path):
     return [[render_inline(c) for c in r] for r in rows]
 
 
-# 小題標號有兩種寫法:
-#   行內  (15)、(a)、(19a) —— 前面是行首或空白、後面是空白;「possible in (a).」後面接句點,不算
-#   清單  - **a.** …(Markdown)/ <li><strong>a.</strong> …(產出的 HTML)
-# 數學式先拿掉,避免 $(x_1, x_2)$ 之類被誤算。
+# 小題標號有三種寫法:
+#   母題號  段落開頭的 (15)、(a)、(19a) —— 只認「行首/段首」,句子中間的 (3) 是式號引用
+#           (「Solve (3) for X」、「the system in (4)」),不是小題
+#   清單    - **a.** …(Markdown)/ <li><strong>a.</strong> …(產出的 HTML)
+#   PP      段首的 (Practice Problem 2)
+# 母題號與 a./b. 子標**不相加**,取較多的那個:合併卡片「4 個題號、其中 3 題有 a/b/c」
+# 需要的是 4 題的空間,不是 7 題。數學式先拿掉,避免 $(x_1, x_2)$ 之類被誤算。
 LABEL = r"(\d{1,2}[a-z]?|[a-h])"
-SUBPART = re.compile(r"(?:^|\s)\(" + LABEL + r"\)(?=\s)")
+SUBPART = re.compile(r"(?m)^\s*(?:<p>\s*)?\(" + LABEL + r"\)(?=[\s<])")
+SUBPART_PP = re.compile(r"(?m)^\s*(?:<p>\s*)?\(Practice Problems?\s*(\d*)\)")
 SUBPART_LIST = re.compile(r"(?m)^\s*[-*]\s+\*\*" + LABEL + r"\.\*\*"
                           r"|<li>\s*(?:<p>\s*)?<strong>" + LABEL + r"\.</strong>")   # 清單項之間有空行時會多一層 <p>
 
@@ -280,10 +284,11 @@ SUBPART_LIST = re.compile(r"(?m)^\s*[-*]\s+\*\*" + LABEL + r"\.\*\*"
 def count_parts(src):
     """題幹(Markdown 或產出的 HTML 皆可)裡有幾個不同的小題標號;沒有就是 1。verify.py 也用這個。"""
     src = re.sub(r"\$\$.*?\$\$|\$[^$]*\$", " ", src, flags=re.S)
-    labels = {a or b for a, b in SUBPART_LIST.findall(src)}
-    prose = re.sub(r"<[^>]+>", " ", src)
-    labels |= set(SUBPART.findall(prose))
-    return max(1, len(labels))
+    sub = {a or b for a, b in SUBPART_LIST.findall(src)}
+    prose = re.sub(r"<(?!/?p\b)[^>]+>", " ", src)
+    mother = set(SUBPART.findall(prose))
+    mother |= {"PP" + n for n in SUBPART_PP.findall(prose)}
+    return max(1, len(mother), len(sub))
 
 
 def _drills(text, path, figdir):

@@ -215,17 +215,25 @@ Exercises 31–34 display a matrix $A$ and an echelon form of $A$. Find a basis 
 
 #### 解答
 (31) 樞軸在第 1、2 行。
-$$\operatorname{Col} A: \left\{\begin{bmatrix} 4 \\ 6 \\ 3 \end{bmatrix}, \begin{bmatrix} 5 \\ 5 \\ 4 \end{bmatrix}\right\}, \qquad \operatorname{Nul} A: \left\{\begin{bmatrix} 4 \\ -5 \\ 1 \\ 0 \end{bmatrix}, \begin{bmatrix} -7 \\ 6 \\ 0 \\ 1 \end{bmatrix}\right\}$$
+$$\operatorname{Col} A: \left\{\begin{bmatrix} 4 \\ 6 \\ 3 \end{bmatrix}, \begin{bmatrix} 5 \\ 5 \\ 4 \end{bmatrix}\right\}$$
+
+$$\operatorname{Nul} A: \left\{\begin{bmatrix} 4 \\ -5 \\ 1 \\ 0 \end{bmatrix}, \begin{bmatrix} -7 \\ 6 \\ 0 \\ 1 \end{bmatrix}\right\}$$
 
 (32) 樞軸在第 1、3 行。
-$$\operatorname{Col} A: \left\{\begin{bmatrix} -3 \\ 2 \\ 3 \end{bmatrix}, \begin{bmatrix} -2 \\ 4 \\ -2 \end{bmatrix}\right\}, \qquad \operatorname{Nul} A: \left\{\begin{bmatrix} 3 \\ 1 \\ 0 \\ 0 \end{bmatrix}, \begin{bmatrix} -6 \\ 0 \\ -5 \\ 4 \end{bmatrix}\right\}$$
+$$\operatorname{Col} A: \left\{\begin{bmatrix} -3 \\ 2 \\ 3 \end{bmatrix}, \begin{bmatrix} -2 \\ 4 \\ -2 \end{bmatrix}\right\}$$
+
+$$\operatorname{Nul} A: \left\{\begin{bmatrix} 3 \\ 1 \\ 0 \\ 0 \end{bmatrix}, \begin{bmatrix} -6 \\ 0 \\ -5 \\ 4 \end{bmatrix}\right\}$$
 (第二個向量已乘 4 去分母;原始形式是 $(-3/2, 0, -5/4, 1)$。)
 
 (33) 樞軸在第 1、2、4 行。
-$$\operatorname{Col} A: \left\{\begin{bmatrix} 1 \\ -1 \\ -2 \\ 3 \end{bmatrix}, \begin{bmatrix} 4 \\ 2 \\ 2 \\ 6 \end{bmatrix}, \begin{bmatrix} -3 \\ 3 \\ 5 \\ -5 \end{bmatrix}\right\}, \qquad \operatorname{Nul} A: \left\{\begin{bmatrix} 2 \\ -5/2 \\ 1 \\ 0 \\ 0 \end{bmatrix}, \begin{bmatrix} -7 \\ 1/2 \\ 0 \\ -4 \\ 1 \end{bmatrix}\right\}$$
+$$\operatorname{Col} A: \left\{\begin{bmatrix} 1 \\ -1 \\ -2 \\ 3 \end{bmatrix}, \begin{bmatrix} 4 \\ 2 \\ 2 \\ 6 \end{bmatrix}, \begin{bmatrix} -3 \\ 3 \\ 5 \\ -5 \end{bmatrix}\right\}$$
+
+$$\operatorname{Nul} A: \left\{\begin{bmatrix} 2 \\ -5/2 \\ 1 \\ 0 \\ 0 \end{bmatrix}, \begin{bmatrix} -7 \\ 1/2 \\ 0 \\ -4 \\ 1 \end{bmatrix}\right\}$$
 
 (34) 樞軸在第 1、2、4 行。
-$$\operatorname{Col} A: \left\{\begin{bmatrix} 3 \\ -2 \\ -5 \\ -2 \end{bmatrix}, \begin{bmatrix} -1 \\ 2 \\ 9 \\ 6 \end{bmatrix}, \begin{bmatrix} 3 \\ 7 \\ 3 \\ 3 \end{bmatrix}\right\}, \qquad \operatorname{Nul} A: \left\{\begin{bmatrix} -3 \\ -2 \\ 1 \\ 0 \\ 0 \end{bmatrix}, \begin{bmatrix} -5/2 \\ -3/2 \\ 0 \\ -1 \\ 1 \end{bmatrix}\right\}$$
+$$\operatorname{Col} A: \left\{\begin{bmatrix} 3 \\ -2 \\ -5 \\ -2 \end{bmatrix}, \begin{bmatrix} -1 \\ 2 \\ 9 \\ 6 \end{bmatrix}, \begin{bmatrix} 3 \\ 7 \\ 3 \\ 3 \end{bmatrix}\right\}$$
+
+$$\operatorname{Nul} A: \left\{\begin{bmatrix} -3 \\ -2 \\ 1 \\ 0 \\ 0 \end{bmatrix}, \begin{bmatrix} -5/2 \\ -3/2 \\ 0 \\ -1 \\ 1 \end{bmatrix}\right\}$$
 
 #### 備註
 四題的流程完全一樣:**從階梯形讀樞軸位置 → 回 $A$ 取行 → 把 $A$ 化到最簡列梯形求零空間**。批改時最該看的是 $\operatorname{Col} A$ 的基底有沒有誤用階梯形的行。
@@ -262,7 +270,9 @@ $$\operatorname{Nul} A: \left\{\begin{bmatrix} -2.5 \\ -1.5 \\ 1 \\ 0 \\ 0 \end{
 $\operatorname{rank} A = 2$、$\dim \operatorname{Nul} A = 3$,$2 + 3 = 5$ = 行數。
 
 (46) 樞軸在第 1、2、3 行,
-$$\operatorname{Col} A: \left\{\begin{bmatrix} 5 \\ 4 \\ 5 \\ -8 \end{bmatrix}, \begin{bmatrix} 2 \\ 1 \\ 1 \\ -5 \end{bmatrix}, \begin{bmatrix} 0 \\ 2 \\ 3 \\ 6 \end{bmatrix}\right\}, \qquad \operatorname{Nul} A: \left\{\begin{bmatrix} -60 \\ 154 \\ 47 \\ 1 \\ 0 \end{bmatrix}, \begin{bmatrix} -122 \\ 309 \\ 94 \\ 0 \\ 1 \end{bmatrix}\right\}$$
+$$\operatorname{Col} A: \left\{\begin{bmatrix} 5 \\ 4 \\ 5 \\ -8 \end{bmatrix}, \begin{bmatrix} 2 \\ 1 \\ 1 \\ -5 \end{bmatrix}, \begin{bmatrix} 0 \\ 2 \\ 3 \\ 6 \end{bmatrix}\right\}$$
+
+$$\operatorname{Nul} A: \left\{\begin{bmatrix} -60 \\ 154 \\ 47 \\ 1 \\ 0 \end{bmatrix}, \begin{bmatrix} -122 \\ 309 \\ 94 \\ 0 \\ 1 \end{bmatrix}\right\}$$
 $\operatorname{rank} A = 3$、$\dim \operatorname{Nul} A = 2$。
 
 #### 備註

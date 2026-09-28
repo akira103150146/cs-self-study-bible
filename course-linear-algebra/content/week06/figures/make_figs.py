@@ -79,10 +79,13 @@ def svg(name, aria, w, h, body, mids):
 
 
 def single(name, aria, p, caption=None):
-    extra = 22 if caption else 0
+    extra = 26 if caption else 0
     body = p.body()
     if caption:
-        body += f'<text x="{p.w / 2}" y="{p.h + 12}" text-anchor="middle">{caption}</text>'
+        # 圖說底下先鋪一塊底色:線或格線可能畫到圖框外,不鋪的話字會被穿過
+        body += (f'<rect x="0" y="{p.h}" width="{p.w}" height="26" '
+                 f'style="fill:var(--bg);stroke:none"/>')
+        body += f'<text x="{p.w / 2}" y="{p.h + 16}" text-anchor="middle">{caption}</text>'
     svg(name, aria, p.w, p.h + extra, body, [p.mid])
 
 
@@ -200,11 +203,13 @@ def curve(x1, y1, x2, y2, lift, mid, cls="l1"):
 
 body = plane(90, 120) + plane(300, 150) + plane(510, 120)
 pts = [(74, 124), (284, 154), (494, 124)]
-for (x, y), lab in zip(pts, ["x", "y", "b"]):
+for (x, y), lab, (ddx, ddy, anc) in zip(pts, ["x", "y", "b"],
+                                        [(-8, 4, "end"), (0, 20, "middle"), (10, 4, "start")]):
     body += f'<circle class="pt" cx="{x}" cy="{y}" r="4"/>'
-    body += f'<text class="t" x="{x - 8}" y="{y + 4}" text-anchor="end">{lab}</text>'
-body += curve(pts[0][0] + 8, pts[0][1] + 8, pts[1][0] - 6, pts[1][1] - 4, -26, "ah-lu", cls="l2")
-body += curve(pts[1][0] + 8, pts[1][1] - 4, pts[2][0] - 6, pts[2][1] + 8, 26, "ah-lu", cls="l2")
+    # 箭頭頭會落在點附近,標籤要閃開:x 在左、y 在下、b 在右
+    body += f'<text class="t" x="{x + ddx}" y="{y + ddy}" text-anchor="{anc}">{lab}</text>'
+body += curve(pts[0][0] + 8, pts[0][1] + 8, pts[1][0] - 14, pts[1][1] - 8, -26, "ah-lu", cls="l2")
+body += curve(pts[1][0] + 8, pts[1][1] - 4, pts[2][0] - 16, pts[2][1] + 10, 26, "ah-lu", cls="l2")
 body += '<text x="190" y="196" text-anchor="middle">multiply by U</text>'
 body += '<text x="410" y="196" text-anchor="middle">multiply by L</text>'
 body += curve(pts[0][0] + 8, pts[0][1] - 10, pts[2][0] - 8, pts[2][1] - 10, 66, "ah-lu")
@@ -237,18 +242,25 @@ svg("inverse-transform.svg",
 
 # ---------- 觀念 3:病態 —— 兩條幾乎重合的線,交點沿線滑很遠 ----------
 p = Plot(2.2, 4.8, -0.4, 2.8, s=92, pad=26, mid="ah-cond")
-for (c1, c2, r), cls in (((4.5, 3.1, 19.249), "l1"), ((1.6, 1.1, 6.843), "l2")):
+# 兩條線在圖上只差 0.4px,直接畫會疊成一條(整張圖就白畫了):
+# 第二條改成虛線、並標出各自的方程式,讓「這是兩條線」看得出來
+for (c1, c2, r), cls, extra, lab in (
+        ((4.5, 3.1, 19.249), "l1", "", "4.5x₁ + 3.1x₂ = 19.249"),
+        ((1.6, 1.1, 6.843), "l2", ' stroke-dasharray="7 5" style="stroke-width:2.6"',
+         "1.6x₁ + 1.1x₂ = 6.843")):
     ys = [(r - c1 * x) / c2 for x in (2.2, 4.8)]
-    p.line((2.2, ys[0]), (4.8, ys[1]), cls=cls)
+    p.line((2.2, ys[0]), (4.8, ys[1]), cls=cls, extra=extra)
 p.line((2.2, 0), (4.8, 0), cls="ax")
+p.line((2.3, -0.4), (2.3, 2.8), cls="ax")
 p.label((4.8, 0), "x1", dx=-6, dy=-8, anchor="end")
+p.label((2.3, 2.8), "x2", dx=10, dy=30)
 p.dot((3.94, 0.49)); p.label((3.94, 0.49), "(3.94, 0.49)", dx=10, dy=14)
 p.dot((2.90, 2.00)); p.label((2.90, 2.00), "(2.90, 2.00)", dx=10, dy=-10)
 p.line((2.90, 2.00), (3.94, 0.49), cls="ax", extra=' stroke-dasharray="5 4"')
 p.label((3.42, 1.25), "solution moves", dx=-12, dy=-6, anchor="end")
 single("ill-conditioned.svg",
        "Two lines that almost coincide; rounding the right-hand side moves the intersection point a long way along them",
-       p, caption="兩條線幾乎重合:右端只動 0.05%,交點就滑到另一處")
+       p, caption="兩條線(實線、虛線)幾乎重合:右端只動 0.05%,交點就沿著線滑到另一處")
 
 # ---------- 觀念 6:梯形網路(改畫課本 2.5 Figure 4)----------
 class Circuit:
@@ -316,7 +328,7 @@ c.wire((40, BOT), (520, BOT))
 c.resistor((380, TOP), (380, BOT), sub("R2"), side=-1, dist=18)
 c.term((40, TOP), sub("v1"), dx=-16)
 c.term((40, BOT), "", dx=0)
-c.term((285, TOP), sub("v2"), dx=0, dy=22)
+c.term((285, TOP), sub("v2"), dx=-8, dy=22)
 c.term((285, BOT), "", dx=0)
 c.term((520, TOP), sub("v3"), dx=16)
 c.term((520, BOT), "", dx=0)
@@ -332,12 +344,12 @@ _x0, _y0 = p.P(0.45, 2.35)
 _x1, _y1 = p.P(4.55, 0.25)
 p.raw(f'<rect x="{_x0}" y="{_y0}" width="{_x1 - _x0}" height="{_y1 - _y0}" class="hl" style="opacity:0.25"/>')
 nodes = {1: (1, 1.8), 2: (1, 0.8), 3: (2, 1.8), 4: (2, 0.8), 5: (3, 1.8), 6: (3, 0.8), 7: (4, 1.8), 8: (4, 0.8)}
-for n, q in nodes.items():
+for aa, bb in ((1, 2), (3, 4), (5, 6), (7, 8), (1, 3), (3, 5), (5, 7), (2, 4), (4, 6), (6, 8)):
+    p.line(nodes[aa], nodes[bb], cls="ax")
+for n, q in nodes.items():           # 節點畫在線之後,否則格線會把編號劃掉
     x, y = p.P(*q)
     p.raw(f'<circle cx="{x}" cy="{y}" r="11" class="l1" style="fill:var(--card)"/>')
     p.raw(f'<text class="m" x="{x}" y="{y + 4}" text-anchor="middle">{n}</text>')
-for aa, bb in ((1, 2), (3, 4), (5, 6), (7, 8), (1, 3), (3, 5), (5, 7), (2, 4), (4, 6), (6, 8)):
-    p.line(nodes[aa], nodes[bb], cls="ax")
 p.label((2.5, 2.35), "0°", dx=0, dy=-8, anchor="middle")
 p.label((2.5, 0.25), "10°", dx=0, dy=18, anchor="middle")
 p.label((0.45, 1.3), "5°", dx=-10, dy=4, anchor="end")

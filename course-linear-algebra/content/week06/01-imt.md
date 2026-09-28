@@ -165,7 +165,7 @@ Determine if $A = \begin{bmatrix} 2 & 3 & 4 \\ 2 & 3 & 4 \\ 2 & 3 & 4 \end{bmatr
 T 題 Exercises 9、10 放進實作課,和條件數一起做。
 
 ## 練習
-### 照做 · Lay 2.3 Exercises 1–6
+### 照做 · Lay 2.3 Exercises 1–3
 Unless otherwise specified, assume that all matrices in these exercises are $n \times n$. Determine which of the matrices in Exercises 1–10 are invertible. Use as few calculations as possible. Justify your answers.
 
 (1) $\begin{bmatrix} 5 & 7 \\ -3 & -6 \end{bmatrix}$
@@ -174,6 +174,17 @@ Unless otherwise specified, assume that all matrices in these exercises are $n \
 
 (3) $\begin{bmatrix} 5 & 0 & 0 \\ -3 & -7 & 0 \\ 8 & 5 & -1 \end{bmatrix}$
 
+#### 解答
+- (1) **可逆**。兩行互不成比例 ⇒ 線性獨立 ⇒ IMT (e)。($\det = -30 + 21 = -9 \ne 0$。)
+- (2) **不可逆**。第 2 行 $= -\tfrac32 \times$ 第 1 行 ⇒ 行相依 ⇒ (e) 不成立。($\det = 36 - 36 = 0$。)
+- (3) **可逆**。下三角、對角線 $5, -7, -1$ 全非零 ⇒ 三個樞軸 ⇒ (c)。
+
+#### 備註
+這三題都是「一眼題」:(1)(2) 看兩行成不成比例,(3) 看三角矩陣的對角線。批改時要看學生有沒有寫出**引用的條款**,而不是只答可逆與否。
+
+書上的共同指示涵蓋 Exercises 1–10;本講義把它拆成三張卡片(1–3、4–6、7–10),免得一張卡片的作答區長到跨頁。
+
+### 照做 · Lay 2.3 Exercises 4–6
 (4) $\begin{bmatrix} -7 & 0 & 4 \\ 3 & 0 & -1 \\ 2 & 0 & 9 \end{bmatrix}$
 
 (5) $\begin{bmatrix} 0 & 4 & 7 \\ 1 & 0 & 5 \\ -5 & 8 & -2 \end{bmatrix}$
@@ -181,15 +192,12 @@ Unless otherwise specified, assume that all matrices in these exercises are $n \
 (6) $\begin{bmatrix} 1 & -5 & -4 \\ 0 & 3 & 4 \\ -3 & 6 & 0 \end{bmatrix}$
 
 #### 解答
-- (1) **可逆**。兩行互不成比例 ⇒ 線性獨立 ⇒ IMT (e)。($\det = -30 + 21 = -9 \ne 0$。)
-- (2) **不可逆**。第 2 行 $= -\tfrac32 \times$ 第 1 行 ⇒ 行相依 ⇒ (e) 不成立。($\det = 36 - 36 = 0$。)
-- (3) **可逆**。下三角、對角線 $5, -7, -1$ 全非零 ⇒ 三個樞軸 ⇒ (c)。
 - (4) **不可逆**。第 2 行整行是 0 ⇒ 行相依 ⇒ (e) 不成立(取 $\mathbf{x} = \mathbf{e}_2$ 就是非零解)。
 - (5) **可逆**。先換列再消,得 $\begin{bmatrix} 1 & 0 & 5 \\ 0 & 4 & 7 \\ 0 & 0 & 9 \end{bmatrix}$,三個樞軸 ⇒ (c)。
 - (6) **不可逆**。列化簡後只有 2 個樞軸,(c) 不成立。($\det = -24 + 60 - 36 = 0$。)
 
 #### 備註
-(1)(2)(4) 都是「一眼題」,(3) 靠三角形狀,只有 (5)(6) 真的要動手。批改時要看學生有沒有寫出**引用的條款**。
+(4) 還是「一眼題」(整行為 0),只有 (5)(6) 真的要動手。
 
 (5) 書後給的是階梯形 $\begin{bmatrix} 1 & 0 & 5 \\ 0 & 4 & 7 \\ 0 & 0 & 9 \end{bmatrix}$;注意換過一次列,所以原矩陣的行列式是 $-36$ 而不是 $+36$——這不影響可逆性,但值得跟學生說一句。
 
