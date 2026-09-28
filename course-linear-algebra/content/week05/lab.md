@@ -11,9 +11,9 @@
 ```python todo
 # TODO 預測:四個答案先寫在這裡,跑完再回來對照
 pred = {
-    "AB_shape": None,        # 例如 (3, 2);B @ A 的部分寫在 comment 裡
+    "AB_shape": None,        # 格式像 (4, 9);B @ A 的部分寫在 comment 裡
     "matmul_operator": None, # 填 "@" 或 "*"
-    "solve_vs_inv": None,    # 填你猜的倍數,例如 3
+    "solve_vs_inv": None,    # 填你猜的倍數(一個大於 1 的數)
     "compose_order": None,   # 填 "Tr @ Rot" 或 "Rot @ Tr"
 }
 ```
@@ -34,7 +34,7 @@ print("(A @ B).shape =", (A @ B).shape)
 P35, Q52 = np.zeros((3, 5)), np.zeros((5, 2))
 print("(3×5) @ (5×2) 的 shape =", (P35 @ Q52).shape)
 try:
-    Q52 @ P35 @ Q52 @ P35          # (5×2) @ (3×5):中間的 2 和 3 對不上
+    Q52 @ P35                      # (5×2) @ (3×5):中間的 2 和 3 對不上
 except ValueError as e:
     print("(5×2) @ (3×5) → ValueError:", str(e)[:44])
 
@@ -73,7 +73,7 @@ err = ""
 - **`C * D` 不會報錯**,但算的是逐格相乘,和矩陣乘法完全不同。這是本週最容易寫錯又最難發現的 bug:程式照跑,只是答案全錯。
 - `np.zeros`、`np.ones`、`np.eye`、`np.diag` 各一行就造出課本 Exercise 43 要的四種矩陣。
 
-## ② 計算 · 用隨機矩陣測恆等式
+## ② 計算 · 用隨機矩陣測恆等式,再看冪次
 課本 Lay 2.1 Exercises 44–48 要學生「用隨機矩陣檢查等式成不成立」——這正是**程式比手算強**的地方:手算一個反例要十分鐘,程式三組只要一瞬間。
 
 ```python
@@ -356,7 +356,7 @@ ans = {
     "why_1": "",        # 為什麼資料矩陣要補上一列全是 1?
     "third_column": "", # 繞 (6,8) 轉 60° 的矩陣,第三行 (9.9282, -1.1962) 是什麼意思?
 }
-# 動手:寫出「繞 (2, 3) 鏡射過水平線 y = 3」的 3×3 矩陣,並驗證 (2,3) 自己不動
+# 動手:寫出「鏡射過水平線 y = 3」的 3×3 矩陣,並驗證它把 (2, 5) 送到 (2, 1)、把 (7, 3) 留在原地
 Mref = None
 ```
 
@@ -426,7 +426,7 @@ back = None
 
 ## 驗算
 ```check
-Matrix([[1, 2], [3, 4]]) * Matrix([[5, 6, 7], [8, 9, 10]]) == Matrix([[21, 24, 27], [47, 54, 61]])
+Matrix([[2, 3], [1, -5]]) * Matrix([[4, 3, 6], [1, -2, 3]]) == Matrix([[11, 0, 21], [-1, 13, -9]])
 (lambda a, m: (a.T * m * a)[0] == 0)(Matrix([1, 0, 1, 0]), Matrix([[1, 0, -1, 0], [0, 1, 0, 0], [-1, 0, 1, 0], [0, 0, 0, 1]]))
 (lambda a, m: (a.T * m * a)[0] == 0)(Matrix([1, 1, 0, 1]), Matrix([[1, 0, 0, -1], [0, 1, 0, -1], [0, 0, 1, 0], [-1, -1, 0, 2]]))
 (lambda g: (g ** 2)[0, 3] == 1 and (g ** 2)[2, 3] == 0 and [(g ** 3)[i, i] for i in range(4)] == [2, 2, 2, 0])(Matrix([[0, 1, 1, 0], [1, 0, 1, 0], [1, 1, 0, 1], [0, 0, 1, 0]]))
@@ -435,6 +435,7 @@ Matrix([[-25, -9, -27], [546, 180, 537], [154, 50, 149]]).solve(Matrix([0, 1, 0]
 Matrix([[-25, -9, -27], [546, 180, 537], [154, 50, 149]]).solve(Matrix([0, 0, 1])) == Matrix([Rational(-9, 2), Rational(439, 2), -69])
 (lambda d: d * Matrix([30, 50, 20]) == Matrix([Rational(27, 100), Rational(3, 10), Rational(23, 100)]))(Matrix([[Rational(5,1000), Rational(2,1000), Rational(1,1000)], [Rational(2,1000), Rational(4,1000), Rational(2,1000)], [Rational(1,1000), Rational(2,1000), Rational(5,1000)]]))
 (lambda d: d.inv() == Matrix([[250, -125, 0], [-125, 375, -125], [0, -125, 250]]) and d.inv() * Matrix([0, 0, Rational(4,100)]) == Matrix([0, -5, 10]))(Matrix([[Rational(5,1000), Rational(2,1000), Rational(1,1000)], [Rational(2,1000), Rational(4,1000), Rational(2,1000)], [Rational(1,1000), Rational(2,1000), Rational(5,1000)]]))
-simplify(Matrix([[1, Rational(1,4), 0], [0, 1, 0], [0, 0, 1]]) * Matrix([0, 6.42, 1]) - Matrix([1.605, 6.42, 1])) == zeros(3, 1)
+simplify(Matrix([[1, Rational(1,4), 0], [0, 1, 0], [0, 0, 1]]) * Matrix([Rational(1,2), 6.42, 1]) - Matrix([2.105, 6.42, 1])) == zeros(3, 1)
+(lambda a: Matrix.hstack(a, eye(3)).rref()[0][:, 3:] == a.inv() == Matrix([[Rational(-9,2), 7, Rational(-3,2)], [-2, 4, -1], [Rational(3,2), -2, Rational(1,2)]]))(Matrix([[0, 1, 2], [1, 0, 3], [4, -3, 8]]))
 (lambda y: [round(float(v), 4) for v in y.inv().col(0)] == [1.0031, 0.9968, 1.0085])(Matrix([[Rational(299,1000), Rational(587,1000), Rational(114,1000)], [Rational(596,1000), Rational(-275,1000), Rational(-321,1000)], [Rational(212,1000), Rational(-528,1000), Rational(311,1000)]]))
 ```

@@ -69,6 +69,14 @@ Exercise 10: 5×5  rank = 5  det = 2  rref 是 I 嗎? True  可逆? True
 → 非方陣時,獨立與張成是兩件事;IMT 不適用
 ```
 
+```python todo
+# TODO 計算:把 A 的第 3 行改成第 1 行的 2 倍(A[:, 2] = 2 * A[:, 0]),再跑一次上面的六條檢查。
+# 六條會同時變成 False 嗎?把結果寫下來,並說出這體現了 IMT 的哪一條。
+A_broken = None                   # ← 改好的矩陣
+checks_broken = {}                # ← 六條的結果
+which_clause = ""                 # 一句話:引用哪一條
+```
+
 **會看到**:
 
 - 兩個 T 題的矩陣都可逆,而且**三種判斷方式給出一致的答案**——這正是可逆矩陣定理保證的事。
@@ -80,6 +88,13 @@ Exercise 10: 5×5  rank = 5  det = 2  rref 是 I 嗎? True  可逆? True
 
 ```python
 from sympy import Rational
+
+# 這一格自己重新造矩陣,不依賴 ② 那一格的變數
+mats = {
+    9: Matrix([[4, 0, -7, -7], [-6, 1, 11, 9], [7, -5, 10, 19], [-1, 2, 3, -1]]),
+    10: Matrix([[5, 3, 1, 7, 9], [6, 4, 2, 8, -8], [7, 5, 3, 10, 9],
+                [9, 6, 4, -9, -5], [8, 5, 2, 11, 4]]),
+}
 
 # ---- Lay 2.3 Exercise 49:右端動 0.05%,解動 300% ----
 Ae = Matrix([[Rational(9, 2), Rational(31, 10)], [Rational(8, 5), Rational(11, 10)]])
@@ -150,6 +165,7 @@ obs = {
 - **Exercise 9 的矩陣 $\det = 1$,條件數卻約 23,000**。行列式漂亮不代表矩陣健康——這是本週最重要的一句話。
 - **「先造答案再解回來」**是很實用的測試手法:自己挑一個 $\mathbf{x}$、算出 $\mathbf{b}$、再叫程式解回來,就知道掉了幾位。這裡大約掉到第 12 位,和 $16 - \log_{10}(2.4 \times 10^4) \approx 11.6$ 吻合。
 - **Hilbert(5)**:條件數約 $4.8 \times 10^5$,浮點解和精確解差了 $10^{-7}$ 這個量級——原本是整數的答案,已經看得到誤差了。
+- **可信到第幾位**:程式印的「大約可信到第 11 位」就是 ① 第 3 題的對照答案——和 $16 - \log_{10}(4.8 \times 10^5) \approx 10.3$ 吻合。
 - **Hilbert(12)**:條件數超過 $10^{16}$,已經超出雙精度的能力。`A @ inv(A)` 應該是單位矩陣,實際上有某一格離 0 差了 $10^{-2}$——**整整 14 個數量級的失準**。
 
 ## ④ 應用 · LU 分解:電腦真正在做的事
@@ -213,6 +229,8 @@ ans = {
 這一格做課本兩個標 **T** 的工程題(平板的穩態熱傳導、桿子的非穩態熱傳導),順便看一眼後面幾週的 QR 與 SVD。
 
 ```python
+import scipy.linalg as sla
+
 # ---- Lay 2.5 Exercise 31(T):平板的穩態熱傳導,帶狀矩陣 ----
 Ap = np.array([
     [4, -1, -1, 0, 0, 0, 0, 0], [-1, 4, 0, -1, 0, 0, 0, 0],
@@ -262,9 +280,9 @@ t4 = [2.7922 4.7778 5.4856 4.7778 2.7922]
 ```python todo
 # TODO 應用:一個問題 + 一個動手題
 why_not_inverse = ""              # 平板那題:為什麼大型問題不存 A 的反矩陣?
-# 動手:把 A 的第 3 行改成第 1 行的 2 倍,再跑一次 ② 的六條檢查,看它們是不是同時變 False
-A_broken = None                   # ← 改好的矩陣
-checks_broken = {}                # ← 六條的結果
+# 動手:把平板矩陣換成 16 個節點的版本(4×4 的格點),比較 nnz(L) + nnz(U) 與 nnz(A⁻¹)
+# 的成長速度 —— 節點變兩倍,哪一個漲得比較快?
+nnz_lu, nnz_inv = None, None
 ```
 
 **會看到**:
@@ -280,10 +298,11 @@ checks_broken = {}                # ← 六條的結果
 ```check
 Matrix([[4, 0, -7, -7], [-6, 1, 11, 9], [7, -5, 10, 19], [-1, 2, 3, -1]]).det() == 1
 Matrix([[5, 3, 1, 7, 9], [6, 4, 2, 8, -8], [7, 5, 3, 10, 9], [9, 6, 4, -9, -5], [8, 5, 2, 11, 4]]).det() == 2
-(lambda a: a.rref()[0] == eye(4) and len(a.rref()[1]) == 4 and a.nullspace() == [] and a.T.rank() == 4)(Matrix([[1, 0, -2], [3, 1, -2], [-5, -1, 9]]).row_join(Matrix([0, 0, 0])).col_join(Matrix([[0, 0, 0, 1]])))
+(lambda a: a.rref()[0] == eye(3) and len(a.rref()[1]) == 3 and a.nullspace() == [] and a.T.rank() == 3)(Matrix([[1, 0, -2], [3, 1, -2], [-5, -1, 9]]))
 Matrix([[1, 0], [0, 1], [0, 0]]).rank() == 2 and Matrix([[1, 0], [0, 1], [0, 0]]).rank() < 3
 Matrix([[Rational(9,2), Rational(31,10)], [Rational(8,5), Rational(11,10)]]).det() == Rational(-1,100)
-round(float(Matrix([[4.5, 3.1], [1.6, 1.1]]).condition_number())) == 3363
+(lambda a: a.solve(Matrix([Rational(19249,1000), Rational(6843,1000)])) == Matrix([Rational(197,50), Rational(49,100)]))(Matrix([[Rational(9,2), Rational(31,10)], [Rational(8,5), Rational(11,10)]]))
+(lambda q: (q.T * q - eye(3)).applyfunc(lambda v: 0 if abs(v) < Rational(1,10**9) else v).is_zero_matrix)(Matrix(4, 3, lambda i, j: [[1, -1, 4], [1, 4, -2], [1, 4, 2], [1, -1, 0]][i][j]).QRdecomposition()[0])
 Matrix(5, 5, lambda i, j: Rational(1, i + j + 1)).solve(Matrix([0, 0, 0, 0, 1])) == Matrix([630, -12600, 56700, -88200, 44100])
 (lambda l, u, a: l * u == a)(Matrix([[1, 0, 0, 0], [-2, 1, 0, 0], [1, -3, 1, 0], [-3, 4, 2, 1]]), Matrix([[2, 4, -1, 5, -2], [0, 3, 1, 2, -3], [0, 0, 0, 2, 1], [0, 0, 0, 0, 5]]), Matrix([[2, 4, -1, 5, -2], [-4, -5, 3, -8, 1], [2, -5, -4, 1, 8], [-6, 0, 7, -3, 1]]))
 (lambda a: len([1 for i in range(a.rows) for j in range(a.cols) if a[i, j] != 0]) == 28 and len([1 for i in range(a.rows) for j in range(a.cols) if a.inv()[i, j] != 0]) == 64)(Matrix([[4, -1, -1, 0, 0, 0, 0, 0], [-1, 4, 0, -1, 0, 0, 0, 0], [-1, 0, 4, -1, -1, 0, 0, 0], [0, -1, -1, 4, 0, -1, 0, 0], [0, 0, -1, 0, 4, -1, -1, 0], [0, 0, 0, -1, -1, 4, 0, -1], [0, 0, 0, 0, -1, 0, 4, -1], [0, 0, 0, 0, 0, -1, -1, 4]]))

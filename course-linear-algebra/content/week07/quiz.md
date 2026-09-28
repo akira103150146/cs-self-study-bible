@@ -14,7 +14,7 @@ Which of the following sets is a subspace of $\mathbb{R}^2$?
 ### 答案
 D
 ### 為什麼
-A 是一條**過原點**的直線:含 $\mathbf{0}$、兩個解相加仍滿足 $y = 2x$、乘任何純量也滿足。三條性質全過。
+**D** 是一條**過原點**的直線:含 $\mathbf{0}$、兩個解相加仍滿足 $y = 2x$、乘任何純量也滿足。三條性質全過。
 
 ### 迷思對照
 - **A** 只看「是直線」就說是子空間 → 觀念 1:不過原點的直線不含 $\mathbf{0}$,第一條就掛了
@@ -42,25 +42,25 @@ $\operatorname{Nul} A$ 的元素是**解向量**,有 5 個分量(行數)⇒ 在 
 ## Q3 · 觀念 3
 The matrix $A$ and an echelon form of $A$ are
 
-$$A = \begin{bmatrix} 1 & 3 & 2 \\ 2 & 6 & 5 \end{bmatrix} \sim \begin{bmatrix} 1 & 3 & 2 \\ 0 & 0 & 1 \end{bmatrix}$$
+$$A = \begin{bmatrix} 1 & 3 & 2 \\ 2 & 6 & 5 \\ 3 & 9 & 7 \end{bmatrix} \sim \begin{bmatrix} 1 & 3 & 2 \\ 0 & 0 & 1 \\ 0 & 0 & 0 \end{bmatrix}$$
 
 Which set is a basis for $\operatorname{Col} A$?
 
-- A. $\left\{\begin{bmatrix} 1 \\ 2 \end{bmatrix}, \begin{bmatrix} 2 \\ 5 \end{bmatrix}\right\}$
-- B. $\left\{\begin{bmatrix} 1 \\ 0 \end{bmatrix}, \begin{bmatrix} 2 \\ 1 \end{bmatrix}\right\}$
-- C. $\left\{\begin{bmatrix} 1 \\ 2 \end{bmatrix}, \begin{bmatrix} 3 \\ 6 \end{bmatrix}\right\}$
-- D. $\left\{\begin{bmatrix} 1 \\ 2 \end{bmatrix}, \begin{bmatrix} 3 \\ 6 \end{bmatrix}, \begin{bmatrix} 2 \\ 5 \end{bmatrix}\right\}$
+- A. $\left\{\begin{bmatrix} 1 \\ 2 \\ 3 \end{bmatrix}, \begin{bmatrix} 2 \\ 5 \\ 7 \end{bmatrix}\right\}$
+- B. $\left\{\begin{bmatrix} 1 \\ 0 \\ 0 \end{bmatrix}, \begin{bmatrix} 2 \\ 1 \\ 0 \end{bmatrix}\right\}$
+- C. $\left\{\begin{bmatrix} 1 \\ 2 \\ 3 \end{bmatrix}, \begin{bmatrix} 3 \\ 6 \\ 9 \end{bmatrix}\right\}$
+- D. $\left\{\begin{bmatrix} 1 \\ 2 \\ 3 \end{bmatrix}, \begin{bmatrix} 3 \\ 6 \\ 9 \end{bmatrix}, \begin{bmatrix} 2 \\ 5 \\ 7 \end{bmatrix}\right\}$
 
 ### 答案
 A
 
 ### 為什麼
-階梯形顯示樞軸在第 **1、3** 行,所以要取 **$A$ 自己**的第 1、3 行:$(1,2)$ 與 $(2,5)$。
+階梯形顯示樞軸在第 **1、3** 行,所以要取 **$A$ 自己**的第 1、3 行:$(1,2,3)$ 與 $(2,5,7)$。
 
 ### 迷思對照
-- **B** 拿階梯形的樞軸行當基底 → 觀念 3 的 Warning:列運算改變行本身,$(1,0)$ 不在 $\operatorname{Col} A$ 裡
+- **B** 拿階梯形的樞軸行當基底 → 觀念 3 的 Warning:列運算改變行本身,$(1,0,0)$ 根本不在 $\operatorname{Col} A$ 裡(它的三個分量不可能由 $(1,2,3)$ 與 $(2,5,7)$ 組出來)
 - **C** 只會取「前兩行」→ 觀念 3:樞軸位置由階梯形決定,第 2 行是 $3 \times$ 第 1 行,不是樞軸行
-- **D** 把所有行都放進去 → 觀念 3:基底不能有多餘的向量,三個 $\mathbb{R}^2$ 向量必相依
+- **D** 把所有行都放進去 → 觀念 3:基底不能有多餘的向量,第 2 行是第 1 行的倍數
 
 ## Q4 · 觀念 4
 Let $\mathbf{b}_1 = \begin{bmatrix} 1 \\ 1 \end{bmatrix}$, $\mathbf{b}_2 = \begin{bmatrix} 2 \\ -1 \end{bmatrix}$, $\mathcal{B} = \{\mathbf{b}_1, \mathbf{b}_2\}$, and $[\,\mathbf{x}\,]_{\mathcal{B}} = \begin{bmatrix} 3 \\ 2 \end{bmatrix}$. What is $\mathbf{x}$?

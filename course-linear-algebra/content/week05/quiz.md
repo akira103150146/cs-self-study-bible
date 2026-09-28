@@ -28,10 +28,10 @@ $$\left[\begin{array}{ccc|ccc} 1 & 2 & 0 & 3 & -1 & 0 \\ 0 & 0 & 0 & -2 & 1 & 0 
 
 What should you conclude?
 
-- A. Keep going; you still have to clear the entry above the pivot in column 3.
+- A. Keep going; you still have to clear the 2 in row 1, column 2.
 - B. $A$ is not invertible, so $A^{-1}$ does not exist.
 - C. $A^{-1} = \begin{bmatrix} 3 & -1 & 0 \\ -2 & 1 & 0 \\ 4 & 0 & 1 \end{bmatrix}$, since the right half is already filled in.
-- D. You made an arithmetic error, because the right half can never contain a zero row.
+- D. You made an arithmetic error, because the left half can never contain a zero row.
 
 ### 答案
 B
@@ -40,7 +40,7 @@ B
 **左半邊出現了一整列 0**,表示 $A$ 最多只有 2 個樞軸,不可能化成 $I_3$ ⇒ 由 IMT 的 (b)(c),$A$ 不可逆。**這時就可以停手**,右半邊算到哪裡都沒有意義。
 
 ### 迷思對照
-- **A** 沒注意到左半邊的零列,只看樞軸位置 → 觀念 5:演算法的終止條件是「左半邊變成 $I$」或「出現零列」
+- **A** 沒注意到左半邊的零列,只想著「還沒化簡完」→ 觀念 5:第 2 行沒有樞軸,那個 2 本來就消不掉;演算法的終止條件是「左半邊變成 $I$」或「出現零列」
 - **C** 以為右半邊自動就是 $A^{-1}$ → 觀念 5:只有**左半邊真的變成 $I$**時,右半邊才是反矩陣
 - **D** 把零列當成計算錯誤 → 觀念 5:零列是正常的結果,它正是「不可逆」的訊號
 

@@ -299,6 +299,8 @@ def decode(y):
 (lambda b, x: b.gauss_jordan_solve(x)[0] == Matrix([Rational(-4,3), Rational(7,3)]) and b.rank() == 2)(Matrix([[12, 15], [-4, -7], [9, 12], [5, 8]]), Matrix([19, -11, 16, 12]))
 (lambda b, x: b.gauss_jordan_solve(x)[0] == Matrix([5, 6, 3]) and b.rank() == 3)(Matrix([[-5, 7, -8], [4, -5, 6], [-3, 3, -4], [2, -3, 3]]), Matrix([-7, 8, -9, 1]))
 Matrix([[1, 2, 3], [2, 4, 6], [3, 6, 9]]).rank() == 1
+(lambda b: b.solve(Matrix([4, 1])) == Matrix([Rational(3,2), Rational(1,2)]))(Matrix([[3, -1], [0, 2]]))
+Matrix([[1, 2, 3], [0, 1, 4], [5, 6, 0]]).rank() == 3 and Matrix([[1, 2, 3], [4, 5, 6], [7, 8, 9]]).rank() == 2
 (Matrix([[1, 2, 3], [2, 4, 6], [3, 6, 9]]) + Matrix([[0, 0, 0], [0, 0, 0], [0, 0, 1]]) * Rational(1, 10**16)).rank() == 2
 (lambda h: h.rank() == 3 and h.cols - h.rank() == 4)(Matrix([[1, 1, 1, 0, 1, 0, 0], [1, 1, 0, 1, 0, 1, 0], [1, 0, 1, 1, 0, 0, 1]]))
 (lambda h, g: (h * g).applyfunc(lambda v: v % 2).is_zero_matrix and g.rank() == 4)(Matrix([[1, 1, 1, 0, 1, 0, 0], [1, 1, 0, 1, 0, 1, 0], [1, 0, 1, 1, 0, 0, 1]]), Matrix([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1], [1, 1, 1, 0], [1, 1, 0, 1], [1, 0, 1, 1]]))
