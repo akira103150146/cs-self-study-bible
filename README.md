@@ -8,11 +8,12 @@
 
 ## 這本書有什麼
 
-- **18 部、73 章**:從「什麼是計算」到 Python、資料結構與演算法、計算機系統
+- **序章＋27 部、122 章**,外加 6 份附錄題庫:從「什麼是計算」到 Python、資料結構與演算法、計算機系統
   (NAND→CPU→OS→網路)、資訊安全、資料庫、機器學習、編譯器、計算理論、線性代數……
   每章都有學習目標、由淺入深的敘事、**C / C++ / Python** 範例、手繪內嵌 SVG 圖,
   以及附可展開解答的練習。
-- **三條專修軌道**:競賽程式設計與 APCS、電腦視覺與影像辨識、實戰資安 CTF。
+- **專修軌道與進階延伸**:競賽程式設計與 APCS、電腦視覺與影像辨識、實戰資安 CTF,
+  以及 SICP、Rust、容器與雲原生、LLM Agent、進階 AI、GPU 與 WASM、八個實戰專題。
 - **完整題庫附錄(依章節)**:
   - AP325 題單(110 題)
   - APCS 觀念題(125 題)、實作題(120 題)、模擬考卷(90 題)
@@ -23,13 +24,14 @@
 
 ```
 index.html              首頁與完整課程地圖
-chapters/               各章節 HTML(00–79)
+chapters/               各章節 HTML(檔名 00–128;src/ 是來源片段,build.py 產生外層)
 assets/
   style.css             設計系統(淺/深雙主題)
   book.js               導覽引擎(側欄、目錄、進度、延遲載入)
   toi/                  TOI 題庫資料與渲染器(toi-index.js / toi-statements.js / toi-render.js)
 _AUTHOR_GUIDE.md        章節撰寫規範
 _build_toi_*.py         TOI 題庫的重建工具
+_check_chapter_refs.py   章號與章際連結檢查(以 book.js 的顯示章號為準)
 ```
 
 ## 效能
