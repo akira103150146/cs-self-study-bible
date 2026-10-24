@@ -16,6 +16,24 @@
 - 單章重建:`python build.py NN-slug`;結構/跳脫自檢:`python build.py --check NN-slug`(驗證為選用 lint,不阻擋建置;既有部分舊章本就不符嚴格規則)。
 - 改完 src 後可用 `python build.py --verify` 確認所有產出已重建(CI/送交前自檢)。
 
+## 0.6 章號與部名一律寫記號(不要寫死數字)
+章的顯示章號與所屬部只記在 `assets/book.js`。內文提到本書的章或部時,**寫記號**,由 `build.py` 依 book.js 代入;
+這樣章搬家、改部時只要改 book.js 再 `python build.py`,全書的章號自動跟著變。`<id>` 一律是章的檔名 id(不含 `.html`)。
+
+| 記號 | 產出 | 用在 |
+|---|---|---|
+| `{{ch:30-graph-algorithms}}` | 第 30 章 | 一般引用;章首 `.tag` 寫本章自己的 id |
+| `{{num:30-graph-algorithms}}` | 30 | 範圍與並列:`第 {{num:34-security-fundamentals}}–{{num:36-secure-coding}} 章`、`第 {{num:52-web-security}}、{{num:53-forensics-governance}} 章` |
+| `{{part:30-graph-algorithms}}` | 第六部 · 演算法與資料結構 | 章首 `.eyebrow`(寫本章自己的 id) |
+| `{{partnum:30-graph-algorithms}}` | 第六部 | 內文提到某一部(用那一部任一章的 id) |
+
+- 連結照舊:`<a href="30-graph-algorithms.html">{{ch:30-graph-algorithms}}</a>`;href 與記號要指同一章(檢查器會比對)。
+- 記號也可以用在 meta 的 `title`/`description`。附錄(附A–附F)、橋接章沒有數字章號,不能用 `ch`/`num`,照原樣寫「附錄 B」。
+- **外部書目的章號照寫數字**(AP325 第 2 章、SICP 第 3 章、CLRS 第 22 章…),並在 `_chapter_refs_allowlist.txt` 加一行放行規則
+  (常見書名已有通用規則)。同一子句裡寫了「本書」的章號,一律視為本書的章,必須寫記號。
+- `python _check_chapter_refs.py` 會擋:新的裸「第 N 章」/「第X部」、指向不存在 id 的記號、白名單裡已經用不到的行。
+  `<pre>`、`<code>` 與 HTML 註解裡的文字不檢查。記號寫錯時 `build.py` 會直接失敗。
+
 ## 1. 寫作語氣與風格(最重要)
 - **語言**:繁體中文為主,寫給台灣讀者。**中英對照**:每個重要術語第一次出現時用「中文(English)」格式,
   例如「遞迴(recursion)」「雜湊表(hash table)」。之後可只用中文或交替使用。
@@ -42,7 +60,7 @@
 - 例:時間複雜度 `$O(n \log n)$`、求和 `$\sum_{i=1}^{n} i = \frac{n(n+1)}{2}$`。
 
 ## 4. 必用的版型元件(class 已在 style.css 定義好,直接用)
-- 章首固定結構(見下方骨架):`.eyebrow`(所屬部別)、`<h1>`、`.subtitle`(一句引人入勝的副標)、
+- 章首固定結構(見下方骨架):`.eyebrow`(所屬部別,寫 `{{part:本章 id}}`)、`<h1>`、`.subtitle`(一句引人入勝的副標)、
   `.byline`(章次/閱讀時間/難度星等)、`.objectives`(學習目標清單)。
 - 小節標題用 `<h2>`,子節 `<h3>`,更小用 `<h4>`。`book.js` 會自動抓 h2/h3 生成右側目錄,所以**標題要寫得好**。
 - **提示框 callout**(語意化):
@@ -81,11 +99,11 @@
 title: 章節標題
 description: 一句話描述本章。注意:title 與 description 內不要用半形雙引號 " 或角括號 < >。
 -->
-      <div class="eyebrow">第 X 部 · 部別名稱</div>
+      <div class="eyebrow">{{part:NN-slug}}</div>
       <h1>章節標題</h1>
       <p class="subtitle">一句引人入勝的副標題。</p>
       <div class="byline">
-        <span class="tag">第 N 章</span>
+        <span class="tag">{{ch:NN-slug}}</span>
         <span>閱讀時間 ≈ NN 分鐘</span>
         <span>難度:★★★☆☆</span>
       </div>

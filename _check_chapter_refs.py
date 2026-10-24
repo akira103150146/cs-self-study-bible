@@ -13,6 +13,11 @@
      連結文字裡有「§小節名」時,小節名必須是第 N 個標題(或該小節內 callout 標題)的開頭。
      標題計數與 _build_routes.py 共用 _book_headings.Headings(同樣先拿掉註解與 <pre>)。
   8. 殘留的「(撰寫中)」「(即將撰寫)」標記(提醒用,不一定是錯)。
+  9. 章號記號({{ch:<id>}} 等,見 _chapter_tokens.py):種類或 id 不存在、對沒有數字章號的章用 ch/num。
+ 10. 裸章號:內文直接寫「第 N 章」「第 34–36 章」「第六部」(不是記號),而且不在 _chapter_refs_allowlist.txt
+     放行的範圍裡;或前面同一個子句寫了「本書」(就算白名單放行也算)。<pre>/<code>/註解裡的不算。
+ 11. 白名單裡已經比對不到任何文字的行(內文改過了,這行該刪)。
+  1–8 都是對「記號代入之後」的文字檢查,和讀者看到的一樣。
 
 用法:python _check_chapter_refs.py          列出所有問題,有問題時 exit 1
       python _check_chapter_refs.py --quiet  只印摘要
@@ -27,6 +32,8 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, ROOT)   # python -I 也找得到共用模組
 from _book_headings import SRC, Headings, load_book  # noqa: E402
 from _book_headings import norm as head_norm  # noqa: E402
+from _chapter_tokens import (allowed, bad_tokens, bare_refs, book_context, load_allowlist,  # noqa: E402
+                             resolve)
 
 LINK_RE = re.compile(r'<a\s[^>]*href="([^"#:]+?)\.html(?:#([^"]*))?"[^>]*>(.*?)</a>', re.S)
 CHNUM_RE = re.compile(r'第\s*(\d+)\s*章')
@@ -70,11 +77,33 @@ def main(argv):
     heads = Headings()
     by_num = {c['num']: cid for cid, c in book.items()}
     by_file = {cid.split('-')[0]: cid for cid in book if cid[0].isdigit()}
+    by_digit = {c['num']: cid for cid, c in book.items() if c['num'].isdigit()}
+    rules = load_allowlist()
+    used = set()
     problems = []
 
     for path in sorted(glob.glob(os.path.join(SRC, '*.html'))):
         name = os.path.basename(path)[:-5]
-        text = open(path, encoding='utf-8-sig').read()
+        raw = open(path, encoding='utf-8-sig').read()
+
+        for pos, tok, why in bad_tokens(raw, book):
+            problems.append((name, line_of(raw, pos), 'bad-token', why))
+        for s, e, kind, got in bare_refs(raw):
+            hit = allowed(rules, name, raw, s, e)
+            if hit:
+                used.add(hit)
+                if not (kind == 'ch' and book_context(raw, s, e, book, by_digit)):
+                    continue
+                why = '前面寫了「本書」,是本書的章,白名單擋不住'
+            else:
+                why = '請改成記號 ' + ('{{ch:<id>}} / {{num:<id>}}' if kind == 'ch' else '{{partnum:<id>}}') + \
+                      ',外部書目的章號請加進 _chapter_refs_allowlist.txt'
+            problems.append((name, line_of(raw, s), 'bare-ref', f'「{got}」{why}'))
+
+        try:
+            text = resolve(raw, book, name)
+        except Exception:      # 記號錯誤已在上面列出,這裡用原文繼續做其他檢查
+            text = raw
         me = book.get(name)
 
         for m in LINK_RE.finditer(text):
@@ -147,12 +176,16 @@ def main(argv):
         for m in TODO_RE.finditer(text):
             problems.append((name, line_of(text, m.start()), 'todo-marker', f'殘留標記「{m.group(0)}」'))
 
+    for glob_, rx, line in rules:
+        if line not in used:
+            problems.append(('_chapter_refs_allowlist.txt', 0, 'allowlist-unused', f'這行已經比對不到任何章號:{line.strip()}'))
+
     kinds = {}
     for p in problems:
         kinds[p[2]] = kinds.get(p[2], 0) + 1
     if not quiet:
         for name, ln, kind, msg in problems:
-            print(f'{name}.html:{ln}: [{kind}] {msg}')
+            print(f'{name if "." in name else name + ".html"}:{ln}: [{kind}] {msg}')
     summary = ', '.join(f'{k} {v}' for k, v in sorted(kinds.items())) or '無'
     print(f'檢查 {len(glob.glob(os.path.join(SRC, "*.html")))} 個片段、{len(book)} 個 book.js 條目;問題:{summary}')
     return 1 if problems else 0
