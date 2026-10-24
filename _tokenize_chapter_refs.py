@@ -152,7 +152,7 @@ def convert_file(name, text, book, by_num, by_part, rules, stats, review):
         last = e
     out.append(text[last:])
     new_text = ''.join(out)
-    if resolve(new_text, book, name) != text:
+    if resolve(new_text, book, name) != resolve(text, book, name):
         raise SystemExit(f'{name}: 轉換後代入的結果和原文不同,停止')
     return new_text
 
