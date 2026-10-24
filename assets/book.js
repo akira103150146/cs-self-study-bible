@@ -26,6 +26,7 @@ const BOOK = {
         { id: "03-functions-recursion", num: "3", title: "函式、抽象與遞迴", en: "Functions, Abstraction & Recursion", done: true },
         { id: "04-data-structures-intro", num: "4", title: "基本資料結構與字串", en: "Built-in Data Structures", done: true },
         { id: "05-algorithmic-thinking", num: "5", title: "演算法思維、除錯與測試", en: "Algorithmic Thinking, Debugging & Testing", done: true },
+        { id: "bridge-read-c", num: "橋A", title: "讀懂 C(給 Python 學生)", en: "Reading C for Python Programmers", done: true },
       ],
     },
     {

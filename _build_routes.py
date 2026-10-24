@@ -137,7 +137,10 @@ READ_FIRST = {
 }
 
 # tree.yaml 還沒列、但書裡已經有的素材:節點 id → [(章 id, [小節名…])]
-BOOK_EXTRA = {}
+BOOK_EXTRA = {
+    't-read-c': [('bridge-read-c', [])],
+    'em-c-pointers': [('bridge-read-c', ['指標初探'])],
+}
 
 # 書端額外寫的導讀頁(不在 book.js,沒有章號):路線 id → [(頁 id, 標題)];節點 id → [(頁 id, 標題, 說明)]
 ROUTE_PAGES = {'security': [('route-security-redlines', '資安紅線與授權')]}

@@ -16,6 +16,7 @@ window.BOOK_ROUTES = [
       "03-functions-recursion",
       "59-cpp-stl",
       "64-apcs-toi",
+      "bridge-read-c",
       "76-bank-apcs-impl-1",
       "05-algorithmic-thinking",
       "60-competitive-techniques",
@@ -153,6 +154,7 @@ window.BOOK_ROUTES = [
     "guide": "route-embedded",
     "pages": [],
     "chapters": [
+      "bridge-read-c",
       "21-cpu-machine-language",
       "36-secure-coding",
       "19-boolean-logic",
