@@ -838,9 +838,9 @@ Content-Length: 1256
         <li><strong>算子網路遮罩</strong>:<code>/27</code> 表示網路部分佔 27 位元,換算成四段二進位是
           <code>11111111.11111111.11111111.11100000</code>,也就是 <strong><code>255.255.255.224</code></strong>。</li>
         <li><strong>算切出幾個子網路</strong>:比 Class C 預設的 <code>/24</code> 多借了 <code>27 − 24 = 3</code> 個位元
-          做子網路切割,所以切出 <code>$2^3 = 8$</code> 個子網路。</li>
+          做子網路切割,所以切出 $2^3 = 8$ 個子網路。</li>
         <li><strong>算每個子網路幾台主機</strong>:32 位元扣掉 27 位元網路部分,剩 <code>32 − 27 = 5</code> 位元給主機,
-          扣掉網路位址與廣播位址後,每個子網路可用 <code>$2^5 - 2 = 30$</code> 台主機。</li>
+          扣掉網路位址與廣播位址後,每個子網路可用 $2^5 - 2 = 30$ 台主機。</li>
       </ol>
 
       <div class="exercise">
@@ -938,6 +938,87 @@ Content-Length: 1256
         這也是它能長成今天這個規模的根本原因之一。
       </p>
 
+      <h4>真實世界的路由協定:OSPF 用 Dijkstra,BGP 用距離向量</h4>
+      <p>
+        「路由器們合力算出最佳路徑圖」這句話,具體是怎麼做到的?業界兩大路由協定家族,剛好對應你在
+        第 30 章學過的兩套最短路徑演算法:
+      </p>
+      <ul>
+        <li><strong>連結狀態(link-state)</strong>,例如<strong>OSPF</strong>:每台路由器先把「我跟哪些鄰居相連、
+        線路成本多少」廣播給全網,讓<strong>每一台</strong>路由器都拿到完整地圖。拿到地圖後,每台路由器各自
+        以「自己」為起點跑一次<strong>Dijkstra</strong>,算出到所有網路的最短路徑,填進自己的轉送表。</li>
+        <li><strong>距離向量(distance-vector)</strong>,例如老式的<strong>RIP</strong>(BGP 用的是親戚
+        「路徑向量,path-vector」):路由器不換完整地圖,只跟<em>鄰居</em>交換「我到某網路要走幾步」,
+        一輪一輪更新、逐漸逼近最佳解——精神上更接近<strong>Bellman-Ford</strong>的鬆弛(relaxation)操作,
+        跟第 30 章學過的是同一個詞。</li>
+      </ul>
+      <p>
+        把圖 25-8 的拓樸搬過來,假設每條線的「成本」(可以是延遲、頻寬或單純跳數)是這樣,直接用第 30 章
+        那個 <code>dijkstra()</code> 函式去跑:
+      </p>
+      <pre><code class="language-python">import heapq
+
+def dijkstra(graph, start):
+    dist = {start: 0}
+    pq = [(0, start)]
+    while pq:
+        d, u = heapq.heappop(pq)
+        if d &gt; dist.get(u, float('inf')):
+            continue
+        for v, w in graph[u]:
+            nd = d + w
+            if nd &lt; dist.get(v, float('inf')):
+                dist[v] = nd
+                heapq.heappush(pq, (nd, v))
+    return dist
+
+# 圖 25-8 的拓樸,邊權是線路成本
+network = {
+    '你的電腦': [('R1', 1)],
+    'R1': [('你的電腦', 1), ('R2', 4), ('R3', 2)],
+    'R2': [('R1', 4), ('R3', 1), ('R4', 3)],
+    'R3': [('R1', 2), ('R2', 1), ('R4', 5)],
+    'R4': [('R2', 3), ('R3', 5), ('伺服器', 1)],
+    '伺服器': [('R4', 1)],
+}
+print(dijkstra(network, '你的電腦'))
+# {'你的電腦': 0, 'R1': 1, 'R3': 3, 'R2': 4, 'R4': 7, '伺服器': 8}</code></pre>
+
+      <p>把 <code>print</code> 的最終結果拆成逐步追蹤(<code>·</code> 表示 ∞),看每「定案」一個路由器,其他人的成本怎麼被鬆弛修短:</p>
+      <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>取出(定案)</th><th>你的電腦</th><th>R1</th><th>R2</th><th>R3</th><th>R4</th><th>伺服器</th><th>動作</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>(初始)</td><td>0</td><td>·</td><td>·</td><td>·</td><td>·</td><td>·</td><td>起點 = 0</td></tr>
+          <tr><td>你的電腦(0)</td><td>0</td><td>1</td><td>·</td><td>·</td><td>·</td><td>·</td><td>鬆弛 你的電腦→R1 = 1</td></tr>
+          <tr><td>R1(1)</td><td>0</td><td>1</td><td>5</td><td>3</td><td>·</td><td>·</td><td>鬆弛 R1→R2=1+4=5、R1→R3=1+2=3</td></tr>
+          <tr><td>R3(3)</td><td>0</td><td>1</td><td><strong>4</strong></td><td>3</td><td>8</td><td>·</td><td>R3→R2=3+1=4 比 5 短!R3→R4=3+5=8</td></tr>
+          <tr><td>R2(4)</td><td>0</td><td>1</td><td>4</td><td>3</td><td><strong>7</strong></td><td>·</td><td>R2→R4=4+3=7 比 8 短!</td></tr>
+          <tr><td>R4(7)</td><td>0</td><td>1</td><td>4</td><td>3</td><td>7</td><td>8</td><td>鬆弛 R4→伺服器=7+1=8</td></tr>
+          <tr><td>伺服器(8)</td><td>0</td><td>1</td><td>4</td><td>3</td><td>7</td><td>8</td><td>全部定案,結束</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>
+        最短路徑是你的電腦 → R1 → R3 → R2 → R4 → 伺服器,成本 8(直接走 R1→R2→R4 要 9,反而更貴)。
+        如果<strong>R1</strong>自己也以自己為起點跑一次這個函式,會發現到伺服器最近的路也是先繞到 R3 再到 R2——
+        它就會在自己的轉送表上寫下「往伺服器,下一跳是 R3」。<strong>OSPF 裡,每一台路由器都在做這件事</strong>,
+        只是起點換成「自己」而已。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">🔁</div>
+        <div class="body">
+          <span class="c-title">想看完整推導?回第 30 章</span>
+          <p>Dijkstra 為什麼貪心就能保證正確、為什麼邊權不能是負的、複雜度為什麼是
+          $O((V+E)\log V)$——這些證明跟 Bellman-Ford 的完整對照都在<strong>第 30 章〈圖演算法〉</strong>。
+          這裡只是想告訴你:你在那章學的演算法不是紙上談兵——<strong>你每次打開網頁的那一刻,
+          全世界的路由器正在跑它</strong>。</p>
+        </div>
+      </div>
+
       <h3>順手認識:NAT、ICMP、ping、traceroute</h3>
       <p>
         網路層還有幾個你遲早會遇到的名詞,一句話各記一個:
@@ -1002,6 +1083,38 @@ $ traceroute google.com        # Windows 上是 tracert
           <strong>MAC 位址</strong>負責<em>每一跳之間</em>(從這台到隔壁那台,每跳都換,像「下一個中轉站」)。
           封包每經過一台路由器,IP 不變,但連結層的 MAC 來源/目的會被改寫成「這一跳」的雙方。
           看懂這點,你就真的懂了分層。</p>
+        </div>
+      </div>
+
+      <h3>位元怎麼變成電?從數位訊號到類比載波</h3>
+      <p>
+        再往下一層想:MAC 位址、乙太網路訊框說到底都只是 0 與 1。但銅線裡跑的是電壓、光纖裡跑的是光、
+        Wi-Fi 裡跑的是無線電波——這些物理世界的訊號本質上都是<strong>連續變化的類比(analog)量</strong>,
+        不是天生就有 0 和 1 兩種狀態。那 0 跟 1 到底怎麼「寄生」在一個類比訊號上?
+      </p>
+      <p>
+        答案是<strong>調變(modulation)</strong>:把要傳的數位資料,編碼成類比載波(carrier wave)某個
+        可調整的性質——振幅、頻率,或是相位——的變化。這幾種做法剛好對應你可能聽過的
+        <strong>AM(調幅)</strong>、<strong>FM(調頻)</strong>的數位版親戚:
+      </p>
+      <ul>
+        <li><strong>ASK(amplitude-shift keying,振幅位移調變)</strong>:用「有訊號/沒訊號」(或強/弱)代表 1/0。</li>
+        <li><strong>FSK(frequency-shift keying,頻率位移調變)</strong>:用兩種不同頻率代表 1/0。</li>
+        <li><strong>PSK(phase-shift keying,相位位移調變)</strong>:用載波相位的變化代表 1/0,抗雜訊更好,
+        Wi-Fi、4G/5G 常用它的進階版<strong>QAM(同時調振幅跟相位,一次塞進好幾個 bit)</strong>。</li>
+      </ul>
+      <p>
+        你家的數據機(modem,字面上就是「調變-解調變器,MOdulator-DEModulator」)、Wi-Fi 網卡、手機基頻晶片,
+        做的都是這件事:送出去前把數位訊號<strong>調變</strong>成類比波;收到之後再<strong>解調變</strong>回數位訊號。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">📡</div>
+        <div class="body">
+          <span class="c-title">這只是輕量版</span>
+          <p>這裡只需要知道「有調變這件事、它解決什麼問題」。真正的工程數學——調變的訊號方程式、
+          取樣定理(sampling theorem)、通道容量——是電機系「通訊原理」課的範疇。如果你的志向是網路通訊、
+          韌體或 RF 相關職缺,後面對應的職涯章節會把這些數學補完整。</p>
         </div>
       </div>
 
