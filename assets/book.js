@@ -26,6 +26,7 @@ const BOOK = {
         { id: "03-functions-recursion", num: "3", title: "函式、抽象與遞迴", en: "Functions, Abstraction & Recursion", done: true },
         { id: "04-data-structures-intro", num: "4", title: "基本資料結構與字串", en: "Built-in Data Structures", done: true },
         { id: "05-algorithmic-thinking", num: "5", title: "演算法思維、除錯與測試", en: "Algorithmic Thinking, Debugging & Testing", done: true },
+        { id: "bridge-read-c", num: "橋A", title: "讀懂 C(給 Python 學生)", en: "Reading C for Python Programmers", done: true },
       ],
     },
     {
@@ -366,14 +367,15 @@ const REL = () => (currentId() === "index" || location.pathname.endsWith("/")) ?
 
 /* ---------- 主題 ---------- */
 function initTheme() {
-  const saved = localStorage.getItem("cs-theme");
+  let saved = null;
+  try { saved = localStorage.getItem("cs-theme"); } catch (e) { /* 讀不到就跟系統設定 */ }
   const sys = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
   document.documentElement.dataset.theme = saved || sys;
 }
 function toggleTheme() {
   const cur = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
   document.documentElement.dataset.theme = cur;
-  localStorage.setItem("cs-theme", cur);
+  try { localStorage.setItem("cs-theme", cur); } catch (e) { /* 私密視窗等情況:不記也沒關係 */ }
   const b = document.getElementById("theme-icon"); if (b) b.textContent = cur === "dark" ? "☀️" : "🌙";
   // 同步切換 highlight.js 的配色主題
   const hl = document.getElementById("hljs-theme");
@@ -400,25 +402,103 @@ function buildTopbar(prefix, hasSidebar) {
   document.body.prepend(el("div", { id: "progress-bar" }));
 }
 
-/* ---------- 左側導覽 ---------- */
+/* ---------- 左側導覽 ----------
+   兩種檢視:「依部」(BOOK.parts,書的原順序)與「依路線」(assets/routes.js 的 BOOK_ROUTES,
+   每條路線 = 導讀頁 + 書內章節的閱讀順序)。選擇記在 localStorage;上一章/下一章永遠照書序。 */
+const NAV_VIEW_KEY = "cs-nav-view";
+function loadNavView() {
+  try { return localStorage.getItem(NAV_VIEW_KEY) === "route" ? "route" : "part"; } catch (e) { return "part"; }
+}
+function saveNavView(view) {
+  try { localStorage.setItem(NAV_VIEW_KEY, view); } catch (e) { /* 私密視窗等情況:不記也沒關係 */ }
+}
+function navLink(prefix, c, cur) {
+  const href = c.done ? prefix + "chapters/" + c.id + ".html" : "javascript:void(0)";
+  const a = el("a", {
+    class: "nav-link" + (c.id === cur ? " active" : "") + (c.done ? "" : " todo"),
+    href,
+    title: c.en,
+  }, el("span", { class: "ch-num" }, c.num), c.title);
+  if (!c.done) { a.style.opacity = ".5"; a.title = "撰寫中 / Coming soon"; }
+  return a;
+}
 function buildSidebar(prefix) {
   const cur = currentId();
   const nav = el("nav", { class: "sidebar", id: "sidebar" });
+  const partView = el("div", { class: "nav-view", "data-view": "part", id: "nav-view-part",
+    role: "tabpanel", "aria-labelledby": "nav-tab-part" });
   for (const part of BOOK.parts) {
-    nav.append(el("div", { class: "part-title" }, part.part));
-    for (const c of part.chapters) {
-      const href = c.done ? prefix + "chapters/" + c.id + ".html" : "javascript:void(0)";
-      const a = el("a", {
-        class: "nav-link" + (c.id === cur ? " active" : "") + (c.done ? "" : " todo"),
-        href,
-        title: c.en,
-      }, el("span", { class: "ch-num" }, c.num), c.title);
-      if (!c.done) { a.style.opacity = ".5"; a.title = "撰寫中 / Coming soon"; }
-      nav.append(a);
-    }
+    partView.append(el("div", { class: "part-title" }, part.part));
+    for (const c of part.chapters) partView.append(navLink(prefix, c, cur));
   }
+  const routeView = el("div", { class: "nav-view", "data-view": "route", id: "nav-view-route",
+    role: "tabpanel", "aria-labelledby": "nav-tab-route" });
+  const tab = (view, label) => el("button", { class: "nav-tab", type: "button", role: "tab",
+    id: "nav-tab-" + view, "aria-controls": "nav-view-" + view, "data-view": view,
+    onclick: () => setNavView(view, true) }, label);
+  const tabs = el("div", { class: "nav-tabs", role: "tablist", "aria-label": "目錄檢視" },
+    tab("part", "依部"), tab("route", "依路線"));
+  // 左右方向鍵在兩個分頁之間移動(WAI-ARIA tabs 的慣例)
+  tabs.addEventListener("keydown", (e) => {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    const list = [...tabs.querySelectorAll(".nav-tab")];
+    const i = list.indexOf(document.activeElement);
+    if (i < 0) return;
+    const next = list[(i + (e.key === "ArrowRight" ? 1 : list.length - 1)) % list.length];
+    e.preventDefault();
+    next.focus();
+    setNavView(next.dataset.view, true);
+  });
+  nav.append(tabs, partView, routeView);
   document.querySelector(".layout").prepend(nav);
   document.querySelector(".layout").prepend(el("div", { class: "sidebar-backdrop", id: "backdrop", onclick: toggleSidebar }));
+
+  let routesBuilt = false;
+  function setNavView(view, remember) {
+    if (remember) saveNavView(view);
+    nav.dataset.view = view;
+    tabs.querySelectorAll(".nav-tab").forEach(b => {
+      const on = b.dataset.view === view;
+      b.setAttribute("aria-selected", String(on));
+      b.tabIndex = on ? 0 : -1;
+    });
+    if (view === "route" && !routesBuilt) {
+      routesBuilt = true;
+      loadRoutes(prefix, () => buildRouteView(routeView, prefix, cur));
+    }
+  }
+  // 導讀頁只出現在「依路線」裡,所以在導讀頁一律先顯示路線(不覆寫讀者記住的選擇)
+  setNavView(cur.startsWith("route-") ? "route" : loadNavView(), false);
+}
+function loadRoutes(prefix, done) {
+  if (window.BOOK_ROUTES) return done();
+  const s = el("script", { src: prefix + "assets/routes.js" });
+  s.onload = done;
+  s.onerror = () => { window.BOOK_ROUTES = []; done(); };
+  document.head.append(s);
+}
+function buildRouteView(view, prefix, cur) {
+  const byId = Object.fromEntries(BOOK.flat.map(c => [c.id, c]));
+  const routes = window.BOOK_ROUTES || [];
+  if (!routes.length) { view.append(el("div", { class: "part-title" }, "路線資料載入失敗")); return; }
+  for (const r of routes) {
+    const pages = r.pages || [];
+    const here = r.guide === cur || r.chapters.includes(cur) || pages.some(pg => pg.id === cur);
+    const group = el("details", { class: "route-group" });
+    if (here) group.open = true;
+    group.append(el("summary", { class: "part-title" }, r.icon + " " + r.title));
+    group.append(el("a", {
+      class: "nav-link route-guide" + (r.guide === cur ? " active" : ""),
+      href: prefix + "chapters/" + r.guide + ".html",
+      title: r.blurb,
+    }, el("span", { class: "ch-num" }, "導"), "路線導讀"));
+    for (const pg of pages) group.append(el("a", {
+      class: "nav-link route-guide" + (pg.id === cur ? " active" : ""),
+      href: prefix + "chapters/" + pg.id + ".html",
+    }, el("span", { class: "ch-num" }, "導"), pg.title));
+    for (const id of r.chapters) if (byId[id]) group.append(navLink(prefix, byId[id], cur));
+    view.append(group);
+  }
 }
 function toggleSidebar() {
   document.getElementById("sidebar")?.classList.toggle("open");
@@ -437,6 +517,22 @@ function buildTOC() {
     toc.append(el("a", { href: "#" + h.id, class: h.tagName === "H3" ? "h3" : "" }, h.textContent));
   });
   document.querySelector(".layout").append(toc);
+  // 小節錨點(#sec-N)是這裡才補上的 id,瀏覽器載入時找不到;補完再捲一次(路線導讀頁會連到這些錨點)。
+  // 練習卡用 content-visibility,捲動途中高度會變,所以隔幾格畫面再對準,直到位置穩定。
+  if (location.hash) {
+    let id = location.hash.slice(1);
+    try { id = decodeURIComponent(id); } catch (e) { /* 不合法的 % 編碼:照原字串找 */ }
+    const target = document.getElementById(id);
+    if (target) {
+      let tries = 0, last = null;
+      const align = () => {
+        target.scrollIntoView({ behavior: "instant", block: "start" });
+        const top = Math.round(target.getBoundingClientRect().top);
+        if (top !== last && ++tries < 8) { last = top; setTimeout(align, 120); }
+      };
+      align();
+    }
+  }
 
   const links = [...toc.querySelectorAll("a")];
   const obs = new IntersectionObserver((entries) => {
