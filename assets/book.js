@@ -437,6 +437,11 @@ function buildTOC() {
     toc.append(el("a", { href: "#" + h.id, class: h.tagName === "H3" ? "h3" : "" }, h.textContent));
   });
   document.querySelector(".layout").append(toc);
+  // 小節錨點(#sec-N)是這裡才補上的 id,瀏覽器載入時找不到;補完再捲一次(路線導讀頁會連到這些錨點)
+  if (location.hash) {
+    const target = document.getElementById(decodeURIComponent(location.hash.slice(1)));
+    if (target) target.scrollIntoView();
+  }
 
   const links = [...toc.querySelectorAll("a")];
   const obs = new IntersectionObserver((entries) => {

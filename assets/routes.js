@@ -1,0 +1,192 @@
+/* 由 _build_routes.py 從職業技能樹 tree.yaml 產生,請勿手改。
+   側欄「依路線」檢視的資料:每條路線 = 導讀頁 + 書內章節的閱讀順序(章 id 對應 book.js)。 */
+window.BOOK_ROUTES = [
+  {
+    "id": "trunk",
+    "title": "共用主幹",
+    "icon": "🌳",
+    "guide": "route-trunk",
+    "chapters": [
+      "16-shell",
+      "17-editors",
+      "18-git",
+      "02-python-basics",
+      "03-functions-recursion",
+      "59-cpp-stl",
+      "64-apcs-toi",
+      "76-bank-apcs-impl-1",
+      "05-algorithmic-thinking",
+      "60-competitive-techniques",
+      "19-boolean-logic",
+      "107-floating-point",
+      "04-data-structures-intro",
+      "77-bank-apcs-impl-2",
+      "27-divide-and-conquer",
+      "74-bank-ap325",
+      "26-complexity",
+      "28-sorting-searching",
+      "29-data-structures",
+      "61-competitive-ds",
+      "63-graph-tree-advanced",
+      "30-graph-algorithms",
+      "15-number-theory-graphs",
+      "31-greedy",
+      "62-competitive-paradigms",
+      "32-dynamic-programming",
+      "79-bank-toi"
+    ]
+  },
+  {
+    "id": "foundation",
+    "title": "數學與理論基礎",
+    "icon": "📐",
+    "guide": "route-foundation",
+    "chapters": [
+      "12-calculus",
+      "13-discrete-math",
+      "14-combinatorics-probability",
+      "15-number-theory-graphs",
+      "54-linear-algebra",
+      "57-probability",
+      "56-formal-logic",
+      "19-boolean-logic",
+      "111-deep-learning-math",
+      "55-numerical-methods",
+      "107-floating-point",
+      "26-complexity",
+      "49-theory-of-computation",
+      "108-information-theory",
+      "109-optimization"
+    ]
+  },
+  {
+    "id": "hw-core",
+    "title": "硬體共同起點",
+    "icon": "🔌",
+    "guide": "route-hw-core",
+    "chapters": [
+      "19-boolean-logic",
+      "47-digital-circuits",
+      "20-combinational-sequential",
+      "21-cpu-machine-language",
+      "22-assembler",
+      "48-computer-architecture"
+    ]
+  },
+  {
+    "id": "backend",
+    "title": "後端工程師",
+    "icon": "🖥️",
+    "guide": "route-backend",
+    "chapters": [
+      "25-networking",
+      "37-databases",
+      "07-design-recipe",
+      "08-oop",
+      "09-types",
+      "11-software-architecture",
+      "40-software-engineering",
+      "05-algorithmic-thinking",
+      "46-debugging-testing",
+      "24-operating-system",
+      "43-parallel",
+      "121-capstone-os",
+      "122-capstone-database",
+      "34-security-fundamentals",
+      "35-cryptography",
+      "36-secure-coding",
+      "52-web-security",
+      "71-ctf-web-network-forensics",
+      "91-virt-landscape",
+      "93-container-internals",
+      "94-mini-docker",
+      "95-docker-practice",
+      "10-design-patterns",
+      "98-distributed-systems",
+      "48-computer-architecture",
+      "128-capstone-raft-kv",
+      "96-kubernetes",
+      "97-ebpf"
+    ]
+  },
+  {
+    "id": "ai",
+    "title": "AI 工程師",
+    "icon": "🤖",
+    "guide": "route-ai",
+    "chapters": [
+      "65-cv-basics-processing",
+      "38-machine-learning",
+      "111-deep-learning-math",
+      "110-classical-ai",
+      "67-cv-deep-learning",
+      "99-gpt-from-scratch",
+      "66-cv-features-classic",
+      "118-cuda-gpu",
+      "119-parallel-algorithms",
+      "100-llm-client",
+      "101-tool-react",
+      "102-rag-from-scratch",
+      "103-mcp",
+      "104-agent-advanced",
+      "105-multi-agent",
+      "106-agent-production",
+      "113-ai-security",
+      "115-efficient-ml"
+    ]
+  },
+  {
+    "id": "embedded",
+    "title": "嵌入式工程師",
+    "icon": "📟",
+    "guide": "route-embedded",
+    "chapters": [
+      "21-cpu-machine-language",
+      "36-secure-coding",
+      "19-boolean-logic",
+      "23-vm-compiler",
+      "42-compilers",
+      "24-operating-system",
+      "90-rust-os-kernel"
+    ]
+  },
+  {
+    "id": "ic-design",
+    "title": "IC 設計工程師",
+    "icon": "🔬",
+    "guide": "route-ic-design",
+    "chapters": [
+      "20-combinational-sequential",
+      "47-digital-circuits",
+      "107-floating-point",
+      "21-cpu-machine-language",
+      "48-computer-architecture"
+    ]
+  },
+  {
+    "id": "security",
+    "title": "資安工程師",
+    "icon": "🛡️",
+    "guide": "route-security",
+    "chapters": [
+      "41-ethics",
+      "69-ctf-foundations",
+      "71-ctf-web-network-forensics",
+      "73-ctf-compete",
+      "52-web-security",
+      "16-shell",
+      "25-networking",
+      "19-boolean-logic",
+      "35-cryptography",
+      "70-ctf-crypto",
+      "34-security-fundamentals",
+      "53-forensics-governance",
+      "36-secure-coding",
+      "15-number-theory-graphs",
+      "72-ctf-pwn-reverse",
+      "21-cpu-machine-language",
+      "22-assembler",
+      "24-operating-system"
+    ]
+  }
+];

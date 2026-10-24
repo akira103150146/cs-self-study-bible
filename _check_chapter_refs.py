@@ -9,7 +9,8 @@
   5. 「第 N 章〈標題〉/「標題」」這種寫法:若標題和第 N 章的書名完全對不上、卻和另一章的書名吻合,列為疑似錯號。
   6. 「第 N 章」的 N 是「檔名號」而不是顯示號(第一次重新編號留下的錯):N ≥ 74、檔名 N-* 和顯示第 N 章
      是不同章,而且前後文和檔名 N 那章的書名吻合、和顯示第 N 章的書名對不上。
-  7. 殘留的「(撰寫中)」「(即將撰寫)」標記(提醒用,不一定是錯)。
+  7. 連到 #sec-N 的小節錨點(book.js 自動目錄給 h2/h3 的 id):N 必須小於目標章的 h2/h3 數量。
+  8. 殘留的「(撰寫中)」「(即將撰寫)」標記(提醒用,不一定是錯)。
 
 用法:python _check_chapter_refs.py          列出所有問題,有問題時 exit 1
       python _check_chapter_refs.py --quiet  只印摘要
@@ -25,7 +26,8 @@ SRC = os.path.join(ROOT, 'chapters', 'src')
 
 ENTRY_RE = re.compile(r'\{\s*id:\s*"([^"]+)",\s*num:\s*"([^"]+)",\s*title:\s*"([^"]*)"')
 PART_RE = re.compile(r'part:\s*"([^"]+)"')
-LINK_RE = re.compile(r'<a\s[^>]*href="([^"#:]+?)\.html(?:#[^"]*)?"[^>]*>(.*?)</a>', re.S)
+LINK_RE = re.compile(r'<a\s[^>]*href="([^"#:]+?)\.html(?:#([^"]*))?"[^>]*>(.*?)</a>', re.S)
+HEADS_RE = re.compile(r'<h[23][\s>]')
 CHNUM_RE = re.compile(r'第\s*(\d+)\s*章')
 TAG_RE = re.compile(r'<span class="tag">\s*第\s*(\d+)\s*章\s*</span>')
 EYEBROW_RE = re.compile(r'<div class="eyebrow">\s*([^<·]+?)\s*·')
@@ -54,6 +56,17 @@ def norm(s):
     s = html.unescape(re.sub(r'<[^>]+>', '', s))
     s = s.translate(str.maketrans('：（）／，、', ':()/,,'))
     return re.sub(r'\s+', '', s)
+
+
+_heads = {}
+
+
+def count_heads(cid):
+    if cid not in _heads:
+        t = open(os.path.join(SRC, cid + '.html'), encoding='utf-8-sig').read()
+        t = re.sub(r'<!--.*?-->', '', t, flags=re.S)
+        _heads[cid] = len(HEADS_RE.findall(t))
+    return _heads[cid]
 
 
 def bigrams(s):
@@ -90,16 +103,21 @@ def main(argv):
         me = book.get(name)
 
         for m in LINK_RE.finditer(text):
-            target, label = m.group(1), m.group(2)
+            target, frag, label = m.group(1), m.group(2), m.group(3)
             if '/' in target:      # ../index.html、../course-*/… 不是章際連結
                 continue
             if not os.path.exists(os.path.join(SRC, target + '.html')):
                 problems.append((name, line_of(text, m.start()), 'broken-link', f'{target}.html 不存在'))
                 continue
+            if frag and frag.startswith('sec-') and frag[4:].isdigit():
+                heads = count_heads(target)
+                if int(frag[4:]) >= heads:
+                    problems.append((name, line_of(text, m.start()), 'anchor',
+                                     f'{target}.html#{frag} 不存在(該章只有 {heads} 個 h2/h3)'))
             if target not in book:
                 continue
             want = book[target]['num']
-            for n in CHNUM_RE.findall(re.sub(r'<[^>]+>', '', label)):
+            for n in CHNUM_RE.findall(re.sub(r'<[^>]+>', '', label))[:1]:   # 只看第一個,後面可能是「呼應第 N 章」
                 if n != want:
                     problems.append((name, line_of(text, m.start()), 'link-num',
                                      f'連到 {target}(顯示第 {want} 章),文字卻寫「第 {n} 章」'))

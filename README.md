@@ -28,10 +28,12 @@ chapters/               各章節 HTML(檔名 00–128;src/ 是來源片段,buil
 assets/
   style.css             設計系統(淺/深雙主題)
   book.js               導覽引擎(側欄、目錄、進度、延遲載入)
+  routes.js             「依路線」側欄的資料(_build_routes.py 產生)
   toi/                  TOI 題庫資料與渲染器(toi-index.js / toi-statements.js / toi-render.js)
 _AUTHOR_GUIDE.md        章節撰寫規範
 _build_toi_*.py         TOI 題庫的重建工具
 _check_chapter_refs.py   章號與章際連結檢查(以 book.js 的顯示章號為準)
+_build_routes.py         由職業技能樹 tree.yaml 產生 assets/routes.js 與 8 份路線導讀(chapters/src/route-*.html)
 ```
 
 ## 效能
