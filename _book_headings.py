@@ -51,11 +51,20 @@ class Headings:
 
     def __init__(self):
         self.cache = {}
+        self.book = None
+
+    def resolved(self, text, cid):
+        """標題裡的章號記號({{ch:…}} 等)先代入成顯示文字,比對與顯示才會和讀者看到的一樣。"""
+        from _chapter_tokens import resolve   # 延後匯入:_chapter_tokens 也匯入本模組
+        if self.book is None:
+            self.book = load_book()[0]
+        return resolve(text, self.book, cid)
 
     def get(self, cid):
         if cid not in self.cache:
             path = os.path.join(SRC, cid + '.html')
             text = open(path, encoding='utf-8-sig').read() if os.path.exists(path) else ''
+            text = self.resolved(text, cid)
             text = re.sub(r'<!--.*?-->', '', text, flags=re.S)
             text = re.sub(r'<pre\b.*?</pre>', '', text, flags=re.S)
             items, idx, last = [], -1, None

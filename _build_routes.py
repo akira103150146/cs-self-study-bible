@@ -11,6 +11,7 @@
 
 規則:
   - tree.yaml 的 chNN 是「檔名號」(chapters/NN-*.html),頁面上一律顯示 book.js 的「顯示章號」。
+    產出的片段裡章號寫成記號 {{ch:<id>}}(見 _chapter_tokens.py),由 build.py 代入。
   - 節點照先修做拓撲排序,依欄(入門/基礎/核心/職業級)分組;同欄內照 yaml 順序打破平手。
   - theory.book 寫了「§小節」時,連到該小節的錨點 #sec-N(N = 該章 h2/h3 的順序,和 book.js 自動目錄同一套)。
     小節名也可以是 callout 標題,這時連到它前面最近的 h2/h3。
@@ -46,7 +47,7 @@ TRACKS = {
         'subtitle': '每條路線都從這裡出發:先會用終端機,再會一門語言,最後把 APCS 的演算法走一遍。',
         'intro': [
             '這條路線是所有職業路線共用的地基。前半段是工具:終端機、Vim、Git。中段是語言:Python 或 C++ 擇一,再加上讀得懂 C。後半段是 APCS 會考的演算法與資料結構。',
-            '書裡的章節不是照這個順序排的。這份導讀幫你跳著讀:工具章(第四部)先讀,演算法(第六部)和競賽實戰(第十六部)交錯讀。',
+            '書裡的章節不是照這個順序排的。這份導讀幫你跳著讀:工具章({{partnum:16-shell}})先讀,演算法({{partnum:26-complexity}})和競賽實戰({{partnum:59-cpp-stl}})交錯讀。',
         ],
     },
     'foundation': {
@@ -63,7 +64,7 @@ TRACKS = {
         'title': '硬體共同起點:從邏輯閘到自己的電腦',
         'subtitle': 'nand2tetris 的路徑:邏輯閘 → ALU → 記憶體 → CPU → 組譯器。IC 設計與嵌入式都從這裡開始。',
         'intro': [
-            '這條路線從一顆 NAND 閘出發,一層一層蓋出一台電腦。書的第五部(第 19–22 章)就是這條路的主體,第 47、48 章補上電路與效能。',
+            '這條路線從一顆 NAND 閘出發,一層一層蓋出一台電腦。書的{{partnum:19-boolean-logic}}(第 {{num:19-boolean-logic}}–{{num:22-assembler}} 章)就是這條路的主體,第 {{num:47-digital-circuits}}、{{num:48-computer-architecture}} 章補上電路與效能。',
             'IC 設計和嵌入式兩條路線都把這裡當起點。RISC-V 組合語言書裡還沒有專章。',
         ],
     },
@@ -82,7 +83,7 @@ TRACKS = {
         'subtitle': '從 NumPy 與機器學習基礎,到 CNN、Transformer、LLM 應用與 Agent。',
         'intro': [
             '入門是 NumPy;基礎是機器學習、最佳化與多層感知機;核心是傳統 AI、CNN、注意力、電腦視覺、NLP 與 GPU;職業級是 LLM 應用、Agent 與高效 ML。',
-            '書裡「動手打造 LLM Agent」(第二二部)排在「進階人工智慧」(第二四部)前面,這條路線的順序剛好相反。照導讀讀就好,不必照書序。',
+            '書裡「動手打造 LLM Agent」({{partnum:99-gpt-from-scratch}})排在「進階人工智慧」({{partnum:110-classical-ai}})前面,這條路線的順序剛好相反。照導讀讀就好,不必照書序。',
         ],
     },
     'embedded': {
@@ -91,7 +92,7 @@ TRACKS = {
         'subtitle': '電路、C 指標、微控制器、中斷與 RTOS。書裡大部分還在施工。',
         'intro': [
             '這條路線的 18 個節點,有一大半書裡還沒有對應的章(電路學、電子學、GPIO、計時器、序列通訊、模擬器等)。這些節點會標「🚧 書裡還沒有這部分」,請先看節點下方列的書外資源。',
-            '已經有的素材散在第 19–24、36、42 章與第 84 章(Rust 迷你核心)。硬體共同起點是這條路線的先修。',
+            '已經有的素材散在第 {{num:19-boolean-logic}}–{{num:24-operating-system}}、{{num:36-secure-coding}}、{{num:42-compilers}} 章與{{ch:90-rust-os-kernel}}(Rust 迷你核心)。硬體共同起點是這條路線的先修。',
         ],
     },
     'ic-design': {
@@ -99,7 +100,7 @@ TRACKS = {
         'title': 'IC 設計工程師',
         'subtitle': 'Verilog、驗證、時序與一顆自己的 RV32I CPU。書裡大部分還在施工。',
         'intro': [
-            '書裡還沒有 Verilog、testbench、合成與實體設計的章。這條路線用到的書內章節(第 20、21、47、48、101 章)在硬體共同起點都讀過了。',
+            '書裡還沒有 Verilog、testbench、合成與實體設計的章。這條路線用到的書內章節(第 {{num:20-combinational-sequential}}、{{num:21-cpu-machine-language}}、{{num:47-digital-circuits}}、{{num:48-computer-architecture}}、{{num:107-floating-point}} 章)在硬體共同起點都讀過了。',
             '標「🚧」的節點請先看書外資源;書內有素材的節點,導讀會指到最相關的小節。',
         ],
     },
@@ -109,7 +110,7 @@ TRACKS = {
         'subtitle': '先過倫理閘門,再學工具、編碼與密碼,最後是鑑識、Web、逆向與防禦。',
         'intro': [
             '這條路線的第一個節點是「資安倫理與法律」閘門。其他節點的先修都包含它:先知道哪條線不能跨,再學怎麼攻擊與防守。',
-            '理論在第七部(第 34–36 章)與第十三部(第 52、53 章),實戰在第十八部 CTF(第 69–73 章)。',
+            '理論在{{partnum:34-security-fundamentals}}(第 {{num:34-security-fundamentals}}–{{num:36-secure-coding}} 章)與{{partnum:52-web-security}}(第 {{num:52-web-security}}、{{num:53-forensics-governance}} 章),實戰在{{partnum:69-ctf-foundations}} CTF(第 {{num:69-ctf-foundations}}–{{num:73-ctf-compete}} 章)。',
         ],
     },
 }
@@ -117,24 +118,24 @@ TRACKS = {
 # 「讀之前」提醒:章 id → 提醒(HTML)。在這章第一次出現於某條路線時顯示一次。
 # 依據:聖經章節重排分析 §3.2(書端真衝突)與 §3.3(樹端引用問題)。
 READ_FIRST = {
-    '02-python-basics': '本章會請你「打開終端機輸入 python」。終端機在第 16 章才教;還沒讀過的話,先讀第 16 章前兩節,或看序章的「開發環境設定」。',
-    '25-networking': '「路由與轉送」那一節用到第 30 章的 Dijkstra 與 Bellman-Ford;HTTP 那幾段會提到第 11 章的分層架構。還沒讀過的話,先讀應用層與傳輸層,路由那一節之後再回來。',
-    '27-divide-and-conquer': '本章用到第 26 章的 Θ 記號與主定理,也用到第 15 章的遞迴關係。只想學遞迴的話,先讀第 3 章與 AP325 第 1 章,本章留到排序那個節點再讀。',
-    '38-machine-learning': '「深掘」那一節假設你讀過第 54 章(線性代數)與第 57 章(機率)。前面的章節不需要;深掘那一節可以等數學基礎路線的 f-linalg、f-prob 走完再讀。',
-    '47-digital-circuits': '本章後半(循序邏輯、FSM)用到第 20、21 章。入門只要讀「組合邏輯的化簡:卡諾圖」那一節;循序邏輯留到記憶體節點再讀。',
-    '56-formal-logic': '「可判定性」與「哥德爾不完備定理」兩節用到第 49 章(計算理論)與第 33 章(NP 完備性)。前面的小節不需要;這兩節可以等計算複雜度節點走完再讀。',
-    '59-cpp-stl': '本章後半(STL)常回頭提第 29 章的資料結構。入門先讀「第一支 C++ 程式」到「struct」那幾節;「STL 登場」以後可以等堆疊、佇列節點再讀。',
-    '63-graph-tree-advanced': '本章多數小節用到第 30 章的圖演算法。「樹上演算法」那一節不需要第 30 章,可以先讀。',
-    '64-apcs-toi': '「APCS 觀念題」那兩節入門就能讀;其餘的實作題示範用到第 26–32 章,等主幹核心欄的節點走完再讀。',
-    '65-cv-basics-processing': 'AI 路線的入門只要讀「影像即資料:一個 H×W×C 的數字陣列」與「用 NumPy 切片存取像素與 ROI」。本章其餘部分用到第 12、38、39、54 章,等電腦視覺節點再讀。',
-    '69-ctf-foundations': '本章會回頭呼應第 34–36 章(威脅模型、密碼學、防禦性程式設計)。建議先讀「威脅模型」與「古典密碼」兩個節點,再讀這一章。',
-    '107-floating-point': '主幹的進位與位元節點只要讀到「反向解碼」為止(二補數在第 19、20 章)。後面的浮點陷阱會回頭提第 55 章,屬於選讀。',
-    '111-deep-learning-math': '本章有幾處說「你已經在第 93 章見過 softmax」。AI 路線把本章排在第 93 章前面:沒讀過第 93 章也沒關係,本章會從頭推導。',
+    '02-python-basics': '本章會請你「打開終端機輸入 python」。終端機在{{ch:16-shell}}才教;還沒讀過的話,先讀{{ch:16-shell}}前兩節,或看序章的「開發環境設定」。',
+    '25-networking': '「路由與轉送」那一節用到{{ch:30-graph-algorithms}}的 Dijkstra 與 Bellman-Ford;HTTP 那幾段會提到{{ch:11-software-architecture}}的分層架構。還沒讀過的話,先讀應用層與傳輸層,路由那一節之後再回來。',
+    '27-divide-and-conquer': '本章用到{{ch:26-complexity}}的 Θ 記號與主定理,也用到{{ch:15-number-theory-graphs}}的遞迴關係。只想學遞迴的話,先讀{{ch:03-functions-recursion}}與 AP325 第 1 章,本章留到排序那個節點再讀。',
+    '38-machine-learning': '「深掘」那一節假設你讀過{{ch:54-linear-algebra}}(線性代數)與{{ch:57-probability}}(機率)。前面的章節不需要;深掘那一節可以等數學基礎路線的 f-linalg、f-prob 走完再讀。',
+    '47-digital-circuits': '本章後半(循序邏輯、FSM)用到第 {{num:20-combinational-sequential}}、{{num:21-cpu-machine-language}} 章。入門只要讀「組合邏輯的化簡:卡諾圖」那一節;循序邏輯留到記憶體節點再讀。',
+    '56-formal-logic': '「可判定性」與「哥德爾不完備定理」兩節用到{{ch:49-theory-of-computation}}(計算理論)與{{ch:33-np-completeness}}(NP 完備性)。前面的小節不需要;這兩節可以等計算複雜度節點走完再讀。',
+    '59-cpp-stl': '本章後半(STL)常回頭提{{ch:29-data-structures}}的資料結構。入門先讀「第一支 C++ 程式」到「struct」那幾節;「STL 登場」以後可以等堆疊、佇列節點再讀。',
+    '63-graph-tree-advanced': '本章多數小節用到{{ch:30-graph-algorithms}}的圖演算法。「樹上演算法」那一節不需要{{ch:30-graph-algorithms}},可以先讀。',
+    '64-apcs-toi': '「APCS 觀念題」那兩節入門就能讀;其餘的實作題示範用到第 {{num:26-complexity}}–{{num:32-dynamic-programming}} 章,等主幹核心欄的節點走完再讀。',
+    '65-cv-basics-processing': 'AI 路線的入門只要讀「影像即資料:一個 H×W×C 的數字陣列」與「用 NumPy 切片存取像素與 ROI」。本章其餘部分用到第 {{num:12-calculus}}、{{num:38-machine-learning}}、{{num:39-computer-graphics}}、{{num:54-linear-algebra}} 章,等電腦視覺節點再讀。',
+    '69-ctf-foundations': '本章會回頭呼應第 {{num:34-security-fundamentals}}–{{num:36-secure-coding}} 章(威脅模型、密碼學、防禦性程式設計)。建議先讀「威脅模型」與「古典密碼」兩個節點,再讀這一章。',
+    '107-floating-point': '主幹的進位與位元節點只要讀到「反向解碼」為止(二補數在第 {{num:19-boolean-logic}}、{{num:20-combinational-sequential}} 章)。後面的浮點陷阱會回頭提{{ch:55-numerical-methods}},屬於選讀。',
+    '111-deep-learning-math': '本章有幾處說「你已經在{{ch:99-gpt-from-scratch}}見過 softmax」。AI 路線把本章排在{{ch:99-gpt-from-scratch}}前面:沒讀過{{ch:99-gpt-from-scratch}}也沒關係,本章會從頭推導。',
     '121-capstone-os': '這是實戰專題章,會用到很多章的內容。建議當成這個節點的期末作業,不要當成第一份閱讀。',
     '122-capstone-database': '這是實戰專題章,會用到很多章的內容。建議當成這個節點的期末作業,不要當成第一份閱讀。',
     '128-capstone-raft-kv': '這是實戰專題章,會用到很多章的內容。建議當成這個節點的期末作業,不要當成第一份閱讀。',
-    '11-software-architecture': '本章會回頭用第 10 章(設計模式)的觀念。還沒讀過的話,先讀第 10 章。',
-    '40-software-engineering': '本章有幾處用到第 10 章(設計模式)的觀念。',
+    '11-software-architecture': '本章會回頭用{{ch:10-design-patterns}}(設計模式)的觀念。還沒讀過的話,先讀{{ch:10-design-patterns}}。',
+    '40-software-engineering': '本章有幾處用到{{ch:10-design-patterns}}(設計模式)的觀念。',
 }
 
 # tree.yaml 還沒列、但書裡已經有的素材:節點 id → [(章 id, [小節名…])]
@@ -166,9 +167,10 @@ def soft(s):
     return s.translate(str.maketrans('：（）／', ':()/')).strip()
 
 
-def num_label(num):
+def num_label(num, cid=None):
+    """章號的顯示文字。有數字章號的章寫成記號 {{ch:<id>}},由 build.py 依 book.js 代入,章搬家時導讀不必重跑。"""
     if num.isdigit():
-        return f'第 {num} 章'
+        return '{{ch:%s}}' % cid if cid else f'第 {num} 章'
     if num.startswith('附'):
         return f'附錄 {num[1:]}'
     if num.startswith('橋'):
@@ -277,7 +279,7 @@ def topo_order(nodes):
 def chapter_link(cid, book, anchor=None, label=None):
     c = book[cid]
     href = cid + '.html' + (f'#{anchor}' if anchor else '')
-    text = label or f'{num_label(c["num"])} {c["title"]}'
+    text = label or f'{num_label(c["num"], cid)} {c["title"]}'
     return f'<a href="{href}">{esc(text)}</a>'
 
 
@@ -390,7 +392,7 @@ def render_guide(track, meta, nodes, all_nodes, book, refs, track_names):
                     add('      <div class="callout tip">')
                     add('        <div class="ico">📖</div>')
                     add('        <div class="body">')
-                    add(f'          <span class="c-title">讀之前:{esc(num_label(book[r["id"]]["num"]))}</span>')
+                    add(f'          <span class="c-title">讀之前:{esc(num_label(book[r["id"]]["num"], r["id"]))}</span>')
                     add(f'          <p>{esc(READ_FIRST[r["id"]])}</p>')
                     add('        </div>')
                     add('      </div>')
