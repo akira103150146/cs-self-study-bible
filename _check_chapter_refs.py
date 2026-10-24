@@ -9,7 +9,9 @@
   5. 「第 N 章〈標題〉/「標題」」這種寫法:若標題和第 N 章的書名完全對不上、卻和另一章的書名吻合,列為疑似錯號。
   6. 「第 N 章」的 N 是「檔名號」而不是顯示號(第一次重新編號留下的錯):N ≥ 74、檔名 N-* 和顯示第 N 章
      是不同章,而且前後文和檔名 N 那章的書名吻合、和顯示第 N 章的書名對不上。
-  7. 連到 #sec-N 的小節錨點(book.js 自動目錄給 h2/h3 的 id):N 必須小於目標章的 h2/h3 數量。
+  7. 連到 #sec-N 的小節錨點(book.js 自動目錄給 h2/h3 的 id):N 必須小於目標章的 h2/h3 數量;
+     連結文字裡有「§小節名」時,小節名必須是第 N 個標題(或該小節內 callout 標題)的開頭。
+     標題計數與 _build_routes.py 共用 _book_headings.Headings(同樣先拿掉註解與 <pre>)。
   8. 殘留的「(撰寫中)」「(即將撰寫)」標記(提醒用,不一定是錯)。
 
 用法:python _check_chapter_refs.py          列出所有問題,有問題時 exit 1
@@ -22,12 +24,11 @@ import re
 import sys
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
-SRC = os.path.join(ROOT, 'chapters', 'src')
+sys.path.insert(0, ROOT)   # python -I 也找得到共用模組
+from _book_headings import SRC, Headings, load_book  # noqa: E402
+from _book_headings import norm as head_norm  # noqa: E402
 
-ENTRY_RE = re.compile(r'\{\s*id:\s*"([^"]+)",\s*num:\s*"([^"]+)",\s*title:\s*"([^"]*)"')
-PART_RE = re.compile(r'part:\s*"([^"]+)"')
 LINK_RE = re.compile(r'<a\s[^>]*href="([^"#:]+?)\.html(?:#([^"]*))?"[^>]*>(.*?)</a>', re.S)
-HEADS_RE = re.compile(r'<h[23][\s>]')
 CHNUM_RE = re.compile(r'第\s*(\d+)\s*章')
 TAG_RE = re.compile(r'<span class="tag">\s*第\s*(\d+)\s*章\s*</span>')
 EYEBROW_RE = re.compile(r'<div class="eyebrow">\s*([^<·]+?)\s*·')
@@ -36,37 +37,10 @@ EXTERNAL_RE = re.compile(r'SICP|Nand2Tetris|nand2tetris|AP325|APCS|TOI|教材|�
 TODO_RE = re.compile(r'[（(](?:撰寫中|即將撰寫)[）)]')
 
 
-def load_book():
-    text = open(os.path.join(ROOT, 'assets', 'book.js'), encoding='utf-8').read()
-    body = text[text.index('parts:'):text.index('BOOK.flat')]
-    chapters = {}
-    part = None
-    for line in body.splitlines():
-        m = PART_RE.search(line)
-        if m:
-            part = m.group(1)
-            continue
-        m = ENTRY_RE.search(line)
-        if m:
-            chapters[m.group(1)] = {'num': m.group(2), 'title': m.group(3), 'part': part}
-    return chapters
-
-
 def norm(s):
     s = html.unescape(re.sub(r'<[^>]+>', '', s))
     s = s.translate(str.maketrans('：（）／，、', ':()/,,'))
     return re.sub(r'\s+', '', s)
-
-
-_heads = {}
-
-
-def count_heads(cid):
-    if cid not in _heads:
-        t = open(os.path.join(SRC, cid + '.html'), encoding='utf-8-sig').read()
-        t = re.sub(r'<!--.*?-->', '', t, flags=re.S)
-        _heads[cid] = len(HEADS_RE.findall(t))
-    return _heads[cid]
 
 
 def bigrams(s):
@@ -92,7 +66,8 @@ def line_of(text, pos):
 
 def main(argv):
     quiet = '--quiet' in argv
-    book = load_book()
+    book, _ = load_book()
+    heads = Headings()
     by_num = {c['num']: cid for cid, c in book.items()}
     by_file = {cid.split('-')[0]: cid for cid in book if cid[0].isdigit()}
     problems = []
@@ -110,10 +85,18 @@ def main(argv):
                 problems.append((name, line_of(text, m.start()), 'broken-link', f'{target}.html 不存在'))
                 continue
             if frag and frag.startswith('sec-') and frag[4:].isdigit():
-                heads = count_heads(target)
-                if int(frag[4:]) >= heads:
+                total = heads.count(target)
+                plain_label = html.unescape(re.sub(r'<[^>]+>', '', label))
+                if int(frag[4:]) >= total:
                     problems.append((name, line_of(text, m.start()), 'anchor',
-                                     f'{target}.html#{frag} 不存在(該章只有 {heads} 個 h2/h3)'))
+                                     f'{target}.html#{frag} 不存在(該章只有 {total} 個 h2/h3)'))
+                elif '§' in plain_label:
+                    want_sec = head_norm(plain_label.split('§', 1)[1])
+                    here = heads.texts_at(target, frag)
+                    if want_sec and not any(t.startswith(want_sec) or want_sec.startswith(t) for t in here):
+                        got = heads.get(target)[[i for i, it in enumerate(heads.get(target)) if it[2] == frag][0]][3]
+                        problems.append((name, line_of(text, m.start()), 'anchor',
+                                         f'{target}.html#{frag} 是〈{got}〉,連結文字卻是「§{plain_label.split("§", 1)[1]}」'))
             if target not in book:
                 continue
             want = book[target]['num']

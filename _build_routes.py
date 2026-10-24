@@ -31,7 +31,8 @@ except ImportError:  # pragma: no cover
     sys.exit('需要 PyYAML(python3 -m venv .venv && .venv/bin/pip install pyyaml,再用 .venv/bin/python 執行)')
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
-SRC = os.path.join(ROOT, 'chapters', 'src')
+sys.path.insert(0, ROOT)   # python -I 也找得到共用模組
+from _book_headings import SRC, Headings, load_book, norm  # noqa: E402
 CRLF = '\r\n'
 
 TRACK_ORDER = ['trunk', 'foundation', 'hw-core', 'backend', 'ai', 'embedded', 'ic-design', 'security']
@@ -142,6 +143,10 @@ BOOK_EXTRA = {
     'em-c-pointers': [('bridge-read-c', ['指標初探'])],
 }
 
+# 同欄內的排序提示:節點 → 排在哪個節點前面(先修仍照 tree.yaml)。
+# t-read-c 排在 t-cpp 前:第 64 章的導引請讀者先讀橋接章,閱讀順序要是 橋A → 59 → 64。
+ORDER_BEFORE = {'t-read-c': 't-cpp'}
+
 # 書端額外寫的導讀頁(不在 book.js,沒有章號):路線 id → [(頁 id, 標題)];節點 id → [(頁 id, 標題, 說明)]
 ROUTE_PAGES = {'security': [('route-security-redlines', '資安紅線與授權')]}
 NODE_PAGES = {'sec-ethics': [('route-security-redlines', '資安紅線與授權', '先讀這一頁:各章紅線段落的彙整與連結')]}
@@ -150,35 +155,15 @@ CHAPTER_REF = re.compile(r'^聖經\s*ch(\d+)\s*(.*)$', re.S)
 COURSE_REF = re.compile(r'^聖經\s*(course-[a-z0-9-]+)\s*(.*)$', re.S)
 NONE_REF = re.compile(r'^聖經\s*[:：]\s*無')
 URL_RE = re.compile(r"https?://[A-Za-z0-9\-._~:/?#\[\]@!$&'*+,;=%]+")
-ENTRY_RE = re.compile(r'\{\s*id:\s*"([^"]+)",\s*num:\s*"([^"]+)",\s*title:\s*"([^"]*)"')
-HEAD_RE = re.compile(r'<(h[23])\b([^>]*)>(.*?)</\1>|<span class="c-title">(.*?)</span>', re.S)
 
 
 def esc(s):
     return html.escape(s, quote=True)
 
 
-def norm(s):
-    """比對用:去標籤、全形轉半形、去空白、轉小寫、去掉開頭的 emoji。"""
-    s = html.unescape(re.sub(r'<[^>]+>', '', s))
-    s = s.translate(str.maketrans('：（）／，、～＋', ':()/,,~+'))
-    s = re.sub(r'[\s「」『』“”"]+', '', s).lower()
-    return re.sub(r'^[^\w(「『]+', '', s)
-
-
 def soft(s):
     """顯示用:把 tree.yaml 的全形冒號、括號、斜線換成書裡慣用的半形。"""
     return s.translate(str.maketrans('：（）／', ':()/')).strip()
-
-
-def load_book():
-    text = open(os.path.join(ROOT, 'assets', 'book.js'), encoding='utf-8').read()
-    body = text[text.index('parts:'):text.index('BOOK.flat')]
-    chapters, order = {}, []
-    for m in ENTRY_RE.finditer(body):
-        chapters[m.group(1)] = {'num': m.group(2), 'title': m.group(3)}
-        order.append(m.group(1))
-    return chapters, order
 
 
 def num_label(num):
@@ -189,58 +174,6 @@ def num_label(num):
     if num.startswith('橋'):
         return f'橋接章 {num[1:]}'
     return num
-
-
-class Headings:
-    """各章的 h2/h3(和 callout 標題)及對應錨點,錨點規則與 book.js buildTOC 相同。"""
-
-    def __init__(self):
-        self.cache = {}
-
-    def get(self, cid):
-        if cid not in self.cache:
-            path = os.path.join(SRC, cid + '.html')
-            text = open(path, encoding='utf-8-sig').read() if os.path.exists(path) else ''
-            text = re.sub(r'<!--.*?-->', '', text, flags=re.S)
-            text = re.sub(r'<pre\b.*?</pre>', '', text, flags=re.S)
-            items, idx, last = [], -1, None
-            for m in HEAD_RE.finditer(text):
-                if m.group(1):
-                    idx += 1
-                    idm = re.search(r'\bid="([^"]+)"', m.group(2))
-                    anchor = idm.group(1) if idm else f'sec-{idx}'
-                    raw = m.group(3)
-                    items.append(('h', norm(raw), anchor, clean_title(raw)))
-                    last = (anchor, clean_title(raw))
-                elif last:
-                    raw = m.group(4)
-                    items.append(('c', norm(raw), last[0], clean_title(raw)))
-            self.cache[cid] = items
-        return self.cache[cid]
-
-    def find(self, cid, section):
-        """回傳 (anchor, 顯示標題) 或 None。"""
-        cands = [section]
-        for sep in ('、', '，', '（', '：', '(', ':'):
-            if sep in section:
-                cands.append(section.split(sep)[0])
-        items = self.get(cid)
-        bare = lambda x: re.sub(r'[^\w]', '', x)   # 第二輪:連標點都不看
-        for key in (lambda x: x, bare):
-            for cand in cands:
-                c = key(norm(cand))
-                if len(c) < 2:
-                    continue
-                for kind in ('h', 'c'):
-                    for k, text, anchor, title in items:
-                        if k == kind and key(text).startswith(c):
-                            return anchor, title
-        return None
-
-
-def clean_title(raw):
-    t = re.sub(r'\s+', ' ', html.unescape(re.sub(r'<[^>]+>', '', raw))).strip()
-    return re.sub(r'\s*[(（]呼應第[^)）]*[)）]$', '', t)   # 「(呼應第 41 章)」這種尾巴在導讀裡不需要
 
 
 def parse_ref(ref, book, file_ids, heads, warnings, node_id):
@@ -321,6 +254,9 @@ def topo_order(nodes):
     """同一條路線的節點:先依欄,欄內照路線內的先修做拓撲排序,平手照 yaml 順序。"""
     ids = {n['id'] for n in nodes}
     pos = {n['id']: i for i, n in enumerate(nodes)}
+    for nid, before in ORDER_BEFORE.items():
+        if nid in pos and before in pos:
+            pos[nid] = pos[before] - 0.5
     col = {n['id']: COLUMNS.index(n['column']) for n in nodes}
     deps = {n['id']: [p for p in (n.get('prereqs') or []) + (n.get('prereqs_any') or []) if p in ids] for n in nodes}
     done, out = set(), []
@@ -367,7 +303,7 @@ def render_guide(track, meta, nodes, all_nodes, book, refs, track_names):
     add('      <div class="byline">')
     add(f'        <span class="tag">{t["icon"]} 路線導讀</span>')
     add(f'        <span>{len(nodes)} 個技能節點</span>')
-    add(f'        <span>書內 {len(reading)} 章</span>')
+    add(f'        <span>{esc(reading_count(reading, book))}</span>')
     if n_missing:
         add(f'        <span>🚧 {n_missing} 個節點書裡還沒有</span>')
     add('      </div>')
@@ -472,7 +408,7 @@ def render_guide(track, meta, nodes, all_nodes, book, refs, track_names):
         add('')
 
     add('      <h2>把這條路線串起來</h2>')
-    add(f'      <p>{esc(t["short"])}路線共有 {len(nodes)} 個節點,書內要讀 {len(reading)} 章'
+    add(f'      <p>{esc(t["short"])}路線共有 {len(nodes)} 個節點,書內要讀{esc(reading_count(reading, book))[2:]}'
         + (f',另有 {n_missing} 個節點書裡還沒有素材' if n_missing else '') + '。'
         '讀完一個節點的章節,就去技能樹上做它的手算與 Lab;先修沒走完的節點,先回頭補先修。</p>')
     others = [x for x in TRACK_ORDER if x != track]
@@ -486,6 +422,13 @@ def render_guide(track, meta, nodes, all_nodes, book, refs, track_names):
     add('        </div>')
     add('      </div>')
     return CRLF.join(lines) + CRLF, reading
+
+
+def reading_count(reading, book):
+    """「書內 N 章」只算有編號的章;附錄與橋接章另外計。"""
+    numbered = sum(1 for cid in reading if book[cid]['num'].isdigit())
+    other = len(reading) - numbered
+    return f'書內 {numbered} 章' + (f' + {other} 份附錄/橋接章' if other else '')
 
 
 def has_material(node_refs):

@@ -367,14 +367,15 @@ const REL = () => (currentId() === "index" || location.pathname.endsWith("/")) ?
 
 /* ---------- 主題 ---------- */
 function initTheme() {
-  const saved = localStorage.getItem("cs-theme");
+  let saved = null;
+  try { saved = localStorage.getItem("cs-theme"); } catch (e) { /* 讀不到就跟系統設定 */ }
   const sys = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
   document.documentElement.dataset.theme = saved || sys;
 }
 function toggleTheme() {
   const cur = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
   document.documentElement.dataset.theme = cur;
-  localStorage.setItem("cs-theme", cur);
+  try { localStorage.setItem("cs-theme", cur); } catch (e) { /* 私密視窗等情況:不記也沒關係 */ }
   const b = document.getElementById("theme-icon"); if (b) b.textContent = cur === "dark" ? "☀️" : "🌙";
   // 同步切換 highlight.js 的配色主題
   const hl = document.getElementById("hljs-theme");
@@ -424,17 +425,30 @@ function navLink(prefix, c, cur) {
 function buildSidebar(prefix) {
   const cur = currentId();
   const nav = el("nav", { class: "sidebar", id: "sidebar" });
-  const partView = el("div", { class: "nav-view", "data-view": "part" });
+  const partView = el("div", { class: "nav-view", "data-view": "part", id: "nav-view-part",
+    role: "tabpanel", "aria-labelledby": "nav-tab-part" });
   for (const part of BOOK.parts) {
     partView.append(el("div", { class: "part-title" }, part.part));
     for (const c of part.chapters) partView.append(navLink(prefix, c, cur));
   }
-  const routeView = el("div", { class: "nav-view", "data-view": "route" });
-  const tabs = el("div", { class: "nav-tabs", role: "tablist" },
-    el("button", { class: "nav-tab", type: "button", role: "tab", "data-view": "part",
-      onclick: () => setNavView("part", true) }, "依部"),
-    el("button", { class: "nav-tab", type: "button", role: "tab", "data-view": "route",
-      onclick: () => setNavView("route", true) }, "依路線"));
+  const routeView = el("div", { class: "nav-view", "data-view": "route", id: "nav-view-route",
+    role: "tabpanel", "aria-labelledby": "nav-tab-route" });
+  const tab = (view, label) => el("button", { class: "nav-tab", type: "button", role: "tab",
+    id: "nav-tab-" + view, "aria-controls": "nav-view-" + view, "data-view": view,
+    onclick: () => setNavView(view, true) }, label);
+  const tabs = el("div", { class: "nav-tabs", role: "tablist", "aria-label": "目錄檢視" },
+    tab("part", "依部"), tab("route", "依路線"));
+  // 左右方向鍵在兩個分頁之間移動(WAI-ARIA tabs 的慣例)
+  tabs.addEventListener("keydown", (e) => {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    const list = [...tabs.querySelectorAll(".nav-tab")];
+    const i = list.indexOf(document.activeElement);
+    if (i < 0) return;
+    const next = list[(i + (e.key === "ArrowRight" ? 1 : list.length - 1)) % list.length];
+    e.preventDefault();
+    next.focus();
+    setNavView(next.dataset.view, true);
+  });
   nav.append(tabs, partView, routeView);
   document.querySelector(".layout").prepend(nav);
   document.querySelector(".layout").prepend(el("div", { class: "sidebar-backdrop", id: "backdrop", onclick: toggleSidebar }));
@@ -443,7 +457,11 @@ function buildSidebar(prefix) {
   function setNavView(view, remember) {
     if (remember) saveNavView(view);
     nav.dataset.view = view;
-    tabs.querySelectorAll(".nav-tab").forEach(b => b.setAttribute("aria-selected", String(b.dataset.view === view)));
+    tabs.querySelectorAll(".nav-tab").forEach(b => {
+      const on = b.dataset.view === view;
+      b.setAttribute("aria-selected", String(on));
+      b.tabIndex = on ? 0 : -1;
+    });
     if (view === "route" && !routesBuilt) {
       routesBuilt = true;
       loadRoutes(prefix, () => buildRouteView(routeView, prefix, cur));
@@ -502,7 +520,9 @@ function buildTOC() {
   // 小節錨點(#sec-N)是這裡才補上的 id,瀏覽器載入時找不到;補完再捲一次(路線導讀頁會連到這些錨點)。
   // 練習卡用 content-visibility,捲動途中高度會變,所以隔幾格畫面再對準,直到位置穩定。
   if (location.hash) {
-    const target = document.getElementById(decodeURIComponent(location.hash.slice(1)));
+    let id = location.hash.slice(1);
+    try { id = decodeURIComponent(id); } catch (e) { /* 不合法的 % 編碼:照原字串找 */ }
+    const target = document.getElementById(id);
     if (target) {
       let tries = 0, last = null;
       const align = () => {

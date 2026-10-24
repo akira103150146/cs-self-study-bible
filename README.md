@@ -34,6 +34,7 @@ _AUTHOR_GUIDE.md        章節撰寫規範
 _build_toi_*.py         TOI 題庫的重建工具
 _check_chapter_refs.py   章號與章際連結檢查(以 book.js 的顯示章號為準)
 _build_routes.py         由職業技能樹 tree.yaml 產生 assets/routes.js 與 8 份路線導讀(chapters/src/route-*.html)
+_book_headings.py        上面兩支工具共用:讀 book.js、各章 h2/h3 錨點(sec-N)的計算
 ```
 
 ## 效能
