@@ -7,6 +7,7 @@ window.BOOK_ROUTES = [
     "icon": "🌳",
     "blurb": "每條路線都從這裡出發:先會用終端機,再會一門語言,最後把 APCS 的演算法走一遍。",
     "guide": "route-trunk",
+    "pages": [],
     "chapters": [
       "16-shell",
       "17-editors",
@@ -43,6 +44,7 @@ window.BOOK_ROUTES = [
     "icon": "📐",
     "blurb": "不擋 APCS 主幹,但每條職業路線的核心與職業級,都會回來找它。",
     "guide": "route-foundation",
+    "pages": [],
     "chapters": [
       "12-calculus",
       "13-discrete-math",
@@ -67,6 +69,7 @@ window.BOOK_ROUTES = [
     "icon": "🔌",
     "blurb": "nand2tetris 的路徑:邏輯閘 → ALU → 記憶體 → CPU → 組譯器。IC 設計與嵌入式都從這裡開始。",
     "guide": "route-hw-core",
+    "pages": [],
     "chapters": [
       "19-boolean-logic",
       "47-digital-circuits",
@@ -82,6 +85,7 @@ window.BOOK_ROUTES = [
     "icon": "🖥️",
     "blurb": "從 HTTP 與 SQL 開始,一路走到 Docker、分散式系統與系統設計。",
     "guide": "route-backend",
+    "pages": [],
     "chapters": [
       "25-networking",
       "37-databases",
@@ -119,6 +123,7 @@ window.BOOK_ROUTES = [
     "icon": "🤖",
     "blurb": "從 NumPy 與機器學習基礎,到 CNN、Transformer、LLM 應用與 Agent。",
     "guide": "route-ai",
+    "pages": [],
     "chapters": [
       "65-cv-basics-processing",
       "38-machine-learning",
@@ -146,6 +151,7 @@ window.BOOK_ROUTES = [
     "icon": "📟",
     "blurb": "電路、C 指標、微控制器、中斷與 RTOS。書裡大部分還在施工。",
     "guide": "route-embedded",
+    "pages": [],
     "chapters": [
       "21-cpu-machine-language",
       "36-secure-coding",
@@ -162,6 +168,7 @@ window.BOOK_ROUTES = [
     "icon": "🔬",
     "blurb": "Verilog、驗證、時序與一顆自己的 RV32I CPU。書裡大部分還在施工。",
     "guide": "route-ic-design",
+    "pages": [],
     "chapters": [
       "20-combinational-sequential",
       "47-digital-circuits",
@@ -176,6 +183,12 @@ window.BOOK_ROUTES = [
     "icon": "🛡️",
     "blurb": "先過倫理閘門,再學工具、編碼與密碼,最後是鑑識、Web、逆向與防禦。",
     "guide": "route-security",
+    "pages": [
+      {
+        "id": "route-security-redlines",
+        "title": "資安紅線與授權"
+      }
+    ],
     "chapters": [
       "41-ethics",
       "69-ctf-foundations",

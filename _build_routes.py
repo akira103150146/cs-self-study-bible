@@ -139,6 +139,10 @@ READ_FIRST = {
 # tree.yaml 還沒列、但書裡已經有的素材:節點 id → [(章 id, [小節名…])]
 BOOK_EXTRA = {}
 
+# 書端額外寫的導讀頁(不在 book.js,沒有章號):路線 id → [(頁 id, 標題)];節點 id → [(頁 id, 標題, 說明)]
+ROUTE_PAGES = {'security': [('route-security-redlines', '資安紅線與授權')]}
+NODE_PAGES = {'sec-ethics': [('route-security-redlines', '資安紅線與授權', '先讀這一頁:各章紅線段落的彙整與連結')]}
+
 CHAPTER_REF = re.compile(r'^聖經\s*ch(\d+)\s*(.*)$', re.S)
 COURSE_REF = re.compile(r'^聖經\s*(course-[a-z0-9-]+)\s*(.*)$', re.S)
 NONE_REF = re.compile(r'^聖經\s*[:：]\s*無')
@@ -421,8 +425,11 @@ def render_guide(track, meta, nodes, all_nodes, book, refs, track_names):
                 add(f'      <p class="route-prereq">{"<br>".join(pre)}</p>')
             node_refs = refs[n['id']]
             items = [r for r in node_refs if r['kind'] in ('chapter', 'course')]
-            if items:
+            pages = NODE_PAGES.get(n['id'], [])
+            if items or pages:
                 add('      <ul>')
+                for pid, ptitle, pnote in pages:
+                    add(f'        <li><a href="{pid}.html">{esc(ptitle)}</a><span class="route-note">({esc(pnote)})</span></li>')
                 for r in items:
                     add(f'        <li>{render_ref(r, book)}</li>')
                 add('      </ul>')
@@ -564,7 +571,9 @@ def main(argv):
         text, reading = render_guide(t, meta, nodes, all_nodes, book, refs, track_names)
         outputs[os.path.join(SRC, f'route-{t}.html')] = text
         routes.append({'id': t, 'title': TRACKS[t]['short'], 'icon': TRACKS[t]['icon'],
-                       'blurb': TRACKS[t]['subtitle'], 'guide': f'route-{t}', 'chapters': reading})
+                       'blurb': TRACKS[t]['subtitle'], 'guide': f'route-{t}',
+                       'pages': [{'id': pid, 'title': pt} for pid, pt in ROUTE_PAGES.get(t, [])],
+                       'chapters': reading})
 
     js = ('/* 由 _build_routes.py 從職業技能樹 tree.yaml 產生,請勿手改。\n'
           '   側欄「依路線」檢視的資料:每條路線 = 導讀頁 + 書內章節的閱讀順序(章 id 對應 book.js)。 */\n'

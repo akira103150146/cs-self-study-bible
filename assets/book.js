@@ -463,7 +463,8 @@ function buildRouteView(view, prefix, cur) {
   const routes = window.BOOK_ROUTES || [];
   if (!routes.length) { view.append(el("div", { class: "part-title" }, "路線資料載入失敗")); return; }
   for (const r of routes) {
-    const here = r.guide === cur || r.chapters.includes(cur);
+    const pages = r.pages || [];
+    const here = r.guide === cur || r.chapters.includes(cur) || pages.some(pg => pg.id === cur);
     const group = el("details", { class: "route-group" });
     if (here) group.open = true;
     group.append(el("summary", { class: "part-title" }, r.icon + " " + r.title));
@@ -472,6 +473,10 @@ function buildRouteView(view, prefix, cur) {
       href: prefix + "chapters/" + r.guide + ".html",
       title: r.blurb,
     }, el("span", { class: "ch-num" }, "導"), "路線導讀"));
+    for (const pg of pages) group.append(el("a", {
+      class: "nav-link route-guide" + (pg.id === cur ? " active" : ""),
+      href: prefix + "chapters/" + pg.id + ".html",
+    }, el("span", { class: "ch-num" }, "導"), pg.title));
     for (const id of r.chapters) if (byId[id]) group.append(navLink(prefix, byId[id], cur));
     view.append(group);
   }
