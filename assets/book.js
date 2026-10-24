@@ -400,25 +400,81 @@ function buildTopbar(prefix, hasSidebar) {
   document.body.prepend(el("div", { id: "progress-bar" }));
 }
 
-/* ---------- 左側導覽 ---------- */
+/* ---------- 左側導覽 ----------
+   兩種檢視:「依部」(BOOK.parts,書的原順序)與「依路線」(assets/routes.js 的 BOOK_ROUTES,
+   每條路線 = 導讀頁 + 書內章節的閱讀順序)。選擇記在 localStorage;上一章/下一章永遠照書序。 */
+const NAV_VIEW_KEY = "cs-nav-view";
+function loadNavView() {
+  try { return localStorage.getItem(NAV_VIEW_KEY) === "route" ? "route" : "part"; } catch (e) { return "part"; }
+}
+function saveNavView(view) {
+  try { localStorage.setItem(NAV_VIEW_KEY, view); } catch (e) { /* 私密視窗等情況:不記也沒關係 */ }
+}
+function navLink(prefix, c, cur) {
+  const href = c.done ? prefix + "chapters/" + c.id + ".html" : "javascript:void(0)";
+  const a = el("a", {
+    class: "nav-link" + (c.id === cur ? " active" : "") + (c.done ? "" : " todo"),
+    href,
+    title: c.en,
+  }, el("span", { class: "ch-num" }, c.num), c.title);
+  if (!c.done) { a.style.opacity = ".5"; a.title = "撰寫中 / Coming soon"; }
+  return a;
+}
 function buildSidebar(prefix) {
   const cur = currentId();
   const nav = el("nav", { class: "sidebar", id: "sidebar" });
+  const partView = el("div", { class: "nav-view", "data-view": "part" });
   for (const part of BOOK.parts) {
-    nav.append(el("div", { class: "part-title" }, part.part));
-    for (const c of part.chapters) {
-      const href = c.done ? prefix + "chapters/" + c.id + ".html" : "javascript:void(0)";
-      const a = el("a", {
-        class: "nav-link" + (c.id === cur ? " active" : "") + (c.done ? "" : " todo"),
-        href,
-        title: c.en,
-      }, el("span", { class: "ch-num" }, c.num), c.title);
-      if (!c.done) { a.style.opacity = ".5"; a.title = "撰寫中 / Coming soon"; }
-      nav.append(a);
-    }
+    partView.append(el("div", { class: "part-title" }, part.part));
+    for (const c of part.chapters) partView.append(navLink(prefix, c, cur));
   }
+  const routeView = el("div", { class: "nav-view", "data-view": "route" });
+  const tabs = el("div", { class: "nav-tabs", role: "tablist" },
+    el("button", { class: "nav-tab", type: "button", role: "tab", "data-view": "part",
+      onclick: () => setNavView("part", true) }, "依部"),
+    el("button", { class: "nav-tab", type: "button", role: "tab", "data-view": "route",
+      onclick: () => setNavView("route", true) }, "依路線"));
+  nav.append(tabs, partView, routeView);
   document.querySelector(".layout").prepend(nav);
   document.querySelector(".layout").prepend(el("div", { class: "sidebar-backdrop", id: "backdrop", onclick: toggleSidebar }));
+
+  let routesBuilt = false;
+  function setNavView(view, remember) {
+    if (remember) saveNavView(view);
+    nav.dataset.view = view;
+    tabs.querySelectorAll(".nav-tab").forEach(b => b.setAttribute("aria-selected", String(b.dataset.view === view)));
+    if (view === "route" && !routesBuilt) {
+      routesBuilt = true;
+      loadRoutes(prefix, () => buildRouteView(routeView, prefix, cur));
+    }
+  }
+  // 導讀頁只出現在「依路線」裡,所以在導讀頁一律先顯示路線(不覆寫讀者記住的選擇)
+  setNavView(cur.startsWith("route-") ? "route" : loadNavView(), false);
+}
+function loadRoutes(prefix, done) {
+  if (window.BOOK_ROUTES) return done();
+  const s = el("script", { src: prefix + "assets/routes.js" });
+  s.onload = done;
+  s.onerror = () => { window.BOOK_ROUTES = []; done(); };
+  document.head.append(s);
+}
+function buildRouteView(view, prefix, cur) {
+  const byId = Object.fromEntries(BOOK.flat.map(c => [c.id, c]));
+  const routes = window.BOOK_ROUTES || [];
+  if (!routes.length) { view.append(el("div", { class: "part-title" }, "路線資料載入失敗")); return; }
+  for (const r of routes) {
+    const here = r.guide === cur || r.chapters.includes(cur);
+    const group = el("details", { class: "route-group" });
+    if (here) group.open = true;
+    group.append(el("summary", { class: "part-title" }, r.icon + " " + r.title));
+    group.append(el("a", {
+      class: "nav-link route-guide" + (r.guide === cur ? " active" : ""),
+      href: prefix + "chapters/" + r.guide + ".html",
+      title: r.blurb,
+    }, el("span", { class: "ch-num" }, "導"), "路線導讀"));
+    for (const id of r.chapters) if (byId[id]) group.append(navLink(prefix, byId[id], cur));
+    view.append(group);
+  }
 }
 function toggleSidebar() {
   document.getElementById("sidebar")?.classList.toggle("open");
@@ -437,10 +493,19 @@ function buildTOC() {
     toc.append(el("a", { href: "#" + h.id, class: h.tagName === "H3" ? "h3" : "" }, h.textContent));
   });
   document.querySelector(".layout").append(toc);
-  // 小節錨點(#sec-N)是這裡才補上的 id,瀏覽器載入時找不到;補完再捲一次(路線導讀頁會連到這些錨點)
+  // 小節錨點(#sec-N)是這裡才補上的 id,瀏覽器載入時找不到;補完再捲一次(路線導讀頁會連到這些錨點)。
+  // 練習卡用 content-visibility,捲動途中高度會變,所以隔幾格畫面再對準,直到位置穩定。
   if (location.hash) {
     const target = document.getElementById(decodeURIComponent(location.hash.slice(1)));
-    if (target) target.scrollIntoView();
+    if (target) {
+      let tries = 0, last = null;
+      const align = () => {
+        target.scrollIntoView({ behavior: "instant", block: "start" });
+        const top = Math.round(target.getBoundingClientRect().top);
+        if (top !== last && ++tries < 8) { last = top; setTimeout(align, 120); }
+      };
+      align();
+    }
   }
 
   const links = [...toc.querySelectorAll("a")];

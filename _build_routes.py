@@ -564,7 +564,7 @@ def main(argv):
         text, reading = render_guide(t, meta, nodes, all_nodes, book, refs, track_names)
         outputs[os.path.join(SRC, f'route-{t}.html')] = text
         routes.append({'id': t, 'title': TRACKS[t]['short'], 'icon': TRACKS[t]['icon'],
-                       'guide': f'route-{t}', 'chapters': reading})
+                       'blurb': TRACKS[t]['subtitle'], 'guide': f'route-{t}', 'chapters': reading})
 
     js = ('/* 由 _build_routes.py 從職業技能樹 tree.yaml 產生,請勿手改。\n'
           '   側欄「依路線」檢視的資料:每條路線 = 導讀頁 + 書內章節的閱讀順序(章 id 對應 book.js)。 */\n'

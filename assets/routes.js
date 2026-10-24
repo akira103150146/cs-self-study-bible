@@ -5,6 +5,7 @@ window.BOOK_ROUTES = [
     "id": "trunk",
     "title": "共用主幹",
     "icon": "🌳",
+    "blurb": "每條路線都從這裡出發:先會用終端機,再會一門語言,最後把 APCS 的演算法走一遍。",
     "guide": "route-trunk",
     "chapters": [
       "16-shell",
@@ -40,6 +41,7 @@ window.BOOK_ROUTES = [
     "id": "foundation",
     "title": "數學與理論基礎",
     "icon": "📐",
+    "blurb": "不擋 APCS 主幹,但每條職業路線的核心與職業級,都會回來找它。",
     "guide": "route-foundation",
     "chapters": [
       "12-calculus",
@@ -63,6 +65,7 @@ window.BOOK_ROUTES = [
     "id": "hw-core",
     "title": "硬體共同起點",
     "icon": "🔌",
+    "blurb": "nand2tetris 的路徑:邏輯閘 → ALU → 記憶體 → CPU → 組譯器。IC 設計與嵌入式都從這裡開始。",
     "guide": "route-hw-core",
     "chapters": [
       "19-boolean-logic",
@@ -77,6 +80,7 @@ window.BOOK_ROUTES = [
     "id": "backend",
     "title": "後端工程師",
     "icon": "🖥️",
+    "blurb": "從 HTTP 與 SQL 開始,一路走到 Docker、分散式系統與系統設計。",
     "guide": "route-backend",
     "chapters": [
       "25-networking",
@@ -113,6 +117,7 @@ window.BOOK_ROUTES = [
     "id": "ai",
     "title": "AI 工程師",
     "icon": "🤖",
+    "blurb": "從 NumPy 與機器學習基礎,到 CNN、Transformer、LLM 應用與 Agent。",
     "guide": "route-ai",
     "chapters": [
       "65-cv-basics-processing",
@@ -139,6 +144,7 @@ window.BOOK_ROUTES = [
     "id": "embedded",
     "title": "嵌入式工程師",
     "icon": "📟",
+    "blurb": "電路、C 指標、微控制器、中斷與 RTOS。書裡大部分還在施工。",
     "guide": "route-embedded",
     "chapters": [
       "21-cpu-machine-language",
@@ -154,6 +160,7 @@ window.BOOK_ROUTES = [
     "id": "ic-design",
     "title": "IC 設計工程師",
     "icon": "🔬",
+    "blurb": "Verilog、驗證、時序與一顆自己的 RV32I CPU。書裡大部分還在施工。",
     "guide": "route-ic-design",
     "chapters": [
       "20-combinational-sequential",
@@ -167,6 +174,7 @@ window.BOOK_ROUTES = [
     "id": "security",
     "title": "資安工程師",
     "icon": "🛡️",
+    "blurb": "先過倫理閘門,再學工具、編碼與密碼,最後是鑑識、Web、逆向與防禦。",
     "guide": "route-security",
     "chapters": [
       "41-ethics",
