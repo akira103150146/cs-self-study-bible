@@ -35,6 +35,7 @@
           <li>圖(graph)是什麼,怎麼用鄰接矩陣 / 鄰接串列把它存進電腦,以及樹為什麼是特別的圖</li>
           <li>七橋問題、四色定理背後的圖論,還有為什麼「漢米頓路徑」是個惡名昭彰的難題</li>
           <li>怎麼「解」一個遞迴關係,以及主定理如何一眼看穿分治演算法的複雜度</li>
+          <li>GF(2) 的算術與多項式長除法,CRC 為什麼一定抓得到單一位元錯與短的突發錯誤,以及檔案格式怎麼用標頭與 CRC 保護自己</li>
         </ul>
       </div>
 
@@ -1137,6 +1138,1019 @@ print("玩具 RSA 加解密成功 ✅")</code></pre>
         </div>
       </div>
 
+      <h2>D. 有限體與多項式:CRC 與 AES 背後的代數</h2>
+      <p>
+        你下載一個檔案,傳輸途中有一個位元被雜訊翻掉了。電腦怎麼知道?它不會把整個檔案和原檔比一次——原檔根本不在它手上。
+        它靠的是檔案後面附的幾個位元組:<strong>循環冗餘檢查(Cyclic Redundancy Check,CRC)</strong>。
+        你的硬碟、乙太網路、USB、PNG 圖檔、zip 壓縮檔,全都用它。
+      </p>
+      <p>
+        CRC 的數學其實就是本章 A 部分「整數除法取餘數」的雙胞胎:只是被除的不是整數,而是<strong>係數只有 0 和 1 的多項式</strong>,
+        而且加法沒有進位。這個奇怪的算術世界叫做 GF(2)。同一套想法再放大一點,就是 AES 加密用的 GF(2⁸);
+        再抽象一點,就是 Diffie–Hellman 與橢圓曲線密碼背後的「群」。
+      </p>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">為什麼要學</span>
+          <p>這一部分是任務線「hzip」(自己的壓縮器)裡任務「CRC」(<code>hzip/crc</code>)和任務「檔案格式與命令列」(<code>hzip/cli</code>)的觀念與手算。
+          壓縮檔的標頭與結尾各放一個 CRC-32;Boss 戰「壞檔偵測」會翻你檔案裡的每一個位元、塞進突發錯誤,要求你一律回報壞檔。
+          同一個 CRC 零件之後還會被兩條任務線拿去用:嵌入式任務線 fw 的「序列埠指令列」,每個訊框後面接一個 CRC-8,收到不對就丟掉;
+          任務線 rtl(自己的 RV32I CPU)的「單週期 CPU」,要在你自己設計的 CPU 上跑一支 C 程式(排序＋CRC),印出來的 CRC 要和參考模擬器一模一樣。
+          最後,這條任務線的 Boss 戰「機率期末」會用你在<a href="14-combinatorics-probability.html">第 14 章</a>寫的蒙地卡羅估計器(<code>hzip/stats</code>),量 CRC-8 的漏抓率是不是理論值(約 1/256)。</p>
+        </div>
+      </div>
+
+      <h3>GF(2):只有 0 和 1 的算術</h3>
+      <p>
+        從最小的世界開始:只有兩個數,0 和 1。加法和乘法都照「模 2」算,也就是做完之後只看奇偶:
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>a</th><th>b</th><th>a + b(模 2)</th><th>a × b(模 2)</th></tr></thead>
+        <tbody>
+          <tr><td>0</td><td>0</td><td>0</td><td>0</td></tr>
+          <tr><td>0</td><td>1</td><td>1</td><td>0</td></tr>
+          <tr><td>1</td><td>0</td><td>1</td><td>0</td></tr>
+          <tr><td>1</td><td>1</td><td><strong>0</strong></td><td>1</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        看「a + b」那一欄:那就是 <strong>XOR</strong>。「a × b」那一欄就是 <strong>AND</strong>。
+        而 $1 + 1 = 0$ 有一個驚人的後果:每個數的負數就是它自己($-1 = 1$),所以<strong>減法和加法是同一件事</strong>,都是 XOR。
+        在 GF(2) 裡,你永遠不用擔心進位與借位。
+      </p>
+      <p>
+        為什麼它有個嚇人的名字?數學家把「加、減、乘、除(除以 0 以外)都能做,而且交換律、結合律、分配律都成立」的集合叫做
+        <strong>體(field)</strong>。有理數、實數都是體;整數不是(2 除以 3 不是整數)。只有有限個元素的體叫<strong>有限體(finite field)</strong>,
+        也叫<strong>伽羅瓦體(Galois field)</strong>,記作 GF(q)。GF(2) 就是最小的有限體:{0, 1},加法是 XOR,乘法是 AND。
+      </p>
+      <p>
+        你在本章 A 部分其實已經見過一整族有限體:當 $p$ 是質數,模 $p$ 的整數 $\{0, 1, \dots, p-1\}$ 就是一個體——
+        每個非 0 的數都有乘法反元素(用擴展歐幾里得算,RSA 裡的 $d$ 就是這樣來的)。GF(2) 正是 $p = 2$ 的情況。
+      </p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 15.8 <span class="badge">反例</span></div>
+        <div class="ex-body">
+          <p><strong>看起來對但其實錯</strong>:「GF(2) 是模 2 的整數、GF(3) 是模 3 的整數,所以 GF(4) 就是模 4 的整數 {0, 1, 2, 3}。」
+          找一個反例,說明模 4 的整數不是體。</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <p>在模 4 裡,$2 \times 2 = 4 \equiv 0$。兩個非 0 的數乘起來變成 0,那 2 就不可能有反元素:
+            $2 \times 0, 2 \times 1, 2 \times 2, 2 \times 3$ 模 4 分別是 0、2、0、2,沒有一個是 1。所以模 4 的整數不是體。
+            模 $m$ 的整數是體,剛好在 $m$ 是質數的時候。</p>
+            <p>真正的 GF(4) 要用下一節的方法造:元素是次數小於 2 的 GF(2) 多項式 {0, 1, x, x+1},乘完之後「除以 $x^2 + x + 1$ 取餘式」。
+            它的乘法表(把 x 寫成 2、x+1 寫成 3):</p>
+            <div class="table-wrap"><table>
+              <thead><tr><th>×</th><th>0</th><th>1</th><th>2(x)</th><th>3(x+1)</th></tr></thead>
+              <tbody>
+                <tr><td>0</td><td>0</td><td>0</td><td>0</td><td>0</td></tr>
+                <tr><td>1</td><td>0</td><td>1</td><td>2</td><td>3</td></tr>
+                <tr><td>2(x)</td><td>0</td><td>2</td><td>3</td><td>1</td></tr>
+                <tr><td>3(x+1)</td><td>0</td><td>3</td><td>1</td><td>2</td></tr>
+              </tbody>
+            </table></div>
+            <p>每個非 0 元素那一列都剛好有一個 1:x 的反元素是 x+1。這張表是用下一節的 <code>poly_mod(clmul(a, b), 0b111)</code> 算出來的。
+            <strong>例子都對 ≠ 敘述為真</strong>:「GF(p) ＝ 模 p」對 2、3、5、7 都對,但那是因為它們是質數,不是因為「GF(n) 就是模 n」。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <h3>多項式也能用位元存:GF(2) 上的多項式</h3>
+      <p>
+        現在把 GF(2) 的數當成多項式的<strong>係數</strong>。例如 $x^3 + x + 1$ 的係數由高到低是 1、0、1、1——
+        這不就是二進位的 <code>1011</code> 嗎?規則很簡單:<strong>整數的第 i 個位元 ＝ $x^i$ 的係數</strong>。
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>多項式</th><th>係數(高 → 低)</th><th>Python 整數</th></tr></thead>
+        <tbody>
+          <tr><td>$x^3 + x + 1$</td><td>1 0 1 1</td><td><code>0b1011</code> ＝ 11</td></tr>
+          <tr><td>$x^2 + x + 1$</td><td>1 1 1</td><td><code>0b111</code> ＝ 7</td></tr>
+          <tr><td>$x^8 + x^2 + x + 1$</td><td>1 0000 0111</td><td><code>0x107</code></td></tr>
+        </tbody>
+      </table></div>
+      <p>這樣存之後,多項式的四則運算全部變成位元運算:</p>
+      <ul>
+        <li><strong>加法(＝減法)</strong>:同次項的係數相加模 2,就是 <code>a ^ b</code>。$(x^2 + x) + (x + 1) = x^2 + 1$,因為兩個 $x$ 相消:<code>0b110 ^ 0b011 == 0b101</code>。</li>
+        <li><strong>乘以 x</strong>:每一項的次數加 1,就是左移 <code>a &lt;&lt; 1</code>。</li>
+        <li><strong>乘法</strong>:像小學的直式乘法,b 的每個 1 都把「左移過的 a」加進來——但加法是 XOR,<strong>沒有進位</strong>。
+        所以它也叫<strong>無進位乘法(carry-less multiplication)</strong>。</li>
+        <li><strong>除法</strong>:像長除法,一直把除式對齊被除式的最高次項、XOR 掉,直到剩下的次數比除式小。剩下的就是<strong>餘式</strong>。</li>
+      </ul>
+      <pre><code class="language-python">def clmul(a, b):
+    """GF(2) 多項式乘法(無進位乘法):整數的位元 i ＝ x^i 的係數"""
+    result = 0
+    while b:
+        if b &amp; 1:            # b 的這一項是 1 → 把目前的 a 加進來
+            result ^= a      # GF(2) 的加法就是 XOR,不會進位
+        a &lt;&lt;= 1              # a 乘上 x
+        b &gt;&gt;= 1
+    return result
+
+def deg(p):
+    """多項式的次數;0 多項式回傳 -1"""
+    return p.bit_length() - 1
+
+def poly_mod(a, g):
+    """a(x) 除以 g(x) 的餘式:把 g 對齊 a 的最高次項、XOR 掉,一直做到次數比 g 小"""
+    assert g != 0, "不能除以 0 多項式"
+    while deg(a) &gt;= deg(g):
+        a ^= g &lt;&lt; (deg(a) - deg(g))
+    return a
+
+print(bin(clmul(0b111, 0b11)))         # (x²+x+1)(x+1) → 0b1001,也就是 x³+1
+print(bin(poly_mod(0b1101011, 0b1011)))  # 下一節長除法表的例子 → 0b10</code></pre>
+      <p>
+        <code>poly_mod</code> 和整數的 <code>%</code> 長得很像,但每一步不是「減掉」而是「XOR 掉」,所以也不會出現負數或借位。
+        每一圈都會讓 a 的最高次項消失,a 的次數至少降 1,所以迴圈一定會停。
+      </p>
+
+      <h3>手算:GF(2) 多項式長除法</h3>
+      <p>
+        算 $a(x) = x^6 + x^5 + x^3 + x + 1$(<code>1101011</code>)除以 $g(x) = x^3 + x + 1$(<code>1011</code>)。
+        每一列做一件事:看「目前的被除式」的最高次 $x^d$,把 g 左移 $d - 3$ 位對齊,XOR 掉,同時在商裡記下 $x^{d-3}$。
+        做到被除式的次數小於 3 為止。
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>步驟</th><th>目前的被除式</th><th>最高次</th><th>商加上的項</th><th>對齊後的 g</th><th>XOR 之後</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td><code>1101011</code></td><td>$x^6$</td><td>$x^3$</td><td><code>1011000</code></td><td><code>0110011</code></td></tr>
+          <tr><td>2</td><td><code>0110011</code></td><td>$x^5$</td><td>$x^2$</td><td><code>0101100</code></td><td><code>0011111</code></td></tr>
+          <tr><td>3</td><td><code>0011111</code></td><td>$x^4$</td><td>$x$</td><td><code>0010110</code></td><td><code>0001001</code></td></tr>
+          <tr><td>4</td><td><code>0001001</code></td><td>$x^3$</td><td>$1$</td><td><code>0001011</code></td><td><code>0000010</code></td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        剩下 <code>10</code>,次數 1 &lt; 3,停。商 $q = x^3 + x^2 + x + 1$(<code>1111</code>),餘式 $r = x$(<code>10</code>)。
+        驗算:$q \cdot g + r$ 要等於 $a$——<code>clmul(0b1111, 0b1011) ^ 0b10 == 0b1101011</code>,成立。
+        這條「$a = q \cdot g + r$,而且 $\deg r &lt; \deg g$」就是多項式除法的定義,和整數的 $a = qb + r,\ 0 \le r &lt; b$ 一模一樣。
+      </p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 15.1 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>用同樣的表格,手算 <code>11100101</code> 除以 <code>1011</code>($x^7 + x^6 + x^5 + x^2 + 1$ 除以 $x^3 + x + 1$),寫出商與餘式,並用 $q \cdot g + r = a$ 驗算。
+          注意:有一步 XOR 完之後,次數會一口氣掉好幾次方。</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <div class="table-wrap"><table>
+              <thead><tr><th>步驟</th><th>目前的被除式</th><th>最高次</th><th>商加上的項</th><th>對齊後的 g</th><th>XOR 之後</th></tr></thead>
+              <tbody>
+                <tr><td>1</td><td><code>11100101</code></td><td>$x^7$</td><td>$x^4$</td><td><code>10110000</code></td><td><code>01010101</code></td></tr>
+                <tr><td>2</td><td><code>01010101</code></td><td>$x^6$</td><td>$x^3$</td><td><code>01011000</code></td><td><code>00001101</code></td></tr>
+                <tr><td>3</td><td><code>00001101</code></td><td>$x^3$</td><td>$1$</td><td><code>00001011</code></td><td><code>00000110</code></td></tr>
+              </tbody>
+            </table></div>
+            <p>第 2 步之後,次數從 6 直接掉到 3,所以商裡沒有 $x^2$ 和 $x$ 兩項(那兩個位置是 0)。
+            商 $q = x^4 + x^3 + 1$(<code>11001</code>),餘式 $r = x^2 + x$(<code>110</code>)。
+            驗算:<code>clmul(0b11001, 0b1011) ^ 0b110 == 0b11100101</code> 是 <code>True</code>;<code>poly_mod(0b11100101, 0b1011)</code> 是 <code>0b110</code>。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <h3>CRC:把訊息當成多項式來除</h3>
+      <p>
+        CRC 的想法一句話就講完:<strong>把整個訊息當成一個巨大的 GF(2) 多項式 $M(x)$,除以一個事先約定好的生成多項式(generator polynomial)$G(x)$,
+        餘式就是 CRC。</strong>
+      </p>
+      <p>
+        細節只多一點。設 $G(x)$ 的次數是 $w$(CRC 就有 $w$ 個位元,叫 CRC-$w$)。發送端:
+      </p>
+      <ol>
+        <li>在訊息後面補 $w$ 個 0,也就是算 $M(x) \cdot x^w$。</li>
+        <li>算餘式 $R(x) = M(x) \cdot x^w \bmod G(x)$,這就是 CRC,$w$ 個位元。</li>
+        <li>把 $R$ 接在訊息後面送出去:$T(x) = M(x) \cdot x^w + R(x)$。</li>
+      </ol>
+      <p>
+        關鍵在第 3 步:GF(2) 裡加法就是減法,所以 $T = M x^w - R$,恰好是「被除式減掉餘式」——<strong>$T(x)$ 一定被 $G(x)$ 整除</strong>。
+        接收端把收到的整串再除一次 $G$:餘式是 0,就當作沒事;不是 0,一定出錯了。
+      </p>
+      <p>
+        實際寫程式有兩種寫法。定義版直接把整串位元組變成一個 Python 大整數再除。<strong>移位暫存器(shift register)</strong>版一次只吃一個位元,
+        只用一個 $w$ 位元的暫存器——這才是硬體、韌體和 zlib 真正的樣子(它們再用查表一次吃一個位元組)。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 560 210" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs><marker id="mk-crc" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#2f6f6a"/></marker></defs>
+  <!-- registers -->
+  <rect x="120" y="70" width="70" height="44" rx="6" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <rect x="260" y="70" width="70" height="44" rx="6" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <rect x="420" y="70" width="70" height="44" rx="6" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <g font-size="15" font-weight="700" text-anchor="middle" fill="#1f2328">
+    <text x="155" y="97">r2</text><text x="295" y="97">r1</text><text x="455" y="97">r0</text>
+  </g>
+  <g font-size="12" text-anchor="middle" fill="#8a929b">
+    <text x="155" y="132">x² 的係數</text><text x="295" y="132">x¹ 的係數</text><text x="455" y="132">x⁰ 的係數</text>
+  </g>
+  <!-- XOR nodes -->
+  <circle cx="70" cy="92" r="13" fill="#fbfdfc" stroke="#b4541f" stroke-width="2"/>
+  <text x="70" y="98" font-size="18" text-anchor="middle" fill="#b4541f">⊕</text>
+  <circle cx="375" cy="92" r="13" fill="#fbfdfc" stroke="#b4541f" stroke-width="2"/>
+  <text x="375" y="98" font-size="18" text-anchor="middle" fill="#b4541f">⊕</text>
+  <!-- shifts: r0 -> xor -> r1 -> r2 -> xor -->
+  <line x1="420" y1="92" x2="390" y2="92" stroke="#2f6f6a" stroke-width="2" marker-end="url(#mk-crc)"/>
+  <line x1="362" y1="92" x2="334" y2="92" stroke="#2f6f6a" stroke-width="2" marker-end="url(#mk-crc)"/>
+  <line x1="260" y1="92" x2="194" y2="92" stroke="#2f6f6a" stroke-width="2" marker-end="url(#mk-crc)"/>
+  <line x1="120" y1="92" x2="86" y2="92" stroke="#2f6f6a" stroke-width="2" marker-end="url(#mk-crc)"/>
+  <!-- input bit -->
+  <line x1="70" y1="30" x2="70" y2="76" stroke="#2f6f6a" stroke-width="2" marker-end="url(#mk-crc)"/>
+  <text x="80" y="26" font-size="12" fill="#1f2328">輸入位元(每個位元組高位先)</text>
+  <!-- feedback -->
+  <polyline points="70,105 70,175 530,175 530,92 494,92" fill="none" stroke="#b4541f" stroke-width="2" marker-end="url(#mk-crc)"/>
+  <line x1="375" y1="175" x2="375" y2="109" stroke="#b4541f" stroke-width="2" marker-end="url(#mk-crc)"/>
+  <text x="200" y="195" font-size="12" fill="#b4541f">回授 out ＝ r2 ⊕ 輸入位元(out ＝ 1 就是「減掉 G」)</text>
+  <text x="300" y="50" font-size="12" text-anchor="middle" fill="#8a929b">每吃一個位元,整排往左移一格</text>
+</svg>
+        <figcaption>圖 15-8:CRC-3、$G(x) = x^3 + x + 1$ 的移位暫存器。$G$ 的 $x^1$ 與 $x^0$ 項是 1,所以回授線接到 r1 前面的 ⊕ 與 r0;$x^2$ 項是 0,r1 到 r2 中間沒有 ⊕。
+        文字版:每吃一個位元 b,先算 out ＝ r2 ⊕ b,然後 r2 ← r1、r1 ← r0 ⊕ out、r0 ← out。</figcaption>
+      </div>
+
+      <pre><code class="language-python">def crc_by_division(data, g):
+    """定義版:CRC ＝ M(x)·x^w 除以 G(x) 的餘式。每個位元組高位先。"""
+    w = deg(g)
+    m = int.from_bytes(data, "big")    # 整串位元組 → 一個大多項式 M(x)
+    return poly_mod(m &lt;&lt; w, g)         # 乘上 x^w ＝ 後面補 w 個 0
+
+def crc_bitwise(data, g):
+    """移位暫存器版:一次吃一個位元(高位先),暫存器只有 w 個位元"""
+    w = deg(g)
+    mask = (1 &lt;&lt; w) - 1
+    low = g &amp; mask                     # G(x) 去掉最高次項 x^w 的那個 1
+    reg = 0
+    for byte in data:
+        for i in range(7, -1, -1):     # 位元組的高位先
+            bit = (byte &gt;&gt; i) &amp; 1
+            out = (reg &gt;&gt; (w - 1)) ^ bit   # 這一步會不會溢出到 x^w?
+            reg = (reg &lt;&lt; 1) &amp; mask
+            if out:
+                reg ^= low             # 溢出了 → 減掉(XOR)G(x)
+    return reg
+
+G3 = 0b1011              # x³ + x + 1
+G8 = 0x107               # x⁸ + x² + x + 1
+G32 = 0x104C11DB7        # CRC-32 的多項式(33 個位元,最高次 x³²)
+print(hex(crc_by_division(b"123456789", G8)))   # 0xf4
+print(hex(crc_bitwise(b"123456789", G8)))       # 0xf4</code></pre>
+      <p>
+        <code>b"123456789"</code> 是 CRC 界的標準測試字串,它的 CRC 叫做 <strong>check 值</strong>。
+        <code>0x107</code> 這個 CRC-8 的 check 值是 <code>0xF4</code>,和 CRC 目錄裡的 CRC-8/SMBUS 一樣——等一下講參數時會看到原因。
+      </p>
+      <p>
+        移位暫存器版為什麼和長除法一樣?把 6 個位元 <code>110101</code> 用 $G = $<code>1011</code> 一個一個餵進去,
+        每一列最後一欄是「到目前為止吃進來的前綴 $P$,算 $P(x) \cdot x^3 \bmod G$」:
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>第 k 個位元</th><th>吃進的位元</th><th>暫存器(吃之前)</th><th>out ＝ r2 ⊕ 位元</th><th>暫存器(吃之後)</th><th>前綴 P</th><th>$P \cdot x^3 \bmod G$</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td>1</td><td><code>000</code></td><td>1</td><td><code>011</code></td><td><code>1</code></td><td><code>011</code></td></tr>
+          <tr><td>2</td><td>1</td><td><code>011</code></td><td>1</td><td><code>101</code></td><td><code>11</code></td><td><code>101</code></td></tr>
+          <tr><td>3</td><td>0</td><td><code>101</code></td><td>1</td><td><code>001</code></td><td><code>110</code></td><td><code>001</code></td></tr>
+          <tr><td>4</td><td>1</td><td><code>001</code></td><td>1</td><td><code>001</code></td><td><code>1101</code></td><td><code>001</code></td></tr>
+          <tr><td>5</td><td>0</td><td><code>001</code></td><td>0</td><td><code>010</code></td><td><code>11010</code></td><td><code>010</code></td></tr>
+          <tr><td>6</td><td>1</td><td><code>010</code></td><td>1</td><td><code>111</code></td><td><code>110101</code></td><td><code>111</code></td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        「吃之後」和最後一欄每一列都一樣。這就是移位暫存器版的<strong>迴圈不變量</strong>:
+        <strong>每吃完一個位元,暫存器 ＝ 目前的前綴 $\cdot\, x^w \bmod G$</strong>。
+        為什麼成立?前綴多吃一個位元 b,新前綴是 $P' = P \cdot x + b$。舊暫存器 $r = P x^w \bmod G$,新的應該是
+        $(r \cdot x + b \cdot x^w) \bmod G$:暫存器左移(乘 x),把 b 加到 $x^w$ 那一格——加完如果 $x^w$ 那格是 1(就是 out),就減掉一個 $G$ 讓次數回到 $w$ 以下。
+        這正是迴圈裡那三行。迴圈結束時前綴就是整個訊息,所以暫存器就是 CRC。
+      </p>
+      <p>把證明寫成程式:下面用隨機資料檢查這個不變量(逐位元組的前綴),順便檢查 CRC 的另一個關鍵性質——<strong>線性</strong>:</p>
+      <pre><code class="language-python">import random
+rng = random.Random(15)
+for _ in range(300):
+    n = rng.randrange(0, 20)
+    a = bytes(rng.randrange(256) for _ in range(n))
+    b = bytes(rng.randrange(256) for _ in range(n))
+    ab = bytes(x ^ y for x, y in zip(a, b))
+    for g in (G3, G8, G32):
+        # 不變式:每吃完一個前綴,暫存器 ＝ 前綴·x^w mod G
+        for k in range(n + 1):
+            assert crc_bitwise(a[:k], g) == crc_by_division(a[:k], g)
+        # 線性:同長度的 a、b,crc(a ⊕ b) ＝ crc(a) ⊕ crc(b)
+        assert crc_bitwise(ab, g) == crc_bitwise(a, g) ^ crc_bitwise(b, g)
+print("兩種寫法一致,而且是線性的")</code></pre>
+      <p>
+        線性的意思是:同樣長度的兩段資料,先 XOR 再算 CRC,等於各算 CRC 再 XOR。原因是餘式本身就是線性的($(A + B) \bmod G = A \bmod G + B \bmod G$)。
+        這條性質在下一節會變成 CRC 偵錯能力的證明——也會在後面變成 CRC 不能拿來防偽造的原因。
+      </p>
+
+      <h3>手算:CRC-3 從發送到驗收</h3>
+      <p>
+        訊息 $M = $<code>110101</code>,$G(x) = x^3 + x + 1$(<code>1011</code>,$w = 3$)。先補 3 個 0 變成 <code>110101000</code>,再做長除法:
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>步驟</th><th>目前的被除式</th><th>最高次</th><th>商加上的項</th><th>對齊後的 G</th><th>XOR 之後</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td><code>110101000</code></td><td>$x^8$</td><td>$x^5$</td><td><code>101100000</code></td><td><code>011001000</code></td></tr>
+          <tr><td>2</td><td><code>011001000</code></td><td>$x^7$</td><td>$x^4$</td><td><code>010110000</code></td><td><code>001111000</code></td></tr>
+          <tr><td>3</td><td><code>001111000</code></td><td>$x^6$</td><td>$x^3$</td><td><code>001011000</code></td><td><code>000100000</code></td></tr>
+          <tr><td>4</td><td><code>000100000</code></td><td>$x^5$</td><td>$x^2$</td><td><code>000101100</code></td><td><code>000001100</code></td></tr>
+          <tr><td>5</td><td><code>000001100</code></td><td>$x^3$</td><td>$1$</td><td><code>000001011</code></td><td><code>000000111</code></td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        CRC ＝ 餘式 <code>111</code>,和上一節移位暫存器最後一列一樣。送出去的是 $T = $<code>110101 111</code>(訊息＋CRC,9 個位元)。
+        接收端算 <code>poly_mod(0b110101111, 0b1011)</code> 得到 0:通過。
+      </p>
+      <p>
+        現在讓傳輸出錯:第 i 個位元被翻掉(位置 i 是 $x^i$,最右邊是 0)。收到的是 $T' = T + x^i$,而 $T$ 被 $G$ 整除,所以接收端算出的餘式就是 $x^i \bmod G$:
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>翻掉第 i 位</th><th>收到的 T′</th><th>T′ mod G(＝ $x^i \bmod G$)</th><th>結果</th></tr></thead>
+        <tbody>
+          <tr><td>0</td><td><code>110101110</code></td><td><code>001</code></td><td>抓到</td></tr>
+          <tr><td>1</td><td><code>110101101</code></td><td><code>010</code></td><td>抓到</td></tr>
+          <tr><td>2</td><td><code>110101011</code></td><td><code>100</code></td><td>抓到</td></tr>
+          <tr><td>3</td><td><code>110100111</code></td><td><code>011</code></td><td>抓到</td></tr>
+          <tr><td>4</td><td><code>110111111</code></td><td><code>110</code></td><td>抓到</td></tr>
+          <tr><td>5</td><td><code>110001111</code></td><td><code>111</code></td><td>抓到</td></tr>
+          <tr><td>6</td><td><code>111101111</code></td><td><code>101</code></td><td>抓到</td></tr>
+          <tr><td>7</td><td><code>100101111</code></td><td><code>001</code></td><td>抓到</td></tr>
+          <tr><td>8</td><td><code>010101111</code></td><td><code>010</code></td><td>抓到</td></tr>
+        </tbody>
+      </table></div>
+      <p>9 個位置,每一個單一位元錯都抓到。不過請盯著第 0 列和第 7 列——餘式一樣都是 <code>001</code>。這件事等一下會咬人(手算 15.3)。</p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 15.2 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>CRC-4,$G(x) = x^4 + x + 1$(<code>10011</code>),訊息是一個位元組 <code>10110110</code>(<code>0xB6</code>)。
+          (a) 用長除法表算出 CRC 與送出去的 12 個位元 T。(b) 用 <code>crc_bitwise(bytes([0xB6]), 0b10011)</code> 對答案。
+          (c) 這個 12 位元的 T,任意兩個位元一起翻掉,CRC-4 一定抓得到嗎?提示:先算 $x^i \bmod G$ 在 i 等於多少時第一次回到 1。</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <p>(a) 補 4 個 0 變成 <code>101101100000</code>:</p>
+            <div class="table-wrap"><table>
+              <thead><tr><th>步驟</th><th>目前的被除式</th><th>最高次</th><th>商加上的項</th><th>對齊後的 G</th><th>XOR 之後</th></tr></thead>
+              <tbody>
+                <tr><td>1</td><td><code>101101100000</code></td><td>$x^{11}$</td><td>$x^7$</td><td><code>100110000000</code></td><td><code>001011100000</code></td></tr>
+                <tr><td>2</td><td><code>001011100000</code></td><td>$x^9$</td><td>$x^5$</td><td><code>001001100000</code></td><td><code>000010000000</code></td></tr>
+                <tr><td>3</td><td><code>000010000000</code></td><td>$x^7$</td><td>$x^3$</td><td><code>000010011000</code></td><td><code>000000011000</code></td></tr>
+                <tr><td>4</td><td><code>000000011000</code></td><td>$x^4$</td><td>$1$</td><td><code>000000010011</code></td><td><code>000000001011</code></td></tr>
+              </tbody>
+            </table></div>
+            <p>CRC ＝ <code>1011</code>,T ＝ <code>10110110 1011</code>,而且 <code>poly_mod(0b101101101011, 0b10011)</code> 是 0。</p>
+            <p>(b) <code>crc_bitwise(bytes([0xB6]), 0b10011)</code> 回傳 11,就是 <code>0b1011</code>。</p>
+            <p>(c) 翻掉第 i、j 位(i &gt; j)時,錯誤是 $x^i + x^j = x^j (x^{i-j} + 1)$。$G$ 的常數項是 1,和 $x^j$ 沒有共同因式,
+            所以漏掉 ⇔ $G$ 整除 $x^{i-j} + 1$ ⇔ $x^{i-j} \bmod G = 1$。逐一算 $x^k \bmod G$:
+            $k = 1, 2, \dots$ 依序是 0010、0100、1000、0011、0110、1100、1011、0101、1010、0111、1110、1111、1101、1001,
+            一直到 $k = 15$ 才回到 0001。T 只有 12 個位元,$i - j \le 11$,所以<strong>任兩個位元一起錯都抓得到</strong>(用程式窮舉 66 對,沒有一對漏掉)。
+            訊框一旦長到 16 個位元以上,第 0 位和第 15 位一起翻就會漏掉。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 15.3 <span class="badge">反例</span></div>
+        <div class="ex-body">
+          <p><strong>看起來對但其實錯</strong>:「上面那張表裡,CRC-3 把 9 個位置的單一位元錯全部抓到了。所以兩個位元一起錯,它也一定抓得到。」
+          在 $T = $<code>110101111</code> 裡找兩個位元,一起翻掉之後 CRC-3 檢查還是通過。</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <p>表裡第 0 位和第 7 位的餘式都是 <code>001</code>。兩個一起翻,餘式是 <code>001 ⊕ 001 = 000</code>——接收端以為一切正常。
+            實際算:$T' = $<code>110101111 ⊕ 010000001 = 100101110</code>,<code>poly_mod(0b100101110, 0b1011)</code> 是 0。第 1 位和第 8 位也一樣(窮舉 36 對,剛好漏掉這 2 對)。</p>
+            <p>原因是 $x^7 \bmod (x^3 + x + 1) = 1$,也就是 $G$ 整除 $x^7 + 1$。<strong>例子都對 ≠ 敘述為真</strong>:單一位元錯全部抓到,
+            不代表兩個位元錯也全部抓到。CRC 真正的保證是下一節的定理,裡面沒有「任兩個位元」這一條——它要看 $x$ 的「週期」和訊框多長。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <h3>為什麼 CRC 抓得到單一位元錯與短的突發錯誤</h3>
+      <p>
+        真實世界的錯誤常常一次壞一小段:刮傷的光碟、一陣電磁干擾、序列埠上一個尖波。
+        一段連續的錯叫<strong>突發錯誤(burst error)</strong>:長度 L 的突發錯誤,是所有錯的位元都落在連續 L 個位置之內,而且頭尾那兩個位元一定錯(中間可錯可不錯)。
+        單一位元錯就是長度 1 的突發錯誤。CRC 對它們有一個硬保證:
+      </p>
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">定理(CRC 的偵錯保證)</span>
+          <p>設生成多項式 $G(x)$ 的次數是 $w \ge 1$,而且常數項是 1。把資料的位元<strong>照 CRC 處理的順序</strong>排成一列。那麼:</p>
+          <ul>
+            <li>任何<strong>一個位元</strong>錯,CRC 一定改變。</li>
+            <li>任何長度 <strong>L ≤ w</strong> 的突發錯誤,CRC 一定改變。</li>
+            <li>(參考)長度 $L = w + 1$ 的突發錯誤,漏掉的比例剛好是 $1/2^{w-1}$;更長的,比例是 $1/2^w$。</li>
+          </ul>
+          <p><strong>但書:「連續」是照 CRC 自己吃位元的順序算的。</strong>本章的 <code>crc_bitwise</code>(和 CRC-8/SMBUS)是每個位元組高位先;
+          zlib 的 CRC-32 是<strong>反射</strong>的,每個位元組低位先。同一個錯誤,換一種順序量,長度可能完全不同(手算 15.4)。</p>
+        </div>
+      </div>
+      <p>
+        <strong>證明(參考)。</strong>接收端拿到 $T' = T + E$,$E(x)$ 是錯誤樣式(錯的位置是 1)。上一節的線性告訴我們餘式是 $T \bmod G + E \bmod G = E \bmod G$,
+        所以<strong>漏掉 ⇔ $G$ 整除 $E$</strong>。長度 L 的突發錯誤可以寫成 $E(x) = x^i \cdot B(x)$,其中 $B$ 的頭尾係數都是 1,
+        次數是 $L - 1$。假設 $G$ 整除 $x^i B(x)$。$G$ 的常數項是 1,所以 $x$ 不是 $G$ 的因式;GF(2) 上的多項式也有唯一分解(就像本章開頭整數的算術基本定理),
+        所以 $G$ 必須整除 $B$。可是 $B \ne 0$,而且 $L \le w$ 時 $\deg B = L - 1 &lt; w = \deg G$——次數比 $G$ 小的非 0 多項式不可能是 $G$ 的倍數。矛盾,所以一定抓到。
+        $L = w + 1$ 時 $\deg B = \deg G$,$G$ 整除 $B$ 只有 $B = G$ 一種可能;而 $B$ 中間的 $w - 1$ 個係數有 $2^{w-1}$ 種,所以漏掉的比例是 $1/2^{w-1}$。∎
+      </p>
+      <p>
+        兩個常見的延伸(都可以用同一招證):如果 $x + 1$ 是 $G$ 的因式(把 $x = 1$ 代進 $G$ 得 0,例如 CRC-8 的 <code>0x107</code>:$1 + 1 + 1 + 1 = 0$),
+        那麼<strong>奇數個位元錯</strong>一定抓得到;如果訊框的長度小於「$x$ 的週期」(最小的 k 使 $x^k \bmod G = 1$),那麼<strong>任兩個位元錯</strong>都抓得到。
+        <code>0x107</code> 的週期是 127,所以 127 個位元以內的訊框,任兩個位元一起錯都抓得到。
+      </p>
+      <p>
+        下面的程式用小範圍窮舉檢查這個定理——<strong>不是證明,是建立直覺</strong>:取一個 64 位元的訊息,64 個位元每一個都翻翻看;
+        再把所有長度 1 到 10 的突發錯誤(高位先的順序)全部試一次。因為 CRC 是線性的,換一個訊息,漏掉的錯誤樣式完全一樣。
+      </p>
+      <pre><code class="language-python">import random, zlib
+rng = random.Random(64)
+msg = bytes(rng.randrange(256) for _ in range(8))   # 64 位元的訊息
+n = int.from_bytes(msg, "big")
+
+def damaged(err):
+    """把錯誤樣式 err(一個 64 位元的整數)XOR 進訊息"""
+    return (n ^ err).to_bytes(8, "big")
+
+# 1) 64 個位元,每一個都翻翻看
+miss8 = sum(crc_bitwise(damaged(1 &lt;&lt; i), G8) == crc_bitwise(msg, G8) for i in range(64))
+miss32 = sum(zlib.crc32(damaged(1 &lt;&lt; i)) == zlib.crc32(msg) for i in range(64))
+print("翻 1 個位元:CRC-8 漏掉", miss8, "次,CRC-32 漏掉", miss32, "次")
+
+# 2) 所有長度 L 的突發錯誤(照高位先的順序):頭尾是 1,中間隨意
+def bursts(L):
+    for start in range(64 - L + 1):
+        for mid in range(1 &lt;&lt; max(L - 2, 0)):
+            pattern = 1 if L == 1 else (1 &lt;&lt; (L - 1)) | (mid &lt;&lt; 1) | 1
+            yield pattern &lt;&lt; start
+
+good = crc_bitwise(msg, G8)
+for L in range(1, 11):
+    errs = list(bursts(L))
+    miss = sum(crc_bitwise(damaged(e), G8) == good for e in errs)
+    print(f"長度 {L:2}:{len(errs):5} 種突發錯誤,CRC-8 漏掉 {miss}")</code></pre>
+      <p>輸出:</p>
+      <pre><code class="language-text">翻 1 個位元:CRC-8 漏掉 0 次,CRC-32 漏掉 0 次
+長度  1:   64 種突發錯誤,CRC-8 漏掉 0
+長度  2:   63 種突發錯誤,CRC-8 漏掉 0
+長度  3:  124 種突發錯誤,CRC-8 漏掉 0
+長度  4:  244 種突發錯誤,CRC-8 漏掉 0
+長度  5:  480 種突發錯誤,CRC-8 漏掉 0
+長度  6:  944 種突發錯誤,CRC-8 漏掉 0
+長度  7: 1856 種突發錯誤,CRC-8 漏掉 0
+長度  8: 3648 種突發錯誤,CRC-8 漏掉 0
+長度  9: 7168 種突發錯誤,CRC-8 漏掉 56
+長度 10:14080 種突發錯誤,CRC-8 漏掉 55</code></pre>
+      <p>
+        長度 ≤ 8 一個都沒漏;長度 9 漏掉 56/7168 ＝ 1/128 ＝ $1/2^{w-1}$(56 個起點,每個起點剛好漏掉 $B = G$ 那一種);
+        長度 10 漏掉 55/14080 ＝ 1/256 ＝ $1/2^w$。和定理說的一模一樣。
+      </p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 15.9 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>仿照上面的程式,改用 CRC-3($G = $<code>1011</code>,$w = 3$),錯誤樣式只在 12 個位元裡。窮舉所有長度 1 到 5 的突發錯誤,
+          數漏掉幾個、比例多少,和定理的 $0$、$1/2^{w-1}$、$1/2^w$ 對照。提示:CRC 是線性的,所以「漏掉」就是 <code>poly_mod(錯誤樣式, G3) == 0</code>,不需要真的訊息。</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+      <pre><code class="language-python">G3 = 0b1011
+NBITS = 12
+for L in range(1, 6):
+    total = miss = 0
+    for start in range(NBITS - L + 1):
+        for mid in range(1 &lt;&lt; max(L - 2, 0)):
+            pattern = 1 if L == 1 else (1 &lt;&lt; (L - 1)) | (mid &lt;&lt; 1) | 1
+            e = pattern &lt;&lt; start
+            total += 1
+            miss += poly_mod(e, G3) == 0     # 錯誤樣式被 G 整除 → 漏掉
+    print(f"長度 {L}:{total:3} 種,漏掉 {miss:2},比例 {miss / total:.3f}")</code></pre>
+            <pre><code class="language-text">長度 1: 12 種,漏掉  0,比例 0.000
+長度 2: 11 種,漏掉  0,比例 0.000
+長度 3: 20 種,漏掉  0,比例 0.000
+長度 4: 36 種,漏掉  9,比例 0.250
+長度 5: 64 種,漏掉  8,比例 0.125</code></pre>
+            <p>長度 ≤ 3 全抓到;長度 4 漏掉 1/4 ＝ $1/2^{w-1}$(9 個起點,每個起點漏掉 <code>1011</code> 那一種);長度 5 漏掉 1/8 ＝ $1/2^w$。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 15.4 <span class="badge">反例</span></div>
+        <div class="ex-body">
+          <p><strong>看起來對但其實錯</strong>:「CRC-8 保證抓到長度 ≤ 8 的突發錯誤。所以不管每個位元組是高位先還是低位先送進 CRC,都一樣有這個保證。」
+          用錯誤樣式 <code>36 C0 00</code>(十六進位,三個位元組)和同一個 $G = $<code>0x107</code> 檢驗:分別照高位先、低位先把錯誤的 24 個位元排成一列,它各是多長的突發錯誤?</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <p>高位先:<code>00110110 11000000 00000000</code>,錯的位元在第 2 到第 9 個,中間是 <code>11011011</code>——長度 8,在保證範圍內。</p>
+            <p>低位先(每個位元組自己倒過來):<code>01101100 00000011 00000000</code>,錯的位元從第 1 個到第 15 個——長度 15,超出保證。
+            而它剛好被漏掉:</p>
+      <pre><code class="language-python">def rev8(b):
+    """把一個位元組的 8 個位元前後倒過來"""
+    return int(f"{b:08b}"[::-1], 2)
+
+def crc_lsb_first(data, g):
+    """同一個 G,但每個位元組改成低位先餵(就是 refin 的意思)"""
+    return crc_bitwise(bytes(rev8(b) for b in data), g)
+
+msg = b"OK!"
+err = bytes([0x36, 0xC0, 0x00])        # 高位先看:..11011011.. 只有 8 個位元長
+bad = bytes(a ^ e for a, e in zip(msg, err))
+print(crc_bitwise(msg, G8) != crc_bitwise(bad, G8))       # True :高位先處理,抓到
+print(crc_lsb_first(msg, G8) != crc_lsb_first(bad, G8))   # False:低位先處理,漏掉</code></pre>
+            <p>定理一個字都沒錯,錯的是「長度」量錯了順序。所以 Lab 的理論檢查會照 CRC 自己的位元順序產生突發錯誤:
+            不反射(refin = False)的 CRC 是每個位元組高位先,反射(refin = True)的 CRC 是低位先。<strong>例子都對 ≠ 敘述為真</strong>:
+            只拿落在單一位元組裡的錯誤去試,兩種順序都量出一樣的長度,永遠發現不了這個問題。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 15.5 <span class="badge">反例</span></div>
+        <div class="ex-body">
+          <p>最簡單的檢查碼是把所有位元組加起來取 mod 256(<code>sum8</code>)。它也抓得到每一個單一位元錯:翻掉一個位元組的第 k 位,總和就變了 $\pm 2^k$,
+          而 $2^k$($k \le 7$)不是 256 的倍數。<strong>看起來對但其實錯</strong>:「所以加總檢查碼和 CRC 一樣可靠。」找一個加總檢查碼抓不到、但 CRC-32 抓得到的錯誤。</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <p><strong>把兩個位元組(或兩段資料)對調</strong>:加法有交換律,總和完全不變。</p>
+      <pre><code class="language-python">import zlib
+
+def sum8(data):
+    """最簡單的檢查碼:所有位元組加起來 mod 256"""
+    return sum(data) % 256
+
+a, b = b"10 to 20", b"20 to 10"            # 兩段數字對調
+print(sum8(a) == sum8(b))                  # True :加總檢查碼看不出來
+print(zlib.crc32(a) == zlib.crc32(b))      # False:CRC-32 看得出來</code></pre>
+            <p>CRC 把位置算進去了:同一個位元組放在不同位置,乘上的是不同的 $x^i$,所以對調通常會改變餘式。
+            (這是對這兩段資料實際算出來的結果;CRC 並沒有「任何對調都抓得到」的保證。)
+            <strong>例子都對 ≠ 敘述為真</strong>:只拿單一位元錯去測,sum8 和 CRC 看起來一樣好。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 15.6 <span class="badge">反例</span></div>
+        <div class="ex-body">
+          <p><strong>看起來對但其實錯</strong>:「CRC-32 有 $2^{32}$ 種值,隨便改一段資料剛好 CRC 不變的機率只有 40 億分之一,所以拿 CRC-32 防止別人竄改檔案很安全。」
+          把 <code>PAY 0100 TO BOB;memo</code> 改成開頭是 <code>PAY 9900 TO EVE;</code> 的 20 個位元組,讓 CRC-32 和原本一模一樣。</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <p>「40 億分之一」只對<strong>隨機</strong>的錯誤成立。攻擊者不是隨機的:CRC 沒有金鑰,而且是線性的。
+            把資料的最後 4 個位元組 t 當成未知數,$\text{crc32}(\text{prefix} + t)$ 是 t 的(GF(2) 上的)仿射函數,
+            解一個 32 × 32 的 GF(2) 線性方程組,就能讓 CRC 變成任何你想要的值:</p>
+      <pre><code class="language-python">import zlib
+
+def forge_tail(prefix, target):
+    """找 4 個位元組 t,讓 zlib.crc32(prefix + t) == target"""
+    base = zlib.crc32(prefix + bytes(4))
+    # crc32(prefix + t) ＝ base ⊕ L(t),L 是 GF(2) 上的線性函數。
+    # 先量出 32 個基底:t 只有第 i 個位元是 1 的時候,L(t) 是多少
+    basis = {}                                   # 最高位元 → (L 的值, 是哪些 t 位元)
+    for i in range(32):
+        t = 1 &lt;&lt; i
+        v = zlib.crc32(prefix + t.to_bytes(4, "little")) ^ base
+        while v:                                 # GF(2) 的高斯消去法(加法＝XOR)
+            top = v.bit_length() - 1
+            if top not in basis:
+                basis[top] = (v, t)
+                break
+            bv, bt = basis[top]
+            v, t = v ^ bv, t ^ bt
+    want, t = base ^ target, 0                   # 要解 L(t) ＝ base ⊕ target
+    while want:
+        bv, bt = basis[want.bit_length() - 1]    # 32 個基底都在,一定找得到
+        want, t = want ^ bv, t ^ bt
+    return t.to_bytes(4, "little")
+
+orig = b"PAY 0100 TO BOB;" + b"memo"
+fake = b"PAY 9900 TO EVE;"
+patch = forge_tail(fake, zlib.crc32(orig))
+print(patch.hex(), len(fake + patch) == len(orig))       # 38886689 True:補上 4 個亂碼位元組,長度不變
+print(zlib.crc32(fake + patch) == zlib.crc32(orig))      # True:CRC 一模一樣</code></pre>
+            <p>(<code>forge_tail</code> 只用 <code>zlib.crc32</code> 量出 32 個基底,再做 GF(2) 上的高斯消去法;每次執行結果都一樣。)
+            CRC 是用來抓<strong>意外</strong>的錯,不是用來防<strong>故意</strong>的竄改。要防竄改,得用有金鑰的訊息鑑別碼(例如 HMAC)或數位簽章,見第 35 章。
+            這種「補 4 個位元組讓 CRC 變成任意值」的手法早就公開了(例如 Stigge 等人 2006 年的 <em>Reversing CRC – Theory and Practice</em>)。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <h3>真實世界的 CRC:CRC-8 與 CRC-32 的參數</h3>
+      <p>
+        到這裡,CRC 只有一個參數:$G(x)$。可是你去查,會發現名字叫「CRC-32」的東西有好幾種,算出來的值都不一樣。
+        差別在幾個「工程上的小調整」。1993 年 Ross Williams 在 <em>A Painless Guide to CRC Error Detection Algorithms</em> 裡把它們整理成一組參數(Rocksoft 參數模型),
+        現在的 CRC 目錄(例如 Greg Cook 的 <em>Catalogue of parametrised CRC algorithms</em>)都照這組參數列:
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>參數</th><th>意思</th><th>為什麼需要</th></tr></thead>
+        <tbody>
+          <tr><td><code>width</code></td><td>CRC 有幾個位元,＝ $\deg G$</td><td>位元越多,隨機錯誤漏掉的機率越小($1/2^w$),保證的突發長度越長</td></tr>
+          <tr><td><code>poly</code></td><td>$G(x)$ <strong>去掉最高次項</strong>之後的 w 個位元</td><td>最高次項一定是 1,不用存。CRC-8 的 <code>0x07</code> 就是 $x^8 + x^2 + x + 1$(本章寫成 <code>0x107</code>)</td></tr>
+          <tr><td><code>init</code></td><td>暫存器的初始值</td><td>init ＝ 0 時,資料前面多幾個 0x00 位元組,CRC 完全不變(暫存器一直是 0)。init 不是 0,前導的 0 就看得見了</td></tr>
+          <tr><td><code>refin</code></td><td>每個位元組改成<strong>低位先</strong>餵進去</td><td>UART、乙太網路在線上就是低位先送位元;硬體邊收邊算,順序自然是低位先</td></tr>
+          <tr><td><code>refout</code></td><td>最後把 w 位元的暫存器前後倒過來</td><td>通常和 refin 一起開,讓結果的位元順序和輸入一致</td></tr>
+          <tr><td><code>xorout</code></td><td>最後再 XOR 一個常數</td><td>init 和 xorout 都是 0 時,全 0 的資料(例如沒寫進去的空白磁區)CRC 也是 0,「全 0＋CRC 0」會被當成正確</td></tr>
+          <tr><td><code>check</code></td><td><code>b"123456789"</code> 的 CRC</td><td>不是參數,是驗收用的答案:你的實作算出這個值,參數才算對</td></tr>
+        </tbody>
+      </table></div>
+      <p>幾個常見的 CRC(check 值都實際跑過):</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>名稱</th><th>width</th><th>poly</th><th>init</th><th>refin</th><th>refout</th><th>xorout</th><th>check</th><th>用在</th></tr></thead>
+        <tbody>
+          <tr><td>CRC-8/SMBUS</td><td>8</td><td><code>0x07</code></td><td><code>0x00</code></td><td>否</td><td>否</td><td><code>0x00</code></td><td><code>0xF4</code></td><td>SMBus;hzip 的 <code>CRC8</code>(fw 的序列埠訊框)</td></tr>
+          <tr><td>CRC-8/MAXIM-DOW</td><td>8</td><td><code>0x31</code></td><td><code>0x00</code></td><td>是</td><td>是</td><td><code>0x00</code></td><td><code>0xA1</code></td><td>1-Wire 感測器</td></tr>
+          <tr><td>CRC-16/IBM-3740</td><td>16</td><td><code>0x1021</code></td><td><code>0xFFFF</code></td><td>否</td><td>否</td><td><code>0x0000</code></td><td><code>0x29B1</code></td><td>俗稱 CRC-16/CCITT-FALSE;hzip 的 <code>CRC16</code></td></tr>
+          <tr><td>CRC-32/ISO-HDLC</td><td>32</td><td><code>0x04C11DB7</code></td><td><code>0xFFFFFFFF</code></td><td>是</td><td>是</td><td><code>0xFFFFFFFF</code></td><td><code>0xCBF43926</code></td><td>zlib、gzip、PNG、zip、乙太網路</td></tr>
+          <tr><td>CRC-32/BZIP2</td><td>32</td><td><code>0x04C11DB7</code></td><td><code>0xFFFFFFFF</code></td><td>否</td><td>否</td><td><code>0xFFFFFFFF</code></td><td><code>0xFC891918</code></td><td>bzip2</td></tr>
+          <tr><td>CRC-32/CKSUM</td><td>32</td><td><code>0x04C11DB7</code></td><td><code>0x00000000</code></td><td>否</td><td>否</td><td><code>0xFFFFFFFF</code></td><td><code>0x765E7680</code></td><td>POSIX 的 <code>cksum</code> 指令(它另外還會把檔案長度也餵進去)</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        本章的 <code>crc_bitwise</code> 就是 init ＝ 0、不反射、xorout ＝ 0 的那一種,所以它算 <code>0x107</code> 剛好是 CRC-8/SMBUS。
+        後面三個 CRC-32 用的是同一個 $G(x)$,只差在參數。用 <code>crc_bitwise</code> 和 <code>zlib.crc32</code> 看幾個參數的效果:
+      </p>
+      <pre><code class="language-python">import zlib
+print(crc_bitwise(b"\x00\x00hi", G8) == crc_bitwise(b"hi", G8))   # True:前面的 0 看不見
+print(crc_bitwise(bytes(16), G8))                                  # 0:全 0 的資料,CRC 也是 0
+print(zlib.crc32(b"\x00\x00hi") == zlib.crc32(b"hi"))             # False:init ≠ 0 就看得見
+# 同一個 CRC-32 多項式,只差在參數:
+print(hex(crc_bitwise(b"123456789", G32) ^ 0xFFFFFFFF))  # 0x765e7680 → CRC-32/CKSUM(xorout 全 1)
+print(hex(zlib.crc32(b"123456789")))                      # 0xcbf43926 → CRC-32/ISO-HDLC(zlib)</code></pre>
+      <p>
+        CRC-32/CKSUM 的 init 是 0、不反射,只多了「xorout 全 1」,所以本章的函式再 XOR 一次就對上了。zlib 那一種還要 init 全 1 和反射,這兩件事就留給 Lab。
+        (兩個實用的觀念:不反射、width 是 8 的倍數、資料至少 w 個位元時,init 全 1 等於把資料的前 w 個位元反相再算;反射的 CRC 實作上常改成暫存器往右移、
+        用位元倒過來的多項式,CRC-32 的 <code>0x04C11DB7</code> 倒過來是 <code>0xEDB88320</code>。)
+      </p>
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">參數改變了 CRC 的值,但沒有改變偵錯保證</span>
+          <p>同樣長度的兩段資料,init 與 xorout 的影響在「好的 CRC ⊕ 壞的 CRC」裡會互相抵消(CRC 從線性變成「仿射」,差值還是 $E \bmod G$);
+          refout 只是把結果的位元換個位置。所以定理對每一種參數都成立——唯一要小心的是 refin:它決定了「連續」要照哪個順序量(手算 15.4)。</p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 15.7 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>(a) CRC-16/IBM-3740 的生成多項式是 $x^{16} + x^{12} + x^5 + 1$,它的 <code>poly</code> 參數(十六進位)是多少?
+          (b) CRC-8/MAXIM-DOW 的 <code>poly = 0x31</code>,寫出完整的 $G(x)$。
+          (c) refin = True 時,字元 <code>'1'</code>(<code>0x31</code>)實際被當成哪個位元組餵進去?
+          (d) 用 init ＝ 0 的 <code>crc_bitwise</code> 說明:為什麼 <code>b"\x00\x00hi"</code> 和 <code>b"hi"</code> 的 CRC 一樣?</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <p>(a) 去掉 $x^{16}$,剩下 $x^{12}$、$x^5$、$x^0$ 三個位元:<code>0001 0000 0010 0001</code> ＝ <code>0x1021</code>。</p>
+            <p>(b) <code>0x31</code> ＝ <code>0011 0001</code>,是 $x^5 + x^4 + 1$,再補回最高次項:$G(x) = x^8 + x^5 + x^4 + 1$(本章的寫法是 <code>0x131</code>)。</p>
+            <p>(c) <code>0x31</code> ＝ <code>00110001</code>,前後倒過來是 <code>10001100</code> ＝ <code>0x8C</code>。</p>
+            <p>(d) 暫存器從 0 開始。吃一個 0 位元時,out ＝ r 的最高位 ⊕ 0 ＝ 0,暫存器左移之後還是 0。所以前面不管有幾個 0 位元,暫存器都停在 0,
+            等於從 <code>h</code> 才開始算。用多項式講:前導的 0 不會改變 $M(x)$,$0 \cdot x^{100} + M(x) = M(x)$。init 不是 0 時,前導的 0 會讓暫存器的非 0 值往前推進,CRC 就不一樣了。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <h3 id="lab-hzip-crc">本章 Lab:CRC hzip/crc.py</h3>
+      <div class="callout lab" data-task="hzip/crc">
+        <div class="ico">🧪</div>
+        <div class="body">
+          <span class="c-title">本章 Lab · 任務線「hzip」· 任務「CRC」</span>
+          <p><strong>對應地下城任務:</strong>任務「CRC」(任務線:hzip 壓縮器,第 4／5 個任務)。零件檔:<code>~/零件庫/hzip/crc.py</code>;任務資料夾:<code>~/任務線/hzip/04-crc/</code>。</p>
+          <p><strong>要做的零件:</strong>讓這一節的代數跑起來:GF(2) 的多項式乘法與長除法,接著是可以設定 Rocksoft 參數的 CRC(所以 CRC-8、CRC-16、zlib 的 CRC-32 都是同一個類別),最後一個和 <code>zlib.crc32</code> 完全相同的 <code>crc32</code>。隱藏檢定會拿你的實作檢查本節的定理:線性、「CRC ＝ 餘式」、長度 ≤ width 的突發錯誤一定抓到。</p>
+          <p><strong>介面:</strong></p>
+<pre><code class="language-python"># ~/零件庫/hzip/crc.py
+def gf2_mul(a, b) -&gt; int:
+    """GF(2) 多項式乘法(位元 i ＝ x^i 的係數),就是本章的 clmul。"""
+
+def gf2_divmod(a, b) -&gt; tuple:
+    """回傳 (q, r):a ＝ q·b ⊕ r,deg r &lt; deg b;b = 0 → ZeroDivisionError。"""
+
+class CRC:
+    def __init__(self, width, poly, init=0, refin=False, refout=False, xorout=0):
+        """Rocksoft 參數模型(本章「真實世界的 CRC」那張表);poly 不含最高次項。
+        width 不在 1..64、poly／init／xorout 不在 [0, 2^width) → ValueError。"""
+    def compute(self, data) -&gt; int:
+        """data 是 bytes;用 256 格的查表法。"""
+
+def crc32(data, value=0) -&gt; int:
+    """和 zlib.crc32 一樣,包括接續計算:crc32(b, crc32(a)) == crc32(a + b)。"""
+
+CRC8 = CRC(8, 0x07)                    # CRC-8/SMBUS,check 值 0xF4
+CRC16 = CRC(16, 0x1021, init=0xFFFF)   # CRC-16/IBM-3740(CCITT-FALSE),check 值 0x29B1</code></pre>
+          <p><strong>公開範例:</strong></p>
+<pre><code class="language-python">&gt;&gt;&gt; import zlib
+&gt;&gt;&gt; from hzip.crc import gf2_mul, gf2_divmod, CRC, crc32, CRC8, CRC16
+&gt;&gt;&gt; hex(crc32(b"123456789")), crc32(b"")
+('0xcbf43926', 0)
+&gt;&gt;&gt; crc32(b"6789", crc32(b"12345")) == crc32(b"123456789") == zlib.crc32(b"123456789")
+True
+&gt;&gt;&gt; hex(CRC8.compute(b"123456789")), hex(CRC16.compute(b"123456789"))
+('0xf4', '0x29b1')
+&gt;&gt;&gt; maxim = CRC(8, 0x31, refin=True, refout=True)
+&gt;&gt;&gt; hex(maxim.compute(b"123456789"))
+'0xa1'
+&gt;&gt;&gt; bin(gf2_mul(0b11, 0b11))
+'0b101'
+&gt;&gt;&gt; q, r = gf2_divmod(0b1101011, 0b1011)
+&gt;&gt;&gt; bin(q), bin(r), gf2_mul(q, 0b1011) ^ r == 0b1101011
+('0b1111', '0b10', True)
+&gt;&gt;&gt; CRC(3, 0b011).compute(b"\xd0") == gf2_divmod(0xd0 &lt;&lt; 3, 0b1011)[1]
+True</code></pre>
+          <p><strong>和本章範例不同的地方:</strong></p>
+          <ul>
+            <li>本章的 <code>crc_bitwise(data, g)</code> 一個位元一個位元做長除法,只有「不反射、init 0、xorout 0」一種,而且 <code>g</code> 含最高次項(0x107)。Lab 的 <code>CRC</code> 要照 Rocksoft 參數(poly 不含最高次項),包括 width &lt; 8、width 64、refin ≠ refout。</li>
+            <li>Lab 要用 256 格的查表法:效能門檻會讓逐位元的版本超時(大約慢 8 倍)。</li>
+            <li>本章的 <code>poly_mod(a, g)</code> 只回傳餘式;Lab 的 <code>gf2_divmod</code> 回傳 <code>(q, r)</code>。</li>
+            <li>本章用 <code>zlib.crc32</code> 當答案;Lab 不能 import <code>zlib</code>,要自己算出一樣的值,還要能接續計算。</li>
+          </ul>
+          <p>可以參考本章的範例,但介面和要求不同,要自己改寫。</p>
+          <p><strong>任務目標</strong>(公開的用 <code>test</code> 自己跑;隱藏檢定在 <code>submit</code> 時跑,只看得到名稱和一行說明):</p>
+          <ul class="lab-goals">
+            <li data-group="crc.zlib">☐ <strong>和 zlib 一樣</strong>〔公開〕crc32 對 zlib.crc32(公開範例:空資料、b'123456789' → 0xCBF43926、接續計算)。</li>
+            <li data-group="crc.params">☐ <strong>可設定的 CRC</strong>〔公開〕CRC8、CRC16 與公開的幾組參數算 b'123456789' 的 check 值對 CRC 目錄。</li>
+            <li data-group="crc.gf2">☐ <strong>GF(2) 多項式</strong>〔公開〕gf2_mul、gf2_divmod 對公開範例;q·b ⊕ r ＝ a 而且 deg r &lt; deg b。</li>
+            <li data-group="crc.catalogue">☐ <strong>CRC 目錄</strong>〔隱藏檢定〕隱藏的 CRC 目錄參數(width 3 到 64、反射與不反射、refin ≠ refout、init 與 xorout 不是 0)的 check 值,以及隨機資料對參考模型。</li>
+            <li data-group="crc.theory">☐ <strong>理論性質</strong>〔隱藏檢定〕init = 0、不反射、xorout = 0 時,CRC 等於 gf2_divmod(M(x)·x<sup>w</sup>, G(x)) 的餘式;同長度的資料 crc(a ⊕ b) = crc(a) ⊕ crc(b);資料裡長度 ≤ width 的突發錯誤一定讓 CRC 改變(照 CRC 自己的位元順序:refin=False 是每個位元組的高位先、refin=True 是低位先;短資料窮舉)。</li>
+            <li data-group="crc.errors">☐ <strong>錯誤處理</strong>〔隱藏檢定〕width 不在 1..64、poly／init／xorout 超出範圍要 ValueError;gf2_divmod 除以 0 要 ZeroDivisionError。</li>
+            <li data-group="crc.perf">☐ <strong>效能</strong>〔隱藏檢定〕查表法每個位元組 O(1);逐位元的長除法會超時。門檻:4 MiB 的 crc32 1 秒內;CRC8、CRC16 各 1 MiB 1 秒內。這個門檻來自任務「檔案格式與命令列」的任務目標「效能」(256 KiB 的檔 compress＋decompress 合計 2.5 秒內,每個檔要算四次 CRC-32)。</li>
+          </ul>
+          <p><strong>規則:</strong>不能 <code>import</code> <code>zlib</code>、<code>binascii</code>(它也有 <code>crc32</code>)、<code>gzip</code>、<code>bz2</code>、<code>lzma</code>、<code>zipfile</code>。</p>
+          <p><strong>之後會用在:</strong><a href="#lab-hzip-cli">本章的任務「檔案格式與命令列」</a>:容器的兩個 CRC-32 都用你的 <code>crc32</code>;Boss 戰「機率期末:理論對實測」用你的 <code>CRC8</code>;任務線 fw「Arduino 韌體三部曲」的任務「序列埠指令列」用 <code>CRC8</code> 當訊框的檢查碼(韌體裡的 C 版本要和它算出一樣的值);任務線 rtl「自己的 RV32I CPU」的任務「單週期 CPU」跑一支會算 CRC 的 C 程式,答案用它對。</p>
+          <p class="lab-rule">這個零件過關之後,後面的專題一律用你自己的版本。規則見<a href="00-about.html#lab-rules">零件庫規則</a>。</p>
+        </div>
+      </div>
+
+      <h3>檔案容器:魔術位元組、長度與 CRC</h3>
+      <p>
+        有了 CRC,就能設計一個「會自己檢查自己」的檔案格式。幾乎所有二進位格式都長成同一個樣子:
+        <strong>標頭(header)</strong>放「我是誰、怎麼解讀我」,中間是<strong>本體(body)</strong>,再加上至少一個檢查碼。
+      </p>
+      <ul>
+        <li><strong>魔術位元組(magic bytes)</strong>:檔案開頭固定的幾個位元組,讓程式一眼認出檔案類型,不靠副檔名。
+        PNG 是 <code>89 50 4E 47 0D 0A 1A 0A</code>、gzip 是 <code>1F 8B</code>、zip 是 <code>50 4B 03 04</code>(「PK」)、Linux 執行檔 ELF 是 <code>7F 45 4C 46</code>(<code>\x7fELF</code>)。</li>
+        <li><strong>版本與方法</strong>:格式會演進;壓縮器可能有好幾種壓法。解壓端看到不認得的版本或方法,要直接拒絕,而不是硬解。</li>
+        <li><strong>長度</strong>:讓解碼器知道該產生多少資料,也能抓出被截斷的檔案。</li>
+        <li><strong>CRC</strong>:gzip 在結尾放原始資料的 CRC-32 和原始長度;PNG 每一個資料區塊(chunk)後面都有一個 CRC-32。</li>
+      </ul>
+      <p>
+        任務「檔案格式與命令列」的 hzip v1 格式就是這個樣子(整數一律<strong>大端</strong>,高位的位元組在前):
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 640 170" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <g stroke="#2f6f6a" stroke-width="2">
+    <rect x="20" y="50" width="100" height="46" fill="#e3efed"/>
+    <rect x="120" y="50" width="50" height="46" fill="#e3efed"/>
+    <rect x="170" y="50" width="50" height="46" fill="#e3efed"/>
+    <rect x="220" y="50" width="100" height="46" fill="#e3efed"/>
+    <rect x="320" y="50" width="100" height="46" fill="#e3efed"/>
+    <rect x="420" y="50" width="100" height="46" fill="#fbfdfc"/>
+    <rect x="520" y="50" width="100" height="46" fill="#f6e3d8" stroke="#b4541f"/>
+  </g>
+  <g font-size="12" text-anchor="middle" fill="#1f2328">
+    <text x="70" y="70">magic</text><text x="70" y="86">HZIP</text>
+    <text x="145" y="70">version</text><text x="145" y="86">1</text>
+    <text x="195" y="70">method</text><text x="195" y="86">0/1/2</text>
+    <text x="270" y="70">原始長度</text><text x="270" y="86">4 位元組</text>
+    <text x="370" y="70">原始資料</text><text x="370" y="86">的 crc32</text>
+    <text x="470" y="70">body</text><text x="470" y="86">n 位元組</text>
+    <text x="570" y="70">容器 crc32</text><text x="570" y="86">4 位元組</text>
+  </g>
+  <g font-size="11" text-anchor="middle" fill="#8a929b">
+    <text x="20" y="112">0</text><text x="120" y="112">4</text><text x="170" y="112">5</text><text x="220" y="112">6</text>
+    <text x="320" y="112">10</text><text x="420" y="112">14</text><text x="520" y="112">14+n</text>
+  </g>
+  <path d="M20,124 L20,134 L520,134 L520,124" fill="none" stroke="#b4541f" stroke-width="1.5"/>
+  <text x="270" y="152" font-size="12" text-anchor="middle" fill="#b4541f">容器 crc32 涵蓋的範圍:前面全部(位元組 0 到 13+n)</text>
+  <path d="M20,40 L20,30 L420,30 L420,40" fill="none" stroke="#2f6f6a" stroke-width="1.5"/>
+  <text x="220" y="22" font-size="12" text-anchor="middle" fill="#2f6f6a">標頭:固定 14 個位元組</text>
+</svg>
+        <figcaption>圖 15-9:hzip v1 容器。上方數字是位元組位移(offset)。method 0 的 body 就是原始資料,所以固定多出 4+1+1+4+4+4 ＝ 18 個位元組。</figcaption>
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>位移</th><th>長度</th><th>欄位</th><th>內容</th></tr></thead>
+        <tbody>
+          <tr><td>0</td><td>4</td><td>magic</td><td><code>b"HZIP"</code> ＝ <code>48 5A 49 50</code></td></tr>
+          <tr><td>4</td><td>1</td><td>version</td><td>1</td></tr>
+          <tr><td>5</td><td>1</td><td>method</td><td>0 原樣、1 Huffman、2 LZ77＋Huffman</td></tr>
+          <tr><td>6</td><td>4</td><td>原始長度</td><td>解壓後應有的位元組數,大端</td></tr>
+          <tr><td>10</td><td>4</td><td>原始資料的 crc32</td><td><code>zlib.crc32(原始資料)</code> 的值,大端</td></tr>
+          <tr><td>14</td><td>n</td><td>body</td><td>依 method 而定</td></tr>
+          <tr><td>14+n</td><td>4</td><td>容器 crc32</td><td>位元組 0 到 13+n 全部的 crc32,大端</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        為什麼要<strong>兩個</strong> CRC?它們抓不同的東西。<strong>容器 CRC</strong> 抓的是檔案在硬碟或網路上被弄壞——它涵蓋每一個位元組,包括標頭,
+        所以解壓時先驗它,不對就不必解了。<strong>原始資料的 CRC 與長度</strong>抓的是「解碼出來的東西不對」:你的解碼器有 bug、
+        或者一個 CRC 正確但內容不合規格的檔案(手算 15.6 說過,CRC 擋不住故意造的檔)。所以解壓的大致順序是:
+        檔案夠不夠長 → 容器 CRC 對不對 → magic、version、method 認不認得 → 解 body → 長度與原始 CRC 對不對。任何一步不對,都要回報壞檔,而不是當掉。
+      </p>
+      <p>
+        <strong>手算</strong>:把 3 個位元組 <code>b"Hi!"</code> 用 method 0(原樣)裝進 hzip v1 容器。CRC-32 用 <code>zlib.crc32</code> 算
+        (手算 32 位元的長除法太長了;你在 Lab 寫的 <code>crc32</code> 要算出一樣的值):
+        <code>zlib.crc32(b"Hi!")</code> ＝ <code>0x799EC5DA</code>,而前 17 個位元組的 <code>zlib.crc32</code> ＝ <code>0x36971023</code>。
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>位移</th><th>欄位</th><th>位元組(十六進位)</th><th>怎麼來的</th></tr></thead>
+        <tbody>
+          <tr><td>0–3</td><td>magic</td><td><code>48 5A 49 50</code></td><td>'H' 'Z' 'I' 'P' 的 ASCII</td></tr>
+          <tr><td>4</td><td>version</td><td><code>01</code></td><td>1</td></tr>
+          <tr><td>5</td><td>method</td><td><code>00</code></td><td>原樣</td></tr>
+          <tr><td>6–9</td><td>原始長度</td><td><code>00 00 00 03</code></td><td>3,大端:高位的位元組在前</td></tr>
+          <tr><td>10–13</td><td>原始 crc32</td><td><code>79 9E C5 DA</code></td><td><code>0x799EC5DA</code> 大端</td></tr>
+          <tr><td>14–16</td><td>body</td><td><code>48 69 21</code></td><td>'H' 'i' '!' 原樣</td></tr>
+          <tr><td>17–20</td><td>容器 crc32</td><td><code>36 97 10 23</code></td><td>位元組 0–16 的 crc32 ＝ <code>0x36971023</code></td></tr>
+        </tbody>
+      </table></div>
+      <p>一共 21 個位元組 ＝ 3 ＋ 18。</p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 15.8 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>(a) 把 <code>b"ok\n"</code> 用 method 0 裝進 hzip v1 容器,寫出 21 個位元組。已知 <code>zlib.crc32(b"ok\n")</code> ＝ <code>0xDA160E7D</code>,
+          前 17 個位元組的 crc32 ＝ <code>0x5FC67CB4</code>。
+          (b) 有人把位移 9 的位元組從 <code>03</code> 改成 <code>02</code>(只翻了一個位元),其他都不動。解壓時哪一個檢查最先抓到?它一定抓得到嗎?
+          (c) 如果他改完之後,連最後的容器 crc32 也重算了呢?</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <div class="table-wrap"><table>
+              <thead><tr><th>位移</th><th>欄位</th><th>位元組(十六進位)</th></tr></thead>
+              <tbody>
+                <tr><td>0–3</td><td>magic</td><td><code>48 5A 49 50</code></td></tr>
+                <tr><td>4</td><td>version</td><td><code>01</code></td></tr>
+                <tr><td>5</td><td>method</td><td><code>00</code></td></tr>
+                <tr><td>6–9</td><td>原始長度</td><td><code>00 00 00 03</code></td></tr>
+                <tr><td>10–13</td><td>原始 crc32</td><td><code>DA 16 0E 7D</code></td></tr>
+                <tr><td>14–16</td><td>body</td><td><code>6F 6B 0A</code></td></tr>
+                <tr><td>17–20</td><td>容器 crc32</td><td><code>5F C6 7C B4</code></td></tr>
+              </tbody>
+            </table></div>
+            <p>(b) 容器 CRC 最先抓到。<code>03 → 02</code> 是單一位元錯,本節的定理保證 CRC-32 一定改變,所以<strong>一定</strong>抓得到。</p>
+            <p>(c) 容器 CRC 對了,通過第一關。但 method 0 的 body 有 3 個位元組,標頭卻說原始長度是 2:長度檢查抓到,回報壞檔。
+            這就是為什麼不能只靠容器 CRC——CRC 是誰都能重算的。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <h3 id="lab-hzip-cli">本章 Lab:檔案格式與命令列 hzip/cli.py</h3>
+      <div class="callout lab" data-task="hzip/cli">
+        <div class="ico">🧪</div>
+        <div class="body">
+          <span class="c-title">本章 Lab · 任務線「hzip」· 任務「檔案格式與命令列」</span>
+          <p><strong>對應地下城任務:</strong>任務「檔案格式與命令列」(任務線:hzip 壓縮器,第 5／5 個任務)。零件檔:<code>~/零件庫/hzip/cli.py</code>;任務資料夾:<code>~/任務線/hzip/05-cli/</code>。</p>
+          <p><strong>要做的零件:</strong>把前面四個理論零件組成一個真正的工具:照上面的 hzip v1 格式(圖 15-9)壓縮、解壓、檢查檔案,而且任何壞檔都要乾淨地回報,不能當掉。這是任務線的工程專題:Boss 戰全部從這個零件進去。</p>
+          <p><strong>格式(規格規定,兩邊才能互解):</strong>標頭、body、容器 CRC 照圖 15-9 和它下面的表,整數一律大端。body:方法 0 是原始資料;方法 1 是 256 個位元組的碼長表(位元組值 b 的碼長,0 表示沒用到)＋4 個位元組的 nbits＋Huffman 位元流(剛好 ⌈nbits/8⌉ 個位元組,用 <code>hzip.huffman</code> 的 canonical 碼);方法 2 是 <code>lz77.pack(lz77.encode(data))</code> 的結果,再照方法 1 壓。方法 0 的額外負擔剛好 18 個位元組。檔名叫 <code>cli.py</code> 而不是 <code>hzip.py</code>:資料夾 <code>hzip/</code> 裡如果有 <code>hzip.py</code>,用 <code>python3 hzip/hzip.py</code> 執行時,<code>import hzip</code> 會找到這個檔案自己,而不是你的零件庫。</p>
+          <p><strong>介面:</strong></p>
+<pre><code class="language-python"># ~/零件庫/hzip/cli.py
+from hzip.stats import FreqTable          # 頻率一律用你自己的零件
+from hzip import huffman, lz77
+from hzip.crc import crc32
+
+class CorruptError(ValueError):
+    """壞檔。"""
+
+def compress(data, method=None) -&gt; bytes:
+    """回傳 hzip v1 容器。method:None 自動選最小(一樣大選編號小的)、
+    0 原樣、1 Huffman、2 LZ77＋Huffman;指定 method 時空資料也要能壓。"""
+
+def decompress(blob) -&gt; bytes:
+    """先驗整個容器的 CRC-32,再解碼,最後驗原始長度與原始資料的 CRC-32;
+    任何不對 → CorruptError(不能丟別的例外)。"""
+
+def main(argv) -&gt; int:
+    """c IN OUT(壓縮)、d IN OUT(解壓)、t IN(只檢查)。
+    0 成功;1 壞檔(stderr 印一行,不留下 OUT);2 用法或檔案錯誤。"""
+
+if __name__ == "__main__":                # 在 ~/零件庫 執行:python3 -m hzip.cli c IN OUT
+    import sys
+    sys.exit(main(sys.argv[1:]))</code></pre>
+          <p><strong>公開範例</strong>(第一行就是本節手算的 21 個位元組;方法 1 的大小只和最佳總位元數有關,所以每個正確的實作都一樣;方法 2 的大小看你的 LZ77,不比):</p>
+<pre><code class="language-python">&gt;&gt;&gt; from hzip.cli import compress, decompress, CorruptError
+&gt;&gt;&gt; compress(b"Hi!", 0).hex(" ")
+'48 5a 49 50 01 00 00 00 00 03 79 9e c5 da 48 69 21 36 97 10 23'
+&gt;&gt;&gt; text = b"to be or not to be, that is the question. " * 20
+&gt;&gt;&gt; [decompress(compress(text, m)) == text for m in (0, 1, 2, None)]
+[True, True, True, True]
+&gt;&gt;&gt; len(compress(text, 0)), len(compress(text, 1))
+(858, 643)
+&gt;&gt;&gt; z = compress(text)
+&gt;&gt;&gt; z[5], len(z) &lt;= len(compress(text, 1))
+(2, True)
+&gt;&gt;&gt; bad = bytearray(z); bad[30] ^= 0x04
+&gt;&gt;&gt; try:
+...     decompress(bytes(bad))
+... except CorruptError:
+...     print("壞檔")
+壞檔
+&gt;&gt;&gt; issubclass(CorruptError, ValueError)
+True
+&gt;&gt;&gt; len(compress(b"")), decompress(compress(b""))
+(18, b'')</code></pre>
+          <p><strong>和本章範例不同的地方:</strong>本章只用手算裝過方法 0 的容器,沒有完整的程式。Lab 要三種方法、自動選擇、命令列,以及「CRC 正確但內容不合規格」的檔也要回報壞檔(手算 15.8 (c) 那一種)。</p>
+          <p>可以參考本章的範例,但介面和要求不同,要自己改寫。</p>
+          <p><strong>抓得到哪些錯:</strong>翻掉任何一個位元,容器 CRC 一定改變(本節的定理)。zlib 的 CRC-32 是反射的,每個位元組低位先,所以只壞在連續 4 個位元組以內、而且全在 CRC 涵蓋範圍裡的錯,是長度 ≤ 32 的突發錯誤,也一定抓得到。其他隨機的損壞(例如同時壞在資料尾巴和最後的 CRC),漏掉的機率大約是 1/2<sup>32</sup>。</p>
+          <p><strong>任務目標</strong>(公開的用 <code>test</code> 自己跑;隱藏檢定在 <code>submit</code> 時跑,只看得到名稱和一行說明):</p>
+          <ul class="lab-goals">
+            <li data-group="cli.roundtrip">☐ <strong>往返一致</strong>〔公開〕公開範例(空資料、b'a'、英文、隨機位元組)三種 method 與自動選擇都 decompress(compress(x)) == x。</li>
+            <li data-group="cli.format">☐ <strong>標頭與 CRC</strong>〔公開〕magic、version、method、原始長度、原始 crc32 與最後的容器 crc32 都在規定的位置;compress(b'', 0) 與 compress(x, 0) 的位元組對公開範例逐一相同。</li>
+            <li data-group="cli.command">☐ <strong>命令列</strong>〔公開〕main(['c', IN, OUT])、['d', …]、['t', IN] 的結束碼與輸出檔;參數不對回傳 2。</li>
+            <li data-group="cli.edge">☐ <strong>邊界</strong>〔隱藏檢定〕空檔、1 個位元組、同一個位元組重複、256 種位元組各一次、1 MiB 的檔;只有一種位元組時指定 method 1。</li>
+            <li data-group="cli.corrupt">☐ <strong>改壞的檔</strong>〔隱藏檢定〕翻任何一個位元(每個位元都試)、隨機改壞連續 4 個位元組以內的一段、截斷到任何長度、後面多接位元組,decompress 都要 CorruptError;main 回傳 1 而且不留下 OUT。</li>
+            <li data-group="cli.malformed">☐ <strong>CRC 對但內容壞</strong>〔隱藏檢定〕容器 CRC 正確但 method 不認得、碼長表超額、nbits 和長度對不上、LZ77 的 offset 超出、原始長度或原始 CRC 不對,都要 CorruptError,不能丟 IndexError 之類的例外。</li>
+            <li data-group="cli.interop">☐ <strong>和參考 hzip 互解</strong>〔隱藏檢定〕參考 hzip 用 method 0、1、2 壓的檔你都解得開;你壓的檔參考 hzip 也解得開。</li>
+            <li data-group="cli.stored">☐ <strong>不會越壓越大</strong>〔隱藏檢定〕隨機與已經壓縮過的資料自動選擇時,輸出 ≤ 原長＋18 個位元組。</li>
+            <li data-group="cli.perf">☐ <strong>效能</strong>〔隱藏檢定〕壓縮會試 method 1 與 2;每個零件都要夠快。門檻:256 KiB 的檔 compress＋decompress 合計 2.5 秒內。這個門檻來自 Boss 戰「二進位檔往返」(256 KiB 的檔壓縮＋解壓,兩次執行合計 2.5 秒內)。</li>
+          </ul>
+          <p><strong>規則:</strong>不能 <code>import</code> <code>zlib</code>、<code>gzip</code>、<code>bz2</code>、<code>lzma</code>、<code>zipfile</code>、<code>binascii</code>;必須用你自己的 <code>hzip.stats</code>、<code>hzip.huffman</code>、<code>hzip.lz77</code>、<code>hzip.crc</code>。</p>
+          <p><strong>之後會用在:</strong>任務線 hzip 的 Boss 戰「二進位檔往返」「壞檔偵測」「壓縮率」「格式相容」都直接執行 <code>python3 -m hzip.cli</code>。</p>
+          <p class="lab-rule">這個零件過關之後,後面的專題一律用你自己的版本。規則見<a href="00-about.html#lab-rules">零件庫規則</a>。</p>
+        </div>
+      </div>
+
+      <h3>從 GF(2) 到更大的體:GF(2⁸)、群與循環群</h3>
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">為什麼要學</span>
+          <p>「多項式 mod 一個多項式」不只會做 CRC。把模數換成一個不能分解的 8 次多項式,就得到 AES 每一回合都在用的 GF(2⁸);
+          「群」則是 Diffie–Hellman 金鑰交換與橢圓曲線密碼(ECC)的共同骨架。這兩個在第 35 章會用到,這裡先把代數講清楚。
+          它也解開 CRC 的最後一個謎:手算 15.3 裡那個「7」是哪裡來的。</p>
+        </div>
+      </div>
+      <p>
+        <strong>群(group)</strong>是比體更簡單的結構:一個集合配上<strong>一種</strong>運算,滿足四條規則——
+        運算結果還在集合裡(封閉)、結合律、有單位元素(什麼都不做的那一個)、每個元素都有反元素。幾個你已經見過的群:
+      </p>
+      <ul>
+        <li>模 m 的整數配加法:單位元素是 0,$a$ 的反元素是 $m - a$。</li>
+        <li>w 位元的 CRC 值配 XOR:單位元素是 0,每個元素的反元素就是它自己。CRC 的線性,說的就是「CRC 把資料的 XOR 對應到餘式的 XOR」。</li>
+        <li>模質數 $p$ 的非 0 整數 $\{1, \dots, p-1\}$ 配乘法,記作 $\mathbb{Z}_p^*$:單位元素是 1,反元素用擴展歐幾里得算。</li>
+      </ul>
+      <p>
+        如果某個元素 g 不斷自己乘自己($g, g^2, g^3, \dots$),可以走遍整個群,這個群就叫<strong>循環群(cyclic group)</strong>,g 叫<strong>生成元(generator)</strong>。
+        讓 $g^k$ 第一次回到單位元素的 k,叫 g 的<strong>階(order)</strong>。$\mathbb{Z}_{11}^*$ 是循環群,2 是生成元:
+      </p>
+      <pre><code class="language-python">p, g = 11, 2
+print([pow(g, k, p) for k in range(1, p)])   # [2, 4, 8, 5, 10, 9, 7, 3, 6, 1]:全部 10 個都出現
+
+# 玩具 Diffie–Hellman(真的要用上千位元的 p)
+a, b = 3, 7                                  # 兩個人各自的祕密
+A, B = pow(g, a, p), pow(g, b, p)            # 在網路上公開傳送
+print(A, B, pow(B, a, p), pow(A, b, p))      # 8 7 2 2:兩邊算出同一個共享祕密
+
+# CRC 的週期 ＝ x 在「mod G」裡的階
+print([poly_mod(1 &lt;&lt; i, G3) for i in range(1, 8)])   # [2, 4, 3, 6, 7, 5, 1]</code></pre>
+      <p>
+        最後一行回答了手算 15.3 的謎:在「mod $x^3 + x + 1$」的世界裡,$x$ 的階是 7,所以 $x^7 \equiv 1$,第 0 位和第 7 位的錯會互相抵消。
+        階能達到最大值 $2^w - 1$ 的生成多項式叫<strong>本原多項式(primitive polynomial)</strong>,它讓「任兩個位元錯都抓得到」的訊框長度最長。
+      </p>
+      <p>
+        Diffie–Hellman 就建立在循環群上:公開 p 與 g,兩個人各自挑祕密 a、b,只傳 $g^a$ 和 $g^b$。
+        兩邊各自算出 $(g^b)^a = (g^a)^b = g^{ab}$,偷聽的人只看到 $g^a$、$g^b$,要從 $g^a$ 反推 a(<strong>離散對數</strong>問題)在夠大的群裡算不動。
+        橢圓曲線密碼換了一個群:元素是曲線上的點,運算是「點加法」,同樣的離散對數問題更難,所以金鑰可以短很多。細節與實務陷阱見第 35 章。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">★深入(選讀):GF(2⁸) 與 AES 的 xtime</span>
+          <p>AES 把每個位元組當成一個 7 次以下的 GF(2) 多項式,乘法做完之後 mod $m(x) = x^8 + x^4 + x^3 + x + 1$(<code>0x11B</code>)。
+          $m(x)$ 不能分解成兩個較低次多項式的乘積(<strong>不可約</strong>,多項式世界的「質數」),所以這 256 個位元組構成一個體 GF(2⁸):
+          加法是 XOR,每個非 0 的位元組都有乘法反元素。AES 的 S-box 用的就是「取反元素」(再加一個仿射變換),MixColumns 用的是乘上 {02} 與 {03}。</p>
+          <p>乘上 x(也就是 {02})有個專門的名字 <strong>xtime</strong>:左移一位;如果超出 8 位元,就 XOR <code>0x1B</code>(<code>0x11B</code> 去掉 $x^8$)。
+          這和 CRC 的移位暫存器是同一個動作。任何乘法都可以拆成一串 xtime 與 XOR:</p>
+      <pre><code class="language-python">def xtime(b):
+    """GF(2⁸) 裡乘上 x:左移一位,超出 8 次就減掉(XOR)AES 的模數 0x11B"""
+    b &lt;&lt;= 1
+    if b &amp; 0x100:
+        b ^= 0x11B
+    return b
+
+def gmul(a, b):
+    """GF(2⁸) 乘法:和 clmul 一樣的「乘 x、再相加」,只是每次乘 x 都用 xtime"""
+    result = 0
+    while b:
+        if b &amp; 1:
+            result ^= a
+        a = xtime(a)
+        b &gt;&gt;= 1
+    return result
+
+chain = [0x57]
+for _ in range(4):
+    chain.append(xtime(chain[-1]))
+print(" ".join(f"{v:02x}" for v in chain))            # 57 ae 47 8e 07
+print(f"{gmul(0x57, 0x83):02x} {gmul(0x57, 0x13):02x}")  # c1 fe
+
+# 和「先 clmul,再 mod 0x11B」完全一樣(256×256 種全部比一次)
+assert all(gmul(a, b) == poly_mod(clmul(a, b), 0x11B)
+           for a in range(256) for b in range(256))
+# 每個非 0 元素剛好有一個反元素
+inverses = {a: [b for b in range(1, 256) if gmul(a, b) == 1] for a in range(1, 256)}
+assert all(len(v) == 1 for v in inverses.values())
+print(f"{inverses[0x53][0]:02x}")                      # ca:{53} 的反元素</code></pre>
+          <p>這幾組數字和 AES 標準 FIPS-197 第 4 節的例子一樣:{57}·{83} ＝ {c1},{57}·{13} ＝ {fe}。</p>
+          <p><strong>看起來對但其實錯</strong>:「隨便拿一個 8 次多項式當模數,都能造出 GF(2⁸)。」換成 $x^8 + 1$(<code>0x101</code>)試試:
+          <code>poly_mod(clmul(0x03, 0xFF), 0x101)</code> 是 0——兩個非 0 元素乘出 0,就像模 4 的 2 × 2。
+          原因是 $x^8 + 1 = (x + 1)^8$ 可以分解,{03}(就是 $x + 1$)沒有反元素;窮舉之後,255 個非 0 元素裡有 127 個沒有反元素。換回 <code>0x11B</code>,一個都沒有。</p>
+          <p>延伸閱讀:NIST FIPS-197 <em>Advanced Encryption Standard</em> 第 4 節(有限體運算);Lidl &amp; Niederreiter, <em>Introduction to Finite Fields and Their Applications</em>。</p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 15.10 <span class="badge">反例</span></div>
+        <div class="ex-body">
+          <p><strong>看起來對但其實錯</strong>:「$\mathbb{Z}_{11}^*$ 是循環群,2 是生成元。那 1 以外的每個元素應該都是生成元。」
+          算 $3^1, 3^2, \dots, 3^{10} \bmod 11$,看 3 是不是生成元。</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <p><code>[pow(3, k, 11) for k in range(1, 11)]</code> ＝ <code>[3, 9, 5, 4, 1, 3, 9, 5, 4, 1]</code>。$3^5 \equiv 1$,3 的階是 5,
+            只走得到 {1, 3, 4, 5, 9} 這 5 個元素,不是生成元。</p>
+            <p>(參考)元素的階一定整除群的大小(拉格朗日定理):$\mathbb{Z}_{11}^*$ 有 10 個元素,所以階只可能是 1、2、5、10。
+            Diffie–Hellman 要挑階夠大的 g,否則 $g^a$ 只有幾種可能,偷聽的人直接窮舉就好。<strong>例子都對 ≠ 敘述為真</strong>:有一個生成元,不代表每個元素都是。</p>
+          </div></details>
+        </div>
+      </div>
+
       <h2>期中期末實戰題庫</h2>
       <p>
         以下 14 題涵蓋本章三大主題的考試高頻考點,依難度分五類。建議先獨立作答,再展開解答對照——
@@ -1615,6 +2629,7 @@ print(f"至少需增加 {extra_edges} 條邊才能得到歐拉迴路")  # 1</cod
         <li><strong>遞迴關係</strong>:遞迴演算法的執行時間天生是遞迴關係;展開法用來猜封閉解、歸納法用來證;
         線性遞迴有特徵方程式解法(費氏數列藏著黃金比例);而分治演算法的 $T(n)=a\,T(n/b)+f(n)$,
         可以用主定理一眼讀出複雜度。</li>
+        <li><strong>有限體與 CRC</strong>:GF(2) 裡加法就是 XOR;位元串就是多項式;CRC 是「訊息 · $x^w$ 除以 $G(x)$」的餘式,單一位元錯與長度 ≤ w 的突發錯誤一定抓得到(照 CRC 自己的位元順序量);但 CRC 是線性、沒有金鑰的,擋不住故意的竄改。同一套「mod 一個多項式」造出 AES 的 GF(2⁸),而循環群是 Diffie–Hellman 的骨架。</li>
       </ul>
       <p>
         你可能已經注意到,這一章像一座橋:它一頭連著前面學過的遞迴、複雜度、雜湊與樹,另一頭預告了後面的圖演算法
