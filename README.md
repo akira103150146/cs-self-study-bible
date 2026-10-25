@@ -9,7 +9,7 @@
 ## 這本書有什麼
 
 - **序章＋27 部、122 章**,外加 1 章不編號的橋接章(讀懂 C)與 6 份附錄題庫:從「什麼是計算」到 Python、資料結構與演算法、計算機系統
-  (NAND→CPU→OS→網路)、資訊安全、資料庫、機器學習、編譯器、計算理論、線性代數……
+  (NAND→CPU→OS)、網路與資訊安全、資料庫、機器學習、編譯器、計算理論、線性代數……
   每章都有學習目標、由淺入深的敘事、**C / C++ / Python** 範例、手繪內嵌 SVG 圖,
   以及附可展開解答的練習。
 - **專修軌道與進階延伸**:競賽程式設計與 APCS、電腦視覺與影像辨識、實戰資安 CTF,
@@ -32,7 +32,10 @@ assets/
   toi/                  TOI 題庫資料與渲染器(toi-index.js / toi-statements.js / toi-render.js)
 _AUTHOR_GUIDE.md        章節撰寫規範
 _build_toi_*.py         TOI 題庫的重建工具
-_check_chapter_refs.py   章號與章際連結檢查(以 book.js 的顯示章號為準)
+_check_chapter_refs.py   章號與章際連結檢查(以 book.js 的顯示章號為準;擋裸寫的「第 N 章」與錯的記號)
+_chapter_tokens.py       章號記號 {{ch:<id>}} 等的代入(build.py 用)與裸章號搜尋
+_chapter_refs_allowlist.txt  刻意保留的裸章號(外部書目、附錄題庫的原書章次)
+_tokenize_chapter_refs.py    一次性工具:把內文寫死的章號改成記號(2026-10 已執行)
 _build_routes.py         由職業技能樹 tree.yaml 產生 assets/routes.js 與 8 份路線導讀(chapters/src/route-*.html)
 _book_headings.py        上面兩支工具共用:讀 book.js、各章 h2/h3 錨點(sec-N)的計算
 ```
