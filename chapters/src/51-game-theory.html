@@ -712,6 +712,396 @@ def play():
         </div>
       </div>
 
+      <h3>手算:賽局樹的 minimax 值</h3>
+      <p>
+        下面這棵樹有三層:根是 MAX(我方),第二層是 MIN(對手),第三層又是 MAX,最下面 8 片葉子是「我方的分數」。
+        節點用路徑命名:<code>1</code> 是根的第 1 個子節點,<code>12</code> 是 <code>1</code> 的第 2 個子節點。子節點一律由左到右看。
+      </p>
+      <pre><code class="language-text">                    根 (MAX)
+             /                 \
+         1 (MIN)             2 (MIN)
+        /       \           /       \
+   11 (MAX)  12 (MAX)  21 (MAX)  22 (MAX)
+    /   \     /   \     /   \     /   \
+   3     5   6     9   1     2   0    -1</code></pre>
+      <p>從葉子往上:MAX 取最大、MIN 取最小。最後一欄是同一個值「從輪到的那一方看」(negamax 的寫法:輪到 MIN 時把分數變號,於是每一層都可以寫成「取最大」)。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>節點</th><th>輪到</th><th>子節點的值</th><th>minimax 值</th><th>從輪到的一方看(negamax)</th></tr></thead>
+        <tbody>
+          <tr><td>11</td><td>MAX</td><td>3、5</td><td>5</td><td>5</td></tr>
+          <tr><td>12</td><td>MAX</td><td>6、9</td><td>9</td><td>9</td></tr>
+          <tr><td>21</td><td>MAX</td><td>1、2</td><td>2</td><td>2</td></tr>
+          <tr><td>22</td><td>MAX</td><td>0、−1</td><td>0</td><td>0</td></tr>
+          <tr><td>1</td><td>MIN</td><td>5、9</td><td>5</td><td>−5(= max(−5, −9))</td></tr>
+          <tr><td>2</td><td>MIN</td><td>2、0</td><td>0</td><td>0(= max(−2, −0))</td></tr>
+          <tr><td>根</td><td>MAX</td><td>5、0</td><td><strong>5</strong></td><td>5(= max(−(−5), −0))</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        根的值是 5,最佳的第一步是走向 <code>1</code>。negamax 那一欄的規則只有一條:「我的值 = 子節點的值變號後取最大」,
+        因為對手的好就是我的壞。這樣寫,MAX、MIN 兩段程式就合成一段。
+      </p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 51.1 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>同樣形狀的樹,葉子由左到右換成 7、2、8、6、3、4、1、5(根是 MAX)。算出每個內部節點的 minimax 值與 negamax 值,以及根的最佳第一步。</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <div class="table-wrap"><table>
+              <thead><tr><th>節點</th><th>輪到</th><th>子節點的值</th><th>minimax 值</th><th>negamax 值</th></tr></thead>
+              <tbody>
+                <tr><td>11</td><td>MAX</td><td>7、2</td><td>7</td><td>7</td></tr>
+                <tr><td>12</td><td>MAX</td><td>8、6</td><td>8</td><td>8</td></tr>
+                <tr><td>21</td><td>MAX</td><td>3、4</td><td>4</td><td>4</td></tr>
+                <tr><td>22</td><td>MAX</td><td>1、5</td><td>5</td><td>5</td></tr>
+                <tr><td>1</td><td>MIN</td><td>7、8</td><td>7</td><td>−7</td></tr>
+                <tr><td>2</td><td>MIN</td><td>4、5</td><td>4</td><td>−4</td></tr>
+                <tr><td>根</td><td>MAX</td><td>7、4</td><td><strong>7</strong></td><td>7</td></tr>
+              </tbody>
+            </table></div>
+            <p>根的值 7,最佳第一步走向 <code>1</code>。用下面的程式驗算:<code>minimax_tree([[[7, 2], [8, 6]], [[3, 4], [1, 5]]], True)</code> 得到 7。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <h3>手算:alpha-beta 的 α、β 與剪枝</h3>
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">為什麼要學</span>
+          <p>任務線 puzzle(解謎 AI)的任務「minimax」要在 5 欄 × 4 列的四子棋上 2 秒內算出最佳著,沒有剪枝的 minimax 要 30 秒以上;
+          隱藏檢定「真的有剪枝」還會數你看過幾片葉子,不能比照順序做的 alpha-beta 多。Boss 戰「不敗棋手」要你一局都不輸。
+          手算 α、β,你才知道每一片葉子為什麼被剪、為什麼沒被剪。</p>
+        </div>
+      </div>
+      <p>
+        α 是「MAX 在這條路上已經保證拿得到的分數」,β 是「MIN 在這條路上已經保證壓得住的分數」。它們從上往下傳;
+        MAX 節點看完一個子節點就更新 α,MIN 節點更新 β;一旦 α ≥ β,這個節點剩下的子節點都不用看了。
+        下面的程式在每個內部節點印出進來時的 α、β,剪枝時印出剪了幾個:
+      </p>
+      <pre><code class="language-python">import math, random
+
+def show(x):
+    return {math.inf: '+∞', -math.inf: '−∞'}.get(x, x)
+
+def minimax_tree(node, is_max):
+    """node 是整數(葉子)或子節點的列表。"""
+    if isinstance(node, int):
+        return node
+    values = [minimax_tree(c, not is_max) for c in node]
+    return max(values) if is_max else min(values)
+
+def alphabeta_tree(node, is_max, alpha=-math.inf, beta=math.inf,
+                   name='', leaves=None, trace=True):
+    """alpha-beta。name 是節點的路徑('' 是根,'12' 是第 1 個子節點的第 2 個子節點);
+    leaves 收集看過的葉子;trace=True 時印出每個內部節點的 α、β。"""
+    if leaves is None:
+        leaves = []
+    if isinstance(node, int):
+        leaves.append(node)
+        return node
+    pad, label = '  ' * len(name), name or '根'
+    if trace:
+        print(f'{pad}{label} {"MAX" if is_max else "MIN"} 進入 α={show(alpha)} β={show(beta)}')
+    best = -math.inf if is_max else math.inf
+    for i, child in enumerate(node):
+        v = alphabeta_tree(child, not is_max, alpha, beta,
+                           name + str(i + 1), leaves, trace)
+        if is_max:
+            best = max(best, v)
+            alpha = max(alpha, best)
+        else:
+            best = min(best, v)
+            beta = min(beta, best)
+        if alpha &gt;= beta and i &lt; len(node) - 1:
+            if trace:
+                print(f'{pad}  α={show(alpha)} ≥ β={show(beta)}:剪掉後面 {len(node) - 1 - i} 個子節點')
+            break
+    if trace:
+        print(f'{pad}{label} 回傳 {best}')
+    return best
+
+tree = [[[3, 5], [6, 9]], [[1, 2], [0, -1]]]
+seen = []
+print(minimax_tree(tree, True), alphabeta_tree(tree, True, leaves=seen), seen)
+</code></pre>
+      <pre><code class="language-text">根 MAX 進入 α=−∞ β=+∞
+  1 MIN 進入 α=−∞ β=+∞
+    11 MAX 進入 α=−∞ β=+∞
+    11 回傳 5
+    12 MAX 進入 α=−∞ β=5
+      α=6 ≥ β=5:剪掉後面 1 個子節點
+    12 回傳 6
+  1 回傳 5
+  2 MIN 進入 α=5 β=+∞
+    21 MAX 進入 α=5 β=+∞
+    21 回傳 2
+    α=5 ≥ β=2:剪掉後面 1 個子節點
+  2 回傳 2
+根 回傳 5
+5 5 [3, 5, 6, 1, 2]</code></pre>
+      <div class="table-wrap"><table>
+        <thead><tr><th>順序</th><th>節點</th><th>進來的 α, β</th><th>看到的子節點值與更新</th><th>剪枝</th><th>回傳</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td>11(MAX)</td><td>−∞, +∞</td><td>葉 3:α=3;葉 5:α=5</td><td>—</td><td>5</td></tr>
+          <tr><td>2</td><td>1(MIN)</td><td>−∞, +∞</td><td>11 回傳 5:β=5</td><td>α=−∞ &lt; β=5,不剪,繼續看 12</td><td>(還沒)</td></tr>
+          <tr><td>3</td><td>12(MAX)</td><td>−∞, 5</td><td>葉 6:α=6</td><td><strong>6 ≥ 5,剪掉葉 9</strong></td><td>6</td></tr>
+          <tr><td>4</td><td>1(MIN)</td><td>—</td><td>12 回傳 6:min(5, 6)=5</td><td>—</td><td>5</td></tr>
+          <tr><td>5</td><td>根(MAX)</td><td>−∞, +∞</td><td>1 回傳 5:α=5</td><td>α=5 &lt; β=+∞,不剪,繼續看 2</td><td>(還沒)</td></tr>
+          <tr><td>6</td><td>21(MAX)</td><td>5, +∞</td><td>葉 1:best=1,α 還是 5;葉 2:best=2,α 還是 5</td><td>—</td><td>2</td></tr>
+          <tr><td>7</td><td>2(MIN)</td><td>5, +∞</td><td>21 回傳 2:β=2</td><td><strong>5 ≥ 2,剪掉整棵 22(葉 0、−1)</strong></td><td>2</td></tr>
+          <tr><td>8</td><td>根(MAX)</td><td>—</td><td>2 回傳 2:max(5, 2)=5</td><td>—</td><td><strong>5</strong></td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        看了 5 片葉子(3、5、6、1、2),剪掉 3 片(9、0、−1),根的值和 minimax 一樣是 5。兩次剪枝的理由不一樣:
+        在 12,MAX 已經拿到 6,但上面的 MIN(節點 1)手上已經有 5,不會讓 MAX 拿到比 5 多,所以 12 剩下的葉子不用看(這叫 β 剪枝);
+        在 2,MIN 已經壓到 2,但根的 MAX 手上已經有 5,不會選 2 這邊,所以 22 整棵不用看(α 剪枝)。
+      </p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 51.2 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>用手算 51.1 的樹(葉子 7、2、8、6、3、4、1、5),由左到右做 alpha-beta。寫出每個內部節點進來的 α、β 與回傳值,哪些葉子被剪掉?</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <div class="table-wrap"><table>
+              <thead><tr><th>順序</th><th>節點</th><th>進來的 α, β</th><th>看到的子節點值與更新</th><th>剪枝</th><th>回傳</th></tr></thead>
+              <tbody>
+                <tr><td>1</td><td>11(MAX)</td><td>−∞, +∞</td><td>葉 7:α=7;葉 2:best 還是 7</td><td>—</td><td>7</td></tr>
+                <tr><td>2</td><td>12(MAX)</td><td>−∞, 7</td><td>葉 8:α=8</td><td><strong>8 ≥ 7,剪掉葉 6</strong></td><td>8</td></tr>
+                <tr><td>3</td><td>1(MIN)</td><td>−∞, +∞</td><td>7、8:β=7</td><td>—</td><td>7</td></tr>
+                <tr><td>4</td><td>21(MAX)</td><td>7, +∞</td><td>葉 3、4:best=4,α 還是 7</td><td>—</td><td>4</td></tr>
+                <tr><td>5</td><td>2(MIN)</td><td>7, +∞</td><td>21 回傳 4:β=4</td><td><strong>7 ≥ 4,剪掉整棵 22(葉 1、5)</strong></td><td>4</td></tr>
+                <tr><td>6</td><td>根(MAX)</td><td>−∞, +∞</td><td>7、4</td><td>—</td><td><strong>7</strong></td></tr>
+              </tbody>
+            </table></div>
+            <p>看了 5 片葉子(7、2、8、3、4),剪掉 6、1、5。驗算:<code>alphabeta_tree([[[7, 2], [8, 6]], [[3, 4], [1, 5]]], True, leaves=seen)</code>
+            回傳 7,<code>seen</code> 是 <code>[7, 2, 8, 3, 4]</code>。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <h3>證明(參考):alpha-beta 為什麼不會改變答案</h3>
+      <p>
+        剪枝讓某些節點「沒算完」,它們回傳的數字還能信嗎?精確的說法是一個<strong>窗口性質</strong>:設 v 是節點真正的 minimax 值,
+        用窗口 (α, β) 呼叫 alpha-beta 得到 r,那麼
+      </p>
+      <ul>
+        <li>如果 α &lt; v &lt; β,r = v(在窗口裡,回傳的就是真值);</li>
+        <li>如果 v ≤ α,r ≤ α(真值太低,只保證回傳的也太低);</li>
+        <li>如果 v ≥ β,r ≥ β(真值太高,只保證回傳的也太高)。</li>
+      </ul>
+      <p>
+        <strong>證明(參考)。</strong>對樹的高度做歸納。葉子直接回傳真值。MAX 節點逐一看子節點,每個子節點用目前的 (α, β) 呼叫;
+        歸納假設保證「落在窗口裡的子節點值都是準的、落在外面的只會往同一邊偏」,所以目前的最大值 best 只會在「還能影響答案」的範圍裡是準的;
+        一旦 best ≥ β,真值也 ≥ best ≥ β,剩下的子節點只會讓它更大,停下來不影響第三條。MIN 節點對稱。
+        根用 (−∞, +∞) 呼叫,第一條一定成立,所以根的值和 minimax 一模一樣。
+        完整的分析(含最佳順序時只要看大約 $b^{d/2}$ 片葉子)見 Knuth 與 Moore 1975 年的 <em>An Analysis of Alpha-Beta Pruning</em>(Artificial Intelligence 第 6 卷)。
+      </p>
+      <p>把三條寫成 <code>assert</code>,在隨機的樹上檢查(小範圍的暴力檢查,不是證明,是建立直覺):</p>
+      <pre><code class="language-python">def random_tree(depth, branching):
+    """隨機賽局樹:葉子是 -9..9 的整數,每個內部節點有 1..branching 個子節點。"""
+    if depth == 0 or random.random() &lt; 0.15:
+        return random.randint(-9, 9)
+    return [random_tree(depth - 1, branching)
+            for _ in range(random.randint(1, branching))]
+
+random.seed(1)
+for _ in range(3000):
+    t = random_tree(4, 3)
+    for is_max in (True, False):
+        v = minimax_tree(t, is_max)
+        assert alphabeta_tree(t, is_max, trace=False) == v   # 全開的窗口:值一樣
+        a, b = sorted(random.sample(range(-10, 11), 2))
+        r = alphabeta_tree(t, is_max, a, b, trace=False)
+        if v &lt;= a:
+            assert r &lt;= a          # 真值 ≤ α:只保證回傳的也 ≤ α
+        elif v &gt;= b:
+            assert r &gt;= b          # 真值 ≥ β:只保證回傳的也 ≥ β
+        else:
+            assert r == v          # 真值在窗口裡:回傳的就是真值
+print('6000 次檢查都通過')
+</code></pre>
+      <pre><code class="language-text">6000 次檢查都通過</code></pre>
+      <p>
+        <strong>看起來對但其實錯(一)。</strong>「alpha-beta 回傳的每一個節點值,都是那個節點的 minimax 值。」不對。上面的表裡,
+        節點 12 回傳 6,真值是 9;節點 2 回傳 2,真值是 0。它們都被剪過,回傳的只是「夠用的界」:12 的 6 只說明「≥ 5,MIN 不會選它」,
+        2 的 2 只說明「≤ 5,MAX 不會選它」。<strong>只有根的值保證一樣。</strong>如果你把每個節點的回傳值存起來重用(置換表),
+        要同時記下它是準確值、上界還是下界,不然下次會用錯。
+      </p>
+      <p>
+        <strong>看起來對但其實錯(二)。</strong>「alpha-beta 剪多少和子節點的順序無關。」也不對。同一棵樹,根的值一定是 5,但看的葉子數會變:
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>子節點順序</th><th>根的值</th><th>看了幾片葉子</th><th>看過的葉子(依序)</th></tr></thead>
+        <tbody>
+          <tr><td>原本的 <code>[[[3, 5], [6, 9]], [[1, 2], [0, -1]]]</code></td><td>5</td><td>5</td><td>3、5、6、1、2</td></tr>
+          <tr><td>根的兩棵子樹對調 <code>[[[1, 2], [0, -1]], [[3, 5], [6, 9]]]</code></td><td>5</td><td>7</td><td>1、2、0、−1、3、5、6</td></tr>
+          <tr><td>每一層都把差的放前面 <code>[[[1, 2], [0, -1]], [[6, 9], [3, 5]]]</code></td><td>5</td><td>8(一片都沒剪)</td><td>1、2、0、−1、6、9、3、5</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        把這棵樹每個節點的子節點順序都試一遍(128 種),看的葉子數最少 5、最多 8。好的順序是「對輪到的一方最好的先看」:
+        MAX 先看大的、MIN 先看小的,α、β 一開始就很緊,後面的子節點很快被剪掉。所以實際的棋類程式會花力氣排順序,
+        四子棋常見的做法是由中間的欄往兩邊試。
+      </p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 51.3 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>把手算 51.2 那棵樹的根的兩棵子樹對調,變成 <code>[[[3, 4], [1, 5]], [[7, 2], [8, 6]]]</code>。(1)根的值會變嗎?(2)用 alpha-beta 由左到右做一次,看了幾片葉子?哪幾片?
+          (3)哪一個內部節點回傳的值和它的真值不一樣?</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <p>(1)不會,還是 7:alpha-beta 只改變看了多少,不改變根的值。</p>
+            <div class="table-wrap"><table>
+              <thead><tr><th>順序</th><th>節點</th><th>進來的 α, β</th><th>看到的子節點值與更新</th><th>剪枝</th><th>回傳</th></tr></thead>
+              <tbody>
+                <tr><td>1</td><td>11(MAX)</td><td>−∞, +∞</td><td>葉 3、4:α=4</td><td>—</td><td>4</td></tr>
+                <tr><td>2</td><td>12(MAX)</td><td>−∞, 4</td><td>葉 1:α=1;葉 5:α=5</td><td>5 ≥ 4,但已經是最後一片,沒有東西可剪</td><td>5</td></tr>
+                <tr><td>3</td><td>1(MIN)</td><td>−∞, +∞</td><td>4、5:β=4</td><td>—</td><td>4</td></tr>
+                <tr><td>4</td><td>21(MAX)</td><td>4, +∞</td><td>葉 7:α=7;葉 2</td><td>—</td><td>7</td></tr>
+                <tr><td>5</td><td>22(MAX)</td><td>4, 7</td><td>葉 8:α=8</td><td><strong>8 ≥ 7,剪掉葉 6</strong></td><td>8</td></tr>
+                <tr><td>6</td><td>2(MIN)</td><td>4, +∞</td><td>7、8:β=7</td><td>—</td><td>7</td></tr>
+                <tr><td>7</td><td>根(MAX)</td><td>−∞, +∞</td><td>4、7</td><td>—</td><td><strong>7</strong></td></tr>
+              </tbody>
+            </table></div>
+            <p>(2)看了 <strong>7 片</strong>:3、4、1、5、7、2、8(原本的順序只看 5 片)。好的子樹(值 7)放到後面,α 一開始只有 4,能剪的就少了。
+            (3)節點 22 回傳 8,真值是 max(8, 6) = 8,剛好一樣;其他節點都沒被剪,所以這一題<strong>每個節點的回傳值都等於真值</strong>。
+            「回傳值不等於真值」只發生在剪過、而且被剪掉的部分會改變結果的節點(例如上面主例的 12 與 2)。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <h3 id="lab-puzzle-minimax">本章 Lab:minimax puzzle/minimax.py</h3>
+      <div class="callout lab" data-task="puzzle/minimax">
+        <div class="ico">🧪</div>
+        <div class="body">
+          <span class="c-title">本章 Lab · 任務線「puzzle」· 任務「minimax」</span>
+          <p><strong>對應地下城任務:</strong>任務「minimax」(任務線:puzzle 解謎 AI,第 4／4 個任務)。零件檔:<code>~/零件庫/puzzle/minimax.py</code>;任務資料夾:<code>~/任務線/puzzle/04-minimax/</code>。</p>
+          <p><strong>要做的零件:</strong>一個任何兩人輪流、沒有運氣的遊戲都能用的 alpha-beta 搜尋(分數一律從「輪到的一方」看,這叫 negamax),和一個有重力的四子棋 <code>ConnectFour</code>。Boss 戰用 5 欄×4 列的四子棋和你下棋:你的每一步都要是最佳著。</p>
+          <p><strong>介面:</strong></p>
+<pre><code class="language-python"># ~/零件庫/puzzle/minimax.py
+# 遊戲介面:solve 與 best_move 只能透過這五個方法碰遊戲(檢定會換成別的遊戲)。
+#   game.initial() -&gt; state
+#   game.to_move(state) -&gt; 0 或 1          輪到誰
+#   game.moves(state) -&gt; list              合法的著法,搜尋就照這個順序;遊戲結束是 []
+#   game.play(state, move) -&gt; state        不合法 → ValueError
+#   game.score(state) -&gt; int 或 None       沒結束是 None;結束時是「輪到的那一方」的分數
+
+class ConnectFour:
+    def __init__(self, cols=5, rows=4, k=4):
+        """有重力的連 k 子:棋子從上面放進一欄,掉到最下面的空位。
+        cols、rows &gt;= 1,2 &lt;= k &lt;= max(cols, rows),否則 ValueError。
+        move 是欄號 0..cols-1;state 要能當 dict 的鍵。"""
+    def initial(self): ...
+    def to_move(self, state): ...          # 先手是 0
+    def moves(self, state) -&gt; list:
+        """沒滿的欄,由中間往兩邊、一樣近時左邊先(5 欄是 [2, 1, 3, 0, 4])。"""
+    def play(self, state, move): ...       # 滿的欄、超出範圍、遊戲已結束 → ValueError
+    def score(self, state):
+        """有人橫、直或斜連成 k 子:-(空格數 + 1)(剛下的人贏,輪到的人輸);
+        下滿沒人贏:0;還沒結束:None。"""
+
+def solve(game, state) -&gt; int:
+    """輪到的一方在雙方都最佳時的分數(negamax＋alpha-beta)。
+    越快贏分數越高;一定會輸時,越慢輸分數越高。"""
+
+def best_move(game, state):
+    """分數等於 solve(game, state) 的一步;一樣好時取 game.moves(state) 裡最前面的。
+    遊戲已結束 → ValueError。"""</code></pre>
+          <p><strong>公開範例:</strong></p>
+          <p>先把本章的賽局樹包成遊戲介面,存成 <code>tree_game.py</code>(這是公開範例的輔助檔,不是零件):</p>
+<pre><code class="language-python"># tree_game.py —— 把書上的賽局樹包成遊戲介面(公開範例用)
+class TreeGame:
+    """巢狀列表是內部節點、整數是葉子;葉子的數字是先手(MAX)看到的分數。"""
+    def __init__(self, tree):
+        self.tree = tree
+        self.seen = {}                      # 看過的葉子:state → 數字(依第一次看到的順序)
+
+    def _node(self, state):
+        node = self.tree
+        for i in state:
+            node = node[i]
+        return node
+
+    def initial(self):
+        return ()                           # state = 從根走下來的子節點編號
+
+    def to_move(self, state):
+        return len(state) % 2               # 0 是 MAX(先手)、1 是 MIN
+
+    def moves(self, state):
+        node = self._node(state)
+        return list(range(len(node))) if isinstance(node, list) else []
+
+    def play(self, state, move):
+        if move not in self.moves(state):
+            raise ValueError("illegal move")
+        return state + (move,)
+
+    def score(self, state):
+        node = self._node(state)
+        if isinstance(node, list):
+            return None                     # 還沒結束
+        self.seen.setdefault(state, node)
+        return node if self.to_move(state) == 0 else -node   # 換成「輪到的一方」看的分數</code></pre>
+          <p>在放 <code>tree_game.py</code> 的資料夾執行 <code>PYTHONPATH=~/零件庫 python3</code>。賽局樹是本章「手算:alpha-beta 的 α、β 與剪枝」那一棵;四子棋那一段:先手在最下排放了 1、2、3 欄,後手擋不住兩頭,下一步一定輸(還剩 13 格,所以分數是 −14):</p>
+<pre><code class="language-python">&gt;&gt;&gt; from puzzle.minimax import ConnectFour, solve, best_move
+&gt;&gt;&gt; from tree_game import TreeGame
+&gt;&gt;&gt; t = TreeGame([[[3, 5], [6, 9]], [[1, 2], [0, -1]]])
+&gt;&gt;&gt; solve(t, t.initial())
+5
+&gt;&gt;&gt; list(t.seen.values())
+[3, 5, 6, 1, 2]
+&gt;&gt;&gt; best_move(t, t.initial())
+0
+&gt;&gt;&gt; g = ConnectFour()
+&gt;&gt;&gt; s = g.initial()
+&gt;&gt;&gt; g.moves(s), g.to_move(s), g.score(s) is None
+([2, 1, 3, 0, 4], 0, True)
+&gt;&gt;&gt; for col in [2, 2, 1, 1, 3]:
+...     s = g.play(s, col)
+&gt;&gt;&gt; g.to_move(s), solve(g, s)
+(1, -14)
+&gt;&gt;&gt; s = g.play(s, 0)
+&gt;&gt;&gt; best_move(g, s), solve(g, s)
+(4, 14)
+&gt;&gt;&gt; s = g.play(s, 4)
+&gt;&gt;&gt; g.score(s), g.moves(s)
+(-14, [])
+&gt;&gt;&gt; small = ConnectFour(4, 4)
+&gt;&gt;&gt; solve(small, small.initial())
+0
+&gt;&gt;&gt; try:
+...     g.play(s, 3)
+... except ValueError:
+...     print("遊戲已經結束")
+...
+遊戲已經結束</code></pre>
+          <p><strong>和本章範例不同的地方:</strong>可以參考本章的範例,但介面和要求不同,要自己改寫。</p>
+          <ul>
+            <li>本章的 <code>minimax(b, player)</code> 和 <code>minimax_ab</code> 只會下井字棋(盤面是全域的 9 格列表);Lab 的 <code>solve</code>/<code>best_move</code> 只透過遊戲介面,同一份程式要能下四子棋、走賽局樹,檢定還會換成別的遊戲。</li>
+            <li>本章是「X 取最大、O 取最小」,分數只有 1、0、−1;Lab 用 negamax:分數一律從輪到的一方看,子節點的分數取負號再取最大,而且越快贏分數越高(四子棋的分數是「剩下的空格數＋1」)。</li>
+            <li>本章的 <code>minimax_tree</code>/<code>alphabeta_tree</code> 吃巢狀列表,用參數 <code>is_max</code> 分 MAX、MIN;Lab 的遊戲由 <code>moves</code> 決定搜尋順序(四子棋由中間往兩邊),檢定會數你看了幾片葉子,確認真的有剪枝。</li>
+            <li>Lab 的 <code>best_move</code> 有同分規則:一樣好時取 <code>moves</code> 裡最前面的,所以 Boss 戰每一局的結果是固定的。</li>
+          </ul>
+          <p><strong>任務目標</strong>(公開的用 <code>test</code> 自己跑;隱藏檢定在 <code>submit</code> 時跑,只看得到名稱和一行說明):</p>
+          <ul class="lab-goals">
+            <li data-group="minimax.game">☐ <strong>四子棋規則</strong>〔公開〕ConnectFour:moves 的順序(由中間往兩邊)、play 疊在欄上、橫直斜連成 k 子、score 的分數(-(空格數＋1)／0／None)、to_move 輪流。</li>
+            <li data-group="minimax.value">☐ <strong>局面的分數</strong>〔公開〕solve 對公開局面:書上那棵小賽局樹(包成遊戲介面)、ConnectFour(4, 4) 的殘局;越快贏分數越高。</li>
+            <li data-group="minimax.best">☐ <strong>最佳著</strong>〔公開〕best_move 的分數等於 solve;一樣好時取 moves 裡最前面的;一步就能贏時直接贏,對手下一步要贏時要擋。</li>
+            <li data-group="minimax.prune">☐ <strong>真的有剪枝</strong>〔隱藏檢定〕在檢定自己的賽局樹上,solve 看過的葉子(不重複計算)不能比參考的 alpha-beta(照 moves 的順序)多;沒剪枝的 minimax 會超過。</li>
+            <li data-group="minimax.edge">☐ <strong>邊界</strong>〔隱藏檢定〕只剩一步;下滿和局;同時有贏的著法和要擋的著法;k=3 的小盤面、只有 1 欄的盤面;換成檢定自己的遊戲(取石子、賽局樹)也要對(只能透過遊戲介面)。</li>
+            <li data-group="minimax.errors">☐ <strong>錯誤處理</strong>〔隱藏檢定〕下在滿的欄、欄號超出範圍、遊戲結束之後還下、ConnectFour 的尺寸不合法、遊戲結束時呼叫 best_move,都要 ValueError。</li>
+            <li data-group="minimax.perf">☐ <strong>效能</strong>〔隱藏檢定〕alpha-beta 加上好的搜尋順序;沒剪枝的 minimax 做不到。門檻:5×4 盤面的 10 個局面(已下 6 子):每個 solve 2 秒內。這個門檻來自任務線 puzzle 的 Boss 戰「不敗棋手」:20 局 5 欄×4 列的四子棋,每局你這一方全部的 best_move 合計 4 秒內。</li>
+          </ul>
+          <p><strong>選做:記憶(置換表)。</strong>同一個盤面可以從不同的走法到達,把算過的分數存在 dict 裡可以省很多時間。但本章「看起來對但其實錯(一)」說過:被剪過的節點回傳的只是上界或下界,存的時候要一起記下它是哪一種。不做記憶也過得了。</p>
+          <p><strong>規則:</strong>只用 Python 標準函式庫。<code>solve</code> 與 <code>best_move</code> 只能呼叫遊戲介面的五個方法。</p>
+          <p><strong>之後會用在:</strong>任務線 puzzle 的 Boss 戰「不敗棋手」。</p>
+          <p class="lab-rule">這個零件過關之後,後面的專題一律用你自己的版本。規則見<a href="00-about.html#lab-rules">零件庫規則</a>。</p>
+        </div>
+      </div>
+
       <h2>機制設計:反過來「設計」賽局</h2>
       <p>
         到這裡,我們一直在做同一件事:<strong>給定一場賽局,分析理性的人會怎麼玩。</strong>
