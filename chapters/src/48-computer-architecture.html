@@ -1488,6 +1488,575 @@ for (int i = 0; i &lt; N; i++)
         </div>
       </div>
 
+      <h3>手算:用 cs_config 把位址拆成 tag、index、offset</h3>
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">為什麼要學</span>
+          <p>接下來五節是任務線「rv32」裡任務「快取模擬器」(<code>rv32/cachesim</code>)的手算。
+          Lab 的公開測試就是一份份存取紀錄,逐筆比對 5 個統計數字;手算對了,你才知道自己的 C 程式該印出什麼。
+          這個零件之後還會用兩次:(1) 同一條任務線的 Boss 戰「快取重播」:<a href="135-riscv-assembly.html#lab-rv32-iss">{{ch:135-riscv-assembly}}的指令集模擬器</a>(<code>rv32/iss</code>)
+          跑隱藏的矩陣走訪程式,用 <code>--mem-trace</code> 印出存取紀錄,再交給你的快取模擬器,在直接對映寫回、2 路 LRU 寫回、4 路 FIFO 寫穿三組設定下重播;
+          (2) IC 路線「迷你 SoC」任務線的快取控制器(<code>soc/cache</code>):你用 Verilog 寫硬體快取,測試拿你的 cachesim 當參考模型,逐筆比對。</p>
+        </div>
+      </div>
+      <p>
+        前面的 Worked Example 用「總大小 ÷ 區塊 ÷ 路數」算組數,位址只有 8 位元。Lab 的設定 <code>cs_config</code> 直接給
+        <code>sets</code>(組數)、<code>ways</code>(路數)、<code>block</code>(區塊位元組數),位址是完整的 32 位元。拆法:
+      </p>
+      <ul>
+        <li><strong>offset</strong> = 低 $\log_2(\text{block})$ 位元 = <code>addr &amp; (block - 1)</code></li>
+        <li><strong>index</strong>(組號)= 接著的 $\log_2(\text{sets})$ 位元 = <code>(addr &gt;&gt; log2(block)) &amp; (sets - 1)</code></li>
+        <li><strong>tag</strong> = 剩下的高位元 = <code>addr &gt;&gt; (log2(block) + log2(sets))</code>;ways 不影響拆法</li>
+      </ul>
+      <p>
+        設定 <code>{sets=64, ways=2, block=64}</code>:容量 64 × 2 × 64 = 8 KB,offset 6 位元、index 6 位元、tag 20 位元。
+        每一列是存取紀錄檔的一行(格式:種類、十六進位位址、大小)。
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>紀錄行</th><th>二進位(tag 20 | index 6 | offset 6)</th><th>tag</th><th>組</th><th>offset</th><th>說明</th></tr></thead>
+        <tbody>
+<tr><td><code>R 00001f40 4</code></td><td><code>00000000000000000001 111101 000000</code></td><td>0x1</td><td>61</td><td>0</td><td></td></tr>
+<tr><td><code>R 00001f7c 4</code></td><td><code>00000000000000000001 111101 111100</code></td><td>0x1</td><td>61</td><td>60</td><td>和上一列同一個區塊(只差 offset)</td></tr>
+<tr><td><code>R 00001f80 4</code></td><td><code>00000000000000000001 111110 000000</code></td><td>0x1</td><td>62</td><td>0</td><td>下一個區塊 → 下一組</td></tr>
+<tr><td><code>R 00002f40 4</code></td><td><code>00000000000000000010 111101 000000</code></td><td>0x2</td><td>61</td><td>0</td><td>組 61,tag 不同</td></tr>
+<tr><td><code>R 00003f40 4</code></td><td><code>00000000000000000011 111101 000000</code></td><td>0x3</td><td>61</td><td>0</td><td>組 61 的第 3 個區塊:2 路裝不下</td></tr>
+<tr><td><code>R fffffffc 4</code></td><td><code>11111111111111111111 111111 111100</code></td><td>0xfffff</td><td>63</td><td>60</td><td>32 位元全部有效,tag 最大</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        <code>0x1f40</code>、<code>0x2f40</code>、<code>0x3f40</code> 差 4096(= sets × block)的倍數,所以落在同一組、tag 不同。
+        3 個區塊搶 2 路,一定會有人被踢掉。相差 sets × block 的位址同組,這件事等一下解釋逐欄走訪為什麼那麼慢。
+      </p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 48.1 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>設定 <code>{sets=16, ways=4, block=32}</code>。(1) 容量多少?offset、index、tag 各幾位元?
+          (2) 拆 <code>R 00001f40 4</code>、<code>R 0000a5c4 4</code>、<code>R 80000010 4</code>、<code>R fffffffc 4</code>。
+          (3) 和 <code>0x00001f40</code> 同一組的下一個位址(往上)是多少?</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <p>(1) 16 × 4 × 32 = 2048 位元組 = 2 KB。offset 5 位元、index 4 位元、tag 32 − 5 − 4 = 23 位元。</p>
+            <div class="table-wrap"><table>
+              <thead><tr><th>紀錄行</th><th>二進位(tag 23 | index 4 | offset 5)</th><th>tag</th><th>組</th><th>offset</th><th></th></tr></thead>
+              <tbody>
+<tr><td><code>R 00001f40 4</code></td><td><code>00000000000000000001111 1010 00000</code></td><td>0xf</td><td>10</td><td>0</td><td></td></tr>
+<tr><td><code>R 0000a5c4 4</code></td><td><code>00000000000000001010010 1110 00100</code></td><td>0x52</td><td>14</td><td>4</td><td></td></tr>
+<tr><td><code>R 80000010 4</code></td><td><code>10000000000000000000000 0000 10000</code></td><td>0x400000</td><td>0</td><td>16</td><td></td></tr>
+<tr><td><code>R fffffffc 4</code></td><td><code>11111111111111111111111 1111 11100</code></td><td>0x7fffff</td><td>15</td><td>28</td><td></td></tr>
+              </tbody>
+            </table></div>
+            <p>(3) 同組的位址相差 sets × block = 16 × 32 = 512 的倍數:<code>0x1f40 + 0x200 = 0x2140</code>,組 10、tag 0x10。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <h3>手算:2 路組相聯的 LRU 與 FIFO</h3>
+      <p>
+        設定 <code>{sets=2, ways=2, block=16}</code>,只有讀。offset 4 位元、index 1 位元、tag = <code>addr &gt;&gt; 5</code>。
+        為了好讀,把區塊取名字:A = <code>0x00</code>(組 0,tag 0)、B = <code>0x20</code>(組 0,tag 1)、C = <code>0x40</code>(組 0,tag 2)、D = <code>0x10</code>(組 1,tag 0)。
+        <code>0x04</code> 和 <code>0x24</code> 只是 A、B 裡面別的 offset。
+      </p>
+      <p>Lab 規定的替換規則(兩種策略都一樣的部分先講):</p>
+      <ul>
+        <li>同一組有空的路,先用<strong>索引最小</strong>的空路。踢掉的行,新區塊就放在它原來那一路。</li>
+        <li><strong>LRU</strong>:每一行記一個時間;<strong>命中與載入</strong>都更新。滿了踢時間最舊的(最久沒用的)。</li>
+        <li><strong>FIFO</strong>:時間<strong>只在載入時</strong>記,命中不改。滿了踢最早載入的。</li>
+      </ul>
+      <p>表中「舊→新」是那一組的替換順序:最左邊就是下一個被踢的。「組內容」是被存取的那一組在存取之後的樣子。</p>
+      <p><strong>LRU:</strong></p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>#</th><th>紀錄行</th><th>區塊</th><th>結果</th><th>組內容</th><th>舊→新</th><th>踢掉</th></tr></thead>
+        <tbody>
+<tr><td>1</td><td><code>R 00000000 4</code></td><td>A(組 0,tag 0)</td><td>失誤</td><td>路0=A 路1=—</td><td>A</td><td>—</td></tr>
+<tr><td>2</td><td><code>R 00000020 4</code></td><td>B(組 0,tag 1)</td><td>失誤</td><td>路0=A 路1=B</td><td>A、B</td><td>—</td></tr>
+<tr><td>3</td><td><code>R 00000004 4</code></td><td>A(組 0,tag 0)</td><td><strong>命中</strong></td><td>路0=A 路1=B</td><td>B、A</td><td>—</td></tr>
+<tr><td>4</td><td><code>R 00000010 4</code></td><td>D(組 1,tag 0)</td><td>失誤</td><td>路0=D 路1=—</td><td>D</td><td>—</td></tr>
+<tr><td>5</td><td><code>R 00000040 4</code></td><td>C(組 0,tag 2)</td><td>失誤</td><td>路0=A 路1=C</td><td>A、C</td><td>B</td></tr>
+<tr><td>6</td><td><code>R 00000000 4</code></td><td>A(組 0,tag 0)</td><td><strong>命中</strong></td><td>路0=A 路1=C</td><td>C、A</td><td>—</td></tr>
+<tr><td>7</td><td><code>R 00000024 4</code></td><td>B(組 0,tag 1)</td><td>失誤</td><td>路0=A 路1=B</td><td>A、B</td><td>C</td></tr>
+<tr><td>8</td><td><code>R 00000040 4</code></td><td>C(組 0,tag 2)</td><td>失誤</td><td>路0=C 路1=B</td><td>B、C</td><td>A</td></tr>
+        </tbody>
+      </table></div>
+      <p><strong>FIFO:</strong></p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>#</th><th>紀錄行</th><th>區塊</th><th>結果</th><th>組內容</th><th>舊→新</th><th>踢掉</th></tr></thead>
+        <tbody>
+<tr><td>1</td><td><code>R 00000000 4</code></td><td>A(組 0,tag 0)</td><td>失誤</td><td>路0=A 路1=—</td><td>A</td><td>—</td></tr>
+<tr><td>2</td><td><code>R 00000020 4</code></td><td>B(組 0,tag 1)</td><td>失誤</td><td>路0=A 路1=B</td><td>A、B</td><td>—</td></tr>
+<tr><td>3</td><td><code>R 00000004 4</code></td><td>A(組 0,tag 0)</td><td><strong>命中</strong></td><td>路0=A 路1=B</td><td>A、B</td><td>—</td></tr>
+<tr><td>4</td><td><code>R 00000010 4</code></td><td>D(組 1,tag 0)</td><td>失誤</td><td>路0=D 路1=—</td><td>D</td><td>—</td></tr>
+<tr><td>5</td><td><code>R 00000040 4</code></td><td>C(組 0,tag 2)</td><td>失誤</td><td>路0=C 路1=B</td><td>B、C</td><td>A</td></tr>
+<tr><td>6</td><td><code>R 00000000 4</code></td><td>A(組 0,tag 0)</td><td>失誤</td><td>路0=C 路1=A</td><td>C、A</td><td>B</td></tr>
+<tr><td>7</td><td><code>R 00000024 4</code></td><td>B(組 0,tag 1)</td><td>失誤</td><td>路0=B 路1=A</td><td>A、B</td><td>C</td></tr>
+<tr><td>8</td><td><code>R 00000040 4</code></td><td>C(組 0,tag 2)</td><td>失誤</td><td>路0=B 路1=C</td><td>B、C</td><td>A</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        最後的統計:LRU 是 hits=2、misses=6、evictions=3、mem_reads=6、mem_writes=0;
+        FIFO 是 hits=1、misses=7、evictions=4、mem_reads=7、mem_writes=0。
+      </p>
+      <p>
+        兩張表從第 3 步開始分岔:A 命中了。LRU 把 A 變成最新,舊→新從「A、B」變成「B、A」;FIFO 不動,A 還是最早載入的。
+        到第 5 步 C 進來,LRU 踢 B,FIFO 踢 A。之後 FIFO 在第 6 步又把 A 叫回來,多了一次失誤。
+        這正是 Lab 任務目標「LRU 與 FIFO」要抓的錯:<strong>命中時也更新 FIFO 的時間</strong>,FIFO 就變成 LRU 了。
+        第 4 步存取組 1,組 0 的順序完全不受影響:每一組各自替換。
+      </p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 48.2 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>設定 <code>{sets=4, ways=2, block=32}</code>,只有讀。紀錄:
+          <code>R 00000020 4</code>、<code>R 000000a0 4</code>、<code>R 00000024 4</code>、<code>R 00000120 4</code>、<code>R 000000a8 4</code>、<code>R 00000020 4</code>。
+          (1) 每個位址落在哪一組、tag 多少?(2) 分別用 LRU 與 FIFO 追完,寫出 5 個統計數字。(3) 哪一個策略比較好?這和上面的例子矛盾嗎?</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <p>(1) offset 5 位元、index 2 位元、tag = <code>addr &gt;&gt; 7</code>。全部落在組 1:P = <code>0x20</code>(tag 0)、Q = <code>0xa0</code>(tag 1)、S = <code>0x120</code>(tag 2);<code>0x24</code>、<code>0xa8</code> 是 P、Q 裡別的 offset。</p>
+            <p><strong>LRU:</strong></p>
+            <div class="table-wrap"><table>
+              <thead><tr><th>#</th><th>紀錄行</th><th>區塊</th><th>結果</th><th>組內容</th><th>舊→新</th><th>踢掉</th></tr></thead>
+              <tbody>
+<tr><td>1</td><td><code>R 00000020 4</code></td><td>P(組 1,tag 0)</td><td>失誤</td><td>路0=P 路1=—</td><td>P</td><td>—</td></tr>
+<tr><td>2</td><td><code>R 000000a0 4</code></td><td>Q(組 1,tag 1)</td><td>失誤</td><td>路0=P 路1=Q</td><td>P、Q</td><td>—</td></tr>
+<tr><td>3</td><td><code>R 00000024 4</code></td><td>P(組 1,tag 0)</td><td><strong>命中</strong></td><td>路0=P 路1=Q</td><td>Q、P</td><td>—</td></tr>
+<tr><td>4</td><td><code>R 00000120 4</code></td><td>S(組 1,tag 2)</td><td>失誤</td><td>路0=P 路1=S</td><td>P、S</td><td>Q</td></tr>
+<tr><td>5</td><td><code>R 000000a8 4</code></td><td>Q(組 1,tag 1)</td><td>失誤</td><td>路0=Q 路1=S</td><td>S、Q</td><td>P</td></tr>
+<tr><td>6</td><td><code>R 00000020 4</code></td><td>P(組 1,tag 0)</td><td>失誤</td><td>路0=Q 路1=P</td><td>Q、P</td><td>S</td></tr>
+              </tbody>
+            </table></div>
+            <p><strong>FIFO:</strong></p>
+            <div class="table-wrap"><table>
+              <thead><tr><th>#</th><th>紀錄行</th><th>區塊</th><th>結果</th><th>組內容</th><th>舊→新</th><th>踢掉</th></tr></thead>
+              <tbody>
+<tr><td>1</td><td><code>R 00000020 4</code></td><td>P(組 1,tag 0)</td><td>失誤</td><td>路0=P 路1=—</td><td>P</td><td>—</td></tr>
+<tr><td>2</td><td><code>R 000000a0 4</code></td><td>Q(組 1,tag 1)</td><td>失誤</td><td>路0=P 路1=Q</td><td>P、Q</td><td>—</td></tr>
+<tr><td>3</td><td><code>R 00000024 4</code></td><td>P(組 1,tag 0)</td><td><strong>命中</strong></td><td>路0=P 路1=Q</td><td>P、Q</td><td>—</td></tr>
+<tr><td>4</td><td><code>R 00000120 4</code></td><td>S(組 1,tag 2)</td><td>失誤</td><td>路0=S 路1=Q</td><td>Q、S</td><td>P</td></tr>
+<tr><td>5</td><td><code>R 000000a8 4</code></td><td>Q(組 1,tag 1)</td><td><strong>命中</strong></td><td>路0=S 路1=Q</td><td>Q、S</td><td>—</td></tr>
+<tr><td>6</td><td><code>R 00000020 4</code></td><td>P(組 1,tag 0)</td><td>失誤</td><td>路0=S 路1=P</td><td>S、P</td><td>Q</td></tr>
+              </tbody>
+            </table></div>
+            <p>(2) LRU:hits=1、misses=5、evictions=3、mem_reads=5、mem_writes=0。
+            FIFO:hits=2、misses=4、evictions=2、mem_reads=4、mem_writes=0。</p>
+            <p>(3) 這一次 FIFO 比較好:第 3 步 P 命中後,LRU 認為 Q 比較舊,第 4 步踢了 Q,第 5 步就失誤;FIFO 踢的是 P,剛好留住 Q。
+            不矛盾:LRU 不是「永遠比較好」,只是在有時間局部性的程式上通常比較好。兩個策略各有讓對方輸的紀錄,所以 Lab 兩個都要做。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <h3>手算:寫回與寫穿的記憶體流量</h3>
+      <p>
+        Lab 的兩種寫入策略是固定的搭配:
+        <strong>寫回＋寫入配置</strong>(<code>CS_WRITE_BACK</code>:寫失誤也把區塊載入,標成髒;踢掉髒的行或 <code>cs_flush</code> 時才寫回)
+        與<strong>寫穿＋不配置</strong>(<code>CS_WRITE_THROUGH</code>:每次寫都直接寫記憶體;寫失誤不載入)。
+        <code>mem_reads</code> 數載入了幾個區塊,<code>mem_writes</code> 數寫了幾次記憶體。寫失誤也算一次 <code>misses</code>。
+      </p>
+      <p>
+        設定 <code>{sets=2, ways=1, block=16}</code>(直接對映,所以 LRU／FIFO 沒差別)。tag = <code>addr &gt;&gt; 5</code>。
+        「快取」欄是存取之後兩組的內容:數字是 tag,「髒」表示改過、還沒寫回。最後兩欄是累計的 mem_reads、mem_writes。
+      </p>
+      <p><strong>寫回＋寫入配置:</strong></p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>#</th><th>紀錄行</th><th>位置</th><th>結果與動作</th><th>快取(組 0 | 組 1)</th><th>mem_reads</th><th>mem_writes</th></tr></thead>
+        <tbody>
+<tr><td>1</td><td><code>W 00000000 4</code></td><td>組 0,tag 0</td><td>失誤,載入,標成髒</td><td>0髒 | —</td><td>1</td><td>0</td></tr>
+<tr><td>2</td><td><code>W 00000004 4</code></td><td>組 0,tag 0</td><td><strong>命中</strong>,標成髒</td><td>0髒 | —</td><td>1</td><td>0</td></tr>
+<tr><td>3</td><td><code>R 00000008 4</code></td><td>組 0,tag 0</td><td><strong>命中</strong></td><td>0髒 | —</td><td>1</td><td>0</td></tr>
+<tr><td>4</td><td><code>W 00000020 4</code></td><td>組 0,tag 1</td><td>失誤,踢掉 tag 0(髒,寫回),載入,標成髒</td><td>1髒 | —</td><td>2</td><td>1</td></tr>
+<tr><td>5</td><td><code>R 00000000 4</code></td><td>組 0,tag 0</td><td>失誤,踢掉 tag 1(髒,寫回),載入</td><td>0 | —</td><td>3</td><td>2</td></tr>
+<tr><td>6</td><td><code>R 00000010 4</code></td><td>組 1,tag 0</td><td>失誤,載入</td><td>0 | 0</td><td>4</td><td>2</td></tr>
+<tr><td>7</td><td><code>W 00000014 4</code></td><td>組 1,tag 0</td><td><strong>命中</strong>,標成髒</td><td>0 | 0髒</td><td>4</td><td>2</td></tr>
+<tr><td>8</td><td><code>W 00000018 4</code></td><td>組 1,tag 0</td><td><strong>命中</strong>,標成髒</td><td>0 | 0髒</td><td>4</td><td>2</td></tr>
+<tr><td>—</td><td><code>cs_flush</code></td><td></td><td>寫回 1 個髒行,清空</td><td>— | —</td><td>4</td><td>3</td></tr>
+        </tbody>
+      </table></div>
+      <p><strong>寫穿＋不配置:</strong></p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>#</th><th>紀錄行</th><th>位置</th><th>結果與動作</th><th>快取(組 0 | 組 1)</th><th>mem_reads</th><th>mem_writes</th></tr></thead>
+        <tbody>
+<tr><td>1</td><td><code>W 00000000 4</code></td><td>組 0,tag 0</td><td>失誤,只寫記憶體(不載入)</td><td>— | —</td><td>0</td><td>1</td></tr>
+<tr><td>2</td><td><code>W 00000004 4</code></td><td>組 0,tag 0</td><td>失誤,只寫記憶體(不載入)</td><td>— | —</td><td>0</td><td>2</td></tr>
+<tr><td>3</td><td><code>R 00000008 4</code></td><td>組 0,tag 0</td><td>失誤,載入</td><td>0 | —</td><td>1</td><td>2</td></tr>
+<tr><td>4</td><td><code>W 00000020 4</code></td><td>組 0,tag 1</td><td>失誤,只寫記憶體(不載入)</td><td>0 | —</td><td>1</td><td>3</td></tr>
+<tr><td>5</td><td><code>R 00000000 4</code></td><td>組 0,tag 0</td><td><strong>命中</strong></td><td>0 | —</td><td>1</td><td>3</td></tr>
+<tr><td>6</td><td><code>R 00000010 4</code></td><td>組 1,tag 0</td><td>失誤,載入</td><td>0 | 0</td><td>2</td><td>3</td></tr>
+<tr><td>7</td><td><code>W 00000014 4</code></td><td>組 1,tag 0</td><td><strong>命中</strong>,寫記憶體</td><td>0 | 0</td><td>2</td><td>4</td></tr>
+<tr><td>8</td><td><code>W 00000018 4</code></td><td>組 1,tag 0</td><td><strong>命中</strong>,寫記憶體</td><td>0 | 0</td><td>2</td><td>5</td></tr>
+<tr><td>—</td><td><code>cs_flush</code></td><td></td><td>沒有髒行,清空</td><td>— | —</td><td>2</td><td>5</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        最後的統計:寫回是 hits=4、misses=4、evictions=2、mem_reads=4、mem_writes=3;
+        寫穿是 hits=3、misses=5、evictions=0、mem_reads=2、mem_writes=5
+        (evictions 只算存取時把有效行踢掉的次數,<code>cs_flush</code> 清空不算)。
+      </p>
+      <ul>
+        <li><strong>寫回</strong>:第 1 步寫失誤也載入。第 7、8 步對同一行寫兩次,只在 <code>cs_flush</code> 時寫回一次。第 4、5 步踢掉髒的行,各寫回一次。</li>
+        <li><strong>寫穿</strong>:第 1、2 步寫失誤不載入,所以第 2 步寫同一個區塊還是失誤,第 3 步讀也是失誤。每次寫(5 次)都算一次 mem_writes,<code>cs_flush</code> 沒東西可寫。</li>
+        <li>這份紀錄兩邊的記憶體次數剛好打平(4 + 3 = 2 + 5)。同一行寫得越多次,寫回越划算。
+        注意單位不同:寫回一次寫整個區塊(這裡 16 位元組),寫穿一次只寫那個字組(4 位元組)。Lab 只數次數。</li>
+      </ul>
+      <p>
+        <strong>統計數字的不變式。</strong>不管紀錄長什麼樣,5 個數字之間有幾條一定成立的關係。
+        把它們寫成 <code>assert</code>,你重播任何紀錄之後都可以自己檢查,不用等參考答案;隱藏的「隨機紀錄」檢定錯了,通常先錯在這裡。
+      </p>
+<pre><code class="language-python">def check_stats(st, n_access, n_writes, write_back, lines, flushed):
+    """重播完一份紀錄之後,統計數字一定要滿足的不變式"""
+    assert st["hits"] + st["misses"] == n_access       # 每次存取不是命中就是失誤
+    assert st["evictions"] &lt;= st["mem_reads"]           # 先載入過,才可能被踢掉
+    if not flushed:                                     # 還留在快取裡的行 = 載入 − 踢掉
+        assert st["mem_reads"] - st["evictions"] &lt;= lines
+    if write_back:
+        assert st["mem_reads"] == st["misses"]          # 寫入配置:每次失誤都載入
+        assert st["mem_writes"] &lt;= st["mem_reads"]      # 每個載入的行最多寫回一次
+    else:
+        assert st["mem_writes"] == n_writes             # 寫穿:每次寫都寫記憶體
+        assert st["mem_reads"] &lt;= st["misses"]          # 寫失誤不載入
+    return "通過"
+
+# 上面兩張表的最後一列(sets=2、ways=1 → 2 行;8 次存取,其中 5 次寫;做過 cs_flush)
+wb = {"hits": 4, "misses": 4, "evictions": 2, "mem_reads": 4, "mem_writes": 3}
+wt = {"hits": 3, "misses": 5, "evictions": 0, "mem_reads": 2, "mem_writes": 5}
+print("寫回:", check_stats(wb, 8, 5, True, 2, flushed=True))
+print("寫穿:", check_stats(wt, 8, 5, False, 2, flushed=True))</code></pre>
+      <p>輸出:</p>
+<pre><code class="language-text">寫回: 通過
+寫穿: 通過</code></pre>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 48.3 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>設定 <code>{sets=1, ways=2, block=16}</code>、LRU。紀錄:
+          <code>W 00000000 4</code>、<code>W 00000004 4</code>、<code>W 00000008 4</code>、<code>R 00000010 4</code>、<code>W 0000000c 4</code>、<code>R 00000020 4</code>、<code>W 00000010 4</code>、<code>R 00000000 4</code>,最後 <code>cs_flush</code>。
+          分別用寫回與寫穿追完,寫出 5 個統計數字,再用 <code>check_stats</code> 檢查。</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <p>sets=1,所以 tag = <code>addr &gt;&gt; 4</code>,全部在組 0。「快取」欄寫兩路的內容。</p>
+            <p><strong>寫回:</strong></p>
+            <div class="table-wrap"><table>
+              <thead><tr><th>#</th><th>紀錄行</th><th>位置</th><th>結果與動作</th><th>快取</th><th>mem_reads</th><th>mem_writes</th></tr></thead>
+              <tbody>
+<tr><td>1</td><td><code>W 00000000 4</code></td><td>組 0,tag 0</td><td>失誤,載入,標成髒</td><td>路0=0髒 路1=—</td><td>1</td><td>0</td></tr>
+<tr><td>2</td><td><code>W 00000004 4</code></td><td>組 0,tag 0</td><td><strong>命中</strong>,標成髒</td><td>路0=0髒 路1=—</td><td>1</td><td>0</td></tr>
+<tr><td>3</td><td><code>W 00000008 4</code></td><td>組 0,tag 0</td><td><strong>命中</strong>,標成髒</td><td>路0=0髒 路1=—</td><td>1</td><td>0</td></tr>
+<tr><td>4</td><td><code>R 00000010 4</code></td><td>組 0,tag 1</td><td>失誤,載入</td><td>路0=0髒 路1=1</td><td>2</td><td>0</td></tr>
+<tr><td>5</td><td><code>W 0000000c 4</code></td><td>組 0,tag 0</td><td><strong>命中</strong>,標成髒</td><td>路0=0髒 路1=1</td><td>2</td><td>0</td></tr>
+<tr><td>6</td><td><code>R 00000020 4</code></td><td>組 0,tag 2</td><td>失誤,踢掉 tag 1(乾淨),載入</td><td>路0=0髒 路1=2</td><td>3</td><td>0</td></tr>
+<tr><td>7</td><td><code>W 00000010 4</code></td><td>組 0,tag 1</td><td>失誤,踢掉 tag 0(髒,寫回),載入,標成髒</td><td>路0=1髒 路1=2</td><td>4</td><td>1</td></tr>
+<tr><td>8</td><td><code>R 00000000 4</code></td><td>組 0,tag 0</td><td>失誤,踢掉 tag 2(乾淨),載入</td><td>路0=1髒 路1=0</td><td>5</td><td>1</td></tr>
+<tr><td>—</td><td><code>cs_flush</code></td><td></td><td>寫回 1 個髒行,清空</td><td>路0=— 路1=—</td><td>5</td><td>2</td></tr>
+              </tbody>
+            </table></div>
+            <p><strong>寫穿:</strong></p>
+            <div class="table-wrap"><table>
+              <thead><tr><th>#</th><th>紀錄行</th><th>位置</th><th>結果與動作</th><th>快取</th><th>mem_reads</th><th>mem_writes</th></tr></thead>
+              <tbody>
+<tr><td>1</td><td><code>W 00000000 4</code></td><td>組 0,tag 0</td><td>失誤,只寫記憶體(不載入)</td><td>路0=— 路1=—</td><td>0</td><td>1</td></tr>
+<tr><td>2</td><td><code>W 00000004 4</code></td><td>組 0,tag 0</td><td>失誤,只寫記憶體(不載入)</td><td>路0=— 路1=—</td><td>0</td><td>2</td></tr>
+<tr><td>3</td><td><code>W 00000008 4</code></td><td>組 0,tag 0</td><td>失誤,只寫記憶體(不載入)</td><td>路0=— 路1=—</td><td>0</td><td>3</td></tr>
+<tr><td>4</td><td><code>R 00000010 4</code></td><td>組 0,tag 1</td><td>失誤,載入</td><td>路0=1 路1=—</td><td>1</td><td>3</td></tr>
+<tr><td>5</td><td><code>W 0000000c 4</code></td><td>組 0,tag 0</td><td>失誤,只寫記憶體(不載入)</td><td>路0=1 路1=—</td><td>1</td><td>4</td></tr>
+<tr><td>6</td><td><code>R 00000020 4</code></td><td>組 0,tag 2</td><td>失誤,載入</td><td>路0=1 路1=2</td><td>2</td><td>4</td></tr>
+<tr><td>7</td><td><code>W 00000010 4</code></td><td>組 0,tag 1</td><td><strong>命中</strong>,寫記憶體</td><td>路0=1 路1=2</td><td>2</td><td>5</td></tr>
+<tr><td>8</td><td><code>R 00000000 4</code></td><td>組 0,tag 0</td><td>失誤,踢掉 tag 2(乾淨),載入</td><td>路0=1 路1=0</td><td>3</td><td>5</td></tr>
+<tr><td>—</td><td><code>cs_flush</code></td><td></td><td>沒有髒行,清空</td><td>路0=— 路1=—</td><td>3</td><td>5</td></tr>
+              </tbody>
+            </table></div>
+            <p>寫回:hits=3、misses=5、evictions=3、mem_reads=5、mem_writes=2。
+            寫穿:hits=1、misses=7、evictions=1、mem_reads=3、mem_writes=5。
+            8 次存取裡有 5 次寫,<code>check_stats(..., 8, 5, True, 2, flushed=True)</code> 與 <code>check_stats(..., 8, 5, False, 2, flushed=True)</code> 都通過。
+            寫回對 tag 0 寫了 4 次,只寫回 1 次(第 7 步踢掉時);寫穿寫了 5 次。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <h3>手算:逐列、逐欄與 AMAT</h3>
+      <p>
+        上面的<a href="#lab-addrs">互動快取模擬器</a>有「逐列走訪」「逐欄走訪」兩個按鈕。換成 Lab 的設定就是 <code>{sets=2, ways=1, block=16}</code>:
+        逐列命中 12 次、逐欄 0 次;衝突示範在 <code>{sets=4, ways=1, block=4}</code> 命中 0 次、<code>{sets=2, ways=2, block=4}</code> 命中 4 次。
+        這幾份紀錄就是 Lab 公開測試「命中與失誤」的一部分,你的 cachesim 要報出同樣的數字。
+      </p>
+      <p>
+        換大一點的:64 × 64 的 <code>int</code> 陣列放在 <code>0x00010000</code>(共 16 KB),只讀不寫。逐列的紀錄是
+        <code>R 00010000 4</code>、<code>R 00010004 4</code>、<code>R 00010008 4</code>…;逐欄是 <code>R 00010000 4</code>、<code>R 00010100 4</code>、<code>R 00010200 4</code>…(每步跳一列 = 256 位元組)。
+        4096 次存取的結果(命中 / 失誤,LRU 與 FIFO 一樣):
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>設定 {sets, ways, block}</th><th>容量</th><th>逐列</th><th>逐欄</th></tr></thead>
+        <tbody>
+<tr><td><code>{64, 2, 64}</code></td><td>8 KB</td><td>3840 / 256</td><td>0 / 4096</td></tr>
+<tr><td><code>{64, 1, 64}</code></td><td>4 KB</td><td>3840 / 256</td><td>0 / 4096</td></tr>
+<tr><td><code>{16, 8, 64}</code></td><td>8 KB</td><td>3840 / 256</td><td>0 / 4096</td></tr>
+<tr><td><code>{1, 128, 64}</code></td><td>8 KB</td><td>3840 / 256</td><td>3840 / 256</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        逐列:每個 64 位元組的區塊裝 16 個 <code>int</code>,載入一次、後面 15 次命中,所以失誤率 = 1/16 = 6.25%,和設定無關。
+        逐欄更有意思:一整欄只有 64 個區塊(4 KB),8 KB 的快取明明裝得下,命中卻是 0。
+        原因是上一節說的「相差 sets × block 的位址同組」:第 i 列的位址是 <code>0x10000 + 256i</code>,組號 = 4i mod 64,只會用到 16 組。
+        16 組 × 2 路 = 32 行,裝不下 64 個區塊,下一欄回來時全被踢光了。這是衝突失誤:同樣 8 KB 改成全相聯 <code>{1, 128, 64}</code>,逐欄也有 3840 次命中。
+      </p>
+      <p>
+        把失誤率代進 AMAT。設命中 1 個週期、失誤代價 100 個週期:
+      </p>
+      <p>$$\text{逐列:}\ 1 + \tfrac{256}{4096} \times 100 = 1 + 0.0625 \times 100 = 7.25 \text{ 週期} \qquad \text{逐欄:}\ 1 + 1 \times 100 = 101 \text{ 週期}$$</p>
+      <p>
+        同一個陣列、同樣的加法,平均每次存取差了約 14 倍。Boss 戰「快取重播」的三支程式就是逐列、逐欄與分塊轉置;
+        分塊轉置的想法是一次只碰一小塊,讓這一小塊用到的區塊同時待在快取裡。
+      </p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 48.4 <span class="badge">計算</span></div>
+        <div class="ex-body">
+          <p>逐列走訪在 L1 的失誤率是 6.25%(L1 命中 1 週期)。在 L1 下面加一層 L2:存取 10 週期、區域失誤率 25%,記憶體 100 週期。AMAT 是多少?比只有 L1 時快幾倍?</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <p>$\text{AMAT} = 1 + 0.0625 \times (10 + 0.25 \times 100) = 1 + 0.0625 \times 35 = 3.1875$ 週期。只有 L1 時是 7.25 週期,7.25 ÷ 3.1875 ≈ 2.27 倍。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 48.5 <span class="badge">反例</span></div>
+        <div class="ex-body">
+          <p><strong>看起來對但其實錯。</strong>「失誤率比較低的快取,平均存取時間一定比較短。」
+          直接對映的 L1:命中 1 ns、失誤率 5%;改成 4 路:比對 tag 變慢,命中 1.6 ns、失誤率降到 4%。失誤代價都是 40 ns。哪一個比較快?4 路的失誤率要降到多少以下才划算?</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <p>直接對映:$1 + 0.05 \times 40 = 3.0$ ns。4 路:$1.6 + 0.04 \times 40 = 3.2$ ns。失誤率低的反而慢。
+            要 $1.6 + m \times 40 &lt; 3.0$,也就是 $m &lt; 0.035$:4 路的失誤率要低於 3.5% 才划算。AMAT 同時看命中時間與失誤率,只看一項會選錯。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <h3>手算:路數變多,失誤反而變多</h3>
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">看起來對但其實錯:路數加倍一定比較少失誤</span>
+          <p>前面的衝突示範(<code>0, 16, 0, 16…</code>)從直接對映改成 2 路,命中率從 0% 變 67%。很容易就下結論:「容量不變、路數加倍,失誤只會變少。」
+          例子都對 ≠ 敘述為真。下面是反例:容量都是 2 個 16 位元組的區塊,LRU,紀錄是 X = <code>0x00</code>、Y = <code>0x10</code>、Z = <code>0x20</code> 輪流讀兩圈。</p>
+        </div>
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>#</th><th>區塊</th><th>直接對映 {2, 1, 16}</th><th>組 0 | 組 1</th><th>2 路全相聯 {1, 2, 16}</th><th>舊→新</th></tr></thead>
+        <tbody>
+<tr><td>1</td><td>X</td><td>失誤</td><td>X | —</td><td>失誤</td><td>X</td></tr>
+<tr><td>2</td><td>Y</td><td>失誤</td><td>X | Y</td><td>失誤</td><td>X、Y</td></tr>
+<tr><td>3</td><td>Z</td><td>失誤</td><td>Z | Y</td><td>失誤</td><td>Y、Z</td></tr>
+<tr><td>4</td><td>X</td><td>失誤</td><td>X | Y</td><td>失誤</td><td>Z、X</td></tr>
+<tr><td>5</td><td>Y</td><td><strong>命中</strong></td><td>X | Y</td><td>失誤</td><td>X、Y</td></tr>
+<tr><td>6</td><td>Z</td><td>失誤</td><td>Z | Y</td><td>失誤</td><td>Y、Z</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        直接對映命中 1 次,2 路 0 次。直接對映裡 Y 獨佔組 1,只有 X、Z 互相踢;2 路全相聯把 Y 也拉進來一起搶,
+        而 LRU 碰到「3 個區塊輪流、只有 2 路」時,每次踢掉的剛好是下一個要用的。路數加倍時組數減半,好處和壞處都有,要看紀錄。
+      </p>
+      <p>
+        組數不變、只加路數(容量變大)呢?對 LRU 來說,失誤真的不會變多:
+        <strong>★深入(選讀) 包含性質</strong>:組數相同時,任何時刻 k 路 LRU 快取裡的區塊,一定都在 k+1 路 LRU 快取裡。
+        每一組的 LRU 順序只由那一組的存取決定,k 路保留的就是「最近用過的 k 個區塊」,而 k+1 路保留「最近用過的 k+1 個」,前者是後者的子集,所以 k 路命中時 k+1 路也命中。
+        (Mattson、Gecsei、Slutz、Traiger 1970〈Evaluation Techniques for Storage Hierarchies〉,IBM Systems Journal 9(2)。)
+        FIFO 沒有這個性質:FIFO 保留的是「最近<strong>載入</strong>的幾個」,兩個大小的快取在不同時間失誤、載入,內容會分開走。
+        下面把這個性質寫成可以執行的檢查(只看一個組,也就是全相聯;不是證明,是建立直覺):
+      </p>
+<pre><code class="language-python">import random
+
+def run(trace, ways, policy):
+    """一個組(全相聯)跑一份區塊編號紀錄;回傳每一步之後組裡有哪些區塊"""
+    order, states = [], []              # order:最左邊是下一個被踢的
+    for b in trace:
+        if b in order:
+            if policy == "LRU":         # 命中:LRU 移到最新,FIFO 不動
+                order.remove(b)
+                order.append(b)
+        else:
+            if len(order) == ways:
+                order.pop(0)
+            order.append(b)
+        states.append(set(order))
+    return states
+
+def inclusion_holds(trace, ways, policy):
+    small = run(trace, ways, policy)
+    big = run(trace, ways + 1, policy)
+    return all(s &lt;= b for s, b in zip(small, big))   # k 路的內容都在 k+1 路裡
+
+random.seed(1)
+ok = all(inclusion_holds([random.randrange(6) for _ in range(30)], k, "LRU")
+         for _ in range(1000) for k in range(1, 5))
+print("LRU 1000 份隨機紀錄:", ok)
+belady = [1, 2, 3, 4, 1, 2, 5, 1, 2, 3, 4, 5]
+print("FIFO 3 路 vs 4 路:", inclusion_holds(belady, 3, "FIFO"))
+print("第 7 步:", sorted(run(belady, 3, "FIFO")[6]), sorted(run(belady, 4, "FIFO")[6]))</code></pre>
+      <p>輸出:</p>
+<pre><code class="language-text">LRU 1000 份隨機紀錄: True
+FIFO 3 路 vs 4 路: False
+第 7 步: [1, 2, 5] [2, 3, 4, 5]</code></pre>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 48.6 <span class="badge">反例</span></div>
+        <div class="ex-body">
+          <p><strong>看起來對但其實錯。</strong>「快取變大(組數不變、路數變多),失誤只會變少。」
+          設定 <code>{sets=1, block=16}</code>、FIFO、只讀,區塊編號依序是 1, 2, 3, 4, 1, 2, 5, 1, 2, 3, 4, 5(位址 = 編號 × 16)。
+          分別用 ways=3 與 ways=4 追完,數失誤次數。再換 LRU 算一次。</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <div class="table-wrap"><table>
+              <thead><tr><th>#</th><th>區塊</th><th>FIFO 3 路</th><th>最早→最晚載入</th><th>FIFO 4 路</th><th>最早→最晚載入</th></tr></thead>
+              <tbody>
+<tr><td>1</td><td>1</td><td>失誤</td><td>1</td><td>失誤</td><td>1</td></tr>
+<tr><td>2</td><td>2</td><td>失誤</td><td>1、2</td><td>失誤</td><td>1、2</td></tr>
+<tr><td>3</td><td>3</td><td>失誤</td><td>1、2、3</td><td>失誤</td><td>1、2、3</td></tr>
+<tr><td>4</td><td>4</td><td>失誤</td><td>2、3、4</td><td>失誤</td><td>1、2、3、4</td></tr>
+<tr><td>5</td><td>1</td><td>失誤</td><td>3、4、1</td><td><strong>命中</strong></td><td>1、2、3、4</td></tr>
+<tr><td>6</td><td>2</td><td>失誤</td><td>4、1、2</td><td><strong>命中</strong></td><td>1、2、3、4</td></tr>
+<tr><td>7</td><td>5</td><td>失誤</td><td>1、2、5</td><td>失誤</td><td>2、3、4、5</td></tr>
+<tr><td>8</td><td>1</td><td><strong>命中</strong></td><td>1、2、5</td><td>失誤</td><td>3、4、5、1</td></tr>
+<tr><td>9</td><td>2</td><td><strong>命中</strong></td><td>1、2、5</td><td>失誤</td><td>4、5、1、2</td></tr>
+<tr><td>10</td><td>3</td><td>失誤</td><td>2、5、3</td><td>失誤</td><td>5、1、2、3</td></tr>
+<tr><td>11</td><td>4</td><td>失誤</td><td>5、3、4</td><td>失誤</td><td>1、2、3、4</td></tr>
+<tr><td>12</td><td>5</td><td><strong>命中</strong></td><td>5、3、4</td><td>失誤</td><td>2、3、4、5</td></tr>
+              </tbody>
+            </table></div>
+            <p>FIFO:3 路失誤 9 次,4 路失誤 10 次:容量變大反而多失誤一次。這叫 <strong>Belady 異常</strong>(Belady、Nelson、Shedler 1969,CACM 12(6));作業系統的分頁替換也會遇到同一件事。
+            第 7 步之後,3 路裡有 1、4 路裡沒有,包含性質被打破,之後 3 路連續命中 1、2,4 路卻一路失誤。
+            LRU:3 路失誤 10 次,4 路失誤 8 次,符合包含性質。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <h3 id="lab-rv32-cachesim">本章 Lab:快取模擬器 rv32/cachesim.c</h3>
+      <div class="callout lab" data-task="rv32/cachesim">
+        <div class="ico">🧪</div>
+        <div class="body">
+          <span class="c-title">本章 Lab · 任務線「rv32」· 任務「快取模擬器」</span>
+          <p><strong>對應地下城任務:</strong>任務「快取模擬器」(任務線:rv32 自己的指令集模擬器＋效能挑戰,第 3／4 個任務;任務線總覽在<a href="135-riscv-assembly.html#lab-rv32-asm">{{ch:135-riscv-assembly}}</a>)。
+          零件檔:<code>~/零件庫/rv32/cachesim.c</code>(標頭 <code>~/零件庫/rv32/cachesim.h</code> 是起始碼給的);任務資料夾:<code>~/任務線/rv32/03-cachesim/</code>。</p>
+          <p><strong>要做的零件:</strong>一個 C 的快取模擬器函式庫:給組數、路數、區塊大小、替換策略(LRU／FIFO)與寫入策略(寫回／寫穿),一筆一筆餵存取,算出命中、失誤、淘汰與記憶體流量。
+          上面五節手算的每一張表,就是它要算出來的東西。</p>
+          <p><strong>介面:</strong></p>
+<pre><code class="language-c">/* ~/零件庫/rv32/cachesim.h(起始碼給的介面,判題用任務套件裡的版本,改了也不算) */
+#include &lt;stdint.h&gt;
+typedef enum { CS_LRU, CS_FIFO } cs_policy;
+typedef enum { CS_WRITE_BACK, CS_WRITE_THROUGH } cs_write;
+typedef struct { uint32_t sets, ways, block; cs_policy policy; cs_write write; } cs_config;  /* block 是位元組數 */
+typedef struct { uint64_t hits, misses, evictions, mem_reads, mem_writes; } cs_stats;
+typedef struct cache cache;   /* 內容由你在 cachesim.c 裡定義 */
+
+/* sets、block 要是 2 的冪、block ≥ 4、ways ≥ 1、policy 與 write 是列舉裡的值,否則回傳 NULL */
+cache *cs_new(const cs_config *cfg);
+/* op 'R' 或 'W';回傳 1 命中、0 失誤;op 不對 → -1,不算進統計;位址已對齊、不會跨區塊 */
+int cs_access(cache *c, char op, uint32_t addr);
+/* 把髒的行寫回(每個髒行 mem_writes+1),再清空整個快取;清空不算 evictions */
+void cs_flush(cache *c);
+cs_stats cs_get_stats(const cache *c);
+void cs_free(cache *c);</code></pre>
+          <ul>
+            <li><strong>位址拆法</strong>:offset = 低 log<sub>2</sub>(block) 位元、index = 接著 log<sub>2</sub>(sets) 位元、tag = 其餘;32 位元位址全部有效。</li>
+            <li><strong>替換</strong>:同一組有空的路,先用索引最小的空路;LRU 在命中與載入時都更新,FIFO 只在載入時記時間。</li>
+            <li><strong>寫入</strong>:<code>CS_WRITE_BACK</code> = 寫回＋寫入配置(寫失誤也載入、標成髒;踢掉髒的行 mem_writes+1);<code>CS_WRITE_THROUGH</code> = 寫穿＋不配置(每次寫都 mem_writes+1,寫失誤不載入);寫失誤也算一次 misses。</li>
+            <li><strong>統計</strong>:mem_reads = 載入的區塊數;evictions = 存取時踢掉有效行的次數(不管髒不髒,<code>cs_flush</code> 不算);mem_writes = 寫記憶體的次數(寫回一個髒行算 1 次、寫穿一次寫入算 1 次,不管寫了幾個位元組)。</li>
+            <li><strong>存取紀錄檔</strong>(和 <code>iss.py --mem-trace</code> 同格式):每行 <code>R 00001f40 4</code>(種類、十六進位位址、大小)。下面的 <code>cachesim_main.c</code> 讀這種檔案,不判分,方便你自己重播;判題用我們的驅動程式呼叫你的函式。</li>
+          </ul>
+<pre><code class="language-c">/* cachesim_main.c:讀存取紀錄檔的小工具(不判分;判題用我們自己的驅動程式)
+   用法:./cachesim &lt;sets&gt; &lt;ways&gt; &lt;block&gt; &lt;LRU|FIFO&gt; &lt;WB|WT&gt; &lt; prog.trace */
+#include &lt;stdio.h&gt;
+#include &lt;stdlib.h&gt;
+#include &lt;string.h&gt;
+#include &lt;inttypes.h&gt;
+#include "rv32/cachesim.h"
+
+int main(int argc, char **argv) {
+    if (argc != 6) {
+        fprintf(stderr, "用法:%s sets ways block LRU|FIFO WB|WT &lt; trace\n", argv[0]);
+        return 2;
+    }
+    cs_config cfg = {
+        (uint32_t)strtoul(argv[1], NULL, 0), (uint32_t)strtoul(argv[2], NULL, 0),
+        (uint32_t)strtoul(argv[3], NULL, 0),
+        strcmp(argv[4], "FIFO") == 0 ? CS_FIFO : CS_LRU,
+        strcmp(argv[5], "WT") == 0 ? CS_WRITE_THROUGH : CS_WRITE_BACK,
+    };
+    cache *c = cs_new(&amp;cfg);
+    if (!c) { fprintf(stderr, "設定不合法\n"); return 1; }
+    char op;
+    uint32_t addr;
+    unsigned size;
+    while (scanf(" %c %" SCNx32 " %u", &amp;op, &amp;addr, &amp;size) == 3)
+        cs_access(c, op, addr);
+    cs_flush(c);
+    cs_stats s = cs_get_stats(c);
+    printf("hits=%" PRIu64 " misses=%" PRIu64 " evictions=%" PRIu64
+           " mem_reads=%" PRIu64 " mem_writes=%" PRIu64 "\n",
+           s.hits, s.misses, s.evictions, s.mem_reads, s.mem_writes);
+    cs_free(c);
+    return 0;
+}</code></pre>
+<pre><code class="language-bash">gcc -std=c17 -Wall -Wextra -I ~/零件庫 -o cachesim cachesim_main.c ~/零件庫/rv32/cachesim.c
+printf 'R 00000000 4\nR 00000010 4\n%.0s' 1 2 3 &gt; conflict.trace   # 位址 0、16 交替 3 次
+./cachesim 4 1 4 LRU WB &lt; conflict.trace
+./cachesim 2 2 4 LRU WB &lt; conflict.trace</code></pre>
+<pre><code class="language-text">hits=0 misses=6 evictions=5 mem_reads=6 mem_writes=0
+hits=4 misses=2 evictions=0 mem_reads=2 mem_writes=0</code></pre>
+          <p><strong>公開範例</strong>(上面「衝突示範」的位址 0、16 交替;<code>demo.c</code> 和你的 <code>cachesim.c</code> 一起編):</p>
+<pre><code class="language-c">/* demo.c:用書上的衝突示範(位址 0、16 交替)比較直接對映與 2 路 */
+#include &lt;stdio.h&gt;
+#include &lt;inttypes.h&gt;
+#include "rv32/cachesim.h"
+
+static void show(const char *name, cs_config cfg, const char *ops, const uint32_t *addrs, int n) {
+    cache *c = cs_new(&amp;cfg);
+    for (int i = 0; i &lt; n; i++)
+        printf("%d", cs_access(c, ops[i], addrs[i]));   /* 1 命中、0 失誤 */
+    cs_flush(c);
+    cs_stats s = cs_get_stats(c);
+    printf("  %s: hits=%" PRIu64 " misses=%" PRIu64 " evictions=%" PRIu64
+           " mem_reads=%" PRIu64 " mem_writes=%" PRIu64 "\n",
+           name, s.hits, s.misses, s.evictions, s.mem_reads, s.mem_writes);
+    cs_free(c);
+}
+
+int main(void) {
+    uint32_t a[] = {0, 16, 0, 16, 0, 16};
+    show("1 路 LRU 寫回", (cs_config){4, 1, 4, CS_LRU, CS_WRITE_BACK}, "RRRRRR", a, 6);
+    show("2 路 LRU 寫回", (cs_config){2, 2, 4, CS_LRU, CS_WRITE_BACK}, "RRRRRR", a, 6);
+    show("2 路 LRU 寫回", (cs_config){2, 2, 4, CS_LRU, CS_WRITE_BACK}, "WWRRWW", a, 6);
+    show("2 路 LRU 寫穿", (cs_config){2, 2, 4, CS_LRU, CS_WRITE_THROUGH}, "WWRRWW", a, 6);
+    cs_config bad = {3, 2, 4, CS_LRU, CS_WRITE_BACK};      /* sets 不是 2 的冪 */
+    printf("cs_new(sets=3) %s\n", cs_new(&amp;bad) == NULL ? "== NULL" : "!= NULL");
+    return 0;
+}</code></pre>
+          <p>輸出:</p>
+<pre><code class="language-text">000000  1 路 LRU 寫回: hits=0 misses=6 evictions=5 mem_reads=6 mem_writes=0
+001111  2 路 LRU 寫回: hits=4 misses=2 evictions=0 mem_reads=2 mem_writes=0
+001111  2 路 LRU 寫回: hits=4 misses=2 evictions=0 mem_reads=2 mem_writes=2
+000011  2 路 LRU 寫穿: hits=2 misses=4 evictions=0 mem_reads=2 mem_writes=4
+cs_new(sets=3) == NULL</code></pre>
+          <p>第三列:兩個髒行一直留在快取裡,到 <code>cs_flush</code> 才各寫回一次。第四列:寫穿的前兩次寫失誤不載入,所以第三、四次讀還是失誤;4 次寫各算一次 mem_writes。
+          上面的 <code>check_stats</code> 可以拿來檢查你自己重播的任何紀錄。</p>
+          <p><strong>和本章範例不同的地方:</strong></p>
+          <ul>
+            <li>本章的互動模擬器是 JavaScript,用「總大小 ÷ 區塊 ÷ 路數」算組數;Lab 是 C 的函式庫介面,直接給 <code>sets</code>、<code>ways</code>、<code>block</code>。</li>
+            <li>互動模擬器只有 LRU、只有讀;Lab 要 LRU 與 FIFO、寫回與寫穿兩種寫入策略、記憶體流量(<code>mem_reads</code>、<code>mem_writes</code>)與 <code>cs_flush</code>。</li>
+            <li>設定不合法時,互動模擬器印錯誤訊息;Lab 的 <code>cs_new</code> 要回傳 <code>NULL</code>。效能門檻是 10<sup>7</sup> 次存取。</li>
+          </ul>
+          <p>可以參考本章的範例,但介面和要求不同,要自己改寫。</p>
+          <p><strong>任務目標</strong>(公開的用 <code>test</code> 自己跑;隱藏檢定在 <code>submit</code> 時跑,只看得到名稱和一行說明):</p>
+          <ul class="lab-goals">
+            <li data-group="cachesim.basic">☐ <strong>命中與失誤</strong>〔公開〕公開的紀錄:書上的逐列／逐欄走訪(命中 12／0 次)與衝突示範(直接對映 0 次、2 路 4 次),以及幾組寫回的讀寫混合;比對 5 個統計數字。</li>
+            <li data-group="cachesim.fifo">☐ <strong>LRU 與 FIFO</strong>〔公開〕同一份紀錄在 LRU 與 FIFO 下的結果不同:命中不會讓 FIFO 的行變新。</li>
+            <li data-group="cachesim.write">☐ <strong>寫入策略</strong>〔隱藏檢定〕寫回:寫失誤也載入、踢掉髒的行與 cs_flush 才算 mem_writes、同一行寫很多次只寫回一次;寫穿:每次寫都算 mem_writes、寫失誤不載入、之後讀同一個位址還是失誤。</li>
+            <li data-group="cachesim.edge">☐ <strong>邊界</strong>〔隱藏檢定〕全相聯(sets=1)、直接對映(ways=1)、block=4 與 block=4096、0xFFFFFFFC 附近的位址、同一區塊不同 offset、路數比用到的區塊多、空的紀錄、cs_flush 之後再存取。</li>
+            <li data-group="cachesim.errors">☐ <strong>錯誤處理</strong>〔隱藏檢定〕sets 或 block 不是 2 的冪、block &lt; 4、ways=0、policy 或 write 不在列舉裡,cs_new 都要回傳 NULL;op 不是 R／W 回傳 -1 而且統計不變。</li>
+            <li data-group="cachesim.random">☐ <strong>隨機紀錄</strong>〔隱藏檢定〕每人 seed 決定的隨機設定與隨機讀寫紀錄,5 個統計數字對參考。</li>
+            <li data-group="cachesim.perf">☐ <strong>效能</strong>〔隱藏檢定〕每次存取只能看自己那一組(O(ways)),不能掃整個快取。門檻:sets=1024、ways=8、block=64:驅動程式產生 10<sup>7</sup> 次隨機＋循序混合的讀寫,1 秒內。
+            這個門檻來自 Boss 戰「快取重播」(3 支程式合計約 1.5×10<sup>6</sup> 條指令,紀錄重播 3 組設定,15 秒內)與「效能挑戰」。</li>
+          </ul>
+          <p><strong>規則:</strong>C17,只用標準函式庫;不要寫 <code>main</code>(判題的驅動程式有自己的 <code>main</code>);判題用任務套件裡的 <code>cachesim.h</code>。</p>
+          <p><strong>之後會用在:</strong>Boss 戰「快取重播」:<a href="135-riscv-assembly.html#lab-rv32-iss">{{ch:135-riscv-assembly}}的任務「指令集模擬器」</a>跑隱藏的矩陣走訪程式產生存取紀錄,交給你的快取模擬器重播;
+          Boss 戰「效能挑戰」:你的 cachesim 對分塊版矩陣乘法的紀錄要報出和參考相同的命中率;任務線 soc 的任務「快取控制器」:你用 Verilog 寫的快取,測試拿你的 cachesim 當參考模型(IC 路線的 SoC 章)。</p>
+          <p class="lab-rule">這個零件過關之後,後面的專題一律用你自己的版本。規則見<a href="00-about.html#lab-rules">零件庫規則</a>。</p>
+        </div>
+      </div>
+
+
       <h2>把這一章串起來</h2>
       <p>
         {{ch:21-cpu-machine-language}}我們造了一台「能跑」的 CPU;這一章,我們看清了工程師如何讓它「跑得飛快」。回顧這趟旅程的路標:

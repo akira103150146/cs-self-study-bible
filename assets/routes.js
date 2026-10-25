@@ -78,6 +78,7 @@ window.BOOK_ROUTES = [
       "20-combinational-sequential",
       "21-cpu-machine-language",
       "22-assembler",
+      "135-riscv-assembly",
       "48-computer-architecture"
     ]
   },

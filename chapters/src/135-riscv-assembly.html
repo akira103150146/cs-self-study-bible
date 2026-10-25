@@ -1,0 +1,2142 @@
+<!--meta
+title: RISC-V 組合語言:RV32I 指令格式、暫存器慣例與呼叫約定
+description: 從 Hack 走到真實世界的指令集:RV32I 的 32 個暫存器與 ABI 名稱、R/I/S/B/U/J 六種指令格式與位元配置、立即值的符號延伸與 B/J 型打散的位元、lui/auipc 與 li/la 假指令、載入與儲存、分支與跳躍、呼叫約定與堆疊框(遞迴 fib)、ecall 與記憶體映射 I/O,以及一個只認 13 條指令的 Python 迷你模擬器。附指令編碼、解碼、暫存器追蹤與堆疊框的手算。
+-->
+      <div class="eyebrow">{{part:135-riscv-assembly}}</div>
+      <h1>RISC-V 組合語言:RV32I 指令格式、暫存器慣例與呼叫約定</h1>
+      <p class="subtitle">Hack 只有兩種指令、兩個暫存器。真實的 CPU 有 32 個暫存器、六種指令格式,還有一套「誰負責保存什麼」的約定。這一章用 RISC-V 把這些一次講清楚。</p>
+      <div class="byline">
+        <span class="tag">{{ch:135-riscv-assembly}}</span>
+        <span>閱讀時間 ≈ 100 分鐘</span>
+        <span>難度:★★★★☆</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>RV32I 的 32 個暫存器、它們的 ABI 名稱(<code>zero</code>、<code>ra</code>、<code>sp</code>、<code>a0</code>…),以及哪些在函式呼叫之後還保證不變</li>
+          <li>R、I、S、B、U、J 六種指令格式的位元配置,能用手把一條指令編成十六進位,也能把十六進位解回指令</li>
+          <li>立即值怎麼做符號延伸,為什麼 B 型與 J 型的位元被「打散」,以及分支的位移量是以位元組計、從分支指令自己的位址算起</li>
+          <li><code>lui</code>、<code>auipc</code> 怎麼和 <code>addi</code> 合作組出任何 32 位元常數,以及 <code>li</code>、<code>la</code>、<code>call</code>、<code>ret</code> 這些假指令背後是哪幾條真指令</li>
+          <li>位元組、半字、字的載入與儲存,有號與無號的差別,以及小端序</li>
+          <li>RISC-V 的呼叫約定:參數與回傳值放哪、<code>s</code> 暫存器誰保存、<code>t</code> 暫存器為什麼不能信、堆疊框怎麼開怎麼收</li>
+          <li>用 <code>ecall</code> 和記憶體映射 I/O 印字、結束程式</li>
+          <li>一個指令集模擬器的骨架長什麼樣子:取指令 → 解碼 → 執行 → 寫回</li>
+        </ul>
+      </div>
+
+      <h2>為什麼在 Hack 之後還要學 RISC-V</h2>
+      <p>
+        你在<a href="21-cpu-machine-language.html">{{ch:21-cpu-machine-language}}</a>學過 Hack:16 位元的指令,只有 A 指令和 C 指令,只有 A、D 兩個暫存器。
+        它小到可以從 NAND 閘一路蓋出來。這是它最大的優點。
+      </p>
+      <p>
+        但是 Hack 少了很多真實 CPU 一定有的東西。它沒有「呼叫函式」的指令,也沒有堆疊;記憶體一格就是 16 位元,沒有位元組;
+        常數最多 15 位元;它也沒有一套「大家都遵守的約定」,讓 A 寫的函式可以被 B 呼叫。
+        這些東西,在你讀編譯器的輸出、寫模擬器、設計 CPU、做逆向工程的時候,每天都會碰到。
+      </p>
+      <p>
+        <strong>RISC-V</strong>(唸作 risk-five)是 2010 年從加州大學柏克萊分校開始的開放指令集。任何人都可以免費實作它,不用付授權費。
+        它的基本整數指令集 <strong>RV32I</strong> 只有 40 條指令(37 條運算、載入儲存與分支跳躍,加上 <code>fence</code>、<code>ecall</code>、<code>ebreak</code>),
+        小到一個學期就能做出一顆 CPU,但它又是真的:ESP32-C3 這類微控制器用的就是 RISC-V 核心,很多晶片裡負責管理工作的小核心也是。
+      </p>
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">為什麼要學</span>
+          <p>這一章是任務線「rv32」(RISC-V:自己的指令集模擬器＋效能挑戰)的起點。本章有兩個 Lab:先用 RV32I 寫幾支遵守呼叫約定的函式,再用 Python 寫一個完整的指令集模擬器(含反組譯)。
+          之後會用到它的地方:{{ch:48-computer-architecture}}的快取模擬器要重播你的模擬器產生的存取紀錄;IC 路線設計 RV32I CPU 時,你的模擬器就是 cocotb 測試的參考模型(ALU、解碼器、逐條比對);
+          資安路線讀組合語言、做逆向題時,反組譯器就是你的工具。</p>
+        </div>
+      </div>
+      <p>
+        這一章的計畫是這樣的:先認識暫存器,寫出第一支程式,看工具鏈把它變成數字;然後把六種指令格式拆開,一位元一位元地編碼、解碼;
+        接著學載入儲存、分支、呼叫約定,用一個遞迴的費氏數列看堆疊框怎麼長、怎麼縮;最後用 Python 寫一個只認 13 條指令的迷你模擬器,
+        讓你看到「CPU 一步一步在做什麼」。
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th></th><th>Hack({{ch:21-cpu-machine-language}})</th><th>RV32I(本章)</th></tr></thead>
+        <tbody>
+          <tr><td>指令長度</td><td>16 位元</td><td>32 位元</td></tr>
+          <tr><td>暫存器</td><td>A、D(加上 M = RAM[A])</td><td>x0–x31,共 32 個,每個 32 位元(x0 永遠是 0)</td></tr>
+          <tr><td>記憶體單位</td><td>一格 16 位元的字</td><td>一格 1 個位元組(byte),可以讀寫 1、2、4 個位元組</td></tr>
+          <tr><td>運算的來源</td><td>D 與 A(或 M)</td><td>任兩個暫存器,或一個暫存器加一個常數</td></tr>
+          <tr><td>載入常數</td><td><code>@值</code>(15 位元)</td><td><code>addi</code>(12 位元)＋<code>lui</code>(高 20 位元)</td></tr>
+          <tr><td>跳躍</td><td>依 ALU 結果跳到 A</td><td>比較兩個暫存器再跳(相對位址);<code>jal</code>/<code>jalr</code> 會把返回位址存起來</td></tr>
+          <tr><td>函式呼叫</td><td>沒有(要自己用 RAM 模擬)</td><td><code>jal</code>/<code>jalr</code> ＋呼叫約定＋堆疊</td></tr>
+          <tr><td>I/O</td><td>記憶體映射(SCREEN、KBD)</td><td>記憶體映射,或 <code>ecall</code> 請環境幫忙</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        學新的指令集有一個好消息:<a href="21-cpu-machine-language.html">{{ch:21-cpu-machine-language}}</a>的「取指 → 解碼 → 執行」、
+        <a href="22-assembler.html">{{ch:22-assembler}}</a>的「組譯就是查表加算位址」,在這裡全部照用。換掉的只是表的內容。
+      </p>
+
+      <h2>32 個暫存器與它們的 ABI 名稱</h2>
+      <p>
+        RV32I 有 32 個整數暫存器,硬體上的名字是 <code>x0</code> 到 <code>x31</code>,每個 32 位元。對硬體來說,除了 <code>x0</code>,它們完全一樣:
+        任何指令都可以讀寫任何暫存器。<code>x0</code> 很特別:讀它永遠得到 0,寫它的值直接丟掉。
+      </p>
+      <p>
+        既然硬體不在乎,為什麼還要分工?因為<strong>程式不是一個人寫的</strong>。你的函式會呼叫別人寫的函式,編譯器產生的程式要和手寫的組合語言接在一起。
+        大家要先說好「參數放在哪個暫存器」「誰可以隨便改哪個暫存器」。這份約定叫做 <strong>ABI</strong>(application binary interface,應用程式二進位介面)。
+        為了方便記,每個暫存器都有一個照用途取的 <strong>ABI 名稱</strong>。寫組合語言時大家都用 ABI 名稱,反組譯器(像 <code>objdump</code>)也預設印 ABI 名稱。
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>暫存器</th><th>ABI 名稱</th><th>用途</th><th>呼叫一個函式之後,值還在嗎?</th></tr></thead>
+        <tbody>
+          <tr><td><code>x0</code></td><td><code>zero</code></td><td>永遠是 0</td><td>(永遠是 0)</td></tr>
+          <tr><td><code>x1</code></td><td><code>ra</code></td><td>返回位址(return address)</td><td>不保證:每次 <code>jal ra</code> 都會蓋掉它</td></tr>
+          <tr><td><code>x2</code></td><td><code>sp</code></td><td>堆疊指標(stack pointer)</td><td>保證:被呼叫的函式要把它還原</td></tr>
+          <tr><td><code>x3</code></td><td><code>gp</code></td><td>全域指標(global pointer)</td><td>保證:一般程式不要動它</td></tr>
+          <tr><td><code>x4</code></td><td><code>tp</code></td><td>執行緒指標(thread pointer)</td><td>保證:一般程式不要動它</td></tr>
+          <tr><td><code>x5</code>–<code>x7</code></td><td><code>t0</code>–<code>t2</code></td><td>暫存(temporary)</td><td>不保證</td></tr>
+          <tr><td><code>x8</code></td><td><code>s0</code>/<code>fp</code></td><td>保存暫存器(saved);也可以當框指標(frame pointer)</td><td>保證</td></tr>
+          <tr><td><code>x9</code></td><td><code>s1</code></td><td>保存暫存器</td><td>保證</td></tr>
+          <tr><td><code>x10</code>–<code>x11</code></td><td><code>a0</code>–<code>a1</code></td><td>參數(argument)與回傳值</td><td>不保證</td></tr>
+          <tr><td><code>x12</code>–<code>x17</code></td><td><code>a2</code>–<code>a7</code></td><td>參數;<code>a7</code> 也放 <code>ecall</code> 的編號</td><td>不保證</td></tr>
+          <tr><td><code>x18</code>–<code>x27</code></td><td><code>s2</code>–<code>s11</code></td><td>保存暫存器</td><td>保證</td></tr>
+          <tr><td><code>x28</code>–<code>x31</code></td><td><code>t3</code>–<code>t6</code></td><td>暫存</td><td>不保證</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        最右欄是整章最重要的一欄,我們在後面的呼叫約定一節會詳細講。現在先記住口訣:<strong>s 是 saved(會被保存),t 是 temporary(隨時會被改),a 是 argument(參數,也會被改)</strong>。
+        暫存器編號要背嗎?寫程式不必,但手算編碼時要用:<code>a0</code> 是 10、<code>sp</code> 是 2、<code>s0</code> 是 8、<code>t0</code> 是 5、<code>ra</code> 是 1,這幾個最常見。
+      </p>
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">核心觀念</span>
+          <p>硬體只有 x0–x31,而且除了 x0 都一樣。<code>a0</code>、<code>sp</code>、<code>s0</code> 這些名字和它們的分工全部是<strong>軟體的約定</strong>。約定不會自己執行:遵不遵守,是寫程式的人(和編譯器)的責任。</p>
+        </div>
+      </div>
+
+      <h2>第一支程式:組譯、連結、反組譯</h2>
+      <p>先看一支完整的程式。它印出一段字串、一個整數和一個換行,然後結束:</p>
+<pre><code class="language-text">    .text
+    .globl _start
+_start:
+    la   a0, msg        # a0 = 字串的位址
+    li   a7, 4          # 4 = print_string
+    ecall
+    li   a0, 42
+    li   a7, 1          # 1 = print_int
+    ecall
+    li   a0, 10         # 10 = '\n'
+    li   a7, 11         # 11 = print_char
+    ecall
+    li   a0, 0
+    li   a7, 93         # 93 = exit(a0)
+    ecall
+
+    .data
+msg:
+    .string "answer = "</code></pre>
+      <p>一行一行看:</p>
+      <ul>
+        <li><code>.text</code>、<code>.data</code>:<strong>組譯器指引(assembler directive)</strong>,以點開頭,不是指令。它們告訴組譯器「接下來的東西放在程式區」或「放在資料區」。</li>
+        <li><code>.globl _start</code>:把 <code>_start</code> 這個標籤匯出,連結器要知道程式從哪裡開始。</li>
+        <li><code>_start:</code>、<code>msg:</code>:<strong>標籤(label)</strong>,代表一個位址。和 Hack 的 <code>(LOOP)</code> 一樣。</li>
+        <li><code>la</code>、<code>li</code>:假指令(pseudo-instruction),組譯器會把它們換成一到兩條真指令。後面有一節專門講。</li>
+        <li><code>ecall</code>:環境呼叫(environment call)。照 <code>a7</code> 的編號請執行環境(模擬器或作業系統)做事。這裡用到 4(印字串)、1(印整數)、11(印字元)、93(結束)。</li>
+        <li><code>.string "answer = "</code>:在資料區放一串位元組,最後自動補一個 0(NUL)。</li>
+        <li><code>#</code> 後面是註解。</li>
+      </ul>
+      <p>
+        要把它變成機器碼,需要 RISC-V 的交叉工具鏈(cross toolchain)。在 Debian 或 Ubuntu 上可以用 <code>sudo apt install gcc-riscv64-unknown-elf</code> 安裝(會一起裝 binutils)。
+        名字裡雖然有 64,加上 <code>-march=rv32i -mabi=ilp32</code> 就會產生 32 位元的 RV32I 程式。<code>ilp32</code> 的意思是 int、long、指標(pointer)都是 32 位元。
+        另外準備一個連結腳本(linker script),讓程式從位址 0 開始放:
+      </p>
+<pre><code class="language-text">ENTRY(_start)
+SECTIONS
+{
+  . = 0x0;                 /* 程式從位址 0 開始放 */
+  .text : { *(.text*) }
+  .data : { *(.data*) *(.rodata*) *(.sdata*) }
+  .bss  : { *(.bss*) *(.sbss*) }
+}</code></pre>
+<pre><code class="language-bash">riscv64-unknown-elf-as -march=rv32i -mabi=ilp32 hello.s -o hello.o          # 組譯
+riscv64-unknown-elf-ld -m elf32lriscv -T link.ld --no-relax hello.o -o hello.elf   # 連結
+riscv64-unknown-elf-objdump -d -M no-aliases hello.elf                      # 反組譯
+riscv64-unknown-elf-objcopy -O binary hello.elf hello.bin                   # 只留下位元組
+od -An -tx4 -w4 -v hello.bin | tr -d ' '                                    # 每行印一個 32 位元字</code></pre>
+      <p>反組譯的結果(<code>-M no-aliases</code> 叫它印真指令,不要印假指令的名字):</p>
+<pre><code class="language-text">00000000 &lt;_start&gt;:
+   0:   00000517                auipc   a0,0x0
+   4:   03450513                addi    a0,a0,52 # 34 &lt;msg&gt;
+   8:   00400893                addi    a7,zero,4
+   c:   00000073                ecall
+  10:   02a00513                addi    a0,zero,42
+  14:   00100893                addi    a7,zero,1
+  18:   00000073                ecall
+  1c:   00a00513                addi    a0,zero,10
+  20:   00b00893                addi    a7,zero,11
+  24:   00000073                ecall
+  28:   00000513                addi    a0,zero,0
+  2c:   05d00893                addi    a7,zero,93
+  30:   00000073                ecall</code></pre>
+      <p>最後一行指令的位址是 <code>0x30</code>,所以字串 <code>msg</code> 從 <code>0x34</code> 開始。<code>od</code> 印出整個檔案的 16 個字:</p>
+<pre><code class="language-text">00000517
+03450513
+00400893
+00000073
+02a00513
+00100893
+00000073
+00a00513
+00b00893
+00000073
+00000513
+05d00893
+00000073
+77736e61
+3d207265
+00000020</code></pre>
+      <p>
+        前 13 個是指令,後 3 個是字串 <code>"answer = "</code> 的 10 個位元組(含 NUL,最後補 0 湊滿一個字)。
+        注意 <code>0x77736e61</code>:字串開頭是 <code>a</code>(0x61)、<code>n</code>(0x6e)、<code>s</code>(0x73)、<code>w</code>(0x77),
+        但印成一個字的時候順序是反過來的。這就是<strong>小端序(little-endian)</strong>:低位址放低位元組。RISC-V 是小端序。
+        (<code>od -tx4</code> 用你電腦的位元組順序來讀;x86 與 Apple Silicon 都是小端序,所以結果剛好正確。)
+      </p>
+      <p>
+        把這些字放進一個 RV32I 模擬器(例如 Ripes,或你在本章 Lab 自己寫的模擬器)從位址 0 開始執行,console 會印出:
+      </p>
+<pre><code class="language-text">answer = 42</code></pre>
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">連結器的「放鬆」(relaxation)</span>
+          <p>上面的連結指令加了 <code>--no-relax</code>。如果不加,連結器發現 <code>msg</code> 的位址很小(0x30),會把 <code>la a0, msg</code> 的兩條指令縮成一條 <code>addi a0, zero, 48</code>,
+          <code>call</code> 也常被縮成一條 <code>jal</code>。這叫連結器放鬆,能讓程式變小變快,但會讓「原始碼的第幾行對到第幾個字」變得不好追。本章為了方便手算,一律加 <code>--no-relax</code>;
+          用 gcc 編出來的程式通常會放鬆,讀反組譯時看到的指令可能比原始碼少。</p>
+        </div>
+      </div>
+
+      <h2>六種指令格式:R、I、S、B、U、J</h2>
+      <p>
+        每一條 RV32I 指令都是 32 位元。最低 7 位元是 <strong>opcode</strong>,決定大類(運算、載入、儲存、分支…)。剩下的 25 位元怎麼切,共有六種切法,叫做<strong>指令格式</strong>:
+      </p>
+      <div class="diagram">
+<svg viewBox="0 0 730 352" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="80" y="26" text-anchor="middle" font-size="10" fill="#8a929b">31</text>
+  <text x="200" y="26" text-anchor="middle" font-size="10" fill="#8a929b">25</text>
+  <text x="220" y="26" text-anchor="middle" font-size="10" fill="#8a929b">24</text>
+  <text x="300" y="26" text-anchor="middle" font-size="10" fill="#8a929b">20</text>
+  <text x="320" y="26" text-anchor="middle" font-size="10" fill="#8a929b">19</text>
+  <text x="400" y="26" text-anchor="middle" font-size="10" fill="#8a929b">15</text>
+  <text x="420" y="26" text-anchor="middle" font-size="10" fill="#8a929b">14</text>
+  <text x="460" y="26" text-anchor="middle" font-size="10" fill="#8a929b">12</text>
+  <text x="480" y="26" text-anchor="middle" font-size="10" fill="#8a929b">11</text>
+  <text x="560" y="26" text-anchor="middle" font-size="10" fill="#8a929b">7</text>
+  <text x="580" y="26" text-anchor="middle" font-size="10" fill="#8a929b">6</text>
+  <text x="700" y="26" text-anchor="middle" font-size="10" fill="#8a929b">0</text>
+  <text x="29" y="56" text-anchor="middle" font-size="15" font-weight="800" fill="#1f2328">R</text>
+  <rect x="70" y="34" width="140" height="34" fill="#f1f2f4" stroke="#8a929b"/>
+  <text x="140" y="55" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2328">funct7</text>
+  <rect x="210" y="34" width="100" height="34" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="260" y="55" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2328">rs2</text>
+  <rect x="310" y="34" width="100" height="34" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="360" y="55" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2328">rs1</text>
+  <rect x="410" y="34" width="60" height="34" fill="#f1f2f4" stroke="#8a929b"/>
+  <text x="440" y="55" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2328">funct3</text>
+  <rect x="470" y="34" width="100" height="34" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="520" y="55" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2328">rd</text>
+  <rect x="570" y="34" width="140" height="34" fill="#f1f2f4" stroke="#8a929b"/>
+  <text x="640" y="55" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2328">opcode</text>
+  <text x="29" y="104" text-anchor="middle" font-size="15" font-weight="800" fill="#1f2328">I</text>
+  <rect x="70" y="82" width="240" height="34" fill="#f6e7dd" stroke="#b4541f"/>
+  <text x="190" y="103" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2328">imm[11:0]</text>
+  <rect x="310" y="82" width="100" height="34" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="360" y="103" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2328">rs1</text>
+  <rect x="410" y="82" width="60" height="34" fill="#f1f2f4" stroke="#8a929b"/>
+  <text x="440" y="103" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2328">funct3</text>
+  <rect x="470" y="82" width="100" height="34" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="520" y="103" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2328">rd</text>
+  <rect x="570" y="82" width="140" height="34" fill="#f1f2f4" stroke="#8a929b"/>
+  <text x="640" y="103" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2328">opcode</text>
+  <text x="29" y="152" text-anchor="middle" font-size="15" font-weight="800" fill="#1f2328">S</text>
+  <rect x="70" y="130" width="140" height="34" fill="#f6e7dd" stroke="#b4541f"/>
+  <text x="140" y="151" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2328">imm[11:5]</text>
+  <rect x="210" y="130" width="100" height="34" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="260" y="151" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2328">rs2</text>
+  <rect x="310" y="130" width="100" height="34" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="360" y="151" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2328">rs1</text>
+  <rect x="410" y="130" width="60" height="34" fill="#f1f2f4" stroke="#8a929b"/>
+  <text x="440" y="151" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2328">funct3</text>
+  <rect x="470" y="130" width="100" height="34" fill="#f6e7dd" stroke="#b4541f"/>
+  <text x="520" y="151" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2328">imm[4:0]</text>
+  <rect x="570" y="130" width="140" height="34" fill="#f1f2f4" stroke="#8a929b"/>
+  <text x="640" y="151" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2328">opcode</text>
+  <text x="29" y="200" text-anchor="middle" font-size="15" font-weight="800" fill="#1f2328">B</text>
+  <rect x="70" y="178" width="140" height="34" fill="#f6e7dd" stroke="#b4541f"/>
+  <text x="140" y="199" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2328">imm[12|10:5]</text>
+  <rect x="210" y="178" width="100" height="34" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="260" y="199" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2328">rs2</text>
+  <rect x="310" y="178" width="100" height="34" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="360" y="199" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2328">rs1</text>
+  <rect x="410" y="178" width="60" height="34" fill="#f1f2f4" stroke="#8a929b"/>
+  <text x="440" y="199" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2328">funct3</text>
+  <rect x="470" y="178" width="100" height="34" fill="#f6e7dd" stroke="#b4541f"/>
+  <text x="520" y="199" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2328">imm[4:1|11]</text>
+  <rect x="570" y="178" width="140" height="34" fill="#f1f2f4" stroke="#8a929b"/>
+  <text x="640" y="199" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2328">opcode</text>
+  <text x="29" y="248" text-anchor="middle" font-size="15" font-weight="800" fill="#1f2328">U</text>
+  <rect x="70" y="226" width="400" height="34" fill="#f6e7dd" stroke="#b4541f"/>
+  <text x="270" y="247" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2328">imm[31:12]</text>
+  <rect x="470" y="226" width="100" height="34" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="520" y="247" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2328">rd</text>
+  <rect x="570" y="226" width="140" height="34" fill="#f1f2f4" stroke="#8a929b"/>
+  <text x="640" y="247" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2328">opcode</text>
+  <text x="29" y="296" text-anchor="middle" font-size="15" font-weight="800" fill="#1f2328">J</text>
+  <rect x="70" y="274" width="400" height="34" fill="#f6e7dd" stroke="#b4541f"/>
+  <text x="270" y="295" text-anchor="middle" font-size="10.5" font-weight="700" fill="#1f2328">imm[20|10:1|11|19:12]</text>
+  <rect x="470" y="274" width="100" height="34" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="520" y="295" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2328">rd</text>
+  <rect x="570" y="274" width="140" height="34" fill="#f1f2f4" stroke="#8a929b"/>
+  <text x="640" y="295" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2328">opcode</text>
+  <rect x="70" y="328" width="14" height="14" fill="#f6e7dd" stroke="#b4541f"/>
+  <text x="90" y="339" font-size="11" fill="#1f2328">立即值的位元</text>
+  <rect x="260" y="328" width="14" height="14" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="280" y="339" font-size="11" fill="#1f2328">暫存器編號(5 位元)</text>
+  <rect x="450" y="328" width="14" height="14" fill="#f1f2f4" stroke="#8a929b"/>
+  <text x="470" y="339" font-size="11" fill="#1f2328">opcode／funct:決定是哪一條指令</text>
+</svg>
+        <figcaption>圖 135-1:RV32I 的六種指令格式。上方數字是位元編號(31 在最左邊)。同色的欄位在不同格式裡盡量放在同一個位置。</figcaption>
+      </div>
+      <p>同一張圖的文字版(每一格寫「位元範圍:欄位」):</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>格式</th><th>31–25</th><th>24–20</th><th>19–15</th><th>14–12</th><th>11–7</th><th>6–0</th><th>用在</th></tr></thead>
+        <tbody>
+          <tr><td>R</td><td>funct7</td><td>rs2</td><td>rs1</td><td>funct3</td><td>rd</td><td>opcode</td><td>兩個暫存器運算:<code>add</code>、<code>sub</code>、<code>slt</code>…</td></tr>
+          <tr><td>I</td><td colspan="2">imm[11:0]</td><td>rs1</td><td>funct3</td><td>rd</td><td>opcode</td><td>暫存器加常數、載入、<code>jalr</code></td></tr>
+          <tr><td>S</td><td>imm[11:5]</td><td>rs2</td><td>rs1</td><td>funct3</td><td>imm[4:0]</td><td>opcode</td><td>儲存:<code>sb</code>、<code>sh</code>、<code>sw</code></td></tr>
+          <tr><td>B</td><td>imm[12|10:5]</td><td>rs2</td><td>rs1</td><td>funct3</td><td>imm[4:1|11]</td><td>opcode</td><td>條件分支:<code>beq</code>、<code>blt</code>…</td></tr>
+          <tr><td>U</td><td colspan="4">imm[31:12](位元 31–12)</td><td>rd</td><td>opcode</td><td><code>lui</code>、<code>auipc</code></td></tr>
+          <tr><td>J</td><td colspan="4">imm[20|10:1|11|19:12](位元 31–12)</td><td>rd</td><td>opcode</td><td><code>jal</code></td></tr>
+        </tbody>
+      </table></div>
+      <p>先看幾個一眼就能看出的設計:</p>
+      <ul>
+        <li><strong>rd、rs1、rs2 永遠在同一個位置</strong>(有的話)。rd 在 11–7、rs1 在 19–15、rs2 在 24–20。硬體可以在還不知道是哪條指令之前,就先去讀暫存器。</li>
+        <li><strong>暫存器編號都是 5 位元</strong>,剛好表示 0–31。</li>
+        <li><strong>立即值(immediate)的最高位(符號位)永遠在位元 31</strong>。不管哪種格式,符號延伸都看同一個位元。</li>
+        <li>S 型沒有 rd(儲存不寫暫存器),所以把原本 rd 的位置拿來放立即值的低 5 位元;B 型同理。</li>
+      </ul>
+
+      <h3>RV32I 的 40 條指令一覽</h3>
+      <p>
+        opcode 決定大類,<code>funct3</code>(3 位元)再分小類,少數指令還要看 <code>funct7</code>(7 位元)。
+        下表是 RV32I 全部的指令。它就是組譯器要查的表,也是模擬器解碼要用的表:
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>opcode</th><th>格式</th><th>指令與 funct3(funct7)</th><th>做什麼</th></tr></thead>
+        <tbody>
+          <tr><td><code>0110111</code>(0x37)</td><td>U</td><td><code>lui</code></td><td>rd = imm(低 12 位元是 0)</td></tr>
+          <tr><td><code>0010111</code>(0x17)</td><td>U</td><td><code>auipc</code></td><td>rd = pc + imm</td></tr>
+          <tr><td><code>1101111</code>(0x6F)</td><td>J</td><td><code>jal</code></td><td>rd = pc + 4;pc = pc + imm</td></tr>
+          <tr><td><code>1100111</code>(0x67)</td><td>I</td><td><code>jalr</code> 000</td><td>rd = pc + 4;pc = (rs1 + imm),再把最低位清成 0</td></tr>
+          <tr><td><code>1100011</code>(0x63)</td><td>B</td><td><code>beq</code> 000、<code>bne</code> 001、<code>blt</code> 100、<code>bge</code> 101、<code>bltu</code> 110、<code>bgeu</code> 111</td><td>條件成立就 pc = pc + imm</td></tr>
+          <tr><td><code>0000011</code>(0x03)</td><td>I</td><td><code>lb</code> 000、<code>lh</code> 001、<code>lw</code> 010、<code>lbu</code> 100、<code>lhu</code> 101</td><td>rd = 記憶體[rs1 + imm]</td></tr>
+          <tr><td><code>0100011</code>(0x23)</td><td>S</td><td><code>sb</code> 000、<code>sh</code> 001、<code>sw</code> 010</td><td>記憶體[rs1 + imm] = rs2</td></tr>
+          <tr><td><code>0010011</code>(0x13)</td><td>I</td><td><code>addi</code> 000、<code>slti</code> 010、<code>sltiu</code> 011、<code>xori</code> 100、<code>ori</code> 110、<code>andi</code> 111;<code>slli</code> 001(0000000)、<code>srli</code> 101(0000000)、<code>srai</code> 101(0100000)</td><td>rd = rs1 運算 imm;移位的量 shamt 放在 imm 的低 5 位元</td></tr>
+          <tr><td><code>0110011</code>(0x33)</td><td>R</td><td><code>add</code> 000(0000000)、<code>sub</code> 000(0100000)、<code>sll</code> 001、<code>slt</code> 010、<code>sltu</code> 011、<code>xor</code> 100、<code>srl</code> 101(0000000)、<code>sra</code> 101(0100000)、<code>or</code> 110、<code>and</code> 111</td><td>rd = rs1 運算 rs2;沒寫 funct7 的都是 0000000</td></tr>
+          <tr><td><code>0001111</code>(0x0F)</td><td>I</td><td><code>fence</code> 000</td><td>記憶體存取的順序(單核心模擬器什麼都不做)</td></tr>
+          <tr><td><code>1110011</code>(0x73)</td><td>I</td><td><code>ecall</code>(整個字 <code>0x00000073</code>)、<code>ebreak</code>(<code>0x00100073</code>)</td><td>請執行環境幫忙;中斷點</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        <code>sub</code> 和 <code>add</code>、<code>sra</code> 和 <code>srl</code>、<code>srai</code> 和 <code>srli</code> 的 opcode 與 funct3 完全一樣,只差 funct7 的第二高位(位元 30)。
+        這是硬體設計上的巧思:位元 30 直接接到 ALU 的「減法/算術移位」控制線。
+      </p>
+
+      <h3>手算:把指令編成十六進位</h3>
+      <p>
+        編碼的步驟:(1) 查上表,找出格式、opcode、funct3、funct7;(2) 把暫存器換成編號;(3) 把立即值寫成二補數,照格式切開;
+        (4) 照位元 31 到 0 的順序排好,每 4 位元一組換成十六進位。下表每一列是一條指令,答案都用 <code>riscv64-unknown-elf-as</code> 組譯驗證過。
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>指令</th><th>格式與欄位(由高位到低位)</th><th>二進位(每 4 位元一組)</th><th>十六進位</th></tr></thead>
+        <tbody>
+          <tr><td><code>add a0, a1, a2</code></td><td>R:funct7 <code>0000000</code> · rs2 = a2 = 12 <code>01100</code> · rs1 = a1 = 11 <code>01011</code> · funct3 <code>000</code> · rd = a0 = 10 <code>01010</code> · opcode <code>0110011</code></td><td><code>0000 0000 1100 0101 1000 0101 0011 0011</code></td><td><code>00c58533</code></td></tr>
+          <tr><td><code>addi a0, sp, -16</code></td><td>I:imm −16 = <code>111111110000</code> · rs1 = sp = 2 <code>00010</code> · <code>000</code> · rd = 10 <code>01010</code> · <code>0010011</code></td><td><code>1111 1111 0000 0001 0000 0101 0001 0011</code></td><td><code>ff010513</code></td></tr>
+          <tr><td><code>sw ra, 12(sp)</code></td><td>S:imm 12 = <code>0000000 01100</code> 切成 imm[11:5] <code>0000000</code> · rs2 = ra = 1 <code>00001</code> · rs1 = sp <code>00010</code> · <code>010</code> · imm[4:0] <code>01100</code> · <code>0100011</code></td><td><code>0000 0000 0001 0001 0010 0110 0010 0011</code></td><td><code>00112623</code></td></tr>
+          <tr><td><code>lui a0, 0x12345</code></td><td>U:imm[31:12] = <code>0x12345</code> · rd = 10 <code>01010</code> · <code>0110111</code></td><td><code>0001 0010 0011 0100 0101 0101 0011 0111</code></td><td><code>12345537</code></td></tr>
+          <tr><td><code>srai t1, t0, 3</code></td><td>I(移位):imm[11:5] <code>0100000</code> · shamt 3 <code>00011</code> · rs1 = t0 = 5 <code>00101</code> · <code>101</code> · rd = t1 = 6 <code>00110</code> · <code>0010011</code></td><td><code>0100 0000 0011 0010 1101 0011 0001 0011</code></td><td><code>4032d313</code></td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        小技巧:opcode 的 7 位元加上 rd 的最低位剛好是最右邊兩個十六進位數字。<code>0x13</code> 結尾的字幾乎都是 <code>addi</code> 這一類(rd 是偶數時),
+        <code>0x33</code> 是 R 型運算,<code>0x23</code> 是儲存,<code>0x03</code> 是載入,<code>0x63</code> 是分支,<code>0x6f</code>/<code>0xef</code> 是 <code>jal</code>(rd 是 zero 或 ra)。
+        讀久了,你看到 <code>…8067</code> 就會想到 <code>ret</code>。
+      </p>
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 135.1 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>把下面五條指令編成十六進位:(a) <code>sub s1, s2, s3</code> (b) <code>andi a0, a0, 255</code> (c) <code>lw t0, -4(s0)</code> (d) <code>sb a1, 3(a0)</code> (e) <code>sltu t2, a0, a1</code></p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <div class="table-wrap"><table>
+              <thead><tr><th>題</th><th>欄位(由高位到低位)</th><th>十六進位</th></tr></thead>
+              <tbody>
+                <tr><td>(a)</td><td>R:<code>0100000</code> · rs2 = s3 = x19 <code>10011</code> · rs1 = s2 = x18 <code>10010</code> · <code>000</code> · rd = s1 = x9 <code>01001</code> · <code>0110011</code></td><td><code>413904b3</code></td></tr>
+                <tr><td>(b)</td><td>I:imm 255 = <code>000011111111</code> · rs1 = a0 <code>01010</code> · <code>111</code> · rd = a0 <code>01010</code> · <code>0010011</code></td><td><code>0ff57513</code></td></tr>
+                <tr><td>(c)</td><td>I:imm −4 = <code>111111111100</code> · rs1 = s0 = x8 <code>01000</code> · <code>010</code> · rd = t0 = x5 <code>00101</code> · <code>0000011</code></td><td><code>ffc42283</code></td></tr>
+                <tr><td>(d)</td><td>S:imm 3 → imm[11:5] <code>0000000</code> · rs2 = a1 <code>01011</code> · rs1 = a0 <code>01010</code> · <code>000</code> · imm[4:0] <code>00011</code> · <code>0100011</code></td><td><code>00b501a3</code></td></tr>
+                <tr><td>(e)</td><td>R:<code>0000000</code> · rs2 = a1 <code>01011</code> · rs1 = a0 <code>01010</code> · <code>011</code> · rd = t2 = x7 <code>00111</code> · <code>0110011</code></td><td><code>00b533b3</code></td></tr>
+              </tbody>
+            </table></div>
+            <p>易錯點:S 型的 rs2 是「要存的值」,rs1 是「基底位址」。<code>sb a1, 3(a0)</code> 是把 a1 存到 a0+3,所以 rs2 = a1、rs1 = a0。
+            驗算方法:把五行寫進一個 <code>.s</code> 檔,用 <code>riscv64-unknown-elf-as</code> 組譯,再 <code>objdump -d</code>,中間那一欄要一模一樣。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <h3>手算:把十六進位解回指令</h3>
+      <p>
+        解碼反過來做:先把十六進位展開成 32 位元,看最低 7 位元的 opcode 決定格式,再照格式切欄位、查 funct3 與 funct7。
+        <code>objdump</code> 就是這樣做的;本章 Lab 的反組譯器也是(輸出格式另有規定)。
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>十六進位</th><th>opcode → 格式</th><th>切開</th><th>指令</th></tr></thead>
+        <tbody>
+          <tr><td><code>00a12423</code></td><td><code>0100011</code> → S(儲存)</td><td>imm[11:5] <code>0000000</code> · rs2 <code>01010</code> = a0 · rs1 <code>00010</code> = sp · funct3 <code>010</code> = sw · imm[4:0] <code>01000</code> → imm = 8</td><td><code>sw a0, 8(sp)</code></td></tr>
+          <tr><td><code>40b50533</code></td><td><code>0110011</code> → R</td><td>funct7 <code>0100000</code> · rs2 <code>01011</code> = a1 · rs1 <code>01010</code> = a0 · funct3 <code>000</code> → sub · rd <code>01010</code> = a0</td><td><code>sub a0, a0, a1</code></td></tr>
+          <tr><td><code>fff00293</code></td><td><code>0010011</code> → I</td><td>imm <code>111111111111</code> = −1 · rs1 <code>00000</code> = zero · funct3 <code>000</code> = addi · rd <code>00101</code> = t0</td><td><code>addi t0, zero, -1</code>(就是 <code>li t0, -1</code>)</td></tr>
+        </tbody>
+      </table></div>
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 135.2 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>把下面的字解回指令(寫真指令,不寫假指令):(a) <code>00c12083</code> (b) <code>0062d2b3</code> (c) <code>4062d2b3</code> (d) <code>fe842783</code> (e) <code>00f50023</code> (f) <code>02b50533</code></p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <div class="table-wrap"><table>
+              <thead><tr><th>題</th><th>切開</th><th>指令</th></tr></thead>
+              <tbody>
+                <tr><td>(a)</td><td><code>0000011</code> 載入 · imm <code>000000001100</code> = 12 · rs1 <code>00010</code> = sp · <code>010</code> = lw · rd <code>00001</code> = ra</td><td><code>lw ra, 12(sp)</code></td></tr>
+                <tr><td>(b)</td><td><code>0110011</code> R · funct7 <code>0000000</code> · rs2 <code>00110</code> = t1 · rs1 <code>00101</code> = t0 · <code>101</code> · rd <code>00101</code> = t0</td><td><code>srl t0, t0, t1</code></td></tr>
+                <tr><td>(c)</td><td>和 (b) 只差 funct7 = <code>0100000</code></td><td><code>sra t0, t0, t1</code></td></tr>
+                <tr><td>(d)</td><td><code>0000011</code> · imm <code>111111101000</code> = −24 · rs1 <code>01000</code> = s0 · <code>010</code> · rd <code>01111</code> = a5</td><td><code>lw a5, -24(s0)</code></td></tr>
+                <tr><td>(e)</td><td><code>0100011</code> S · imm[11:5] <code>0000000</code> · rs2 <code>01111</code> = a5 · rs1 <code>01010</code> = a0 · <code>000</code> = sb · imm[4:0] <code>00000</code></td><td><code>sb a5, 0(a0)</code></td></tr>
+                <tr><td>(f)</td><td><code>0110011</code> R · funct7 <code>0000001</code> · rs2 = a1 · rs1 = a0 · <code>000</code> · rd = a0</td><td>RV32I 裡<strong>沒有</strong>這條指令</td></tr>
+              </tbody>
+            </table></div>
+            <p>(f) 是陷阱。funct7 = <code>0000001</code> 是 M 擴充(乘除法)的 <code>mul a0, a0, a1</code>。只支援 RV32I 的 CPU 或模擬器遇到它,要當成非法指令(illegal instruction)。
+            用 <code>-march=rv32i</code> 組譯 <code>mul</code>,組譯器會直接拒絕:</p>
+<pre><code class="language-text">Error: unrecognized opcode `mul a0,a1,a2', extension `m' or `zmmul' required</code></pre>
+          </div></details>
+        </div>
+      </div>
+
+      <h2>立即值:符號延伸與 B、J 型的「打散」位元</h2>
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">為什麼要學</span>
+          <p>立即值是解碼器最容易寫錯、測試最容易漏掉的地方。本章 Lab 的模擬器有一組隱藏檢定專門測每種格式立即值的極端值(I/S 型 −2048 與 2047、B 型 ±4 KiB、J 型 ±1 MiB);
+          IC 路線設計 CPU 時,立即值產生器(immediate generator)是單獨的一個零件,要和你的模擬器的解碼結果逐一比對。</p>
+        </div>
+      </div>
+      <p>
+        立即值在指令裡只有 12 或 20 位元,但暫存器是 32 位元。要把短的數字變長,就要做<strong>符號延伸(sign extension)</strong>:
+        把最高位(符號位)複製到所有新增的位元。這樣 12 位元的 <code>111111110000</code>(−16)延伸成 32 位元的 <code>0xFFFFFFF0</code>,還是 −16;
+        <code>000000001100</code>(12)延伸成 <code>0x0000000C</code>,還是 12。二補數的細節見<a href="20-combinational-sequential.html">{{ch:20-combinational-sequential}}</a>。
+      </p>
+      <p>
+        RV32I 的規則很簡單:<strong>所有立即值都做符號延伸,而且符號位一律是指令的位元 31</strong>。
+        (唯一的例外是移位量 shamt,它只有 5 位元,不延伸。<code>sltiu</code> 也是先符號延伸,再當成無號數比較。)
+      </p>
+      <p>各格式的立即值長度與範圍:</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>格式</th><th>立即值</th><th>範圍</th><th>說明</th></tr></thead>
+        <tbody>
+          <tr><td>I、S</td><td>12 位元</td><td>−2048 到 2047</td><td><code>addi</code> 的常數、載入儲存的位移</td></tr>
+          <tr><td>B</td><td>13 位元,最低位固定是 0</td><td>−4096 到 4094(位元組)</td><td>分支能跳 ±4 KiB</td></tr>
+          <tr><td>U</td><td>32 位元,低 12 位固定是 0</td><td>高 20 位元任意</td><td><code>lui</code>、<code>auipc</code></td></tr>
+          <tr><td>J</td><td>21 位元,最低位固定是 0</td><td>−1048576 到 1048574(位元組)</td><td><code>jal</code> 能跳 ±1 MiB</td></tr>
+        </tbody>
+      </table></div>
+
+      <h3>B 型與 J 型為什麼要打散位元</h3>
+      <p>
+        看圖 135-1 的 B 型:立即值的第 12 位放在指令位元 31,第 10–5 位放在 30–25,第 4–1 位放在 11–8,第 11 位卻跑到位元 7。
+        J 型更亂:位元 31 是 imm[20],30–21 是 imm[10:1],20 是 imm[11],19–12 是 imm[19:12]。為什麼不照順序放?
+      </p>
+      <p>
+        因為設計的目標是<strong>讓硬體簡單</strong>,不是讓人好讀。把每種格式的立即值位元對齊來看:
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>指令位元</th><th>31</th><th>30–25</th><th>24–21</th><th>20</th><th>19–12</th><th>11–8</th><th>7</th></tr></thead>
+        <tbody>
+          <tr><td>I</td><td>imm[11]</td><td>imm[10:5]</td><td>imm[4:1]</td><td>imm[0]</td><td>(rs1、funct3)</td><td colspan="2">(rd)</td></tr>
+          <tr><td>S</td><td>imm[11]</td><td>imm[10:5]</td><td colspan="3">(rs2、rs1、funct3)</td><td>imm[4:1]</td><td>imm[0]</td></tr>
+          <tr><td>B</td><td>imm[12]</td><td>imm[10:5]</td><td colspan="3">(rs2、rs1、funct3)</td><td>imm[4:1]</td><td>imm[11]</td></tr>
+          <tr><td>U</td><td>imm[31]</td><td>imm[30:25]</td><td>imm[24:21]</td><td>imm[20]</td><td>imm[19:12]</td><td colspan="2">(rd)</td></tr>
+          <tr><td>J</td><td>imm[20]</td><td>imm[10:5]</td><td>imm[4:1]</td><td>imm[11]</td><td>imm[19:12]</td><td colspan="2">(rd)</td></tr>
+        </tbody>
+      </table></div>
+      <p>規律就出來了:</p>
+      <ul>
+        <li>imm[10:5] 在 I、S、B、J 四種格式裡<strong>都在位元 30–25</strong>;imm[4:1] 在 S、B 都在 11–8,在 I、J 都在 24–21。</li>
+        <li>B 和 J 的位移一定是偶數(最低位是 0),不必存。B 型把空出來的位元 7 拿來放 imm[11];J 型把位元 20 拿來放 imm[11]。</li>
+        <li>J 型的 imm[19:12] 和 U 型放在同一個位置。</li>
+      </ul>
+      <p>
+        結果是:立即值的每一個位元,在六種格式之間只有很少的來源可以選,硬體裡的多工器(multiplexer)可以很小,而且符號位永遠是位元 31。
+        人要多花一點力氣,換來的是每一顆 RISC-V CPU 都少一點電路。
+      </p>
+      <p>把散開的位元撿回來,寫成程式就是下面四個函式(它們等一下會用在迷你模擬器裡):</p>
+<pre><code class="language-python">def sext(value, bits):
+    """把 bits 位元寬的值做符號延伸,回傳 Python 的有號 int。"""
+    value &amp;= (1 &lt;&lt; bits) - 1
+    return value - (1 &lt;&lt; bits) if value &gt;&gt; (bits - 1) else value
+
+def imm_i(w): return sext(w &gt;&gt; 20, 12)
+def imm_s(w): return sext((w &gt;&gt; 25) &lt;&lt; 5 | (w &gt;&gt; 7) &amp; 0x1F, 12)
+def imm_b(w): return sext((w &gt;&gt; 31) &lt;&lt; 12 | (w &gt;&gt; 7 &amp; 1) &lt;&lt; 11
+                          | (w &gt;&gt; 25 &amp; 0x3F) &lt;&lt; 5 | (w &gt;&gt; 8 &amp; 0xF) &lt;&lt; 1, 13)
+def imm_j(w): return sext((w &gt;&gt; 31) &lt;&lt; 20 | (w &gt;&gt; 12 &amp; 0xFF) &lt;&lt; 12
+                          | (w &gt;&gt; 20 &amp; 1) &lt;&lt; 11 | (w &gt;&gt; 21 &amp; 0x3FF) &lt;&lt; 1, 21)
+
+print(imm_i(0xff010513), imm_s(0xfea42e23), imm_b(0xfeb518e3), imm_j(0xfe1ff0ef))</code></pre>
+<pre><code class="language-text">-16 -4 -16 -32</code></pre>
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">看起來對但其實錯:「B 型的立即值照 S 型的方式讀就好,反正欄位位置一樣」</span>
+          <p>B 型和 S 型的欄位位置確實一樣(都是 31–25 與 11–7)。拿往前跳的分支來測:位移 28、100、2046,用 S 型的讀法全部讀對。
+          因為往前跳不到 2 KiB 時,imm[12] 和 imm[11] 都是 0,位元 7 和位元 31 剛好都是 0。
+          但往回跳的分支,位移 −16 的 <code>feb518e3</code> 照 S 型讀會得到 −15(奇數!),−2 會讀成 −1;往前跳 2048 會讀成 1。
+          實際把 −4096 到 4094 的 4096 個偶數位移全部試過,S 型讀法只有 0 到 2046 這 1024 個是對的。
+          <strong>例子都對,不代表敘述是真的。</strong>測解碼器一定要測往回跳的分支和最大、最小的位移。</p>
+        </div>
+      </div>
+
+      <h3>手算:立即值與分支目標</h3>
+      <p>
+        分支和 <code>jal</code> 的立即值是<strong>相對於這條指令自己的位址</strong>的位移,以<strong>位元組</strong>計:目標 = 分支指令的 pc + imm。
+        下面的例子來自一個測試檔(指令放在指定的位址),答案都用組譯器驗證過。
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>指令(位址)</th><th>位移 = 目標 − pc</th><th>13 或 21 位元的二補數</th><th>放進欄位</th><th>十六進位</th></tr></thead>
+        <tbody>
+          <tr><td><code>beq t0, zero, 0x120</code>(在 0x104)</td><td>0x120 − 0x104 = 28</td><td><code>0 0 000000 1110 0</code>(imm[12] imm[11] imm[10:5] imm[4:1] imm[0])</td><td>31–25 = <code>0000000</code>(imm[12]、imm[10:5]) · rs2 <code>00000</code> · rs1 <code>00101</code> · <code>000</code> · 11–7 = <code>11100</code>(imm[4:1]、imm[11]) · <code>1100011</code></td><td><code>00028e63</code></td></tr>
+          <tr><td><code>bne a0, a1, 0xf0</code>(在 0x100)</td><td>0xf0 − 0x100 = −16</td><td><code>1 1 111111 1000 0</code></td><td>31–25 = <code>1111111</code> · rs2 <code>01011</code> · rs1 <code>01010</code> · <code>001</code> · 11–7 = <code>10001</code> · <code>1100011</code></td><td><code>feb518e3</code></td></tr>
+          <tr><td><code>jal ra, 0x20</code>(在 0x40)</td><td>0x20 − 0x40 = −32</td><td>imm[20] <code>1</code> · imm[19:12] <code>11111111</code> · imm[11] <code>1</code> · imm[10:1] <code>1111110000</code> · imm[0] 0</td><td>31 = <code>1</code> · 30–21 = <code>1111110000</code> · 20 = <code>1</code> · 19–12 = <code>11111111</code> · rd <code>00001</code> · <code>1101111</code></td><td><code>fe1ff0ef</code></td></tr>
+        </tbody>
+      </table></div>
+      <p>反過來,解碼時把各段撿回原位,做符號延伸,再加上 pc:</p>
+      <ul>
+        <li><code>ff010513</code>(I 型):位元 31–20 = <code>0xff0</code> = <code>111111110000</code>,最高位是 1,所以是 0xff0 − 0x1000 = −16。</li>
+        <li><code>fea42e23</code>(S 型 <code>sw a0, -4(s0)</code>):imm[11:5] = <code>1111111</code>、imm[4:0] = <code>11100</code>,接起來 <code>111111111100</code> = −4。</li>
+        <li><code>fe1ff0ef</code> 在 pc = 0x40:J 型撿回 −32,目標 = 0x40 − 32 = 0x20。</li>
+      </ul>
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 135.3 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>(a) <code>bge a0, a1, 0xf0</code> 放在 0x124,編成十六進位。(b) <code>bltu a2, a3, 0x120</code> 放在 0x128。(c) <code>jal ra, 0x920</code> 放在 0x120。
+          (d) 位址 0x4c 的字是 <code>fd5ff0ef</code>,它跳到哪裡?(e) 位址 0x54 的字是 <code>0080006f</code>,它是什麼指令、跳到哪裡?
+          (f) 一條 <code>beq</code> 最遠能往前跳幾個位元組?最遠能往回跳幾個?</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <div class="table-wrap"><table>
+              <thead><tr><th>題</th><th>位移與二補數</th><th>欄位</th><th>答案</th></tr></thead>
+              <tbody>
+                <tr><td>(a)</td><td>0xf0 − 0x124 = −52;13 位元 <code>1111111001100</code></td><td>31–25 = <code>1111110</code> · rs2 <code>01011</code> · rs1 <code>01010</code> · <code>101</code> · 11–7 = <code>01101</code> · <code>1100011</code></td><td><code>fcb556e3</code></td></tr>
+                <tr><td>(b)</td><td>0x120 − 0x128 = −8;<code>1111111111000</code></td><td>31–25 = <code>1111111</code> · rs2 <code>01101</code> · rs1 <code>01100</code> · <code>110</code> · 11–7 = <code>11001</code> · <code>1100011</code></td><td><code>fed66ce3</code></td></tr>
+                <tr><td>(c)</td><td>0x920 − 0x120 = 2048 = 2<sup>11</sup>;只有 imm[11] 是 1</td><td>31 = 0 · 30–21 = <code>0000000000</code> · 20 = <code>1</code> · 19–12 = <code>00000000</code> · rd <code>00001</code> · <code>1101111</code></td><td><code>001000ef</code></td></tr>
+                <tr><td>(d)</td><td>31 = 1、30–21 = <code>1111101010</code>、20 = 1、19–12 = <code>11111111</code> → imm = <code>1 11111111 1 1111101010 0</code> = −44</td><td>rd = ra</td><td><code>jal ra</code>,目標 0x4c − 44 = 0x20</td></tr>
+                <tr><td>(e)</td><td>31 = 0、30–21 = <code>0000000100</code>、20 = 0、19–12 = 0 → imm = 8</td><td>rd = zero</td><td><code>jal zero, 0x5c</code>(就是 <code>j</code>),目標 0x54 + 8 = 0x5c</td></tr>
+                <tr><td>(f)</td><td colspan="3">13 位元有號、最低位是 0:往前最多 4094 位元組,往回最多 4096 位元組。超過的話,組譯器會改用「反向分支跳過一條 <code>jal</code>」的寫法,或直接報錯。</td></tr>
+              </tbody>
+            </table></div>
+            <p>(c) 是個好例子:2048 剛好超過 12 位元有號數的範圍,所以 imm[11] 那一位「看起來像符號位」,但 J 型的符號位是 imm[20],這裡是 0,所以是正的。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <h2>大常數與位址:lui、auipc 與 li、la 假指令</h2>
+      <p>
+        <code>addi</code> 的立即值只有 12 位元。那要怎麼把 <code>0x12345678</code> 放進暫存器?答案是兩步:
+        <code>lui</code>(load upper immediate)把 20 位元放進暫存器的高 20 位、低 12 位清成 0;再用 <code>addi</code> 加上低 12 位元。
+      </p>
+<pre><code class="language-text">lui  a0, 0x12345        # a0 = 0x12345000
+addi a0, a0, 0x678      # a0 = 0x12345000 + 0x678 = 0x12345678</code></pre>
+      <p>
+        <code>auipc</code>(add upper immediate to pc)和 <code>lui</code> 很像,只是把結果再加上這條指令自己的 pc。
+        它是「和位置無關的程式」(position-independent code)的基礎:<code>auipc</code> 加 <code>addi</code> 可以算出「離我這條指令多遠的位址」,
+        不管程式被放到記憶體的哪裡都對。<code>auipc t1, 0xfffff</code> 的意思是 t1 = pc + 0xFFFFF000 = pc − 4096。
+      </p>
+      <p>
+        每次都手算 hi 和 lo 很煩,所以組譯器提供<strong>假指令</strong>:<code>li rd, 常數</code>(load immediate)與 <code>la rd, 標籤</code>(load address)。
+        組譯器會自動選一到兩條真指令。下面是 <code>riscv64-unknown-elf-as</code> 實際的展開結果:
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>假指令</th><th>組譯器產生的真指令</th></tr></thead>
+        <tbody>
+          <tr><td><code>li a0, 2047</code></td><td><code>addi a0, zero, 2047</code></td></tr>
+          <tr><td><code>li a0, -2048</code></td><td><code>addi a0, zero, -2048</code></td></tr>
+          <tr><td><code>li a0, 0x10000000</code></td><td><code>lui a0, 0x10000</code>(低 12 位是 0,一條就夠)</td></tr>
+          <tr><td><code>li a0, 0x12345678</code></td><td><code>lui a0, 0x12345</code> ＋ <code>addi a0, a0, 1656</code></td></tr>
+          <tr><td><code>li a0, 0x12345FFF</code></td><td><code>lui a0, 0x12346</code> ＋ <code>addi a0, a0, -1</code></td></tr>
+          <tr><td><code>la a0, msg</code></td><td><code>auipc a0, 0x0</code> ＋ <code>addi a0, a0, 52</code>(第一支程式裡 msg 在 0x34)</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        第五列是重點:<code>0x12345FFF</code> 的 hi 為什麼是 <code>0x12346</code>,不是 <code>0x12345</code>?
+        因為 <code>addi</code> 會把 12 位元的 <code>0xFFF</code> 符號延伸成 −1,不是 4095。如果寫 <code>lui 0x12345</code> 再 <code>addi 0xFFF</code>,
+        得到的是 0x12345000 − 1 = 0x12344FFF。所以當 lo 的最高位是 1(lo ≥ 0x800)時,hi 要先加 1,讓 <code>addi</code> 的負數把它扣回來。
+        寫成公式:$\text{lo} = \text{sext}_{12}(v \bmod 4096)$,$\text{hi} = (v - \text{lo}) / 4096 \bmod 2^{20}$,也就是 <code>hi = ((v + 0x800) &gt;&gt; 12) &amp; 0xFFFFF</code>。
+      </p>
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">看起來對但其實錯:「addi 可以載入任何 32 位元常數」</span>
+          <p><code>li a0, 5</code>、<code>li a0, -1</code>、<code>li a0, 2047</code> 都只產生一條 <code>addi</code>,你可能以為 <code>addi</code> 什麼常數都能放。
+          但它的立即值只有 12 位元,<code>addi a0, zero, 2048</code> 就組譯失敗:</p>
+<pre><code class="language-text">Error: illegal operands `addi a0,zero,2048'</code></pre>
+          <p>能用一條 <code>addi</code> 的只有 −2048 到 2047。其他常數要 <code>lui</code> 加 <code>addi</code>,而且要處理上面的「hi 加 1」。手寫 <code>lui</code>/<code>addi</code> 的人最常在這裡出錯;
+          用 <code>li</code> 讓組譯器算最安全。</p>
+        </div>
+      </div>
+      <p>
+        拆法本身可以寫成程式,而且「lui 再 addi 一定回到原來的數」可以直接寫成 <code>assert</code>:
+      </p>
+<pre><code class="language-python">import random
+
+def split_li(v):
+    """把 32 位元常數 v 拆成 lui 的 20 位元 hi 與 addi 的 12 位元有號 lo。"""
+    v &amp;= 0xFFFFFFFF
+    lo = v &amp; 0xFFF
+    if lo &gt;= 0x800:              # addi 會把這 12 位元當成負數
+        lo -= 0x1000
+    hi = ((v - lo) &gt;&gt; 12) &amp; 0xFFFFF   # 等於 ((v + 0x800) &gt;&gt; 12) &amp; 0xFFFFF
+    assert -2048 &lt;= lo &lt;= 2047
+    assert ((hi &lt;&lt; 12) + lo) &amp; 0xFFFFFFFF == v   # 不變式:lui hi 再 addi lo 一定回到 v
+    return hi, lo
+
+for v in [0x12345678, 0x12345FFF, 0x800, 0x10000004, 0x7FFFFFFF, 0xDEADBEEF, -1]:
+    hi, lo = split_li(v)
+    print(f'{v &amp; 0xFFFFFFFF:#010x} → lui {hi:#07x}, addi {lo}')
+
+for _ in range(100_000):         # 隨機抽查:不是證明,是建立信心
+    split_li(random.getrandbits(32))
+print('10 萬個隨機常數都通過')</code></pre>
+<pre><code class="language-text">0x12345678 → lui 0x12345, addi 1656
+0x12345fff → lui 0x12346, addi -1
+0x00000800 → lui 0x00001, addi -2048
+0x10000004 → lui 0x10000, addi 4
+0x7fffffff → lui 0x80000, addi -1
+0xdeadbeef → lui 0xdeadc, addi -273
+0xffffffff → lui 0x00000, addi -1
+10 萬個隨機常數都通過</code></pre>
+      <p>
+        每一列都和組譯器的 <code>li</code> 展開一致(<code>0xffffffff</code> 的 hi 是 0,組譯器就省掉 <code>lui</code>,只留 <code>addi a0, zero, -1</code>)。
+        <code>0x7fffffff</code> 那一列很有趣:<code>lui 0x80000</code> 得到 0x80000000(負數),再加 −1 繞回 0x7FFFFFFF。32 位元的加法本來就會繞回,這不是錯。
+      </p>
+      <div class="callout note">
+        <div class="ico">📐</div>
+        <div class="body">
+          <span class="c-title">證明(參考):為什麼 lui hi 再 addi lo 一定得到 v</span>
+          <p>設 $v$ 是 0 到 $2^{32}-1$ 的整數,$r = v \bmod 4096$。若 $r &lt; 2048$,取 lo = $r$;否則取 lo = $r - 4096$。兩種情況都有 $-2048 \le \text{lo} \le 2047$(addi 放得下),而且 $v - \text{lo}$ 是 4096 的倍數。
+          令 hi = $(v - \text{lo})/4096 \bmod 2^{20}$。<code>lui</code> 得到 $\text{hi} \cdot 4096 \bmod 2^{32} = (v - \text{lo}) \bmod 2^{32}$,再加 lo 得到 $v \bmod 2^{32} = v$。
+          上面程式的兩個 <code>assert</code> 就是這兩件事:lo 的範圍,與「加回去等於 v」。隨機抽查 10 萬個數不是證明,只是讓你對程式更有信心;證明才保證 $2^{32}$ 個數全部成立。</p>
+        </div>
+      </div>
+
+      <h3>手算:把 li 拆成 lui 與 addi</h3>
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 135.4 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>寫出組譯器會把下面的 <code>li</code> 展開成哪幾條真指令(寫出 hi 與 lo):(a) <code>li a0, 100000</code> (b) <code>li a0, 0xDEADBEEF</code> (c) <code>li a0, 0x8001FF7F</code> (d) <code>li a0, 0xFFFFF800</code> (e) <code>li a0, 0x800</code></p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <div class="table-wrap"><table>
+              <thead><tr><th>題</th><th>v 的十六進位</th><th>低 12 位元 → lo</th><th>hi</th><th>真指令</th></tr></thead>
+              <tbody>
+                <tr><td>(a)</td><td><code>0x000186A0</code></td><td><code>0x6A0</code> &lt; 0x800 → 1696</td><td><code>0x18</code></td><td><code>lui a0, 0x18</code> ＋ <code>addi a0, a0, 1696</code></td></tr>
+                <tr><td>(b)</td><td><code>0xDEADBEEF</code></td><td><code>0xEEF</code> ≥ 0x800 → 0xEEF − 0x1000 = −273</td><td><code>0xDEADB</code> + 1 = <code>0xDEADC</code></td><td><code>lui a0, 0xdeadc</code> ＋ <code>addi a0, a0, -273</code></td></tr>
+                <tr><td>(c)</td><td><code>0x8001FF7F</code></td><td><code>0xF7F</code> ≥ 0x800 → −129</td><td><code>0x8001F</code> + 1 = <code>0x80020</code></td><td><code>lui a0, 0x80020</code> ＋ <code>addi a0, a0, -129</code></td></tr>
+                <tr><td>(d)</td><td><code>0xFFFFF800</code></td><td><code>0x800</code> → −2048</td><td><code>0xFFFFF</code> + 1 = 0x100000,取 20 位元 = 0</td><td>只要 <code>addi a0, zero, -2048</code></td></tr>
+                <tr><td>(e)</td><td><code>0x00000800</code></td><td><code>0x800</code> → −2048</td><td>0 + 1 = <code>0x1</code></td><td><code>lui a0, 0x1</code> ＋ <code>addi a0, a0, -2048</code></td></tr>
+              </tbody>
+            </table></div>
+            <p>(d) 和 (e) 的低 12 位元一樣,答案卻差很多:0xFFFFF800 本身就是 −2048 的 32 位元寫法,一條 <code>addi</code> 就夠;0x800 = 2048 剛好超出 12 位元。以上結果都和 <code>riscv64-unknown-elf-as</code> 的展開一致。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <h3>常用假指令對照表</h3>
+      <p>
+        組合語言程式裡大部分的「指令」其實是假指令。看反組譯(<code>-M no-aliases</code>)或寫模擬器時,你看到的都是右欄:
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>假指令</th><th>真指令</th><th>意思</th></tr></thead>
+        <tbody>
+          <tr><td><code>nop</code></td><td><code>addi zero, zero, 0</code></td><td>什麼都不做(字是 <code>0x00000013</code>)</td></tr>
+          <tr><td><code>mv rd, rs</code></td><td><code>addi rd, rs, 0</code></td><td>複製</td></tr>
+          <tr><td><code>not rd, rs</code></td><td><code>xori rd, rs, -1</code></td><td>每一位反相</td></tr>
+          <tr><td><code>neg rd, rs</code></td><td><code>sub rd, zero, rs</code></td><td>取負號</td></tr>
+          <tr><td><code>seqz rd, rs</code></td><td><code>sltiu rd, rs, 1</code></td><td>rs == 0 ? 1 : 0</td></tr>
+          <tr><td><code>snez rd, rs</code></td><td><code>sltu rd, zero, rs</code></td><td>rs != 0 ? 1 : 0</td></tr>
+          <tr><td><code>beqz rs, L</code> / <code>bnez rs, L</code></td><td><code>beq rs, zero, L</code> / <code>bne rs, zero, L</code></td><td>和 0 比較</td></tr>
+          <tr><td><code>bgt a, b, L</code> / <code>ble a, b, L</code></td><td><code>blt b, a, L</code> / <code>bge b, a, L</code></td><td>沒有 bgt 指令,把兩個運算元對調</td></tr>
+          <tr><td><code>bgtu a, b, L</code></td><td><code>bltu b, a, L</code></td><td>無號版</td></tr>
+          <tr><td><code>j L</code></td><td><code>jal zero, L</code></td><td>無條件跳,不存返回位址</td></tr>
+          <tr><td><code>jal L</code></td><td><code>jal ra, L</code></td><td>呼叫(近)</td></tr>
+          <tr><td><code>jr rs</code></td><td><code>jalr zero, 0(rs)</code></td><td>跳到暫存器裡的位址</td></tr>
+          <tr><td><code>ret</code></td><td><code>jalr zero, 0(ra)</code></td><td>從函式回去(字是 <code>0x00008067</code>)</td></tr>
+          <tr><td><code>call L</code></td><td><code>auipc ra, hi</code> ＋ <code>jalr ra, lo(ra)</code></td><td>呼叫(遠,±2 GiB);連結器常把它放鬆成一條 <code>jal ra, L</code></td></tr>
+          <tr><td><code>li</code>、<code>la</code></td><td>見上面</td><td></td></tr>
+        </tbody>
+      </table></div>
+      <p>注意有多少假指令靠 <code>x0</code>:<code>nop</code>、<code>j</code>、<code>ret</code>、<code>beqz</code>、<code>neg</code>、小常數的 <code>li</code>。一個永遠是 0 的暫存器,省下了一大堆專用指令。</p>
+
+      <h2>算術、邏輯與比較:沒有 mul 的整數運算</h2>
+      <p>
+        RV32I 的運算指令分兩組:R 型(兩個暫存器)與 I 型(暫存器加 12 位元常數)。I 型沒有 <code>subi</code>,因為 <code>addi</code> 加負數就是減法。
+        幾個和 Python 不一樣、要特別記住的地方:
+      </p>
+      <ul>
+        <li><strong>沒有旗標(flags)</strong>。x86 和 ARM 的加法會設定進位、溢位旗標;RISC-V 沒有。加法溢位就照二補數繞回(0x7FFFFFFF + 1 = 0x80000000),不會有任何通知。要比較,就用 <code>slt</code> 或分支指令直接比兩個暫存器。</li>
+        <li><strong><code>slt</code> 和 <code>sltu</code></strong>(set less than):rd = (rs1 &lt; rs2) ? 1 : 0。<code>slt</code> 把兩邊當有號數,<code>sltu</code> 當無號數。−1 的位元是 0xFFFFFFFF,所以 <code>slt</code> 認為 −1 &lt; 1,<code>sltu</code> 認為 0xFFFFFFFF &gt; 1。</li>
+        <li><strong>三種移位</strong>:<code>sll</code> 左移補 0;<code>srl</code> 邏輯右移,左邊補 0;<code>sra</code> 算術右移,左邊補符號位。0x80000000 用 <code>srl</code> 右移 4 位得 0x08000000,用 <code>sra</code> 得 0xF8000000。</li>
+        <li><strong>移位量只看低 5 位元</strong>。<code>sll</code> 的 rs2 是 33 的時候,只移 1 位(33 = 0b100001)。32 位元的數移 32 位以上沒有意義,硬體乾脆只接 5 條線。</li>
+        <li><strong>沒有乘法和除法</strong>。那是 M 擴充(RV32M)的指令。只有 RV32I 的時候,C 編譯器會把 <code>x * 10</code> 改成移位加法,把 <code>x * y</code> 改成呼叫函式庫的 <code>__mulsi3</code>(後面「從 C 到 RV32I」一節有實例)。</li>
+      </ul>
+      <div class="table-wrap"><table>
+        <thead><tr><th>運算</th><th>a = 0xFFFFFFFF(−1)、b = 1</th><th>a = 0x80000000、b = 4</th></tr></thead>
+        <tbody>
+          <tr><td><code>add</code></td><td>0x00000000(繞回)</td><td>0x80000004</td></tr>
+          <tr><td><code>sub</code></td><td>0xFFFFFFFE(−2)</td><td>0x7FFFFFFC(繞回)</td></tr>
+          <tr><td><code>slt</code></td><td>1(−1 &lt; 1)</td><td>1(−2<sup>31</sup> &lt; 4)</td></tr>
+          <tr><td><code>sltu</code></td><td>0(4294967295 &gt; 1)</td><td>0</td></tr>
+          <tr><td><code>sll</code></td><td>0xFFFFFFFE</td><td>0x00000000</td></tr>
+          <tr><td><code>srl</code></td><td>0x7FFFFFFF</td><td>0x08000000</td></tr>
+          <tr><td><code>sra</code></td><td>0xFFFFFFFF</td><td>0xF8000000</td></tr>
+        </tbody>
+      </table></div>
+      <p>你可以用 Python 自己驗算這張表(和 Python 的 <code>&amp; 0xFFFFFFFF</code> 一起用,模擬 32 位元繞回):</p>
+<pre><code class="language-python">M = 0xFFFFFFFF
+def s32(v): return v - (1 &lt;&lt; 32) if v &amp; 0x80000000 else v   # 當有號數看
+
+for a, b in [(0xFFFFFFFF, 1), (0x80000000, 4)]:
+    print(f'add {(a + b) &amp; M:#010x}  sub {(a - b) &amp; M:#010x}  '
+          f'slt {int(s32(a) &lt; s32(b))}  sltu {int(a &lt; b)}  '
+          f'sll {(a &lt;&lt; (b &amp; 31)) &amp; M:#010x}  srl {a &gt;&gt; (b &amp; 31):#010x}  '
+          f'sra {(s32(a) &gt;&gt; (b &amp; 31)) &amp; M:#010x}')</code></pre>
+<pre><code class="language-text">add 0x00000000  sub 0xfffffffe  slt 1  sltu 0  sll 0xfffffffe  srl 0x7fffffff  sra 0xffffffff
+add 0x80000004  sub 0x7ffffffc  slt 1  sltu 0  sll 0x00000000  srl 0x08000000  sra 0xf8000000</code></pre>
+
+      <h2>載入與儲存:位元組、半字、字</h2>
+      <p>
+        RISC-V 是<strong>載入/儲存架構(load/store architecture)</strong>:運算指令只碰暫存器,只有載入和儲存指令會碰記憶體。
+        記憶體以位元組為單位編址,一次可以讀寫 1 個位元組(byte)、2 個位元組(半字,halfword)或 4 個位元組(字,word)。
+        位址一律是「基底暫存器 + 12 位元位移」,寫成 <code>lw rd, 位移(rs1)</code>。
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>指令</th><th>讀寫幾個位元組</th><th>放進 32 位元暫存器時</th></tr></thead>
+        <tbody>
+          <tr><td><code>lb</code> / <code>lbu</code></td><td>1</td><td><code>lb</code> 符號延伸;<code>lbu</code> 補 0(u = unsigned)</td></tr>
+          <tr><td><code>lh</code> / <code>lhu</code></td><td>2</td><td><code>lh</code> 符號延伸;<code>lhu</code> 補 0</td></tr>
+          <tr><td><code>lw</code></td><td>4</td><td>(剛好 32 位元,不必延伸)</td></tr>
+          <tr><td><code>sb</code> / <code>sh</code> / <code>sw</code></td><td>1 / 2 / 4</td><td>只寫 rs2 的低 8 / 16 / 32 位元,記憶體的其他位元組不動</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        多位元組的值用<strong>小端序</strong>放:低位元組放在低位址。<code>sw</code> 把 0x8001FF7F 存到 0x100,記憶體會變成 0x100 = <code>7F</code>、0x101 = <code>FF</code>、0x102 = <code>01</code>、0x103 = <code>80</code>。
+      </p>
+      <p>
+        <strong>對齊(alignment)</strong>:半字的位址要是 2 的倍數,字的位址要是 4 的倍數。規格允許硬體自己處理沒對齊的存取,也允許它丟出例外;
+        本章 Lab 的模擬器採用比較嚴格的做法:沒對齊就是錯誤。寫組合語言時,自己保證對齊最安全。
+      </p>
+
+      <h3>手算:小端序與 lb、lbu、lh、lhu</h3>
+      <p>下面這支程式先存一個字,再用不同寬度、有號無號的指令讀回來:</p>
+<pre><code class="language-text">    .text
+    .globl _start
+_start:
+    li   t0, 0x100          # 一塊緩衝區的位址
+    li   t1, 0x8001FF7F
+    sw   t1, 0(t0)          # 小端序:0x100..0x103 = 7F FF 01 80
+    lb   a0, 0(t0)
+    lb   a1, 1(t0)
+    lbu  a2, 1(t0)
+    lh   a3, 2(t0)
+    lhu  a4, 2(t0)
+    lw   a5, 0(t0)
+    sb   zero, 3(t0)        # 只改 0x103 這一個位元組
+    lw   a6, 0(t0)
+    li   a7, 10
+    ecall</code></pre>
+      <p>執行前四步之後,0x100–0x103 是 <code>7F FF 01 80</code>。接下來每一步讀到什麼(用模擬器逐步執行驗證):</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>指令</th><th>位址</th><th>讀到的位元組(低位址在左)</th><th>延伸</th><th>結果(十六進位)</th><th>結果(十進位)</th></tr></thead>
+        <tbody>
+          <tr><td><code>lb a0, 0(t0)</code></td><td>0x100</td><td><code>7F</code></td><td>符號位 0,補 0</td><td><code>0x0000007f</code></td><td>127</td></tr>
+          <tr><td><code>lb a1, 1(t0)</code></td><td>0x101</td><td><code>FF</code></td><td>符號位 1,補 1</td><td><code>0xffffffff</code></td><td>−1</td></tr>
+          <tr><td><code>lbu a2, 1(t0)</code></td><td>0x101</td><td><code>FF</code></td><td>補 0</td><td><code>0x000000ff</code></td><td>255</td></tr>
+          <tr><td><code>lh a3, 2(t0)</code></td><td>0x102</td><td><code>01 80</code> → 0x8001</td><td>符號位 1,補 1</td><td><code>0xffff8001</code></td><td>−32767</td></tr>
+          <tr><td><code>lhu a4, 2(t0)</code></td><td>0x102</td><td><code>01 80</code> → 0x8001</td><td>補 0</td><td><code>0x00008001</code></td><td>32769</td></tr>
+          <tr><td><code>lw a5, 0(t0)</code></td><td>0x100</td><td><code>7F FF 01 80</code></td><td>—</td><td><code>0x8001ff7f</code></td><td>−2147352705</td></tr>
+          <tr><td><code>sb zero, 3(t0)</code></td><td>0x103</td><td>(寫入 <code>00</code>)</td><td>—</td><td>記憶體變成 <code>7F FF 01 00</code></td><td></td></tr>
+          <tr><td><code>lw a6, 0(t0)</code></td><td>0x100</td><td><code>7F FF 01 00</code></td><td>—</td><td><code>0x0001ff7f</code></td><td>130943</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        <code>li t1, 0x8001FF7F</code> 本身也是手算 135.4 (c) 的答案:<code>lui t1, 0x80020</code> 加 <code>addi t1, t1, -129</code>。
+      </p>
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">看起來對但其實錯:「lb 和 lbu 只是名字不同,讀字串時用哪個都一樣」</span>
+          <p>拿英文字串測試,<code>"hello"</code> 每個位元組都小於 0x80,<code>lb</code> 和 <code>lbu</code> 讀出來完全相同,測試全過。
+          但 UTF-8 的中文字每個位元組都 ≥ 0x80,例如「中」是 <code>E4 B8 AD</code>。<code>lb</code> 讀 <code>E4</code> 得到 −28(0xFFFFFFE4),<code>lbu</code> 得到 228。
+          如果你的程式拿讀到的值和 0x80 比大小、當陣列索引、或累加成雜湊值,用錯就會出錯。<strong>只用 ASCII 測試全過,不代表程式是對的。</strong>
+          處理「位元組」用 <code>lbu</code>;只有真的要 C 的 <code>signed char</code> 時才用 <code>lb</code>。</p>
+        </div>
+      </div>
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 135.5 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>追蹤下面這支程式,寫出 0x200–0x203 最後的四個位元組,以及 a0–a4 的值(十六進位與十進位):</p>
+<pre><code class="language-text">    .text
+    .globl _start
+_start:
+    li   t0, 0x200
+    li   t1, 0x00C0FE90
+    sw   t1, 0(t0)
+    li   t2, -2
+    sh   t2, 2(t0)
+    lb   a0, 0(t0)
+    lbu  a1, 0(t0)
+    lh   a2, 0(t0)
+    lhu  a3, 2(t0)
+    lw   a4, 0(t0)
+    li   a7, 10
+    ecall</code></pre>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <p><code>li t1, 0x00C0FE90</code> 展開成 <code>lui t1, 0xc10</code> ＋ <code>addi t1, t1, -368</code>(0xE90 ≥ 0x800)。<code>sw</code> 之後 0x200–0x203 = <code>90 FE C0 00</code>。
+            <code>sh t2, 2(t0)</code> 把 −2 的低 16 位元 0xFFFE 寫到 0x202–0x203(小端序:<code>FE FF</code>),所以最後是 <code>90 FE FE FF</code>。</p>
+            <div class="table-wrap"><table>
+              <thead><tr><th>指令</th><th>讀到</th><th>結果</th></tr></thead>
+              <tbody>
+                <tr><td><code>lb a0, 0(t0)</code></td><td><code>90</code></td><td><code>0xffffff90</code> = −112</td></tr>
+                <tr><td><code>lbu a1, 0(t0)</code></td><td><code>90</code></td><td><code>0x00000090</code> = 144</td></tr>
+                <tr><td><code>lh a2, 0(t0)</code></td><td><code>90 FE</code> → 0xFE90</td><td><code>0xfffffe90</code> = −368</td></tr>
+                <tr><td><code>lhu a3, 2(t0)</code></td><td><code>FE FF</code> → 0xFFFE</td><td><code>0x0000fffe</code> = 65534</td></tr>
+                <tr><td><code>lw a4, 0(t0)</code></td><td><code>90 FE FE FF</code></td><td><code>0xfffefe90</code> = −65904</td></tr>
+              </tbody>
+            </table></div>
+          </div></details>
+        </div>
+      </div>
+
+      <h2>分支與跳躍:把 if 與迴圈翻成組合語言</h2>
+      <p>
+        Hack 的跳躍是「ALU 算出來的結果大於 0 就跳」。RISC-V 的條件分支直接比較兩個暫存器:<code>beq</code>(相等)、<code>bne</code>(不等)、
+        <code>blt</code>/<code>bge</code>(有號的小於、大於等於)、<code>bltu</code>/<code>bgeu</code>(無號)。
+        沒有 <code>bgt</code>、<code>ble</code>,因為把兩個運算元對調就有了(見假指令表)。
+      </p>
+      <p>
+        無條件跳躍有兩條:<code>jal rd, 標籤</code> 把 pc + 4 存進 rd,再跳到 pc + imm;<code>jalr rd, imm(rs1)</code> 把 pc + 4 存進 rd,再跳到 rs1 + imm(最低位清成 0)。
+        rd 寫 <code>zero</code> 就是單純的跳躍,寫 <code>ra</code> 就是呼叫函式。
+      </p>
+      <p>常見的翻譯樣板(<code>a</code>、<code>b</code> 已經在暫存器裡):</p>
+<pre><code class="language-text"># if (a &lt; b) { 甲 } else { 乙 }       —— 條件反過來寫:不成立就跳去 else
+    bge  a, b, else_part
+    (甲)
+    j    end_if
+else_part:
+    (乙)
+end_if:
+
+# while (i != 0) { 身體 }
+loop:
+    beqz i, done
+    (身體)
+    j    loop
+done:</code></pre>
+      <p>
+        條件<strong>反過來</strong>寫是因為分支「成立就跳走」:C 的 <code>if (a &lt; b)</code> 要在 a ≥ b 時跳過「甲」。
+        另外,有號和無號要分清楚:C 的 <code>int</code> 比較用 <code>blt</code>/<code>bge</code>,<code>unsigned</code> 與指標用 <code>bltu</code>/<code>bgeu</code>。
+      </p>
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">看起來對但其實錯:「beq 的位移量以指令為單位,而且從下一條指令算起」</span>
+          <p>Hack 的跳躍目標是指令編號;有些教科書的 MIPS 分支也是「下一條指令 + 位移 × 4」。所以很多人以為 RISC-V 也一樣。
+          不對:RISC-V 的 B 型與 J 型立即值是<strong>位元組</strong>位移,而且從<strong>分支指令自己的位址</strong>算起。
+          手算 135.3 的 <code>00028e63</code> 在 0x104,立即值是 28,目標是 0x104 + 28 = 0x120,中間隔了 7 條指令。
+          如果把 28 當成指令數,會跳到 0x104 + 112;如果從 pc + 4 算起,會差一條。寫模擬器和組譯器時,這兩個錯都會讓「跳 0 步」「跳下一條」這種小例子看起來還可以,大一點的程式就全亂了。</p>
+        </div>
+      </div>
+
+      <h3>手算:逐步追一個迴圈的暫存器</h3>
+      <p>這支程式算 4 + 3 + 2 + 1,答案當結束碼:</p>
+<pre><code class="language-text">    .text
+    .globl _start
+_start:
+    li   a0, 0          # a0 = 總和
+    li   t0, 4          # t0 = i,從 4 倒數
+loop:
+    beqz t0, done       # i == 0 就結束
+    add  a0, a0, t0     # 總和 += i
+    addi t0, t0, -1     # i -= 1
+    j    loop
+done:
+    li   a7, 93
+    ecall               # exit(a0)</code></pre>
+      <p>
+        組譯後,<code>li</code> 是 <code>addi</code>,<code>beqz</code> 是 <code>beq t0, zero</code>,<code>j</code> 是 <code>jal zero</code>。
+        下表每一列是執行一條指令;「寫入」欄是這條指令寫進的暫存器和新值(分支、<code>j</code> 不寫暫存器)。
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>步</th><th>pc</th><th>指令</th><th>寫入</th><th>t0</th><th>a0</th><th>下一個 pc</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td>0x00</td><td><code>addi a0, zero, 0</code></td><td>a0 = 0</td><td>0</td><td>0</td><td>0x04</td></tr>
+          <tr><td>2</td><td>0x04</td><td><code>addi t0, zero, 4</code></td><td>t0 = 4</td><td>4</td><td>0</td><td>0x08</td></tr>
+          <tr><td>3</td><td>0x08</td><td><code>beq t0, zero, 0x18</code></td><td>—</td><td>4</td><td>0</td><td>0x0c</td></tr>
+          <tr><td>4</td><td>0x0c</td><td><code>add a0, a0, t0</code></td><td>a0 = 4</td><td>4</td><td>4</td><td>0x10</td></tr>
+          <tr><td>5</td><td>0x10</td><td><code>addi t0, t0, -1</code></td><td>t0 = 3</td><td>3</td><td>4</td><td>0x14</td></tr>
+          <tr><td>6</td><td>0x14</td><td><code>jal zero, 0x8</code></td><td>—</td><td>3</td><td>4</td><td>0x08</td></tr>
+          <tr><td>7</td><td>0x08</td><td><code>beq t0, zero, 0x18</code></td><td>—</td><td>3</td><td>4</td><td>0x0c</td></tr>
+          <tr><td>8</td><td>0x0c</td><td><code>add a0, a0, t0</code></td><td>a0 = 7</td><td>3</td><td>7</td><td>0x10</td></tr>
+          <tr><td>9</td><td>0x10</td><td><code>addi t0, t0, -1</code></td><td>t0 = 2</td><td>2</td><td>7</td><td>0x14</td></tr>
+          <tr><td>10</td><td>0x14</td><td><code>jal zero, 0x8</code></td><td>—</td><td>2</td><td>7</td><td>0x08</td></tr>
+          <tr><td>11</td><td>0x08</td><td><code>beq t0, zero, 0x18</code></td><td>—</td><td>2</td><td>7</td><td>0x0c</td></tr>
+          <tr><td>12</td><td>0x0c</td><td><code>add a0, a0, t0</code></td><td>a0 = 9</td><td>2</td><td>9</td><td>0x10</td></tr>
+          <tr><td>13</td><td>0x10</td><td><code>addi t0, t0, -1</code></td><td>t0 = 1</td><td>1</td><td>9</td><td>0x14</td></tr>
+          <tr><td>14</td><td>0x14</td><td><code>jal zero, 0x8</code></td><td>—</td><td>1</td><td>9</td><td>0x08</td></tr>
+          <tr><td>15</td><td>0x08</td><td><code>beq t0, zero, 0x18</code></td><td>—</td><td>1</td><td>9</td><td>0x0c</td></tr>
+          <tr><td>16</td><td>0x0c</td><td><code>add a0, a0, t0</code></td><td>a0 = 10</td><td>1</td><td>10</td><td>0x10</td></tr>
+          <tr><td>17</td><td>0x10</td><td><code>addi t0, t0, -1</code></td><td>t0 = 0</td><td>0</td><td>10</td><td>0x14</td></tr>
+          <tr><td>18</td><td>0x14</td><td><code>jal zero, 0x8</code></td><td>—</td><td>0</td><td>10</td><td>0x08</td></tr>
+          <tr><td>19</td><td>0x08</td><td><code>beq t0, zero, 0x18</code></td><td>—</td><td>0</td><td>10</td><td>0x18</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        第 19 步 <code>beq</code> 成立,跳到 0x18。接著 <code>li a7, 93</code> 和 <code>ecall</code> 結束程式,結束碼 a0 = 10。全部共執行 21 條指令。
+        迴圈每一圈 4 條指令(<code>beq</code>、<code>add</code>、<code>addi</code>、<code>j</code>),4 圈是 16 條,加上最後一次不成立的檢查 1 條,前面 2 條、後面 2 條,剛好 21。
+      </p>
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 135.6 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>照上表的格式,追蹤下面這支數 1 的個數(popcount)的程式,寫出每一步的 t0、t1、a0。最後的結束碼是多少?一共執行幾條指令?</p>
+<pre><code class="language-text">    .text
+    .globl _start
+_start:
+    li   a0, 0          # a0 = 1 的個數
+    li   t0, 13         # t0 = 0b1101
+loop:
+    beqz t0, done
+    andi t1, t0, 1      # t1 = 最低位
+    add  a0, a0, t1
+    srli t0, t0, 1      # 右移一位
+    j    loop
+done:
+    li   a7, 93
+    ecall</code></pre>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <div class="table-wrap"><table>
+              <thead><tr><th>步</th><th>pc</th><th>指令</th><th>寫入</th><th>t0</th><th>t1</th><th>a0</th></tr></thead>
+              <tbody>
+          <tr><td>1</td><td>0x00</td><td><code>addi a0, zero, 0</code></td><td>a0 = 0</td><td>0</td><td>0</td><td>0</td></tr>
+          <tr><td>2</td><td>0x04</td><td><code>addi t0, zero, 13</code></td><td>t0 = 13</td><td>13</td><td>0</td><td>0</td></tr>
+          <tr><td>3</td><td>0x08</td><td><code>beq t0, zero, 0x1c</code></td><td>—</td><td>13</td><td>0</td><td>0</td></tr>
+          <tr><td>4</td><td>0x0c</td><td><code>andi t1, t0, 1</code></td><td>t1 = 1</td><td>13</td><td>1</td><td>0</td></tr>
+          <tr><td>5</td><td>0x10</td><td><code>add a0, a0, t1</code></td><td>a0 = 1</td><td>13</td><td>1</td><td>1</td></tr>
+          <tr><td>6</td><td>0x14</td><td><code>srli t0, t0, 0x1</code></td><td>t0 = 6</td><td>6</td><td>1</td><td>1</td></tr>
+          <tr><td>7</td><td>0x18</td><td><code>jal zero, 0x8</code></td><td>—</td><td>6</td><td>1</td><td>1</td></tr>
+          <tr><td>8</td><td>0x08</td><td><code>beq t0, zero, 0x1c</code></td><td>—</td><td>6</td><td>1</td><td>1</td></tr>
+          <tr><td>9</td><td>0x0c</td><td><code>andi t1, t0, 1</code></td><td>t1 = 0</td><td>6</td><td>0</td><td>1</td></tr>
+          <tr><td>10</td><td>0x10</td><td><code>add a0, a0, t1</code></td><td>a0 = 1</td><td>6</td><td>0</td><td>1</td></tr>
+          <tr><td>11</td><td>0x14</td><td><code>srli t0, t0, 0x1</code></td><td>t0 = 3</td><td>3</td><td>0</td><td>1</td></tr>
+          <tr><td>12</td><td>0x18</td><td><code>jal zero, 0x8</code></td><td>—</td><td>3</td><td>0</td><td>1</td></tr>
+          <tr><td>13</td><td>0x08</td><td><code>beq t0, zero, 0x1c</code></td><td>—</td><td>3</td><td>0</td><td>1</td></tr>
+          <tr><td>14</td><td>0x0c</td><td><code>andi t1, t0, 1</code></td><td>t1 = 1</td><td>3</td><td>1</td><td>1</td></tr>
+          <tr><td>15</td><td>0x10</td><td><code>add a0, a0, t1</code></td><td>a0 = 2</td><td>3</td><td>1</td><td>2</td></tr>
+          <tr><td>16</td><td>0x14</td><td><code>srli t0, t0, 0x1</code></td><td>t0 = 1</td><td>1</td><td>1</td><td>2</td></tr>
+          <tr><td>17</td><td>0x18</td><td><code>jal zero, 0x8</code></td><td>—</td><td>1</td><td>1</td><td>2</td></tr>
+          <tr><td>18</td><td>0x08</td><td><code>beq t0, zero, 0x1c</code></td><td>—</td><td>1</td><td>1</td><td>2</td></tr>
+          <tr><td>19</td><td>0x0c</td><td><code>andi t1, t0, 1</code></td><td>t1 = 1</td><td>1</td><td>1</td><td>2</td></tr>
+          <tr><td>20</td><td>0x10</td><td><code>add a0, a0, t1</code></td><td>a0 = 3</td><td>1</td><td>1</td><td>3</td></tr>
+          <tr><td>21</td><td>0x14</td><td><code>srli t0, t0, 0x1</code></td><td>t0 = 0</td><td>0</td><td>1</td><td>3</td></tr>
+          <tr><td>22</td><td>0x18</td><td><code>jal zero, 0x8</code></td><td>—</td><td>0</td><td>1</td><td>3</td></tr>
+          <tr><td>23</td><td>0x08</td><td><code>beq t0, zero, 0x1c</code></td><td>—</td><td>0</td><td>1</td><td>3</td></tr>
+              </tbody>
+            </table></div>
+            <p>第 23 步 t0 = 0,<code>beq</code> 成立跳到 0x1c;再執行 <code>li a7, 93</code> 與 <code>ecall</code>。結束碼 a0 = 3(13 = 0b1101 有 3 個 1),共 25 條指令。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <h2>呼叫約定:誰負責保存哪個暫存器</h2>
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">為什麼要學</span>
+          <p>本章 Lab 的組合語言函式會被我們的測試框架呼叫:框架先在 s0–s11、gp、tp 放檢查值,呼叫之後檢查它們沒變、sp 回到原處、用 ra 回去。
+          你自己的模擬器之後要跑 gcc 編出來的程式,它們全都遵守這套約定。讀反組譯做逆向時,知道「a0 是第一個參數、回傳值也在 a0」,一段函式就讀懂了一半。</p>
+        </div>
+      </div>
+      <p>
+        <strong>呼叫約定(calling convention)</strong>是 ABI 的一部分,規定函式之間怎麼交接。RISC-V 的版本(ilp32,整數部分)可以濃縮成五條:
+      </p>
+      <ol>
+        <li><strong>參數</strong>放在 <code>a0</code>–<code>a7</code>(前 8 個),多的放在堆疊上。<strong>回傳值</strong>放在 <code>a0</code>(64 位元的值用 <code>a0</code>、<code>a1</code>)。</li>
+        <li>用 <code>jal ra, f</code>(或 <code>call f</code>)呼叫,返回位址存在 <code>ra</code>;函式用 <code>ret</code>(<code>jalr zero, 0(ra)</code>)回去。</li>
+        <li><strong>被呼叫者保存(callee-saved)</strong>:<code>s0</code>–<code>s11</code> 和 <code>sp</code>。函式如果要用它們,必須先把舊值存起來,回去之前還原。呼叫者可以相信它們在呼叫前後不變。</li>
+        <li><strong>呼叫者保存(caller-saved)</strong>:<code>t0</code>–<code>t6</code>、<code>a0</code>–<code>a7</code>、<code>ra</code>。被呼叫的函式可以隨便改。呼叫者如果在呼叫之後還需要它們的值,要自己先存起來。</li>
+        <li><strong><code>sp</code> 隨時保持 16 位元組對齊</strong>,堆疊往低位址長。<code>gp</code>、<code>tp</code> 一般程式不要動。</li>
+      </ol>
+      <p>
+        為什麼要分兩種?想像兩個極端。如果全部都是「被呼叫者保存」,每個小函式都要把用到的暫存器存起來再還原,很多根本沒必要;
+        如果全部都是「呼叫者保存」,呼叫者每次呼叫前都要把所有還要用的值存起來。分成兩半,讓兩邊都能挑便宜的用:
+        <strong>不會呼叫別人的函式(葉函式,leaf function)只用 t 和 a,完全不必碰堆疊;要跨過呼叫保留的值,放進 s 暫存器</strong>,存一次、還原一次就好。
+      </p>
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">核心觀念</span>
+          <p>呼叫約定是一份<strong>雙方的契約</strong>:被呼叫者保證 s 暫存器與 sp 不變;呼叫者不能假設 t、a、ra 不變。只要有一方不守,錯誤會出現在<strong>另一方</strong>的程式裡,而且常常要很久以後才發作。</p>
+        </div>
+      </div>
+      <p>下面這支程式呼叫一個把參數乘 2 的函式。呼叫之前,呼叫者把 100 放在 <code>t0</code>,呼叫之後拿來用:</p>
+<pre><code class="language-text">    .text
+    .globl _start
+_start:
+    li   t0, 100        # 呼叫前放進 t0,以為呼叫之後還在
+    li   a0, 5
+    jal  ra, twice      # a0 = twice(5)
+    add  a0, a0, t0     # 期望 10 + 100 = 110
+    li   a7, 1
+    ecall               # 印出 a0
+    li   a7, 10
+    ecall
+
+twice:                  # 版本 A:只用 a0
+    slli a0, a0, 1
+    ret</code></pre>
+      <p>執行結果是 <code>110</code>。現在把 <code>twice</code> 換成另一個寫法。它完全合法:<code>t0</code> 本來就是函式可以隨便用的暫存器。</p>
+<pre><code class="language-text">twice:                  # 版本 B:用 t0 當暫存(完全合法)
+    slli t0, a0, 1
+    mv   a0, t0
+    ret</code></pre>
+      <p>同一個呼叫者,印出來變成 <code>20</code>:<code>twice</code> 把 <code>t0</code> 改成 10,呼叫者再加 10。</p>
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">看起來對但其實錯:「t 暫存器呼叫之後還在,我測過了」</span>
+          <p>用版本 A 測試,結果是對的,因為這個 <code>twice</code> 剛好沒碰 <code>t0</code>。但約定說 t 是呼叫者保存:被呼叫的函式隨時可以改它。
+          哪天 <code>twice</code> 換了寫法(版本 B)、換了編譯器的最佳化等級、或者呼叫的是函式庫,錯誤就出現了,而且出現在呼叫者這邊,不在真正「改了 t0」的函式裡。
+          <strong>這次的測試通過,不代表程式守了約定。</strong>本章 Lab 的測試框架就是故意在 t 暫存器放亂數、在 s 暫存器放檢查值來抓這種錯。
+          要跨過呼叫保留的值,放進 s 暫存器(並在你的函式裡保存它),或自己存到堆疊上。</p>
+        </div>
+      </div>
+
+      <h2>堆疊框:跟著遞迴的 fib 走一趟</h2>
+      <p>
+        函式需要記憶體來放「跨過呼叫要保留的東西」:返回位址 <code>ra</code>、要用的 s 暫存器的舊值、放不進暫存器的區域變數。
+        這塊記憶體叫<strong>堆疊框(stack frame)</strong>。函式一進來就把 <code>sp</code> 往下減,開出自己的框(序言,prologue);
+        回去之前從框裡還原,再把 <code>sp</code> 加回去(尾聲,epilogue)。<a href="03-functions-recursion.html">{{ch:03-functions-recursion}}</a>的「呼叫堆疊」,在機器層就是這個。
+      </p>
+      <p>
+        用遞迴的費氏數列來看:fib(0) = 0、fib(1) = 1、fib(n) = fib(n−1) + fib(n−2)。它會呼叫自己兩次,第一次呼叫的結果要跨過第二次呼叫保留下來,很適合練習:
+      </p>
+<pre><code class="language-text">    .text
+    .globl _start
+_start:
+    li   sp, 0x00100000     # 堆疊頂(模擬器一開始也是這個值)
+    li   a0, 6
+    jal  ra, fib            # a0 = fib(6)
+    li   a7, 1              # print_int
+    ecall
+    li   a0, 0
+    li   a7, 93             # exit(0)
+    ecall
+
+# fib(n):a0 = n,回傳 a0 = 第 n 個費氏數(fib(0)=0、fib(1)=1)
+fib:
+    addi sp, sp, -16        # 開一個 16 位元組的框
+    sw   ra, 12(sp)         # 存返回位址(等一下 jal 會蓋掉 ra)
+    sw   s0, 8(sp)          # 要用 s0、s1,先存起它們的舊值
+    sw   s1, 4(sp)
+    mv   s0, a0             # s0 = n(跨過呼叫還要用,所以放 s 暫存器)
+    li   t0, 2
+    blt  a0, t0, fib_base   # n &lt; 2 → 答案就是 n
+    addi a0, s0, -1
+    jal  ra, fib            # a0 = fib(n-1)
+    mv   s1, a0             # s1 = fib(n-1),跨過下一次呼叫
+    addi a0, s0, -2
+    jal  ra, fib            # a0 = fib(n-2)
+    add  a0, s1, a0         # a0 = fib(n-1) + fib(n-2)
+    j    fib_done
+fib_base:
+    mv   a0, s0
+fib_done:
+    lw   s1, 4(sp)          # 照相反順序還原
+    lw   s0, 8(sp)
+    lw   ra, 12(sp)
+    addi sp, sp, 16         # 收掉框
+    ret</code></pre>
+      <p>重點:</p>
+      <ul>
+        <li><strong>框的大小是 16 位元組</strong>。只需要存 3 個字(12 位元組),但 sp 要保持 16 對齊,所以開 16,<code>0(sp)</code> 空著。</li>
+        <li><strong>ra 一定要存</strong>。<code>fib</code> 裡面還有 <code>jal ra, fib</code>,會把 ra 蓋掉;不存的話,就回不到呼叫者了。</li>
+        <li><strong>n 放在 s0、fib(n−1) 放在 s1</strong>,因為它們要跨過呼叫。用 s 暫存器就要先存舊值(呼叫者的 s0、s1 也要保證不變)。</li>
+        <li>就算是 n &lt; 2 的情況,也走同一個尾聲,把框收掉。每一條路徑上,開框和收框都要剛好配對。</li>
+      </ul>
+      <p>用本章的指令組譯、連結(<code>--no-relax</code>)後的反組譯:</p>
+<pre><code class="language-text">00000000 &lt;_start&gt;:
+   0:   00100137                lui     sp,0x100
+   4:   00600513                addi    a0,zero,6
+   8:   018000ef                jal     ra,20 &lt;fib&gt;
+   c:   00100893                addi    a7,zero,1
+  10:   00000073                ecall
+  14:   00000513                addi    a0,zero,0
+  18:   05d00893                addi    a7,zero,93
+  1c:   00000073                ecall
+
+00000020 &lt;fib&gt;:
+  20:   ff010113                addi    sp,sp,-16 # ffff0 &lt;fib_done+0xfff94&gt;
+  24:   00112623                sw      ra,12(sp)
+  28:   00812423                sw      s0,8(sp)
+  2c:   00912223                sw      s1,4(sp)
+  30:   00050413                addi    s0,a0,0
+  34:   00200293                addi    t0,zero,2
+  38:   02554063                blt     a0,t0,58 &lt;fib_base&gt;
+  3c:   fff40513                addi    a0,s0,-1
+  40:   fe1ff0ef                jal     ra,20 &lt;fib&gt;
+  44:   00050493                addi    s1,a0,0
+  48:   ffe40513                addi    a0,s0,-2
+  4c:   fd5ff0ef                jal     ra,20 &lt;fib&gt;
+  50:   00a48533                add     a0,s1,a0
+  54:   0080006f                jal     zero,5c &lt;fib_done&gt;
+
+00000058 &lt;fib_base&gt;:
+  58:   00040513                addi    a0,s0,0
+
+0000005c &lt;fib_done&gt;:
+  5c:   00412483                lw      s1,4(sp)
+  60:   00812403                lw      s0,8(sp)
+  64:   00c12083                lw      ra,12(sp)
+  68:   01010113                addi    sp,sp,16
+  6c:   00008067                jalr    zero,0(ra)</code></pre>
+      <p>
+        在模擬器上跑,印出 <code>8</code>(fib(6) = 8),共執行 405 條指令,sp 最低到 0xFFFA0,也就是一開始的 0x100000 往下 6 個框。
+        下圖是計算 fib(3) 時、堆疊最深的那一刻:fib(3) 呼叫 fib(2),fib(2) 又呼叫 fib(1)。
+      </p>
+      <div class="diagram">
+<svg viewBox="0 0 600 404" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="112" y="34" text-anchor="end" font-size="11" fill="#8a929b">位址高 ↑</text>
+  <text x="364" y="38" font-size="11" fill="#8a929b">0x100000(一開始的 sp)</text>
+  <line x1="110" y1="46" x2="360" y2="46" stroke="#8a929b" stroke-width="1.5" stroke-dasharray="4 3"/>
+  <rect x="120" y="46" width="230" height="24" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="112" y="62" text-anchor="end" font-size="11" fill="#8a929b">0xffffc</text>
+  <text x="130" y="62" font-size="11.5" fill="#1f2328">ra = 0x0c(回 _start)</text>
+  <rect x="120" y="70" width="230" height="24" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="112" y="86" text-anchor="end" font-size="11" fill="#8a929b">0xffff8</text>
+  <text x="130" y="86" font-size="11.5" fill="#1f2328">舊 s0 = 0</text>
+  <rect x="120" y="94" width="230" height="24" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="112" y="110" text-anchor="end" font-size="11" fill="#8a929b">0xffff4</text>
+  <text x="130" y="110" font-size="11.5" fill="#1f2328">舊 s1 = 0</text>
+  <rect x="120" y="118" width="230" height="24" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="112" y="134" text-anchor="end" font-size="11" fill="#8a929b">0xffff0</text>
+  <text x="130" y="134" font-size="11.5" fill="#1f2328">(空,湊滿 16)</text>
+  <path d="M356 48 h10 v92 h-10" fill="none" stroke="#2f6f6a" stroke-width="1.5"/>
+  <text x="372" y="98" font-size="12" font-weight="700" fill="#2f6f6a">fib(3) 的框</text>
+  <text x="372" y="114" font-size="10.5" fill="#8a929b">這一層的 sp = 0xffff0</text>
+  <rect x="120" y="142" width="230" height="24" fill="#f6e7dd" stroke="#b4541f"/>
+  <text x="112" y="158" text-anchor="end" font-size="11" fill="#8a929b">0xfffec</text>
+  <text x="130" y="158" font-size="11.5" fill="#1f2328">ra = 0x44</text>
+  <rect x="120" y="166" width="230" height="24" fill="#f6e7dd" stroke="#b4541f"/>
+  <text x="112" y="182" text-anchor="end" font-size="11" fill="#8a929b">0xfffe8</text>
+  <text x="130" y="182" font-size="11.5" fill="#1f2328">舊 s0 = 3</text>
+  <rect x="120" y="190" width="230" height="24" fill="#f6e7dd" stroke="#b4541f"/>
+  <text x="112" y="206" text-anchor="end" font-size="11" fill="#8a929b">0xfffe4</text>
+  <text x="130" y="206" font-size="11.5" fill="#1f2328">舊 s1 = 0</text>
+  <rect x="120" y="214" width="230" height="24" fill="#f6e7dd" stroke="#b4541f"/>
+  <text x="112" y="230" text-anchor="end" font-size="11" fill="#8a929b">0xfffe0</text>
+  <text x="130" y="230" font-size="11.5" fill="#1f2328">(空)</text>
+  <path d="M356 144 h10 v92 h-10" fill="none" stroke="#b4541f" stroke-width="1.5"/>
+  <text x="372" y="194" font-size="12" font-weight="700" fill="#b4541f">fib(2) 的框</text>
+  <text x="372" y="210" font-size="10.5" fill="#8a929b">這一層的 sp = 0xfffe0</text>
+  <rect x="120" y="238" width="230" height="24" fill="#ede7fb" stroke="#8b5cf6"/>
+  <text x="112" y="254" text-anchor="end" font-size="11" fill="#8a929b">0xfffdc</text>
+  <text x="130" y="254" font-size="11.5" fill="#1f2328">ra = 0x44</text>
+  <rect x="120" y="262" width="230" height="24" fill="#ede7fb" stroke="#8b5cf6"/>
+  <text x="112" y="278" text-anchor="end" font-size="11" fill="#8a929b">0xfffd8</text>
+  <text x="130" y="278" font-size="11.5" fill="#1f2328">舊 s0 = 2</text>
+  <rect x="120" y="286" width="230" height="24" fill="#ede7fb" stroke="#8b5cf6"/>
+  <text x="112" y="302" text-anchor="end" font-size="11" fill="#8a929b">0xfffd4</text>
+  <text x="130" y="302" font-size="11.5" fill="#1f2328">舊 s1 = 0</text>
+  <rect x="120" y="310" width="230" height="24" fill="#ede7fb" stroke="#8b5cf6"/>
+  <text x="112" y="326" text-anchor="end" font-size="11" fill="#8a929b">0xfffd0</text>
+  <text x="130" y="326" font-size="11.5" fill="#1f2328">(空)</text>
+  <path d="M356 240 h10 v92 h-10" fill="none" stroke="#8b5cf6" stroke-width="1.5"/>
+  <text x="372" y="290" font-size="12" font-weight="700" fill="#8b5cf6">fib(1) 的框</text>
+  <text x="372" y="306" font-size="10.5" fill="#8a929b">這一層的 sp = 0xfffd0</text>
+  <line x1="110" y1="334" x2="360" y2="334" stroke="#b4541f" stroke-width="2"/>
+  <text x="364" y="339" font-size="12" font-weight="700" fill="#b4541f">← 現在的 sp(0xfffd0)</text>
+  <text x="364" y="358" font-size="11" fill="#8a929b">位址低 ↓ 堆疊往這邊長</text>
+</svg>
+        <figcaption>圖 135-2:fib(3) → fib(2) → fib(1) 時的堆疊。每層一個 16 位元組的框,存著返回位址與呼叫者的 s0、s1。</figcaption>
+      </div>
+      <p>同一張圖的文字版:</p>
+<pre><code class="language-text">位址       內容                     屬於
+0x0ffffc   ra = 0x0c(回 _start)    fib(3) 的框(sp = 0xffff0)
+0x0ffff8   舊 s0 = 0
+0x0ffff4   舊 s1 = 0
+0x0ffff0   (空)
+0x0fffec   ra = 0x44                fib(2) 的框(sp = 0xfffe0)
+0x0fffe8   舊 s0 = 3
+0x0fffe4   舊 s1 = 0
+0x0fffe0   (空)
+0x0fffdc   ra = 0x44                fib(1) 的框(sp = 0xfffd0)← 現在的 sp
+0x0fffd8   舊 s0 = 2
+0x0fffd4   舊 s1 = 0
+0x0fffd0   (空)</code></pre>
+      <p>
+        讀法:每個框裡存的是<strong>呼叫者</strong>的東西。fib(2) 的框裡的「舊 s0 = 3」是 fib(3) 的 n,等 fib(2) 回去時要還給 fib(3)。
+        返回位址 0x44 是 fib 裡第一個 <code>jal ra, fib</code>(在 0x40)的下一條,0x50 則是第二個 <code>jal</code>(在 0x4c)的下一條。
+      </p>
+
+      <h3>手算:呼叫鏈的堆疊框配置表</h3>
+      <p>
+        把 fib(3) 的每一次呼叫都列出來(依呼叫的先後)。「框的位址」是這次呼叫開框後的 sp;後三欄是這次呼叫存進框裡的值,用模擬器在每次存完之後讀記憶體驗證:
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>第幾次呼叫</th><th>n</th><th>誰呼叫的(從哪個 jal)</th><th>框的位址(sp)</th><th>[sp+12] 存的 ra</th><th>[sp+8] 存的 s0</th><th>[sp+4] 存的 s1</th><th>回傳</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td>3</td><td><code>_start</code>(0x08)</td><td>0xffff0</td><td>0x0c</td><td>0</td><td>0</td><td>2</td></tr>
+          <tr><td>2</td><td>2</td><td>fib(3) 第一次(0x40)</td><td>0xfffe0</td><td>0x44</td><td>3</td><td>0</td><td>1</td></tr>
+          <tr><td>3</td><td>1</td><td>fib(2) 第一次(0x40)</td><td>0xfffd0</td><td>0x44</td><td>2</td><td>0</td><td>1</td></tr>
+          <tr><td>4</td><td>0</td><td>fib(2) 第二次(0x4c)</td><td>0xfffd0</td><td>0x50</td><td>2</td><td>1</td><td>0</td></tr>
+          <tr><td>5</td><td>1</td><td>fib(3) 第二次(0x4c)</td><td>0xfffe0</td><td>0x50</td><td>3</td><td>1</td><td>1</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        看第 4 列:fib(0) 的框和第 3 列的 fib(1) 用<strong>同一塊記憶體</strong>(0xfffd0)。fib(1) 回去時收掉了框,fib(0) 再開,就蓋在同一個地方。
+        「舊 s1 = 1」是因為這時 fib(2) 已經把 fib(1) 的結果放進 s1 了。最深只有 3 層(sp 最低 0xfffd0),共 5 次呼叫,執行 85 條指令,印出 <code>2</code>。
+      </p>
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 135.7 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>把 <code>_start</code> 的 <code>li a0, 6</code> 改成 <code>li a0, 4</code>,計算 fib(4)。(a) 一共呼叫 fib 幾次?最深幾層?sp 最低是多少?
+          (b) 畫出堆疊最深那一刻(第一次到達最深時)的框配置表:每個框的位址,以及存在裡面的 ra、s0、s1。
+          (c) 第 7 次呼叫是 fib(幾)?它的框在哪裡、存了什麼?</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <p>(a) 9 次呼叫(fib(4)、fib(3)、fib(2)、fib(1)、fib(0)、fib(1)、fib(2)、fib(1)、fib(0)),最深 4 層,sp 最低 0xfffc0。執行 149 條指令,印出 <code>3</code>。</p>
+            <p>(b) 第 4 次呼叫(fib(1),由 fib(2) 的第一個 jal 呼叫)時最深:</p>
+            <div class="table-wrap"><table>
+              <thead><tr><th>框的位址</th><th>屬於</th><th>[sp+12] ra</th><th>[sp+8] s0</th><th>[sp+4] s1</th></tr></thead>
+              <tbody>
+                <tr><td>0xffff0</td><td>fib(4)</td><td>0x0c</td><td>0</td><td>0</td></tr>
+                <tr><td>0xfffe0</td><td>fib(3)</td><td>0x44</td><td>4</td><td>0</td></tr>
+                <tr><td>0xfffd0</td><td>fib(2)</td><td>0x44</td><td>3</td><td>0</td></tr>
+                <tr><td>0xfffc0</td><td>fib(1)</td><td>0x44</td><td>2</td><td>0</td></tr>
+              </tbody>
+            </table></div>
+            <p>(c) 第 7 次呼叫是 fib(4) 的第二次呼叫 fib(2):框在 0xfffe0(和當初 fib(3) 同一塊),ra = 0x50,s0 = 4(fib(4) 的 n),s1 = 2(fib(4) 已經算好的 fib(3))。</p>
+          </div></details>
+        </div>
+      </div>
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">常見錯誤:序言和尾聲沒有配對</span>
+          <p>(1) 存了 ra 卻在某條提早 <code>ret</code> 的路徑上忘了收框:sp 回不去,呼叫者之後讀到的框全錯。(2) 還原的順序和位移對不上:<code>sw s0, 8(sp)</code> 卻 <code>lw s0, 4(sp)</code>。
+          (3) 先 <code>addi sp, sp, 16</code> 再 <code>lw ra, 12(sp)</code>:收框之後那塊記憶體已經不屬於你了。檢查方法:每條從函式入口走到 <code>ret</code> 的路徑上,sp 的加減總和都要是 0。</p>
+        </div>
+      </div>
+      <div class="callout note">
+        <div class="ico">🧭</div>
+        <div class="body">
+          <span class="c-title">任務線總覽:rv32 自己的指令集模擬器＋效能挑戰</span>
+          <p>從這一章到<a href="48-computer-architecture.html">{{ch:48-computer-architecture}}</a>,每章的 Lab 串成程式地下城的一條<strong>任務線</strong>「rv32」:
+          每個 Lab 是一個<strong>任務</strong>(有自己的資料夾),每組測試是一個<strong>任務目標</strong>(打勾的格子),最後的整合測試是 <strong>Boss 戰</strong>。
+          先看 Boss 戰要什麼,每個任務的門檻都是從它推回來的。〔公開〕的目標用 <code>test</code>(或 F5)自己跑;〔隱藏檢定〕在 <code>submit</code> 時跑,只看得到名稱和一行說明。</p>
+<pre><code class="language-text">rv32 自己的指令集模擬器＋效能挑戰(任務線)
+├─ Boss 戰
+│  ├─ 自己的模擬器跑自己的程式〔隱藏檢定〕你的 iss.py 跑你的三支 .s＋5 支隱藏程式,
+│  │     暫存器、記憶體、輸出、結束碼與指令數都和參考相同;合計約 3×10^6 條指令,20 秒內
+│  ├─ 反組譯清單〔隱藏檢定〕dis 反組譯 2 支隱藏程式,每一行都和參考相同
+│  ├─ 快取重播〔隱藏檢定〕你的 ISS 產生存取紀錄,你的 cachesim 在 3 組設定下重播,
+│  │     5 個統計數字都和參考相同;15 秒內
+│  └─ 效能挑戰〔隱藏檢定〕重排指令消除 stall、分塊提高 D-cache 命中率(門檻之後再定)
+├─ L1 RV32I 組合語言   fact.s、array.s、string.s   ← {{ch:135-riscv-assembly}} Lab
+│     公開輸入 · 邊界 · 呼叫約定 · 真的遞迴 · 指令數
+├─ L2 指令集模擬器     iss.py                     ← {{ch:135-riscv-assembly}} Lab
+│     解碼 · 反組譯 · 跑程式 · 運算 · 立即值 · 記憶體與 MMIO · 錯誤處理 ·
+│     隱藏程式 · 逐條紀錄 · 存取紀錄 · 效能
+├─ L3 快取模擬器       cachesim.c、cachesim.h     ← {{ch:48-computer-architecture}} Lab
+│     命中與失誤 · LRU 與 FIFO · 寫入策略 · 邊界 · 錯誤處理 · 隨機紀錄 · 效能
+└─ L4 管線與分塊       reorder.s、matmul.s        ← {{ch:48-computer-architecture}}(管線時序圖寫好後補)
+      任務目標設計中</code></pre>
+          <p>每個 Boss 戰用到哪些任務:「自己的模擬器跑自己的程式」用 L1 和 L2;「反組譯清單」用 L2;「快取重播」用 L2 和 L3;「效能挑戰」用 L3 和 L4(L4 的乘法用 L1 的 <code>mul32</code>)。
+          這條任務線做完之後,你的模擬器是任務線 rtl「自己的 RV32I CPU」逐條比對的參考模型,也是資安路線讀組合語言的工具;你的快取模擬器是任務線 soc 快取控制器的參考模型。</p>
+        </div>
+      </div>
+
+      <h3 id="lab-rv32-asm">本章 Lab:RV32I 組合語言 rv32/asm/*.s</h3>
+      <div class="callout lab" data-task="rv32/asm">
+        <div class="ico">🧪</div>
+        <div class="body">
+          <span class="c-title">本章 Lab · 任務線「rv32」· 任務「RV32I 組合語言」</span>
+          <p><strong>對應地下城任務:</strong>任務「RV32I 組合語言」(任務線:rv32 自己的指令集模擬器＋效能挑戰,第 1／4 個任務)。零件檔:<code>~/零件庫/rv32/asm/fact.s</code>、<code>array.s</code>、<code>string.s</code>;任務資料夾:<code>~/任務線/rv32/01-asm/</code>。</p>
+          <p><strong>要做的零件:</strong>三個檔、六個函式,每個都照 RISC-V 的呼叫約定寫:自己做的乘法 <code>mul32</code> 與遞迴的階乘 <code>fact</code>、陣列的和與最大值、字串的長度與原地倒轉。
+          它們之後是你自己的模擬器的第一批測試程式。</p>
+          <p><strong>介面:</strong></p>
+<pre><code class="language-text"># ~/零件庫/rv32/asm/fact.s
+    .text
+    .globl mul32
+mul32:      # mul32(a0, a1) -&gt; a0:a0 × a1 取低 32 位元(有號、無號結果相同)
+            # RV32I 沒有 mul,用移位加法;葉函式(不呼叫別人)
+    .globl fact
+fact:       # fact(a0=n) -&gt; a0:n! 取低 32 位元,n 是 0..20 的無號數
+            # 必須遞迴:每層一個堆疊框,ra 存在框裡;乘法呼叫你的 mul32
+
+# ~/零件庫/rv32/asm/array.s
+    .globl array_sum    # array_sum(a0=p, a1=n) -&gt; a0:n 個 32 位元整數的和,溢位照二補數繞回;n=0 → 0
+    .globl array_max    # array_max(a0=p, a1=n) -&gt; a0=最大值(有號比較)、a1=第一個最大值的索引
+                        # n=0 → a0=0x80000000、a1=-1
+
+# ~/零件庫/rv32/asm/string.s
+    .globl str_len      # str_len(a0=s) -&gt; a0:NUL 之前的位元組數
+    .globl str_rev      # str_rev(a0=s) -&gt; a0:長度;原地把 NUL 之前的位元組倒過來
+                        # (以位元組為單位,不管 UTF-8);NUL 與後面的記憶體不能動</code></pre>
+          <ul>
+            <li>每個函式用 <code>.globl</code> 匯出;遵守呼叫約定:s0–s11、sp、gp、tp 呼叫前後不變,用 <code>ra</code> 回去,回傳值在 <code>a0</code>(<code>array_max</code> 還有 <code>a1</code>)。</li>
+            <li>組譯用 <code>riscv64-unknown-elf-as -march=rv32i -mabi=ilp32</code>:只准 RV32I 基本指令,<code>mul</code> 這類 M 擴充的指令會組譯失敗。可以用 <code>li</code>、<code>la</code>、<code>mv</code>、<code>j</code>、<code>call</code>、<code>ret</code>、<code>beqz</code> 這些假指令。</li>
+            <li>判題時沒有 <code>_start</code>:測試框架把參數放進 <code>a0</code>、<code>a1</code>,<code>sp</code> = 0x00100000、<code>ra</code> = 框架的返回位址,直接呼叫你的函式,在參考 ISS 上跑到它回來(就像上面「把呼叫約定寫成 assert」的 <code>call()</code>)。</li>
+          </ul>
+          <p><strong>公開範例</strong>(測試框架呼叫你的函式,看回來時的 a0、a1 與緩衝區):</p>
+<pre><code class="language-text">呼叫                          回來時
+fact(0)                       a0 = 1
+fact(6)                       a0 = 720
+mul32(6, 7)                   a0 = 42
+mul32(1000, 1000)             a0 = 1000000
+array_sum([3, -7, 9, 4, 2])   a0 = 11
+array_max([3, -7, 9, 4, 2])   a0 = 9、a1 = 2
+str_len("hello")              a0 = 5
+str_rev("hello")              a0 = 5,緩衝區變成 "olleh\0"(NUL 後面的位元組沒動)</code></pre>
+          <p><strong>和本章範例不同的地方:</strong></p>
+          <ul>
+            <li>本章的遞迴例子是 <code>fib</code>,Lab 要的是 <code>fact</code>,而且乘法要呼叫你自己寫的 <code>mul32</code>:RV32I 沒有乘法,用 <code>mul</code> 會組譯失敗(本章「從 C 到 RV32I」一節的 gcc 是呼叫 libgcc 的 <code>__mulsi3</code>,判題時沒有 libgcc)。</li>
+            <li>本章的 <code>hello.s</code> 與 MMIO 例子從 <code>_start</code> 開始、自己印結果;Lab 只寫函式,由測試框架呼叫,結果看暫存器與記憶體。</li>
+            <li><code>array_max</code> 要多回傳索引(<code>a1</code>);<code>str_rev</code> 要原地倒轉並回傳長度。函式名稱刻意避開 C 標準函式庫(<code>str_len</code> 不是 <code>strlen</code>)。</li>
+          </ul>
+          <p>可以參考本章的範例,但介面和要求不同,要自己改寫。</p>
+          <p><strong>任務目標</strong>(公開的用 <code>test</code> 自己跑;隱藏檢定在 <code>submit</code> 時跑,只看得到名稱和一行說明):</p>
+          <ul class="lab-goals">
+            <li data-group="asm.public">☐ <strong>公開輸入</strong>〔公開〕test 用參考 ISS 跑公開輸入:fact(0..6)、mul32 的小數字、array_sum 與 array_max 的小陣列、str_len 與 str_rev("hello");比對 a0、a1 與緩衝區內容。</li>
+            <li data-group="asm.edge">☐ <strong>邊界</strong>〔隱藏檢定〕fact(0)、fact(1)、fact(13..20) 取低 32 位元;mul32 碰到 0、0xFFFFFFFF、負數;陣列長度 0 與 1、全部是負數、全部是 −2<sup>31</sup>、最大值在最後、最大值重複(回傳第一個);空字串、1 個位元組、0x80 以上的位元組(lb 與 lbu 的差別)。</li>
+            <li data-group="asm.abi">☐ <strong>呼叫約定</strong>〔隱藏檢定〕框架先在 s0–s11、gp、tp 放檢查值,呼叫之後要不變、sp 要回到原處、用 ra 回去、執行中 sp 一直 16 位元組對齊;t0–t6 與沒用到的 a 暫存器一開始是亂數,不能假設是 0;除了自己的堆疊框與給的緩衝區,不能寫任何記憶體(array 的兩個函式完全不能寫)。</li>
+            <li data-group="asm.recursive">☐ <strong>真的遞迴</strong>〔隱藏檢定〕fact(n)(n ≥ 2)要用 jal／call 呼叫自己至少 n−1 次、呼叫 mul32 至少 n−1 次,堆疊最深處比進入時低至少 8(n−1) 個位元組(每層一個框)。</li>
+            <li data-group="asm.steps">☐ <strong>指令數</strong>〔隱藏檢定〕用參考 ISS 數執行的指令數(instret):不能是 O(n<sup>2</sup>)(例:str_rev 每一步都重算長度),mul32 不能用重複加法。
+            門檻:mul32 每次 300 條內、fact(20) 6,000 條內;n=10<sup>4</sup> 的 array_sum、array_max 各 1.5×10<sup>5</sup> 條內;長 10<sup>4</sup> 的 str_len 1.2×10<sup>5</sup> 條內、str_rev 2.5×10<sup>5</sup> 條內;每支在參考 ISS 上 2 秒內。
+            這個門檻來自 Boss 戰「自己的模擬器跑自己的程式」:你的三支 .s 和 5 支隱藏程式合計約 3×10<sup>6</sup> 條指令,要在你自己的模擬器上 20 秒內跑完。</li>
+          </ul>
+          <p><strong>規則:</strong>只准 RV32I 基本指令(組譯時加 <code>-march=rv32i</code>);不能呼叫函式庫(判題時只連結你的檔案)。</p>
+          <p><strong>之後會用在:</strong><a href="#lab-rv32-iss">本章的任務「指令集模擬器」</a>之後的 Boss 戰「自己的模擬器跑自己的程式」:你的 <code>iss.py</code> 要跑你這三支 .s;
+          <a href="48-computer-architecture.html">{{ch:48-computer-architecture}}</a>的任務「管線與分塊」:矩陣乘法用你的 <code>mul32</code>(這個任務的 Lab 之後會補在那一章)。</p>
+          <p class="lab-rule">這個零件過關之後,後面的專題一律用你自己的版本。規則見<a href="00-about.html#lab-rules">零件庫規則</a>。</p>
+        </div>
+      </div>
+
+      <h2>和外界說話:ecall 與記憶體映射 I/O</h2>
+      <p>
+        程式算完了,要怎麼印出結果?在 Hack 裡,螢幕是一段記憶體。RISC-V 有兩種做法,本章兩種都用。
+      </p>
+      <h3>ecall:請執行環境幫忙</h3>
+      <p>
+        <code>ecall</code> 會讓 CPU 把控制權交給「執行環境」:真實的機器上是作業系統的核心,模擬器裡是模擬器自己。要做什麼,照約定放在暫存器裡:
+        <code>a7</code> 放編號,<code>a0</code> 放參數。下表是 Ripes 模擬器的編號,本書(包括本章 Lab 的模擬器)也照這一套:
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th><code>a7</code></th><th><code>a0</code></th><th>名稱</th><th>做什麼</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td>要印的整數</td><td>print_int</td><td>把 a0 當有號整數,印十進位</td></tr>
+          <tr><td>4</td><td>字串的位址</td><td>print_string</td><td>印出 a0 指到的、以 NUL 結尾的字串</td></tr>
+          <tr><td>10</td><td>—</td><td>exit</td><td>結束程式(結束碼 0)</td></tr>
+          <tr><td>11</td><td>要印的字元</td><td>print_char</td><td>把 a0 的低 8 位元當成一個字元印出</td></tr>
+          <tr><td>93</td><td>結束碼</td><td>exit</td><td>結束程式,結束碼是 a0</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        這張表改寫自 Ripes 的文件 <code>docs/ecalls.md</code>(Morten Borup Petersen,<a href="https://github.com/mortbopet/Ripes">mortbopet/Ripes</a>,MIT 授權),只留下本書用到的五個編號。
+        Ripes 另外還有 2(印浮點數)、34(十六進位)、35(二進位)、36(無號整數)等編號。
+      </p>
+      <p>
+        第一支程式 <code>hello.s</code> 就是用 4、1、11、93 印出 <code>answer = 42</code>。
+        在 RISC-V 的 Linux 上,<code>ecall</code> 是真正的系統呼叫(system call,見<a href="24-operating-system.html">{{ch:24-operating-system}}</a>),編號是另一套:
+        64 是 <code>write</code>、93 是 <code>exit</code>。93 剛好相同,其他編號都不一樣,同一支程式不能直接拿到 Linux 上跑。
+      </p>
+
+      <h3>記憶體映射 I/O:寫到某個位址就是印字</h3>
+      <p>
+        真實的嵌入式系統常常沒有作業系統可以 <code>ecall</code>。周邊裝置(序列埠、LED、計時器)直接「掛」在某段位址上,讀寫那些位址就是在操作裝置。
+        這叫<strong>記憶體映射 I/O(memory-mapped I/O,MMIO)</strong>,和 Hack 的 SCREEN、KBD 是同一個想法。本書的 RV32I 環境約定兩個位址:
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>位址</th><th>名稱</th><th>寫入</th><th>讀取</th></tr></thead>
+        <tbody>
+          <tr><td><code>0x10000000</code></td><td>CONSOLE</td><td><code>sb</code>/<code>sh</code>/<code>sw</code>:把寫入值的低 8 位元當成一個字元輸出</td><td>得到 0</td></tr>
+          <tr><td><code>0x10000004</code></td><td>EXIT</td><td><code>sw</code>:結束程式,結束碼是寫入的值(有號)</td><td>得到 0</td></tr>
+        </tbody>
+      </table></div>
+<pre><code class="language-text">    .text
+    .globl _start
+_start:
+    li   t0, 0x10000000 # CONSOLE 的位址
+    li   t1, 'H'
+    sb   t1, 0(t0)      # 寫一個位元組 = 印一個字
+    li   t1, 'i'
+    sb   t1, 0(t0)
+    li   t1, '\n'
+    sb   t1, 0(t0)
+    li   t1, 3
+    sw   t1, 4(t0)      # 寫到 0x10000004(EXIT):結束,結束碼 3</code></pre>
+      <p>
+        <code>li t0, 0x10000000</code> 低 12 位元是 0,只要一條 <code>lui t0, 0x10000</code>;EXIT 用 <code>sw t1, 4(t0)</code>,位移 4 就到了 0x10000004。
+        在完整的 RV32I 模擬器上執行,console 印出 <code>Hi</code> 加換行,結束碼 3,共執行 9 條指令。
+        IC 路線之後自己設計 CPU 時,CPU 的測試也用同樣的兩個位址輸出,這樣同一支程式在模擬器和硬體上都能跑。
+      </p>
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">C 程式怎麼寫 MMIO</span>
+          <p>C 裡面要用 <code>volatile</code> 指標:<code>*(volatile unsigned char *)0x10000000 = 'H';</code>。<code>volatile</code> 告訴編譯器「每次寫入都有作用,不能省、不能合併」;
+          少了它,編譯器可能覺得連續寫同一個位址三次沒有意義,只留最後一次。</p>
+        </div>
+      </div>
+
+      <h2>從 C 到 RV32I:看編譯器怎麼寫</h2>
+      <p>
+        本章的程式都是手寫的。真實世界裡,你讀到的組合語言大多是編譯器產生的。來看 gcc 12 把一個小函式編成什麼樣子:
+      </p>
+<pre><code class="language-c">int max3(int a, int b, int c) {
+    int m = a;
+    if (b &gt; m) m = b;
+    if (c &gt; m) m = c;
+    return m;
+}
+
+int times10(int x) { return x * 10; }
+
+int times(int x, int y) { return x * y; }</code></pre>
+<pre><code class="language-bash">riscv64-unknown-elf-gcc -march=rv32i -mabi=ilp32 -O0 -c cfun.c -o cfun.o
+riscv64-unknown-elf-objdump -d -M no-aliases cfun.o</code></pre>
+      <p><code>-O0</code>(不最佳化)的 <code>max3</code>:</p>
+<pre><code class="language-text">00000000 &lt;max3&gt;:
+   0:   fd010113                addi    sp,sp,-48
+   4:   02812623                sw      s0,44(sp)
+   8:   03010413                addi    s0,sp,48
+   c:   fca42e23                sw      a0,-36(s0)
+  10:   fcb42c23                sw      a1,-40(s0)
+  14:   fcc42a23                sw      a2,-44(s0)
+  18:   fdc42783                lw      a5,-36(s0)
+  1c:   fef42623                sw      a5,-20(s0)
+  20:   fd842703                lw      a4,-40(s0)
+  24:   fec42783                lw      a5,-20(s0)
+  28:   00e7d663                bge     a5,a4,34 &lt;.L2&gt;
+  2c:   fd842783                lw      a5,-40(s0)
+  30:   fef42623                sw      a5,-20(s0)
+
+00000034 &lt;.L2&gt;:
+  34:   fd442703                lw      a4,-44(s0)
+  38:   fec42783                lw      a5,-20(s0)
+  3c:   00e7d663                bge     a5,a4,48 &lt;.L3&gt;
+  40:   fd442783                lw      a5,-44(s0)
+  44:   fef42623                sw      a5,-20(s0)
+
+00000048 &lt;.L3&gt;:
+  48:   fec42783                lw      a5,-20(s0)
+  4c:   00078513                addi    a0,a5,0
+  50:   02c12403                lw      s0,44(sp)
+  54:   03010113                addi    sp,sp,48
+  58:   00008067                jalr    zero,0(ra)</code></pre>
+      <p>
+        <code>-O0</code> 的編譯器很老實:開一個 48 位元組的框,把 <code>s0</code> 當<strong>框指標</strong>(s0 = 進入時的 sp),
+        三個參數 a、b、c 存到 <code>-36(s0)</code>、<code>-40(s0)</code>、<code>-44(s0)</code>,區域變數 m 放在 <code>-20(s0)</code>,每用一次就從記憶體讀一次。
+        <code>max3</code> 不呼叫別人,所以沒有存 <code>ra</code>。<code>if (b &gt; m)</code> 被翻成 <code>bge a5, a4</code>(m ≥ b 就跳過),正是「條件反過來寫」。
+      </p>
+      <p>同一個檔案用 <code>-O2</code> 編譯,並加上 <code>-r</code> 印出重定位(relocation)資訊:</p>
+<pre><code class="language-text">00000000 &lt;max3&gt;:
+   0:   00050793                addi    a5,a0,0
+   4:   00c5d463                bge     a1,a2,c &lt;.L2&gt;
+                        4: R_RISCV_BRANCH       .L2
+   8:   00060593                addi    a1,a2,0
+
+0000000c &lt;.L2&gt;:
+   c:   00058513                addi    a0,a1,0
+  10:   00f5d463                bge     a1,a5,18 &lt;.L3&gt;
+                        10: R_RISCV_BRANCH      .L3
+  14:   00078513                addi    a0,a5,0
+
+00000018 &lt;.L3&gt;:
+  18:   00008067                jalr    zero,0(ra)
+
+0000001c &lt;times10&gt;:
+  1c:   00251793                slli    a5,a0,0x2
+  20:   00a78533                add     a0,a5,a0
+  24:   00151513                slli    a0,a0,0x1
+  28:   00008067                jalr    zero,0(ra)
+
+0000002c &lt;times&gt;:
+  2c:   ff010113                addi    sp,sp,-16
+  30:   00112623                sw      ra,12(sp)
+  34:   00000097                auipc   ra,0x0
+                        34: R_RISCV_CALL_PLT    __mulsi3
+                        34: R_RISCV_RELAX       *ABS*
+  38:   000080e7                jalr    ra,0(ra) # 34 &lt;times+0x8&gt;
+  3c:   00c12083                lw      ra,12(sp)
+  40:   01010113                addi    sp,sp,16
+  44:   00008067                jalr    zero,0(ra)</code></pre>
+      <ul>
+        <li><code>max3</code> 只剩 7 條指令,完全不碰堆疊:全部在 a 暫存器裡做完。這是葉函式的好處。</li>
+        <li><code>times10</code>:RV32I 沒有乘法,gcc 把 <code>x * 10</code> 改成 (x·4 + x)·2,用兩次移位和一次加法。</li>
+        <li><code>times</code>:兩個變數相乘,沒辦法用固定的移位,只好呼叫 libgcc 的 <code>__mulsi3</code>(<code>R_RISCV_CALL_PLT</code> 那一行是告訴連結器「這裡要填 __mulsi3 的位址」)。
+          因為這是一次呼叫,<code>times</code> 必須開框保存 <code>ra</code>。用 <code>-march=rv32im</code> 編譯,同一個函式只剩 <code>mul a0, a0, a1</code> 和 <code>ret</code> 兩條。</li>
+      </ul>
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">小技巧:讀編譯器輸出的順序</span>
+          <p>先找序言(<code>addi sp, sp, -N</code> 與一串 <code>sw</code>)知道框多大、存了哪些暫存器;再找尾聲與 <code>jalr zero, 0(ra)</code> 知道出口在哪;
+          中間把 a0–a7 當參數、a0 當回傳值,分支照「條件反過來」翻回 if。<a href="https://godbolt.org/">Compiler Explorer(godbolt.org)</a> 可以選 RISC-V 的 gcc 或 clang,左邊打 C、右邊即時看組合語言。</p>
+        </div>
+      </div>
+
+      <h2>用 Python 寫一個迷你指令集模擬器</h2>
+      <p>
+        <strong>指令集模擬器(instruction set simulator,ISS)</strong>用軟體照著規格一條一條執行機器碼。它不管管線、快取這些硬體細節,只管「每條指令執行完之後,暫存器、記憶體和 pc 應該是什麼」。
+        它是 CPU 設計的參考答案,也是學指令集最好的方法:寫完一個,你就再也不會忘記 B 型的立即值怎麼排。
+      </p>
+      <p>
+        下面是一個<strong>只認 13 條指令</strong>的迷你版:<code>lui</code>、<code>addi</code>、<code>slli</code>、<code>add</code>、<code>sub</code>、<code>lw</code>、<code>sw</code>、
+        <code>beq</code>、<code>bne</code>、<code>blt</code>、<code>jal</code>、<code>jalr</code>、<code>ecall</code>(只有 1、11、93 三個編號)。
+        它剛好夠跑本章的 fib 程式。它<strong>不是</strong>本章 Lab 要的模擬器:Lab 要全部 40 條指令、各種錯誤(非法指令、沒對齊、超出範圍)、MMIO、反組譯、存取紀錄與效能要求,介面也不一樣。
+        這裡只讓你看到骨架。
+      </p>
+<pre><code class="language-python"># mini_rv.py:只認 13 條 RV32I 指令的迷你模擬器(示範骨架,不是本章 Lab 要的完整 ISS)
+MASK = 0xFFFFFFFF
+
+def sext(value, bits):
+    """把 bits 位元寬的值做符號延伸,回傳 Python 的有號 int。"""
+    value &amp;= (1 &lt;&lt; bits) - 1
+    return value - (1 &lt;&lt; bits) if value &gt;&gt; (bits - 1) else value
+
+# 立即值:照六種格式把散開的位元撿回來
+def imm_i(w): return sext(w &gt;&gt; 20, 12)
+def imm_s(w): return sext((w &gt;&gt; 25) &lt;&lt; 5 | (w &gt;&gt; 7) &amp; 0x1F, 12)
+def imm_b(w): return sext((w &gt;&gt; 31) &lt;&lt; 12 | (w &gt;&gt; 7 &amp; 1) &lt;&lt; 11
+                          | (w &gt;&gt; 25 &amp; 0x3F) &lt;&lt; 5 | (w &gt;&gt; 8 &amp; 0xF) &lt;&lt; 1, 13)
+def imm_j(w): return sext((w &gt;&gt; 31) &lt;&lt; 20 | (w &gt;&gt; 12 &amp; 0xFF) &lt;&lt; 12
+                          | (w &gt;&gt; 20 &amp; 1) &lt;&lt; 11 | (w &gt;&gt; 21 &amp; 0x3FF) &lt;&lt; 1, 21)
+
+class MiniRV:
+    def __init__(self, words, mem_size=1 &lt;&lt; 20):
+        self.mem = bytearray(mem_size)
+        for i, w in enumerate(words):                 # 程式從位址 0 開始放,小端序
+            self.mem[4 * i:4 * i + 4] = w.to_bytes(4, 'little')
+        self.x = [0] * 32                             # x0..x31
+        self.x[2] = mem_size                          # sp 指向記憶體頂端
+        self.pc = 0
+        self.out = ''
+        self.halted = False
+
+    def word(self, addr):
+        return int.from_bytes(self.mem[addr:addr + 4], 'little')
+
+    def step(self):
+        w = self.word(self.pc)
+        op, rd, f3 = w &amp; 0x7F, w &gt;&gt; 7 &amp; 0x1F, w &gt;&gt; 12 &amp; 7
+        rs1, rs2, f7 = w &gt;&gt; 15 &amp; 0x1F, w &gt;&gt; 20 &amp; 0x1F, w &gt;&gt; 25
+        a, b = self.x[rs1], self.x[rs2]
+        next_pc, val = self.pc + 4, None              # val:要寫進 rd 的值
+        if op == 0x37:                   val = w &amp; 0xFFFFF000               # lui
+        elif op == 0x13 and f3 == 0:     val = a + imm_i(w)                 # addi
+        elif op == 0x13 and f3 == 1:     val = a &lt;&lt; rs2                     # slli(shamt 放在 rs2 的位置)
+        elif op == 0x33 and f3 == 0:     val = a - b if f7 == 0x20 else a + b   # sub / add
+        elif op == 0x03 and f3 == 2:     val = self.word((a + imm_i(w)) &amp; MASK)  # lw
+        elif op == 0x23 and f3 == 2:                                        # sw
+            addr = (a + imm_s(w)) &amp; MASK
+            self.mem[addr:addr + 4] = b.to_bytes(4, 'little')
+        elif op == 0x63 and f3 in (0, 1, 4):                                # beq / bne / blt
+            taken = {0: a == b, 1: a != b, 4: sext(a, 32) &lt; sext(b, 32)}[f3]
+            if taken:
+                next_pc = self.pc + imm_b(w)
+        elif op == 0x6F:                 val, next_pc = next_pc, self.pc + imm_j(w)       # jal
+        elif op == 0x67:                 val, next_pc = next_pc, (a + imm_i(w)) &amp; ~1      # jalr
+        elif w == 0x00000073:            self.ecall()                                     # ecall
+        else:
+            raise ValueError(f'不認得的指令 {w:08x}(pc = {self.pc:#x})')
+        if val is not None and rd != 0:               # 寫 x0 沒有作用
+            self.x[rd] = val &amp; MASK
+        self.pc = next_pc &amp; MASK
+
+    def ecall(self):
+        num, a0 = self.x[17], self.x[10]              # a7 = 編號,a0 = 參數
+        if num == 1:    self.out += str(sext(a0, 32))  # print_int
+        elif num == 11: self.out += chr(a0 &amp; 0xFF)     # print_char
+        elif num == 93: self.halted = True             # exit
+        else:
+            raise ValueError(f'不支援的 ecall {num}')
+
+    def run(self, limit=100_000):
+        steps = 0
+        while not self.halted and steps &lt; limit:
+            self.step()
+            steps += 1
+        return steps</code></pre>
+      <p>結構就是<a href="21-cpu-machine-language.html">{{ch:21-cpu-machine-language}}</a>的指令週期:</p>
+      <ol>
+        <li><strong>取指令</strong>:從 <code>mem[pc]</code> 讀 4 個位元組(小端序)。</li>
+        <li><strong>解碼</strong>:用移位和遮罩切出 opcode、rd、funct3、rs1、rs2、funct7,立即值用前面的 <code>imm_*</code> 撿回來。</li>
+        <li><strong>執行</strong>:一長串 <code>if</code>/<code>elif</code>,每條指令一行。</li>
+        <li><strong>寫回</strong>:有結果就寫進 rd(rd 是 x0 時丟掉),最後更新 pc。所有值都 <code>&amp; MASK</code> 保持在 32 位元,這就是 Python 版的「繞回」。</li>
+      </ol>
+      <p>把 fib.s 組譯出來的 28 個字放進去執行,並印出前 10 步改了哪些暫存器:</p>
+<pre><code class="language-python">from mini_rv import MiniRV
+
+FIB = [  # fib.s 組譯、連結之後的 28 個字(objcopy -O binary 再每 4 位元組一個字)
+    0x00100137, 0x00600513, 0x018000ef, 0x00100893,
+    0x00000073, 0x00000513, 0x05d00893, 0x00000073,
+    0xff010113, 0x00112623, 0x00812423, 0x00912223,
+    0x00050413, 0x00200293, 0x02554063, 0xfff40513,
+    0xfe1ff0ef, 0x00050493, 0xffe40513, 0xfd5ff0ef,
+    0x00a48533, 0x0080006f, 0x00040513, 0x00412483,
+    0x00812403, 0x00c12083, 0x01010113, 0x00008067,
+]
+
+if __name__ == '__main__':
+    m = MiniRV(FIB)
+    steps = m.run()
+    print('輸出:', m.out, ' 執行指令數:', steps, ' sp:', hex(m.x[2]))
+
+    m = MiniRV(FIB)                         # 再跑一次,印出前 10 步
+    for _ in range(10):
+        pc = m.pc
+        before = m.x[:]
+        m.step()
+        changed = [f'x{i}={m.x[i]:#x}' for i in range(32) if m.x[i] != before[i]]
+        print(f'pc={pc:#04x}  {m.word(pc):08x}  -&gt;  pc={m.pc:#04x}  {" ".join(changed)}')</code></pre>
+<pre><code class="language-text">輸出: 8  執行指令數: 405  sp: 0x100000
+pc=0x00  00100137  -&gt;  pc=0x04  
+pc=0x04  00600513  -&gt;  pc=0x08  x10=0x6
+pc=0x08  018000ef  -&gt;  pc=0x20  x1=0xc
+pc=0x20  ff010113  -&gt;  pc=0x24  x2=0xffff0
+pc=0x24  00112623  -&gt;  pc=0x28  
+pc=0x28  00812423  -&gt;  pc=0x2c  
+pc=0x2c  00912223  -&gt;  pc=0x30  
+pc=0x30  00050413  -&gt;  pc=0x34  x8=0x6
+pc=0x34  00200293  -&gt;  pc=0x38  x5=0x2
+pc=0x38  02554063  -&gt;  pc=0x3c  </code></pre>
+      <p>
+        印出的 <code>8</code> 和 405 條指令,和前面完整模擬器的結果一樣。第一步 <code>lui sp, 0x100</code> 沒有顯示變化,因為模擬器一開始就把 sp 設成 0x100000 了。
+      </p>
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">看起來對但其實錯:「寫 x0 的檢查可以拿掉,正常程式不會寫 x0」</span>
+          <p>把 <code>step()</code> 裡的 <code>and rd != 0</code> 拿掉,前 10 步的輸出完全一樣,一條直線執行的小程式也都對。但 <code>j</code> 是 <code>jal zero</code>、<code>ret</code> 是 <code>jalr zero</code>、<code>nop</code> 是 <code>addi zero</code>:
+          正常程式<strong>一天到晚</strong>在寫 x0。實際試的結果:fib 程式第一次 <code>ret</code> 把 x0 改成 0x70,之後 <code>li a7, 1</code>(<code>addi a7, zero, 1</code>)變成 a7 = 0x71,模擬器停在「不支援的 ecall 113」;
+          倒數迴圈的 <code>j loop</code> 把 x0 改成 0x18,<code>beqz t0</code> 再也不成立,跑滿 10 萬步也停不下來。</p>
+        </div>
+      </div>
+
+      <h3>把呼叫約定寫成 assert</h3>
+      <p>
+        呼叫約定是一組<strong>不變式(invariant)</strong>:函式回來的時候,sp、s0–s11 要和進去時一樣;執行的每一刻,sp 都要 16 對齊。
+        有了模擬器,這些可以直接寫成程式來檢查。下面的 <code>call()</code> 模仿測試框架:在 s 暫存器放檢查值,把 ra 設成一個假的返回位址,跑到 pc 回到那裡為止。
+        每一步只做 O(1) 的檢查(sp 對齊),整體性質(s 暫存器沒變)回來之後才查。
+      </p>
+<pre><code class="language-python">from mini_rv import MiniRV
+from run_fib import FIB
+
+SAVED = [2, 8, 9] + list(range(18, 28))     # sp、s0、s1、s2..s11
+RET = 0x000FFF00                            # 假的返回位址:pc 走到這裡就算函式回來了
+
+def call(words, entry, a0):
+    """像測試框架一樣呼叫一個函式,並檢查呼叫約定的不變式。"""
+    m = MiniRV(words)
+    for r in SAVED[1:]:
+        m.x[r] = 0x5EED0000 + r             # 在 s 暫存器放檢查值
+    m.x[1], m.x[10], m.pc = RET, a0, entry  # ra、a0、pc
+    before = {r: m.x[r] for r in SAVED}
+    steps = 0
+    while m.pc != RET:
+        m.step()
+        steps += 1
+        assert m.x[2] % 16 == 0, f'sp 沒有 16 位元組對齊:{m.x[2]:#x}'   # O(1),每一步都查
+        assert steps &lt; 100_000, '跑太久,可能沒有回到 ra'
+    for r in SAVED:                         # 整體性質:回來之後才查
+        assert m.x[r] == before[r], f'x{r} 被改了:{before[r]:#x} → {m.x[r]:#x}'
+    return m.x[10], steps
+
+print('fib(10) =', call(FIB, 0x20, 10))
+
+broken = FIB[:]
+broken[11] = 0x00000013                     # 0x2c 的 sw s1, 4(sp) 換成 nop
+broken[23] = 0x00000013                     # 0x5c 的 lw s1, 4(sp) 換成 nop
+try:
+    print('壞掉的 fib(10) =', call(broken, 0x20, 10))
+except AssertionError as e:
+    print('抓到了:', e)</code></pre>
+<pre><code class="language-text">fib(10) = (55, 2829)
+抓到了: x9 被改了:0x5eed0009 → 0x1</code></pre>
+      <p>
+        正常的 fib(10) = 55,執行 2,829 條指令(這次不經過 <code>_start</code>)。故意把存 s1、還原 s1 的兩條指令換成 <code>nop</code>(<code>0x00000013</code>):
+        它弄壞了呼叫者的 s1,<code>assert</code> 一回來就抓到。其實這個壞掉的版本連自己的答案都錯了(直接跑會算出 fib(10) = 5),因為 fib 的兩次遞迴也靠「呼叫之後 s1 不變」;
+        但 <code>assert</code> 不必知道正確答案是多少,只看約定就抓得到。這就是測試的思路:<strong>不只看答案,也看約定</strong>。
+      </p>
+
+      <h3>手算:模擬器的一步</h3>
+      <p>
+        當一回模擬器。每一步:讀 pc 的字 → 看 opcode 決定格式 → 切欄位 → 執行 → 寫回 rd、更新 pc。
+        下表是上面 <code>run_fib.py</code> 印出的前 10 步,把模擬器心裡做的事寫出來(本章 Lab 的 <code>step()</code> 也是一次做一條,並回報這一步寫了哪個暫存器、寫了什麼值):
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>pc</th><th>字</th><th>opcode → 格式</th><th>欄位</th><th>指令</th><th>寫入</th><th>下一個 pc</th></tr></thead>
+        <tbody>
+          <tr><td>0x00</td><td><code>00100137</code></td><td>0x37 → U</td><td>rd = 2,imm = 0x00100000</td><td><code>lui sp, 0x100</code></td><td>sp = 0x100000(本來就是)</td><td>0x04</td></tr>
+          <tr><td>0x04</td><td><code>00600513</code></td><td>0x13 → I</td><td>rd = 10,f3 = 0,rs1 = 0,imm = 6</td><td><code>addi a0, zero, 6</code></td><td>a0 = 6</td><td>0x08</td></tr>
+          <tr><td>0x08</td><td><code>018000ef</code></td><td>0x6F → J</td><td>rd = 1,imm = 24</td><td><code>jal ra, 0x20</code></td><td>ra = 0x0c</td><td>0x08 + 24 = 0x20</td></tr>
+          <tr><td>0x20</td><td><code>ff010113</code></td><td>0x13 → I</td><td>rd = 2,rs1 = 2,imm = −16</td><td><code>addi sp, sp, -16</code></td><td>sp = 0xffff0</td><td>0x24</td></tr>
+          <tr><td>0x24</td><td><code>00112623</code></td><td>0x23 → S</td><td>f3 = 2,rs1 = 2,rs2 = 1,imm = 12</td><td><code>sw ra, 12(sp)</code></td><td>(記憶體 0xffffc = 0x0c)</td><td>0x28</td></tr>
+          <tr><td>0x28</td><td><code>00812423</code></td><td>0x23 → S</td><td>rs1 = 2,rs2 = 8,imm = 8</td><td><code>sw s0, 8(sp)</code></td><td>(記憶體 0xffff8 = 0)</td><td>0x2c</td></tr>
+          <tr><td>0x2c</td><td><code>00912223</code></td><td>0x23 → S</td><td>rs1 = 2,rs2 = 9,imm = 4</td><td><code>sw s1, 4(sp)</code></td><td>(記憶體 0xffff4 = 0)</td><td>0x30</td></tr>
+          <tr><td>0x30</td><td><code>00050413</code></td><td>0x13 → I</td><td>rd = 8,rs1 = 10,imm = 0</td><td><code>addi s0, a0, 0</code></td><td>s0 = 6</td><td>0x34</td></tr>
+          <tr><td>0x34</td><td><code>00200293</code></td><td>0x13 → I</td><td>rd = 5,rs1 = 0,imm = 2</td><td><code>addi t0, zero, 2</code></td><td>t0 = 2</td><td>0x38</td></tr>
+          <tr><td>0x38</td><td><code>02554063</code></td><td>0x63 → B</td><td>f3 = 4(blt),rs1 = 10,rs2 = 5,imm = 32</td><td><code>blt a0, t0, 0x58</code></td><td>(6 &lt; 2 不成立)</td><td>0x3c</td></tr>
+        </tbody>
+      </table></div>
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 135.8 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>
+            計算 fib(3) 的途中,fib(2) 正要回去。這時 pc = 0x5c、ra = 0x50、sp = 0xfffe0、s0 = 2、s1 = 1、a0 = 1(fib(2) 的答案),
+            記憶體 0xfffe4 = 0、0xfffe8 = 3、0xfffec = 0x44。照上表的格式,從 pc = 0x5c 開始執行 8 步(字請查前面 fib 的反組譯),寫出每一步寫了哪個暫存器、寫了什麼值、下一個 pc。
+          </p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <div class="table-wrap"><table>
+              <thead><tr><th>pc</th><th>字</th><th>指令</th><th>寫入</th><th>下一個 pc</th></tr></thead>
+              <tbody>
+                <tr><td>0x5c</td><td><code>00412483</code></td><td><code>lw s1, 4(sp)</code>(讀 0xfffe4)</td><td>s1 = 0</td><td>0x60</td></tr>
+                <tr><td>0x60</td><td><code>00812403</code></td><td><code>lw s0, 8(sp)</code>(讀 0xfffe8)</td><td>s0 = 3</td><td>0x64</td></tr>
+                <tr><td>0x64</td><td><code>00c12083</code></td><td><code>lw ra, 12(sp)</code>(讀 0xfffec)</td><td>ra = 0x44</td><td>0x68</td></tr>
+                <tr><td>0x68</td><td><code>01010113</code></td><td><code>addi sp, sp, 16</code></td><td>sp = 0xffff0</td><td>0x6c</td></tr>
+                <tr><td>0x6c</td><td><code>00008067</code></td><td><code>jalr zero, 0(ra)</code></td><td>(rd = x0,不寫)</td><td>0x44</td></tr>
+                <tr><td>0x44</td><td><code>00050493</code></td><td><code>addi s1, a0, 0</code></td><td>s1 = 1</td><td>0x48</td></tr>
+                <tr><td>0x48</td><td><code>ffe40513</code></td><td><code>addi a0, s0, -2</code></td><td>a0 = 1</td><td>0x4c</td></tr>
+                <tr><td>0x4c</td><td><code>fd5ff0ef</code></td><td><code>jal ra, 0x20</code></td><td>ra = 0x50</td><td>0x20</td></tr>
+              </tbody>
+            </table></div>
+            <p>前 5 步是 fib(2) 的尾聲:還原 fib(3) 的 s1 = 0、s0 = 3,拿回 ra = 0x44,收框,回到 fib(3)。後 3 步是 fib(3) 存起 fib(2) = 1、準備呼叫 fib(1)。
+            這 8 步和完整模擬器逐步執行的紀錄一致。第 5 步注意:<code>jalr zero</code> 會算出 pc + 4 = 0x70,但 rd 是 x0,所以丟掉。</p>
+          </div></details>
+        </div>
+      </div>
+      <h3 id="lab-rv32-iss">本章 Lab:指令集模擬器 rv32/iss.py</h3>
+      <div class="callout lab" data-task="rv32/iss">
+        <div class="ico">🧪</div>
+        <div class="body">
+          <span class="c-title">本章 Lab · 任務線「rv32」· 任務「指令集模擬器」</span>
+          <p><strong>對應地下城任務:</strong>任務「指令集模擬器」(任務線:rv32 自己的指令集模擬器＋效能挑戰,第 2／4 個任務)。零件檔:<code>~/零件庫/rv32/iss.py</code>;任務資料夾:<code>~/任務線/rv32/02-iss/</code>。</p>
+          <p><strong>要做的零件:</strong>一個完整的 RV32I 指令集模擬器:全部 40 條指令(37 條＋<code>fence</code>、<code>ecall</code>、<code>ebreak</code>)、解碼、反組譯、ALU、MMIO 與 ecall 輸出、出錯時丟對的 <code>Trap</code>、
+          每一步的 commit 紀錄與資料存取紀錄。之後 IC 路線的 CPU 拿它當參考答案逐條比對,資安路線拿它的反組譯讀程式。</p>
+          <p><strong>介面:</strong></p>
+<pre><code class="language-python"># ~/零件庫/rv32/iss.py
+from collections import namedtuple
+
+class Trap(Exception):
+    """.cause:'illegal'|'misaligned'|'access'|'ebreak'|'ecall'|'step-limit';.pc:出錯那條指令的位址。"""
+
+Instr = namedtuple('Instr', 'name fmt rd rs1 rs2 imm')
+# fmt 是 'R' 'I' 'S' 'B' 'U' 'J' 之一;沒用到的欄位是 0;imm 是符號延伸後的 int
+# (U 型 = imm[31:12] &lt;&lt; 12 當成 32 位元有號數;移位指令的 imm = shamt)
+
+def decode(word) -&gt; Instr:
+    """37 條 RV32I 指令＋fence、ecall、ebreak;其他(M 擴充、CSR 指令、全 0)→ Trap('illegal')。"""
+
+def disasm(word, pc=0) -&gt; str:
+    """照下面的格式回傳一行組合語言;不認得 → '.word 0x%08x'。"""
+
+def alu(op, a, b) -&gt; int:
+    """op ∈ add sub sll slt sltu xor srl sra or and;a、b、結果都是 0..2**32-1;移位只看 b 的低 5 位元。"""
+
+class Machine:
+    def __init__(self, mem_size=1 &lt;&lt; 20):
+        """RAM 在 [0, mem_size),小端序;一開始 pc=0、sp=mem_size、其他暫存器 0。
+        屬性:regs(32 個 0..2**32-1 的值,x0 永遠是 0)、pc、output(bytearray,console 輸出)、
+        exit_code(結束前是 None)、instret(已執行的指令數)、on_mem(None 或 callable)。"""
+    def load_hex(self, text, base=0) -&gt; None:
+        """$readmemh 格式:每個 32 位元字一個十六進位數,依序放進記憶體;// 是註解;@&lt;十六進位字位址&gt; 換位置。"""
+    def load(self, addr, size) -&gt; int:
+        """size 1/2/4;規則和程式的存取一樣(對齊、範圍、MMIO)。"""
+    def store(self, addr, size, value) -&gt; None:
+        """同上。"""
+    def step(self) -&gt; tuple:
+        """執行一條,回傳 (pc, rd, value);沒寫暫存器(store、分支、rd=x0、ecall)時 rd 與 value 是 None。
+        出錯 → Trap,暫存器、記憶體與 pc 都不變。"""
+    def run(self, max_steps=10**7) -&gt; int:
+        """跑到程式結束,回傳 exit_code;執行超過 max_steps 條 → Trap('step-limit')。"""</code></pre>
+          <p><strong>規則細節:</strong></p>
+          <ul>
+            <li><strong>對齊與範圍</strong>:<code>lh</code>/<code>lhu</code>/<code>sh</code> 要 2 對齊、<code>lw</code>/<code>sw</code> 要 4 對齊,否則 <code>Trap('misaligned')</code>;跳到不是 4 對齊的位址(分支成立、<code>jal</code>、<code>jalr</code> 清掉最低位之後)也是 <code>Trap('misaligned')</code>;RAM 與 MMIO 以外 → <code>Trap('access')</code>。</li>
+            <li><strong>MMIO</strong>:<code>sb</code>/<code>sh</code>/<code>sw</code> 寫到 0x10000000(CONSOLE)把低 8 位元附加到 <code>output</code>;<code>sw</code> 寫到 0x10000004(EXIT)結束程式,<code>exit_code</code> = 寫入值(有號);讀這兩個位址得到 0。</li>
+            <li><strong>ecall</strong>(看 a7,編號同本章的表):93 結束(<code>exit_code</code> = a0)、10 結束(0)、11 印字元、1 印有號十進位、4 印 NUL 結尾字串;其他 → <code>Trap('ecall')</code>;<code>ebreak</code> → <code>Trap('ebreak')</code>;<code>fence</code> 什麼都不做。</li>
+            <li><strong>on_mem</strong>:每次資料存取(不含取指令、不含 MMIO)在存取成功後呼叫一次 <code>on_mem(kind, addr, size)</code>,<code>kind</code> 是 <code>'R'</code> 或 <code>'W'</code>;快取模擬器的存取紀錄從這裡來。</li>
+            <li><strong>反組譯格式</strong>:ABI 名稱(x8 寫 <code>s0</code>)、逗號後一個空白、不用假指令。
+              <code>add a0, a1, a2</code>、<code>addi a0, sp, -16</code>、<code>slli a0, a0, 3</code>、<code>lw a0, 8(sp)</code>、<code>jalr ra, 0(t0)</code>、<code>sw a0, -4(s0)</code>、
+              <code>beq a0, zero, 0x1c</code>(分支與 <code>jal</code> 印目標位址 pc + imm)、<code>jal ra, 0x40</code>、<code>lui a0, 0x12345</code>(<code>lui</code>/<code>auipc</code> 印高 20 位元)、<code>ecall</code>。</li>
+            <li><strong>命令列</strong>:<code>python3 rv32/iss.py run prog.hex [--max-steps N] [--mem-trace FILE]</code> 把 console 輸出寫到 stdout、<code>exit_code &amp; 0xFF</code> 當結束碼,<code>--mem-trace</code> 每次資料存取寫一行 <code>R 00001f40 4</code>;
+              <code>python3 rv32/iss.py dis prog.hex</code> 每個字一行 <code>00000010: 00a2a023  sw a0, 0(t0)</code>(位址 8 位、字 8 位、兩個空白、<code>disasm</code> 的結果)。</li>
+          </ul>
+          <p><strong>公開範例:</strong></p>
+<pre><code class="language-python">&gt;&gt;&gt; from rv32.iss import decode, disasm, alu, Machine, Trap
+&gt;&gt;&gt; decode(0xff010113)
+Instr(name='addi', fmt='I', rd=2, rs1=2, rs2=0, imm=-16)
+&gt;&gt;&gt; decode(0x02554063)
+Instr(name='blt', fmt='B', rd=0, rs1=10, rs2=5, imm=32)
+&gt;&gt;&gt; disasm(0x02554063, pc=0x38)
+'blt a0, t0, 0x58'
+&gt;&gt;&gt; disasm(0x00112623), disasm(0x100002b7), disasm(0x00008067)
+('sw ra, 12(sp)', 'lui t0, 0x10000', 'jalr zero, 0(ra)')
+&gt;&gt;&gt; disasm(0x02b50533)
+'.word 0x02b50533'
+&gt;&gt;&gt; hex(alu('sra', 0xfffffff0, 2)), hex(alu('srl', 0xfffffff0, 2))
+('0xfffffffc', '0x3ffffffc')
+&gt;&gt;&gt; alu('slt', 0xffffffff, 1), alu('sltu', 0xffffffff, 1)
+(1, 0)
+&gt;&gt;&gt; HI = """
+... 100002b7  // lui  t0, 0x10000
+... 04800313  // addi t1, zero, 72   ('H')
+... 00628023  // sb   t1, 0(t0)
+... 06900313  // addi t1, zero, 105  ('i')
+... 00628023  // sb   t1, 0(t0)
+... 00300313  // addi t1, zero, 3
+... 0062a223  // sw   t1, 4(t0)       (EXIT)
+... """
+&gt;&gt;&gt; m = Machine()
+&gt;&gt;&gt; m.load_hex(HI)
+&gt;&gt;&gt; m.step(), m.step()
+((0, 5, 268435456), (4, 6, 72))
+&gt;&gt;&gt; m.step()
+(8, None, None)
+&gt;&gt;&gt; m.run()
+3
+&gt;&gt;&gt; bytes(m.output), m.instret
+(b'Hi', 7)
+&gt;&gt;&gt; m = Machine()
+&gt;&gt;&gt; m.load_hex("02b50533")        # mul a0, a0, a1:M 擴充,不是 RV32I
+&gt;&gt;&gt; try:
+...     m.step()
+... except Trap as e:
+...     print(e.cause, e.pc, m.pc, m.instret)
+illegal 0 0 0</code></pre>
+          <p><strong>和本章範例不同的地方:</strong></p>
+          <ul>
+            <li>本章的 <code>MiniRV</code> 只認 13 條指令;Lab 要全部 40 條。</li>
+            <li><code>MiniRV(words)</code> 建構時給字的列表;Lab 是 <code>Machine(mem_size)</code> 再用 <code>load_hex</code> 讀 $readmemh 格式的文字(IC 路線的 Verilog 測試也讀同一種檔案)。</li>
+            <li>名稱不同:暫存器是 <code>regs</code>(不是 <code>x</code>)、輸出是 bytearray 的 <code>output</code>(不是字串 <code>out</code>)、結束看 <code>exit_code</code>(不是 <code>halted</code>)。</li>
+            <li><code>MiniRV.step()</code> 不回傳東西;Lab 的 <code>step()</code> 回傳 <code>(pc, rd, value)</code>。<code>MiniRV.run(limit)</code> 回傳步數、到上限就停;Lab 的 <code>run(max_steps)</code> 回傳 <code>exit_code</code>,超過上限丟 <code>Trap('step-limit')</code>,步數在 <code>instret</code>。</li>
+            <li><code>MiniRV</code> 出錯一律 <code>ValueError</code>,不檢查對齊與範圍;Lab 要分 6 種 <code>Trap</code>,而且出錯時狀態不變。</li>
+            <li><code>MiniRV</code> 的 ecall 只有 1、11、93,沒有 MMIO;Lab 還要 4、10、CONSOLE 與 EXIT。另外還要 <code>decode</code>、<code>disasm</code>、<code>alu</code>、<code>on_mem</code>、命令列與效能門檻。</li>
+          </ul>
+          <p>可以參考本章的範例,但介面和要求不同,要自己改寫。</p>
+          <p><strong>任務目標</strong>(公開的用 <code>test</code> 自己跑;隱藏檢定在 <code>submit</code> 時跑,只看得到名稱和一行說明):</p>
+          <ul class="lab-goals">
+            <li data-group="iss.decode">☐ <strong>解碼</strong>〔公開〕decode 對公開的字(六種格式各幾個):name、fmt、rd、rs1、rs2、imm 都要對。(任務線 rtl 的 Boss 戰「RV32I 測試」也需要它。)</li>
+            <li data-group="iss.disasm">☐ <strong>反組譯</strong>〔公開〕disasm 對公開的字逐字相同(ABI 名稱、逗號後一個空白、分支與 jal 印目標位址、lui／auipc 印高 20 位元);不認得的字印 .word。(任務線 pwn 的 Boss 戰「大學段綜合 CTF」也需要它。)</li>
+            <li data-group="iss.run">☐ <strong>跑程式</strong>〔公開〕公開的 .hex 程式(MMIO 印 Hello、ecall 印數字、遞迴階乘):output、exit_code、最後的暫存器對參考;命令列 run 的 stdout 與結束碼。</li>
+            <li data-group="iss.alu">☐ <strong>運算</strong>〔隱藏檢定〕alu() 與對應的指令:slt 對 sltu(負數)、sra 對 srl、移位量只看低 5 位元(移 33 等於移 1)、加減溢位繞回、寫 x0 沒有作用、lui 加 addi 組出負數。</li>
+            <li data-group="iss.imm">☐ <strong>立即值</strong>〔隱藏檢定〕每種格式立即值的極端值:I／S 型 −2048 與 2047、B 型 ±4 KiB、J 型 ±1 MiB、U 型 0xFFFFF、shamt 31;jalr 清掉最低位;auipc 加負數;往回跳的分支。(任務線 rtl 的 Boss 戰「RV32I 測試」也需要它。)</li>
+            <li data-group="iss.memory">☐ <strong>記憶體與 MMIO</strong>〔隱藏檢定〕lb／lh 符號延伸、lbu／lhu 補 0、小端序;sb／sh 只改到該改的位元組;記憶體最後一個字;CONSOLE 與 EXIT;ecall 1、4、10、11、93。</li>
+            <li data-group="iss.errors">☐ <strong>錯誤處理</strong>〔隱藏檢定〕全 0 的字、0xFFFFFFFF、funct7 不對(例 mul)、CSR 指令要 Trap('illegal');沒對齊的 lw／sw／lh 與跳到沒對齊的位址要 Trap('misaligned');RAM 以外要 Trap('access');ebreak、不認得的 ecall、超過 max_steps 也要丟對的 cause,而且 pc 停在出錯的那條、狀態不變。(任務線 pwn 的 Boss 戰「大學段綜合 CTF」也需要它。)</li>
+            <li data-group="iss.programs">☐ <strong>隱藏程式</strong>〔隱藏檢定〕自己寫的隱藏 .hex(每條指令一支的自我檢查程式＋gcc -O0／-O2 編的 C 程式):最後的暫存器、記憶體摘要、output、exit_code 與 instret 對參考 ISS。(任務線 rtl 的 Boss 戰「RV32I 測試」也需要它。)</li>
+            <li data-group="iss.commit">☐ <strong>逐條紀錄</strong>〔隱藏檢定〕step() 每一步回傳的 (pc, rd, value) 和參考逐條相同(rd=x0 與沒有寫暫存器的指令回傳 None);rtl 的 CPU 用這份紀錄逐條比對。</li>
+            <li data-group="iss.memtrace">☐ <strong>存取紀錄</strong>〔隱藏檢定〕on_mem 的呼叫順序、種類、位址與大小和參考相同:取指令與 MMIO 不算、出錯的存取不算;--mem-trace 檔案逐行相同。</li>
+            <li data-group="iss.perf">☐ <strong>效能</strong>〔隱藏檢定〕主迴圈不能每一步都做很貴的事(例:每次 store 複製整塊記憶體、每一步把字轉成字串再解碼)。門檻:10<sup>6</sup> 條指令(排序＋CRC 的混合程式),5 秒內。
+            這個門檻來自 Boss 戰「自己的模擬器跑自己的程式」(合計約 3×10<sup>6</sup> 條指令,20 秒內)與「快取重播」(3 支程式合計約 1.5×10<sup>6</sup> 條指令,紀錄重播 3 組設定,15 秒內)。</li>
+          </ul>
+          <p><strong>規則:</strong>不能 <code>import subprocess</code>、<code>ctypes</code>(不能叫別的模擬器代勞)。</p>
+          <p><strong>之後會用在:</strong>Boss 戰「自己的模擬器跑自己的程式」「反組譯清單」;<a href="48-computer-architecture.html#lab-rv32-cachesim">{{ch:48-computer-architecture}}的任務「快取模擬器」</a>之後的 Boss 戰「快取重播」:你的 <code>on_mem</code> 產生存取紀錄;
+          任務線 rtl「自己的 RV32I CPU」的任務「解碼與立即值」與「單週期 CPU」:cocotb 測試用 <code>from rv32.iss import decode, Machine</code> 當參考模型(IC 路線的 CPU 設計章);
+          任務線 pwn 的 Boss 戰「大學段綜合 CTF」:讀組合語言的題目用你的反組譯。</p>
+          <p class="lab-rule">這個零件過關之後,後面的專題一律用你自己的版本。規則見<a href="00-about.html#lab-rules">零件庫規則</a>。</p>
+        </div>
+      </div>
+
+      <h2>動手練習</h2>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 135.1 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>(a) 列出四個靠 <code>x0</code> 才能用一條真指令完成的假指令。(b) <code>addi x0, x0, 5</code> 執行之後會發生什麼事?它是合法的指令嗎?</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <p>(a) 例如 <code>nop</code>(<code>addi zero, zero, 0</code>)、<code>li rd, 小常數</code>(<code>addi rd, zero, c</code>)、<code>j</code>(<code>jal zero</code>)、<code>ret</code>(<code>jalr zero, 0(ra)</code>)、
+            <code>beqz</code>(<code>beq rs, zero</code>)、<code>neg</code>(<code>sub rd, zero, rs</code>)、<code>snez</code>(<code>sltu rd, zero, rs</code>)。</p>
+            <p>(b) 合法,而且什麼都不會改變:結果寫進 x0 就被丟掉。規格把 rd = x0 的運算指令都當成「提示」(hint)保留給未來使用,目前的效果就是 nop。真正的 <code>nop</code> 規定用 <code>addi x0, x0, 0</code>(<code>0x00000013</code>)。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 135.2 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>(a) 一條 <code>jal</code> 最遠能跳多遠?(b) 如果要呼叫一個距離 100 MiB 的函式,要怎麼辦?(c) <code>jalr</code> 為什麼要把目標的最低位清成 0?</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <p>(a) J 型立即值 21 位元有號、最低位是 0:往前 1048574 位元組,往回 1048576 位元組,約 ±1 MiB。</p>
+            <p>(b) 用 <code>auipc</code> 加 <code>jalr</code>(就是假指令 <code>call</code>):<code>auipc ra, hi</code> 算出 pc + hi·4096,<code>jalr ra, lo(ra)</code> 再加上 12 位元的 lo 並跳過去,範圍 ±2 GiB。hi/lo 的拆法和 <code>li</code> 一樣要處理「lo 是負數時 hi 加 1」。</p>
+            <p>(c) 讓 jalr 的目標計算和 jal、分支一樣:位移都是偶數。有了 C 擴充(16 位元的壓縮指令)後,指令只要 2 對齊;清掉最低位也讓軟體可以把最低位拿來做標記。只有 RV32I 時,目標還要 4 對齊,否則是「指令位址沒對齊」的例外。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 135.3 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>把下面的 C 翻成 RV32I,a 在 a0、b 在 a1,結果 x 放 t2:<code>if (a &lt; b) x = 1; else x = 2;</code>。寫兩個版本:a、b 是 <code>int</code>,和 a、b 是 <code>unsigned</code>。
+          用 a = −1、b = 1 執行,兩個版本的 x 各是多少?</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+<pre><code class="language-text">    .text
+    .globl _start
+_start:
+    li   a0, -1
+    li   a1, 1
+    # 有號:if (a &lt; b) x = 1; else x = 2;   x 放 t2
+    bge  a0, a1, s_else
+    li   t2, 1
+    j    s_end
+s_else:
+    li   t2, 2
+s_end:
+    # 無號:同一個 if,但 a、b 當 unsigned;結果放 t3
+    bgeu a0, a1, u_else
+    li   t3, 1
+    j    u_end
+u_else:
+    li   t3, 2
+u_end:
+    mv   a0, t2
+    li   a7, 1
+    ecall
+    li   a0, ' '
+    li   a7, 11
+    ecall
+    mv   a0, t3
+    li   a7, 1
+    ecall
+    li   a7, 10
+    ecall</code></pre>
+            <p>印出 <code>1 2</code>:有號時 −1 &lt; 1,x = 1;無號時 −1 是 0xFFFFFFFF = 4294967295,不小於 1,x = 2。唯一的差別是 <code>bge</code> 換成 <code>bgeu</code>。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 135.4 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>寫一個葉函式 <code>gcd(a0, a1)</code>,用輾轉相減法算兩個正整數的最大公因數,回傳在 a0。從 <code>_start</code> 呼叫 gcd(48, 18),用 ecall 1 印出結果。</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+<pre><code class="language-text">    .text
+    .globl _start
+_start:
+    li   a0, 48
+    li   a1, 18
+    jal  ra, gcd
+    li   a7, 1
+    ecall               # 印出 6
+    li   a7, 10
+    ecall
+
+# gcd(a0, a1):輾轉相減,a0、a1 都是正數;葉函式,不必開框
+gcd:
+    beq  a0, a1, gcd_done
+    blt  a0, a1, gcd_swap   # 有號比較
+    sub  a0, a0, a1         # a0 &gt; a1:a0 -= a1
+    j    gcd
+gcd_swap:
+    sub  a1, a1, a0         # a1 &gt; a0:a1 -= a0
+    j    gcd
+gcd_done:
+    ret</code></pre>
+            <p>印出 <code>6</code>,共執行 25 條指令。<code>gcd</code> 只用 a0、a1,不呼叫別人,所以不必開框、不必存 ra。
+            (用 <code>%</code> 的輾轉相除法比較快,但 RV32I 沒有除法指令,要自己寫或呼叫 <code>__modsi3</code>。)</p>
+          </div></details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 135.5 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>改寫 fib.s 的 <code>_start</code>,讓它印出 <code>fib(10) = 55</code> 加換行:用 <code>la</code> 與 ecall 4 印前面的字串,ecall 1 印數字,ecall 11 印換行,最後 ecall 93 結束。<code>fib</code> 函式本身不改。</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+<pre><code class="language-text">    .text
+    .globl _start
+_start:
+    li   sp, 0x00100000
+    la   a0, msg
+    li   a7, 4
+    ecall               # 印 "fib(10) = "
+    li   a0, 10
+    jal  ra, fib
+    li   a7, 1
+    ecall               # 印 55
+    li   a0, '\n'
+    li   a7, 11
+    ecall
+    li   a0, 0
+    li   a7, 93
+    ecall
+# (fib 函式同前)
+
+    .data
+msg:
+    .string "fib(10) = "</code></pre>
+            <p>印出 <code>fib(10) = 55</code>。照本章的 <code>--no-relax</code> 建置共執行 2,844 條指令,sp 最低 0xfff60(往下 10 個框)。
+            <code>.data</code> 寫在原始檔的哪裡都可以:連結腳本會把所有 <code>.data</code> 放在整個 <code>.text</code> 後面,不會插進程式中間。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 135.6 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>下面的函式 <code>sum3</code> 回傳 a0 + a1 + a2。它單獨測試時答案都對,但被某些呼叫者呼叫之後,呼叫者就出錯了。錯在哪裡?怎麼改?</p>
+<pre><code class="language-text">sum3:
+    add  s0, a0, a1
+    add  a0, s0, a2
+    ret</code></pre>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <p><code>sum3</code> 改了 <code>s0</code> 卻沒有保存、還原。s0 是被呼叫者保存的暫存器,呼叫者有權假設它不變;例如 fib 把 n 放在 s0,呼叫 sum3 之後 n 就壞了。
+            最簡單的改法是改用 t 暫存器(葉函式不需要 s):<code>add t0, a0, a1</code>、<code>add a0, t0, a2</code>、<code>ret</code>。
+            如果一定要用 s0,就要開框:<code>addi sp, sp, -16</code>、<code>sw s0, 12(sp)</code> …… <code>lw s0, 12(sp)</code>、<code>addi sp, sp, 16</code>。上面的 <code>call()</code> 檢查就會抓到原本的錯。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 135.7 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>一個函式會呼叫別的函式,而且要用 s0、s1、s2、s3 四個保存暫存器。它的框最小要開多大?寫出序言與尾聲(每個值存在框的哪裡)。</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <p>要存 ra 加 4 個 s 暫存器,共 5 個字 = 20 位元組;sp 要 16 對齊,所以開 32 位元組。一種排法:</p>
+<pre><code class="language-text">    addi sp, sp, -32
+    sw   ra, 28(sp)
+    sw   s0, 24(sp)
+    sw   s1, 20(sp)
+    sw   s2, 16(sp)
+    sw   s3, 12(sp)       # 0(sp)..8(sp) 空著
+    ...
+    lw   s3, 12(sp)
+    lw   s2, 16(sp)
+    lw   s1, 20(sp)
+    lw   s0, 24(sp)
+    lw   ra, 28(sp)
+    addi sp, sp, 32
+    ret</code></pre>
+          </div></details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 135.8 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>迷你模擬器跑手算 135.6 的 popcount 程式會失敗,因為它不認得 <code>andi</code> 和 <code>srli</code>。不改 <code>mini_rv.py</code>,寫一個子類別 <code>MiniRV2</code> 加上這兩條指令,讓它跑完這 9 個字:
+          <code>0x00000513, 0x00d00293, 0x00028a63, 0x0012f313, 0x00650533, 0x0012d293, 0xff1ff06f, 0x05d00893, 0x00000073</code>。</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+<pre><code class="language-python">from mini_rv import MiniRV, imm_i
+
+class MiniRV2(MiniRV):
+    def step(self):
+        w = self.word(self.pc)
+        op, rd, f3 = w &amp; 0x7F, w &gt;&gt; 7 &amp; 0x1F, w &gt;&gt; 12 &amp; 7
+        rs1, f7 = w &gt;&gt; 15 &amp; 0x1F, w &gt;&gt; 25
+        a = self.x[rs1]
+        if op == 0x13 and f3 == 7:                    # andi
+            val = a &amp; (imm_i(w) &amp; 0xFFFFFFFF)
+        elif op == 0x13 and f3 == 5 and f7 == 0:      # srli
+            val = a &gt;&gt; (w &gt;&gt; 20 &amp; 0x1F)
+        else:
+            return super().step()                     # 其他交給原本的 13 條
+        if rd != 0:
+            self.x[rd] = val
+        self.pc += 4
+
+POPC = [0x00000513, 0x00d00293, 0x00028a63, 0x0012f313, 0x00650533,
+        0x0012d293, 0xff1ff06f, 0x05d00893, 0x00000073]
+m = MiniRV2(POPC)
+print(m.run(), m.x[10])
+try:
+    MiniRV(POPC).run()
+except ValueError as e:
+    print(e)</code></pre>
+<pre><code class="language-text">25 3
+不認得的指令 0012f313(pc = 0xc)</code></pre>
+            <p>執行 25 條指令,a0 = 3,和手算 135.6 一致;原本的 <code>MiniRV</code> 在 pc = 0xc 的 <code>andi</code> 停下。注意 <code>andi</code> 的立即值要先符號延伸再和 a 做 AND(<code>andi a0, a0, -1</code> 要保留全部 32 位元),
+            <code>srli</code> 要檢查 funct7 = 0,不然會把 <code>srai</code> 也當成邏輯右移。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 135.9 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>看「從 C 到 RV32I」一節 <code>-O0</code> 的 <code>max3</code>。(a) 進入函式時 sp = 0x1000,執行完前三條指令後 s0 是多少?參數 c 存在哪個位址?
+          (b) 為什麼 <code>-O0</code> 版本存了 s0,卻沒有存 ra?(c) <code>-O2</code> 版本為什麼連框都不開?</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <p>(a) <code>addi sp, sp, -48</code> → sp = 0xFD0;<code>sw s0, 44(sp)</code> 把舊 s0 存在 0xFFC;<code>addi s0, sp, 48</code> → s0 = 0x1000(進入時的 sp)。c 存在 <code>-44(s0)</code> = 0x1000 − 44 = 0xFD4。</p>
+            <p>(b) <code>-O0</code> 用 s0 當框指標,所以要保存 s0(被呼叫者保存);<code>max3</code> 不呼叫別人,ra 不會被蓋掉,不必存。</p>
+            <p>(c) 最佳化後所有值都放在 a 暫存器(呼叫者保存,可以隨便用),不需要記憶體,也不呼叫別人,所以不必開框。這是葉函式最省的寫法。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 135.10 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>
+            本章的 fib 程式:n &lt; 2 的呼叫執行 13 條指令(序言 4 條、<code>mv</code>、<code>li</code>、<code>blt</code>、<code>fib_base</code> 的 <code>mv</code>、尾聲 5 條),
+            n ≥ 2 的呼叫本身執行 19 條(不含它呼叫的子問題),<code>_start</code> 執行 8 條。
+            (a) 證明計算 fib(n) 時,n &lt; 2 的呼叫有 F(n+1) 次,n ≥ 2 的呼叫有 F(n+1) − 1 次(F 是費氏數,F(1) = F(2) = 1)。
+            (b) 由此寫出總指令數的公式,並和實測的 fib(3) = 85、fib(4) = 149、fib(6) = 405 條對照。(c) 預測 fib(10)、fib(20) 的指令數。
+          </p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <p>(a) 設 L(n) 是計算 fib(n) 時 n &lt; 2 的呼叫次數(葉),I(n) 是 n ≥ 2 的呼叫次數。L(0) = L(1) = 1,I(0) = I(1) = 0;n ≥ 2 時 L(n) = L(n−1) + L(n−2),I(n) = 1 + I(n−1) + I(n−2)。
+            L 的遞迴式和初值與 F(n+1) 相同,所以 L(n) = F(n+1)。令 J(n) = I(n) + 1,得 J(n) = J(n−1) + J(n−2)、J(0) = J(1) = 1,所以 J(n) = F(n+1),I(n) = F(n+1) − 1。(這是歸納法;換個說法:呼叫樹是一棵滿二元樹,每個內部節點都有兩個子節點,所以內部節點永遠比葉子少 1 個。)</p>
+            <p>(b) 總數 = 13·F(n+1) + 19·(F(n+1) − 1) + 8 = 32·F(n+1) − 11。fib(3):F(4) = 3,32·3 − 11 = 85;fib(4):F(5) = 5,149;fib(6):F(7) = 13,405。全部吻合。</p>
+            <p>(c) fib(10):F(11) = 89,32·89 − 11 = 2,837;fib(20):F(21) = 10946,350,261。實際在模擬器上跑,分別是 2,837 與 350,261 條,印出 55 與 6765。
+            指令數和 fib(n) 本身一樣是指數成長,約 1.618<sup>n</sup>:遞迴版 fib 很適合拿來測模擬器的速度,不適合拿來算費氏數。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <h2>把這一章串起來</h2>
+      <ul>
+        <li><strong>32 個暫存器,硬體上一樣,軟體上分工</strong>:x0 永遠是 0;ra、sp、a0–a7、s0–s11、t0–t6 的角色全部來自 ABI 約定。</li>
+        <li><strong>六種格式</strong>:R(兩個暫存器)、I(暫存器加常數、載入、jalr)、S(儲存)、B(分支)、U(lui、auipc)、J(jal)。rd、rs1、rs2 位置固定,符號位永遠在位元 31。</li>
+        <li><strong>立即值都做符號延伸</strong>;B、J 型的位元打散是為了讓硬體簡單,位移以位元組計、從分支指令自己算起。</li>
+        <li><strong>大常數 = lui + addi</strong>,lo ≥ 0x800 時 hi 要加 1;位址用 auipc + addi。<code>li</code>、<code>la</code>、<code>call</code>、<code>ret</code> 都是假指令。</li>
+        <li><strong>載入儲存</strong>分 1、2、4 位元組,<code>lb</code>/<code>lh</code> 符號延伸、<code>lbu</code>/<code>lhu</code> 補 0;小端序;要對齊。</li>
+        <li><strong>呼叫約定</strong>:參數 a0–a7,回傳 a0;s 與 sp 被呼叫者保存,t、a、ra 呼叫者保存;sp 16 對齊。堆疊框存 ra 與要用的 s 暫存器,序言與尾聲必須配對。</li>
+        <li><strong>和外界說話</strong>:ecall(a7 = 1、4、10、11、93)或 MMIO(0x10000000 印字、0x10000004 結束)。</li>
+        <li><strong>模擬器</strong>就是取指 → 解碼 → 執行 → 寫回的迴圈;呼叫約定可以寫成 assert 自動檢查。</li>
+      </ul>
+      <p>
+        你現在能讀懂編譯器吐出來的 RISC-V,也能用手把它們編成數字。下一步是讓它們跑得快:<a href="48-computer-architecture.html">{{ch:48-computer-architecture}}</a>會把這些指令放進管線、
+        看 <code>lw</code> 之後馬上用結果為什麼要等、分支為什麼會浪費時脈週期,以及快取怎麼決定一個迴圈是快是慢。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">📚</div>
+        <div class="body">
+          <span class="c-title">想更深入?延伸資源</span>
+          <ul>
+            <li><a href="https://riscv.org/technical/specifications/">The RISC-V Instruction Set Manual, Volume I: Unprivileged ISA</a>:官方規格。RV32I 那一章不長,本章的格式圖與指令表都可以在那裡對照。</li>
+            <li><a href="https://github.com/riscv-non-isa/riscv-elf-psabi-doc">RISC-V ELF psABI</a>:呼叫約定、暫存器分工與堆疊對齊的正式文件。</li>
+            <li><a href="https://github.com/mortbopet/Ripes">Ripes</a>(MIT 授權):圖形化的 RISC-V 模擬器,可以單步執行、看暫存器與記憶體,也有單週期與五級管線的處理器模型。本章的 ecall 編號照它的約定。</li>
+            <li>Patterson &amp; Hennessy,《Computer Organization and Design RISC-V Edition》Chapter 2(Instructions: Language of the Computer):本章內容的教科書版本,有更多 C 到組合語言的例子。</li>
+            <li>Harris &amp; Harris,《Digital Design and Computer Architecture, RISC-V Edition》:從邏輯閘一路做到 RISC-V CPU,適合接 IC 路線。</li>
+          </ul>
+        </div>
+      </div>
