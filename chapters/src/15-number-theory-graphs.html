@@ -1295,7 +1295,7 @@ print(bin(poly_mod(0b1101011, 0b1011)))  # 下一節長除法表的例子 → 0b
         </div>
       </div>
 
-      <h3>CRC:把訊息當成多項式來除</h3>
+      <h3 id="crc-polynomial-division">CRC:把訊息當成多項式來除</h3>
       <p>
         CRC 的想法一句話就講完:<strong>把整個訊息當成一個巨大的 GF(2) 多項式 $M(x)$,除以一個事先約定好的生成多項式(generator polynomial)$G(x)$,
         餘式就是 CRC。</strong>
@@ -1533,7 +1533,7 @@ print("兩種寫法一致,而且是線性的")</code></pre>
       </p>
       <p>
         兩個常見的延伸(都可以用同一招證):如果 $x + 1$ 是 $G$ 的因式(把 $x = 1$ 代進 $G$ 得 0,例如 CRC-8 的 <code>0x107</code>:$1 + 1 + 1 + 1 = 0$),
-        那麼<strong>奇數個位元錯</strong>一定抓得到;如果訊框的長度小於「$x$ 的週期」(最小的 k 使 $x^k \bmod G = 1$),那麼<strong>任兩個位元錯</strong>都抓得到。
+        那麼<strong>奇數個位元錯</strong>一定抓得到;如果訊框的長度不超過「$x$ 的週期」(最小的 k 使 $x^k \bmod G = 1$),那麼<strong>任兩個位元錯</strong>都抓得到。
         <code>0x107</code> 的週期是 127,所以 127 個位元以內的訊框,任兩個位元一起錯都抓得到。
       </p>
       <p>
@@ -1616,8 +1616,8 @@ for L in range(1, 6):
           <p><strong>看起來對但其實錯</strong>:「CRC-8 保證抓到長度 ≤ 8 的突發錯誤。所以不管每個位元組是高位先還是低位先送進 CRC,都一樣有這個保證。」
           用錯誤樣式 <code>36 C0 00</code>(十六進位,三個位元組)和同一個 $G = $<code>0x107</code> 檢驗:分別照高位先、低位先把錯誤的 24 個位元排成一列,它各是多長的突發錯誤?</p>
           <details class="solution"><summary>看解答</summary><div class="sol-body">
-            <p>高位先:<code>00110110 11000000 00000000</code>,錯的位元在第 2 到第 9 個,中間是 <code>11011011</code>——長度 8,在保證範圍內。</p>
-            <p>低位先(每個位元組自己倒過來):<code>01101100 00000011 00000000</code>,錯的位元從第 1 個到第 15 個——長度 15,超出保證。
+            <p>高位先:<code>00110110 11000000 00000000</code>,錯的位元在第 3 到第 10 個,中間是 <code>11011011</code>——長度 8,在保證範圍內。</p>
+            <p>低位先(每個位元組自己倒過來):<code>01101100 00000011 00000000</code>,錯的位元從第 2 個到第 16 個——長度 15,超出保證。
             而它剛好被漏掉:</p>
       <pre><code class="language-python">def rev8(b):
     """把一個位元組的 8 個位元前後倒過來"""
@@ -1749,9 +1749,57 @@ print(zlib.crc32(b"\x00\x00hi") == zlib.crc32(b"hi"))             # False:init �
 print(hex(crc_bitwise(b"123456789", G32) ^ 0xFFFFFFFF))  # 0x765e7680 → CRC-32/CKSUM(xorout 全 1)
 print(hex(zlib.crc32(b"123456789")))                      # 0xcbf43926 → CRC-32/ISO-HDLC(zlib)</code></pre>
       <p>
-        CRC-32/CKSUM 的 init 是 0、不反射,只多了「xorout 全 1」,所以本章的函式再 XOR 一次就對上了。zlib 那一種還要 init 全 1 和反射,這兩件事就留給 Lab。
+        CRC-32/CKSUM 的 init 是 0、不反射,只多了「xorout 全 1」,所以本章的函式再 XOR 一次就對上了。zlib 那一種還要 init 全 1 和反射,下面的查表法會補上。
         (兩個實用的觀念:不反射、width 是 8 的倍數、資料至少 w 個位元時,init 全 1 等於把資料的前 w 個位元反相再算;反射的 CRC 實作上常改成暫存器往右移、
         用位元倒過來的多項式,CRC-32 的 <code>0x04C11DB7</code> 倒過來是 <code>0xEDB88320</code>。)
+      </p>
+      <p>
+        前面說過,zlib 和韌體「用查表一次吃一個位元組」。做法只用到不變量「暫存器 ＝ 前綴 $\cdot\, x^w \bmod G$」:
+        前綴多吃一個位元組 b,新的暫存器是 $(r \cdot x^8 + b \cdot x^w) \bmod G$。把 $r$ 拆成最高 8 個位元 $t$ 和其餘的低位,
+        低位乘上 $x^8$ 之後次數還是小於 $w$,不用除;要除的只有 $(t \oplus b) \cdot x^w \bmod G$。它只有 256 種,先用 <code>crc_bitwise</code> 對 0..255 各算一次存成表:
+        不反射的版本每個位元組只做一次 <code>reg = ((reg &lt;&lt; 8) &amp; mask) ^ table[(reg &gt;&gt; (w - 8)) ^ byte]</code>($w \ge 8$)。
+      </p>
+      <pre><code class="language-python">import random, zlib
+
+def make_table(g):
+    """table[t] ＝ crc_bitwise(bytes([t]), g),也就是 t(x)·x^w mod G(x)"""
+    return [crc_bitwise(bytes([t]), g) for t in range(256)]
+
+def crc_table(data, g, table, init=0):
+    """不反射的查表法:一次吃一個位元組。需要 w ≥ 8。"""
+    w = deg(g)
+    mask = (1 &lt;&lt; w) - 1
+    reg = init
+    for byte in data:
+        reg = ((reg &lt;&lt; 8) &amp; mask) ^ table[(reg &gt;&gt; (w - 8)) ^ byte]
+    return reg
+
+T8, T32 = make_table(G8), make_table(G32)
+rng = random.Random(256)
+for _ in range(300):
+    data = bytes(rng.randrange(256) for _ in range(rng.randrange(50)))
+    assert crc_table(data, G8, T8) == crc_bitwise(data, G8)
+    assert crc_table(data, G32, T32) == crc_bitwise(data, G32)
+print(hex(crc_table(b"123456789", G8, T8)))                       # 0xf4(CRC-8/SMBUS)
+print(hex(crc_table(b"123456789", G32, T32, 0xFFFFFFFF) ^ 0xFFFFFFFF))   # 0xfc891918(CRC-32/BZIP2)
+
+def rev(x, nbits):
+    """把 nbits 個位元前後倒過來"""
+    return int(f"{x:0{nbits}b}"[::-1], 2)
+
+def crc32_zlib_style(data):
+    """CRC-32/ISO-HDLC:refin(每個位元組倒過來餵)、init 全 1、refout(暫存器倒過來)、xorout 全 1"""
+    reg = crc_table(bytes(rev(b, 8) for b in data), G32, T32, init=0xFFFFFFFF)
+    return rev(reg, 32) ^ 0xFFFFFFFF
+
+for _ in range(300):
+    data = bytes(rng.randrange(256) for _ in range(rng.randrange(50)))
+    assert crc32_zlib_style(data) == zlib.crc32(data)
+print(hex(crc32_zlib_style(b"123456789")))                        # 0xcbf43926</code></pre>
+      <p>
+        反射的 CRC(refin、refout 都開)實作上通常不必每個位元組倒一次:把暫存器改成往右移、用倒過來的多項式建表(CRC-32 是 <code>0xEDB88320</code>),
+        每個位元組做 <code>reg = (reg &gt;&gt; 8) ^ table[(reg ^ byte) &amp; 0xFF]</code>,結果一樣。$w &lt; 8$ 時 <code>reg &gt;&gt; (w - 8)</code> 不能用,Lab 的 width 3 要另外想辦法
+        (例如把多項式和暫存器都左移 $8 - w$ 位,當成 8 位元的 CRC 算,最後再右移回來)。
       </p>
       <div class="callout key">
         <div class="ico">🔑</div>
@@ -1823,6 +1871,7 @@ True
 &gt;&gt;&gt; q, r = gf2_divmod(0b1101011, 0b1011)
 &gt;&gt;&gt; bin(q), bin(r), gf2_mul(q, 0b1011) ^ r == 0b1101011
 ('0b1111', '0b10', True)
+&gt;&gt;&gt; # width 3 &lt; 8:查表法要另外處理;0xd0 ＝ 11010000 是隨便挑的一個高位是 1 的位元組,G ＝ 1011 和「手算:CRC-3」一樣
 &gt;&gt;&gt; CRC(3, 0b011).compute(b"\xd0") == gf2_divmod(0xd0 &lt;&lt; 3, 0b1011)[1]
 True</code></pre>
           <p><strong>和本章範例不同的地方:</strong></p>
@@ -1839,7 +1888,7 @@ True</code></pre>
             <li data-group="crc.params">☐ <strong>可設定的 CRC</strong>〔公開〕CRC8、CRC16 與公開的幾組參數算 b'123456789' 的 check 值對 CRC 目錄。</li>
             <li data-group="crc.gf2">☐ <strong>GF(2) 多項式</strong>〔公開〕gf2_mul、gf2_divmod 對公開範例;q·b ⊕ r ＝ a 而且 deg r &lt; deg b。</li>
             <li data-group="crc.catalogue">☐ <strong>CRC 目錄</strong>〔隱藏檢定〕隱藏的 CRC 目錄參數(width 3 到 64、反射與不反射、refin ≠ refout、init 與 xorout 不是 0)的 check 值,以及隨機資料對參考模型。</li>
-            <li data-group="crc.theory">☐ <strong>理論性質</strong>〔隱藏檢定〕init = 0、不反射、xorout = 0 時,CRC 等於 gf2_divmod(M(x)·x<sup>w</sup>, G(x)) 的餘式;同長度的資料 crc(a ⊕ b) = crc(a) ⊕ crc(b);資料裡長度 ≤ width 的突發錯誤一定讓 CRC 改變(照 CRC 自己的位元順序:refin=False 是每個位元組的高位先、refin=True 是低位先;短資料窮舉)。</li>
+            <li data-group="crc.theory">☐ <strong>理論性質</strong>〔隱藏檢定〕init = 0、不反射、xorout = 0 時,CRC 等於 gf2_divmod(M(x)·x<sup>w</sup>, G(x)) 的餘式;同長度的資料 crc(a ⊕ b) = crc(a) ⊕ crc(b);poly 的最低位是 1 時,資料裡長度 ≤ width 的突發錯誤一定讓 CRC 改變(照 CRC 自己的位元順序:refin=False 是每個位元組的高位先、refin=True 是低位先;短資料窮舉)。</li>
             <li data-group="crc.errors">☐ <strong>錯誤處理</strong>〔隱藏檢定〕width 不在 1..64、poly／init／xorout 超出範圍要 ValueError;gf2_divmod 除以 0 要 ZeroDivisionError。</li>
             <li data-group="crc.perf">☐ <strong>效能</strong>〔隱藏檢定〕查表法每個位元組 O(1);逐位元的長除法會超時。門檻:4 MiB 的 crc32 1 秒內;CRC8、CRC16 各 1 MiB 1 秒內。這個門檻來自任務「檔案格式與命令列」的任務目標「效能」(256 KiB 的檔 compress＋decompress 合計 2.5 秒內,每個檔要算四次 CRC-32)。</li>
           </ul>
@@ -1966,7 +2015,8 @@ True</code></pre>
         <div class="body">
           <span class="c-title">本章 Lab · 任務線「hzip」· 任務「檔案格式與命令列」</span>
           <p><strong>對應地下城任務:</strong>任務「檔案格式與命令列」(任務線:hzip 壓縮器,第 5／5 個任務)。零件檔:<code>~/零件庫/hzip/cli.py</code>;任務資料夾:<code>~/任務線/hzip/05-cli/</code>。</p>
-          <p><strong>要做的零件:</strong>把前面四個理論零件組成一個真正的工具:照上面的 hzip v1 格式(圖 15-9)壓縮、解壓、檢查檔案,而且任何壞檔都要乾淨地回報,不能當掉。這是任務線的工程專題:Boss 戰全部從這個零件進去。</p>
+          <p><strong>先做完兩個任務:</strong>這個任務會 import 你的 <code>hzip.huffman</code> 與 <code>hzip.lz77</code>,它們在{{ch:108-information-theory}}。先完成{{ch:108-information-theory}}的任務<a href="108-information-theory.html#lab-hzip-huffman">「Huffman 編碼」</a>與<a href="108-information-theory.html#lab-hzip-lz77">「LZ77」</a>,再回來做這個任務。</p>
+          <p><strong>要做的零件:</strong>把任務線的前四個零件組成一個真正的工具:照上面的 hzip v1 格式(圖 15-9)壓縮、解壓、檢查檔案,而且任何壞檔都要乾淨地回報,不能當掉。這是任務線的工程專題:Boss 戰全部從這個零件進去。</p>
           <p><strong>格式(規格規定,兩邊才能互解):</strong>標頭、body、容器 CRC 照圖 15-9 和它下面的表,整數一律大端。body:方法 0 是原始資料;方法 1 是 256 個位元組的碼長表(位元組值 b 的碼長,0 表示沒用到)＋4 個位元組的 nbits＋Huffman 位元流(剛好 ⌈nbits/8⌉ 個位元組,用 <code>hzip.huffman</code> 的 canonical 碼);方法 2 是 <code>lz77.pack(lz77.encode(data))</code> 的結果,再照方法 1 壓。方法 0 的額外負擔剛好 18 個位元組。檔名叫 <code>cli.py</code> 而不是 <code>hzip.py</code>:資料夾 <code>hzip/</code> 裡如果有 <code>hzip.py</code>,用 <code>python3 hzip/hzip.py</code> 執行時,<code>import hzip</code> 會找到這個檔案自己,而不是你的零件庫。</p>
           <p><strong>介面:</strong></p>
 <pre><code class="language-python"># ~/零件庫/hzip/cli.py
