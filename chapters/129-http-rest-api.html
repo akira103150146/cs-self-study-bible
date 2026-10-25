@@ -386,7 +386,7 @@
       </div>
 
       <h2>JSON 本體與一致的錯誤格式</h2>
-      <p>JSON 只有六種值,Python 的 <code>json</code> 模組會自動對應:</p>
+      <p>JSON 只有六種型別,Python 的 <code>json</code> 模組會自動對應:</p>
       <div class="table-wrap">
       <table>
         <thead><tr><th>JSON</th><th>Python</th><th>例子</th></tr></thead>
@@ -401,7 +401,7 @@
       </table>
       </div>
       <p>
-        <code>json.dumps(data, ensure_ascii=False)</code> 讓中文直接以 UTF-8 送出;不加這個參數,中文會變成 <code>寫</code> 這種跳脫寫法。兩種都是合法的 JSON,只是前者比較好讀。
+        <code>json.dumps(data, ensure_ascii=False)</code> 讓中文直接以 UTF-8 送出;不加這個參數,中文會變成 <code>\u5beb</code>(「寫」)這種跳脫寫法。兩種都是合法的 JSON,只是前者比較好讀。
         還有一個 Python 特有的陷阱:<code>bool</code> 是 <code>int</code> 的子類別,<code>isinstance(True, int)</code> 是 <code>True</code>。檢查「要整數」的欄位時,要先排除布林。
       </p>
       <p>錯誤也要用 JSON 回,而且<strong>每一個錯誤都用同一個形狀</strong>:</p>
@@ -1081,6 +1081,7 @@ def make_app(store):
         <li><strong><code>validate</code> 先全部檢查完,才交給資料層</strong>。手算 129.1 第 7 列的「全部不改」就是這樣來的。</li>
         <li><strong>例外變成回應</strong>:<code>ApiError</code> 帶著自己的狀態碼;資料層的 <code>NotFound</code> 變成 404;其他沒預料到的例外變成 500,細節用 <code>traceback.print_exc()</code> 印到伺服器的 stderr。</li>
         <li><strong>304 的時候</strong>,只回 <code>ETag</code> 與 <code>Cache-Control</code>,本體是空的。</li>
+        <li><strong><code>If-None-Match</code> 只做字串相等</strong>:這是簡化版。RFC 9110 的規則還包括弱比較(<code>W/"…"</code>)、用逗號分開的多個 ETag、以及 <code>*</code>;這個範例都不處理。</li>
       </ul>
 
       <h3>掛上 http.server:BaseHTTPRequestHandler 與 ThreadingHTTPServer</h3>
@@ -1140,7 +1141,7 @@ if __name__ == "__main__":
     server.serve_forever()</code></pre>
       <ul>
         <li><strong><code>BaseHTTPRequestHandler</code></strong> 已經幫你讀好請求列和標頭:<code>self.command</code> 是方法,<code>self.path</code> 是路徑加 query,<code>self.headers</code> 是標頭,<code>self.rfile</code> 是還沒讀的本體。
-          收到 <code>PATCH</code> 時它會呼叫 <code>do_PATCH</code>;這裡讓五個方法都指向同一個 <code>_dispatch</code>。沒定義的方法(例如 <code>OPTIONS</code>)它會自己回 501。</li>
+          收到 <code>PATCH</code> 時它會呼叫 <code>do_PATCH</code>;這裡讓五個方法都指向同一個 <code>_dispatch</code>。沒定義的方法(例如 <code>OPTIONS</code>)它會自己回 501。<code>HEAD</code> 也沒定義,所以這個範例對 <code>HEAD</code> 回 501;一般的伺服器應該支援 <code>HEAD</code>(回 GET 的標頭、不送本體),這裡是為了簡單而省略。</li>
         <li><strong><code>self.rfile.read(n)</code></strong> 剛好讀 <code>Content-Length</code> 個位元組。不能「讀到沒有為止」:連線是保留著的,沒有「結尾」。</li>
         <li><strong><code>protocol_version = "HTTP/1.1"</code></strong>:預設是 HTTP/1.0(每個回應後就斷線)。改成 1.1 之後連線會保留,客戶端完全靠 <code>Content-Length</code> 知道本體在哪裡結束,所以每個有本體的回應都要送它。
           <code>Content-Length</code> 不合法時不知道本體有多長,只好回 400 並斷線。</li>
@@ -1153,7 +1154,7 @@ if __name__ == "__main__":
         <div class="body">
           <span class="c-title">http.server 適合學習與測試,不適合直接上線</span>
           <p>Python 官方文件明白寫著:<code>http.server</code> 只做了基本的安全檢查,不建議用在正式環境。
-          它沒有逾時(一個只連線不送資料的客戶端會一直佔著一條執行緒)、沒有請求大小上限、沒有 HTTPS。
+          它沒有逾時(一個只連線不送資料的客戶端會一直佔著一條執行緒)、沒有請求大小上限、沒有 HTTPS。本章的 Handler 也只看 <code>Content-Length</code>,不支援 <code>Transfer-Encoding: chunked</code> 的請求本體。
           學習 HTTP、寫測試、在本機跑小工具都很好;正式上線時,前面要有反向代理和正式的應用伺服器。
           逾時和執行緒池正好是 <a href="24-operating-system.html#lab-srv-pool"><code>srv/pool</code></a> 那一站要你自己做的事。</p>
         </div>
@@ -1555,7 +1556,7 @@ available == copies - (這本書還沒還的借閱筆數)</code></pre>
       <table>
         <thead><tr><th>方法與路徑</th><th>做什麼</th><th>成功</th><th>可能的錯誤</th></tr></thead>
         <tbody>
-          <tr><td><code>GET /books</code></td><td>列出書。<code>?q=</code> 比對書名或作者(照字面比對,<code>%</code>、<code>_</code>、引號都是普通字元);<code>?limit=</code>、<code>?offset=</code> 分頁</td><td>200 <code>{"items", "limit", "offset"}</code></td><td>422</td></tr>
+          <tr><td><code>GET /books</code></td><td>列出書。<code>?q=</code> 比對書名或作者(子字串比對,英文不分大小寫;照字面比對,<code>%</code>、<code>_</code>、引號都是普通字元);<code>?limit=</code>、<code>?offset=</code> 分頁</td><td>200 <code>{"items", "limit", "offset"}</code></td><td>422</td></tr>
           <tr><td><code>POST /books</code></td><td>新增書。<code>title</code>、<code>author</code>、<code>isbn</code> 必填;<code>copies</code> 選填,預設 1</td><td>201,<code>Location: /books/{id}</code>,本體是書</td><td>400、415、422、409(isbn 重複)</td></tr>
           <tr><td><code>GET /books/{id}</code></td><td>一本書,含 <code>available</code></td><td>200</td><td>404</td></tr>
           <tr><td><code>PATCH /books/{id}</code></td><td>只改給的欄位(<code>title</code>、<code>author</code>、<code>isbn</code>、<code>copies</code>)</td><td>200,本體是改完的書</td><td>400、404、415、422、409(isbn 重複,或 <code>copies</code> 比借出中的本數少)</td></tr>
@@ -1570,7 +1571,7 @@ available == copies - (這本書還沒還的借閱筆數)</code></pre>
       <h3>規則細節</h3>
       <ul>
         <li><strong>字串欄位</strong>(<code>title</code>、<code>author</code>、<code>isbn</code>、<code>name</code>、<code>email</code>):必須是字串,去掉頭尾空白後不能是空的,存的是去掉空白後的值;<code>email</code> 還要含 <code>@</code>。</li>
-        <li><strong>整數欄位</strong>(<code>copies</code>、<code>book_id</code>、<code>member_id</code>、<code>days</code>):必須是 JSON 整數,<code>true</code> 和 <code>"1"</code> 都不算;<code>copies</code> 不能小於 0。</li>
+        <li><strong>整數欄位</strong>(<code>copies</code>、<code>book_id</code>、<code>member_id</code>、<code>days</code>):必須是 JSON 整數,<code>true</code> 和 <code>"1"</code> 都不算;<code>copies</code> 小於 0 → 422(欄位驗證在資料層之前,所以走不到 <code>LibraryRepo</code> 的 <code>Conflict</code>)。</li>
         <li><strong>不認得的欄位</strong> → 422。<code>PATCH</code> 送 <code>{}</code> 是合法的:什麼都不改,回 200。</li>
         <li><strong>分頁</strong>同本章:<code>limit</code> 1–100(預設 20),<code>offset</code> 0 以上(預設 0),否則 422;<code>offset</code> 超過結尾回空的 <code>items</code>。列表一律照 <code>id</code> 由小到大。</li>
         <li><strong>時間</strong>:ISO 8601,到秒,不帶時區,例如 <code>2026-10-01T09:00:00</code>(和 <code>bookapi/repo</code> 的 <code>now</code> 同一種格式)。<code>due_at</code> = <code>loaned_at</code> + <code>days</code> 天。
@@ -1628,6 +1629,7 @@ available == copies - (這本書還沒還的借閱筆數)</code></pre>
       <p>
         一台全新的借書服務,假設伺服器的時間固定是 <code>2026-10-01T09:00:00</code>。依序送出 12 個請求,寫出狀態碼,以及之後第 1 本書的 <code>copies</code>/<code>available</code>。
         (這張表是用一個照規格寫的參考版本跑出來的;參考版本不在書裡。)
+        這是時鐘固定的參考版本,下面的手算 129.4 也一樣。拿你自己的版本對照時,時間欄位要比相對的值(<code>due_at</code> = <code>loaned_at</code> + 天數),不要比絕對的時刻;測試裡要固定「現在」,就用 <code>?now=</code> 或 repo 的 <code>now=</code> 參數。
       </p>
       <div class="table-wrap">
       <table>
@@ -1750,7 +1752,7 @@ True
 &gt;&gt;&gt; call("GET", "/books", query={"limit": "0"})[0]
 422</code></pre>
           <p>真的跑起來(判題時的啟動檔做的也是這件事,只是資料庫在 <code>/tmp/app.db</code>):<code>PYTHONPATH=~/零件庫 python3 run_api.py</code>,再用 curl 或 <code>urllib</code> 連 <code>http://127.0.0.1:8080/books</code>。</p>
-<pre><code class="language-python"># run_api.py —— 自己的借書 API 跑在自己的多執行緒伺服器上(和判題的啟動檔做的事一樣)
+<pre><code class="language-python"># run_api.py —— 自己的借書 API 跑在自己的多執行緒伺服器上(和判題的啟動檔做的是同一件事,判題用的參數不同)
 import sys
 
 from bookapi.api import make_app
@@ -1770,7 +1772,7 @@ serve_threaded(8080, make_app(LibraryRepo(db)), workers=8)</code></pre>
           <ul class="lab-goals">
             <li data-group="api.public">☐ <strong>公開 API 測試</strong>〔公開〕約 12 條:每個端點的正常流程與狀態碼。</li>
             <li data-group="api.edge">☐ <strong>邊界</strong>〔隱藏檢定〕limit 要 1–100(預設 20)、offset 要 0 以上,limit=0、負數或太大回 422;offset 超過結尾回空的 items;只有空白的書名回 422;本數 0 的書借不到;Unicode 書名;剛好到期的借閱不算逾期(用 ?now= 查)。</li>
-            <li data-group="api.errors">☐ <strong>錯誤處理</strong>〔隱藏檢定〕壞 JSON 回 400;要讀本體的請求 Content-Type 不對回 415;頂層不是 JSON 物件(例如陣列)、型別錯(true 和 "1" 都不算整數)、缺欄位、days 不在 1–365、email 沒有 @ 回 422;找不到(包括借不存在的書或會員)回 404;路徑對、方法錯回 405 加 Allow;不能借回 409;借書的檢查順序是欄位、書、會員、本數;錯誤一律是 {"error": {"code", "message"}}。</li>
+            <li data-group="api.errors">☐ <strong>錯誤處理</strong>〔隱藏檢定〕壞 JSON 回 400;要讀本體的請求 Content-Type 不對回 415;頂層不是 JSON 物件(例如陣列)、型別錯(true 和 "1" 都不算整數)、缺欄位、days 不在 1–365、copies 小於 0、email 沒有 @ 回 422(欄位驗證在資料層之前);找不到(包括借不存在的書或會員)回 404;路徑對、方法錯回 405 加 Allow;不能借回 409;借書的檢查順序是欄位、書、會員、本數;錯誤一律是 {"error": {"code", "message"}}。</li>
             <li data-group="api.consistency">☐ <strong>資料一致</strong>〔隱藏檢定〕借還之後 available 正確、重複還書回 409、刪除有人借的書回 409、copies 改得比借出中的本數少回 409、PATCH 只改給的欄位。</li>
             <li data-group="api.spec">☐ <strong>規格細節</strong>〔隱藏檢定〕201 回傳新資源並帶 Location、204 沒有 body、Content-Type 是 application/json; charset=utf-8、列表照 id 排序、未知欄位回 422、PATCH {} 什麼都不改並回 200、?now= 指定逾期查詢的「現在」。</li>
             <li data-group="api.perf">☐ <strong>併發借還</strong>〔隱藏檢定〕(服務模式)借書要在同一個交易裡檢查並扣本數。效能:掛在 serve_threaded 上,100 個客戶端同時各借還 10 次:零錯誤、沒有超借,10 秒內。這個門檻來自檢查點 2 的 Boss 戰「借還負載」(同樣的負載,10 秒內)與「資料一致」(同時借最後一本只能成功一次)。</li>

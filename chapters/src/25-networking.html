@@ -688,7 +688,7 @@ Content-Length: 1256
         <div class="body">
           <span class="c-title">為什麼要學</span>
           <p>你的程式看不到區段,只看得到 <code>recv()</code> 交給你的位元組。可是「一個請求分好幾次到」「對方送一半就斷線,<code>recv()</code> 回傳 <code>b''</code>」這些事,
-          全都寫在這張表裡。本章 Lab 的 <code>srv/http</code> 有一組隱藏檢定叫「半開與分段」,考的就是這個。</p>
+          都是區段層的事:下面這張表的第 8、9 列是對方關閉時 <code>recv()</code> 回傳 <code>b''</code>,資料分成好幾段、中間掉一段的情形在手算 25.1(b)。本章 Lab 的 <code>srv/http</code> 有一組隱藏檢定叫「半開與分段」,考的就是這個。</p>
         </div>
       </div>
 
@@ -716,6 +716,7 @@ Content-Length: 1256
         幾個要注意的地方。第 3、4 列的 seq 都是 1001:第 3 列是純 ACK,不佔號,所以資料從 1001 開始。
         第 8–11 列是關閉:每一邊各送一個 FIN、各收一個 ACK,共四個區段(常叫「四次揮手」)。
         第 8、9 列之後,伺服器→客戶端這個方向已經關了,但客戶端→伺服器還可以送資料,這叫<strong>半關閉(half-close)</strong>。
+        不過這裡的伺服器用的是 <code>close()</code>,兩個方向都不收了:客戶端這時再送資料,伺服器的作業系統會回 RST,客戶端下一次 <code>send()</code> 就出錯(作者實測是 <code>BrokenPipeError</code>)。真的只關自己這一邊、還要繼續收,要用 <code>shutdown(socket.SHUT_WR)</code>。
         真實的 ISN 是隨機挑的(讓攻擊者猜不到序號);Wireshark 預設顯示「相對序號」,從 0 開始算,方便閱讀。
       </p>
       <p>下面的程式把三條規則寫成程式,印出同一張表:</p>
@@ -2341,7 +2342,7 @@ HTTP/1.1 200 OK</code></pre>
             <li data-group="http.malformed">☐ <strong>畸形請求</strong>〔隱藏檢定〕請求列少欄位、header 少冒號、Content-Length 不是數字或是負數、body 比 Content-Length 短,都要 raise BadRequest。</li>
             <li data-group="http.details">☐ <strong>規格細節</strong>〔隱藏檢定〕header 名稱不分大小寫、query 的 %XX 與 + 解碼、沒有 body 的 POST。</li>
             <li data-group="http.half-open">☐ <strong>半開與分段</strong>〔隱藏檢定〕(服務模式)同一個請求分好幾次送到、送一半就斷線、畸形請求回 400 之後,伺服器都要繼續服務。</li>
-            <li data-group="http.perf">☐ <strong>循序吞吐</strong>〔隱藏檢定〕(服務模式)每個連線處理完就關,不能漏關或卡住。效能:單執行緒 serve 連續處理 1,000 個請求(每個一條新連線),2 秒內。這個門檻來自任務「執行緒池」的任務目標「併發」:100 個連線同時各送 10 個請求要在 5 秒內做完,每個請求都要經過你的解析和回應。</li>
+            <li data-group="http.perf">☐ <strong>循序吞吐</strong>〔隱藏檢定〕(服務模式)每個連線處理完就關,不能漏關或卡住。效能:單執行緒 serve 連續處理 1,000 個請求(每個一條新連線),2 秒內。這個門檻來自任務「執行緒池」的任務目標「併發」:100 個客戶端同時開始、各依序連 10 次,1,000 個請求要在 5 秒內做完,每個請求都要經過你的解析和回應。</li>
           </ul>
           <p>標「服務模式」的任務目標:判題時你的服務在沙盒裡的 8080 埠跑(以學生的身分),我們的測試客戶端用另一個使用者從外面連進來,你的程式碰不到它。</p>
           <p><strong>之後會用在:</strong><a href="24-operating-system.html#lab-srv-pool">{{ch:24-operating-system}}的執行緒池 <code>srv/pool</code></a>(用你的 <code>parse_request</code> 和 <code>make_response</code>)、<a href="129-http-rest-api.html#lab-bookapi-api">{{ch:129-http-rest-api}}的借書 REST API</a>(它的 handler 直接掛在你的 <code>serve</code> 上);檢查點 1 的 Boss 戰「靜態檔」「JSON 回應」「找不到」「畸形請求」。</p>

@@ -758,7 +758,7 @@ permissions:
 
 concurrency:                         # 同一條分支推了新的 commit,就取消還在跑的舊那次
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}   # main 上的每一次都跑完,不取消
 
 jobs:
   lint:                              # 第一關:最便宜、最快,先擋掉明顯的錯
@@ -811,7 +811,8 @@ jobs:
 
   report:                            # 全部通過之後,在 PR 留言(就是 hello-github-actions 教的那一步)
     needs: [unit, integration]
-    if: github.event_name == 'pull_request'
+    # 只在同一個 repo 開的 PR 留言:fork 來的 PR 拿到的 token 是唯讀的,留言一定失敗
+    if: github.event_name == 'pull_request' &amp;&amp; github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
     permissions:
       pull-requests: write           # 只有這個 job 拿得到「寫 PR 留言」的權限
@@ -826,7 +827,7 @@ jobs:
         <li><strong><code>needs</code></strong> 把 job 串成階段:<code>unit</code> 等 <code>lint</code>,<code>integration</code> 等 <code>unit</code>,<code>report</code> 等前兩個。沒有 <code>needs</code> 的 job 會同時開始。</li>
         <li><strong><code>strategy.matrix</code></strong> 把同一個 job 複製成三份,在三個 Python 版本上同時跑。<code>fail-fast: true</code>(預設值)表示其中一份失敗,就取消其他還在跑的。</li>
         <li><strong><code>timeout-minutes</code></strong>:一個卡住的測試不能讓 runner 空轉好幾個小時。設一個比平常多幾倍的上限。</li>
-        <li><strong><code>concurrency</code></strong>:同一個 PR 連推三次,只有最後一次的結果有意義,舊的就取消。</li>
+        <li><strong><code>concurrency</code></strong>:同一個 PR 連推三次,只有最後一次的結果有意義,舊的就取消。<code>main</code> 通常不取消:每個合進去的 commit 都要有自己的結果,出事時才知道是哪一個壞的。所以 <code>cancel-in-progress</code> 寫成運算式,只有不是 <code>main</code> 的時候才是 <code>true</code>。</li>
         <li><strong><code>shell: bash</code></strong>:沒寫 <code>shell</code> 時,step 用 <code>bash -e</code> 執行;明寫 <code>bash</code> 才會加上 <code>-o pipefail</code>。差別在管線 <code>|</code>:沒有 pipefail,<code>... | tee integration.log</code> 的結束碼是 <code>tee</code> 的(永遠是 0),測試失敗也會變成綠燈。作者實測:同一個會失敗的測試,<code>bash -e</code> 的結束碼是 0,加上 <code>-o pipefail</code> 是 1。</li>
       </ul>
       <p><code>lint</code> 裝的工具清單也要釘死版本:</p>
@@ -864,7 +865,7 @@ ruff==0.6.9</code></pre>
       <ul>
         <li><strong>只給需要的 step。</strong>用 <code>env:</code> 掛在那一個 step 上,不要掛在整個 workflow。</li>
         <li><strong>不要印出來。</strong>GitHub 會把 log 裡和祕密一模一樣的字串遮成 <code>***</code>,但祕密經過轉換(例如 base64 編碼、只印一部分)之後就遮不到了。</li>
-        <li><strong>最小權限。</strong>每次執行自動附的 <code>GITHUB_TOKEN</code> 能做什麼,由 <code>permissions:</code> 決定。預設只給 <code>contents: read</code>,需要留言的 job 才另外給 <code>pull-requests: write</code>(上面的 <code>report</code>)。</li>
+        <li><strong>最小權限。</strong>每次執行自動附的 <code>GITHUB_TOKEN</code> 能做什麼,由 <code>permissions:</code> 決定。預設只給 <code>contents: read</code>,需要留言的 job 才另外給 <code>pull-requests: write</code>(上面的 <code>report</code>)。fork 來的 PR 例外:它的 <code>GITHUB_TOKEN</code> 預設是唯讀的,<code>permissions:</code> 寫了 <code>write</code> 也一樣,所以 <code>report</code> 的 <code>if</code> 只讓同一個 repo 開的 PR 執行。</li>
         <li><strong>別人 fork 來的 PR 拿不到祕密。</strong>這是故意的:PR 的程式碼是陌生人寫的,如果它能讀到你的金鑰,改一行就能把金鑰寄走。不要為了拿到祕密,改用 <code>pull_request_target</code> 去執行 PR 裡的程式碼。</li>
         <li><strong>外洩了就換。</strong>祕密一旦進了 commit,就算刪掉,它還在 git 歷史裡。唯一的補救是立刻到發行的地方作廢它,換一把新的。</li>
       </ul>
