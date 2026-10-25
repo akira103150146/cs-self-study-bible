@@ -962,6 +962,7 @@ done:
           <tr><td>23</td><td>0x08</td><td><code>beq t0, zero, 0x1c</code></td><td>—</td><td>0</td><td>1</td><td>3</td></tr>
               </tbody>
             </table></div>
+            <p>表裡的 <code>0x1</code> 是 objdump 的寫法,Lab 的 <code>disasm</code> 印十進位 <code>1</code>。</p>
             <p>第 23 步 t0 = 0,<code>beq</code> 成立跳到 0x1c;再執行 <code>li a7, 93</code> 與 <code>ecall</code>。結束碼 a0 = 3(13 = 0b1101 有 3 個 1),共 25 條指令。</p>
           </div></details>
         </div>
@@ -1246,6 +1247,124 @@ fib_done:
           (3) 先 <code>addi sp, sp, 16</code> 再 <code>lw ra, 12(sp)</code>:收框之後那塊記憶體已經不屬於你了。檢查方法:每條從函式入口走到 <code>ret</code> 的路徑上,sp 的加減總和都要是 0。</p>
         </div>
       </div>
+      <h3>手算:移位加法乘法與指標迴圈</h3>
+      <p>
+        Lab 的 <code>mul32</code> 不能用 <code>mul</code>。辦法和直式乘法一樣,只是換成二進位:看 b 的每一位,是 1 就把「移好位的 a」加進結果。
+        每一輪做五件事:<code>andi</code> 取 b 的最低位、<code>beqz</code> 看到 0 就跳過加法、<code>add</code> 把 a 加進結果、<code>slli</code> 把 a 左移一位、<code>srli</code> 把 b 右移一位;b 變成 0 就結束。
+      </p>
+<pre><code class="language-text">結果 = 0
+當 b ≠ 0:
+    如果 b 的最低位是 1:結果 = 結果 + a
+    a = a 左移一位
+    b = b 邏輯右移一位(左邊補 0)
+回傳 結果                (每一步都只留低 32 位元)</code></pre>
+      <p>
+        下面追 mul32(13, 11)。13 = 0b1101,11 = 0b1011。每一列是一輪,寫的是這一輪每條指令做完之後的值;最右欄是「結果 + a × b」:
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>輪</th><th>進入時 a</th><th>進入時 b</th><th><code>andi</code>:最低位</th><th><code>beqz</code></th><th><code>add</code> 後的結果</th><th><code>slli</code> 後的 a</th><th><code>srli</code> 後的 b</th><th>結果 + a × b</th></tr></thead>
+        <tbody>
+          <tr><td>開始</td><td>13</td><td>11(0b1011)</td><td>—</td><td>—</td><td>0</td><td>—</td><td>—</td><td>0 + 13 × 11 = 143</td></tr>
+          <tr><td>1</td><td>13</td><td>11(0b1011)</td><td>1</td><td>不跳</td><td>0 + 13 = 13</td><td>26</td><td>5(0b101)</td><td>13 + 26 × 5 = 143</td></tr>
+          <tr><td>2</td><td>26</td><td>5(0b101)</td><td>1</td><td>不跳</td><td>13 + 26 = 39</td><td>52</td><td>2(0b10)</td><td>39 + 52 × 2 = 143</td></tr>
+          <tr><td>3</td><td>52</td><td>2(0b10)</td><td>0</td><td>跳過 <code>add</code></td><td>39(沒變)</td><td>104</td><td>1(0b1)</td><td>39 + 104 × 1 = 143</td></tr>
+          <tr><td>4</td><td>104</td><td>1(0b1)</td><td>1</td><td>不跳</td><td>39 + 104 = 143</td><td>208</td><td>0</td><td>143 + 208 × 0 = 143</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        第 5 次檢查時 b = 0,迴圈結束,回傳 143 = 13 × 11。b = 0b1011 由低到高是 1、1、0、1,所以結果就是 13 + 26 + 104:只有 b 是 1 的那幾位,才把移好位的 a 加進去。
+        b 每一輪少一位,最多 32 輪就變成 0。照上面五個動作再加一條跳回迴圈開頭的 <code>j</code>,每一輪 6 到 7 條指令,最多約 230 條,在 Lab「指令數」的 300 條門檻內;
+        用重複加法(把 a 加 b 次)的話,b = 0xFFFFFFFF 時要跑四十幾億輪。
+      </p>
+      <p>
+        最右欄一直是 143,這是這個迴圈的<strong>不變式</strong>:結果 + a × b = 原本的 a × 原本的 b(取低 32 位元)。
+        <strong>證明(參考)</strong>:一開始結果 = 0,不變式成立。每一輪把 b 寫成 2q + 位元(位元是最低位):加法讓結果多了「位元 × a」;
+        移位之後 a 變成 2a、b 變成 q,a × b 從 a(2q + 位元) 變成 2a × q,剛好少了「位元 × a」。一增一減,總和不變。迴圈停下時 b = 0,所以結果就是答案。
+        寫成程式就是每一輪後面的 <code>assert</code>:
+      </p>
+<pre><code class="language-python"># mul32_trace.py:移位加法乘法的 Python 模型,逐輪印出並檢查迴圈不變式
+MASK = 0xFFFFFFFF
+
+def mul32_trace(a, b):
+    a, b = a &amp; MASK, b &amp; MASK
+    goal = (a * b) &amp; MASK                    # 正確答案,只拿來檢查不變式
+    result, rnd = 0, 0
+    while b != 0:                            # beqz:b 是 0 就結束
+        bit = b &amp; 1                          # andi:取 b 的最低位
+        if bit:                              # beqz:最低位是 0 就跳過加法
+            result = (result + a) &amp; MASK     # add
+        a = (a &lt;&lt; 1) &amp; MASK                  # slli:a 左移一位
+        b = b &gt;&gt; 1                           # srli:b 邏輯右移一位(左邊補 0)
+        rnd += 1
+        assert (result + a * b) &amp; MASK == goal, '不變式壞了'
+        print(f'第 {rnd} 輪:最低位 {bit},結果 {result},a {a},b {b}')
+    return result
+
+print('mul32(13, 11) =', mul32_trace(13, 11))</code></pre>
+<pre><code class="language-text">第 1 輪:最低位 1,結果 13,a 26,b 5
+第 2 輪:最低位 1,結果 39,a 52,b 2
+第 3 輪:最低位 0,結果 39,a 104,b 1
+第 4 輪:最低位 1,結果 143,a 208,b 0
+mul32(13, 11) = 143</code></pre>
+      <p>
+        陣列的迴圈也一樣,先想清楚每一輪要動哪些暫存器。array_sum(p, n) 用<strong>指標</strong>走訪:每一輪 <code>lw</code> 讀 p 指的那個字、<code>add</code> 加進和、<code>addi</code> 讓 p 加 4(一個字 4 個位元組)、再一條 <code>addi</code> 讓 n 減 1;n 變成 0 就結束。
+        下表追 array_sum(0x200, 4),記憶體從 0x200 起放著 5、−2、8、6(−2 在記憶體裡是 <code>fe ff ff ff</code>):
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>輪</th><th>進入時 p</th><th>進入時 n</th><th><code>lw</code> 讀到</th><th><code>add</code> 後的和</th><th><code>addi</code> 後的 p</th><th><code>addi</code> 後的 n</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td>0x200</td><td>4</td><td>5</td><td>5</td><td>0x204</td><td>3</td></tr>
+          <tr><td>2</td><td>0x204</td><td>3</td><td>−2(0xfffffffe)</td><td>3</td><td>0x208</td><td>2</td></tr>
+          <tr><td>3</td><td>0x208</td><td>2</td><td>8</td><td>11</td><td>0x20c</td><td>1</td></tr>
+          <tr><td>4</td><td>0x20c</td><td>1</td><td>6</td><td>17</td><td>0x210</td><td>0</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        第 5 次檢查時 n = 0,結束,回傳 17。不變式:p = 0x200 + 4 × (已經加過的個數),和 = 前面那幾個字的總和。
+        第 2 列的 −2 是 0xfffffffe,加法照二補數繞回,3 自然就出來了,不用分正負。
+        另一種寫法是用索引 i:每一輪算位址 = 0x200 + (i 左移 2 位),要多一條 <code>slli</code> 和一條 <code>add</code>;指標版直接讓 p 加 4。
+      </p>
+      <p>
+        字串的迴圈是同一個樣子,只是用 <code>lbu</code> 一次讀 1 個位元組(p 加 1),讀到 0 就停;用 <code>lb</code> 的話,0x80 以上的位元組會被符號延伸成負數。
+        原地倒轉則是兩個指標從頭尾往中間走,每一輪交換一對位元組,兩個指標相遇就停。
+        上面兩張表的每一格,都是把一支照這兩個演算法寫的測試程式用 <code>riscv64-unknown-elf-as</code> 組譯,再用模擬器逐條執行、在每一輪結束時讀暫存器核對過的。
+      </p>
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 135.9 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>(a) 照上面第一張表的格式追 mul32(9, 6),寫出每一輪的最低位、結果、a、b 與「結果 + a × b」。
+          (b) mul32(3, 0xFFFFFFFF) 要跑幾輪?回傳值的十六進位與有號值是多少?如果把 <code>srli</code> 寫成 <code>srai</code>(算術右移,左邊補符號位元),會發生什麼事?不變式還成立嗎?
+          (c) 照第二張表的格式追 array_sum(0x300, 4),記憶體從 0x300 起是 0x7FFFFFFF、1、−5、10。回傳值的十六進位與有號值是多少?</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <p>(a) 6 = 0b110,最低位是 0,第 1 輪跳過加法:</p>
+            <div class="table-wrap"><table>
+              <thead><tr><th>輪</th><th>進入時 a</th><th>進入時 b</th><th>最低位</th><th>結果</th><th>a</th><th>b</th><th>結果 + a × b</th></tr></thead>
+              <tbody>
+                <tr><td>1</td><td>9</td><td>6(0b110)</td><td>0</td><td>0(跳過)</td><td>18</td><td>3</td><td>0 + 18 × 3 = 54</td></tr>
+                <tr><td>2</td><td>18</td><td>3(0b11)</td><td>1</td><td>18</td><td>36</td><td>1</td><td>18 + 36 × 1 = 54</td></tr>
+                <tr><td>3</td><td>36</td><td>1(0b1)</td><td>1</td><td>54</td><td>72</td><td>0</td><td>54 + 72 × 0 = 54</td></tr>
+              </tbody>
+            </table></div>
+            <p>第 4 次檢查 b = 0,回傳 54。</p>
+            <p>(b) 0xFFFFFFFF 有 32 個 1,每一輪右移一位,要 32 輪才變成 0,每一輪都加。回傳 0xFFFFFFFD,有號是 −3:3 × (2<sup>32</sup> − 1) = 3 × 2<sup>32</sup> − 3,取低 32 位元就是 −3。
+            這和有號的 3 × (−1) = −3 一樣,所以介面說「有號、無號結果相同」。
+            換成 <code>srai</code>:0xFFFFFFFF 算術右移還是 0xFFFFFFFF,b 永遠不是 0,迴圈停不下來(模擬器跑了 2 萬條指令還在迴圈裡)。
+            不變式其實還成立(每一輪的「結果 + a × b」取低 32 位元都是 0xFFFFFFFD),但不變式只保證「停下來時答案對」,不保證會停;會不會停要另外看 b 有沒有每輪變小。</p>
+            <p>(c)</p>
+            <div class="table-wrap"><table>
+              <thead><tr><th>輪</th><th>進入時 p</th><th>進入時 n</th><th><code>lw</code> 讀到</th><th><code>add</code> 後的和</th><th>p</th><th>n</th></tr></thead>
+              <tbody>
+                <tr><td>1</td><td>0x300</td><td>4</td><td>0x7fffffff</td><td>0x7fffffff(2147483647)</td><td>0x304</td><td>3</td></tr>
+                <tr><td>2</td><td>0x304</td><td>3</td><td>1</td><td>0x80000000(−2147483648)</td><td>0x308</td><td>2</td></tr>
+                <tr><td>3</td><td>0x308</td><td>2</td><td>−5(0xfffffffb)</td><td>0x7ffffffb(2147483643)</td><td>0x30c</td><td>1</td></tr>
+                <tr><td>4</td><td>0x30c</td><td>1</td><td>10</td><td>0x80000005(−2147483643)</td><td>0x310</td><td>0</td></tr>
+              </tbody>
+            </table></div>
+            <p>回傳 0x80000005,有號是 −2147483643。第 2 輪溢位繞到最小的負數,第 3 輪再繞回來:<code>add</code> 不會因為溢位停下或出錯,Lab 要的正是這種「照二補數繞回」。</p>
+          </div></details>
+        </div>
+      </div>
+
       <div class="callout note">
         <div class="ico">🧭</div>
         <div class="body">
@@ -1305,7 +1424,7 @@ fact:       # fact(a0=n) -&gt; a0:n! 取低 32 位元,n 是 0..20 的無號數
           <ul>
             <li>每個函式用 <code>.globl</code> 匯出;遵守呼叫約定:s0–s11、sp、gp、tp 呼叫前後不變,用 <code>ra</code> 回去,回傳值在 <code>a0</code>(<code>array_max</code> 還有 <code>a1</code>)。</li>
             <li>組譯用 <code>riscv64-unknown-elf-as -march=rv32i -mabi=ilp32</code>:只准 RV32I 基本指令,<code>mul</code> 這類 M 擴充的指令會組譯失敗。可以用 <code>li</code>、<code>la</code>、<code>mv</code>、<code>j</code>、<code>call</code>、<code>ret</code>、<code>beqz</code> 這些假指令。</li>
-            <li>判題時沒有 <code>_start</code>:測試框架把參數放進 <code>a0</code>、<code>a1</code>,<code>sp</code> = 0x00100000、<code>ra</code> = 框架的返回位址,直接呼叫你的函式,在參考 ISS 上跑到它回來(就像上面「把呼叫約定寫成 assert」的 <code>call()</code>)。</li>
+            <li>判題時沒有 <code>_start</code>:測試框架把參數放進 <code>a0</code>、<code>a1</code>,<code>sp</code> = 0x00100000、<code>ra</code> = 框架的返回位址,直接呼叫你的函式,在參考 ISS 上跑到它回來(就像後面「把呼叫約定寫成 assert」的 <code>call()</code>)。</li>
           </ul>
           <p><strong>公開範例</strong>(測試框架呼叫你的函式,看回來時的 a0、a1 與緩衝區):</p>
 <pre><code class="language-text">呼叫                          回來時
@@ -1319,7 +1438,7 @@ str_len("hello")              a0 = 5
 str_rev("hello")              a0 = 5,緩衝區變成 "olleh\0"(NUL 後面的位元組沒動)</code></pre>
           <p><strong>和本章範例不同的地方:</strong></p>
           <ul>
-            <li>本章的遞迴例子是 <code>fib</code>,Lab 要的是 <code>fact</code>,而且乘法要呼叫你自己寫的 <code>mul32</code>:RV32I 沒有乘法,用 <code>mul</code> 會組譯失敗(本章「從 C 到 RV32I」一節的 gcc 是呼叫 libgcc 的 <code>__mulsi3</code>,判題時沒有 libgcc)。</li>
+            <li>本章的遞迴例子是 <code>fib</code>,Lab 要的是 <code>fact</code>,而且乘法要呼叫你自己寫的 <code>mul32</code>:RV32I 沒有乘法,用 <code>mul</code> 會組譯失敗(本章後面「從 C 到 RV32I」一節的 gcc 是呼叫 libgcc 的 <code>__mulsi3</code>,判題時沒有 libgcc)。</li>
             <li>本章的 <code>hello.s</code> 與 MMIO 例子從 <code>_start</code> 開始、自己印結果;Lab 只寫函式,由測試框架呼叫,結果看暫存器與記憶體。</li>
             <li><code>array_max</code> 要多回傳索引(<code>a1</code>);<code>str_rev</code> 要原地倒轉並回傳長度。函式名稱刻意避開 C 標準函式庫(<code>str_len</code> 不是 <code>strlen</code>)。</li>
           </ul>
@@ -1595,7 +1714,8 @@ class MiniRV:
         <li><strong>寫回</strong>:有結果就寫進 rd(rd 是 x0 時丟掉),最後更新 pc。所有值都 <code>&amp; MASK</code> 保持在 32 位元,這就是 Python 版的「繞回」。</li>
       </ol>
       <p>把 fib.s 組譯出來的 28 個字放進去執行,並印出前 10 步改了哪些暫存器:</p>
-<pre><code class="language-python">from mini_rv import MiniRV
+<pre><code class="language-python"># run_fib.py
+from mini_rv import MiniRV
 
 FIB = [  # fib.s 組譯、連結之後的 28 個字(objcopy -O binary 再每 4 位元組一個字)
     0x00100137, 0x00600513, 0x018000ef, 0x00100893,
@@ -1638,7 +1758,7 @@ pc=0x38  02554063  -&gt;  pc=0x3c  </code></pre>
         <div class="body">
           <span class="c-title">看起來對但其實錯:「寫 x0 的檢查可以拿掉,正常程式不會寫 x0」</span>
           <p>把 <code>step()</code> 裡的 <code>and rd != 0</code> 拿掉,前 10 步的輸出完全一樣,一條直線執行的小程式也都對。但 <code>j</code> 是 <code>jal zero</code>、<code>ret</code> 是 <code>jalr zero</code>、<code>nop</code> 是 <code>addi zero</code>:
-          正常程式<strong>一天到晚</strong>在寫 x0。實際試的結果:fib 程式第一次 <code>ret</code> 把 x0 改成 0x70,之後 <code>li a7, 1</code>(<code>addi a7, zero, 1</code>)變成 a7 = 0x71,模擬器停在「不支援的 ecall 113」;
+          正常程式<strong>一天到晚</strong>在寫 x0。實際試的結果:fib 程式裡的 <code>ret</code> 把 x0 改成 0x70、<code>j</code> 把它改成 0x58,來回改了 11 次,<code>li t0, 2</code> 這類讀 x0 的指令跟著算錯,遞迴的答案也錯了(a0 = 11,不是 8);最後一次 <code>ret</code> 讓 x0 殘留 0x70,之後 <code>li a7, 1</code>(<code>addi a7, zero, 1</code>)變成 a7 = 0x71,執行 177 條指令之後,模擬器停在「不支援的 ecall 113」;
           倒數迴圈的 <code>j loop</code> 把 x0 改成 0x18,<code>beqz t0</code> 再也不成立,跑滿 10 萬步也停不下來。</p>
         </div>
       </div>
@@ -1871,7 +1991,7 @@ illegal 0 0 0</code></pre>
       <div class="exercise">
         <div class="ex-head">✏️ 練習 135.1 <span class="badge">思考</span></div>
         <div class="ex-body">
-          <p>(a) 列出四個靠 <code>x0</code> 才能用一條真指令完成的假指令。(b) <code>addi x0, x0, 5</code> 執行之後會發生什麼事?它是合法的指令嗎?</p>
+          <p>(a) 列出至少四個靠 <code>x0</code> 才能用一條真指令完成的假指令。(b) <code>addi x0, x0, 5</code> 執行之後會發生什麼事?它是合法的指令嗎?</p>
           <details class="solution"><summary>看解答</summary><div class="sol-body">
             <p>(a) 例如 <code>nop</code>(<code>addi zero, zero, 0</code>)、<code>li rd, 小常數</code>(<code>addi rd, zero, c</code>)、<code>j</code>(<code>jal zero</code>)、<code>ret</code>(<code>jalr zero, 0(ra)</code>)、
             <code>beqz</code>(<code>beq rs, zero</code>)、<code>neg</code>(<code>sub rd, zero, rs</code>)、<code>snez</code>(<code>sltu rd, zero, rs</code>)。</p>
@@ -1895,7 +2015,7 @@ illegal 0 0 0</code></pre>
       <div class="exercise">
         <div class="ex-head">✏️ 練習 135.3 <span class="badge">實作</span></div>
         <div class="ex-body">
-          <p>把下面的 C 翻成 RV32I,a 在 a0、b 在 a1,結果 x 放 t2:<code>if (a &lt; b) x = 1; else x = 2;</code>。寫兩個版本:a、b 是 <code>int</code>,和 a、b 是 <code>unsigned</code>。
+          <p>把下面的 C 翻成 RV32I,a 在 a0、b 在 a1,結果 x 有號版本放 t2、無號版本放 t3:<code>if (a &lt; b) x = 1; else x = 2;</code>。寫兩個版本:a、b 是 <code>int</code>,和 a、b 是 <code>unsigned</code>。
           用 a = −1、b = 1 執行,兩個版本的 x 各是多少?</p>
           <details class="solution"><summary>看解答</summary><div class="sol-body">
 <pre><code class="language-text">    .text
