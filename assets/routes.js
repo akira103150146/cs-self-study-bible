@@ -129,6 +129,7 @@ window.BOOK_ROUTES = [
     "pages": [],
     "chapters": [
       "65-cv-basics-processing",
+      "132-numpy-pandas",
       "38-machine-learning",
       "111-deep-learning-math",
       "110-classical-ai",

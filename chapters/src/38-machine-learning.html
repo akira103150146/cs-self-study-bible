@@ -552,6 +552,121 @@ pred  = model.predict(X_test)        # 直接給出 0/1 判定</code></pre>
         </div>
       </div>
 
+      <h3>手算:邏輯迴歸走一步 SGD</h3>
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">為什麼要學</span>
+          <p>「算 $p$ → 算 $p - y$ → 乘上 $x$ → 往反方向走一小步」是本章 Lab 的任務「邏輯迴歸與指標」(nn/linear,任務線「nn」:從 micrograd 到 MNIST)裡
+          <code>fit</code> 每一批做的事,只是從兩類換成十類。Boss 戰「線性基準線」要它在 4,000 張手寫數字上訓練 10 個 epoch,準確率至少 95%。</p>
+        </div>
+      </div>
+      <p>
+        交叉熵配 sigmoid 的梯度非常乾淨。令 $z = \mathbf{w}\cdot\mathbf{x} + b$、$p = \sigma(z)$,單筆的損失
+        $L = -\big[y\log p + (1-y)\log(1-p)\big]$ 對 $z$ 的導數是
+      </p>
+      <p>$$\frac{\partial L}{\partial z} = p - y, \qquad \frac{\partial L}{\partial w_j} = (p - y)\,x_j, \qquad \frac{\partial L}{\partial b} = p - y$$</p>
+      <p>
+        推導(證明(參考))在本章後面〈深掘〉的〈邏輯回歸：MLE 推出交叉熵與梯度完整推導〉;
+        <a href="111-deep-learning-math.html">{{ch:111-deep-learning-math}}</a>的 softmax + 交叉熵是同一個公式的多類別版本($\hat{\mathbf{y}} - \mathbf{y}$)。
+        一步 <strong>SGD</strong> 就是 $\mathbf{w} \leftarrow \mathbf{w} - \eta\,\nabla_{\mathbf{w}} L$、$b \leftarrow b - \eta\,\partial L/\partial b$。
+        設定:一筆資料 $\mathbf{x} = (2, 1)$、$y = 1$,起點 $\mathbf{w} = (0.5, -1)$、$b = 0$,學習率 $\eta = 0.1$:
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>量</th><th>算式</th><th>數值</th></tr></thead>
+        <tbody>
+          <tr><td>$z$</td><td>0.5·2 + (−1)·1 + 0</td><td>0</td></tr>
+          <tr><td>$p$</td><td>$\sigma(0)$</td><td>0.5000</td></tr>
+          <tr><td>$L$</td><td>$-\log 0.5$</td><td>0.6931</td></tr>
+          <tr><td>$p - y$</td><td>0.5 − 1</td><td>−0.5</td></tr>
+          <tr><td>$\nabla_{\mathbf{w}} L$</td><td>−0.5·(2, 1)</td><td>(−1, −0.5)</td></tr>
+          <tr><td>$\partial L/\partial b$</td><td>$p - y$</td><td>−0.5</td></tr>
+          <tr><td>新的 $\mathbf{w}$</td><td>(0.5, −1) − 0.1·(−1, −0.5)</td><td>(0.6, −0.95)</td></tr>
+          <tr><td>新的 $b$</td><td>0 − 0.1·(−0.5)</td><td>0.05</td></tr>
+          <tr><td>新的 $z$、$p$</td><td>0.6·2 − 0.95·1 + 0.05 = 0.3;$\sigma(0.3)$</td><td>0.3、0.5744</td></tr>
+          <tr><td>新的 $L$</td><td>$-\log 0.5744$</td><td><strong>0.5544</strong>(變小了)</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        $p - y = -0.5$ 是負的,意思是「模型給正類的機率太低」,於是兩個權重都往讓 $z$ 變大的方向走,$p$ 從 0.5 升到 0.5744。
+        用程式對一次(只用標準函式庫):
+      </p>
+      <pre><code class="language-python">import math
+
+def sigmoid(z):
+    return 1 / (1 + math.exp(-z))
+
+x, y = [2.0, 1.0], 1                 # 一筆資料,正類
+w, b, lr = [0.5, -1.0], 0.0, 0.1
+
+def loss(w, b):
+    p = sigmoid(sum(wi * xi for wi, xi in zip(w, x)) + b)
+    return p, -(y * math.log(p) + (1 - y) * math.log(1 - p))
+
+p, L = loss(w, b)
+dw = [(p - y) * xi for xi in x]      # ∂L/∂w = (p − y)·x
+db = p - y                           # ∂L/∂b = p − y
+w = [wi - lr * g for wi, g in zip(w, dw)]
+b = b - lr * db
+p2, L2 = loss(w, b)
+print(f"更新前 p={p:.4f} L={L:.4f}  dw={dw} db={db}")
+print(f"更新後 w={[round(v, 4) for v in w]} b={b:.4f}  p={p2:.4f} L={L2:.4f}")
+# 更新前 p=0.5000 L=0.6931  dw=[-1.0, -0.5] db=-0.5
+# 更新後 w=[0.6, -0.95] b=0.0500  p=0.5744 L=0.5544</code></pre>
+      <p>
+        實際訓練時一次拿一小批(mini-batch)$B$ 筆:每筆各算一次 $(p_i - y_i)\,\mathbf{x}_i$,<strong>平均</strong>起來再走一步。
+      </p>
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 38.1 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>一批兩筆:A 是 $\mathbf{x} = (1, 2)$、$y = 0$;B 是 $\mathbf{x} = (1, 1)$、$y = 1$。起點 $\mathbf{w} = (0.5, 0.5)$、$b = 0$,$\eta = 0.5$。
+          (a) 算出 A、B 各自的 $p$ 與損失,以及這一批的平均損失。
+          (b) 算出平均梯度,走一步,新的 $\mathbf{w}$、$b$ 與新的平均損失是多少?
+          (c) <strong>看起來對但其實錯:</strong>「這一步讓平均損失下降了,所以每一筆的損失都下降了。」用 B 檢查。</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <div class="table-wrap"><table>
+              <thead><tr><th></th><th>$z$</th><th>$p$</th><th>損失</th><th>$p - y$</th><th>$(p - y)\,\mathbf{x}$</th></tr></thead>
+              <tbody>
+                <tr><td>A(更新前)</td><td>1.5</td><td>0.8176</td><td>1.7014</td><td>0.8176</td><td>(0.8176, 1.6351)</td></tr>
+                <tr><td>B(更新前)</td><td>1.0</td><td>0.7311</td><td>0.3133</td><td>−0.2689</td><td>(−0.2689, −0.2689)</td></tr>
+                <tr><td>平均</td><td></td><td></td><td>1.0073</td><td>0.2743</td><td>(0.2743, 0.6831)</td></tr>
+              </tbody>
+            </table></div>
+            <p>(b) $\mathbf{w} = (0.5, 0.5) - 0.5\cdot(0.2743, 0.6831) = (0.3628, 0.1584)$,$b = 0 - 0.5\cdot 0.2743 = -0.1372$。
+            新的 $p$:A 是 0.6324(損失 1.0008),B 是 0.5949(損失 0.5194);平均損失從 1.0073 降到 <strong>0.7601</strong>。</p>
+            <p>(c) 錯。B 的損失從 0.3133 <strong>升</strong>到 0.5194。A 的梯度很大、而且要把 $z$ 往下壓,B 跟著被拖下去。
+            梯度下降保證的是(學習率夠小時)<em>這一批的平均</em>下降,不是每一筆都下降;這也是 SGD 的損失曲線會上下抖的原因之一。
+            驗證程式(和上面那段同樣的寫法):</p>
+            <pre><code class="language-python">import math
+
+def sigmoid(z):
+    return 1 / (1 + math.exp(-z))
+
+def p_and_loss(w, b, x, y):
+    p = sigmoid(w[0] * x[0] + w[1] * x[1] + b)
+    return p, -(y * math.log(p) + (1 - y) * math.log(1 - p))
+
+batch = [([1.0, 2.0], 0), ([1.0, 1.0], 1)]      # A、B
+w, b, lr = [0.5, 0.5], 0.0, 0.5
+gw, gb = [0.0, 0.0], 0.0
+for x, y in batch:                               # 平均梯度
+    p, _ = p_and_loss(w, b, x, y)
+    gw = [g + (p - y) * xi / len(batch) for g, xi in zip(gw, x)]
+    gb += (p - y) / len(batch)
+new_w = [wi - lr * g for wi, g in zip(w, gw)]
+new_b = b - lr * gb
+for x, y in batch:
+    before = p_and_loss(w, b, x, y)[1]
+    after = p_and_loss(new_w, new_b, x, y)[1]
+    print(f"x={x} y={y}  損失 {before:.4f} → {after:.4f}")
+print([round(v, 4) for v in new_w], round(new_b, 4))
+# x=[1.0, 2.0] y=0  損失 1.7014 → 1.0008
+# x=[1.0, 1.0] y=1  損失 0.3133 → 0.5194
+# [0.3628, 0.1584] -0.1372</code></pre>
+          </div></details>
+        </div>
+      </div>
+
       <h2>過擬合與正則化:ML 的第一道難關</h2>
       <p>
         現在進入機器學習<strong>最核心、也最容易被忽略</strong>的觀念。前面我們一直追求「損失越小越好」,
@@ -811,6 +926,239 @@ print(f"F1 分數          = {f1:.2f}")          # 0.80</code></pre>
           <p>拿到分類任務,第一件事先看「各類別各佔多少」。一旦發現嚴重不平衡(例如 99:1),
           就<strong>立刻把準確率丟掉</strong>,改看精確率、召回率、F1,或對少數類別加權、重採樣。
           無數「上線後才發現完全沒用」的 ML 系統,死因都是訓練時只盯著那個騙人的高準確率。</p>
+        </div>
+      </div>
+
+      <h3>手算:三類的混淆矩陣與 macro、micro 平均</h3>
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">為什麼要學</span>
+          <p>手寫數字有 10 類,一張 2×2 的表不夠用。本章 Lab 的任務「邏輯迴歸與指標」(nn/linear)要你寫 k×k 混淆矩陣、每一類與 macro/micro 的 precision/recall/F1;
+          Boss 戰「評估報告」用它們分析你的模型在隱藏測試集上的預測,還要找出最常搞混的 3 對數字。</p>
+        </div>
+      </div>
+      <p>
+        $K$ 類時,混淆矩陣是 $K\times K$:<code>cm[真][預測]</code> 是「真的是這一類、被猜成那一類」的次數,對角線是答對的。
+        每一類 $k$ 都可以當成「$k$ 對其他」的二元問題,從表裡讀出三個數:
+      </p>
+      <ul>
+        <li>$TP_k$ = <code>cm[k][k]</code>(對角線那一格)。</li>
+        <li>$FP_k$ = 第 $k$ <strong>欄</strong>的總和 − $TP_k$:被猜成 $k$,其實不是 $k$。</li>
+        <li>$FN_k$ = 第 $k$ <strong>列</strong>的總和 − $TP_k$:真的是 $k$,卻沒被猜成 $k$。</li>
+      </ul>
+      <p>
+        每一類各算一組 precision、recall、F1 之後,有兩種平均法。<strong>macro 平均</strong>:每一類的數字直接平均,每一類一樣重要,不管它有幾筆。
+        <strong>micro 平均</strong>:先把所有類的 $TP$、$FP$、$FN$ 各自加總,再套公式,所以筆數多的類影響比較大。
+        例子:30 張圖片,0 = 貓、1 = 狗、2 = 兔。
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>真 \ 預測</th><th>貓(0)</th><th>狗(1)</th><th>兔(2)</th><th>列總和</th></tr></thead>
+        <tbody>
+          <tr><td>貓(0)</td><td><strong>8</strong></td><td>1</td><td>1</td><td>10</td></tr>
+          <tr><td>狗(1)</td><td>1</td><td><strong>6</strong></td><td>3</td><td>10</td></tr>
+          <tr><td>兔(2)</td><td>0</td><td>2</td><td><strong>8</strong></td><td>10</td></tr>
+          <tr><td>欄總和</td><td>9</td><td>9</td><td>12</td><td>30</td></tr>
+        </tbody>
+      </table></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>類別</th><th>TP</th><th>FP</th><th>FN</th><th>precision</th><th>recall</th><th>F1</th></tr></thead>
+        <tbody>
+          <tr><td>貓(0)</td><td>8</td><td>9 − 8 = 1</td><td>10 − 8 = 2</td><td>8/9 = 0.8889</td><td>8/10 = 0.8000</td><td>0.8421</td></tr>
+          <tr><td>狗(1)</td><td>6</td><td>9 − 6 = 3</td><td>10 − 6 = 4</td><td>6/9 = 0.6667</td><td>6/10 = 0.6000</td><td>0.6316</td></tr>
+          <tr><td>兔(2)</td><td>8</td><td>12 − 8 = 4</td><td>10 − 8 = 2</td><td>8/12 = 0.6667</td><td>8/10 = 0.8000</td><td>0.7273</td></tr>
+          <tr><td>macro</td><td></td><td></td><td></td><td>0.7407</td><td>0.7333</td><td>0.7337</td></tr>
+          <tr><td>micro</td><td>22</td><td>8</td><td>8</td><td>22/30 = 0.7333</td><td>22/30 = 0.7333</td><td>0.7333</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        兩個值得記住的觀察。第一,每一筆答錯的資料,同時是某一類的 FP(被猜成的那類)和另一類的 FN(真正的那類),
+        所以 $\sum FP = \sum FN$ = 答錯的筆數,<strong>micro 的 precision、recall、F1 都等於準確率</strong>(這裡 22/30)。
+        第二,macro F1 是三個 F1 的平均 $(0.8421 + 0.6316 + 0.7273)/3 = 0.7337$,<em>不是</em>拿 macro precision 與 macro recall 再算一次 F1(那會得到 0.7370);
+        本書與 scikit-learn 都用前者,報告裡要寫清楚用哪一種。
+        另外,對角線以外最大的格子告訴你模型最常搞混什麼:這裡是「真的是狗、被猜成兔」3 次,其次是「兔被猜成狗」2 次。
+      </p>
+      <p>用程式從混淆矩陣算出整張表:</p>
+      <pre><code class="language-python">cm = [[8, 1, 1],                     # cm[真][預測]:0 貓、1 狗、2 兔
+      [1, 6, 3],
+      [0, 2, 8]]
+K = len(cm)
+
+def div(a, b):
+    return a / b if b else 0.0        # 分母是 0 時,那一項算 0
+
+stats = []
+for k in range(K):
+    tp = cm[k][k]
+    fp = sum(cm[i][k] for i in range(K)) - tp     # 第 k 欄:被猜成 k,但不是 k
+    fn = sum(cm[k]) - tp                          # 第 k 列:真的是 k,但沒猜中
+    p, r = div(tp, tp + fp), div(tp, tp + fn)
+    f1 = div(2 * p * r, p + r)
+    stats.append((tp, fp, fn, p, r, f1))
+    print(f"類別 {k}: TP={tp} FP={fp} FN={fn}  P={p:.4f} R={r:.4f} F1={f1:.4f}")
+
+mp, mr, mf = (sum(s[i] for s in stats) / K for i in (3, 4, 5))
+print(f"macro: P={mp:.4f} R={mr:.4f} F1={mf:.4f}")
+
+TP, FP, FN = (sum(s[i] for s in stats) for i in (0, 1, 2))
+up, ur = div(TP, TP + FP), div(TP, TP + FN)
+print(f"micro: P={up:.4f} R={ur:.4f} F1={div(2 * up * ur, up + ur):.4f}")
+print(f"accuracy = {TP / sum(map(sum, cm)):.4f}")
+# 類別 0: TP=8 FP=1 FN=2  P=0.8889 R=0.8000 F1=0.8421
+# 類別 1: TP=6 FP=3 FN=4  P=0.6667 R=0.6000 F1=0.6316
+# 類別 2: TP=8 FP=4 FN=2  P=0.6667 R=0.8000 F1=0.7273
+# macro: P=0.7407 R=0.7333 F1=0.7337
+# micro: P=0.7333 R=0.7333 F1=0.7333
+# accuracy = 0.7333</code></pre>
+      <p>
+        <code>div</code> 處理分母是 0 的情況:某一類從來沒被猜過,它的 precision 是 $0/0$。這種時候要先講好規則;
+        本書和本章 Lab 都約定算 0(scikit-learn 的 <code>zero_division=0</code> 也是),否則一個 <code>nan</code> 會讓 macro 平均整個變成 <code>nan</code>。
+      </p>
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 38.2 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>混淆矩陣(列是真、欄是預測)<code>cm = [[6, 2, 0], [1, 4, 0], [2, 1, 0]]</code>。
+          (a) 算出每一類的 TP、FP、FN、precision、recall、F1。(b) 算出 macro 與 micro 的 precision、recall、F1。
+          (c) 列出對角線以外次數最多的 3 格(次數相同時,真類別小的先),寫成(真, 預測, 次數)。</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <div class="table-wrap"><table>
+              <thead><tr><th>類別</th><th>TP</th><th>FP</th><th>FN</th><th>precision</th><th>recall</th><th>F1</th></tr></thead>
+              <tbody>
+                <tr><td>0</td><td>6</td><td>3</td><td>2</td><td>0.6667</td><td>0.7500</td><td>0.7059</td></tr>
+                <tr><td>1</td><td>4</td><td>3</td><td>1</td><td>0.5714</td><td>0.8000</td><td>0.6667</td></tr>
+                <tr><td>2</td><td>0</td><td>0</td><td>3</td><td>0/0 → 0</td><td>0/3 = 0</td><td>0</td></tr>
+                <tr><td>macro</td><td></td><td></td><td></td><td>0.4127</td><td>0.5167</td><td>0.4575</td></tr>
+                <tr><td>micro</td><td>10</td><td>6</td><td>6</td><td>0.6250</td><td>0.6250</td><td>0.6250</td></tr>
+              </tbody>
+            </table></div>
+            <p>類別 2 從來沒被預測過,precision 的分母是 0,照約定算 0;它的 recall 也是 0,F1 是 0,把 macro 平均拉低很多。
+            micro 仍然等於準確率 10/16 = 0.625。(c)(0, 1, 2)、(2, 0, 2)、(1, 0, 1)。
+            驗證:把上面程式的 <code>cm</code> 換成這一個再執行。</p>
+          </div></details>
+        </div>
+      </div>
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 38.3 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p><strong>看起來對但其實錯:</strong>「準確率 98% 就是好模型。」100 筆資料裡 98 筆是類別 0、類別 1 與 2 各 1 筆;
+          一個「模型」永遠猜 0。算出它的準確率、macro F1、micro F1。哪一個數字揭穿了它?</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <p>混淆矩陣是 <code>[[98, 0, 0], [1, 0, 0], [1, 0, 0]]</code>。類別 0:P = 98/100 = 0.98、R = 1、F1 = 0.9899;
+            類別 1、2:TP = 0,P = 0/0 → 0,R = 0,F1 = 0。</p>
+            <ul>
+              <li>準確率 = 0.98,micro F1 = 0.98(micro 等於準確率,一樣被騙)。</li>
+              <li>macro F1 = (0.9899 + 0 + 0)/3 = <strong>0.33</strong>:每一類一樣重要,兩個少數類全錯,一眼看穿。</li>
+            </ul>
+            <p>例子都對 ≠ 敘述為真:這個模型對 98% 的資料都「對」,卻一個少數類都沒抓到。資料不平衡時,看 macro 平均與每一類的 recall。
+            把上面程式的 <code>cm</code> 換成這一個執行,會印出 <code>macro: P=0.3267 R=0.3333 F1=0.3300</code> 與 <code>micro: P=0.9800 R=0.9800 F1=0.9800</code>。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <h3 id="lab-nn-linear">本章 Lab:邏輯迴歸與指標 nn/linear.py</h3>
+      <div class="callout lab" data-task="nn/linear">
+        <div class="ico">🧪</div>
+        <div class="body">
+          <span class="c-title">本章 Lab · 任務線「nn」· 任務「邏輯迴歸與指標」</span>
+          <p><strong>對應地下城任務:</strong>任務「邏輯迴歸與指標」(任務線:nn 從 micrograd 到 MNIST,第 3／5 個任務)。零件檔:<code>~/零件庫/nn/linear.py</code>、<code>~/零件庫/nn/metrics.py</code>;任務資料夾:<code>~/任務線/nn/03-linear/</code>。</p>
+          <p><strong>要做的零件:</strong>兩個檔。<code>nn/linear.py</code>:數值穩定的 softmax／交叉熵,與多類別的邏輯迴歸 <code>SoftmaxRegression</code>(softmax 迴歸,可以加 L2)。<code>nn/metrics.py</code>:準確率、k×k 混淆矩陣、每一類與 macro／micro 的 precision／recall／F1,以及「最常搞混的 k 對」。Boss 戰「線性基準線」用前者,「評估報告」用後者。</p>
+          <p><strong>介面:</strong></p>
+<pre><code class="language-python"># ~/零件庫/nn/linear.py
+def softmax(z) -&gt; list: ...
+def log_softmax(z) -&gt; list:
+    """一筆 logits;先減最大值,z 裡有 1000 也不溢位。"""
+
+def cross_entropy(logits, y) -&gt; float:
+    """logits:list[list[float]]、y:list[int];平均的 −log_softmax(z)[y](log-sum-exp,不能加 eps)。"""
+
+class SoftmaxRegression:
+    def __init__(self, n_features, n_classes, l2=0.0):
+        """W:n_classes×n_features 的 list[list[float]]、b:list[float],都從 0 開始。"""
+    def loss_and_grad(self, X, y) -&gt; tuple:
+        """回傳 (loss, dW, db):平均交叉熵 + l2/2·ΣW²(b 不算);∂L/∂z = softmax(z) − onehot(y),再對批次取平均。"""
+    def fit(self, X, y, lr=0.1, epochs=100, batch_size=None, seed=0) -&gt; list:
+        """每批更新一次 W -= lr·dW、b -= lr·db(最後不滿一批也算);batch_size=None 是全批次;
+        給了就用 random.Random(seed) 每個 epoch 洗牌;回傳每個 epoch 的平均損失(更新前算、依筆數加權)。"""
+    def predict_proba(self, X) -&gt; list: ...
+    def predict(self, X) -&gt; list:
+        """同分取最小的類別。"""
+
+# ~/零件庫/nn/metrics.py
+def accuracy(y_true, y_pred) -&gt; float: ...
+
+def confusion_matrix(y_true, y_pred, n_classes=None) -&gt; list:
+    """cm[真][預測];n_classes 預設是兩邊出現過的最大標籤 + 1。"""
+
+def precision_recall_f1(y_true, y_pred, average='macro') -&gt; tuple:
+    """回傳 (p, r, f1)。average='macro' | 'micro' | None(None 回傳三個 list,每類一個)。
+    macro 是每一類的 P、R、F1 各自平均(macro F1 是每類 F1 的平均,不是拿 macro P、R 再算一次);
+    分母是 0 時那一項算 0.0。"""
+
+def top_confusions(cm, k=3) -&gt; list:
+    """(真, 預測, 次數):對角線以外最大的 k 格,次數多到少;同次數時真類別小的先,
+    真類別也一樣時預測類別小的先;次數 0 的不列。"""
+
+# 兩個檔共同的錯誤:長度不同、空的輸入、負的標籤、標籤 ≥ n_classes、不認得的 average → ValueError</code></pre>
+          <p><strong>公開範例:</strong></p>
+<pre><code class="language-python">&gt;&gt;&gt; from nn.linear import softmax, log_softmax, cross_entropy, SoftmaxRegression
+&gt;&gt;&gt; [round(p, 4) for p in softmax([1000.0, 1001.0, 1002.0])]
+[0.09, 0.2447, 0.6652]
+&gt;&gt;&gt; [round(v, 4) for v in log_softmax([0.0, 0.0])]
+[-0.6931, -0.6931]
+&gt;&gt;&gt; round(cross_entropy([[2.0, 0.0], [0.0, 0.0]], [0, 1]), 4)
+0.41
+&gt;&gt;&gt; X = [[0, 0], [0, 1], [5, 5], [5, 6], [0, 9], [1, 9]]
+&gt;&gt;&gt; y = [0, 0, 1, 1, 2, 2]
+&gt;&gt;&gt; m = SoftmaxRegression(2, 3)
+&gt;&gt;&gt; loss, dW, db = m.loss_and_grad(X[:2], y[:2])
+&gt;&gt;&gt; round(loss, 4), [round(g, 4) for g in db]
+(1.0986, [-0.6667, 0.3333, 0.3333])
+&gt;&gt;&gt; [[round(g, 4) for g in row] for row in dW]
+[[0.0, -0.3333], [0.0, 0.1667], [0.0, 0.1667]]
+&gt;&gt;&gt; hist = m.fit(X, y, lr=0.1, epochs=300)
+&gt;&gt;&gt; hist[0] &gt; hist[-1], m.predict(X)
+(True, [0, 0, 1, 1, 2, 2])
+&gt;&gt;&gt; from nn.metrics import accuracy, confusion_matrix, precision_recall_f1, top_confusions
+&gt;&gt;&gt; yt = [0, 0, 1, 1, 1, 2, 2, 2]
+&gt;&gt;&gt; yp = [0, 1, 1, 1, 2, 2, 2, 0]
+&gt;&gt;&gt; cm = confusion_matrix(yt, yp)
+&gt;&gt;&gt; cm
+[[1, 1, 0], [0, 2, 1], [1, 0, 2]]
+&gt;&gt;&gt; accuracy(yt, yp)
+0.625
+&gt;&gt;&gt; [round(v, 4) for v in precision_recall_f1(yt, yp)]
+[0.6111, 0.6111, 0.6111]
+&gt;&gt;&gt; [round(v, 4) for v in precision_recall_f1(yt, yp, average='micro')]
+[0.625, 0.625, 0.625]
+&gt;&gt;&gt; P, R, F = precision_recall_f1(yt, yp, average=None)
+&gt;&gt;&gt; [round(v, 4) for v in F]
+[0.5, 0.6667, 0.6667]
+&gt;&gt;&gt; top_confusions(cm, k=2)
+[(0, 1, 1), (1, 2, 1)]
+&gt;&gt;&gt; precision_recall_f1([0, 0, 1], [0, 0, 0], average=None)
+([0.6666666666666666, 0.0], [1.0, 0.0], [0.8, 0.0])</code></pre>
+          <p><strong>和本章範例不同的地方:</strong></p>
+          <ul>
+            <li>本章的 <code>logistic_train</code>、<code>cross_entropy</code> 是 numpy 的二元分類;Lab 是純 Python 的多類別版(判題機沒有 numpy),梯度要能單獨用 <code>loss_and_grad</code> 檢查,<code>fit</code> 要回傳每個 epoch 的損失。</li>
+            <li>本章的交叉熵加 <code>eps = 1e-9</code> 防 log(0);Lab 要用 log-sum-exp,不准加 eps,logits 有 ±1000 也不能是 inf 或 nan。</li>
+            <li>本章的 <code>f1_score</code> 只算二元、分母加 <code>1e-9</code>(所以全對時是 0.9999… 不是 1);Lab 照本章手算的約定:分母是 0 那一項算 0.0,macro F1 是每類 F1 的平均。</li>
+            <li>本章手算用一段程式從混淆矩陣算整張表;Lab 要包成函式,支援 <code>average=None</code>,還要 <code>top_confusions</code> 與錯誤處理。</li>
+          </ul>
+          <p>可以參考本章的範例,但介面和要求不同,要自己改寫。</p>
+          <p><strong>任務目標</strong>(公開的用 <code>test</code> 自己跑;隱藏檢定在 <code>submit</code> 時跑,只看得到名稱和一行說明):</p>
+          <ul class="lab-goals">
+            <li data-group="linear.softmax">☐ <strong>softmax 與交叉熵</strong>〔公開〕softmax、log_softmax、cross_entropy 對公開範例。(任務「多層感知機」的任務目標「兩條反向傳播一致」需要它:MLP 的損失用你的 log_softmax。)</li>
+            <li data-group="linear.fit">☐ <strong>訓練與預測</strong>〔公開〕loss_and_grad 對公開範例;三群分得開的小資料 fit 之後 predict 全對、損失一直下降。</li>
+            <li data-group="linear.metrics">☐ <strong>評估指標</strong>〔公開〕accuracy、confusion_matrix、precision_recall_f1(macro、micro、None;macro F1 是每類 F1 的平均)、top_confusions(同次數時真類別小的先)對公開範例。</li>
+            <li data-group="linear.grad">☐ <strong>梯度檢查</strong>〔隱藏檢定〕隨機的 W、b、資料與 l2:loss_and_grad 的梯度對有限差分,相對誤差 1e-6 內。(任務「多層感知機」的「兩條反向傳播一致」也需要它。)</li>
+            <li data-group="linear.stable">☐ <strong>數值穩定</strong>〔隱藏檢定〕logits 有 ±1000、全部相同、只有一類;損失不能是 inf 或 nan;predict 同分取最小的類別。(任務「多層感知機」的「兩條反向傳播一致」也需要它。)</li>
+            <li data-group="linear.metrics-edge">☐ <strong>指標的邊界</strong>〔隱藏檢定〕某一類從來沒被預測(precision 的分母是 0)、某一類沒出現(recall 的分母是 0)、全部答對、n_classes 比出現過的大;單一標籤時 micro 平均等於 accuracy。</li>
+            <li data-group="linear.errors">☐ <strong>錯誤處理</strong>〔隱藏檢定〕長度不同、空的輸入、負的標籤、標籤 ≥ n_classes、不認得的 average,都要 ValueError。</li>
+            <li data-group="linear.perf">☐ <strong>效能</strong>〔隱藏檢定〕每批的前向與梯度都是 O(批次 × 特徵 × 類別);不能每筆重算整個資料集。門檻:fit:4,000 筆、64 個特徵、10 類、10 個 epoch、batch 32,7 秒內。這個門檻來自 Boss 戰「線性基準線」:fit＋predict 10 秒內。</li>
+          </ul>
+          <p><strong>規則:</strong>不能 <code>import numpy</code>、<code>sklearn</code>、<code>torch</code>(判題機是純 Python)。</p>
+          <p><strong>之後會用在:</strong><a href="111-deep-learning-math.html#lab-nn-mlp">{{ch:111-deep-learning-math}}的任務「多層感知機」</a>:MLP 的損失用你的 <code>log_softmax</code>;Boss 戰「線性基準線」與「評估報告」。</p>
+          <p class="lab-rule">這個零件過關之後,後面的專題一律用你自己的版本。規則見<a href="00-about.html#lab-rules">零件庫規則</a>。</p>
         </div>
       </div>
 
