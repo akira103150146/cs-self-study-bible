@@ -19,7 +19,7 @@ mainlines:
     acceptance:               # 驗收檢查＝Boss 戰
       - {id: boss.heap, name: …, description: …, consumes: [libds/heap]}
     tasks:                    # 任務＝零件
-      - id: libds/heap        # 元件 id「<lib>/<名>」
+      - id: libds/heap        # 元件 id「<零件庫資料夾>/<名>」(不一定等於 lib,例 bookapi 線的 srv/http)
         order: 2              # 任務線內的順序
         name: 優先佇列
         files: [libds/heap.py]
@@ -60,18 +60,18 @@ mainlines:
 | acceptance | `perf`、`checkpoint` | 驗收檢查的效能需求;屬於哪個檢查點 |
 | task | `lab_no`、`anchor`、`gap`、`gap_title`、`also_chapters`、`optional`、`status`、`used_by`、`note` | Lab 編號、h3 的 id、缺口、參考章、選修、覆寫狀態、誰接著用 |
 | task | `interface`、`internal` | **書端定的介面**(章的 Lab 方框照抄;9Jang 的 `task.yaml` `interface` 應一致)、規格規定的內部表示法 |
-| task | `forbid`、`forbid_calls`、`forbid_storage`、`require` | import 規則與限制(對應 9Jang `task.yaml` 的 `imports`) |
-| task | `invariants` | 不變式(9Jang 設計 §3.3b):`{name, kind, symbol, sabotage?}`;`name` 也是一個 `kind: invariant` 的測試組 |
+| task | `forbid`、`forbid_calls`、`forbidAttrTypes`、`require` | import 規則與限制(對應 9Jang `task.yaml` 的 `imports`) |
+| task | `invariants` | 不變式(9Jang 設計 §3.3b):`{name, kind, symbol, sabotage?{attr, breaks}}`;`name` 也是一個 `kind: invariant` 的測試組 |
 | group | `perf_ref`、`perf_basis`、`runner` | 參考解實測值;`estimate`＝還沒量;`py-io`/`service`(借書 API 一個任務有兩種 runner) |
 
 ## 書端決定的介面(libds;9Jang 計畫 Task 12–13 留給書定的部分)
 
 - `libds/sort`:`stable_sort(a, key=None, reverse=False)`、`count_inversions(a)`、`bisect_left(a, x, key=None)`(key 只套在元素上,同 Python 3.10)。不能用 `sorted`、`list.sort`、`bisect`。
-- `libds/heap`:`PriorityQueue(key=None)`(key 套在 priority 上);`push(item, priority)`(item 已在 → `ValueError`)、`pop_min()`/`peek_min()` 回傳 `(item, priority)`、`decrease_key(item, priority)`(不在 → `KeyError`、變大 → `ValueError`)、`in`、`len`、`check()`;內部 `self.a=[(priority, item)]`、`self.pos`。
+- `libds/heap`:`PriorityQueue(key=None)`(key 套在 priority 上,所有比較都用 `key(priority)`);`push(item, priority)`(item 已在 → `ValueError`)、`pop_min()`/`peek_min()` 回傳 `(item, priority)`、`decrease_key(item, priority)`(不在 → `KeyError`、變大 → `ValueError`)、`in`、`len`、`check()`;內部 `self.a=[(priority, item)]`、`self.pos`。
 - `libds/lru`:`LRUCache(capacity, on_evict=None)`、`get(key, default=None)`、`put` 回傳被淘汰的 key 或 `None`、`resize(capacity)` 回傳 `None`、`keys_by_recency()`(最近的在前)、`len`;`on_evict(key, value)` 依淘汰順序呼叫。第一版沒有 `delete`。
 - `libds/hashmap`:`HashMap()`、`put`、`get(key, default=None)`、`pop`(不在 → `KeyError`)、`len`、`iter`(插入順序)、`check()`;內部 `self.index`/`self.entries`/`self.size`;(live＋墓碑)/m > 0.7 擴容、live/m < 0.2 且 m > 8 縮容、最小 8。
-- `libds/trie`:`insert` 記次數、`contains`、`remove`(整個字刪掉)、`count_prefix`(經過前綴的插入次數)、`top_words(prefix, k)`(次數多到少、同次數依字典序)、`check()`(沒有空的分支)。
-- `libds/graph`:`Graph(directed=True)`、`add_edge(u, v, w=1)`、`bfs(s) -> dict`、`dfs_order(s) -> list`(迴圈版)、`topo_sort() -> list | None`(最小的先,用 `PriorityQueue`)、`dijkstra(s) -> (dist, prev)`(用 `decrease_key`)、`shortest_path(s, t) -> (dist, path)`(走不到 `(None, None)`)。
+- `libds/trie`:`insert` 記次數、`contains`、`remove(word) -> None`(整個字刪掉;字不在 → `KeyError`,什麼都不改)、`count_prefix`(經過前綴的插入次數)、`top_words(prefix, k)`(次數多到少、同次數依字典序)、`check()`(沒有空的分支)。
+- `libds/graph`:`Graph(directed=True)`、`add_edge(u, v, w=1)`、`bfs(s) -> dict`、`dfs_order(s) -> list`(迴圈版)、`topo_sort() -> list | None`(最小的先,用 `PriorityQueue`;自迴圈也算環)、`dijkstra(s) -> (dist, prev)`(用 `decrease_key`;dist、prev 只含走得到的點,`prev[s] = None`)、`shortest_path(s, t) -> (dist, path)`(走不到 `(None, None)`)。
 - `libds/dsu`:`DSU(n)`、`find`(迴圈版、完整路徑壓縮)、`union -> bool`(依大小;一樣大時 b 的根接到 a 的根下)、`same`、`size_of`、`components()`、`check()`;`kruskal(n, edges)` 只依權重穩定排序(同權重依輸入順序),必須用 `libds.sort.stable_sort`。
 - `libds/fenwick.hpp`:`libds::Fenwick(n)`,索引 1 起算,`range_add(l, r, v)`、`range_sum(l, r)`(兩棵 BIT)。
 - `libds/segtree.hpp`:`libds::SegTree(vector<long long>)`,索引 0 起算,`update(i, v)`、`range_min(l, r)`、`argmin(l, r)`(同值取最左)。
@@ -82,6 +82,13 @@ mainlines:
 2. `status: outline` 的任務線只列任務與 Boss,`groups: []`。建議 9Jang 的 `validateMainlines` 對 outline 線的「project 存在」(minidb 的 `proj-be-minidb` tree.yaml 還沒有)、「驗收檢查有人 requiredBy」、「跨線先修閉包」只警告不擋。
 3. `language` 提議加 `asm`(Hack、RISC-V 組合語言)、`verilog`、`spice`。
 4. 計畫寫的效能門檻有兩個在 CPython 參考解下做不到「參考解 ≤ 時限的 1/3」:heap(10^5 次 push＋decrease_key＋pop,計畫 1 秒,參考解 0.90 秒 → 改 3 秒)、sort(2×10^5,計畫 1 秒,參考解 0.38 秒 → 改 1.5 秒)。
+5. 效能門檻一律照「參考解 ≤ 時限的 1/3」定;`perf_ref` 記參考解的實測值。
+6. `visibility: teacher`(老師核可)的驗收檢查不受「要有測試組 `requiredBy` 指到它」的檢查(例 `bookapi/cp3.deploy`)。
+7. 任務層的 `status: outline` 即使在 `detailed` 任務線裡,也不擋「跨任務線先修閉包」的檢查,只列為資訊(例 `bookapi/auth` 用到 `webfix/passwords`)。
+8. 書端多加的欄位(上面的表):建議 9Jang 的 Zod schema 用 `.passthrough()`,不要用 `.strict()`,sync 時略過不讀的欄位。
+9. 和 9Jang spec 的命名:`invariants[].sabotage.attr` 照 spec §3.3b 的名稱,但我們允許寫成列表(例 `attr: [a, pos]`,spec 的例子是單一 `attr: a`);hashmap「不能用 dict 當底層儲存」的欄位照 plan Task 12 的驅動程式設定取名 `forbidAttrTypes`(spec 的 `task.yaml` 寫成 `imports.forbid` 的一條規則)。
+10. 任務 id 的前綴是**零件庫資料夾**:`<零件庫資料夾>/<名>`,也就是 `~/零件庫/<資料夾>/`;不一定等於任務線的 `lib`(例 bookapi 線的 `srv/http`、`srv/pool`)。
+11. 已知的順序例外:`srv/pool`(Lab 在 `24-operating-system`)用到 `srv/http`(Lab 在書裡比較後面的 `25-networking`)。算數的是任務線內的 `order`(http 是 1、pool 是 2),不是書的章序。
 
 ## 檢查
 
