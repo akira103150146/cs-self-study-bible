@@ -1302,7 +1302,119 @@ print("沒有接住例外:"); print("  每個工作恰好跑一次?", run(2, Fal
         </div>
       </div>
 
-      <!-- LAB: srv/pool -->
+      <h3 id="lab-srv-pool">本章 Lab:執行緒池 srv/pool.py</h3>
+      <div class="callout lab" data-task="srv/pool">
+        <div class="ico">🧪</div>
+        <div class="body">
+          <span class="c-title">本章 Lab · 任務線「bookapi」· 任務「執行緒池」</span>
+          <p><strong>對應地下城任務:</strong>任務「執行緒池」(任務線:bookapi 借書 API:從 socket 到上線,第 2 個任務)。零件檔:<code>~/零件庫/srv/pool.py</code>。</p>
+          <p><strong>要做的零件:</strong>一個可以一直 <code>submit</code> 工作的執行緒池 <code>ThreadPool</code>,再用它寫 <code>serve_threaded</code>:主執行緒只負責 accept,每條連線交給池子裡的工作執行緒處理,讓 <a href="25-networking.html#lab-srv-http">{{ch:25-networking}}</a>的 HTTP 伺服器同時服務很多連線。上面兩張手算表(接住例外、慢客戶端)就是它的隱藏檢定在檢查的事。</p>
+          <p><strong>介面:</strong></p>
+<pre><code class="language-python"># ~/零件庫/srv/pool.py
+from srv.http import parse_request, make_response   # 用你自己的 srv/http
+
+
+class ThreadPool:
+    def __init__(self, n):
+        """開 n 條工作執行緒;n &lt; 1 → ValueError。"""
+
+    def submit(self, fn, *args) -&gt; None:
+        """把 fn(*args) 放進佇列,馬上回來。shutdown 之後 → RuntimeError。
+        工作丟例外時要接住(可以印到 stderr),工作執行緒繼續拿下一個。"""
+
+    def shutdown(self, wait=True) -&gt; None:
+        """不再收新工作。wait=True:等已經 submit 的工作全部做完才回來;
+        wait=False:立刻回來。"""
+
+
+def serve_threaded(port, handler, workers=8, timeout=5.0, host="127.0.0.1") -&gt; None:
+    """多執行緒伺服器,一直跑下去。主執行緒 accept,把每條連線交給 ThreadPool(workers);
+    解析請求與組回應用 srv.http;一條連線超過 timeout 秒沒有送資料,就關掉它。"""</code></pre>
+          <p><strong>公開範例:</strong></p>
+          <p><code>PYTHONPATH=~/零件庫 python3 pool_demo.py</code>(<code>broken</code> 的例外訊息會印在 stderr,下面沒有列出):</p>
+<pre><code class="language-python"># pool_demo.py —— 公開範例:ThreadPool 與 serve_threaded
+import socket, threading, time
+
+from srv.pool import ThreadPool, serve_threaded
+
+# ── 1. ThreadPool:8 個工作、4 條工作執行緒,其中一個工作會丟例外 ──
+done, lock = [], threading.Lock()
+
+def job(i):
+    time.sleep(0.2)
+    with lock:
+        done.append(i)
+
+def broken():
+    raise ValueError("這個工作壞掉了")       # 例外的訊息可以印在 stderr
+
+pool = ThreadPool(4)
+t0 = time.monotonic()
+pool.submit(broken)
+for i in range(8):
+    pool.submit(job, i)
+pool.shutdown(wait=True)                     # 等全部做完才回來
+print("做完:", sorted(done), "| 不到 1 秒:", time.monotonic() - t0 &lt; 1.0)
+try:
+    pool.submit(job, 99)
+except RuntimeError:
+    print("shutdown 之後不能再 submit")
+
+# ── 2. serve_threaded:一個慢客戶端擋不住別人 ──
+def handler(req):
+    time.sleep(0.1)                          # 假裝每個請求要處理 0.1 秒
+    return 200, {"Content-Type": "text/plain"}, req.path.encode()
+
+threading.Thread(target=serve_threaded, args=(8080, handler),
+                 kwargs={"workers": 8, "timeout": 2.0}, daemon=True).start()
+time.sleep(0.3)
+
+def get(path):
+    with socket.create_connection(("127.0.0.1", 8080), timeout=5) as c:
+        c.sendall(f"GET {path} HTTP/1.1\r\nHost: localhost\r\n\r\n".encode())
+        data = b""
+        while chunk := c.recv(4096):
+            data += chunk
+    return data.split(b"\r\n\r\n", 1)[1].decode()
+
+slow = socket.create_connection(("127.0.0.1", 8080))   # 連上之後什麼都不送
+t_slow = time.monotonic()
+results = []
+t0 = time.monotonic()
+ts = [threading.Thread(target=lambda i=i: results.append(get(f"/{i}"))) for i in range(8)]
+for t in ts:
+    t.start()
+for t in ts:
+    t.join()
+print("8 個請求:", sorted(results), "| 不到 0.5 秒:", time.monotonic() - t0 &lt; 0.5)
+slow.settimeout(10)
+while slow.recv(4096):                       # 等到伺服器把它關掉(關之前送不送 400 都可以)
+    pass
+print("慢客戶端在 2 秒左右被關掉:", 1.5 &lt; time.monotonic() - t_slow &lt; 3.0)</code></pre>
+<pre><code class="language-text">做完: [0, 1, 2, 3, 4, 5, 6, 7] | 不到 1 秒: True
+shutdown 之後不能再 submit
+8 個請求: ['/0', '/1', '/2', '/3', '/4', '/5', '/6', '/7'] | 不到 0.5 秒: True
+慢客戶端在 2 秒左右被關掉: True</code></pre>
+          <p><strong>和本章範例不同的地方:</strong>可以參考本章的範例,但介面和要求不同,要自己改寫。</p>
+          <ul>
+            <li>範例 <code>pool_real.py</code> 是一個 <code>run(n, survive)</code> 函式:工作清單寫死,跑完就收;Lab 是一個類別,可以隨時 <code>submit</code>,直到 <code>shutdown</code>。</li>
+            <li>範例用 <code>survive=False</code> 示範「沒接住例外,工作執行緒就死掉」;Lab 一律要接住,工作執行緒不能死。</li>
+            <li>範例只有一種收工方式(每條一個 <code>None</code>,再 <code>join</code>);Lab 要分 <code>shutdown(wait=True)</code> 與 <code>wait=False</code>,而且 shutdown 之後再 submit 要 <code>RuntimeError</code>、<code>n &lt; 1</code> 要 <code>ValueError</code>。</li>
+            <li>範例沒有網路;Lab 還要 <code>serve_threaded</code>:用你的 <code>srv.http</code> 解析與回應,每條連線設 <code>timeout</code>,慢客戶端不能把工作執行緒佔住。</li>
+          </ul>
+          <p><strong>任務目標</strong>(公開的用 <code>test</code> 自己跑;隱藏檢定在 <code>submit</code> 時跑,只看得到名稱和一行說明):</p>
+          <ul class="lab-goals">
+            <li data-group="pool.basic">☐ <strong>基本操作</strong>〔公開〕submit 的工作全部跑完;shutdown(wait=True) 等工作做完才回來。</li>
+            <li data-group="pool.concurrency">☐ <strong>同時服務</strong>〔公開〕(服務模式)serve_threaded 能同時服務兩個連線(一個慢的不擋住另一個)。</li>
+            <li data-group="pool.errors">☐ <strong>錯誤處理</strong>〔隱藏檢定〕工作丟例外時工作執行緒不能死;shutdown 之後再 submit 要 RuntimeError;n &lt; 1 要 ValueError;shutdown(wait=False) 立刻回來。</li>
+            <li data-group="pool.slow-client">☐ <strong>慢客戶端</strong>〔隱藏檢定〕(服務模式)只連線不送資料的客戶端不能擋住別人,timeout 秒後被關掉。</li>
+            <li data-group="pool.perf">☐ <strong>併發</strong>〔隱藏檢定〕(服務模式)工作真的同時進行(一個一個處理要 10 秒)。效能:100 個連線同時各送 10 個請求、每個請求處理 10 ms;8 個工作執行緒,零錯誤,5 秒內。這個門檻來自檢查點 1 的 Boss 戰「100 個併發連線」(同樣的負載,5 秒內),以及檢查點 2 的「借還負載」(100 個客戶端同時各借還 10 次,10 秒內)。</li>
+          </ul>
+          <p>標「服務模式」的任務目標:判題時你的服務在沙盒裡的 8080 埠跑(以學生的身分),我們的測試客戶端用另一個使用者從外面連進來,你的程式碰不到它。</p>
+          <p><strong>之後會用在:</strong><a href="129-http-rest-api.html#lab-bookapi-api">{{ch:129-http-rest-api}}的借書 REST API</a>(判題時跑在你的 <code>serve_threaded</code> 上);檢查點 1 的 Boss 戰「100 個併發連線」「慢客戶端」;檢查點 2 的 Boss 戰「資料一致」「借還負載」。</p>
+          <p class="lab-rule">這個零件過關之後,後面的專題一律用你自己的版本。規則見<a href="00-about.html#lab-rules">零件庫規則</a>。</p>
+        </div>
+      </div>
 
       <h2>持久化:讓資料活過斷電</h2>
       <p>

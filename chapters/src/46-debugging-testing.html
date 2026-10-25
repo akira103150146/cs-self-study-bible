@@ -1621,7 +1621,99 @@ M5   ·   ·   ✗   ·   ·  T3
         而且隱藏的 8 個突變版(例如「逾期少算一天」「還書沒有把本數加回去」)每一個都至少讓一條測試失敗。
         上面手算的每一步(找出存活者、想它像哪一種 bug、補一條邊界測試),就是你寫那份測試時要做的事。
       </p>
-      <!-- LAB: bookapi/tests -->
+      <h3 id="lab-bookapi-tests">本章 Lab:測試借書 API bookapi/tests/</h3>
+      <div class="callout lab" data-task="bookapi/tests">
+        <div class="ico">🧪</div>
+        <div class="body">
+          <span class="c-title">本章 Lab · 任務線「bookapi」· 任務「測試借書 API」</span>
+          <p><strong>對應地下城任務:</strong>任務「測試借書 API」(任務線:bookapi 借書 API:從 socket 到上線,第 5 個任務)。零件檔:<code>~/零件庫/bookapi/tests/test_api.py</code>。</p>
+          <p><strong>要做的零件:</strong>替<a href="129-http-rest-api.html#lab-bookapi-api">{{ch:129-http-rest-api}}</a>的借書 API 寫一整套 <code>unittest</code> 測試。判題時,<code>bookapi/</code> 會換成我們的參考解和 8 個埋了 bug 的突變版:你的測試要讓參考解全過,而且每個突變版至少有一條測試失敗。這個任務要等任務「借書 REST API」過關之後才開放。</p>
+          <p><strong>介面:</strong></p>
+<pre><code class="language-python"># ~/零件庫/bookapi/tests/test_api.py
+import unittest
+
+from bookapi.api import make_app        # 判題時換成參考解或突變版
+from bookapi.repo import LibraryRepo
+
+
+class BookApiTest(unittest.TestCase):   # 類別的名稱和個數都隨你
+    def setUp(self):
+        self.handler = make_app(LibraryRepo(":memory:"))   # 每個測試一個全新的服務
+
+    def test_something(self):
+        """一條測試檢查一件事;只用公開的介面(make_app、LibraryRepo)和 API 規格。"""</code></pre>
+          <p><strong>公開範例:</strong></p>
+          <p>一個起點:兩條測試,其他的要你自己補。在 <code>~/零件庫</code> 裡執行 <code>python3 -m unittest -v bookapi.tests.test_api</code>(不需要 <code>__init__.py</code>):</p>
+<pre><code class="language-python"># bookapi/tests/test_api.py —— 起點:兩條測試,其他的要你自己補
+import json
+import unittest
+from datetime import datetime, timedelta
+from types import SimpleNamespace
+
+from bookapi.api import make_app        # 判題時換成參考解或突變版
+from bookapi.repo import LibraryRepo
+
+
+class BookApiTest(unittest.TestCase):
+    def setUp(self):
+        self.handler = make_app(LibraryRepo(":memory:"))   # 每個測試一個全新的服務
+
+    def call(self, method, path, payload=None, query=None):
+        body = b"" if payload is None else json.dumps(payload).encode()
+        req = SimpleNamespace(method=method, path=path, query=query or {},
+                              headers={"content-type": "application/json"}, body=body)
+        status, headers, out = self.handler(req)
+        return status, (json.loads(out) if out else None)
+
+    def add_book_and_member(self, copies=1):
+        self.call("POST", "/books", {"title": "小王子", "author": "聖修伯里",
+                                     "isbn": "9789570000001", "copies": copies})
+        self.call("POST", "/members", {"name": "小明", "email": "ming@example.com"})
+
+    def test_borrow_last_copy_then_409(self):
+        self.add_book_and_member(copies=1)
+        self.assertEqual(self.call("POST", "/loans", {"book_id": 1, "member_id": 1})[0], 201)
+        status, err = self.call("POST", "/loans", {"book_id": 1, "member_id": 1})
+        self.assertEqual(status, 409)
+        self.assertEqual(err["error"]["code"], "conflict")     # 只比 code,不比 message 的文字
+
+    def test_due_at_is_loaned_at_plus_days(self):
+        self.add_book_and_member()
+        status, loan = self.call("POST", "/loans", {"book_id": 1, "member_id": 1, "days": 7})
+        loaned = datetime.fromisoformat(loan["loaned_at"])
+        self.assertEqual(datetime.fromisoformat(loan["due_at"]), loaned + timedelta(days=7))
+
+
+if __name__ == "__main__":
+    unittest.main()</code></pre>
+<pre><code class="language-text">$ cd ~/零件庫
+$ python3 -m unittest -v bookapi.tests.test_api
+test_borrow_last_copy_then_409 (bookapi.tests.test_api.BookApiTest.test_borrow_last_copy_then_409) ... ok
+test_due_at_is_loaned_at_plus_days (bookapi.tests.test_api.BookApiTest.test_due_at_is_loaned_at_plus_days) ... ok
+
+----------------------------------------------------------------------
+Ran 2 tests in 0.001s
+
+OK</code></pre>
+          <p>把你自己的 <code>repo.py</code> 改壞一處(<code>due_at</code> 少算一天),第二條就會失敗:這就是突變測試在做的事。</p>
+          <p><strong>和本章範例不同的地方:</strong>可以參考本章的範例,但介面和要求不同,要自己改寫。</p>
+          <ul>
+            <li>本章的範例測的是本章自己的待辦服務,被測的程式和測試是同一個人寫的;Lab 的測試要能測<strong>別人的</strong>借書 API,只能用公開的介面和規格,不能碰你自己實作的內部細節(私有屬性、錯誤訊息的文字)。</li>
+            <li>範例用 <code>FakeClock</code> 注入時間;<code>make_app(repo)</code> 沒有時鐘參數,逾期要用 <code>?now=</code> 和回應裡的 <code>loaned_at</code>、<code>due_at</code> 來測。</li>
+            <li>範例的整合測試開一台真的伺服器;Lab 直接呼叫 handler 就夠了,快很多(整套有 30 秒的門檻)。</li>
+            <li>範例的錯誤格式是 <code>{"error": "not found"}</code>;借書 API 是 <code>{"error": {"code", "message"}}</code>,斷言比 <code>code</code>,不比 <code>message</code> 的文字。</li>
+            <li>前面幾節的 pytest 寫法(<code>parametrize</code>、fixtures)不能用:判題的沙盒只有標準函式庫,一律用 <code>unittest</code>(<code>subTest</code> 可以代替 <code>parametrize</code>)。</li>
+          </ul>
+          <p><strong>任務目標</strong>(公開的用 <code>test</code> 自己跑;隱藏檢定在 <code>submit</code> 時跑,只看得到名稱和一行說明):</p>
+          <ul class="lab-goals">
+            <li data-group="tests.green">☐ <strong>參考解全過</strong>〔公開〕你的測試在參考解上全部通過(python3 -m unittest)。</li>
+            <li data-group="tests.mutants">☐ <strong>抓突變</strong>〔隱藏檢定〕8 個隱藏突變版(例:逾期少算一天、還書沒有加回本數),每個都至少一條測試失敗。</li>
+            <li data-group="tests.perf">☐ <strong>跑得夠快</strong>〔隱藏檢定〕每個突變版都要把整套測試重跑一次。效能:整套測試 30 秒內跑完。這個門檻來自檢查點 2 的 Boss 戰「突變測試」:參考解加上 8 個突變版,整套測試要跑 9 次。</li>
+          </ul>
+          <p><strong>之後會用在:</strong>檢查點 2 的 Boss 戰「突變測試」;組隊副本 R1「圖書館借書 API」也用同一套方法驗收。每加一個功能(檢查點 3 的認證、快取),這套測試就先跑一次,確認舊的功能沒有壞。</p>
+          <p class="lab-rule">這個零件過關之後,後面的專題一律用你自己的版本。規則見<a href="00-about.html#lab-rules">零件庫規則</a>。</p>
+        </div>
+      </div>
 
       <h2>心態:bug 是老師,可測試性是好設計的影子</h2>
       <p>

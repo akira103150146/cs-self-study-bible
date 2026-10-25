@@ -1685,7 +1685,89 @@ available == copies - (這本書還沒還的借閱筆數)</code></pre>
         </div>
       </div>
 
-      <!-- LAB: bookapi/api -->
+      <h3 id="lab-bookapi-api">本章 Lab:借書 REST API bookapi/api.py</h3>
+      <div class="callout lab" data-task="bookapi/api">
+        <div class="ico">🧪</div>
+        <div class="body">
+          <span class="c-title">本章 Lab · 任務線「bookapi」· 任務「借書 REST API」</span>
+          <p><strong>對應地下城任務:</strong>任務「借書 REST API」(任務線:bookapi 借書 API:從 socket 到上線,第 4 個任務)。零件檔:<code>~/零件庫/bookapi/api.py</code>。</p>
+          <p><strong>要做的零件:</strong>照上面「借書 API 規格:你要自己寫的服務」寫出 <code>make_app(repo)</code>:路由、讀 JSON、驗證欄位、把 <code>LibraryRepo</code> 的例外變成狀態碼與一致的錯誤格式。資料層用你在<a href="37-databases.html#lab-bookapi-repo">{{ch:37-databases}}</a>寫的 <code>LibraryRepo</code>,伺服器用你的 <code>srv/http</code> 或 <code>srv/pool</code>。</p>
+          <p><strong>介面:</strong></p>
+<pre><code class="language-python"># ~/零件庫/bookapi/api.py
+from bookapi.repo import Conflict, LibraryRepo, NotFound
+
+
+def make_app(repo: LibraryRepo):
+    """回傳 handler(Request) -&gt; (status, headers, body),可以直接交給
+    srv.http.serve 或 srv.pool.serve_threaded。
+    端點、欄位規則、狀態碼與錯誤格式照本章「借書 API 規格:你要自己寫的服務」。"""</code></pre>
+          <p><strong>公開範例:</strong></p>
+          <p>不開任何伺服器,手做一個長得像 <code>Request</code> 的物件直接呼叫 handler(在 <code>~/零件庫</code> 裡執行 <code>python3</code>):</p>
+<pre><code class="language-python">&gt;&gt;&gt; import json
+&gt;&gt;&gt; from types import SimpleNamespace
+&gt;&gt;&gt; from bookapi.api import make_app
+&gt;&gt;&gt; from bookapi.repo import LibraryRepo
+&gt;&gt;&gt; handler = make_app(LibraryRepo(":memory:"))
+&gt;&gt;&gt; def call(method, path, payload=None, query=None):
+...     """手做一個長得像 srv.http.Request 的物件交給 handler,回傳 (狀態碼, JSON)。"""
+...     body = b"" if payload is None else json.dumps(payload).encode()
+...     req = SimpleNamespace(method=method, path=path, query=query or {},
+...                           headers={"content-type": "application/json"}, body=body)
+...     status, headers, out = handler(req)
+...     return status, (json.loads(out) if out else None)
+...
+&gt;&gt;&gt; status, book = call("POST", "/books", {"title": "小王子", "author": "聖修伯里", "isbn": "9789570000001"})
+&gt;&gt;&gt; status, book["id"], book["copies"], book["available"]
+(201, 1, 1, 1)
+&gt;&gt;&gt; call("POST", "/members", {"name": "小明", "email": "ming@example.com"})[0]
+201
+&gt;&gt;&gt; status, loan = call("POST", "/loans", {"book_id": 1, "member_id": 1, "days": 7})
+&gt;&gt;&gt; status, loan["returned_at"]
+(201, None)
+&gt;&gt;&gt; status, err = call("POST", "/loans", {"book_id": 1, "member_id": 1})
+&gt;&gt;&gt; status, err["error"]["code"]
+(409, 'conflict')
+&gt;&gt;&gt; call("GET", "/loans/overdue", query={"now": loan["due_at"]})
+(200, {'items': []})
+&gt;&gt;&gt; call("POST", "/loans/1/return")[1]["returned_at"] is not None
+True
+&gt;&gt;&gt; call("GET", "/books/1")[1]["available"]
+1
+&gt;&gt;&gt; call("DELETE", "/books/1")
+(204, None)
+&gt;&gt;&gt; call("GET", "/books", query={"limit": "0"})[0]
+422</code></pre>
+          <p>真的跑起來(判題時的啟動檔做的也是這件事,只是資料庫在 <code>/tmp/app.db</code>):<code>PYTHONPATH=~/零件庫 python3 run_api.py</code>,再用 curl 或 <code>urllib</code> 連 <code>http://127.0.0.1:8080/books</code>。</p>
+<pre><code class="language-python"># run_api.py —— 自己的借書 API 跑在自己的多執行緒伺服器上(和判題的啟動檔做的事一樣)
+import sys
+
+from bookapi.api import make_app
+from bookapi.repo import LibraryRepo
+from srv.pool import serve_threaded
+
+db = sys.argv[1] if len(sys.argv) &gt; 1 else "library.db"
+serve_threaded(8080, make_app(LibraryRepo(db)), workers=8)</code></pre>
+          <p><strong>和本章範例不同的地方:</strong>可以參考本章的範例,但介面和要求不同,要自己改寫。</p>
+          <p>完整的清單在上面的「和待辦範例不同的地方」。最要緊的三點:</p>
+          <ul>
+            <li>handler 只收一個 <code>Request</code>(<code>req.method</code>、<code>req.path</code>、<code>req.query</code>、<code>req.headers</code>、<code>req.body</code>),不是待辦範例那個收五個參數的 <code>app</code>。</li>
+            <li>資料層的 <code>NotFound</code> 要變成 404、<code>Conflict</code> 要變成 409;待辦範例沒有 409,也沒有 <code>?q=</code>、<code>?now=</code>。</li>
+            <li>借書要防超借:檢查本數和新增借閱在同一個交易裡;待辦範例沒有併發的資料一致問題。</li>
+          </ul>
+          <p><strong>任務目標</strong>(公開的用 <code>test</code> 自己跑;隱藏檢定在 <code>submit</code> 時跑,只看得到名稱和一行說明):</p>
+          <ul class="lab-goals">
+            <li data-group="api.public">☐ <strong>公開 API 測試</strong>〔公開〕約 12 條:每個端點的正常流程與狀態碼。</li>
+            <li data-group="api.edge">☐ <strong>邊界</strong>〔隱藏檢定〕limit 要 1–100(預設 20)、offset 要 0 以上,limit=0、負數或太大回 422;offset 超過結尾回空的 items;只有空白的書名回 422;本數 0 的書借不到;Unicode 書名;剛好到期的借閱不算逾期(用 ?now= 查)。</li>
+            <li data-group="api.errors">☐ <strong>錯誤處理</strong>〔隱藏檢定〕壞 JSON 回 400;要讀本體的請求 Content-Type 不對回 415;頂層不是 JSON 物件(例如陣列)、型別錯(true 和 "1" 都不算整數)、缺欄位、days 不在 1–365、email 沒有 @ 回 422;找不到(包括借不存在的書或會員)回 404;路徑對、方法錯回 405 加 Allow;不能借回 409;借書的檢查順序是欄位、書、會員、本數;錯誤一律是 {"error": {"code", "message"}}。</li>
+            <li data-group="api.consistency">☐ <strong>資料一致</strong>〔隱藏檢定〕借還之後 available 正確、重複還書回 409、刪除有人借的書回 409、copies 改得比借出中的本數少回 409、PATCH 只改給的欄位。</li>
+            <li data-group="api.spec">☐ <strong>規格細節</strong>〔隱藏檢定〕201 回傳新資源並帶 Location、204 沒有 body、Content-Type 是 application/json; charset=utf-8、列表照 id 排序、未知欄位回 422、PATCH {} 什麼都不改並回 200、?now= 指定逾期查詢的「現在」。</li>
+            <li data-group="api.perf">☐ <strong>併發借還</strong>〔隱藏檢定〕(服務模式)借書要在同一個交易裡檢查並扣本數。效能:掛在 serve_threaded 上,100 個客戶端同時各借還 10 次:零錯誤、沒有超借,10 秒內。這個門檻來自檢查點 2 的 Boss 戰「借還負載」(同樣的負載,10 秒內)與「資料一致」(同時借最後一本只能成功一次)。</li>
+          </ul>
+          <p>標「服務模式」的任務目標:判題時你的服務在沙盒裡的 8080 埠跑(以學生的身分),我們的測試客戶端用另一個使用者從外面連進來,你的程式碰不到它。</p>
+          <p><strong>之後會用在:</strong><a href="46-debugging-testing.html#lab-bookapi-tests">{{ch:46-debugging-testing}}的測試借書 API</a>(替這個 API 寫一整套測試);檢查點 2 的 Boss 戰(公開 API 測試、邊界、錯誤處理、資料一致、規格細節、借還負載);組隊副本 R1「圖書館借書 API」(同一個題目,另一組隱藏測試);之後檢查點 3 的認證與授權 <code>bookapi/auth</code>、快取層 <code>bookapi/cache</code>(那兩章還沒寫);資安任務線 S3「Web 修補:攻防自己的借書 API」也拿你的這份 <code>api.py</code> 當靶子。</p>
+          <p class="lab-rule">這個零件過關之後,後面的專題一律用你自己的版本。規則見<a href="00-about.html#lab-rules">零件庫規則</a>。</p>
+        </div>
+      </div>
 
       <h2>動手練習</h2>
 

@@ -1694,7 +1694,127 @@ borrow_immediate
         </div>
       </div>
 
-      <!-- LAB: bookapi/repo -->
+      <h3 id="lab-bookapi-repo">本章 Lab:借書資料庫 bookapi/repo.py</h3>
+      <div class="callout lab" data-task="bookapi/repo">
+        <div class="ico">🧪</div>
+        <div class="body">
+          <span class="c-title">本章 Lab · 任務線「bookapi」· 任務「借書資料庫」</span>
+          <p><strong>對應地下城任務:</strong>任務「借書資料庫」(任務線:bookapi 借書 API:從 socket 到上線,第 3 個任務)。零件檔:<code>~/零件庫/bookapi/schema.sql</code> 與 <code>~/零件庫/bookapi/repo.py</code>。</p>
+          <p><strong>要做的零件:</strong>借書 API 的資料層:<code>schema.sql</code> 建三張表,<code>LibraryRepo</code> 把所有 SQL 包起來,呼叫的人只看得到 Python 的方法、<code>dict</code> 和兩種例外 <code>NotFound</code>、<code>Conflict</code>。本章「手算:把借書紀錄拆到 3NF」「手算:books 與 loans 的 JOIN、可借本數、逾期清單」「手算:兩個人同時借最後一本」就是它的規格。</p>
+          <p><strong>介面:</strong></p>
+<pre><code class="language-python"># ~/零件庫/bookapi/schema.sql:三張表,用 CREATE TABLE IF NOT EXISTS(可以重複執行)
+#   books(id, title, author, isbn UNIQUE, copies &gt;= 0)
+#   members(id, name, email UNIQUE)
+#   loans(id, book_id → books, member_id → members, loaned_at, due_at, returned_at NULL)
+# ~/零件庫/bookapi/repo.py
+# now 參數:ISO 8601 字串,到秒、不帶時區,例如 "2026-10-01T09:00:00";None = 現在的時間。
+# 找不到的 id 一律丟 NotFound。
+
+class NotFound(Exception):
+    """找不到書、會員或借閱。"""
+
+
+class Conflict(Exception):
+    """沒有可借本數、重複 isbn 或 email、本數小於 0、copies 改得比借出中的本數少、
+    已經還過、刪除有人借的書。"""
+
+
+class LibraryRepo:
+    def __init__(self, db_path=":memory:"):
+        """連上 SQLite、打開外鍵檢查、執行同一個資料夾的 schema.sql。
+        同一個物件會被好幾條執行緒同時呼叫(API 掛在 serve_threaded 上)。"""
+
+    def add_book(self, title, author, isbn, copies=1) -&gt; int:
+        """新增一本書,回傳 id。"""
+
+    def get_book(self, book_id) -&gt; dict:
+        """{"id", "title", "author", "isbn", "copies", "available"};
+        available = copies - 還沒還的借閱數,每次算出來。"""
+
+    def list_books(self, q=None, limit=20, offset=0) -&gt; list[dict]:
+        """照 id 由小到大;q:書名或作者包含 q(照字面比對)。"""
+
+    def update_book(self, book_id, **fields) -&gt; dict:
+        """只收 title、author、isbn、copies;沒給欄位就什麼都不改。回傳改完的書。"""
+
+    def delete_book(self, book_id) -&gt; None:
+        """還有沒還的借閱 → Conflict;只剩已經還了的借閱時,連那些借閱一起刪。"""
+
+    def add_member(self, name, email) -&gt; int:
+        """新增一位會員,回傳 id。"""
+
+    def get_member(self, member_id) -&gt; dict:
+        """{"id", "name", "email"}"""
+
+    def borrow(self, book_id, member_id, days=14, now=None) -&gt; int:
+        """先查書(NotFound)、再查會員(NotFound),都在才查本數(Conflict);
+        檢查和新增借閱在同一個交易裡。loaned_at = now,due_at = now + days 天。回傳借閱 id。"""
+
+    def get_loan(self, loan_id) -&gt; dict:
+        """{"id", "book_id", "member_id", "loaned_at", "due_at", "returned_at"}"""
+
+    def return_loan(self, loan_id, now=None) -&gt; None:
+        """returned_at = now;已經還過 → Conflict。"""
+
+    def overdue(self, now=None) -&gt; list[dict]:
+        """還沒還、而且 due_at 早於 now 的借閱,照 id 排序;剛好等於 now 不算。"""</code></pre>
+          <p><strong>公開範例:</strong></p>
+          <p>在 <code>~/零件庫</code> 裡執行 <code>python3</code>(<code>now</code> 都固定,所以結果每次一樣):</p>
+<pre><code class="language-python">&gt;&gt;&gt; from bookapi.repo import Conflict, LibraryRepo, NotFound
+&gt;&gt;&gt; repo = LibraryRepo(":memory:")
+&gt;&gt;&gt; b = repo.add_book("小王子", "聖修伯里", "9789570000001", copies=1)
+&gt;&gt;&gt; m1 = repo.add_member("小明", "ming@example.com")
+&gt;&gt;&gt; m2 = repo.add_member("小華", "hua@example.com")
+&gt;&gt;&gt; loan = repo.borrow(b, m1, now="2026-10-01T09:00:00")
+&gt;&gt;&gt; book = repo.get_book(b)
+&gt;&gt;&gt; book["copies"], book["available"]
+(1, 0)
+&gt;&gt;&gt; repo.get_loan(loan)["due_at"]
+'2026-10-15T09:00:00'
+&gt;&gt;&gt; try:
+...     repo.borrow(b, m2, now="2026-10-02T09:00:00")
+... except Conflict:
+...     print("沒有可借的本數")
+...
+沒有可借的本數
+&gt;&gt;&gt; try:
+...     repo.borrow(99, m2)
+... except NotFound:
+...     print("沒有這本書")
+...
+沒有這本書
+&gt;&gt;&gt; [x["id"] for x in repo.overdue(now="2026-10-15T09:00:00")]    # 剛好到期不算逾期
+[]
+&gt;&gt;&gt; [x["id"] for x in repo.overdue(now="2026-10-15T09:00:01")]
+[1]
+&gt;&gt;&gt; repo.return_loan(loan, now="2026-10-16T10:00:00")
+&gt;&gt;&gt; repo.get_book(b)["available"], repo.get_loan(loan)["returned_at"]
+(1, '2026-10-16T10:00:00')
+&gt;&gt;&gt; [x["title"] for x in repo.list_books(q="王子")]
+['小王子']
+&gt;&gt;&gt; repo.update_book(b, copies=3)["available"]
+3</code></pre>
+          <p><strong>和本章範例不同的地方:</strong>可以參考本章的範例,但介面和要求不同,要自己改寫。</p>
+          <ul>
+            <li>本章的 <code>library.sql</code> 是一份建表加塞資料的腳本;Lab 的 <code>schema.sql</code> 只建表(和你決定要建的索引),由 <code>LibraryRepo</code> 建立時執行,要能重複執行;資料一律經過方法新增。</li>
+            <li>本章直接下 SQL,錯誤是 <code>sqlite3.IntegrityError</code>;Lab 要把它換成 <code>NotFound</code> 或 <code>Conflict</code>,呼叫的人看不到 SQLite。</li>
+            <li>本章的 <code>constraints.py</code> 示範了外鍵檢查預設是關的;Lab 的每一條連線都要打開它。</li>
+            <li>本章的 <code>borrow_race.py</code> 每個人一條連線、時間寫死;Lab 的 <code>borrow</code> 要自己算 <code>due_at</code>,在同一個交易裡檢查本數,而且同一個 <code>LibraryRepo</code> 會被好幾條執行緒同時呼叫。</li>
+            <li>本章的 schema 沒有索引;Lab 有效能門檻,要你想想哪些欄位要建索引。</li>
+            <li>Lab 多了本章沒有的操作:搜尋與分頁(<code>list_books</code>)、只改給的欄位(<code>update_book</code>)、刪書時檢查有沒有人借。</li>
+          </ul>
+          <p><strong>任務目標</strong>(公開的用 <code>test</code> 自己跑;隱藏檢定在 <code>submit</code> 時跑,只看得到名稱和一行說明):</p>
+          <ul class="lab-goals">
+            <li data-group="repo.crud">☐ <strong>基本操作</strong>〔公開〕書與會員的新增、查詢、更新、刪除,借書、還書、逾期查詢的公開範例(now 固定)。</li>
+            <li data-group="repo.constraints">☐ <strong>約束</strong>〔隱藏檢定〕重複的 isbn 或 email、本數小於 0、copies 改得比借出中的本數少、找不到的 id、沒有可借本數、還過的再還、刪除有人借的書,都要丟對的例外(NotFound 或 Conflict);書和會員都不存在時,丟的是書的 NotFound。</li>
+            <li data-group="repo.time">☐ <strong>時間邊界</strong>〔隱藏檢定〕剛好到期不算逾期、已還的不算、days 參數、跨月跨年的日期。</li>
+            <li data-group="repo.search">☐ <strong>搜尋與分頁</strong>〔隱藏檢定〕q 比對書名與作者(子字串;不考英文大小寫)、列表照 id 排序、offset 超過結尾回傳空串列、q 裡有引號、% 或 _ 要照字面比對(參數化查詢)。</li>
+            <li data-group="repo.perf">☐ <strong>效能</strong>〔隱藏檢定〕想想哪些欄位要建索引。效能:1 萬本書、10 萬筆借閱的資料庫上:連續 1,000 次 get_book 1 秒內、overdue() 0.5 秒內。這個門檻來自檢查點 2 的 Boss 戰「借還負載」:100 個客戶端同時各借還 10 次要在 10 秒內做完,每一次借還都要查好幾次資料層。</li>
+          </ul>
+          <p><strong>之後會用在:</strong><a href="129-http-rest-api.html#lab-bookapi-api">{{ch:129-http-rest-api}}的借書 REST API</a>(<code>NotFound</code> 變成 404、<code>Conflict</code> 變成 409);檢查點 2 的 Boss 戰「公開 API 測試」「邊界」「錯誤處理」「資料一致」「規格細節」「借還負載」;組隊副本 R1「圖書館借書 API」;檢查點 3 的「攻擊套件」(SQL injection 擋不擋得住,就看這裡的參數化查詢;那一章還沒寫)。</p>
+          <p class="lab-rule">這個零件過關之後,後面的專題一律用你自己的版本。規則見<a href="00-about.html#lab-rules">零件庫規則</a>。</p>
+        </div>
+      </div>
 
       <h2>當關聯模型不夠用:NoSQL 與半結構化資料</h2>
       <p>
