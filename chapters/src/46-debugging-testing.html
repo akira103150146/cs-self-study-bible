@@ -873,6 +873,756 @@ def test_notify_user_sends_correct_email():
         </div>
       </div>
 
+
+      <h2>unittest 對照:同一組測試用標準函式庫寫</h2>
+      <p>
+        前面的測試都用 <code>pytest</code>。它好用,但它是第三方套件,要先 <code>pip install</code>。
+        Python 自己就帶了一套測試框架:<strong><code>unittest</code></strong>(標準函式庫)。任何裝了 Python 的機器都能直接跑,不用裝任何東西。
+        所以很多判題系統、很多公司的 CI 都用它。本書的地下城也一樣:本章 Lab「測試借書 API」與組隊副本「圖書館借書 API」,都用 <code>python3 -m unittest</code> 執行測試。
+      </p>
+      <p>
+        兩者的觀念完全相同(準備、執行、檢查、清理),只是寫法不同。下表把本章用過的 pytest 寫法一個一個對過去:
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>要做的事</th><th>pytest</th><th>unittest</th></tr></thead>
+        <tbody>
+          <tr><td>一條測試</td><td><code>def test_x():</code>(普通函式)</td><td><code>class TestX(unittest.TestCase):</code> 裡的 <code>def test_x(self):</code></td></tr>
+          <tr><td>比較相等</td><td><code>assert a == b</code></td><td><code>self.assertEqual(a, b)</code></td></tr>
+          <tr><td>真/假、在不在裡面</td><td><code>assert x</code>、<code>assert k in d</code></td><td><code>self.assertTrue(x)</code>、<code>self.assertIn(k, d)</code></td></tr>
+          <tr><td>應該丟例外</td><td><code>with pytest.raises(ValueError):</code></td><td><code>with self.assertRaises(ValueError):</code></td></tr>
+          <tr><td>一個測試餵多組資料</td><td><code>@pytest.mark.parametrize</code></td><td><code>for</code> 迴圈加 <code>with self.subTest(...):</code></td></tr>
+          <tr><td>準備資料(fixture)</td><td><code>@pytest.fixture</code></td><td><code>setUp()</code>(每個測試前)、<code>setUpClass()</code>(整個類別一次)</td></tr>
+          <tr><td>測完清理</td><td>fixture 裡 <code>yield</code> 之後的程式</td><td><code>tearDown()</code>、<code>self.addCleanup(函式, 引數…)</code></td></tr>
+          <tr><td>假物件(mock)</td><td>也是用 <code>unittest.mock</code></td><td><code>unittest.mock</code></td></tr>
+          <tr><td>執行</td><td><code>pytest</code></td><td><code>python3 -m unittest -v</code></td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        先改寫前面 parametrize 的成績例子。被測的 <code>letter_grade</code> 也寫出來,兩個檔案放在同一個資料夾就能直接跑:
+      </p>
+      <pre><code class="language-python"># grade.py ─ 被測的函式(和上面的分區一致)
+def letter_grade(score):
+    if not 0 &lt;= score &lt;= 100:
+        raise ValueError(f"分數要在 0–100 之間,收到 {score}")
+    if score &gt;= 90:
+        return "A"
+    if score &gt;= 80:
+        return "B"
+    if score &gt;= 70:
+        return "C"
+    if score &gt;= 60:
+        return "D"
+    return "F"</code></pre>
+      <pre><code class="language-python"># test_grade.py ─ 和 pytest 版測同一組案例,只用標準函式庫
+import unittest
+from grade import letter_grade
+
+class TestLetterGrade(unittest.TestCase):
+    CASES = [
+        (30,  "F"),   # F 區代表
+        (59,  "F"),   # ★ 邊界
+        (60,  "D"),   # ★ 邊界
+        (75,  "C"),   # C 區代表
+        (89,  "B"),   # ★ 邊界
+        (90,  "A"),   # ★ 邊界
+        (100, "A"),   # 範圍端點
+    ]
+
+    def test_letter_grade(self):
+        for score, expected in self.CASES:
+            with self.subTest(score=score):        # 每組資料各自回報成敗
+                self.assertEqual(letter_grade(score), expected)
+
+    def test_rejects_out_of_range(self):
+        for bad in [-1, 101, 150]:
+            with self.subTest(bad=bad):
+                with self.assertRaises(ValueError):  # 對應 pytest.raises
+                    letter_grade(bad)
+
+if __name__ == "__main__":
+    unittest.main()</code></pre>
+      <pre><code class="language-text">$ python3 -m unittest -v
+test_letter_grade (test_grade.TestLetterGrade.test_letter_grade) ... ok
+test_rejects_out_of_range (test_grade.TestLetterGrade.test_rejects_out_of_range) ... ok
+
+----------------------------------------------------------------------
+Ran 2 tests in 0.000s
+
+OK</code></pre>
+      <p>
+        <code>subTest</code> 是 parametrize 的對應品。差別在失敗的時候:沒有 <code>subTest</code>,迴圈在第一個失敗的 <code>assertEqual</code> 就停了,後面幾組根本沒跑;
+        有 <code>subTest</code>,每一組各自記成敗,全部跑完再一起回報。把 <code>grade.py</code> 裡的 <code>&gt;=</code> 全部改成 <code>&gt;</code>(典型的差一錯誤),再跑一次(節錄):
+      </p>
+      <pre><code class="language-text">$ python3 -m unittest -v
+test_letter_grade (test_grade.TestLetterGrade.test_letter_grade) ...
+  test_letter_grade (test_grade.TestLetterGrade.test_letter_grade) (score=60) ... FAIL
+  test_letter_grade (test_grade.TestLetterGrade.test_letter_grade) (score=90) ... FAIL
+test_rejects_out_of_range (test_grade.TestLetterGrade.test_rejects_out_of_range) ... ok
+...
+AssertionError: 'F' != 'D'
+...
+AssertionError: 'B' != 'A'
+...
+FAILED (failures=2)</code></pre>
+      <p>
+        兩個壞掉的邊界(60 與 90)一次都抓出來,而且括號裡直接寫出是哪一組資料(<code>score=60</code>)。
+        這和 pytest 的 <code>test_letter_grade[59-F]</code> 是同一個用意:<strong>失敗訊息要能直接告訴你是哪一組輸入。</strong>
+      </p>
+
+      <h3>setUp 與 tearDown:每個測試都從乾淨的狀態出發</h3>
+      <p>
+        pytest 的 fixture,在 unittest 裡是 <code>setUp</code>。框架在<em>每一個</em> <code>test_</code> 方法之前呼叫一次 <code>setUp</code>,
+        所以每個測試拿到的 <code>self.accounts</code> 都是新的一份,誰也改不到誰。前面的轉帳例子改寫如下:
+      </p>
+      <pre><code class="language-python"># test_transfer.py ─ pytest 的 fixture 改寫成 setUp
+import unittest
+
+def transfer(accounts, src, dst, amount):
+    """從 src 轉 amount 到 dst;餘額不足 → ValueError"""
+    if accounts[src] &lt; amount:
+        raise ValueError("餘額不足")
+    accounts[src] -= amount
+    accounts[dst] += amount
+
+class TestTransfer(unittest.TestCase):
+    def setUp(self):
+        # 每個 test 方法執行之前都會重跑一次:每個測試拿到全新的資料
+        self.accounts = {"alice": 100, "bob": 50}
+
+    def test_transfer_ok(self):
+        transfer(self.accounts, "alice", "bob", 30)
+        self.assertEqual(self.accounts, {"alice": 70, "bob": 80})
+
+    def test_transfer_insufficient(self):
+        with self.assertRaises(ValueError):           # 餘額不足應該報錯
+            transfer(self.accounts, "bob", "alice", 999)
+        self.assertEqual(self.accounts, {"alice": 100, "bob": 50})  # 失敗時一毛都不能動
+
+if __name__ == "__main__":
+    unittest.main()</code></pre>
+      <pre><code class="language-text">$ python3 -m unittest -v test_transfer
+test_transfer_insufficient (test_transfer.TestTransfer.test_transfer_insufficient) ... ok
+test_transfer_ok (test_transfer.TestTransfer.test_transfer_ok) ... ok
+
+----------------------------------------------------------------------
+Ran 2 tests in 0.000s
+
+OK</code></pre>
+      <p>
+        注意執行順序:<code>insufficient</code> 排在 <code>ok</code> 前面。unittest 在同一個類別裡<strong>依方法名稱的字母順序</strong>執行,不是依你寫的順序。
+        好的測試不在乎順序;如果你的測試只有照某個順序跑才會過,那是一個藏起來的 bug(後面「flaky 測試」會再看到)。
+      </p>
+      <p>
+        需要清理的資源(暫存檔、資料庫連線、背景伺服器)放在 <code>tearDown</code> 或 <code>addCleanup</code>。
+        它們在測試<em>失敗時也會執行</em>,這正是 pytest 的 <code>yield</code> fixture 要做的事。下面這個小檔案把每個鉤子什麼時候被呼叫印出來:
+      </p>
+      <pre><code class="language-python"># test_lifecycle.py ─ 看清楚 unittest 什麼時候呼叫哪個方法
+import unittest
+
+class Lifecycle(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        print("setUpClass         (整個類別一次)")
+
+    def setUp(self):
+        print("  setUp            (每個測試之前)")
+        self.addCleanup(print, "  cleanup          (addCleanup 登記的,最後跑)")
+
+    def tearDown(self):
+        print("  tearDown         (每個測試之後,失敗也會跑)")
+
+    def test_a(self):
+        print("    test_a")
+
+    def test_b(self):
+        print("    test_b")
+        self.fail("故意失敗")
+
+    @classmethod
+    def tearDownClass(cls):
+        print("tearDownClass      (整個類別一次)")</code></pre>
+      <pre><code class="language-text">$ python3 -m unittest test_lifecycle 2&gt;/dev/null
+setUpClass         (整個類別一次)
+  setUp            (每個測試之前)
+    test_a
+  tearDown         (每個測試之後,失敗也會跑)
+  cleanup          (addCleanup 登記的,最後跑)
+  setUp            (每個測試之前)
+    test_b
+  tearDown         (每個測試之後,失敗也會跑)
+  cleanup          (addCleanup 登記的,最後跑)
+tearDownClass      (整個類別一次)</code></pre>
+      <p>
+        (<code>2&gt;/dev/null</code> 把 unittest 自己的報告藏起來,只留 <code>print</code> 的內容。)<code>test_b</code> 失敗了,它的 <code>tearDown</code> 與 cleanup 照樣執行。
+        <code>addCleanup</code> 可以登記好幾個,執行順序是<strong>後登記的先跑</strong>(像堆疊)。
+        實務上建議:在 <code>setUp</code> 裡每建立一個資源,就馬上 <code>addCleanup</code> 它的清理函式。這樣就算 <code>setUp</code> 做到一半失敗,已經建好的資源也會被清掉(<code>setUp</code> 失敗時 <code>tearDown</code> 不會被呼叫,但 cleanup 會)。
+      </p>
+
+      <h3>探索規則:unittest 怎麼找到你的測試</h3>
+      <p>
+        不加任何引數執行 <code>python3 -m unittest</code>,等於 <code>python3 -m unittest discover</code>:從目前的資料夾開始找測試。它只認這些名字:
+      </p>
+      <ul>
+        <li><strong>檔名</strong>符合 <code>test*.py</code>(例如 <code>test_api.py</code>)。<code>api_test.py</code> 不會被找到,除非你加 <code>-p '*_test.py'</code>。</li>
+        <li><strong>子資料夾</strong>要是一般套件,也就是裡面要有 <code>__init__.py</code>(可以是空檔)。沒有的話,整個資料夾會被跳過。</li>
+        <li><strong>類別</strong>要繼承 <code>unittest.TestCase</code>;<strong>方法</strong>名稱要以 <code>test</code> 開頭。其他方法可以當輔助函式,不會被當成測試。</li>
+        <li>只跑一部分:<code>python3 -m unittest tests.test_api</code>(一個模組)、<code>tests.test_api.TestBooks</code>(一個類別)、<code>tests.test_api.TestBooks.test_create</code>(一條);
+          或用 <code>-k create</code> 只跑名稱含有 <code>create</code> 的測試。</li>
+      </ul>
+      <p>來看一個「名字取錯」的資料夾:<code>calc.py</code> 裡只有 <code>def add(a, b): return a + b</code>;<code>tests/</code> 裡沒有 <code>__init__.py</code>,而且有一個方法叫 <code>check_negative</code>。</p>
+      <pre><code class="language-python"># tests/test_calc.py
+import unittest
+from calc import add
+
+class TestAdd(unittest.TestCase):
+    def test_small(self):
+        self.assertEqual(add(2, 3), 5)
+
+    def check_negative(self):          # 名字不是 test 開頭:不會被執行
+        self.assertEqual(add(-1, -1), 999)</code></pre>
+      <pre><code class="language-text">$ ls
+calc.py  tests
+$ python3 -m unittest -v          # tests/ 裡沒有 __init__.py
+
+----------------------------------------------------------------------
+Ran 0 tests in 0.000s
+
+NO TESTS RAN
+$ echo $?
+5
+$ touch tests/__init__.py
+$ python3 -m unittest -v
+test_small (tests.test_calc.TestAdd.test_small) ... ok
+
+----------------------------------------------------------------------
+Ran 1 test in 0.000s
+
+OK</code></pre>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">看起來對但其實錯:「沒有紅燈,就是測試都過了」</span>
+          <p>上面加了 <code>__init__.py</code> 之後,報告寫 <code>OK</code>,可是只跑了 1 條。<code>check_negative</code> 那條明明會失敗(它期待 <code>-1 + -1 == 999</code>),
+          卻因為名字不是 <code>test</code> 開頭,根本沒執行。沒有紅燈,不等於測試過了;也可能是測試<strong>沒有跑</strong>。
+          Python 3.12 起,一條測試都沒跑時會印 <code>NO TESTS RAN</code>,結束碼是 5,CI 會把它當失敗;更舊的版本印 <code>OK</code>、結束碼 0,CI 會亮綠燈。
+          所以看報告時,先看 <code>Ran N tests</code> 的 N 對不對。</p>
+        </div>
+      </div>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">pytest 也能跑 unittest 寫的測試</span>
+          <p>反過來不行,但這個方向可以:在同一個資料夾執行 <code>pytest</code>,它會找到 <code>unittest.TestCase</code> 的類別並執行(作者用 pytest 9 跑上面的 <code>test_grade.py</code>,結果是 <code>2 passed, 10 subtests passed</code>)。
+          所以用 unittest 寫的測試不會被綁死:判題機器用 <code>python3 -m unittest</code>,你自己的電腦想用 pytest 的漂亮報告也行。</p>
+        </div>
+      </div>
+
+      <h2>測一個 HTTP 服務</h2>
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">為什麼要學</span>
+          <p>到目前為止,被測的都是一個函式。真實的後端是一個<strong>一直在跑的服務</strong>:它聽一個埠、收 HTTP 請求、讀寫資料庫、看時鐘。
+          <a href="129-http-rest-api.html">{{ch:129-http-rest-api}}</a>會帶你寫一個借書 REST API;本章 Lab 要你替那個 API 寫一整套測試(任務「測試借書 API」,用 <code>python3 -m unittest</code> 判),
+          組隊副本「圖書館借書 API」也用同一套方法驗收。這一節示範所有需要的技巧,用一個比借書更小的服務。</p>
+        </div>
+      </div>
+      <p>
+        被測的服務是一個待辦事項 API,只用標準函式庫:<code>http.server</code> 收請求、<code>json</code> 編解碼、<code>sqlite3</code> 存資料。
+        它分成三層,每一層都是為了「好測」而切的:
+      </p>
+      <ul>
+        <li><strong><code>TodoStore</code>(資料層)</strong>:所有 SQL 都在這裡。資料庫路徑由外面傳進來,測試傳 <code>":memory:"</code>(只存在記憶體裡的 SQLite 資料庫,關掉就消失)。</li>
+        <li><strong><code>make_handler(store, now)</code>(HTTP 層)</strong>:把請求翻譯成對 <code>store</code> 的呼叫。「現在幾點」不自己去問,而是呼叫外面傳進來的 <code>now()</code>。</li>
+        <li><strong><code>start_server(store, now, port)</code></strong>:在背景執行緒啟動服務,把伺服器物件交回來。<code>port=0</code> 表示請作業系統挑一個沒人用的埠。</li>
+      </ul>
+      <pre><code class="language-python"># todo_service.py ─ 一個很小的待辦事項 JSON 服務(只用標準函式庫)
+import json
+import sqlite3
+import threading
+from datetime import datetime
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+class TodoStore:
+    """資料層:所有 SQL 都在這裡。now 由呼叫的人傳進來,這一層不看時鐘。"""
+    def __init__(self, path=":memory:"):
+        # 伺服器用好幾條執行緒處理請求,所以允許跨執行緒,自己用鎖保護
+        self.db = sqlite3.connect(path, check_same_thread=False)
+        self.lock = threading.Lock()
+        self.db.execute("CREATE TABLE IF NOT EXISTS todos ("
+                        " id INTEGER PRIMARY KEY, title TEXT NOT NULL,"
+                        " due TEXT NOT NULL, done INTEGER NOT NULL DEFAULT 0)")
+
+    def add(self, title, due):
+        with self.lock, self.db:
+            cur = self.db.execute("INSERT INTO todos (title, due) VALUES (?, ?)",
+                                  (title, due))
+            return cur.lastrowid
+
+    def get(self, todo_id):
+        with self.lock:
+            row = self.db.execute("SELECT id, title, due, done FROM todos WHERE id = ?",
+                                  (todo_id,)).fetchone()
+        if row is None:
+            return None
+        return {"id": row[0], "title": row[1], "due": row[2], "done": bool(row[3])}
+
+    def overdue(self, now):
+        """還沒做完、而且 due 早於 now 的待辦(剛好等於 now 不算逾期)"""
+        with self.lock:
+            rows = self.db.execute("SELECT id FROM todos WHERE done = 0 AND due &lt; ?"
+                                   " ORDER BY id", (now.isoformat(),)).fetchall()
+        return [r[0] for r in rows]
+
+    def close(self):
+        self.db.close()
+
+def make_handler(store, now):
+    """now 是一個「回傳現在時間」的函式;正式上線傳 datetime.now,測試傳假時鐘"""
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, fmt, *args):   # 不要每個請求都印一行,測試輸出才乾淨
+            pass
+
+        def send_json(self, status, obj):
+            body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            if self.path == "/todos/overdue":
+                return self.send_json(200, {"ids": store.overdue(now())})
+            parts = self.path.strip("/").split("/")
+            if len(parts) == 2 and parts[0] == "todos" and parts[1].isdigit():
+                todo = store.get(int(parts[1]))
+                if todo is None:
+                    return self.send_json(404, {"error": "not found"})
+                return self.send_json(200, todo)
+            self.send_json(404, {"error": "not found"})
+
+        def do_POST(self):
+            if self.path != "/todos":
+                return self.send_json(404, {"error": "not found"})
+            length = int(self.headers.get("Content-Length", 0))
+            try:
+                data = json.loads(self.rfile.read(length))
+                title = data["title"]
+                due = datetime.fromisoformat(data["due"]).isoformat()
+            except (ValueError, KeyError, TypeError):
+                return self.send_json(400, {"error": "bad request"})
+            new_id = store.add(title, due)
+            self.send_json(201, store.get(new_id))
+    return Handler
+
+def start_server(store, now=datetime.now, port=0):
+    """在背景執行緒啟動服務。port=0:請作業系統挑一個空的埠。"""
+    httpd = ThreadingHTTPServer(("127.0.0.1", port), make_handler(store, now))
+    # poll_interval:serve_forever 多久檢查一次「該停了嗎」。預設 0.5 秒,
+    # 每個測試的 shutdown() 都要白等最多 0.5 秒;改成 0.01 秒,整套測試快很多
+    threading.Thread(target=httpd.serve_forever, kwargs={"poll_interval": 0.01},
+                     daemon=True).start()
+    return httpd                        # httpd.server_address 是 (主機, 實際的埠)
+
+if __name__ == "__main__":
+    httpd = start_server(TodoStore("todos.db"), port=8000)
+    print("serving on", httpd.server_address)
+    threading.Event().wait()            # 主執行緒睡著,讓背景執行緒服務</code></pre>
+      <p>
+        測試檔裡有兩個類別。<code>TodoStoreTest</code> 不開網路,直接呼叫資料層;<code>TodoApiTest</code> 在每個測試前開一個真的伺服器,用 <code>urllib.request</code> 從外面連進去:
+      </p>
+      <pre><code class="language-python"># test_todo_service.py ─ 單元測試(直接測資料層)+ 整合測試(真的走 HTTP)
+import json
+import unittest
+import urllib.error
+import urllib.request
+from datetime import datetime, timedelta
+
+from todo_service import TodoStore, start_server
+
+class FakeClock:
+    """測試替身:時間由測試決定。呼叫它就得到「現在」。"""
+    def __init__(self, start):
+        self.current = datetime.fromisoformat(start)
+    def __call__(self):
+        return self.current
+    def advance(self, **kwargs):          # clock.advance(hours=1)
+        self.current += timedelta(**kwargs)
+
+# 不經過任何代理伺服器(CI 機器常設 http_proxy,連 127.0.0.1 也會被轉走)
+OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+class TodoStoreTest(unittest.TestCase):
+    """單元測試:不開網路,只測資料層的規則"""
+    def setUp(self):
+        self.store = TodoStore(":memory:")       # 每個測試一個全新的空資料庫
+        self.addCleanup(self.store.close)
+
+    def test_due_exactly_now_is_not_overdue(self):
+        a = self.store.add("交報告", "2026-10-25T08:59:59")
+        self.store.add("繳費", "2026-10-25T09:00:00")
+        self.assertEqual(self.store.overdue(datetime(2026, 10, 25, 9, 0, 0)), [a])
+
+class TodoApiTest(unittest.TestCase):
+    """整合測試:真的開一個 HTTP 服務,用 urllib 從外面連進去"""
+    def setUp(self):
+        # 每建一個資源就馬上登記清理;addCleanup 後登記的先跑
+        self.store = TodoStore(":memory:")
+        self.addCleanup(self.store.close)               # 最後:關資料庫
+        self.clock = FakeClock("2026-10-25T09:00:00")
+        self.server = start_server(self.store, now=self.clock, port=0)
+        self.addCleanup(self.server.server_close)       # 再來:關掉 socket
+        self.addCleanup(self.server.shutdown)           # 最先:停下 serve_forever
+        host, port = self.server.server_address
+        self.base = f"http://{host}:{port}"
+
+    def call(self, method, path, payload=None, raw=None):
+        """送一個請求,回傳 (狀態碼, 解開的 JSON)。4xx/5xx 不丟例外。"""
+        data = raw if raw is not None else (
+            None if payload is None else json.dumps(payload).encode())
+        req = urllib.request.Request(self.base + path, data=data, method=method,
+                                     headers={"Content-Type": "application/json"})
+        try:
+            with OPENER.open(req, timeout=5) as resp:
+                return resp.status, json.loads(resp.read())
+        except urllib.error.HTTPError as err:          # 4xx/5xx 走這裡
+            with err:
+                return err.code, json.loads(err.read())
+
+    def test_create_then_get(self):
+        status, todo = self.call("POST", "/todos",
+                                 {"title": "寫測試", "due": "2026-10-26T12:00:00"})
+        self.assertEqual(status, 201)
+        self.assertEqual(todo["title"], "寫測試")
+        status, again = self.call("GET", f"/todos/{todo['id']}")
+        self.assertEqual((status, again), (200, todo))
+
+    def test_unknown_id_is_404(self):
+        self.assertEqual(self.call("GET", "/todos/999"), (404, {"error": "not found"}))
+
+    def test_bad_json_is_400(self):
+        status, _ = self.call("POST", "/todos", raw=b"{not json")
+        self.assertEqual(status, 400)
+
+    def test_overdue_follows_the_fake_clock(self):
+        self.call("POST", "/todos", {"title": "A", "due": "2026-10-25T10:00:00"})
+        self.assertEqual(self.call("GET", "/todos/overdue"), (200, {"ids": []}))
+        self.clock.advance(hours=2)                    # 不用真的等兩小時
+        self.assertEqual(self.call("GET", "/todos/overdue"), (200, {"ids": [1]}))
+
+if __name__ == "__main__":
+    unittest.main()</code></pre>
+      <pre><code class="language-text">$ python3 -m unittest -v
+test_bad_json_is_400 (test_todo_service.TodoApiTest.test_bad_json_is_400) ... ok
+test_create_then_get (test_todo_service.TodoApiTest.test_create_then_get) ... ok
+test_overdue_follows_the_fake_clock (test_todo_service.TodoApiTest.test_overdue_follows_the_fake_clock) ... ok
+test_unknown_id_is_404 (test_todo_service.TodoApiTest.test_unknown_id_is_404) ... ok
+test_due_exactly_now_is_not_overdue (test_todo_service.TodoStoreTest.test_due_exactly_now_is_not_overdue) ... ok
+
+----------------------------------------------------------------------
+Ran 5 tests in 0.054s
+
+OK</code></pre>
+      <p>幾個值得停下來看的地方:</p>
+      <ul>
+        <li><strong>每個測試一個全新的資料庫。</strong><code>setUp</code> 每次都建一個新的 <code>TodoStore(":memory:")</code>,所以 <code>test_overdue_follows_the_fake_clock</code> 可以放心假設新增的待辦 id 是 1。
+          如果多個測試共用一個資料庫檔案,id 會跟著執行順序變,測試就變得時好時壞。</li>
+        <li><strong>伺服器不用等。</strong><code>ThreadingHTTPServer(...)</code> 建好的時候,socket 已經 bind 並且開始 listen。客戶端這時就能連,連線會在佇列裡等背景執行緒來接。所以測試裡<strong>沒有任何 <code>time.sleep</code></strong>。</li>
+        <li><strong>清理的順序。</strong><code>addCleanup</code> 後登記的先跑:先 <code>shutdown()</code> 讓 <code>serve_forever</code> 迴圈停下,再 <code>server_close()</code> 關掉 socket,最後關資料庫。
+          另外,<code>poll_interval</code>:改回預設的 0.5 秒,同樣 5 條測試要約 2 秒(每個 <code>shutdown()</code> 白等約 0.5 秒)。測試多了,這種小地方會決定整套測試跑 3 秒還是 3 分鐘。</li>
+        <li><strong>4xx 不是例外。</strong><code>urllib</code> 遇到 4xx/5xx 會丟 <code>HTTPError</code>。測試要檢查的正是這些狀態碼,所以 <code>call()</code> 把它接住、照樣回傳 <code>(狀態碼, JSON)</code>。</li>
+        <li><strong>關掉代理伺服器。</strong>很多公司網路與 CI 機器設了 <code>http_proxy</code> 環境變數,<code>urllib</code> 預設會照用,連 <code>127.0.0.1</code> 也可能被轉到代理那裡,測試就莫名其妙失敗。<code>ProxyHandler({})</code> 明確地說「不要代理」。</li>
+      </ul>
+
+      <h3>單元測試與整合測試:兩種都要</h3>
+      <p>
+        <code>test_due_exactly_now_is_not_overdue</code> 是<strong>單元測試</strong>:它直接呼叫 <code>TodoStore.overdue</code>,不開埠、不送 HTTP。它快,而且失敗時你知道問題一定在資料層的 SQL。
+        <code>TodoApiTest</code> 的四條是<strong>整合測試</strong>:請求真的經過 socket、HTTP 解析、JSON、資料層、再回來。它抓得到單元測試抓不到的錯,例如 <code>Content-Length</code> 算錯、路徑沒對上、JSON 欄位名拼錯。
+      </p>
+      <p>
+        兩種要分工。<strong>規則(邊界、計算、狀態轉換)盡量用單元測試測得很細</strong>,像「剛好等於 now 不算逾期」這種邊界,在資料層測一次就夠;
+        <strong>整合測試只確認「接起來是通的」</strong>:每個端點的正常流程走一次、每一種錯誤狀態碼至少出現一次。
+        這就是前面測試金字塔的形狀,只是現在你看到它在一個真實服務上長什麼樣子。
+      </p>
+
+      <h3>時間也是相依:把 now 注入</h3>
+      <p>
+        如果 handler 裡直接寫 <code>datetime.now()</code>,「逾期」的測試就只能用真實時間:今天新增一筆明天到期的待辦,斷言它沒逾期;要測「逾期了」,就得真的等到明天。
+        更糟的是,這種測試常常<em>今天過、明天掛</em>(或在月底、跨年、換日光節約時間的那一天掛)。
+      </p>
+      <p>
+        解法是把時間當成一個外部相依,用前面講過的<strong>測試替身</strong>換掉。<code>make_handler</code> 收一個 <code>now</code> 函式:正式上線傳 <code>datetime.now</code>,測試傳 <code>FakeClock</code>。
+        <code>FakeClock</code> 是一個 fake:行為像真的時鐘,但只在測試呼叫 <code>advance()</code> 時才前進。於是「兩小時後就逾期了」這件事,在測試裡只花幾毫秒。
+        資料層更簡單,<code>overdue(now)</code> 直接把時間當參數,單元測試連假時鐘都不用。
+      </p>
+      <p>
+        這和 <code>":memory:"</code> 資料庫是同一個想法:<strong>被測的程式不自己去拿外部的東西(時鐘、資料庫路徑、埠),而是讓呼叫它的人傳進來。</strong>
+        正式上線時傳真貨,測試時傳可控的替身。這也是前面那句話的實例:可測試性,是好設計的副產品。
+      </p>
+
+      <h3>flaky 測試:時好時壞的紅燈</h3>
+      <p>
+        <strong>flaky 測試(flaky test)</strong>是程式沒改、同一條測試卻有時過、有時不過。它比沒有測試更傷:大家很快學會「紅了就重跑」,
+        等到真的有 bug 讓它變紅,也沒人相信了。測服務的測試特別容易 flaky,因為它碰到了埠、執行緒、時間這些不受你控制的東西。常見成因與解法:
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>成因</th><th>症狀</th><th>解法</th></tr></thead>
+        <tbody>
+          <tr><td>固定的埠(例如一律 8765)</td><td>兩份測試同時跑、或上一次的服務還沒關,就 <code>OSError: [Errno 98] Address already in use</code></td><td><code>port=0</code>,再從 <code>server_address</code> 讀實際的埠</td></tr>
+          <tr><td>用 <code>sleep</code> 等服務啟動</td><td>機器忙的時候 0.5 秒不夠,偶爾 <code>Connection refused</code>;機器閒的時候白等</td><td>同一個行程:建好 server 就能連,不用等。另一個行程:一直試著連,連上就走,設一個總逾時(見下面 <code>wait_for_port</code>)</td></tr>
+          <tr><td>測試之間的順序相依</td><td>整個檔案跑會過,單獨跑一條、或換個順序就掛</td><td>每個測試在 <code>setUp</code> 建自己的資料;偶爾倒過來跑一次檢查</td></tr>
+          <tr><td>用真實時間</td><td>某些日子、某些時段才掛(午夜、月底、跨年)</td><td>把 <code>now</code> 注入,測試用假時鐘</td></tr>
+          <tr><td>共用的檔案或資料庫</td><td>平行執行時互相蓋掉資料</td><td>每個測試用 <code>":memory:"</code> 或 <code>tempfile.TemporaryDirectory()</code></td></tr>
+          <tr><td>連到外部網路或服務</td><td>對方慢或掛掉時跟著紅;CI 上的代理伺服器設定</td><td>單元測試用替身;只連自己開在 <code>127.0.0.1</code> 的服務,並關掉代理</td></tr>
+          <tr><td>逾時設得太緊、或沒設</td><td>設太緊:慢機器上偶爾逾時。沒設:一個卡住的請求讓整套測試永遠跑不完</td><td>每個請求都給逾時(上面的 <code>timeout=5</code>),數值留足餘裕</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        固定埠的問題可以自己重現:把測試裡的 <code>port=0</code> 改成 <code>port=8765</code>,在四個終端機同時跑。作者試的那一次,四份都有測試因為 <code>Address already in use</code> 失敗,而且每份失敗的條數不一樣;再跑一次,條數又變了。這就是 flaky 的長相。改回 <code>port=0</code>,同時跑八份也全部通過。
+      </p>
+      <p>順序相依最容易藏起來。下面兩條測試共用一個模組層級的資料庫:</p>
+      <pre><code class="language-python"># test_order.py ─ 反例:兩個測試偷偷共用同一個資料庫
+import unittest
+from todo_service import TodoStore
+
+STORE = TodoStore(":memory:")          # ✗ 整個模組共用一份
+
+class SharedStateTest(unittest.TestCase):
+    def test_add(self):
+        self.assertEqual(STORE.add("A", "2026-10-25T10:00:00"), 1)
+
+    def test_get_first(self):          # 偷偷假設 test_add 已經先跑過
+        self.assertEqual(STORE.get(1)["title"], "A")</code></pre>
+      <pre><code class="language-text">$ python3 -m unittest -v test_order
+test_add (test_order.SharedStateTest.test_add) ... ok
+test_get_first (test_order.SharedStateTest.test_get_first) ... ok
+
+----------------------------------------------------------------------
+Ran 2 tests in 0.000s
+
+OK
+$ python3 -m unittest test_order.SharedStateTest.test_get_first
+...
+TypeError: 'NoneType' object is not subscriptable
+...
+FAILED (errors=1)</code></pre>
+      <p>
+        整個檔案一起跑會過,只因為 <code>test_add</code> 的字母順序剛好排在前面。單獨跑 <code>test_get_first</code> 就掛了。
+        要主動找出這種測試,可以偶爾把順序倒過來跑:
+      </p>
+      <pre><code class="language-python"># run_reversed.py ─ 把每個類別裡的測試倒過來跑,抓出「靠順序才會過」的測試
+import sys
+import unittest
+
+loader = unittest.TestLoader()
+loader.sortTestMethodsUsing = lambda a, b: (a &lt; b) - (a &gt; b)   # 由 Z 排到 A
+suite = loader.loadTestsFromNames(sys.argv[1:])
+result = unittest.TextTestRunner(verbosity=2).run(suite)
+sys.exit(not result.wasSuccessful())</code></pre>
+      <pre><code class="language-text">$ python3 run_reversed.py test_order
+test_get_first (test_order.SharedStateTest.test_get_first) ... ERROR
+test_add (test_order.SharedStateTest.test_add) ... ok
+...
+FAILED (errors=1)
+$ python3 run_reversed.py test_todo_service
+...
+Ran 5 tests in 0.056s
+
+OK</code></pre>
+      <p>
+        <code>test_todo_service</code> 倒過來跑照樣全過,因為它的每個測試都在 <code>setUp</code> 裡建自己的資料庫和伺服器。
+      </p>
+      <p>
+        最後是「服務在另一個行程」的情況。判題系統常常這樣跑你的服務:先用一個指令把它啟動成獨立的行程,再從外面連進去。
+        這時你沒辦法拿到 server 物件,只能等那個埠開始接受連線。不要寫固定的 <code>time.sleep(1)</code>,寫一個「試到成功或逾時為止」的小函式:
+      </p>
+      <pre><code class="language-python"># wait_port.py ─ 等另一個行程的服務開始接受連線
+import socket
+import time
+
+def wait_for_port(host, port, timeout=5.0):
+    """一直試著連線,連得上就回來;超過 timeout 才算失敗(取代固定的 sleep)"""
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            with socket.create_connection((host, port), timeout=0.2):
+                return
+        except OSError:
+            if time.monotonic() &gt; deadline:
+                raise TimeoutError(f"{host}:{port} 在 {timeout} 秒內沒有開始服務")
+            time.sleep(0.02)</code></pre>
+      <p>
+        用 <code>subprocess.Popen</code> 啟動 <code>python3 todo_service.py</code>(它聽 8000 埠)之後呼叫 <code>wait_for_port("127.0.0.1", 8000)</code>,
+        作者的機器上不到 0.3 秒就回來,接著送 <code>GET /todos/999</code> 得到 <code>404 {"error": "not found"}</code>。服務關掉之後再等 0.3 秒,得到
+        <code>TimeoutError: 127.0.0.1:8000 在 0.3 秒內沒有開始服務</code>。快的機器不白等,慢的機器多等一下也不會誤判。
+      </p>
+
+      <h3>手算:哪個突變會被哪條測試抓到</h3>
+      <p>
+        測試寫好了,它夠強嗎?前面的<strong>變異測試</strong>回答這個問題:把程式故意改壞,看測試抓不抓得到。這一節用手把「擊殺矩陣」填出來。
+        被測的是一個算逾期罰金的小函式,另外有 5 條測試和 5 個變異體:
+      </p>
+      <pre><code class="language-python">def late_fee(days_late, per_day=5, cap=50):
+    """逾期 days_late 天的罰金:每天 per_day 元,最多 cap 元;沒逾期是 0"""
+    if days_late &lt;= 0:
+        return 0
+    return min(days_late * per_day, cap)</code></pre>
+      <div class="table-wrap"><table>
+        <thead><tr><th>測試</th><th>呼叫</th><th>預期</th></tr></thead>
+        <tbody>
+          <tr><td>T1</td><td><code>late_fee(0)</code></td><td>0</td></tr>
+          <tr><td>T2</td><td><code>late_fee(3)</code></td><td>15</td></tr>
+          <tr><td>T3</td><td><code>late_fee(20)</code></td><td>50</td></tr>
+          <tr><td>T4</td><td><code>late_fee(-2)</code></td><td>0</td></tr>
+          <tr><td>T5</td><td><code>late_fee(10)</code></td><td>50</td></tr>
+        </tbody>
+      </table></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>變異體</th><th>改了什麼</th><th>像哪一種真實的 bug</th></tr></thead>
+        <tbody>
+          <tr><td>M1</td><td><code>days_late &lt;= 0</code> → <code>days_late &lt; 0</code></td><td>邊界的 <code>&lt;=</code>、<code>&lt;</code> 寫錯</td></tr>
+          <tr><td>M2</td><td><code>days_late &lt;= 0</code> → <code>days_late &lt;= 1</code></td><td>逾期 1 天不罰(少算一天)</td></tr>
+          <tr><td>M3</td><td><code>min(</code> → <code>max(</code></td><td>上限寫成下限</td></tr>
+          <tr><td>M4</td><td><code>days_late * per_day</code> → <code>(days_late - 1) * per_day</code></td><td>罰金少算一天</td></tr>
+          <tr><td>M5</td><td><code>min(days_late * per_day, cap)</code> → <code>days_late * per_day</code></td><td>忘了上限</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        做法:每個變異體,把 5 條測試的輸入代進去算出它的回傳值,和「預期」比。不一樣,這條測試就<strong>殺死</strong>了這個變異體(標 ✗)。
+        每一格寫「變異體的回傳值」,原始程式的回傳值就是預期那一欄:
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>變異體</th><th>T1 (0)</th><th>T2 (3)</th><th>T3 (20)</th><th>T4 (−2)</th><th>T5 (10)</th><th>結果</th></tr></thead>
+        <tbody>
+          <tr><td>預期</td><td>0</td><td>15</td><td>50</td><td>0</td><td>50</td><td></td></tr>
+          <tr><td>M1</td><td>0</td><td>15</td><td>50</td><td>0</td><td>50</td><td>存活</td></tr>
+          <tr><td>M2</td><td>0</td><td>15</td><td>50</td><td>0</td><td>50</td><td>存活</td></tr>
+          <tr><td>M3</td><td>0</td><td>50 ✗</td><td>100 ✗</td><td>0</td><td>50</td><td>被 T2、T3 殺死</td></tr>
+          <tr><td>M4</td><td>0</td><td>10 ✗</td><td>50</td><td>0</td><td>45 ✗</td><td>被 T2、T5 殺死</td></tr>
+          <tr><td>M5</td><td>0</td><td>15</td><td>100 ✗</td><td>0</td><td>50</td><td>被 T3 殺死</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        變異分數 = 被殺死的變異體 / 變異體總數 = 3 / 5 = <strong>60%</strong>。兩個存活者要分開看:
+      </p>
+      <ul>
+        <li><strong>M1 是等價變異體(equivalent mutant)。</strong><code>days_late == 0</code> 時,原程式走 <code>return 0</code>,M1 走 <code>min(0 * 5, 50)</code>,也是 0。對任何整數輸入兩者都一樣,<em>沒有任何測試殺得死它</em>。
+          所以實務上算分數時會把確認過的等價變異體從分母拿掉:3 / 4 = 75%。</li>
+        <li><strong>M2 是真的漏洞。</strong>它把「逾期 1 天」當成沒逾期,而 5 條測試沒有一條的輸入是 1。補一條 <code>T6: late_fee(1) == 5</code>:M2 回傳 0,被殺死(M3 回傳 50、M4 回傳 0,也都被它殺死)。補完之後,非等價的 4 個全部被殺,4 / 4 = 100%。</li>
+      </ul>
+      <p>
+        再看一欄一欄:T1 和 T4 一個變異體都沒殺死。這不代表它們沒用(T1 守的正是 0 這個邊界,只是能動到它的 M1 剛好是等價的),
+        但它提醒你:測試的條數不等於強度。存活的 M2 精準指出了缺的那一條,這和前面<strong>邊界值分析</strong>說的一樣,bug 躲在交界的兩側(0 和 1)。
+      </p>
+      <p>手算完,用一個迷你變異測試器對答案。它只做三件事:把原始碼裡的一段字換掉、<code>exec</code> 成新的函式、對每條測試比較結果:</p>
+      <pre><code class="language-python"># mini_mutation.py ─ 迷你變異測試器:改壞程式、跑測試、填出擊殺矩陣
+SOURCE = '''
+def late_fee(days_late, per_day=5, cap=50):
+    """逾期 days_late 天的罰金:每天 per_day 元,最多 cap 元;沒逾期是 0"""
+    if days_late &lt;= 0:
+        return 0
+    return min(days_late * per_day, cap)
+'''
+
+MUTANTS = {                       # 名字: (原本的字, 改成的字)
+    "M1": ("days_late &lt;= 0", "days_late &lt; 0"),
+    "M2": ("days_late &lt;= 0", "days_late &lt;= 1"),
+    "M3": ("min(", "max("),
+    "M4": ("days_late * per_day", "(days_late - 1) * per_day"),
+    "M5": ("min(days_late * per_day, cap)", "days_late * per_day"),
+}
+
+TESTS = {                         # 名字: (引數, 預期)
+    "T1": (0, 0),
+    "T2": (3, 15),
+    "T3": (20, 50),
+    "T4": (-2, 0),
+    "T5": (10, 50),
+}
+
+def load(source):
+    namespace = {}
+    exec(source, namespace)       # 把(改過的)原始碼變成一個函式
+    return namespace["late_fee"]
+
+original = load(SOURCE)
+for name, (arg, expected) in TESTS.items():
+    assert original(arg) == expected, f"{name} 在原始程式上就不過"
+
+print("    " + "  ".join(TESTS) + "  殺死它的測試")
+killed = 0
+for mname, (old, new) in MUTANTS.items():
+    assert old in SOURCE
+    mutant = load(SOURCE.replace(old, new, 1))
+    row, killers = [], []
+    for tname, (arg, expected) in TESTS.items():
+        dead = mutant(arg) != expected      # 測試失敗 = 這個變異體被殺死
+        row.append(" ✗" if dead else " ·")      # ✗ = 殺死,· = 沒抓到
+        if dead:
+            killers.append(tname)
+    killed += bool(killers)
+    print(f"{mname}  " + "  ".join(row) + "  " + (", ".join(killers) or "(存活)"))
+print(f"變異分數 = {killed}/{len(MUTANTS)} = {killed / len(MUTANTS):.0%}")</code></pre>
+      <pre><code class="language-text">$ python3 mini_mutation.py
+    T1  T2  T3  T4  T5  殺死它的測試
+M1   ·   ·   ·   ·   ·  (存活)
+M2   ·   ·   ·   ·   ·  (存活)
+M3   ·   ✗   ✗   ·   ·  T2, T3
+M4   ·   ✗   ·   ·   ✗  T2, T5
+M5   ·   ·   ✗   ·   ·  T3
+變異分數 = 3/5 = 60%</code></pre>
+      <p>
+        <code>mutmut</code> 這類工具做的是同一件事,只是自動產生變異體(把每個 <code>&lt;=</code>、<code>+</code>、<code>min</code> 都試著換掉),並且對每個變異體重跑你<em>真正的</em>測試套件。
+      </p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 46.1 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>換一個函式。借書前檢查能不能借:</p>
+          <pre><code class="language-python">def can_borrow(available, active_loans, limit=3):
+    return available &gt; 0 and active_loans &lt; limit</code></pre>
+          <p>測試:S1 <code>can_borrow(2, 0) == True</code>、S2 <code>can_borrow(0, 0) == False</code>、S3 <code>can_borrow(5, 3) == False</code>、S4 <code>can_borrow(5, 2) == True</code>。<br>
+          變異體:N1 <code>available &gt; 0</code> → <code>available &gt;= 0</code>;N2 <code>active_loans &lt; limit</code> → <code>active_loans &lt;= limit</code>;N3 <code>and</code> → <code>or</code>;N4 <code>available &gt; 0</code> → <code>available &gt; 1</code>。</p>
+          <p>(1) 填出擊殺矩陣(每格寫變異體的回傳值,殺死的標 ✗),算變異分數。(2) 哪一條測試一個變異體都沒殺死?(3) 存活的變異體像哪一種真實的 bug?補一條測試把它殺死。</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <div class="table-wrap"><table>
+              <thead><tr><th>變異體</th><th>S1 (2, 0)</th><th>S2 (0, 0)</th><th>S3 (5, 3)</th><th>S4 (5, 2)</th><th>結果</th></tr></thead>
+              <tbody>
+                <tr><td>預期</td><td>True</td><td>False</td><td>False</td><td>True</td><td></td></tr>
+                <tr><td>N1</td><td>True</td><td>True ✗</td><td>False</td><td>True</td><td>被 S2 殺死</td></tr>
+                <tr><td>N2</td><td>True</td><td>False</td><td>True ✗</td><td>True</td><td>被 S3 殺死</td></tr>
+                <tr><td>N3</td><td>True</td><td>True ✗</td><td>True ✗</td><td>True</td><td>被 S2、S3 殺死</td></tr>
+                <tr><td>N4</td><td>True</td><td>False</td><td>False</td><td>True</td><td>存活</td></tr>
+              </tbody>
+            </table></div>
+            <p>(1) 變異分數 = 3 / 4 = 75%。(2) S4 一個都沒殺死(在這組變異體之下,它和 S1 落在同一個分區)。
+            (3) N4 像「只剩最後一本時不能借」的差一錯誤:S1 用的是 2 本,2 &gt; 1 和 2 &gt; 0 都成立,所以看不出差別。
+            補 <code>S5: can_borrow(1, 0) == True</code>:原程式 True,N4 得到 1 &gt; 1 = False,被殺死;分數變成 4 / 4 = 100%。
+            「剩最後一本」正是可借本數的邊界。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">看起來對但其實錯:「行覆蓋率 100%,測試就抓得到每一個 bug」</span>
+          <p>上面 <code>late_fee</code> 的 T1–T5:T1 走進 <code>if</code> 執行 <code>return 0</code>,T2 走另一邊執行 <code>return min(...)</code>。函式裡的每一行都被執行過,
+          <strong>行覆蓋率 100%,連分支覆蓋率也是 100%</strong>(<code>if</code> 的真、假兩邊都走過)。可是 M2「逾期 1 天不罰」這種真實會發生的 bug,5 條測試一條都抓不到。
+          覆蓋率量的是「哪幾行被<em>執行</em>過」,不是「哪些錯會被<em>發現</em>」:<code>days_late &lt;= 0</code> 這一行執行了,但沒有一條測試的輸入落在 0 和 1 之間的交界,改成 <code>&lt;= 1</code> 也沒人發現。
+          <strong>例子都對 ≠ 敘述為真。</strong>覆蓋率告訴你哪裡完全沒測;變異分數才告訴你測到的地方測得夠不夠。</p>
+        </div>
+      </div>
+      <p>
+        本章 Lab 就是用變異體來判你的測試:你為借書 API 寫的 <code>tests/</code> 要在參考解上全部通過(<code>python3 -m unittest</code>),
+        而且隱藏的 8 個突變版(例如「逾期少算一天」「還書沒有把本數加回去」)每一個都至少讓一條測試失敗。
+        上面手算的每一步(找出存活者、想它像哪一種 bug、補一條邊界測試),就是你寫那份測試時要做的事。
+      </p>
+      <!-- LAB: bookapi/tests -->
+
       <h2>心態:bug 是老師,可測試性是好設計的影子</h2>
       <p>
         技術講完了,但決定你能走多遠的,是心態。最後送你三個觀念,它們會貫穿你整個工程生涯。
