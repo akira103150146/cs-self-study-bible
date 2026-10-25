@@ -1,0 +1,2360 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>C 語言深入:指標、記憶體佈局與 volatile · CS 自學聖經</title>
+<meta name="description" content="接續讀懂 C 的橋接章與計算機結構:指標運算、陣列退化與 sizeof 陷阱、指向指標的指標、struct 的對齊與填補、位元欄位、stdint.h 定寬整數與整數提升、遮罩與移位、符號延伸、大小端、const、volatile 與模擬的硬體暫存器、函式指標與分派表、堆疊與堆積、懸空指標與釋放後使用,以及用 -fsanitize=address,undefined 抓出記憶體錯誤。寫模擬器與韌體之前要先懂的 C。">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;700&family=Noto+Sans+TC:wght@400;700&family=Lora:ital,wght@0,400;0,600;0,700;1,400&family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <main class="main">
+    <article class="content">      <div class="eyebrow">第十一部 · 進階系統</div>
+      <h1>C 語言深入:指標、記憶體佈局與 volatile</h1>
+      <p class="subtitle">讀得懂 C 還不夠。要寫模擬器、要碰硬體暫存器,你得知道每一個位元組放在哪裡、編譯器會對它做什麼、它什麼時候就不在了。</p>
+      <div class="byline">
+        <span class="tag">第 51 章</span>
+        <span>閱讀時間 ≈ 110 分鐘</span>
+        <span>難度:★★★★☆</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>指標加 1 為什麼是加「一個元素」的位元組數,以及 <code>&amp;a + 1</code> 和 <code>a + 1</code> 差在哪裡</li>
+          <li>陣列什麼時候會<strong>退化(decay)</strong>成指標、<code>sizeof</code> 在函式參數上為什麼會騙你,以及指向指標的指標怎麼用</li>
+          <li>用手算出 <code>struct</code> 每個成員的位移、填補與總大小,並用 <code>offsetof</code> 和 <code>_Static_assert</code> 驗證</li>
+          <li>位元欄位(bit-field)的方便與危險,以及寫硬體暫存器時為什麼改用遮罩</li>
+          <li><code>&lt;stdint.h&gt;</code> 的定寬整數、整數提升的陷阱、設／清／翻轉／取出欄位的遮罩寫法、移位的未定義行為、符號延伸</li>
+          <li>大小端(endianness):手算一個值在記憶體裡的位元組順序,並寫出和電腦端序無關的讀寫函式</li>
+          <li><code>const</code> 的讀法、<code>volatile</code> 做什麼和<strong>不</strong>做什麼(用一個模擬的暫存器與編譯器產生的組合語言看)</li>
+          <li>函式指標與分派表,以及「一段位址交給一個處理函式」的記憶體映射概念</li>
+          <li>堆疊與堆積、懸空指標與釋放後使用,以及用 <code>-fsanitize=address,undefined</code> 抓出它們</li>
+        </ul>
+      </div>
+
+      <h2>為什麼要再學一次 C</h2>
+      <p>
+        在<a href="bridge-read-c.html">橋接章 A</a>,你學會「讀」C:看一段程式,算出它印出什麼。那一章刻意停在指標的門口。
+        在<a href="48-computer-architecture.html">第 50 章</a>,你看到硬體怎麼用快取、管線和記憶體階層讓程式變快。
+        這一章站在兩者中間:<strong>C 程式裡的每個變數,在記憶體裡到底長什麼樣子</strong>。
+      </p>
+      <p>接下來你要寫的東西,都需要這個答案:</p>
+      <ul>
+        <li><strong>模擬器。</strong><a href="134-chip8-emulator.html">第 52 章</a>要你用 C 寫一台 CHIP-8。CHIP-8 的指令是兩個位元組、高位元組在前;你要從 <code>0x8XY6</code> 這種指令裡切出 X、Y 兩個欄位;記憶體裡有幾段位址不是 RAM,而是「裝置」。之後的 Game Boy 和 GBA 一樣,只是位元組順序反過來。</li>
+        <li><strong>韌體。</strong>微控制器的周邊(GPIO、UART、計時器)是一組固定位址上的<strong>暫存器(register)</strong>。寫韌體就是在這些位址上設位元、清位元、等某個位元變成 1。少了 <code>volatile</code>,編譯器會把你的等待迴圈「最佳化」成一個永遠不會結束的迴圈。</li>
+        <li><strong>資安。</strong><a href="36-secure-coding.html">第 36 章</a>的緩衝區溢位、釋放後使用,全都是本章這些規則被違反的結果。</li>
+      </ul>
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">核心觀念</span>
+          <p>在 C 裡,一個變數就是「從某個位址開始的幾個位元組」,型別只是告訴編譯器怎麼解讀這幾個位元組。本章每一節都在回答同一個問題:這幾個位元組在哪裡、有幾個、什麼時候有效。</p>
+        </div>
+      </div>
+      <p>
+        本章每一段程式都可以直接編譯:<code>gcc -std=c17 -Wall -Wextra 檔名.c -o 檔名</code>。
+        除了特別標明「錯誤示範」、要讓你看警告的那幾段,都不會有任何警告。
+        書上的輸出都是在 x86-64 Linux、gcc 13.3 上實際跑出來的;和機器有關的結果(例如位元組順序、<code>long</code> 的大小),會特別註明。
+      </p>
+
+      <h2>指標運算:加 1 是加幾個位元組</h2>
+      <p>
+        <a href="bridge-read-c.html">橋接章 A</a>說過:<code>*(q + 1)</code> 就是 <code>q[1]</code>。現在要問得更精確:<code>q + 1</code> 的位址,比 <code>q</code> 大多少?
+        答案是<strong>一個元素的大小</strong>。<code>q</code> 指向 <code>int32_t</code>,<code>q + 1</code> 就比 <code>q</code> 大 4 個位元組;指向 <code>uint8_t</code> 就大 1;指向 <code>double</code> 就大 8。
+        這叫<strong>指標運算(pointer arithmetic)</strong>:指標的加減,單位是「它指向的型別」。
+      </p>
+<pre><code class="language-c">#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+
+int main(void) {
+    int32_t a[4] = {10, 20, 30, 40};
+    int32_t *p = a;               // a 退化成 &amp;a[0]
+    uint8_t *b = (uint8_t *)a;    // 同一塊記憶體,用「一個位元組」的眼光看
+    int16_t *h = (int16_t *)a;    // 用「兩個位元組」的眼光看
+
+    // 印「離 a 的開頭幾個位元組」,不印位址本身(位址每次執行都不同)
+    printf("p + 2      -&gt; 位移 %td,值 %d\n", (char *)(p + 2) - (char *)a, (int)*(p + 2));
+    printf("b + 2      -&gt; 位移 %td\n", (char *)(b + 2) - (char *)a);
+    printf("h + 3      -&gt; 位移 %td\n", (char *)(h + 3) - (char *)a);
+    printf("&amp;a + 1     -&gt; 位移 %td\n", (char *)(&amp;a + 1) - (char *)a);
+    printf("&amp;a[3] - p  =  %td 個元素\n", &amp;a[3] - p);
+    printf("p[1] %d, *(p + 1) %d, 1[p] %d\n", (int)p[1], (int)*(p + 1), (int)1[p]);
+    return 0;
+}</code></pre>
+      <p>輸出:</p>
+<pre><code class="language-text">p + 2      -&gt; 位移 8,值 30
+b + 2      -&gt; 位移 2
+h + 3      -&gt; 位移 6
+&amp;a + 1     -&gt; 位移 16
+&amp;a[3] - p  =  3 個元素
+p[1] 20, *(p + 1) 20, 1[p] 20</code></pre>
+      <ul>
+        <li>同一塊記憶體,用三種眼光看:<code>p + 2</code> 走 2 × 4 = 8 個位元組,<code>b + 2</code> 走 2 × 1 = 2,<code>h + 3</code> 走 3 × 2 = 6。</li>
+        <li><code>&amp;a</code> 的型別是「指向整個陣列 <code>int32_t[4]</code> 的指標」,一個元素是 16 個位元組,所以 <code>&amp;a + 1</code> 跳過整個陣列。</li>
+        <li>兩個指標相減,得到的是「相差幾個元素」(型別是 <code>ptrdiff_t</code>,用 <code>%td</code> 印),不是相差幾個位元組。</li>
+        <li><code>p[i]</code> 的定義就是 <code>*(p + i)</code>。加法可以交換,所以 <code>1[p]</code> 也合法。知道就好,不要這樣寫。</li>
+      </ul>
+      <p>
+        程式只印「離 <code>a</code> 開頭幾個位元組」,不印位址本身:Linux 每次執行都會把堆疊放在隨機的位置(<strong>位址空間配置隨機化</strong>,ASLR),位址每次都不同,位移才是固定的。
+        <code>(char *)</code> 轉型是為了讓兩個指標相減時,單位變成位元組。
+      </p>
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">指標運算的界線</span>
+          <p>C 標準只保證:指標在同一個陣列裡移動,或剛好指到最後一個元素的「下一格」,都是合法的(下一格可以拿來比較,不能讀寫)。
+          超出這個範圍,光是<strong>算出</strong>那個指標就已經是未定義行為,不必等到讀寫。把不同陣列的指標相減,也是未定義行為。</p>
+        </div>
+      </div>
+
+      <h3>手算:指標運算的位址</h3>
+      <p>
+        假設 <code>int32_t a[4] = {10, 20, 30, 40};</code> 從位址 <code>0x1000</code> 開始(真正的位址每次執行都不同,這裡固定一個好算的數)。
+        每一列算一個式子:先看它指向什麼型別,一步是幾個位元組,再算位址。
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>式子</th><th>型別</th><th>一步幾個位元組</th><th>位址或值</th><th>說明</th></tr></thead>
+        <tbody>
+          <tr><td><code>a + 1</code></td><td><code>int32_t *</code></td><td>4</td><td><code>0x1004</code></td><td><code>a</code> 退化成 <code>&amp;a[0]</code>,走 1 步</td></tr>
+          <tr><td><code>(uint8_t *)a + 1</code></td><td><code>uint8_t *</code></td><td>1</td><td><code>0x1001</code></td><td>轉型先做,加法後做</td></tr>
+          <tr><td><code>(uint16_t *)a + 3</code></td><td><code>uint16_t *</code></td><td>2</td><td><code>0x1006</code></td><td>3 × 2 = 6</td></tr>
+          <tr><td><code>&amp;a + 1</code></td><td><code>int32_t (*)[4]</code></td><td>16</td><td><code>0x1010</code></td><td>一步是整個陣列</td></tr>
+          <tr><td><code>(int32_t *)((uint8_t *)a + 8)</code></td><td><code>int32_t *</code></td><td>—</td><td><code>0x1008</code>,讀出 30</td><td>位元組位移 8 = 第 2 個元素</td></tr>
+          <tr><td><code>&amp;a[3] - &amp;a[1]</code></td><td><code>ptrdiff_t</code></td><td>—</td><td>2</td><td>相差 8 個位元組 ÷ 4</td></tr>
+        </tbody>
+      </table></div>
+      <p>每一列都可以照上面程式的寫法,印出「離 <code>a</code> 開頭幾個位元組」再加上 <code>0x1000</code> 來驗證;例如上面印出的 <code>h + 3</code> 位移 6、<code>&amp;a + 1</code> 位移 16,就是表裡的第 3、4 列。</p>
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 133.1 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p><code>uint64_t q[5];</code> 從位址 <code>0x3000</code> 開始。算出:<code>q + 2</code>、<code>(uint32_t *)q + 3</code>、<code>(uint8_t *)(q + 1) + 3</code>、<code>&amp;q + 1</code> 的位址,以及 <code>&amp;q[4] - q</code> 的值。</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <div class="table-wrap"><table>
+                <thead><tr><th>式子</th><th>型別</th><th>一步幾個位元組</th><th>答案</th></tr></thead>
+                <tbody>
+                  <tr><td><code>q + 2</code></td><td><code>uint64_t *</code></td><td>8</td><td><code>0x3010</code>(2 × 8 = 16 = 0x10)</td></tr>
+                  <tr><td><code>(uint32_t *)q + 3</code></td><td><code>uint32_t *</code></td><td>4</td><td><code>0x300C</code></td></tr>
+                  <tr><td><code>(uint8_t *)(q + 1) + 3</code></td><td><code>uint8_t *</code></td><td>先 8,再 1</td><td><code>0x300B</code>(8 + 3 = 11)</td></tr>
+                  <tr><td><code>&amp;q + 1</code></td><td><code>uint64_t (*)[5]</code></td><td>40</td><td><code>0x3028</code></td></tr>
+                  <tr><td><code>&amp;q[4] - q</code></td><td><code>ptrdiff_t</code></td><td>—</td><td>4</td></tr>
+                </tbody>
+              </table></div>
+              <p>第三列要注意括號:<code>q + 1</code> 先以 8 個位元組為單位走 1 步,轉成 <code>uint8_t *</code> 之後,再以 1 個位元組為單位走 3 步。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>陣列不是指標:退化與 sizeof 陷阱</h2>
+      <p>
+        <a href="bridge-read-c.html">橋接章 A</a>說「陣列名稱在大多數式子裡會自動轉成第 0 格的位址」。這個自動轉換叫做<strong>退化(decay)</strong>。
+        退化之後,長度資訊就不見了。陣列本身不是指標,只是它很容易變成指標。
+      </p>
+<pre><code class="language-c">#include &lt;stdio.h&gt;
+
+void show(int arr[10]) {          // 看起來是陣列,其實是 int *arr
+    printf("函式裡 sizeof(arr) = %zu\n", sizeof(arr));
+}
+
+int main(void) {
+    int a[10] = {0};
+    int *p = a;
+    char s[] = "hi";              // 陣列:'h' 'i' '\0'
+    const char *t = "hi";         // 指標:指向唯讀的字串常數
+
+    printf("sizeof(a) = %zu, 元素數 = %zu\n", sizeof(a), sizeof(a) / sizeof(a[0]));
+    printf("sizeof(p) = %zu\n", sizeof(p));
+    printf("sizeof(s) = %zu, sizeof(t) = %zu\n", sizeof(s), sizeof(t));
+    show(a);
+    return 0;
+}</code></pre>
+      <p>這段程式是錯誤示範,gcc 會警告:</p>
+<pre><code class="language-text">decay.c: In function ‘show’:
+decay.c:4:48: warning: ‘sizeof’ on array function parameter ‘arr’ will return size of ‘int *’ [-Wsizeof-array-argument]
+    4 |     printf("函式裡 sizeof(arr) = %zu\n", sizeof(arr));
+      |                                                ^
+decay.c:3:15: note: declared here
+    3 | void show(int arr[10]) {          // 看起來是陣列,其實是 int *arr
+      |           ~~~~^~~~~~~</code></pre>
+      <p>輸出(x86-64,指標是 8 個位元組):</p>
+<pre><code class="language-text">sizeof(a) = 40, 元素數 = 10
+sizeof(p) = 8
+sizeof(s) = 3, sizeof(t) = 8
+函式裡 sizeof(arr) = 8</code></pre>
+      <ul>
+        <li><code>sizeof(a)</code> 是整個陣列:10 × 4 = 40。<code>sizeof</code> 是三個「不退化」的例外之一,另外兩個是 <code>&amp;a</code>,以及用字串常數初始化字元陣列(<code>char s[] = "hi"</code>)。</li>
+        <li><code>sizeof(p)</code> 是指標本身的大小:8。</li>
+        <li><code>s</code> 是 3 個位元組的陣列(含 <code>'\0'</code>);<code>t</code> 是一個指標,指向放在唯讀區的字串常數。透過 <code>t</code> 修改字串是未定義行為,所以 <code>t</code> 宣告成 <code>const char *</code>。</li>
+        <li>參數寫成 <code>int arr[10]</code>,編譯器會把它當成 <code>int *arr</code>,10 只是給人看的註解。函式裡的 <code>sizeof(arr)</code> 是 8,不是 40。</li>
+      </ul>
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">看起來對但其實錯:在函式裡用 sizeof 算長度</span>
+          <p><code>sizeof(arr) / sizeof(arr[0])</code> 在宣告陣列的那個函式裡是對的,換到接收參數的函式裡就變成 8 ÷ 4 = 2。
+          測試時剛好用 2 個元素的陣列,就看不出錯。規則:<strong>陣列傳進函式時,一定另外傳長度</strong>,例如 <code>f(const int *a, size_t n)</code>。</p>
+        </div>
+      </div>
+
+      <h3>二維陣列退化成什麼</h3>
+      <p>
+        <code>int32_t m[3][4]</code> 是「3 個元素的陣列,每個元素是 <code>int32_t[4]</code>」。它退化成指向第 0 個元素的指標,型別是 <code>int32_t (*)[4]</code>:一步走一整列。
+      </p>
+<pre><code class="language-c">#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+
+int main(void) {
+    int32_t m[3][4] = {{0, 1, 2, 3}, {10, 11, 12, 13}, {20, 21, 22, 23}};
+    int32_t (*row)[4] = m;        // m 退化成「指向 4 個 int32_t 的陣列」的指標
+    int32_t *cell = &amp;m[0][0];     // 指向單一元素
+
+    printf("row + 1  -&gt; 位移 %td\n", (char *)(row + 1) - (char *)m);
+    printf("cell + 1 -&gt; 位移 %td\n", (char *)(cell + 1) - (char *)m);
+    printf("row[2][1] = %d, (*(row + 2))[1] = %d\n", (int)row[2][1], (int)(*(row + 2))[1]);
+    return 0;
+}</code></pre>
+      <p>輸出:</p>
+<pre><code class="language-text">row + 1  -&gt; 位移 16
+cell + 1 -&gt; 位移 4
+row[2][1] = 21, (*(row + 2))[1] = 21</code></pre>
+      <p>
+        <code>row + 1</code> 走一列(16 個位元組),<code>cell + 1</code> 走一格(4 個位元組)。
+        <code>int32_t (*row)[4]</code> 的括號不能省:<code>int32_t *row[4]</code> 是「4 個指標的陣列」,意思完全不同。
+      </p>
+
+      <h2>指向指標的指標</h2>
+      <p>
+        C 一律傳值。想讓函式改掉呼叫端的 <code>int</code>,要傳 <code>int *</code>;同樣的道理,想讓函式改掉呼叫端的<strong>指標</strong>,就要傳指標的位址,也就是 <code>int **</code>。
+        最常見的兩個用途:函式透過參數「交回」一個新配置的指標,以及修改鏈結串列。
+      </p>
+<pre><code class="language-c">#include &lt;stdio.h&gt;
+#include &lt;stdlib.h&gt;
+
+struct node { int val; struct node *next; };
+
+// 加到最前面:要改的是 head 本身,所以傳 head 的位址
+static int push_front(struct node **head, int v) {
+    struct node *n = malloc(sizeof *n);
+    if (n == NULL) return -1;
+    n-&gt;val = v;
+    n-&gt;next = *head;
+    *head = n;
+    return 0;
+}
+
+// 刪掉第一個值等於 v 的節點。pp 指向「指到目前節點的那個指標」,
+// 所以刪開頭和刪中間是同一段程式,不必特別處理 head
+static void remove_first(struct node **head, int v) {
+    for (struct node **pp = head; *pp != NULL; pp = &amp;(*pp)-&gt;next) {
+        if ((*pp)-&gt;val == v) {
+            struct node *dead = *pp;
+            *pp = dead-&gt;next;     // 讓前一個指標跳過它
+            free(dead);
+            return;
+        }
+    }
+}
+
+static void print_list(const struct node *n) {
+    for (; n != NULL; n = n-&gt;next) printf("%d ", n-&gt;val);
+    printf("\n");
+}
+
+int main(void) {
+    struct node *head = NULL;
+    for (int v = 1; v &lt;= 4; v++) push_front(&amp;head, v);
+    print_list(head);             // 4 3 2 1
+    remove_first(&amp;head, 4);       // 刪開頭
+    remove_first(&amp;head, 2);       // 刪中間
+    print_list(head);             // 3 1
+    while (head != NULL) {        // 全部還回去
+        struct node *next = head-&gt;next;
+        free(head);
+        head = next;
+    }
+    return 0;
+}</code></pre>
+      <p>輸出:</p>
+<pre><code class="language-text">4 3 2 1 
+3 1 </code></pre>
+      <ul>
+        <li><code>push_front</code> 要改 <code>main</code> 的 <code>head</code>,所以收 <code>struct node **head</code>,寫 <code>*head = n</code>。如果只收 <code>struct node *head</code>,改的是複本,<code>main</code> 的串列永遠是空的。</li>
+        <li><code>remove_first</code> 的 <code>pp</code> 不是指向節點,而是指向「指到目前節點的那個指標」:一開始是 <code>head</code> 的位址,之後是前一個節點的 <code>next</code> 欄位的位址。
+          刪除時只要 <code>*pp = dead-&gt;next</code>,刪開頭和刪中間就是同一段程式。</li>
+        <li><code>(*pp)-&gt;next</code> 的括號不能省:<code>-&gt;</code> 比 <code>*</code> 先結合。</li>
+      </ul>
+      <p><code>main(int argc, char **argv)</code> 的 <code>argv</code> 也是指向指標的指標:它指向一個陣列,陣列裡每一格是一個指向字串的指標。</p>
+
+      <h2>struct 的記憶體佈局:對齊與填補</h2>
+      <p>
+        把 <code>char</code>、<code>int32_t</code>、<code>char</code> 三個成員放進一個 <code>struct</code>,1 + 4 + 1 = 6 個位元組,對吧?在 x86-64 上,答案是 12。
+        多出來的 6 個位元組是<strong>填補(padding)</strong>,原因是<strong>對齊(alignment)</strong>:
+        大多數 CPU 讀一個 4 位元組的整數時,希望它的位址是 4 的倍數。有的 CPU 讀到沒對齊的位址會變慢,有的會直接觸發例外。
+        所以編譯器替每個型別規定一個對齊值,並在成員之間塞進空的位元組。
+      </p>
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">為什麼要學</span>
+          <p>檔案格式、網路封包、硬體暫存器群組,都有「第幾個位元組是什麼欄位」的規格。
+          你要能一眼看出一個 <code>struct</code> 的佈局和規格對不對得上;對不上時(通常是因為填補),就要改成一個位元組一個位元組讀(本章練習 133.12)。
+          第 52 章的 CPU 狀態、之後 Game Boy 的卡匣標頭,都會用到。</p>
+        </div>
+      </div>
+      <p>規則只有三條(x86-64 Linux 的 System V ABI;其他平台大致相同,但<strong>不保證</strong>):</p>
+      <ol>
+        <li>每個基本型別的對齊值通常等於它的大小:<code>char</code> 1、<code>int16_t</code> 2、<code>int32_t</code> 4、<code>double</code> 與指標 8。</li>
+        <li>成員依宣告順序放。放之前,把目前的位移補到這個成員對齊值的倍數。第一個成員一定在位移 0。</li>
+        <li><code>struct</code> 本身的對齊值是成員裡最大的那個;總大小要補到它的倍數(這樣陣列裡每個元素才都對齊)。</li>
+      </ol>
+<pre><code class="language-c">#include &lt;stdio.h&gt;
+#include &lt;stddef.h&gt;   // offsetof
+#include &lt;stdint.h&gt;
+
+struct A { char c; int32_t i; char d; };
+struct B { int32_t i; char c; char d; };
+struct C { char c; double x; int16_t s; };
+struct D { uint8_t tag; uint16_t len; uint32_t crc; uint8_t flags; };
+
+// 不變量:把手算的結果寫成編譯期檢查;佈局一變,編譯就失敗
+_Static_assert(offsetof(struct D, crc) == 4, "crc 應該在位移 4");
+_Static_assert(sizeof(struct D) == 12, "struct D 應該是 12 位元組");
+
+#define SHOW(T, f) printf("  %-6s 位移 %2zu,大小 %zu\n", #f, offsetof(T, f), sizeof(((T *)0)-&gt;f))
+
+int main(void) {
+    printf("struct A:sizeof %zu,_Alignof %zu\n", sizeof(struct A), _Alignof(struct A));
+    SHOW(struct A, c); SHOW(struct A, i); SHOW(struct A, d);
+    printf("struct B:sizeof %zu,_Alignof %zu\n", sizeof(struct B), _Alignof(struct B));
+    SHOW(struct B, i); SHOW(struct B, c); SHOW(struct B, d);
+    printf("struct C:sizeof %zu,_Alignof %zu\n", sizeof(struct C), _Alignof(struct C));
+    SHOW(struct C, c); SHOW(struct C, x); SHOW(struct C, s);
+    printf("struct D:sizeof %zu,_Alignof %zu\n", sizeof(struct D), _Alignof(struct D));
+    SHOW(struct D, tag); SHOW(struct D, len); SHOW(struct D, crc); SHOW(struct D, flags);
+    return 0;
+}</code></pre>
+      <p>輸出(x86-64):</p>
+<pre><code class="language-text">struct A:sizeof 12,_Alignof 4
+  c      位移  0,大小 1
+  i      位移  4,大小 4
+  d      位移  8,大小 1
+struct B:sizeof 8,_Alignof 4
+  i      位移  0,大小 4
+  c      位移  4,大小 1
+  d      位移  5,大小 1
+struct C:sizeof 24,_Alignof 8
+  c      位移  0,大小 1
+  x      位移  8,大小 8
+  s      位移 16,大小 2
+struct D:sizeof 12,_Alignof 4
+  tag    位移  0,大小 1
+  len    位移  2,大小 2
+  crc    位移  4,大小 4
+  flags  位移  8,大小 1</code></pre>
+      <ul>
+        <li><code>offsetof(型別, 成員)</code>(在 <code>&lt;stddef.h&gt;</code>)回傳成員的位移;<code>_Alignof(型別)</code> 回傳對齊值(C11 起)。</li>
+        <li><code>struct A</code> 和 <code>struct B</code> 的成員一模一樣,只是順序不同,大小就差了 4。把大的成員排前面,通常比較省。</li>
+        <li><code>struct C</code>:<code>double</code> 要對齊 8,所以 <code>c</code> 後面補 7 個;<code>s</code> 放完是 18,補到 8 的倍數,總共 24。</li>
+        <li><code>_Static_assert</code> 是<strong>編譯期的斷言</strong>:條件不成立,程式就編譯不過。把你手算的佈局寫成 <code>_Static_assert</code>,哪天有人插了一個成員、換了編譯器,錯誤會在編譯時就出現,而不是在讀錯一個封包之後。</li>
+      </ul>
+      <div class="diagram">
+<svg viewBox="0 0 620 250" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="20" y="30" font-size="14" fill="#2f6f6a" font-weight="700">struct D { uint8_t tag; uint16_t len; uint32_t crc; uint8_t flags; }:12 個位元組</text>
+  <g font-size="14" text-anchor="middle">
+    <rect x="100" y="45" width="40" height="44" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+    <text x="120" y="72">tag</text>
+    <rect x="140" y="45" width="40" height="44" fill="#f3f4f6" stroke="#8a929b" stroke-width="1.5" stroke-dasharray="4 3"/>
+    <text x="160" y="71" fill="#8a929b" font-size="11">填補</text>
+    <rect x="180" y="45" width="80" height="44" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+    <text x="220" y="72">len</text>
+    <rect x="260" y="45" width="160" height="44" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+    <text x="340" y="72">crc</text>
+    <rect x="420" y="45" width="40" height="44" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+    <text x="440" y="72">flags</text>
+    <rect x="460" y="45" width="120" height="44" fill="#f3f4f6" stroke="#8a929b" stroke-width="1.5" stroke-dasharray="4 3"/>
+    <text x="520" y="72" fill="#8a929b">填補 ×3</text>
+  </g>
+  <g font-size="12" fill="#8a929b" text-anchor="middle">
+    <text x="100" y="106">0</text><text x="140" y="106">1</text><text x="180" y="106">2</text>
+    <text x="260" y="106">4</text><text x="420" y="106">8</text><text x="460" y="106">9</text><text x="580" y="106">12</text>
+  </g>
+  <text x="20" y="72" font-size="12" fill="#8a929b">原本</text>
+  <text x="20" y="150" font-size="14" fill="#b4541f" font-weight="700">重排成 crc、len、tag、flags:8 個位元組,沒有填補</text>
+  <g font-size="14" text-anchor="middle">
+    <rect x="100" y="165" width="160" height="44" fill="#fbe9df" stroke="#b4541f" stroke-width="2"/>
+    <text x="180" y="192">crc</text>
+    <rect x="260" y="165" width="80" height="44" fill="#fbe9df" stroke="#b4541f" stroke-width="2"/>
+    <text x="300" y="192">len</text>
+    <rect x="340" y="165" width="40" height="44" fill="#fbe9df" stroke="#b4541f" stroke-width="2"/>
+    <text x="360" y="192">tag</text>
+    <rect x="380" y="165" width="40" height="44" fill="#fbe9df" stroke="#b4541f" stroke-width="2"/>
+    <text x="400" y="192">flags</text>
+  </g>
+  <g font-size="12" fill="#8a929b" text-anchor="middle">
+    <text x="100" y="226">0</text><text x="260" y="226">4</text><text x="340" y="226">6</text><text x="380" y="226">7</text><text x="420" y="226">8</text>
+  </g>
+  <text x="20" y="192" font-size="12" fill="#8a929b">重排</text>
+  <text x="100" y="246" font-size="12" fill="#8a929b">每一小格是 1 個位元組;格子下面的數字是位移(x86-64,gcc)</text>
+</svg>
+        <figcaption>圖 133-1:struct D 的記憶體佈局。len 要對齊 2、crc 要對齊 4,所以 tag 後面補 1 個位元組;總大小要是 4 的倍數,所以結尾再補 3 個。把成員依大小由大到小排,填補就不見了。</figcaption>
+      </div>
+      <p>文字版(給終端機閱讀):</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>位移</th><th>0</th><th>1</th><th>2</th><th>3</th><th>4</th><th>5</th><th>6</th><th>7</th><th>8</th><th>9</th><th>10</th><th>11</th></tr></thead>
+        <tbody>
+          <tr><td>原本(12)</td><td>tag</td><td>填補</td><td>len</td><td>len</td><td>crc</td><td>crc</td><td>crc</td><td>crc</td><td>flags</td><td>填補</td><td>填補</td><td>填補</td></tr>
+          <tr><td>重排(8)</td><td>crc</td><td>crc</td><td>crc</td><td>crc</td><td>len</td><td>len</td><td>tag</td><td>flags</td><td colspan="4">(沒有)</td></tr>
+        </tbody>
+      </table></div>
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">packed 不是免費的</span>
+          <p>gcc 的 <code>__attribute__((packed))</code> 可以拿掉填補,但這是編譯器擴充,不是標準 C。
+          而且成員會落在沒對齊的位址上:在要求對齊的 CPU 上,編譯器只能改成一個位元組一個位元組讀,變慢;
+          如果你拿一個指標指向 packed 成員,再透過那個指標讀,可能直接出錯。讀線上格式最可靠的方法,是一個欄位一個欄位從位元組陣列讀出來(見本章「大小端」一節)。</p>
+        </div>
+      </div>
+
+      <h3>手算:struct 的位移與大小</h3>
+      <p>
+        一列放一個成員。「目前位移」是上一個成員放完的位置;補到這個成員對齊值的倍數,就是它的位移。最後一列把總大小補到整個 <code>struct</code> 對齊值的倍數。
+      </p>
+<pre><code class="language-c">#include &lt;stdint.h&gt;
+
+struct W { uint8_t a; uint32_t b; uint16_t c; uint8_t d; uint64_t e; };</code></pre>
+      <div class="table-wrap"><table>
+        <thead><tr><th>成員</th><th>大小</th><th>對齊</th><th>目前位移</th><th>補幾個</th><th>位移</th><th>放完之後</th></tr></thead>
+        <tbody>
+          <tr><td><code>a</code></td><td>1</td><td>1</td><td>0</td><td>0</td><td>0</td><td>1</td></tr>
+          <tr><td><code>b</code></td><td>4</td><td>4</td><td>1</td><td>3</td><td>4</td><td>8</td></tr>
+          <tr><td><code>c</code></td><td>2</td><td>2</td><td>8</td><td>0</td><td>8</td><td>10</td></tr>
+          <tr><td><code>d</code></td><td>1</td><td>1</td><td>10</td><td>0</td><td>10</td><td>11</td></tr>
+          <tr><td><code>e</code></td><td>8</td><td>8</td><td>11</td><td>5</td><td>16</td><td>24</td></tr>
+          <tr><td>結尾</td><td>—</td><td>8(最大的)</td><td>24</td><td>0</td><td>—</td><td><code>sizeof</code> = 24</td></tr>
+        </tbody>
+      </table></div>
+      <p>用 <code>offsetof</code> 印出來是 0、4、8、10、16,<code>sizeof</code> 24、<code>_Alignof</code> 8,和表一致。填補一共 3 + 5 = 8 個位元組。</p>
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 133.2 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>照上面的表格,算出這個 <code>struct</code> 每個成員的位移、總大小與對齊值(x86-64):</p>
+<pre><code class="language-c">#include &lt;stdint.h&gt;
+
+struct X { uint16_t a; uint8_t b; uint32_t c; uint8_t d[3]; uint16_t e; };</code></pre>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <div class="table-wrap"><table>
+                <thead><tr><th>成員</th><th>大小</th><th>對齊</th><th>目前位移</th><th>補幾個</th><th>位移</th><th>放完之後</th></tr></thead>
+                <tbody>
+                  <tr><td><code>a</code></td><td>2</td><td>2</td><td>0</td><td>0</td><td>0</td><td>2</td></tr>
+                  <tr><td><code>b</code></td><td>1</td><td>1</td><td>2</td><td>0</td><td>2</td><td>3</td></tr>
+                  <tr><td><code>c</code></td><td>4</td><td>4</td><td>3</td><td>1</td><td>4</td><td>8</td></tr>
+                  <tr><td><code>d[3]</code></td><td>3</td><td>1(陣列的對齊等於元素的對齊)</td><td>8</td><td>0</td><td>8</td><td>11</td></tr>
+                  <tr><td><code>e</code></td><td>2</td><td>2</td><td>11</td><td>1</td><td>12</td><td>14</td></tr>
+                  <tr><td>結尾</td><td>—</td><td>4</td><td>14</td><td>2</td><td>—</td><td><code>sizeof</code> = 16</td></tr>
+                </tbody>
+              </table></div>
+              <p>位移 0、2、4、8、12,總大小 16,對齊 4。最後兩個填補位元組很容易漏掉:沒有它們,<code>struct X arr[2]</code> 的第二個元素的 <code>c</code> 就會落在 14 + 4 = 18,不是 4 的倍數。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>位元欄位:看起來方便,為什麼 MMIO 不用</h2>
+      <p>
+        硬體暫存器常常是「第 0 位是開關、第 1–2 位是模式、第 3–7 位是除頻值」這種格式。C 有一個看起來正好合用的語法:<strong>位元欄位(bit-field)</strong>,
+        在成員後面寫 <code>: 位元數</code>。
+      </p>
+<pre><code class="language-c">#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+#include &lt;string.h&gt;
+
+struct ctrl_bf {                  // 用位元欄位描述一個 8 位元的控制暫存器
+    unsigned enable : 1;
+    unsigned mode   : 2;
+    unsigned div    : 5;
+};
+
+int main(void) {
+    struct ctrl_bf r = {0};
+    r.enable = 1;
+    r.mode = 2;
+    r.div = 9;
+
+    uint32_t raw = 0;
+    memcpy(&amp;raw, &amp;r, sizeof r &lt; sizeof raw ? sizeof r : sizeof raw);
+    printf("sizeof(struct ctrl_bf) = %zu\n", sizeof r);
+    printf("位元欄位排出來的值 = 0x%02X\n", (unsigned)raw);
+
+    // 同一個意思,用遮罩與移位自己排:位置寫在程式裡,不靠編譯器
+    uint32_t m = (1u &lt;&lt; 0) | (2u &lt;&lt; 1) | (9u &lt;&lt; 3);
+    printf("遮罩版的值       = 0x%02X\n", (unsigned)m);
+
+    r.div = 40;                   // 40 需要 6 位元,欄位只有 5 位元
+    printf("div 存 40 之後讀回 %u\n", (unsigned)r.div);
+    return 0;
+}</code></pre>
+      <p>最後一個指定是故意的錯誤示範,gcc 會警告:</p>
+<pre><code class="language-text">bitfield.c: In function ‘main’:
+bitfield.c:26:13: warning: unsigned conversion from ‘int’ to ‘unsigned char:5’ changes value from ‘40’ to ‘8’ [-Woverflow]
+   26 |     r.div = 40;                   // 40 需要 6 位元,欄位只有 5 位元
+      |             ^~</code></pre>
+      <p>輸出(x86-64,gcc):</p>
+<pre><code class="language-text">sizeof(struct ctrl_bf) = 4
+位元欄位排出來的值 = 0x4D
+遮罩版的值       = 0x4D
+div 存 40 之後讀回 8</code></pre>
+      <p>
+        在這台機器上,位元欄位從最低位開始排:<code>enable</code> 在第 0 位、<code>mode</code> 在第 1–2 位、<code>div</code> 在第 3–7 位,
+        1 + 2 × 2 + 9 × 8 = 77 = <code>0x4D</code>,和遮罩版一樣。存 40 進 5 位元的欄位,只留下低 5 位:40 = <code>0b101000</code>,低 5 位是 <code>0b01000</code> = 8。
+      </p>
+      <p>那為什麼寫硬體暫存器的程式(MMIO,memory-mapped I/O,記憶體映射輸入輸出)幾乎都不用它?因為 C 標準把太多細節留給實作決定:</p>
+      <ul>
+        <li><strong>從哪一頭開始排</strong>是實作定義的。同一份 <code>struct</code>,換一個編譯器或換一種 CPU,<code>enable</code> 可能跑到第 7 位。資料手冊寫的是「第 0 位」,不是「第一個欄位」。</li>
+        <li><strong>欄位裝在多大的單位裡、會不會跨過單位的邊界</strong>是實作定義的。上面的 <code>struct</code> 只用了 8 個位元,<code>sizeof</code> 卻是 4。</li>
+        <li><strong>改一個欄位時,實際讀寫多少位元組</strong>由編譯器決定。很多周邊只接受完整 32 位元的存取;有的暫存器是「寫 1 清除」(write-1-to-clear),編譯器順手把讀回來的其他位元寫回去,就會誤清旗標。</li>
+        <li>沒有寫 <code>signed</code> 或 <code>unsigned</code> 的 <code>int</code> 位元欄位,有沒有號也是實作定義的。</li>
+      </ul>
+      <p>
+        公平地說:在 x86-64 的 gcc 13 上,對一個 <code>volatile</code> 的 32 位元位元欄位改 <code>mode</code>,和你自己用遮罩讀、改、寫,產生的指令一模一樣(都是一次 32 位元讀、<code>and</code>、<code>or</code>、一次 32 位元寫)。
+        問題不在這一次對不對,而在於標準沒有保證下一次、下一台機器也一樣。遮罩把位置寫在程式碼裡,讀的人和編譯器看到的都是同一件事。
+      </p>
+<pre><code class="language-text">set_mode_bf:
+    endbr64
+    movl fake_ctrl_bf(%rip), %eax
+    andl $-7, %eax
+    orl $4, %eax
+    movl %eax, fake_ctrl_bf(%rip)
+    ret
+
+set_mode_mask:
+    endbr64
+    movl fake_ctrl(%rip), %eax
+    andl $-7, %eax
+    orl $4, %eax
+    movl %eax, fake_ctrl(%rip)
+    ret</code></pre>
+      <p>(上面是 <code>gcc -O2 -S</code> 對兩個版本產生的組合語言;<code>endbr64</code> 是控制流程保護用的標記,和本題無關。)</p>
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">核心觀念</span>
+          <p>位元欄位適合「只在自己程式裡用、不在乎實際位元位置」的旗標壓縮。只要位元位置是外面規定的(硬體、檔案、網路),就用定寬整數加遮罩。</p>
+        </div>
+      </div>
+
+      <h2>定寬整數與整數提升</h2>
+      <p>
+        <a href="bridge-read-c.html">橋接章 A</a>說 <code>int</code>「常見」是 4 個位元組。C 標準只保證 <code>int</code> 至少 16 位元、<code>long</code> 至少 32 位元。
+        寫硬體和檔案格式時,「大概」不夠,所以 C99 加了 <code>&lt;stdint.h&gt;</code>:<code>int8_t</code>、<code>uint8_t</code>、<code>int16_t</code>……<code>uint64_t</code>,名字裡的數字就是位元數。
+      </p>
+<pre><code class="language-c">#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+#include &lt;inttypes.h&gt;   // PRIu32、PRIx64 這些印定寬整數用的格式
+
+int main(void) {
+    printf("int %zu, long %zu, long long %zu, 指標 %zu\n",
+           sizeof(int), sizeof(long), sizeof(long long), sizeof(void *));
+    printf("int8_t %zu, uint16_t %zu, int32_t %zu, uint64_t %zu\n",
+           sizeof(int8_t), sizeof(uint16_t), sizeof(int32_t), sizeof(uint64_t));
+
+    uint32_t reg = 0xDEADBEEF;
+    uint64_t big = UINT64_C(1) &lt;&lt; 40;   // UINT64_C:寫出 uint64_t 型別的常數
+    printf("reg = %" PRIu32 " = 0x%" PRIX32 "\n", reg, reg);
+    printf("big = %" PRIu64 "\n", big);
+    printf("INT32_MIN = %" PRId32 ", UINT16_MAX = %u\n", INT32_MIN, (unsigned)UINT16_MAX);
+    return 0;
+}</code></pre>
+      <p>輸出(x86-64 Linux):</p>
+<pre><code class="language-text">int 4, long 8, long long 8, 指標 8
+int8_t 1, uint16_t 2, int32_t 4, uint64_t 8
+reg = 3735928559 = 0xDEADBEEF
+big = 1099511627776
+INT32_MIN = -2147483648, UINT16_MAX = 65535</code></pre>
+      <ul>
+        <li>第一行和機器有關:x86-64 Linux 的 <code>long</code> 是 8 個位元組,64 位元 Windows 是 4 個。第二行在任何有這些型別的平台上都一樣。</li>
+        <li>印定寬整數,用 <code>&lt;inttypes.h&gt;</code> 的 <code>PRIu32</code>、<code>PRIX32</code>、<code>PRIu64</code> 這些巨集,它們會展開成這個平台上正確的格式字串,例如 <code>"u"</code> 或 <code>"lu"</code>。本章其他地方為了好讀,先轉成 <code>unsigned</code> 再用 <code>%u</code>、<code>%X</code> 印(32 位元以內的值都裝得下)。</li>
+        <li>寫常數也有寬度問題:<code>1 &lt;&lt; 40</code> 的 <code>1</code> 是 <code>int</code>,移 40 位是未定義行為。<code>UINT64_C(1)</code> 是一個 <code>uint64_t</code> 型別的 1。</li>
+      </ul>
+      <p>
+        定寬整數有一個陷阱:<strong>整數提升(integer promotion)</strong>。比 <code>int</code> 小的型別(<code>char</code>、<code>uint8_t</code>、<code>int16_t</code>、<code>uint16_t</code>)
+        一放進運算式,就先被轉成 <code>int</code>,再做運算。結果存回小型別時才截斷。
+      </p>
+<pre><code class="language-c">#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+
+int main(void) {
+    uint8_t a = 0xF0;
+    uint8_t b = ~a;                       // 存回 uint8_t 時截成 8 位元
+    printf("b = 0x%02X\n", (unsigned)b);
+    printf("~a == 0x0F ? %d\n", ~a == 0x0F);   // a 先被提升成 int
+    printf("~a = 0x%X\n", (unsigned)~a);
+
+    char c = (char)0xF6;                  // char 有沒有號是實作定義
+    printf("c = %d\n", c);
+
+    uint16_t x = 0xFFFF;
+    uint32_t ok = (uint32_t)x * x;        // 先轉成 uint32_t 再乘
+    printf("ok = %u\n", (unsigned)ok);
+    return 0;
+}</code></pre>
+      <p>gcc 對第 8 行有警告,這正是我們要讓你看的陷阱:</p>
+<pre><code class="language-text">promote.c: In function ‘main’:
+promote.c:8:36: warning: comparison of promoted bitwise complement of an unsigned value with constant [-Wsign-compare]
+    8 |     printf("~a == 0x0F ? %d\n", ~a == 0x0F);   // a 先被提升成 int
+      |                                    ^~</code></pre>
+      <p>輸出(x86-64):</p>
+<pre><code class="language-text">b = 0x0F
+~a == 0x0F ? 0
+~a = 0xFFFFFF0F
+c = -10
+ok = 4294836225</code></pre>
+      <ul>
+        <li><code>~a</code>:<code>a</code> 先提升成 <code>int</code> 的 <code>0x000000F0</code>,取反得到 <code>0xFFFFFF0F</code>。存回 <code>uint8_t</code> 的 <code>b</code> 時截成 <code>0x0F</code>,所以 <code>b</code> 是對的;但直接拿 <code>~a</code> 去比 <code>0x0F</code>,比的是 <code>0xFFFFFF0F</code>,結果是 0。</li>
+        <li><code>char</code> 有沒有號是實作定義的:x86-64 上 <code>char</code> 是有號的,<code>0xF6</code> 讀出來是 −10;在 ARM 的 Linux 上 <code>char</code> 通常是無號的,會印出 246。存位元組一律用 <code>uint8_t</code>。</li>
+        <li><code>uint16_t x = 0xFFFF</code>,<code>x * x</code> 看起來是兩個無號數相乘,其實兩邊都先提升成<strong>有號的</strong> <code>int</code>:65535 × 65535 = 4294836225 &gt; <code>INT_MAX</code>,是有號溢位,未定義行為。
+          先把一邊轉成 <code>uint32_t</code> 就沒事。本章後面會用消毒器(sanitizer)當場抓到這個錯。</li>
+      </ul>
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">看起來對但其實錯:「全部用無號數就不會溢位」</span>
+          <p>無號數的確會繞回、不會有未定義行為,<strong>但只限於 <code>unsigned int</code> 以上</strong>。<code>uint8_t</code> 和 <code>uint16_t</code> 在運算時會先變成有號的 <code>int</code>。
+          上面的 <code>x * x</code> 測 <code>x = 100</code> 完全正常,只有在乘積超過 <code>INT_MAX</code> 時才出事。小數字都對,不代表寫法是對的。</p>
+        </div>
+      </div>
+
+      <h2>遮罩與移位:設、清、翻轉、取出欄位</h2>
+      <p>
+        <a href="19-boolean-logic.html">第 19 章</a>教過 AND、OR、XOR 的真值表。在 C 裡,<code>&amp;</code>、<code>|</code>、<code>^</code>、<code>~</code> 對每一個位元同時做這些運算,
+        再加上 <code>&lt;&lt;</code>、<code>&gt;&gt;</code> 兩個移位,就能操作任何一個位元或一段位元。用來挑出某些位元的那個數叫<strong>遮罩(mask)</strong>。
+      </p>
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">為什麼要學</span>
+          <p>CHIP-8 的指令 <code>0x8XY6</code> 要切出 X(第 8–11 位)與 Y(第 4–7 位);Game Boy 的 F 暫存器裡,Z、N、H、C 四個旗標各佔一位;韌體裡每個周邊暫存器都是一堆欄位。
+          <a href="#lab-emu-bus">本章 Lab</a> 的 <code>emu/bits.h</code> 就是一組這樣的位元函式,<a href="134-chip8-emulator.html#lab-chip8-cpu">第 52 章的 CPU</a> 每一條指令都會用到。</p>
+        </div>
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>想做的事</th><th>寫法</th><th>為什麼</th></tr></thead>
+        <tbody>
+          <tr><td>第 n 位的遮罩</td><td><code>1u &lt;&lt; n</code></td><td>只有第 n 位是 1</td></tr>
+          <tr><td>設成 1(set)</td><td><code>x |= 1u &lt;&lt; n</code></td><td>x | 1 = 1,x | 0 = x</td></tr>
+          <tr><td>清成 0(clear)</td><td><code>x &amp;= ~(1u &lt;&lt; n)</code></td><td>x &amp; 0 = 0,x &amp; 1 = x</td></tr>
+          <tr><td>翻轉(toggle)</td><td><code>x ^= 1u &lt;&lt; n</code></td><td>x ^ 1 = 非 x,x ^ 0 = x</td></tr>
+          <tr><td>檢查第 n 位</td><td><code>(x &gt;&gt; n) &amp; 1u</code></td><td>移到第 0 位再挑出來</td></tr>
+          <tr><td>取出 <code>[lo, lo+w)</code> 這段</td><td><code>(x &gt;&gt; lo) &amp; ((1u &lt;&lt; w) - 1u)</code></td><td><code>(1u &lt;&lt; w) - 1</code> 是低 w 位全是 1</td></tr>
+          <tr><td>把這段換成 v</td><td><code>(x &amp; ~(M &lt;&lt; lo)) | ((v &amp; M) &lt;&lt; lo)</code>,M 是低 w 位的遮罩</td><td>先清掉那一段,再放進 v</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        下面的程式用一個全域變數 <code>ctrl</code> 假裝是 UART(序列埠)的控制暫存器,並把這些寫法包成巨集。巨集的名字都用大寫,提醒讀的人「這不是函式」。
+      </p>
+<pre><code class="language-c">#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+#include &lt;assert.h&gt;
+
+#define BIT(n)            (1u &lt;&lt; (n))
+#define LOW_ONES(w)       (BIT(w) - 1u)                 // 低 w 位全是 1;w 只能是 0..31
+#define FIELD_GET(x, lo, w)     (((x) &gt;&gt; (lo)) &amp; LOW_ONES(w))
+#define FIELD_PUT(x, lo, w, v)  (((x) &amp; ~(LOW_ONES(w) &lt;&lt; (lo))) | (((v) &amp; LOW_ONES(w)) &lt;&lt; (lo)))
+
+// 假裝這是一個 UART 的控制暫存器:
+//   bit 0 EN(開關)、bit 1 IRQ(中斷)、bits 4..7 BAUD(4 位元)、bits 8..15 DIV(8 位元)
+uint32_t ctrl = 0;
+
+int main(void) {
+    ctrl |= BIT(0);                       // 設:EN = 1
+    ctrl |= BIT(1);                       // 設:IRQ = 1
+    ctrl &amp;= ~BIT(1);                      // 清:IRQ = 0
+    ctrl ^= BIT(3);                       // 翻轉:bit 3 由 0 變 1
+    ctrl ^= BIT(3);                       // 再翻轉一次,變回 0
+    ctrl = FIELD_PUT(ctrl, 4, 4, 0x9u);   // BAUD = 9
+    ctrl = FIELD_PUT(ctrl, 8, 8, 0x1A3u); // DIV 只有 8 位元,0x1A3 只留下 0xA3
+    printf("ctrl = 0x%08X\n", (unsigned)ctrl);
+    printf("EN = %u, IRQ = %u, BAUD = %u, DIV = 0x%02X\n",
+           (unsigned)FIELD_GET(ctrl, 0, 1), (unsigned)FIELD_GET(ctrl, 1, 1),
+           (unsigned)FIELD_GET(ctrl, 4, 4), (unsigned)FIELD_GET(ctrl, 8, 8));
+
+    // 不變量:換掉一段之後,這段以外的位元一個都不能變
+    uint32_t before = ctrl;
+    uint32_t after = FIELD_PUT(before, 4, 4, 0x3u);
+    assert(((before ^ after) &amp; ~(LOW_ONES(4) &lt;&lt; 4)) == 0);
+    assert(FIELD_GET(after, 4, 4) == 0x3u);
+    printf("after = 0x%08X\n", (unsigned)after);
+    return 0;
+}</code></pre>
+      <p>輸出:</p>
+<pre><code class="language-text">ctrl = 0x0000A391
+EN = 1, IRQ = 0, BAUD = 9, DIV = 0xA3
+after = 0x0000A331</code></pre>
+      <p>
+        <code>ctrl</code> 最後是 <code>0xA391</code>:DIV(第 8–15 位)= <code>0xA3</code>,BAUD(第 4–7 位)= 9,EN(第 0 位)= 1,IRQ 已經清掉。
+        <code>0x1A3</code> 放進 8 位元的 DIV,<code>&amp; LOW_ONES(8)</code> 先把第 8 位(<code>0x100</code>)丟掉,不會溢出去改到別的欄位。
+      </p>
+      <h4>證明(參考):FIELD_PUT 只改那一段</h4>
+      <p>
+        令 <code>M = LOW_ONES(w) &lt;&lt; lo</code>,也就是 <code>[lo, lo+w)</code> 這段是 1、其他是 0。對任何一個位元位置 i:
+        如果 i 不在那一段,<code>~M</code> 的第 i 位是 1,所以 <code>x &amp; ~M</code> 保留 x 的第 i 位;而 <code>(v &amp; LOW_ONES(w)) &lt;&lt; lo</code> 的第 i 位一定是 0,OR 之後還是 x 的第 i 位。
+        如果 i 在那一段,<code>x &amp; ~M</code> 的第 i 位是 0,OR 之後就是 v 的第 (i − lo) 位。所以結果「段外等於 x、段內等於 v 的低 w 位」。
+      </p>
+      <p>
+        程式最後兩個 <code>assert</code> 就是這個證明的程式版本:<code>(before ^ after) &amp; ~M == 0</code> 說「段外沒有任何位元改變」,<code>FIELD_GET(after, 4, 4) == 3</code> 說「段內是新的值」。
+        證明保證所有輸入都對;<code>assert</code> 只檢查這一次,但它會在你改壞巨集的那一刻叫出來。
+      </p>
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">看起來對但其實錯:LOW_ONES(32)</span>
+          <p><code>LOW_ONES(w)</code> 對 w = 1 到 31 都對,測了一堆都過。但 w = 32 時,<code>1u &lt;&lt; 32</code> 的移位量等於型別寬度,是未定義行為(下一小節)。
+          而 32 位元的欄位偏偏很常見(例如整個暫存器)。上面的 <code>FIELD_GET</code>、<code>FIELD_PUT</code> 只在 w ≤ 31、lo + w ≤ 32 時能用;
+          本章 Lab 要你寫的版本必須連寬度 0 和 32 都沒有未定義行為。巨集還有另一個問題:參數會被展開好幾次,<code>FIELD_PUT(x, lo++, 4, v)</code> 會把 <code>lo</code> 加兩次(練習 133.5)。</p>
+        </div>
+      </div>
+
+      <h3>手算:遮罩運算</h3>
+      <p>從 <code>x = 0x0A5</code> 開始,依序做下面每一步(每一步都用上一步的結果)。二進位只寫低 12 位,每 4 位空一格,對應一個十六進位數字。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>步驟</th><th>運算</th><th>遮罩(二進位)</th><th>x(二進位)</th><th>x</th></tr></thead>
+        <tbody>
+          <tr><td>0</td><td>開始</td><td>—</td><td><code>0000 1010 0101</code></td><td><code>0x0A5</code></td></tr>
+          <tr><td>1</td><td><code>x |= BIT(9)</code></td><td><code>0010 0000 0000</code></td><td><code>0010 1010 0101</code></td><td><code>0x2A5</code></td></tr>
+          <tr><td>2</td><td><code>x &amp;= ~BIT(0)</code></td><td><code>1111 1111 1110</code></td><td><code>0010 1010 0100</code></td><td><code>0x2A4</code></td></tr>
+          <tr><td>3</td><td><code>x ^= BIT(7)</code></td><td><code>0000 1000 0000</code></td><td><code>0010 0010 0100</code></td><td><code>0x224</code></td></tr>
+          <tr><td>4</td><td><code>FIELD_GET(x, 2, 3)</code></td><td><code>x &gt;&gt; 2</code> = <code>0000 1000 1001</code>,<code>&amp; 111</code></td><td>(x 不變)</td><td>結果 <strong>1</strong></td></tr>
+          <tr><td>5</td><td><code>x = FIELD_PUT(x, 4, 4, 6)</code></td><td>清 <code>0000 1111 0000</code>,放 <code>0110</code> 到第 4–7 位</td><td><code>0010 0110 0100</code></td><td><code>0x264</code></td></tr>
+        </tbody>
+      </table></div>
+      <p>第 3 步:第 7 位原本是 1(<code>0x2A4</code> 的 A = <code>1010</code>,最高的 1 就是第 7 位),翻轉後變 0。第 5 步先得到 <code>0x204</code>,再 OR 上 <code>0x60</code>。</p>
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 133.3 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>從 <code>y = 0x03C</code> 開始,依序做:<code>y |= BIT(8)</code>、<code>y &amp;= ~BIT(4)</code>、<code>y ^= BIT(0)</code>,然後算 <code>FIELD_GET(y, 1, 4)</code>,最後 <code>y = FIELD_PUT(y, 5, 3, 0xD)</code>。寫出每一步的二進位與十六進位。</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <div class="table-wrap"><table>
+                <thead><tr><th>步驟</th><th>運算</th><th>y(二進位)</th><th>y</th></tr></thead>
+                <tbody>
+                  <tr><td>0</td><td>開始</td><td><code>0000 0011 1100</code></td><td><code>0x03C</code></td></tr>
+                  <tr><td>1</td><td><code>y |= BIT(8)</code></td><td><code>0001 0011 1100</code></td><td><code>0x13C</code></td></tr>
+                  <tr><td>2</td><td><code>y &amp;= ~BIT(4)</code></td><td><code>0001 0010 1100</code></td><td><code>0x12C</code></td></tr>
+                  <tr><td>3</td><td><code>y ^= BIT(0)</code></td><td><code>0001 0010 1101</code></td><td><code>0x12D</code></td></tr>
+                  <tr><td>4</td><td><code>FIELD_GET(y, 1, 4)</code></td><td><code>y &gt;&gt; 1</code> = <code>0000 1001 0110</code>,<code>&amp; 1111</code> = <code>0110</code></td><td>結果 <strong>6</strong></td></tr>
+                  <tr><td>5</td><td><code>FIELD_PUT(y, 5, 3, 0xD)</code></td><td>清第 5–7 位得 <code>0001 0000 1101</code>;<code>0xD &amp; 111</code> = <code>101</code>,放到第 5–7 位</td><td><code>0x1AD</code></td></tr>
+                </tbody>
+              </table></div>
+              <p>第 5 步的陷阱:<code>0xD</code> = <code>1101</code> 有 4 位,欄位只有 3 位,最高的 1 被丟掉,放進去的是 <code>101</code> = 5。這是 <code>FIELD_PUT</code> 先 <code>&amp; LOW_ONES(w)</code> 的原因:不這樣做,多出來的位元會改到第 8 位。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h3>移位的規則與未定義行為</h3>
+      <p>移位看起來最簡單,規則卻最多。先看合法的情況:</p>
+<pre><code class="language-c">#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+
+int main(void) {
+    int32_t s = -16;
+    uint32_t u = (uint32_t)s;             // 同樣的 32 個位元:0xFFFFFFF0
+    printf("u = 0x%08X\n", (unsigned)u);
+    printf("u &gt;&gt; 2 = 0x%08X(邏輯右移,左邊補 0)\n", (unsigned)(u &gt;&gt; 2));
+    printf("s &gt;&gt; 2 = %d(實作定義;gcc 用算術右移,左邊補符號位元)\n", (int)(s &gt;&gt; 2));
+    printf("u &lt;&lt; 4 = 0x%08X(左邊移出去的位元就丟掉)\n", (unsigned)(u &lt;&lt; 4));
+    printf("1u &lt;&lt; 31 = 0x%08X\n", 1u &lt;&lt; 31);
+    uint8_t byte = 0x81;
+    printf("byte &lt;&lt; 1 = 0x%X(先提升成 int,所以第 8 位留下來了)\n", (unsigned)(byte &lt;&lt; 1));
+    printf("(uint8_t)(byte &lt;&lt; 1) = 0x%02X\n", (unsigned)(uint8_t)(byte &lt;&lt; 1));
+    return 0;
+}</code></pre>
+      <p>輸出(x86-64,gcc):</p>
+<pre><code class="language-text">u = 0xFFFFFFF0
+u &gt;&gt; 2 = 0x3FFFFFFC(邏輯右移,左邊補 0)
+s &gt;&gt; 2 = -4(實作定義;gcc 用算術右移,左邊補符號位元)
+u &lt;&lt; 4 = 0xFFFFFF00(左邊移出去的位元就丟掉)
+1u &lt;&lt; 31 = 0x80000000
+byte &lt;&lt; 1 = 0x102(先提升成 int,所以第 8 位留下來了)
+(uint8_t)(byte &lt;&lt; 1) = 0x02</code></pre>
+      <div class="table-wrap"><table>
+        <thead><tr><th>情況</th><th>C17 怎麼說</th><th>建議</th></tr></thead>
+        <tbody>
+          <tr><td>無號數右移</td><td>邏輯右移,左邊補 0</td><td>位元操作一律用無號數</td></tr>
+          <tr><td>負的有號數右移</td><td><strong>實作定義</strong>;gcc 與幾乎所有編譯器做算術右移(補符號位元)</td><td>要算術右移就明講,或先轉無號數</td></tr>
+          <tr><td>無號數左移</td><td>移出去的位元丟掉(對 2<sup>寬度</sup> 取餘數)</td><td>安全</td></tr>
+          <tr><td>有號數左移,結果裝不下(例如 <code>1 &lt;&lt; 31</code>、負數左移)</td><td><strong>未定義行為</strong></td><td>寫 <code>1u &lt;&lt; 31</code></td></tr>
+          <tr><td>移位量 ≥ 型別寬度,或是負數</td><td><strong>未定義行為</strong>(有號、無號都一樣)</td><td>寬度 32 要另外處理</td></tr>
+          <tr><td>比 <code>int</code> 小的型別</td><td>先提升成 <code>int</code> 再移</td><td>移完要截斷就自己轉型</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        「移位量等於寬度」為什麼是未定義行為?因為 CPU 的做法不一樣。x86 的移位指令只看移位量的低 5 位,所以「移 32 位」等於「移 0 位」;有的 CPU(例如 32 位元 ARM)會得到 0。
+        C 標準不想讓每次移位都多一道檢查,乾脆不規定。下面這段的移位量在執行時才知道,編譯器沒辦法警告:
+      </p>
+<pre><code class="language-c">#include &lt;stdio.h&gt;
+
+int main(int argc, char **argv) {
+    (void)argv;
+    unsigned n = 31u + (unsigned)argc;    // 不帶參數執行時 argc 是 1,所以 n = 32
+    unsigned r = 1u &lt;&lt; n;                 // 移位量等於寬度:未定義行為
+    printf("n = %u, 1u &lt;&lt; n = %u\n", n, r);
+    return 0;
+}</code></pre>
+      <p>在 x86-64 上,用 <code>-O0</code> 或 <code>-O2</code> 編譯,這次都印出:</p>
+<pre><code class="language-text">n = 32, 1u &lt;&lt; n = 1</code></pre>
+      <p>
+        你可能以為 <code>1u &lt;&lt; 32</code> 會是 0(1 被移出去了),實際上是 1。換一台機器、換一個最佳化等級,答案可能又不一樣。這就是未定義行為:<strong>不是「結果很怪」,是「沒有結果可以依靠」</strong>。
+        本章後面的消毒器會把這一行直接指出來。
+      </p>
+
+      <h2>符號延伸:把短的二補數變長</h2>
+      <p>
+        <a href="19-boolean-logic.html">第 19 章</a>的二補數(two's complement):w 位元的數,最高位的權重是 −2<sup>w−1</sup>。
+        <code>0xF6</code> 當 8 位元的二補數是 −128 + 64 + 32 + 16 + 4 + 2 = −10。把它放進 32 位元的變數時,要讓值還是 −10,左邊 24 位就要補上符號位元 1:<code>0xFFFFFFF6</code>。
+        這叫<strong>符號延伸(sign extension)</strong>。無號數變寬則是左邊補 0,叫<strong>零延伸(zero extension)</strong>。
+      </p>
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">為什麼要學</span>
+          <p>Game Boy 的相對跳躍 <code>JR e</code> 用一個有號的 8 位元位移;GBA 的 ARM 分支指令有 24 位元的有號位移;RISC-V 的立即值是 12 位元有號數。
+          模擬器每次解碼這種指令,都要把一段位元符號延伸成 32 位元。本章 Lab 的 <code>sign_extend</code> 就是做這件事。</p>
+        </div>
+      </div>
+<pre><code class="language-c">#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+
+// 把 12 位元的欄位當二補數:先翻轉符號位元,再減掉它
+static int32_t sext12(uint32_t x) {
+    const uint32_t sign = 1u &lt;&lt; 11;
+    x &amp;= (1u &lt;&lt; 12) - 1u;                 // 只留低 12 位
+    return (int32_t)(x ^ sign) - (int32_t)sign;
+}
+
+int main(void) {
+    uint8_t raw = 0xF6;
+    int8_t  s8  = (int8_t)raw;            // 轉成有號的 8 位元(gcc:照位元解讀)
+    int32_t w1  = s8;                     // 有號變寬:補符號位元
+    uint32_t w2 = raw;                    // 無號變寬:補 0
+    printf("s8 = %d\n", s8);
+    printf("w1 = %d = 0x%08X\n", (int)w1, (unsigned)w1);
+    printf("w2 = %u = 0x%08X\n", (unsigned)w2, (unsigned)w2);
+
+    printf("sext12(0xFF6) = %d\n", (int)sext12(0xFF6));
+    printf("sext12(0x7F6) = %d\n", (int)sext12(0x7F6));
+    printf("sext12(0x800) = %d\n", (int)sext12(0x800));
+
+    uint16_t pc = 0x0150;                 // 相對跳躍:位移量是有號的 8 位元
+    uint8_t offset = 0xFE;
+    printf("跳到 0x%04X\n", (unsigned)(uint16_t)(pc + (int8_t)offset));
+    return 0;
+}</code></pre>
+      <p>輸出(x86-64,gcc):</p>
+<pre><code class="language-text">s8 = -10
+w1 = -10 = 0xFFFFFFF6
+w2 = 246 = 0x000000F6
+sext12(0xFF6) = -10
+sext12(0x7F6) = 2038
+sext12(0x800) = -2048
+跳到 0x014E</code></pre>
+      <ul>
+        <li><code>(int8_t)raw</code>:把超出 <code>int8_t</code> 範圍的 246 轉成 <code>int8_t</code>,結果是實作定義的;gcc 規定照位元解讀,得到 −10。</li>
+        <li>有號的 <code>s8</code> 變寬成 <code>int32_t</code>,編譯器自動補符號位元;無號的 <code>raw</code> 變寬,補 0。<strong>變寬時補什麼,看的是「來源」的型別</strong>。</li>
+        <li>欄位不是剛好 8、16 位元時(例如 12 位元),就沒有現成的型別可以轉,要自己算:<code>(x ^ s) - s</code>,s 是符號位元的權重 2<sup>w−1</sup>。</li>
+        <li>相對跳躍:<code>0x0150 + (−2) = 0x014E</code>。如果忘了轉 <code>int8_t</code>,會跳到 <code>0x0150 + 254 = 0x024E</code>。</li>
+      </ul>
+      <h4>證明(參考):為什麼 (x ^ s) − s 是對的</h4>
+      <p>
+        x 是 w 位元(0 ≤ x &lt; 2<sup>w</sup>),s = 2<sup>w−1</sup>。二補數的值是:最高位是 0 時等於 x,是 1 時等於 x − 2<sup>w</sup>。
+        最高位是 0:<code>x ^ s</code> 把那一位從 0 變 1,等於 x + s,減掉 s 還是 x。
+        最高位是 1:<code>x ^ s</code> 把那一位從 1 變 0,等於 x − s,再減 s 得到 x − 2s = x − 2<sup>w</sup>。兩種情況都對。
+        程式裡用有號的 <code>int32_t</code> 做減法,是為了讓結果可以是負數;w 是 32 時 s 本身就裝不進 <code>int32_t</code>,要另外處理(這是 Lab 的邊界之一)。
+      </p>
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">看起來對但其實錯:「最高位是 1 就是負數」</span>
+          <p><code>0x9C</code> 的最高位是 1,當 8 位元二補數是 −100;但同樣的位元當 12 位元二補數,最高位(第 11 位)是 0,值是 +156。
+          「是不是負數」不是位元本身的性質,要先說好寬度。手算 133.4 的第二列就是這個例子。</p>
+        </div>
+      </div>
+
+      <h3>手算:符號延伸</h3>
+      <p>每一列:先找符號位元(第 w − 1 位),算 <code>x ^ s</code>,再減 s。最後一欄是結果存成 32 位元時的十六進位。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>x</th><th>寬度 w</th><th>s = 2<sup>w−1</sup></th><th>符號位元</th><th>x ^ s</th><th>(x ^ s) − s</th><th>32 位元</th></tr></thead>
+        <tbody>
+          <tr><td><code>0x5</code>(101)</td><td>3</td><td>4</td><td>1</td><td><code>0x1</code></td><td>1 − 4 = <strong>−3</strong></td><td><code>0xFFFFFFFD</code></td></tr>
+          <tr><td><code>0x5</code>(0101)</td><td>4</td><td>8</td><td>0</td><td><code>0xD</code></td><td>13 − 8 = <strong>5</strong></td><td><code>0x00000005</code></td></tr>
+          <tr><td><code>0x80</code></td><td>8</td><td>128</td><td>1</td><td><code>0x00</code></td><td><strong>−128</strong></td><td><code>0xFFFFFF80</code></td></tr>
+          <tr><td><code>0x7F</code></td><td>8</td><td>128</td><td>0</td><td><code>0xFF</code></td><td>255 − 128 = <strong>127</strong></td><td><code>0x0000007F</code></td></tr>
+          <tr><td><code>0x3FF</code></td><td>10</td><td>512</td><td>1</td><td><code>0x1FF</code></td><td>511 − 512 = <strong>−1</strong></td><td><code>0xFFFFFFFF</code></td></tr>
+          <tr><td><code>0x200</code></td><td>10</td><td>512</td><td>1</td><td><code>0x000</code></td><td><strong>−512</strong></td><td><code>0xFFFFFE00</code></td></tr>
+          <tr><td><code>0xFE</code></td><td>8</td><td>128</td><td>1</td><td><code>0x7E</code></td><td>126 − 128 = <strong>−2</strong></td><td><code>0xFFFFFFFE</code></td></tr>
+        </tbody>
+      </table></div>
+      <p>同一個 <code>0x5</code>,寬度 3 是 −3,寬度 4 是 5。最後一列就是上面相對跳躍用的 <code>0xFE</code>。</p>
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 133.4 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>照上面的表,把下面每一組當成 w 位元的二補數,算出值與 32 位元的十六進位:(<code>0x9C</code>, 8)、(<code>0x9C</code>, 12)、(<code>0x1F</code>, 5)、(<code>0xF</code>, 5)、(<code>0x8000</code>, 16)、(<code>0x3</code>, 2)。</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <div class="table-wrap"><table>
+                <thead><tr><th>x</th><th>w</th><th>s</th><th>符號位元</th><th>x ^ s</th><th>值</th><th>32 位元</th></tr></thead>
+                <tbody>
+                  <tr><td><code>0x9C</code></td><td>8</td><td>128</td><td>1</td><td><code>0x1C</code></td><td>28 − 128 = −100</td><td><code>0xFFFFFF9C</code></td></tr>
+                  <tr><td><code>0x9C</code></td><td>12</td><td>2048</td><td>0</td><td><code>0x89C</code></td><td>2204 − 2048 = 156</td><td><code>0x0000009C</code></td></tr>
+                  <tr><td><code>0x1F</code></td><td>5</td><td>16</td><td>1</td><td><code>0xF</code></td><td>15 − 16 = −1</td><td><code>0xFFFFFFFF</code></td></tr>
+                  <tr><td><code>0xF</code></td><td>5</td><td>16</td><td>0</td><td><code>0x1F</code></td><td>31 − 16 = 15</td><td><code>0x0000000F</code></td></tr>
+                  <tr><td><code>0x8000</code></td><td>16</td><td>32768</td><td>1</td><td><code>0x0000</code></td><td>−32768</td><td><code>0xFFFF8000</code></td></tr>
+                  <tr><td><code>0x3</code></td><td>2</td><td>2</td><td>1</td><td><code>0x1</code></td><td>1 − 2 = −1</td><td><code>0xFFFFFFFF</code></td></tr>
+                </tbody>
+              </table></div>
+              <p>捷徑:符號位元是 1 時,值 = x − 2<sup>w</sup>。例如 <code>0x9C</code>(8 位元)= 156 − 256 = −100。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>大小端:多位元組的值怎麼排</h2>
+      <p>
+        記憶體的每個位址放一個位元組。一個 32 位元的值 <code>0x12345678</code> 要佔 4 個位址,那麼 <code>0x12</code> 放在最小的位址,還是 <code>0x78</code> 放在最小的位址?
+        兩種都有人用:
+      </p>
+      <ul>
+        <li><strong>小端序(little-endian,LE)</strong>:最低有效位元組(<code>0x78</code>)放在最小的位址。x86、x86-64、Game Boy、GBA、大部分 ARM 與 RISC-V 系統都是。</li>
+        <li><strong>大端序(big-endian,BE)</strong>:最高有效位元組(<code>0x12</code>)放在最小的位址,和人寫數字的順序一樣。網路協定的「網路位元組順序」(<a href="25-networking.html">第 33 章</a>)、CHIP-8 的指令、很多檔案格式都是。</li>
+      </ul>
+      <p>這個名詞叫<strong>位元組順序</strong>或<strong>端序(endianness)</strong>。它只管「位元組」的順序,一個位元組裡 8 個位元的順序不受影響。</p>
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">為什麼要學</span>
+          <p>你的模擬器跑在 x86-64(小端序)上,模擬的 CHIP-8 卻要用大端序讀指令。如果直接把兩個位元組的記憶體當成 <code>uint16_t</code> 讀,每一條指令的兩個位元組都會反過來。
+          本章 Lab 的 <code>load16_be</code>、<code>store32_le</code> 這組函式,就是讓模擬器的結果和主機是哪一種端序無關。</p>
+        </div>
+      </div>
+      <div class="diagram">
+<svg viewBox="0 0 560 200" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="20" y="28" font-size="14" fill="#2f6f6a" font-weight="700">uint32_t v = 0x12345678; 存在位址 0x100 開始的 4 個位元組</text>
+  <g font-size="12" fill="#8a929b" text-anchor="middle">
+    <text x="210" y="56">0x100</text><text x="290" y="56">0x101</text><text x="370" y="56">0x102</text><text x="450" y="56">0x103</text>
+  </g>
+  <text x="20" y="92" font-size="13" fill="#2f6f6a">小端序(x86)</text>
+  <g font-size="18" text-anchor="middle">
+    <rect x="170" y="66" width="80" height="40" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/><text x="210" y="93">78</text>
+    <rect x="250" y="66" width="80" height="40" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/><text x="290" y="93">56</text>
+    <rect x="330" y="66" width="80" height="40" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/><text x="370" y="93">34</text>
+    <rect x="410" y="66" width="80" height="40" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/><text x="450" y="93">12</text>
+  </g>
+  <text x="20" y="152" font-size="13" fill="#b4541f">大端序(網路)</text>
+  <g font-size="18" text-anchor="middle">
+    <rect x="170" y="126" width="80" height="40" fill="#fbe9df" stroke="#b4541f" stroke-width="2"/><text x="210" y="153">12</text>
+    <rect x="250" y="126" width="80" height="40" fill="#fbe9df" stroke="#b4541f" stroke-width="2"/><text x="290" y="153">34</text>
+    <rect x="330" y="126" width="80" height="40" fill="#fbe9df" stroke="#b4541f" stroke-width="2"/><text x="370" y="153">56</text>
+    <rect x="410" y="126" width="80" height="40" fill="#fbe9df" stroke="#b4541f" stroke-width="2"/><text x="450" y="153">78</text>
+  </g>
+  <text x="20" y="190" font-size="12" fill="#8a929b">位址由小到大往右;小端序在最小的位址放最低的位元組 0x78</text>
+</svg>
+        <figcaption>圖 133-2:同一個 32 位元的值,在小端序與大端序的記憶體裡。</figcaption>
+      </div>
+      <p>文字版:</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>位址</th><th>0x100</th><th>0x101</th><th>0x102</th><th>0x103</th></tr></thead>
+        <tbody>
+          <tr><td>小端序</td><td>78</td><td>56</td><td>34</td><td>12</td></tr>
+          <tr><td>大端序</td><td>12</td><td>34</td><td>56</td><td>78</td></tr>
+        </tbody>
+      </table></div>
+
+      <h3>和主機端序無關的讀寫函式</h3>
+      <p>
+        要讀「某個格式規定的端序」,不要問這台電腦是哪一種端序,直接用移位把位元組拼起來。移位是對「值」做運算,和值在記憶體裡怎麼放無關,所以同一份程式在任何機器上結果都一樣。
+      </p>
+<pre><code class="language-c">#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+#include &lt;string.h&gt;
+
+// 從位元組陣列讀、寫 16 位元的值。只用移位,和這台電腦是哪一種端序無關
+static uint16_t get_le16(const uint8_t *p) { return (uint16_t)(p[0] | (p[1] &lt;&lt; 8)); }
+static uint16_t get_be16(const uint8_t *p) { return (uint16_t)((p[0] &lt;&lt; 8) | p[1]); }
+static void put_le16(uint8_t *p, uint16_t v) { p[0] = (uint8_t)v; p[1] = (uint8_t)(v &gt;&gt; 8); }
+static void put_be16(uint8_t *p, uint16_t v) { p[0] = (uint8_t)(v &gt;&gt; 8); p[1] = (uint8_t)v; }
+
+int main(void) {
+    uint32_t v = 0x11223344;
+    const uint8_t *b = (const uint8_t *)&amp;v;   // 用 unsigned char 看物件的位元組是合法的
+    printf("0x11223344 在這台電腦的記憶體裡:%02X %02X %02X %02X\n",
+           (unsigned)b[0], (unsigned)b[1], (unsigned)b[2], (unsigned)b[3]);
+
+    uint8_t buf[4];
+    put_be16(buf, 0xBEEF);                     // 網路封包、CHIP-8 的指令:大端序
+    put_le16(buf + 2, 0xBEEF);                 // Game Boy、x86:小端序
+    printf("buf = %02X %02X %02X %02X\n",
+           (unsigned)buf[0], (unsigned)buf[1], (unsigned)buf[2], (unsigned)buf[3]);
+    printf("get_be16(buf) = 0x%04X, get_le16(buf) = 0x%04X\n",
+           (unsigned)get_be16(buf), (unsigned)get_le16(buf));
+    printf("get_le16(buf + 1) = 0x%04X\n", (unsigned)get_le16(buf + 1));
+
+    uint16_t host;
+    memcpy(&amp;host, buf, 2);                     // 照這台電腦的端序解讀:結果不可攜
+    printf("memcpy 讀回 0x%04X\n", (unsigned)host);
+    return 0;
+}</code></pre>
+      <p>輸出(x86-64,小端序):</p>
+<pre><code class="language-text">0x11223344 在這台電腦的記憶體裡:44 33 22 11
+buf = BE EF EF BE
+get_be16(buf) = 0xBEEF, get_le16(buf) = 0xEFBE
+get_le16(buf + 1) = 0xEFEF
+memcpy 讀回 0xEFBE</code></pre>
+      <ul>
+        <li>第一行和機器有關:x86-64 是小端序,所以 <code>0x11223344</code> 在記憶體裡是 <code>44 33 22 11</code>。用 <code>unsigned char</code>(或 <code>uint8_t</code>)指標看任何物件的位元組,是 C 標準允許的。</li>
+        <li><code>get_be16</code>、<code>get_le16</code> 讀同樣兩個位元組 <code>BE EF</code>,一個得到 <code>0xBEEF</code>,一個得到 <code>0xEFBE</code>。這兩個結果在大端序的機器上也一樣。</li>
+        <li><code>memcpy</code> 把位元組原封不動複製進 <code>uint16_t</code>,得到的是「照這台電腦的端序解讀」:在 x86-64 上是 <code>0xEFBE</code>,在大端序的機器上是 <code>0xBEEF</code>。不可攜。</li>
+        <li>本章只示範 16 位元。32 位元的版本是同一個模式(四個位元組、移 0、8、16、24 位),要注意每個位元組要先轉成 <code>uint32_t</code> 再移 24 位,不然 <code>p[3] &lt;&lt; 24</code> 會在 <code>int</code> 上溢位。完整的 16、32 位元 LE／BE 讀寫是本章 Lab 的一部分。</li>
+      </ul>
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">看起來對但其實錯:把指標轉成 uint16_t * 直接讀</span>
+          <p><code>uint16_t v = *(uint16_t *)(buf + 1);</code> 在 x86-64 上通常「能跑」,但它有三個問題:
+          結果依主機端序而定;<code>buf + 1</code> 是奇數位址,沒有對齊,在要求對齊的 CPU 上會出錯;而且用 <code>uint16_t</code> 型別去讀一個 <code>uint8_t</code> 陣列,違反 C 的<strong>嚴格別名規則(strict aliasing)</strong>,最佳化之後可能讀到舊值。
+          用移位拼起來,或用 <code>memcpy</code>(再自己處理端序),三個問題都沒有。</p>
+        </div>
+      </div>
+      <p>另一個常見的錯,是用 <code>char</code> 裝位元組。<code>char</code> 在 x86-64 上有號,<code>0xF6</code> 一提升成 <code>int</code> 就變成 <code>0xFFFFFFF6</code>,OR 進去就把高位元組蓋掉了:</p>
+<pre><code class="language-c">#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+
+int main(void) {
+    const char  sbuf[2] = {0x12, (char)0xF6};       // 錯誤示範:用 char 裝位元組
+    const uint8_t ubuf[2] = {0x12, 0xF6};
+
+    uint16_t bad  = (uint16_t)((sbuf[0] &lt;&lt; 8) | sbuf[1]);
+    uint16_t good = (uint16_t)((ubuf[0] &lt;&lt; 8) | ubuf[1]);
+    printf("char 版 0x%04X,uint8_t 版 0x%04X\n", (unsigned)bad, (unsigned)good);
+    return 0;
+}</code></pre>
+      <p>輸出(x86-64):</p>
+<pre><code class="language-text">char 版 0xFFF6,uint8_t 版 0x12F6</code></pre>
+
+      <h3>手算:位元組順序</h3>
+      <p>
+        <code>0x12345678</code> 存在 <code>0x100</code> 開始的 4 個位元組(上面的圖)。每一列從某一種記憶體、某個位址,用某種讀法讀 2 或 4 個位元組。
+        先寫出碰到的位元組(依位址由小到大),再照讀法組成值:LE 是「第一個位元組放最低位」,BE 是「第一個位元組放最高位」。
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>記憶體</th><th>讀法</th><th>碰到的位元組(依位址)</th><th>組成</th><th>結果</th></tr></thead>
+        <tbody>
+          <tr><td>小端序存的</td><td>16 位元 LE,從 <code>0x100</code></td><td>78 56</td><td>56 是高位</td><td><code>0x5678</code></td></tr>
+          <tr><td>小端序存的</td><td>16 位元 LE,從 <code>0x101</code></td><td>56 34</td><td>34 是高位</td><td><code>0x3456</code></td></tr>
+          <tr><td>小端序存的</td><td>16 位元 BE,從 <code>0x102</code></td><td>34 12</td><td>34 是高位</td><td><code>0x3412</code></td></tr>
+          <tr><td>小端序存的</td><td>32 位元 BE,從 <code>0x100</code></td><td>78 56 34 12</td><td>78 是最高位</td><td><code>0x78563412</code></td></tr>
+          <tr><td>大端序存的</td><td>16 位元 BE,從 <code>0x100</code></td><td>12 34</td><td>12 是高位</td><td><code>0x1234</code></td></tr>
+          <tr><td>大端序存的</td><td>16 位元 LE,從 <code>0x101</code></td><td>34 56</td><td>56 是高位</td><td><code>0x5634</code></td></tr>
+          <tr><td>大端序存的</td><td>32 位元 LE,從 <code>0x100</code></td><td>12 34 56 78</td><td>78 是最高位</td><td><code>0x78563412</code></td></tr>
+        </tbody>
+      </table></div>
+      <p>「存」和「讀」用不同的端序,值就整個倒過來(第 4、7 列)。這就是在小端序的電腦上用 <code>memcpy</code> 讀網路封包會得到的錯誤結果。</p>
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 133.5 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p><code>0xCAFEBABE</code> 存在 <code>0x40</code> 開始的 4 個位元組。(1)寫出小端序與大端序的位元組表。(2)在小端序的記憶體上:16 位元 LE 從 <code>0x41</code>、16 位元 BE 從 <code>0x42</code>、32 位元 BE 從 <code>0x40</code>。(3)在大端序的記憶體上:16 位元 LE 從 <code>0x41</code>、16 位元 BE 從 <code>0x42</code>。</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <div class="table-wrap"><table>
+                <thead><tr><th>位址</th><th>0x40</th><th>0x41</th><th>0x42</th><th>0x43</th></tr></thead>
+                <tbody>
+                  <tr><td>小端序</td><td>BE</td><td>BA</td><td>FE</td><td>CA</td></tr>
+                  <tr><td>大端序</td><td>CA</td><td>FE</td><td>BA</td><td>BE</td></tr>
+                </tbody>
+              </table></div>
+              <div class="table-wrap"><table>
+                <thead><tr><th>記憶體</th><th>讀法</th><th>碰到的位元組</th><th>結果</th></tr></thead>
+                <tbody>
+                  <tr><td>小端序</td><td>16 LE,<code>0x41</code></td><td>BA FE</td><td><code>0xFEBA</code></td></tr>
+                  <tr><td>小端序</td><td>16 BE,<code>0x42</code></td><td>FE CA</td><td><code>0xFECA</code></td></tr>
+                  <tr><td>小端序</td><td>32 BE,<code>0x40</code></td><td>BE BA FE CA</td><td><code>0xBEBAFECA</code></td></tr>
+                  <tr><td>大端序</td><td>16 LE,<code>0x41</code></td><td>FE BA</td><td><code>0xBAFE</code></td></tr>
+                  <tr><td>大端序</td><td>16 BE,<code>0x42</code></td><td>BA BE</td><td><code>0xBABE</code></td></tr>
+                </tbody>
+              </table></div>
+              <p>注意 <code>0xBE</code> 這個位元組和「BE(大端序)」這個縮寫剛好同名,寫表格時不要搞混。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>const 正確性</h2>
+      <p>
+        <code>const</code> 的意思是「透過這個名字,不能改」。它不是讓資料變成唯讀的魔法,而是你和編譯器(還有讀程式的人)之間的約定:
+        函式參數寫成 <code>const uint8_t *buf</code>,就是在說「我只讀 <code>buf</code>,不會改它」。違反約定,編譯器直接報錯。
+      </p>
+<pre><code class="language-c">#include &lt;stdio.h&gt;
+#include &lt;stddef.h&gt;
+#include &lt;stdint.h&gt;
+
+// const 寫在參數上是一個承諾:這個函式只讀 buf,不會改它
+static size_t count_byte(const uint8_t *buf, size_t n, uint8_t v) {
+    size_t c = 0;
+    for (size_t i = 0; i &lt; n; i++) {
+        if (buf[i] == v) c++;
+        // buf[i] = 0;            // 編譯錯誤:assignment of read-only location
+    }
+    return c;
+}
+
+int main(void) {
+    uint8_t data[6] = {7, 0, 7, 7, 1, 0};
+    int x = 1, y = 2;
+
+    const int *p1 = &amp;x;           // 指向 const int:不能透過 p1 改值,但 p1 可以改指別人
+    p1 = &amp;y;
+    // *p1 = 5;                   // 編譯錯誤:assignment of read-only location
+
+    int *const p2 = &amp;x;           // const 指標:p2 永遠指 x,但可以透過它改 x
+    *p2 = 5;
+    // p2 = &amp;y;                   // 編譯錯誤:assignment of read-only variable
+
+    const int *const p3 = &amp;y;     // 兩個都不能改
+    printf("%d %d %d\n", *p1, *p2, *p3);
+    printf("7 出現 %zu 次\n", count_byte(data, sizeof data, 7));
+    return 0;
+}</code></pre>
+      <p>輸出:</p>
+<pre><code class="language-text">2 5 2
+7 出現 3 次</code></pre>
+      <p>把三行註解拿掉,gcc 會給出這三個錯誤(這時候程式就編譯不過了):</p>
+<pre><code class="language-text">error: assignment of read-only location ‘*(buf + (sizetype)i)’
+error: assignment of read-only location ‘*p1’
+error: assignment of read-only variable ‘p2’</code></pre>
+      <p>讀宣告的訣竅:<strong>從變數名稱往左讀</strong>,<code>*</code> 讀成「指向」。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>宣告</th><th>從右往左讀</th><th>能改指到的值嗎</th><th>能改指標本身嗎</th></tr></thead>
+        <tbody>
+          <tr><td><code>const int *p</code>(等於 <code>int const *p</code>)</td><td>p 是指標,指向 const int</td><td>不能</td><td>能</td></tr>
+          <tr><td><code>int *const p</code></td><td>p 是 const 指標,指向 int</td><td>能</td><td>不能</td></tr>
+          <tr><td><code>const int *const p</code></td><td>p 是 const 指標,指向 const int</td><td>不能</td><td>不能</td></tr>
+          <tr><td><code>const volatile uint32_t *const STATUS</code></td><td>STATUS 是 const 指標,指向 const volatile uint32_t</td><td>程式不能寫,但硬體會改</td><td>不能</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        最後一列是下一節的主角:一個唯讀的硬體狀態暫存器。<code>const</code> 說「我不准寫它」,<code>volatile</code> 說「它自己會變」。兩個並不矛盾。
+        <code>const</code> 還有一個實際的好處:韌體裡宣告成 <code>static const</code> 的大表格,連結器可以把它放進 Flash,不佔寶貴的 RAM。
+      </p>
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">const 是會傳染的</span>
+          <p>一個函式收了 <code>const uint8_t *</code>,它就不能把這個指標傳給一個收 <code>uint8_t *</code> 的函式(gcc 會警告「discards const qualifier」)。
+          所以要從最底層的函式開始加 <code>const</code>。只讀不寫的指標參數,一律加 <code>const</code>,這叫 const 正確性(const correctness)。</p>
+        </div>
+      </div>
+
+      <h2>volatile:它做什麼、不做什麼</h2>
+      <p>
+        編譯器最佳化的前提是:<strong>記憶體裡的值,只有這個程式自己會改</strong>。所以它可以把同一個位址寫三次合併成一次,也可以把迴圈裡重複的讀取搬到迴圈外面。
+        對一般變數,這些都是對的。但硬體暫存器不是一般變數:寫三次 UART 的資料暫存器,是送出三個字元;讀一次狀態暫存器,下一次可能就不一樣了。
+      </p>
+      <p>
+        <code>volatile</code> 就是告訴編譯器:<strong>這個物件可能被這個程式以外的東西讀寫,每一次讀寫都要照原樣做出來,不能合併、不能刪掉、不能改變彼此的順序</strong>。
+      </p>
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">為什麼要學</span>
+          <p>韌體的第一支程式通常就是「等狀態暫存器的某一位變成 1,再寫資料暫存器」。少了 <code>volatile</code>,開了最佳化就當機,沒開最佳化又正常,是最難查的那一種錯。
+          之後微控制器與中斷的章節,ISR 和主程式共用的旗標也一定要用它。</p>
+        </div>
+      </div>
+
+      <h3>模擬的暫存器:看編譯器做了什麼</h3>
+      <p>
+        真的韌體會寫 <code>#define UART_DATA (*(volatile uint32_t *)0x40011004)</code>,把固定的硬體位址當成一個變數。我們的電腦上沒有那個裝置,
+        所以用全域變數假裝是暫存器,然後看 <code>gcc -O2 -S</code> 產生的組合語言(<a href="21-cpu-machine-language.html">第 21 章</a>):
+      </p>
+<pre><code class="language-c">#include &lt;stdint.h&gt;
+
+// 真的韌體裡,這會是一個固定的硬體位址,例如 (uintptr_t)0x40011004。
+// 這裡用一個全域變數「假裝」是 UART 的資料暫存器與狀態暫存器,讓程式在電腦上也能編譯。
+uint32_t fake_uart_data;
+uint32_t fake_uart_status;
+
+#define TX_READY (1u &lt;&lt; 7)
+
+#define DATA_PLAIN    (*(uint32_t *)&amp;fake_uart_data)
+#define STATUS_PLAIN  (*(uint32_t *)&amp;fake_uart_status)
+#define DATA_VOL      (*(volatile uint32_t *)&amp;fake_uart_data)
+#define STATUS_VOL    (*(const volatile uint32_t *)&amp;fake_uart_status)
+
+void send3_plain(void) {          // 送出 'H' 'i' '!' 三個字元
+    DATA_PLAIN = 'H';
+    DATA_PLAIN = 'i';
+    DATA_PLAIN = '!';
+}
+
+void send3_volatile(void) {
+    DATA_VOL = 'H';
+    DATA_VOL = 'i';
+    DATA_VOL = '!';
+}
+
+void wait_plain(void) {           // 等硬體把 TX_READY 設起來
+    while ((STATUS_PLAIN &amp; TX_READY) == 0) { }
+}
+
+void wait_volatile(void) {
+    while ((STATUS_VOL &amp; TX_READY) == 0) { }
+}</code></pre>
+      <p>用 <code>gcc -std=c17 -Wall -Wextra -O2 -S uart_volatile.c</code> 編譯,四個函式的本體是(x86-64 AT&amp;T 語法,省略了對齊用的 <code>.p2align</code>):</p>
+<pre><code class="language-text">send3_plain:
+    endbr64
+    movl $33, fake_uart_data(%rip)
+    ret
+
+send3_volatile:
+    endbr64
+    movl $72, fake_uart_data(%rip)
+    movl $105, fake_uart_data(%rip)
+    movl $33, fake_uart_data(%rip)
+    ret
+
+wait_plain:
+    endbr64
+    testb $-128, fake_uart_status(%rip)
+    jne .L4
+.L6:
+    jmp .L6
+.L4:
+    ret
+
+wait_volatile:
+    endbr64
+    leaq fake_uart_status(%rip), %rdx
+.L8:
+    movl (%rdx), %eax
+    testb $-128, %al
+    je .L8
+    ret</code></pre>
+      <ul>
+        <li><code>send3_plain</code> 只剩一條 <code>movl $33</code>:33 是 <code>'!'</code>。編譯器認為前兩次寫入馬上被蓋掉,沒有人看得到,就刪了。真的 UART 只會送出一個 <code>!</code>。</li>
+        <li><code>send3_volatile</code> 有三條寫入,72、105、33 就是 <code>'H'</code>、<code>'i'</code>、<code>'!'</code>,順序也照原樣。</li>
+        <li><code>wait_plain</code> 只讀狀態<strong>一次</strong>(<code>testb</code>)。如果那時還沒準備好,就跳到 <code>.L6: jmp .L6</code>:一個永遠不再讀暫存器的無窮迴圈。</li>
+        <li><code>wait_volatile</code> 在迴圈 <code>.L8</code> 裡每一圈都重新 <code>movl (%rdx), %eax</code> 讀一次。</li>
+      </ul>
+
+      <h3>跑起來看:沒有 volatile 的輪詢永遠等不到</h3>
+      <p>
+        組合語言是證據,但我們也可以真的跑一次。下面用一個 POSIX 訊號模擬「硬體在背後改了暫存器」:<code>alarm(1)</code> 讓系統 1 秒後送 <code>SIGALRM</code>,處理函式把 <code>ready</code> 設成 1。
+        主程式從頭到尾都沒有改 <code>ready</code>,就像它從來沒有寫過硬體的狀態暫存器。
+      </p>
+<pre><code class="language-c">#define _POSIX_C_SOURCE 200809L   // 要用 POSIX 的 alarm()
+#include &lt;stdio.h&gt;
+#include &lt;signal.h&gt;
+#include &lt;unistd.h&gt;
+
+// 「硬體」在 1 秒後把 ready 設成 1。這裡用 SIGALRM 訊號模擬:
+// 處理函式會在主程式不知道的時候插進來執行,就像硬體在背後改暫存器。
+#ifdef NO_VOLATILE
+static sig_atomic_t ready = 0;            // 錯誤示範
+#else
+static volatile sig_atomic_t ready = 0;   // C 標準唯一保證和訊號處理函式共用時可靠的寫法
+#endif
+
+static void on_alarm(int sig) {
+    (void)sig;
+    ready = 1;
+}
+
+int main(void) {
+    signal(SIGALRM, on_alarm);
+    alarm(1);
+    unsigned long spins = 0;
+    while (!ready) {
+        spins++;                           // 一直輪詢(polling)
+    }
+    printf("等到了;輪詢了 %s 次\n", spins &gt; 1000 ? "超過 1000" : "不到 1000");
+    return 0;
+}</code></pre>
+<pre><code class="language-bash">gcc -std=c17 -Wall -Wextra -O2 fake_hw.c -o hw
+./hw                       # 約 1 秒後印出:等到了;輪詢了 超過 1000 次
+gcc -std=c17 -Wall -Wextra -O2 -DNO_VOLATILE fake_hw.c -o hw_bad
+timeout 3 ./hw_bad; echo $?   # 印出 124:被 timeout 在 3 秒時強制結束,迴圈從沒停過</code></pre>
+      <p>
+        有 <code>volatile</code> 的版本 1 秒後結束;沒有 <code>volatile</code> 的版本,即使處理函式已經把 <code>ready</code> 設成 1,主迴圈也看不到,只能被 <code>timeout</code> 砍掉(結束碼 124)。
+        <code>-O0</code> 編譯的話,兩個版本都會正常結束,所以這種錯常常在「改成發行版編譯」那天才出現。
+      </p>
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">為什麼是 volatile sig_atomic_t</span>
+          <p>C 標準只保證一種和訊號處理函式共用變數的寫法:<code>volatile sig_atomic_t</code>。<code>sig_atomic_t</code> 是一個「讀寫一次就完成、不會被訊號切成兩半」的整數型別。
+          微控制器上的中斷服務程式(ISR)和主程式共用旗標,道理一樣。</p>
+        </div>
+      </div>
+
+      <h3>volatile 不做的事</h3>
+      <p>
+        <code>volatile</code> 只管一件事:這個物件的每一次存取都要真的做出來。下面這些它<strong>都不管</strong>:
+      </p>
+      <ul>
+        <li><strong>不保證原子性。</strong><code>counter++</code> 就算 <code>counter</code> 是 <code>volatile</code>,還是「讀、加、寫」三個步驟,中間可以被中斷或另一個執行緒插進來:
+<pre><code class="language-c">volatile int counter;
+
+void bump(void) {
+    counter++;            // 看起來是一個動作
+}</code></pre>
+<pre><code class="language-text">bump:
+    endbr64
+    movl counter(%rip), %eax
+    addl $1, %eax
+    movl %eax, counter(%rip)
+    ret</code></pre>
+        </li>
+        <li><strong>不是執行緒之間的同步工具。</strong>多個執行緒共用變數,要用 C11 的 <code>_Atomic</code>(<code>&lt;stdatomic.h&gt;</code>)或互斥鎖(<a href="24-operating-system.html">第 24 章</a>、<a href="43-parallel.html">第 45 章</a>)。只靠 <code>volatile</code> 的共用變數在 C 標準裡仍然是資料競爭(data race),是未定義行為。</li>
+        <li><strong>不管其他非 volatile 變數的順序。</strong>先寫一般的緩衝區、再寫 volatile 的「開始傳送」暫存器,編譯器仍然可以把緩衝區的寫入挪到後面;CPU 本身也可能重新排序。需要順序時要用記憶體屏障(memory barrier)。</li>
+        <li><strong>不處理快取。</strong><a href="48-computer-architecture.html">第 50 章</a>的快取不知道你寫了 <code>volatile</code>。和 DMA 共用的緩衝區,要靠硬體的一致性機制或手動清快取。</li>
+      </ul>
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">看起來對但其實錯:「加了 volatile,多執行緒就安全了」</span>
+          <p>兩個執行緒各對 <code>volatile int counter</code> 做 100 萬次 <code>counter++</code>,結果常常小於 200 萬,而且每次跑都不同(我們用 <code>-O2 -pthread</code> 實測 5 次,每次都只有 101 萬左右)。
+          每一次讀寫都「真的做了」,但兩個執行緒的「讀、加、寫」交錯在一起,有些加法被蓋掉。在單核心、沒有中斷的情況下測不出這個錯,這正是它危險的地方。</p>
+        </div>
+      </div>
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">核心觀念</span>
+          <p><code>volatile</code> 用在「這個程式以外的東西會讀寫這塊記憶體」:記憶體映射的暫存器、和訊號處理函式或 ISR 共用的旗標。它解決的是編譯器最佳化的問題,不是並行的問題。</p>
+        </div>
+      </div>
+
+      <h2>函式指標與分派表</h2>
+      <p>
+        函式也放在記憶體裡,也有位址。<strong>函式指標(function pointer)</strong>就是存函式位址的變數,透過它可以呼叫「執行時才決定的」函式。
+        Python 的函式本來就是值,可以放進 list 和 dict;C 用函式指標做同樣的事。
+      </p>
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">為什麼要學</span>
+          <p>CPU 模擬器用 opcode 查表決定要執行哪個函式;中斷向量表是一個函式位址的陣列;模擬器的記憶體匯流排用「這段位址交給這個裝置的函式」來接上鍵盤、計時器和螢幕。
+          這三件事都是函式指標的陣列。本章 Lab 的 <code>bus_map</code> 就是「登錄一段位址的處理函式」。</p>
+        </div>
+      </div>
+<pre><code class="language-c">#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+
+static int add(int a, int b) { return a + b; }
+static int sub(int a, int b) { return a - b; }
+static int mul(int a, int b) { return a * b; }
+
+typedef int (*binop)(int, int);           // binop:「吃兩個 int、回傳 int 的函式」的指標
+
+// 一台只有 4 個指令的小機器:指令的高 4 位是 opcode,低 4 位是運算元
+enum { OP_LOAD, OP_ADD, OP_SUB, OP_MUL };
+
+int main(void) {
+    int (*f)(int, int) = add;             // 不用 typedef 的寫法
+    binop g = &amp;mul;                       // &amp; 可寫可不寫
+    printf("f(2, 3) = %d, g(2, 3) = %d\n", f(2, 3), (*g)(2, 3));
+
+    // 分派表(dispatch table):用 opcode 當索引,直接查到要呼叫的函式
+    static const binop table[4] = { [OP_ADD] = add, [OP_SUB] = sub, [OP_MUL] = mul };
+    const uint8_t prog[] = {0x05, 0x13, 0x32, 0x21, 0x14};   // LOAD 5; ADD 3; MUL 2; SUB 1; ADD 4
+    int acc = 0;
+    for (size_t pc = 0; pc &lt; sizeof prog; pc++) {
+        unsigned op = prog[pc] &gt;&gt; 4, arg = prog[pc] &amp; 0x0F;
+        if (op == OP_LOAD) acc = (int)arg;
+        else acc = table[op](acc, (int)arg);
+        printf("pc %zu:op %u arg %u -&gt; acc %d\n", pc, op, arg, acc);
+    }
+    return 0;
+}</code></pre>
+      <p>輸出:</p>
+<pre><code class="language-text">f(2, 3) = 5, g(2, 3) = 6
+pc 0:op 0 arg 5 -&gt; acc 5
+pc 1:op 1 arg 3 -&gt; acc 8
+pc 2:op 3 arg 2 -&gt; acc 16
+pc 3:op 2 arg 1 -&gt; acc 15
+pc 4:op 1 arg 4 -&gt; acc 19</code></pre>
+      <ul>
+        <li><code>int (*f)(int, int)</code>:f 是一個指標,指向「吃兩個 <code>int</code>、回傳 <code>int</code> 的函式」。括號不能省,<code>int *f(int, int)</code> 是「回傳 <code>int *</code> 的函式」。宣告很難讀,所以通常先 <code>typedef</code>。</li>
+        <li>函式名稱會自動轉成函式指標,所以 <code>add</code> 和 <code>&amp;add</code> 一樣;呼叫時 <code>g(2, 3)</code> 和 <code>(*g)(2, 3)</code> 也一樣。</li>
+        <li><strong>分派表(dispatch table)</strong>:<code>table[op](acc, arg)</code> 用 opcode 當索引直接找到函式,取代一長串 <code>switch</code>。<code>[OP_ADD] = add</code> 是 C99 的<strong>指定初始化(designated initializer)</strong>,沒列出的元素(<code>[OP_LOAD]</code>)是 <code>NULL</code>。</li>
+        <li>指令 <code>0x32</code> 的高 4 位是 opcode 3(MUL)、低 4 位是運算元 2:這正是上一節的 <code>FIELD_GET</code>。</li>
+      </ul>
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">分派表的邊界檢查</span>
+          <p>這個範例的 <code>prog</code> 裡只有合法的 opcode。真的模擬器讀到的是任意位元組:<code>op</code> 超出表的範圍、或剛好是表裡的 <code>NULL</code>,呼叫下去就是當機,甚至跳到攻擊者準備好的位址。
+          查表之前一定先檢查 <code>op &lt; 表的長度</code> 而且 <code>table[op] != NULL</code>(練習 133.10)。</p>
+        </div>
+      </div>
+
+      <h3>從分派表到記憶體映射</h3>
+      <p>
+        把「用 opcode 查函式」換成「用位址查函式」,就是記憶體映射的概念:大部分位址是 RAM,但有幾段位址屬於裝置。程式讀寫那些位址時,實際上是在呼叫裝置的函式。
+        下面是一台位址只有 8 位元的小機器:<code>0xF0</code> 是鍵盤、<code>0xF1</code> 是 LED,其他位址是 RAM。記憶體映射表寫死在程式裡,用全域陣列當 RAM。
+      </p>
+<pre><code class="language-c">#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+
+// 一台位址只有 8 位元(0x00..0xFF)的小機器。大部分位址是 RAM,
+// 但 0xF0 是鍵盤、0xF1 是 LED:讀寫它們會呼叫「裝置」的函式,而不是碰 RAM。
+typedef uint8_t (*read_fn)(uint8_t addr);
+typedef void (*write_fn)(uint8_t addr, uint8_t value);
+
+struct region {
+    uint8_t lo, hi;          // 這一段涵蓋 [lo, hi]
+    read_fn rd;              // NULL:這一段不能讀(本例讀回 0)
+    write_fn wr;             // NULL:這一段不能寫(本例直接忽略)
+    const char *name;
+};
+
+static uint8_t ram[256];
+static uint8_t pending_key = 'A';         // 鍵盤緩衝區裡還沒被讀走的字
+
+static uint8_t ram_rd(uint8_t a) { return ram[a]; }
+static void ram_wr(uint8_t a, uint8_t v) { ram[a] = v; }
+static uint8_t key_rd(uint8_t a) {        // 讀了就清掉:這個「讀」有副作用
+    (void)a;
+    uint8_t k = pending_key;
+    pending_key = 0;
+    return k;
+}
+static void led_wr(uint8_t a, uint8_t v) { (void)a; printf("  [LED] 0x%02X\n", (unsigned)v); }
+
+// 記憶體映射表:從上往下找,先符合的那一段負責。最後一段 RAM 包住全部位址
+static const struct region memory_map[] = {
+    {0xF0, 0xF0, key_rd, NULL,   "KEY"},
+    {0xF1, 0xF1, NULL,   led_wr, "LED"},
+    {0x00, 0xFF, ram_rd, ram_wr, "RAM"},
+};
+#define NREGIONS (sizeof memory_map / sizeof memory_map[0])
+
+static const struct region *find(uint8_t a) {
+    for (size_t i = 0; i &lt; NREGIONS; i++)
+        if (a &gt;= memory_map[i].lo &amp;&amp; a &lt;= memory_map[i].hi) return &amp;memory_map[i];
+    return NULL;                           // 本例不會發生:RAM 包住全部
+}
+
+static uint8_t mem_read(uint8_t a) {
+    const struct region *r = find(a);
+    return (r &amp;&amp; r-&gt;rd) ? r-&gt;rd(a) : 0;
+}
+
+static void mem_write(uint8_t a, uint8_t v) {
+    const struct region *r = find(a);
+    if (r &amp;&amp; r-&gt;wr) r-&gt;wr(a, v);
+}
+
+int main(void) {
+    mem_write(0x10, 0x42);
+    printf("read 0x10 -&gt; 0x%02X(%s)\n", (unsigned)mem_read(0x10), find(0x10)-&gt;name);
+    mem_write(0xF1, 0x07);                 // 寫 LED:呼叫 led_wr
+    printf("read 0xF0 -&gt; '%c'\n", mem_read(0xF0));
+    printf("read 0xF0 -&gt; 0x%02X(第二次讀,已經被清掉)\n", (unsigned)mem_read(0xF0));
+    printf("read 0xF1 -&gt; 0x%02X(LED 不能讀)\n", (unsigned)mem_read(0xF1));
+    return 0;
+}</code></pre>
+      <p>輸出:</p>
+<pre><code class="language-text">read 0x10 -&gt; 0x42(RAM)
+  [LED] 0x07
+read 0xF0 -&gt; 'A'
+read 0xF0 -&gt; 0x00(第二次讀,已經被清掉)
+read 0xF1 -&gt; 0x00(LED 不能讀)</code></pre>
+      <ul>
+        <li>CPU 只會說「讀 <code>0xF0</code>」,不知道那裡是鍵盤。<code>find</code> 查表,找到負責的那一段,再透過函式指標呼叫它。換一張表,同一顆 CPU 就接上了不同的裝置。</li>
+        <li><code>key_rd</code> 讀了就把字清掉:<strong>讀取有副作用</strong>。所以第二次讀 <code>0xF0</code> 得到 0。這種暫存器在真的硬體上很常見(讀資料暫存器會清掉「有資料」旗標),也是 <code>volatile</code> 必須存在的理由。</li>
+        <li>讀有副作用,就代表「讀幾次、照什麼順序讀」會改變結果。本章最後的手算 133.6 會追這件事。</li>
+      </ul>
+      <p>
+        這個範例故意寫得很簡單:表是寫死的、處理函式拿到的是完整位址、找不到的位址讀回 0、只處理單一位元組。本章 Lab 的匯流排要的比這多(執行時登錄、拒絕重疊、超出範圍的處理、多位元組存取的規則),細節見 Lab 的規格。
+      </p>
+
+      <h2>堆疊與堆積:變數住在哪裡、活多久</h2>
+      <p>
+        一支 C 程式執行時,它的變數分住在幾個區域,每個區域的<strong>生命週期(lifetime)</strong>不同:
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>區域</th><th>放什麼</th><th>什麼時候出現</th><th>什麼時候消失</th></tr></thead>
+        <tbody>
+          <tr><td>程式碼(<code>.text</code>)</td><td>機器碼、字串常數(常放在旁邊的唯讀區)</td><td>程式載入時</td><td>程式結束</td></tr>
+          <tr><td><code>.data</code></td><td>有初值的全域變數與 <code>static</code> 變數</td><td>程式載入時</td><td>程式結束</td></tr>
+          <tr><td><code>.bss</code></td><td>沒有初值的全域與 <code>static</code> 變數(清成 0)</td><td>程式載入時</td><td>程式結束</td></tr>
+          <tr><td>堆積(heap)</td><td><code>malloc</code> 要來的記憶體</td><td><code>malloc</code> 成功時</td><td><code>free</code> 時</td></tr>
+          <tr><td>堆疊(stack)</td><td>區域變數、參數、返回位址(呼叫堆疊)</td><td>進入函式或區塊時</td><td>離開那個函式或區塊時</td></tr>
+        </tbody>
+      </table></div>
+      <div class="diagram">
+<svg viewBox="0 0 520 330" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="cdArrowUp" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#2f6f6a"/></marker>
+    <marker id="cdArrowDn" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#b4541f"/></marker>
+  </defs>
+  <text x="380" y="30" font-size="12" fill="#8a929b">高位址</text>
+  <text x="380" y="316" font-size="12" fill="#8a929b">低位址</text>
+  <g font-size="14" text-anchor="middle">
+    <rect x="120" y="20" width="240" height="50" fill="#fbe9df" stroke="#b4541f" stroke-width="2"/>
+    <text x="240" y="50" fill="#b4541f">堆疊:區域變數、參數</text>
+    <rect x="120" y="70" width="240" height="80" fill="#ffffff" stroke="#8a929b" stroke-width="1.5" stroke-dasharray="5 4"/>
+    <text x="240" y="115" fill="#8a929b">(還沒用到的空間)</text>
+    <rect x="120" y="150" width="240" height="50" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+    <text x="240" y="180" fill="#2f6f6a">堆積:malloc 的記憶體</text>
+    <rect x="120" y="200" width="240" height="34" fill="#f1ecfe" stroke="#8b5cf6" stroke-width="2"/>
+    <text x="240" y="222" fill="#8b5cf6">.bss:沒有初值的全域</text>
+    <rect x="120" y="234" width="240" height="34" fill="#f1ecfe" stroke="#8b5cf6" stroke-width="2"/>
+    <text x="240" y="256" fill="#8b5cf6">.data:有初值的全域</text>
+    <rect x="120" y="268" width="240" height="40" fill="#f3f4f6" stroke="#8a929b" stroke-width="2"/>
+    <text x="240" y="293">程式碼 .text</text>
+  </g>
+  <line x1="80" y1="40" x2="80" y2="100" stroke="#b4541f" stroke-width="2.5" marker-end="url(#cdArrowDn)"/>
+  <text x="20" y="30" font-size="12" fill="#b4541f">往下長</text>
+  <line x1="80" y1="190" x2="80" y2="140" stroke="#2f6f6a" stroke-width="2.5" marker-end="url(#cdArrowUp)"/>
+  <text x="20" y="210" font-size="12" fill="#2f6f6a">往上長</text>
+</svg>
+        <figcaption>圖 133-3:Linux x86-64 上一個行程的典型記憶體配置(示意,不照比例;實際位址每次執行都會隨機移動)。堆疊從高位址往下長,堆積從低處往上長。</figcaption>
+      </div>
+      <p>文字版(由高位址到低位址):堆疊(往下長) → 還沒用到的空間 → 堆積(往上長) → <code>.bss</code> → <code>.data</code> → 程式碼 <code>.text</code>。</p>
+      <p>下面的程式驗證這個順序。它不印位址(每次執行都不同),只印比較的結果:</p>
+<pre><code class="language-c">#include &lt;stdio.h&gt;
+#include &lt;stdlib.h&gt;
+#include &lt;stdint.h&gt;
+
+int g_init = 1;               // 有初值的全域變數:.data 區段
+int g_zero;                   // 沒有初值的全域變數:.bss 區段(開機時清成 0)
+
+static void depth(int n, uintptr_t prev) {
+    int local = n;            // 每一層呼叫都有自己的 local,放在自己的堆疊框裡
+    uintptr_t here = (uintptr_t)&amp;local;
+    if (prev != 0)
+        printf("  第 %d 層的 local 比上一層%s\n", n, here &lt; prev ? "低(堆疊往下長)" : "高");
+    if (n &lt; 3) depth(n + 1, here);
+}
+
+int main(void) {
+    int local = 0;
+    int *heap = malloc(sizeof *heap);
+    if (heap == NULL) return 1;
+
+    uintptr_t code = (uintptr_t)&amp;main;    // 把函式位址轉成整數是常見的實作定義做法
+    uintptr_t data = (uintptr_t)&amp;g_init, bss = (uintptr_t)&amp;g_zero;
+    uintptr_t hp = (uintptr_t)heap, st = (uintptr_t)&amp;local;
+    printf("程式碼 &lt; .data ? %d\n", code &lt; data);
+    printf(".data  &lt; .bss  ? %d\n", data &lt; bss);
+    printf(".bss   &lt; 堆積  ? %d\n", bss &lt; hp);
+    printf("堆積   &lt; 堆疊  ? %d\n", hp &lt; st);
+    depth(1, 0);
+    free(heap);
+    return 0;
+}</code></pre>
+      <p>輸出(x86-64 Linux;我們連跑 30 次,每次都一樣):</p>
+<pre><code class="language-text">程式碼 &lt; .data ? 1
+.data  &lt; .bss  ? 1
+.bss   &lt; 堆積  ? 1
+堆積   &lt; 堆疊  ? 1
+  第 2 層的 local 比上一層低(堆疊往下長)
+  第 3 層的 local 比上一層低(堆疊往下長)</code></pre>
+      <ul>
+        <li>每次呼叫 <code>depth</code> 都在堆疊上開一個新的<strong>堆疊框(stack frame)</strong>,裡面有自己的 <code>local</code>。越深的呼叫,位址越低。函式返回,它的堆疊框就被下一次呼叫拿去用了。</li>
+        <li>這些相對位置是 Linux x86-64 的慣例,不是 C 標準的規定。C 只規定生命週期:區域變數活到區塊結束、<code>malloc</code> 的記憶體活到 <code>free</code>、全域變數活到程式結束。</li>
+        <li>堆疊不大:Linux 預設的堆疊上限通常是 8 MiB(<code>ulimit -s</code> 看得到),微控制器上常常只有幾 KiB。在函式裡宣告 <code>int big[10000000];</code> 就會撞爆堆疊(stack overflow),要用 <code>malloc</code>。</li>
+      </ul>
+
+      <h2>生命週期錯誤與消毒器</h2>
+      <p>
+        生命週期結束之後,記憶體還在那裡,裡面的位元組通常也還沒變,只是你<strong>已經沒有權利用它了</strong>。
+        還指著它的指標叫<strong>懸空指標(dangling pointer)</strong>。透過懸空指標讀寫,是未定義行為,而且最麻煩的是:它常常「看起來正常」。
+      </p>
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">為什麼要學</span>
+          <p>本章 Lab 的隱藏檢定會用 <code>-fsanitize=undefined,address</code> 重新編譯你的匯流排,有一個越界或一次超過寬度的移位就不過。
+          這是你在 C 裡最有用的除錯工具,從現在起每個 C 作業都先用它跑一遍。</p>
+        </div>
+      </div>
+
+      <h3>懸空指標</h3>
+<pre><code class="language-c">#include &lt;stdio.h&gt;
+
+static int *bad_counter(void) {
+    int c = 42;
+    return &amp;c;                    // 錯誤示範:c 在函式返回時就結束了
+}
+
+int main(void) {
+    int *p;
+    {
+        int x = 7;
+        p = &amp;x;
+    }                             // x 的生命週期在這裡結束,p 變成懸空指標
+    printf("%d\n", *p);           // 錯誤示範:用到已經結束的變數
+
+    int *q = bad_counter();
+    printf("%p\n", (void *)q);
+    return 0;
+}</code></pre>
+      <p>gcc 13 的 <code>-Wall</code> 已經看出兩個問題(這是錯誤示範,警告是故意的):</p>
+<pre><code class="language-text">dangling.c: In function ‘bad_counter’:
+dangling.c:5:12: warning: function returns address of local variable [-Wreturn-local-addr]
+    5 |     return &amp;c;                    // 錯誤示範:c 在函式返回時就結束了
+      |            ^~
+dangling.c: In function ‘main’:
+dangling.c:14:5: warning: using dangling pointer ‘p’ to ‘x’ [-Wdangling-pointer=]
+   14 |     printf("%d\n", *p);           // 錯誤示範:用到已經結束的變數
+      |     ^~~~~~~~~~~~~~~~~~
+dangling.c:11:13: note: ‘x’ declared here
+   11 |         int x = 7;
+      |             ^</code></pre>
+      <p>但程式照樣編譯、照樣執行:</p>
+<pre><code class="language-text">7
+(nil)</code></pre>
+      <ul>
+        <li>第一行印出 7,「看起來是對的」。<code>x</code> 的生命週期已經結束,只是那幾個位元組還沒被別的東西蓋掉。函式多呼叫一層、多開一點最佳化,就可能印出別的數。</li>
+        <li><code>bad_counter</code> 回傳的位址,gcc 乾脆直接換成 <code>NULL</code>(印出 <code>(nil)</code>):反正那個位址不能用,編譯器有權這樣做。這個指標一解參考就當機。</li>
+      </ul>
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">看起來對但其實錯:「印出來的值是對的,所以沒問題」</span>
+          <p>未定義行為最常見的樣子不是當機,而是「這次剛好對」。測試全過不代表沒有生命週期錯誤。
+          警告也不是每次都抓得到:指標多傳過一個函式,<code>-Wall</code> 就看不出來了。要靠下面的消毒器在執行時檢查。</p>
+        </div>
+      </div>
+
+      <h3>釋放後使用與 AddressSanitizer</h3>
+<pre><code class="language-c">#include &lt;stdio.h&gt;
+#include &lt;stdlib.h&gt;
+#include &lt;string.h&gt;
+
+int main(void) {
+    char *name = malloc(16);
+    if (name == NULL) return 1;
+    strcpy(name, "emu");
+    char *alias = name;           // 兩個指標指向同一塊
+
+    free(name);                   // 還回去了;name 和 alias 現在都是懸空指標
+    name = NULL;                  // 好習慣,但救不了 alias
+
+    printf("%c\n", alias[0]);     // 錯誤示範:釋放後使用(use-after-free)
+    return 0;
+}</code></pre>
+      <p>
+        gcc 13 對這段也會警告(<code>-Wuse-after-free</code>)。不加任何選項執行,我們這次印出一個看不懂的字元,下一次可能是別的字元或直接當機。
+        加上 <strong>AddressSanitizer</strong>(ASan)與 <strong>UndefinedBehaviorSanitizer</strong>(UBSan)重新編譯:
+      </p>
+<pre><code class="language-bash">gcc -std=c17 -Wall -Wextra -g -fsanitize=address,undefined uaf.c -o uaf
+./uaf</code></pre>
+      <p>程式在第 14 行停下來,報告(只留重要的幾行,<code>…</code> 是省略的呼叫堆疊;位址、行程編號每次都不同):</p>
+<pre><code class="language-text">==63242==ERROR: AddressSanitizer: heap-use-after-free on address 0x502000000010 at pc 0x5986794c1350 bp 0x7ffee3b2c6c0 sp 0x7ffee3b2c6b0
+READ of size 1 at 0x502000000010 thread T0
+    #0 0x5986794c134f in main uaf.c:14
+    …
+0x502000000010 is located 0 bytes inside of 16-byte region [0x502000000010,0x502000000020)
+freed by thread T0 here:
+    #0 0x7754c4cfc4d8 in free ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:52
+    #1 0x5986794c12f8 in main uaf.c:11
+    …
+previously allocated by thread T0 here:
+    #0 0x7754c4cfd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5986794c129e in main uaf.c:6
+    …
+SUMMARY: AddressSanitizer: heap-use-after-free uaf.c:14 in main
+    …
+==63242==ABORTING</code></pre>
+      <ul>
+        <li>第一行說錯誤的種類:<code>heap-use-after-free</code>(堆積上的釋放後使用),以及是讀(<code>READ of size 1</code>)。</li>
+        <li>接著三段呼叫堆疊:在哪裡讀的(<code>uaf.c:14</code>)、在哪裡 <code>free</code> 的(<code>uaf.c:11</code>)、在哪裡 <code>malloc</code> 的(<code>uaf.c:6</code>)。<code>-g</code> 讓報告能印出檔名和行號。</li>
+        <li>ASan 的做法:在每塊配置的記憶體旁邊放「紅區」,<code>free</code> 之後先不把記憶體還出去,並記錄每個位元組現在能不能用;每一次讀寫前都檢查一下。代價是程式大約慢 2 倍、記憶體用得更多,所以只在開發和測試時開。</li>
+      </ul>
+      <p>上一小節的 <code>dangling.c</code> 用 ASan 跑,也會在第 14 行停下來:</p>
+<pre><code class="language-text">==63248==ERROR: AddressSanitizer: stack-use-after-scope on address 0x715a34a00020 at pc 0x5d7bbe2c74b6 bp 0x7ffc09f13350 sp 0x7ffc09f13340
+READ of size 4 at 0x715a34a00020 thread T0
+    #0 0x5d7bbe2c74b5 in main dangling.c:14
+    …
+Address 0x715a34a00020 is located in stack of thread T0 at offset 32 in frame
+    #0 0x5d7bbe2c7386 in main dangling.c:8
+    …
+SUMMARY: AddressSanitizer: stack-use-after-scope dangling.c:14 in main
+    …
+==63248==ABORTING</code></pre>
+
+      <h3>UBSan 抓未定義行為</h3>
+      <p>
+        <code>-fsanitize=undefined</code> 在每個可能出現未定義行為的運算旁邊加檢查:有號溢位、超過寬度的移位、除以 0、沒對齊的存取……
+        回頭跑本章前面的兩個例子。先是整數提升造成的有號溢位:
+      </p>
+<pre><code class="language-c">#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+
+int main(int argc, char **argv) {
+    (void)argv;
+    uint16_t x = (uint16_t)(0xFFFE + argc);   // 不帶參數執行時是 0xFFFF
+    uint32_t sq = x * x;          // 錯誤示範:x 先提升成 int,65535 * 65535 超過 INT_MAX
+    printf("sq = %u\n", (unsigned)sq);
+    return 0;
+}</code></pre>
+<pre><code class="language-text">ub_promote.c:7:21: runtime error: signed integer overflow: 65535 * 65535 cannot be represented in type 'int'
+sq = 4294836225</code></pre>
+      <p>再跑「移位量等於寬度」那一段(<code>shift_ub.c</code>):</p>
+<pre><code class="language-text">shift_ub.c:6:21: runtime error: shift exponent 32 is too large for 32-bit type 'unsigned int'
+n = 32, 1u &lt;&lt; n = 1</code></pre>
+      <p>
+        UBSan 預設只印出錯誤、讓程式繼續跑(所以後面還有一行正常的輸出)。加上 <code>-fno-sanitize-recover=all</code>,第一個錯誤就讓程式以非 0 的結束碼停下來,適合自動測試:本章 Lab 的隱藏檢定就是這樣編譯的。
+      </p>
+<pre><code class="language-bash">gcc -std=c17 -Wall -Wextra -g -fsanitize=address,undefined -fno-sanitize-recover=all 你的程式.c</code></pre>
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">核心觀念</span>
+          <p>C 的記憶體錯誤不會自己報錯。三層防線一起用:編譯時 <code>-Wall -Wextra</code>(看得到的抓)、測試時 <code>-fsanitize=address,undefined</code>(跑到的抓)、寫程式時養成習慣(傳長度、<code>free</code> 後設成 <code>NULL</code>、誰配置誰釋放)。</p>
+        </div>
+      </div>
+
+      <h2>從 C 到記憶體安全</h2>
+      <p>
+        這一章的錯誤,在<a href="36-secure-coding.html">第 36 章</a>換了一個名字:漏洞。陣列越界寫入就是緩衝區溢位;釋放後使用可以讓攻擊者控制「那塊記憶體下次裝什麼」;
+        整數提升造成的溢位,會讓長度檢查失效,接著變成越界。它們的根源都是同一件事:<strong>C 不檢查你有沒有權利用一塊記憶體</strong>。
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>本章的規則</th><th>違反時</th><th>在第 36 章叫做</th></tr></thead>
+        <tbody>
+          <tr><td>指標只能在陣列範圍內移動</td><td>讀寫到隔壁的資料</td><td>緩衝區溢位、Off-by-one</td></tr>
+          <tr><td>陣列傳進函式要另外傳長度</td><td>函式不知道邊界</td><td>緩衝區溢位</td></tr>
+          <tr><td>小型別先提升成 <code>int</code></td><td>算出來的長度是負數或繞回</td><td>整數溢位</td></tr>
+          <tr><td>生命週期結束就不能再用</td><td>透過懸空指標讀寫</td><td>Use-after-free、double free</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        業界的回應有三條路:在 C 裡加防線(本章的警告、消毒器,加上第 36 章的堆疊保護、ASLR、模糊測試);
+        改用會在編譯時檢查生命週期的語言(Rust 的所有權與借用,見<a href="85-rust-ownership.html">第 83 章</a>);
+        或在硬體上替每個指標加上邊界(例如研究中的 CHERI 架構)。不管走哪一條,你都得先懂本章講的「位元組、位址、生命週期」,才知道它們在防什麼。
+        想從攻擊者的角度看這些錯誤,讀<a href="72-ctf-pwn-reverse.html">第 76 章</a>。
+      </p>
+
+      <h2>手算:多位元組存取經過記憶體映射</h2>
+      <p>
+        最後把本章的三件事放在一起:端序、記憶體映射、讀取的副作用。本章 Lab 的匯流排有這幾條規則,我們先用紙筆照規則追一遍:
+      </p>
+      <ol>
+        <li>16、32 位元的存取,一律拆成 2 或 4 次單一位元組存取,<strong>依位址由小到大</strong>:addr、addr + 1、……(位址是 <code>uint32_t</code>,<code>0xFFFFFFFF + 1</code> 繞回 0)。LE 和 BE 都一樣由小到大,差別只在組合:LE 第一個位元組放最低位,BE 第一個位元組放最高位。</li>
+        <li>落在 MMIO 區段裡的位元組,交給那一段的處理函式,並告訴它 <code>offset = addr − base</code>。</li>
+        <li>超出記憶體大小的位址:讀回 <code>0xFF</code>(open bus:這個位址沒有任何東西回應,規格規定讀到 <code>0xFF</code>)、寫入被忽略,而且錯誤計數(faults)加 1。</li>
+      </ol>
+      <p>
+        設定:記憶體大小 <code>0x100</code>(合法位址 <code>0x00</code>–<code>0xFF</code>)。RAM 裡 <code>[0x7E] = 0x11</code>、<code>[0x7F] = 0x22</code>、<code>[0xFE] = 0xAA</code>、<code>[0xFF] = 0xBB</code>。
+        <code>0x80</code>–<code>0x81</code> 是一個 MMIO 區段 SEQ:每次讀回計數器目前的值,然後計數器加 1(一開始是 <code>0x01</code>);每次寫入把 (offset, 值) 記進 LOG。faults 一開始是 0。
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>步驟</th><th>存取</th><th>拆成(依序)</th><th>每次得到</th><th>結果</th><th>之後</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td><code>read16le(0x7E)</code></td><td><code>0x7E</code>、<code>0x7F</code></td><td>11、22</td><td><code>0x2211</code></td><td>計數器 01,faults 0</td></tr>
+          <tr><td>2</td><td><code>read16be(0x7E)</code></td><td><code>0x7E</code>、<code>0x7F</code></td><td>11、22</td><td><code>0x1122</code></td><td>不變</td></tr>
+          <tr><td>3</td><td><code>read16le(0x7F)</code></td><td><code>0x7F</code>、<code>0x80</code>(SEQ,offset 0)</td><td>22、01</td><td><code>0x0122</code></td><td>計數器 02</td></tr>
+          <tr><td>4</td><td><code>read16be(0x80)</code></td><td><code>0x80</code>(offset 0)、<code>0x81</code>(offset 1)</td><td>02、03</td><td><code>0x0203</code></td><td>計數器 04</td></tr>
+          <tr><td>5</td><td><code>read16le(0xFF)</code></td><td><code>0xFF</code>、<code>0x100</code>(超出範圍)</td><td>BB、FF</td><td><code>0xFFBB</code></td><td>faults 1</td></tr>
+          <tr><td>6</td><td><code>write16be(0x80, 0xABCD)</code></td><td>寫 <code>0x80</code> ← AB、寫 <code>0x81</code> ← CD</td><td>—</td><td>LOG:(0, AB)、(1, CD)</td><td>faults 1</td></tr>
+          <tr><td>7</td><td><code>write16le(0x80, 0xABCD)</code></td><td>寫 <code>0x80</code> ← CD、寫 <code>0x81</code> ← AB</td><td>—</td><td>LOG 再加 (0, CD)、(1, AB)</td><td>faults 1</td></tr>
+        </tbody>
+      </table></div>
+      <ul>
+        <li>第 3、4 步:讀 SEQ 會改變計數器,所以「讀幾次、照什麼順序」決定了答案。如果實作偷懶,BE 從高位址往低位址讀,第 4 步就會變成 <code>0x0302</code>。這就是規則 1 要把順序寫死的原因。</li>
+        <li>第 5 步:16 位元讀取的後半超出範圍。前半照常讀到 <code>0xBB</code>,後半是 open bus 的 <code>0xFF</code>,而且只有後半算一次 fault。</li>
+        <li>第 6、7 步:同一個值,BE 和 LE 寫進裝置的位元組順序相反,但位址順序一樣是 offset 0 再 offset 1。</li>
+      </ul>
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 133.6 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>同樣的規則與 RAM,另外 <code>[0x00] = 0x5A</code>;SEQ 的計數器從 <code>0x10</code> 開始,faults 從 0 開始。依序做:(a)<code>read32le(0x7E)</code>;(b)<code>read16be(0xFF)</code>;(c)<code>read16le(0xFFFFFFFF)</code>;(d)<code>write32le(0x7F, 0x01020304)</code>。寫出每一步拆成的單一位元組存取、結果、計數器、faults 與 LOG。</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <div class="table-wrap"><table>
+                <thead><tr><th>步驟</th><th>拆成(依序)</th><th>每次得到</th><th>結果</th><th>之後</th></tr></thead>
+                <tbody>
+                  <tr><td>(a)</td><td><code>0x7E</code>、<code>0x7F</code>、<code>0x80</code>、<code>0x81</code></td><td>11、22、10、11</td><td><code>0x11102211</code></td><td>計數器 12,faults 0</td></tr>
+                  <tr><td>(b)</td><td><code>0xFF</code>、<code>0x100</code>(超出)</td><td>BB、FF</td><td><code>0xBBFF</code></td><td>faults 1</td></tr>
+                  <tr><td>(c)</td><td><code>0xFFFFFFFF</code>(超出)、<code>0x00000000</code>(繞回)</td><td>FF、5A</td><td><code>0x5AFF</code></td><td>faults 2</td></tr>
+                  <tr><td>(d)</td><td>寫 <code>0x7F</code> ← 04、<code>0x80</code> ← 03、<code>0x81</code> ← 02、<code>0x82</code> ← 01</td><td>—</td><td><code>[0x7F] = 04</code>、<code>[0x82] = 01</code>;LOG:(0, 03)、(1, 02)</td><td>faults 2</td></tr>
+                </tbody>
+              </table></div>
+              <p>(a)的 32 位元 LE:第一個位元組 11 放最低位,最後一個 11(SEQ 的第二次讀)放最高位。(c)最容易錯:<code>0xFFFFFFFF + 1</code> 在 <code>uint32_t</code> 上繞回 0,而 0 是合法的 RAM 位址,所以後半讀到 <code>0x5A</code>,只有前半算 fault。(d)一次 32 位元寫入跨過了 RAM、MMIO、RAM 三段,每個位元組各自找自己的那一段。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+      <p>這張表的每一條規則,在本章 Lab 都會變成一組任務目標。</p>
+      <div class="callout note">
+        <div class="ico">🧭</div>
+        <div class="body">
+          <span class="c-title">任務線總覽:emu 模擬器三部曲</span>
+          <p>本章的 Lab 是任務線 emu 的第 1 個任務。這條任務線由上而下設計:先定每個檢查點的 Boss 戰(最後的驗收),再拆成零件;每個任務的任務目標都是某一場 Boss 戰需要的。〔公開〕的用 <code>test</code> 自己跑,其他的是 <code>submit</code> 時的隱藏檢定。</p>
+<pre><code class="language-text">emu(任務線):模擬器三部曲
+├─ 檢查點 1 🏆 CHIP-8 模擬器
+│  ├─ Boss 戰:CHIP-8 隱藏 ROM(8 支 ROM 2 秒內)、CHIP-8 畫面重播(2 秒內)、
+│  │          面板上玩(老師核可)
+│  ├─ 任務 1 位元與記憶體匯流排  emu/bits.h、emu/bus.c  ← 第 51 章 Lab(本章)
+│  │    公開:位元操作、大小端、MMIO 區段
+│  │    隱藏:邊界、錯誤處理、存取順序、只求值一次、沒有未定義行為、
+│  │          效能(1.4×10^7 次存取 1 秒內)
+│  ├─ 任務 2 CHIP-8 CPU          chip8/cpu.c            ← 第 52 章 Lab
+│  │    公開:算術與邏輯、跳躍呼叫與跳過、記憶體指令、計時器、狀態傾印
+│  │    隱藏:旗標的先後、怪癖設定、邊界、錯誤處理、等按鍵、經過自己的匯流排、
+│  │          效能(2×10^7 條指令 1 秒內)
+│  └─ 任務 3 CHIP-8 畫面與按鍵   chip8/display.c        ← 第 52 章 Lab
+│       公開:畫 sprite、畫面 hash 與文字、按鍵
+│       隱藏:邊緣、碰撞旗標、一幀一幀跑、效能(1 秒內)
+├─ 之後:檢查點 2 🏆 Game Boy(DMG)模擬器
+│  ├─ Boss 戰:Game Boy 測試 ROM
+│  ├─ 任務 4 SM83 CPU            gb/cpu.c               ← 書還沒寫(G49-2)
+│  └─ 任務 5 Game Boy 系統       gb/mmu.c、gb/ppu.c     ← 書還沒寫(G49-3)
+└─ 之後:檢查點 3 🏆 GBA 模擬器(solo 版)
+   ├─ Boss 戰:GBA 測試
+   └─ 任務 6 ARM7TDMI            gba/cpu.c              ← 書還沒寫(G49-4)</code></pre>
+          <p>三個檢查點共用任務 1 的匯流排:CHIP-8 用它的大端讀取,Game Boy 和 GBA 用小端、MMIO 區段和 <code>rotr32</code>/<code>sign_extend</code>。全部用 C 寫,判題時用我們的無頭驅動程式跑自寫的測試 ROM,比對暫存器、記憶體與畫面 hash;不用授權不明的第三方 ROM。每個任務目標的一行說明,在<a href="route-embedded.html#mainline-emu">嵌入式路線導讀</a>。</p>
+        </div>
+      </div>
+
+      <h3 id="lab-emu-bus">本章 Lab:位元與記憶體匯流排 emu/bus.c</h3>
+      <div class="callout lab" data-task="emu/bus">
+        <div class="ico">🧪</div>
+        <div class="body">
+          <span class="c-title">本章 Lab · 任務線「emu」· 任務「位元與記憶體匯流排」</span>
+          <p><strong>對應地下城任務:</strong>任務「位元與記憶體匯流排」(任務線:emu 模擬器三部曲,第 1 個任務)。零件檔:<code>~/零件庫/emu/bits.h</code>、<code>~/零件庫/emu/bus.c</code>。
+          規格標頭 <code>~/零件庫/emu/bus.h</code> 由任務給(起始碼),判題一律用規格版,不要改它。</p>
+          <p><strong>要做的零件:</strong>兩個檔。<code>bits.h</code> 是一組位元與端序的小函式(本章「遮罩與移位」「符號延伸」「大小端」三節的規則);<code>bus.c</code> 是模擬器的記憶體匯流排:一塊 RAM,加上可以在執行時登錄的 MMIO 區段,CPU 的每一次讀寫都經過它。前面「手算:多位元組存取經過記憶體映射」的三條規則就是 <code>bus.c</code> 的規格。</p>
+          <p><strong>介面:</strong></p>
+<pre><code class="language-c">// ~/零件庫/emu/bits.h:你自己寫(header-only)
+// 每個都寫成 static inline 函式(不是巨集);每個參數只求值一次;
+// width 0..32、n 0..31 都不能有未定義行為(例如不能寫 1u &lt;&lt; 32)。
+#include &lt;stdint.h&gt;
+
+static inline uint32_t mask(unsigned width);                    // 低 width 位全是 1;mask(0)=0、mask(32)=0xFFFFFFFF
+static inline uint32_t bit_get(uint32_t x, unsigned n);         // 第 n 位,回傳 0 或 1
+static inline uint32_t bit_set(uint32_t x, unsigned n, int v);  // 第 n 位設成 v(非 0 當 1),回傳新值
+static inline uint32_t bits_get(uint32_t x, unsigned lo, unsigned width);              // 取出 [lo, lo+width)
+static inline uint32_t bits_set(uint32_t x, unsigned lo, unsigned width, uint32_t v);  // 那段換成 v 的低 width 位
+static inline int32_t  sign_extend(uint32_t x, unsigned width); // 低 width 位當二補數(width 1..32)
+static inline uint32_t rotr32(uint32_t x, unsigned n);          // 右旋 n % 32 位
+
+static inline uint16_t load16_le(const uint8_t *p);
+static inline uint16_t load16_be(const uint8_t *p);
+static inline uint32_t load32_le(const uint8_t *p);
+static inline uint32_t load32_be(const uint8_t *p);
+static inline void store16_le(uint8_t *p, uint16_t v);
+static inline void store16_be(uint8_t *p, uint16_t v);
+static inline void store32_le(uint8_t *p, uint32_t v);
+static inline void store32_be(uint8_t *p, uint32_t v);</code></pre>
+<pre><code class="language-c">// ~/零件庫/emu/bus.h:規格標頭(任務給的,不要改;判題用這一份)
+#ifndef EMU_BUS_H
+#define EMU_BUS_H
+#include &lt;stdint.h&gt;
+#include &lt;stddef.h&gt;
+
+#define BUS_OPEN 0xFFu             // 沒有東西回應的位址讀到的值(open bus)
+#define BUS_MAX_REGIONS 16         // 最多 16 個 MMIO 區段
+#define BUS_MAX_SIZE (1u &lt;&lt; 24)    // 匯流排最大 16 MiB
+
+typedef struct Bus Bus;            // 不透明:struct Bus 在你的 bus.c 裡定義
+typedef uint8_t (*bus_read_fn)(void *ctx, uint32_t offset);               // offset = addr - base
+typedef void (*bus_write_fn)(void *ctx, uint32_t offset, uint8_t value);
+
+Bus *bus_new(uint32_t size);       // RAM 0..size-1 全是 0;size 是 0 或大於 BUS_MAX_SIZE → NULL
+void bus_free(Bus *b);             // b 是 NULL 時什麼都不做
+uint32_t bus_size(const Bus *b);
+
+// 把 [base, base+len) 交給裝置:成功回 0。
+// len 是 0、超出 [0, size)、和已經註冊的區段重疊、已經有 16 段 → 回 -1,什麼都不改。
+// rd 是 NULL:讀回 BUS_OPEN;wr 是 NULL:寫入被忽略。
+int bus_map(Bus *b, uint32_t base, uint32_t len, bus_read_fn rd, bus_write_fn wr, void *ctx);
+
+// 落在區段裡 → 呼叫 rd/wr(ctx, addr - base);其他位址是 RAM。
+// 超出 [0, size):讀回 BUS_OPEN、寫入被忽略,而且 bus_faults 加 1。
+uint8_t bus_read8(Bus *b, uint32_t addr);
+void bus_write8(Bus *b, uint32_t addr, uint8_t v);
+
+// 多位元組存取一律拆成 read8/write8,依位址由小到大:addr、addr+1、…(uint32_t 自然進位)。
+uint16_t bus_read16le(Bus *b, uint32_t addr);
+uint16_t bus_read16be(Bus *b, uint32_t addr);
+void bus_write16le(Bus *b, uint32_t addr, uint16_t v);
+void bus_write16be(Bus *b, uint32_t addr, uint16_t v);
+uint32_t bus_read32le(Bus *b, uint32_t addr);
+void bus_write32le(Bus *b, uint32_t addr, uint32_t v);
+
+// 直接寫進 RAM(不經過 MMIO 區段):成功回 0;超出範圍回 -1,一個位元組都不寫。
+int bus_load(Bus *b, uint32_t addr, const uint8_t *data, uint32_t n);
+uint32_t bus_faults(const Bus *b); // 到目前為止超出範圍的存取次數
+#endif</code></pre>
+          <p><strong>公開範例:</strong>(編譯:<code>gcc -std=c17 -Wall -Werror -O2 -I ~/零件庫 bus_demo.c ~/零件庫/emu/bus.c -o bus_demo</code>):</p>
+<pre><code class="language-c">// bus_demo.c:公開範例(用你的 emu/bits.h 與 emu/bus.c)
+#include &lt;stdio.h&gt;
+#include "emu/bits.h"
+#include "emu/bus.h"
+
+// 一個「計數器」裝置:每讀一次回傳目前的值再加 1;寫入記下最後一次的 offset 與值
+struct counter { uint8_t next; uint32_t last_off; uint8_t last_val; };
+static uint8_t ctr_read(void *ctx, uint32_t off) {
+    struct counter *c = ctx;
+    (void)off;
+    return c-&gt;next++;
+}
+static void ctr_write(void *ctx, uint32_t off, uint8_t v) {
+    struct counter *c = ctx;
+    c-&gt;last_off = off;
+    c-&gt;last_val = v;
+}
+
+int main(void) {
+    printf("%08X %08X %08X\n", (unsigned)mask(0), (unsigned)mask(5), (unsigned)mask(32));
+    printf("%u %08X %X\n", (unsigned)bit_get(0x80, 7), (unsigned)bit_set(0, 31, 1),
+           (unsigned)bits_get(0xABCD, 4, 8));
+    printf("%08X %d %d\n", (unsigned)bits_set(0xFFFF, 4, 4, 0x15), (int)sign_extend(0xFE, 8),
+           (int)sign_extend(0x7FF, 12));
+    printf("%08X %08X\n", (unsigned)rotr32(0x12345678, 8), (unsigned)rotr32(0x12345678, 32));
+
+    uint8_t buf[4];
+    store32_le(buf, 0x11223344);
+    printf("%02X %02X %02X %02X -&gt; be %08X\n", buf[0], buf[1], buf[2], buf[3], (unsigned)load32_be(buf));
+
+    Bus *b = bus_new(0x1000);
+    struct counter dev = {0x40, 0, 0};
+    printf("map=%d\n", bus_map(b, 0x800, 0x10, ctr_read, ctr_write, &amp;dev));
+    printf("overlap=%d\n", bus_map(b, 0x80F, 4, ctr_read, NULL, &amp;dev));
+    bus_write16be(b, 0x100, 0xBEEF);
+    printf("%02X %02X %04X %04X\n", bus_read8(b, 0x100), bus_read8(b, 0x101),
+           bus_read16le(b, 0x100), bus_read16be(b, 0x100));
+    uint16_t le = bus_read16le(b, 0x800);   // 裝置被讀兩次:0x40、0x41
+    uint16_t be = bus_read16be(b, 0x800);   // 再兩次:0x42、0x43
+    printf("dev: %04X %04X\n", le, be);
+    bus_write8(b, 0x805, 0x99);
+    printf("dev last: off=%u val=%02X\n", (unsigned)dev.last_off, dev.last_val);
+    uint8_t open = bus_read8(b, 0x1000);    // 超出範圍
+    printf("out of range: %02X faults=%u\n", open, (unsigned)bus_faults(b));
+    uint8_t rom[3] = {1, 2, 3};
+    printf("load=%d load=%d\n", bus_load(b, 0xFFD, rom, 3), bus_load(b, 0xFFE, rom, 3));
+    bus_free(b);
+    printf("bad size: %s\n", bus_new(0) == NULL ? "NULL" : "?");
+    return 0;
+}</code></pre>
+          <p>輸出:</p>
+<pre><code class="language-text">00000000 0000001F FFFFFFFF
+1 80000000 BC
+0000FF5F -2 2047
+78123456 12345678
+44 33 22 11 -&gt; be 44332211
+map=0
+overlap=-1
+BE EF EFBE BEEF
+dev: 4140 4243
+dev last: off=5 val=99
+out of range: FF faults=1
+load=0 load=-1
+bad size: NULL</code></pre>
+          <p>注意 <code>le</code>、<code>be</code> 分兩行讀:同一個 <code>printf</code> 裡呼叫兩次有副作用的讀取,C 不規定哪一個先算。</p>
+          <p><strong>和本章範例不同的地方:</strong>可以參考本章的範例,但介面和要求不同,要自己改寫。</p>
+          <ul>
+            <li>本章的 <code>BIT</code>、<code>LOW_ONES</code>、<code>FIELD_GET</code>、<code>FIELD_PUT</code> 是巨集,參數會展開好幾次,寬度 32 是未定義行為;Lab 要 <code>static inline</code> 函式,每個參數只求值一次,寬度 0 和 32 都要對。</li>
+            <li>本章的 <code>get_le16</code> 這類函式只有 16 位元;Lab 另外要 32 位元的 LE/BE、<code>sign_extend</code> 的任意寬度(本章的 <code>sext12</code> 只有 12 位元)與 <code>rotr32</code>。</li>
+            <li>本章「從分派表到記憶體映射」的表是寫死的、位址只有 8 位元、處理函式拿到完整位址、讀不到的位址回 0、只處理單一位元組;Lab 的 <code>bus_map</code> 在執行時登錄、拒絕重疊、處理函式拿到 <code>ctx</code> 和 <code>offset</code>,超出範圍讀回 <code>0xFF</code> 並記進 <code>bus_faults</code>,16、32 位元存取依位址由小到大拆開。</li>
+            <li>本章的範例用全域陣列當 RAM;Lab 的 <code>Bus</code> 是不透明型別,可以同時有好幾個,大小在 <code>bus_new</code> 決定。</li>
+          </ul>
+          <p><strong>任務目標</strong>(公開的用 <code>test</code> 自己跑;隱藏檢定在 <code>submit</code> 時跑,只看得到名稱和一行說明):</p>
+          <ul class="lab-goals">
+            <li data-group="bus.bits">☐ <strong>位元操作</strong>〔公開〕mask、bit_get、bit_set、bits_get、bits_set、sign_extend、rotr32 對公開範例。</li>
+            <li data-group="bus.endian">☐ <strong>大小端</strong>〔公開〕load/store 16、32 位元的 LE 與 BE 對位元組陣列;bus_read16be/le、bus_write16be/le、bus_read32le/bus_write32le 對 RAM。</li>
+            <li data-group="bus.mmio">☐ <strong>MMIO 區段</strong>〔公開〕bus_map 註冊之後,區段裡的讀寫交給你的處理函式,帶回登錄時的 ctx 與 offset(addr - base);區段外照常讀寫 RAM。</li>
+            <li data-group="bus.edge">☐ <strong>邊界</strong>〔隱藏檢定〕寬度 0、1、31、32;位置 0 與 31;rotr32 旋轉 0 與 32;最後一個位元組上的 16 位元存取(後半超出範圍);位址 0xFFFFFFFF 的進位;size 1 與 2<sup>24</sup> 的匯流排;剛好相鄰(不重疊)的兩個區段。</li>
+            <li data-group="bus.errors">☐ <strong>錯誤處理</strong>〔隱藏檢定〕bus_new 的 size 不合法回 NULL;bus_map 重疊、超出範圍、len 0、第 17 段都回 -1 而且之前的區段照常運作;超出範圍的讀寫回 0xFF、寫入被忽略、bus_faults 正確;bus_load 超出範圍回 -1 而且一個位元組都沒寫;rd/wr 是 NULL 的區段。</li>
+            <li data-group="bus.order">☐ <strong>存取順序</strong>〔隱藏檢定〕16、32 位元的存取落在 MMIO 區段時,處理函式被呼叫的次數剛好是 2 或 4 次,而且依位址由小到大(LE 與 BE 都一樣);bus_load 不呼叫處理函式。</li>
+            <li data-group="bus.inline">☐ <strong>只求值一次</strong>〔隱藏檢定〕bits.h 的每個函式,參數有副作用(例如 a[i++])時只發生一次;兩個 .c 檔同時 include bits.h 也能連結(static inline)。</li>
+            <li data-group="bus.ub">☐ <strong>沒有未定義行為</strong>〔隱藏檢定〕用 -fsanitize=undefined,address -fno-sanitize-recover=all 重新編譯,跑一遍邊界與錯誤處理的案例:不能有超過寬度的位移、有號數溢位或越界存取。</li>
+            <li data-group="bus.perf">☐ <strong>效能</strong>〔隱藏檢定〕RAM 讀寫要 O(1);找 MMIO 區段只能和區段數成正比(最多 16 段),不能和區段的長度成正比。門檻:10<sup>7</sup> 次 RAM 讀寫＋2×10<sup>6</sup> 次 MMIO 存取(16 段、每段 4 KiB)＋2×10<sup>6</sup> 次 16 位元存取,1 秒內。這個門檻來自 Boss 戰「CHIP-8 隱藏 ROM」(8 支 ROM 合計 8×10<sup>6</sup> 個週期要在 2 秒內批改完,每個週期至少經過匯流排讀 2 個位元組)與任務「CHIP-8 CPU」的效能目標(2×10<sup>7</sup> 條指令 1 秒內)。</li>
+          </ul>
+          <p><strong>規則:</strong>只交 <code>bits.h</code> 與 <code>bus.c</code>,只用 C 標準函式庫;<code>bus.c</code> 要 <code>#include "emu/bus.h"</code>,<code>struct Bus</code> 在 <code>bus.c</code> 裡定義。編譯指令由檢定產生(<code>-std=c17 -Wall -Werror -O2 -I ~/零件庫</code>),警告就是錯誤;「沒有未定義行為」這一組另外加消毒器重新編譯一次(本章「生命週期錯誤與消毒器」一節)。</p>
+          <p><strong>之後會用在:</strong><a href="134-chip8-emulator.html#lab-chip8-cpu">第 52 章的 CHIP-8 CPU</a>(取指和所有記憶體指令都經過你的匯流排)與<a href="134-chip8-emulator.html#lab-chip8-display">畫面與按鍵</a>(讀 sprite);檢查點 1 的 Boss 戰「CHIP-8 隱藏 ROM」「CHIP-8 畫面重播」。之後的 Game Boy(SM83 CPU)與 GBA(ARM7TDMI)模擬器用同一個匯流排;大學段 CTF(任務線 pwn)的 Boss 戰也會用到它。</p>
+          <p class="lab-rule">這個零件過關之後,後面的專題一律用你自己的版本。規則見<a href="00-about.html#lab-rules">零件庫規則</a>。</p>
+        </div>
+      </div>
+
+      <h2>動手練習</h2>
+      <p>每一題都先在紙上算,再打開解答。程式題都可以用 <code>gcc -std=c17 -Wall -Wextra</code> 編譯驗證。</p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 133.1 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p><code>uint32_t buf[8];</code> 從位址 <code>0x2000</code> 開始。寫出 <code>(uint8_t *)buf + 5</code>、<code>buf + 5</code>、<code>&amp;buf + 1</code>、<code>(uint16_t *)(buf + 1) + 3</code> 的位址,以及 <code>&amp;buf[6] - &amp;buf[2]</code> 的值。</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p><code>0x2005</code>、<code>0x2014</code>(5 × 4 = 20 = 0x14)、<code>0x2020</code>(整個陣列 32 個位元組)、<code>0x200A</code>(先走 4 個位元組,再走 3 × 2 = 6 個)、4。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 133.2 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>這段程式想把整個陣列清成 0。它印出什麼?為什麼?怎麼改?</p>
+<pre><code class="language-c">#include &lt;stdio.h&gt;
+#include &lt;string.h&gt;
+
+void zero(int a[]) {
+    memset(a, 0, sizeof a);       // 想把整個陣列清成 0
+}
+
+int main(void) {
+    int a[5] = {1, 2, 3, 4, 5};
+    zero(a);
+    for (int i = 0; i &lt; 5; i++) printf("%d ", a[i]);
+    printf("\n");
+    return 0;
+}</code></pre>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+<pre><code class="language-text">0 0 3 4 5 </code></pre>
+              <p><code>int a[]</code> 當參數就是 <code>int *a</code>,<code>sizeof a</code> 是指標的 8 個位元組,只清掉前 2 個 <code>int</code>。gcc 給了兩個警告:</p>
+<pre><code class="language-text">ex_zero.c: In function ‘zero’:
+ex_zero.c:5:25: warning: ‘sizeof’ on array function parameter ‘a’ will return size of ‘int *’ [-Wsizeof-array-argument]
+    5 |     memset(a, 0, sizeof a);       // 想把整個陣列清成 0
+      |                         ^
+ex_zero.c:4:15: note: declared here
+    4 | void zero(int a[]) {
+      |           ~~~~^~~
+ex_zero.c:5:25: warning: argument to ‘sizeof’ in ‘memset’ call is the same expression as the destination; did you mean to dereference it? [-Wsizeof-pointer-memaccess]
+    5 |     memset(a, 0, sizeof a);       // 想把整個陣列清成 0
+      |                         ^</code></pre>
+              <p>改法:多傳一個長度,<code>void zero(int *a, size_t n) { memset(a, 0, n * sizeof a[0]); }</code>,呼叫時寫 <code>zero(a, sizeof a / sizeof a[0])</code>(這個 <code>sizeof</code> 在 <code>main</code> 裡,<code>a</code> 還是陣列)。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 133.3 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p><code>struct E { char a; double b; char c; int d; short e; };</code> 在 x86-64 上多大?把成員重新排列,讓它最小,並用 <code>_Static_assert</code> 把你算出的大小釘住。</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p>原本:<code>a</code> 0、<code>b</code> 8(補 7)、<code>c</code> 16、<code>d</code> 20(補 3)、<code>e</code> 24,放完是 26,補到 8 的倍數:<strong>32</strong>。由大到小重排:</p>
+<pre><code class="language-c">#include &lt;stddef.h&gt;
+
+struct E2 { double b; int d; short e; char a; char c; };   // 8 + 4 + 2 + 1 + 1 = 16
+_Static_assert(sizeof(struct E2) == 16, "struct E2 應該是 16 位元組");
+_Static_assert(offsetof(struct E2, a) == 14, "a 應該在位移 14");
+
+int main(void) { return 0; }</code></pre>
+              <p>16 位元組,沒有任何填補(16 剛好是 8 的倍數)。資料一樣,省了一半的記憶體;一百萬個元素的陣列就差 16 MB。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 133.4 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>這段程式的 <code>status</code> 裡,<code>READY</code> 那一位是 0。它會印出「看起來 READY 了」嗎?</p>
+<pre><code class="language-c">#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+
+#define READY 0x80u
+
+int main(void) {
+    uint32_t status = 0x02;       // READY 位元是 0
+    if (status &amp; READY == READY) {        // 錯誤示範
+        printf("看起來 READY 了\n");
+    }
+    if ((status &amp; READY) == READY) {
+        printf("真的 READY 了\n");
+    }
+    printf("status &amp; READY == READY 的值是 %u\n", (unsigned)(status &amp; READY == READY));
+    return 0;
+}</code></pre>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+<pre><code class="language-text">status &amp; READY == READY 的值是 0</code></pre>
+              <p>兩個 <code>if</code> 都沒印。但第一個 <code>if</code> 是錯的,只是這次剛好沒印:<code>==</code> 的優先順序比 <code>&amp;</code> 高,所以 <code>status &amp; READY == READY</code> 是 <code>status &amp; (READY == READY)</code>,也就是 <code>status &amp; 1</code>,
+              檢查的是第 0 位。<code>status = 0x02</code> 的第 0 位是 0,所以印出 0;換成 <code>status = 0x01</code>,READY 明明是 0,第一個 <code>if</code> 卻會成立。gcc 的 <code>-Wall</code> 有警告(<code>-Wparentheses</code>):</p>
+<pre><code class="language-text">ex_prec.c: In function ‘main’:
+ex_prec.c:8:16: warning: suggest parentheses around comparison in operand of ‘&amp;’ [-Wparentheses]
+    8 |     if (status &amp; READY == READY) {        // 錯誤示範
+      |                ^
+ex_prec.c:14:69: warning: suggest parentheses around comparison in operand of ‘&amp;’ [-Wparentheses]
+   14 |     printf("status &amp; READY == READY 的值是 %u\n", (unsigned)(status &amp; READY == READY));
+      |                                                                     ^</code></pre>
+              <p>規則:位元運算一律加括號。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 133.5 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>回到本章的 <code>FIELD_GET</code> 與 <code>FIELD_PUT</code> 巨集。(1)哪些 <code>lo</code>、<code>w</code> 的組合會有未定義行為?(2)<code>FIELD_PUT(x, lo, w, v)</code> 裡,哪幾個參數會被展開不只一次?<code>FIELD_PUT(r, i++, 4, 9)</code> 有什麼問題?</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p>(1)<code>LOW_ONES(w)</code> 是 <code>(1u &lt;&lt; w) - 1u</code>:<strong>w ≥ 32</strong> 時移位量不小於寬度,是未定義行為。<code>x &gt;&gt; lo</code> 與 <code>... &lt;&lt; lo</code>:<strong>lo ≥ 32</strong> 也是。另外 lo + w &gt; 32 時雖然沒有未定義行為,但欄位的高位會被移出去,結果不是你要的。</p>
+              <p>(2)<code>lo</code> 出現兩次、<code>w</code> 出現兩次,<code>x</code> 和 <code>v</code> 各一次。<code>FIELD_PUT(r, i++, 4, 9)</code> 展開後有兩個 <code>i++</code>,而且它們之間沒有序列點,是未定義行為。
+              <code>static inline</code> 函式不會有這個問題:參數在呼叫前就算好一次。本章 Lab 規定 <code>bits.h</code> 要用函式、每個參數只求值一次,也要處理寬度 0 與 32,就是為了這兩個坑。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 133.6 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>一個網路封包的前兩個位元組是長度,規格說是「網路位元組順序」。收到的位元組是 <code>01 F4</code>。(1)長度是多少?(2)在 x86-64 上寫 <code>uint16_t n; memcpy(&amp;n, pkt, 2);</code> 會得到多少?(3)用本章哪個函式讀才對?</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p>(1)網路位元組順序是大端序:<code>0x01F4</code> = 500。(2)<code>memcpy</code> 照主機的小端序解讀:<code>0xF401</code> = 62465。(3)<code>get_be16(pkt)</code>,它在任何機器上都得到 500。
+              (POSIX 也有 <code>ntohs</code> 做同樣的事,<a href="25-networking.html">第 33 章</a>的 socket 程式會用到。)</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 133.7 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>有人這樣寫 16 位元有號數的符號延伸:<code>int32_t v = (x &amp; 0x8000) ? (int32_t)(x | 0xFFFF0000) : (int32_t)x;</code>,x 是 <code>uint32_t</code>,只有低 16 位有值。這樣對嗎?有沒有和機器有關的地方?</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p>位元的想法是對的:符號位元是 1 就把高 16 位補 1。例如 x = <code>0x8000</code>,<code>x | 0xFFFF0000</code> = <code>0xFFFF8000</code>。
+              但最後一步把 <code>0xFFFF8000</code>(大於 <code>INT32_MAX</code> 的無號數)轉成 <code>int32_t</code>,在 C17 是<strong>實作定義</strong>的;gcc 規定照位元解讀,得到 −32768,所以在 gcc 上會對。
+              想完全不依賴實作,可以用本章的 <code>(x ^ 0x8000) - 0x8000</code>,全部在 <code>int32_t</code> 的範圍裡算,或是 <code>(int32_t)(int16_t)x</code> 搭配 gcc 的規定。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 133.8 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>下面哪些變數該加 <code>volatile</code>?哪些加了也沒用,應該用別的東西?</p>
+          <ol>
+            <li>計時器中斷服務程式每 1 毫秒把 <code>ticks</code> 加 1,主程式讀 <code>ticks</code> 來計算經過的時間。</li>
+            <li>兩個執行緒共用的計數器 <code>hits</code>,都會做 <code>hits++</code>。</li>
+            <li>指向 GPIO 輸入暫存器(按鈕的狀態)的指標。</li>
+            <li>一張只讀的查表 <code>sine_table[256]</code>。</li>
+            <li>拿來「空轉等待」的迴圈變數:<code>for (int i = 0; i &lt; 100000; i++) { }</code>。</li>
+          </ol>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <ol>
+                <li>要 <code>volatile</code>(被 ISR 改)。如果 <code>ticks</code> 比 CPU 一次能讀寫的寬度還大(例如 8 位元 CPU 上的 32 位元變數),讀的時候還要暫時關中斷,因為 <code>volatile</code> 不保證一次讀完。</li>
+                <li><code>volatile</code> 沒用:<code>hits++</code> 不是原子的。用 <code>_Atomic</code>(<code>atomic_fetch_add</code>)或互斥鎖。</li>
+                <li>要,而且是 <code>const volatile</code>:程式不寫它,但按鈕會改變它。</li>
+                <li>不要 <code>volatile</code>,要 <code>static const</code>:它不會變,讓編譯器盡量最佳化,還能放進 Flash。</li>
+                <li>不加 <code>volatile</code>,整個迴圈會被最佳化刪掉;加了雖然會留下來,但延遲的長短取決於時脈與編譯器,不可靠。要等一段時間,用硬體計時器。</li>
+              </ol>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 133.9 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>用「從名字往左讀」說出每個宣告的意思,並說出哪些東西可以改:(1)<code>const char *msg</code>;(2)<code>char *const buf</code>;(3)<code>const uint8_t *const rom</code>;(4)<code>volatile uint32_t *const GPIO_OUT</code>;(5)<code>int (*handlers[4])(int)</code>。</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <ol>
+                <li>msg 是指標,指向 const char:可以改指別的字串,不能透過它改字元。</li>
+                <li>buf 是 const 指標,指向 char:永遠指同一塊,但可以改裡面的字元。</li>
+                <li>rom 是 const 指標,指向 const uint8_t:兩個都不能改(適合模擬器裡的 ROM 映像)。</li>
+                <li>GPIO_OUT 是 const 指標,指向 volatile uint32_t:位址固定,每次寫入都會真的做出來(寫韌體時的輸出暫存器)。</li>
+                <li>handlers 是 4 個元素的陣列,每個元素是指標,指向「吃一個 int、回傳 int 的函式」:一張分派表。用 <code>typedef int (*handler)(int); handler handlers[4];</code> 比較好讀。</li>
+              </ol>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 133.10 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>擴充本章的分派表小機器:加一個 opcode 4 是 SHL(<code>acc</code> 左移 arg 位),並讓它遇到表裡沒有的 opcode 時印出訊息、停下來,而不是當機。用程式 <code>{0x03, 0x42, 0x11, 0x77}</code> 測試。</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+<pre><code class="language-c">#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+
+static int add(int a, int b) { return a + b; }
+static int sub(int a, int b) { return a - b; }
+static int mul(int a, int b) { return a * b; }
+static int shl(int a, int b) { return (int)((unsigned)a &lt;&lt; b); }   // 新增:左移
+
+typedef int (*binop)(int, int);
+enum { OP_LOAD, OP_ADD, OP_SUB, OP_MUL, OP_SHL, OP_COUNT };
+
+int main(void) {
+    static const binop table[OP_COUNT] = {
+        [OP_ADD] = add, [OP_SUB] = sub, [OP_MUL] = mul, [OP_SHL] = shl,
+    };
+    const uint8_t prog[] = {0x03, 0x42, 0x11, 0x77};   // LOAD 3; SHL 2; ADD 1; 不存在的 opcode 7
+    int acc = 0;
+    for (size_t pc = 0; pc &lt; sizeof prog; pc++) {
+        unsigned op = prog[pc] &gt;&gt; 4, arg = prog[pc] &amp; 0x0F;
+        if (op == OP_LOAD) {
+            acc = (int)arg;
+        } else if (op &lt; OP_COUNT &amp;&amp; table[op] != NULL) {
+            acc = table[op](acc, (int)arg);
+        } else {
+            printf("pc %zu:不認得的 opcode %u,停止\n", pc, op);
+            break;
+        }
+        printf("pc %zu:acc %d\n", pc, acc);
+    }
+    return 0;
+}</code></pre>
+              <p>輸出:</p>
+<pre><code class="language-text">pc 0:acc 3
+pc 1:acc 12
+pc 2:acc 13
+pc 3:不認得的 opcode 7,停止</code></pre>
+              <p>LOAD 3;SHL 2 得 12;ADD 1 得 13;<code>0x77</code> 的 opcode 是 7,超出表的範圍,停下來。<code>shl</code> 先轉成 <code>unsigned</code> 再移,避免有號數左移的未定義行為。<code>OP_COUNT</code> 放在 <code>enum</code> 最後,表的長度和檢查用同一個常數,加新 opcode 時不會忘了改。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 133.11 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>這段程式「能跑」,印出 <code>chip8</code>。用 ASan 找出它的錯誤,並修好。</p>
+<pre><code class="language-c">#include &lt;stdio.h&gt;
+#include &lt;stdlib.h&gt;
+#include &lt;string.h&gt;
+
+static char *dup_name(const char *s) {
+    char *p = malloc(strlen(s));          // 錯誤示範:少算了什麼?
+    if (p == NULL) return NULL;
+    strcpy(p, s);
+    return p;
+}
+
+int main(void) {
+    char *n = dup_name("chip8");
+    if (n == NULL) return 1;
+    printf("%s\n", n);
+    free(n);
+    return 0;
+}</code></pre>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p>用 <code>gcc -std=c17 -Wall -Wextra -g -fsanitize=address,undefined</code> 編譯後執行,ASan 報告(節錄):</p>
+<pre><code class="language-text">==63270==ERROR: AddressSanitizer: heap-buffer-overflow on address 0x502000000015 at pc 0x799ee52a7923 bp 0x7fff0f99a710 sp 0x7fff0f999eb8
+WRITE of size 6 at 0x502000000015 thread T0
+    #0 0x799ee52a7922 in strcpy ../../../../src/libsanitizer/asan/asan_interceptors.cpp:563
+    #1 0x5fa1394c72f3 in dup_name ex_offby1.c:8
+    #2 0x5fa1394c7314 in main ex_offby1.c:13
+    …
+0x502000000015 is located 0 bytes after 5-byte region [0x502000000010,0x502000000015)
+allocated by thread T0 here:
+    #0 0x799ee52fd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5fa1394c72a2 in dup_name ex_offby1.c:6
+    #2 0x5fa1394c7314 in main ex_offby1.c:13
+    …
+SUMMARY: AddressSanitizer: heap-buffer-overflow ../../../../src/libsanitizer/asan/asan_interceptors.cpp:563 in strcpy
+    …
+==63270==ABORTING</code></pre>
+              <p><code>strlen("chip8")</code> 是 5,不含結尾的 <code>'\0'</code>;<code>strcpy</code> 要寫 6 個位元組(<code>WRITE of size 6</code>),最後一個寫在 5 個位元組區塊的「後面 0 個位元組」,也就是剛好越界一格。
+              改成 <code>malloc(strlen(s) + 1)</code>。沒有 ASan 時它「能跑」,是因為 <code>malloc</code> 通常會多給一點空間;換一種配置器,或剛好多寫的那一格屬於別人,就會壞掉。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 133.12 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>一個封包標頭的線上格式是:1 個位元組的 tag,接著 2 個位元組的 len,接著 4 個位元組的 crc,全部大端序、中間沒有空隙,共 7 個位元組。
+          有人寫 <code>struct header *h = (struct header *)wire;</code> 直接讀。說出這樣做的三個問題,並寫一個一個欄位讀出來的 <code>parse_header</code>。測試資料 <code>01 00 2A DE AD BE EF</code>。</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p>三個問題:(1)<strong>填補</strong>:<code>struct header</code> 在記憶體裡 <code>len</code> 在位移 2、<code>crc</code> 在位移 4,總共 8 個位元組,和線上格式的位移 1、3 對不上;
+              (2)<strong>端序</strong>:就算位移對了,x86-64 也會用小端序解讀;(3)<strong>對齊與嚴格別名</strong>:<code>wire</code> 是 <code>uint8_t</code> 陣列,不保證對齊 4,用 <code>struct</code> 型別讀它是未定義行為。</p>
+<pre><code class="language-c">#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+#include &lt;stddef.h&gt;
+
+struct header { uint8_t tag; uint16_t len; uint32_t crc; };   // 記憶體裡:tag@0、len@2、crc@4
+
+static uint16_t get_be16(const uint8_t *p) { return (uint16_t)((p[0] &lt;&lt; 8) | p[1]); }
+
+// 從線上格式(緊密排列、大端序)一個欄位一個欄位讀出來,不把 struct 直接蓋在緩衝區上
+static struct header parse_header(const uint8_t *buf) {
+    struct header h;
+    h.tag = buf[0];
+    h.len = get_be16(buf + 1);
+    h.crc = ((uint32_t)get_be16(buf + 3) &lt;&lt; 16) | get_be16(buf + 5);
+    return h;
+}
+
+int main(void) {
+    const uint8_t wire[7] = {0x01, 0x00, 0x2A, 0xDE, 0xAD, 0xBE, 0xEF};
+    struct header h = parse_header(wire);
+    printf("tag %u, len %u, crc 0x%08X\n", (unsigned)h.tag, (unsigned)h.len, (unsigned)h.crc);
+    printf("sizeof(struct header) = %zu,線上格式只有 7 個位元組\n", sizeof(struct header));
+    return 0;
+}</code></pre>
+              <p>輸出:</p>
+<pre><code class="language-text">tag 1, len 42, crc 0xDEADBEEF
+sizeof(struct header) = 8,線上格式只有 7 個位元組</code></pre>
+              <p>32 位元的 crc 用兩次 <code>get_be16</code> 組起來:<code>0xDEAD &lt;&lt; 16 | 0xBEEF</code>。注意要先轉成 <code>uint32_t</code> 再左移 16,否則 <code>uint16_t</code> 會提升成 <code>int</code>,<code>0xDEAD &lt;&lt; 16</code> 超過 <code>INT_MAX</code>,又是有號溢位。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>把這一章串起來</h2>
+      <ul>
+        <li><strong>指標運算</strong>以「指向的型別」為單位;<code>&amp;a</code> 是指向整個陣列的指標;只能在陣列範圍內(含最後一格的下一格)移動。</li>
+        <li><strong>陣列會退化</strong>成指標,長度就不見了:<code>sizeof</code> 只在宣告陣列的地方有用,傳進函式要另外傳長度。要改呼叫端的指標,就傳<strong>指向指標的指標</strong>。</li>
+        <li><strong>struct 佈局</strong>:每個成員補到自己的對齊值,總大小補到最大的對齊值;大的成員排前面比較省;用 <code>offsetof</code> 與 <code>_Static_assert</code> 把手算的佈局釘住。</li>
+        <li><strong>位元欄位</strong>的位置和存取寬度是實作定義的,外面規定位元位置時改用定寬整數加遮罩。</li>
+        <li><strong>定寬整數</strong>:<code>&lt;stdint.h&gt;</code> 給確定的大小,但比 <code>int</code> 小的型別運算時會先提升成有號的 <code>int</code>。</li>
+        <li><strong>遮罩與移位</strong>:<code>|=</code> 設、<code>&amp;= ~</code> 清、<code>^=</code> 翻轉、移位加遮罩取出與替換欄位。移位量不能等於或超過寬度;位元運算用無號數、加括號。</li>
+        <li><strong>符號延伸</strong>:變寬時補什麼看來源的型別;任意寬度用 <code>(x ^ s) - s</code>。「是不是負數」要先說好寬度。</li>
+        <li><strong>大小端</strong>:LE 最小的位址放最低的位元組;用移位拼位元組,結果就和主機無關。</li>
+        <li><strong>const</strong> 是「透過這個名字不能改」的約定;<strong>volatile</strong> 讓每一次存取都真的做出來,但不保證原子性、不是執行緒同步工具。</li>
+        <li><strong>函式指標</strong>讓分派表與記憶體映射成為可能:用 opcode 或位址查到要呼叫的函式;讀取可能有副作用,所以存取的次數與順序是規格的一部分。</li>
+        <li><strong>生命週期</strong>:區域變數活到區塊結束,<code>malloc</code> 的活到 <code>free</code>。懸空指標「看起來正常」最危險;用 <code>-Wall -Wextra</code> 與 <code>-fsanitize=address,undefined</code> 把它們抓出來。</li>
+      </ul>
+      <p>
+        下一步:做完本章 Lab 的 <code>emu/bits.h</code> 與 <code>emu/bus.c</code>,再到<a href="134-chip8-emulator.html">第 52 章</a>用它們蓋出一台 CHIP-8。
+        想先看這些錯誤怎麼變成漏洞,讀<a href="36-secure-coding.html">第 36 章</a>的「記憶體安全」一節。
+      </p>
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">延伸資源</span>
+          <p>Kernighan &amp; Ritchie《The C Programming Language》(K&amp;R)第 5、6 章是指標與 struct 的經典講法;
+          Jens Gustedt《Modern C》(作者在網站上免費提供 PDF)照 C17 標準講,指標、對齊、未定義行為都講得很完整;
+          <a href="https://beej.us/guide/bgc/">Beej's Guide to C Programming</a> 的指標與 <code>volatile</code> 章節口語好讀;
+          Eric S. Raymond〈The Lost Art of Structure Packing〉(網路文章)專講 struct 的填補;
+          gcc 的 <a href="https://gcc.gnu.org/onlinedocs/gcc/Instrumentation-Options.html">Instrumentation Options</a> 文件列出所有 <code>-fsanitize</code> 選項。
+          大小端與 MMIO 的硬體面,可以和<a href="48-computer-architecture.html">第 50 章</a>、<a href="21-cpu-machine-language.html">第 21 章</a>對照著讀。</p>
+        </div>
+      </div>
+</article>
+  </main>
+</div>
+<script src="../assets/book.js"></script>
+</body>
+</html>

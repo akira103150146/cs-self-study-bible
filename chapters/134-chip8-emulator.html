@@ -1,0 +1,2301 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>寫一台模擬器(一):CHIP-8 · CS 自學聖經</title>
+<meta name="description" content="用 C 寫一台 CHIP-8 模擬器:4 KiB 記憶體、16 個 V 暫存器、I、PC、堆疊、60 Hz 的 DT 與 ST、64×32 單色畫面、16 鍵鍵盤與內建字型;35 條指令依 opcode 的 nibble 分組解碼;取指、解碼、執行的主迴圈與每幀幾條指令;XOR 畫 sprite 與碰撞旗標;FX0A 等按鍵;COSMAC VIP 與現代直譯器之間的怪癖;以及自己寫測試 ROM、用 trace 除錯。">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;700&family=Noto+Sans+TC:wght@400;700&family=Lora:ital,wght@0,400;0,600;0,700;1,400&family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <main class="main">
+    <article class="content">      <div class="eyebrow">第十一部 · 進階系統</div>
+      <h1>寫一台模擬器(一):CHIP-8</h1>
+      <p class="subtitle">一台只有 35 條指令、64×32 個像素的小電腦。你會用兩百行 C 讓它活過來,再用自己寫的 ROM 證明它真的對。</p>
+      <div class="byline">
+        <span class="tag">第 52 章</span>
+        <span>閱讀時間 ≈ 120 分鐘</span>
+        <span>難度:★★★☆☆</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>CHIP-8 這台機器有哪些零件:4 KiB 記憶體、V0–VF、I、PC、堆疊、DT 與 ST 兩個計時器、64×32 單色畫面、16 鍵鍵盤、內建字型</li>
+          <li>怎麼把一個 16 位元的 opcode 拆成四個 nibble,再查出它是 35 條指令裡的哪一條</li>
+          <li>模擬器的主迴圈:取指 → 解碼 → 執行,以及「每幀幾條指令」為什麼是規格的一部分</li>
+          <li>VF 旗標的規則:先算結果、最後才寫 VF;7XNN 溢位不改 VF</li>
+          <li>DXYN 怎麼用 XOR 畫 sprite、碰撞旗標到底代表什麼,以及畫面邊緣的裁切與繞回</li>
+          <li>FX0A 等按鍵時,模擬器在做什麼</li>
+          <li>COSMAC VIP 原機和現代直譯器有五個地方不一樣(怪癖),以及地下城的 Lab 怎麼處理它們</li>
+          <li>自己用十六進位寫測試 ROM,跑在自己的模擬器上,用 trace 找出第一個出錯的指令</li>
+        </ul>
+      </div>
+
+      <h2>為什麼要自己寫一台模擬器</h2>
+      <p>
+        在<a href="21-cpu-machine-language.html">第 21 章</a>,你看過 Hack CPU 怎麼一拍一拍地執行指令,
+        也在那一章的動手實驗室用 Python 寫過一個 Hack 模擬器。那台機器是為了教學設計的:沒有計時器、沒有聲音、螢幕只是一段記憶體。
+      </p>
+      <p>
+        這一章換一台「真的有人拿來寫遊戲」的機器:<strong>CHIP-8</strong>。它其實不是一顆晶片,而是一種<strong>直譯式語言(interpreted language)</strong>,
+        1970 年代由 Joseph Weisbecker 為 RCA 的 COSMAC VIP 電腦設計。VIP 上跑一支 512 位元組的直譯器,直譯器讀 CHIP-8 的指令,一條一條執行。
+        今天的人寫「CHIP-8 模擬器」,其實是在重寫那支直譯器。
+      </p>
+      <p>
+        CHIP-8 很適合當第一台模擬器:指令只有 35 條、每條固定 2 個位元組、畫面只有黑白兩色。
+        但它已經有一台真電腦該有的麻煩事:旗標暫存器、呼叫堆疊、以 60 Hz 倒數的計時器、要等按鍵的指令,
+        還有「同一條指令,不同的直譯器做法不一樣」這種歷史包袱。把這些都處理好,你就有了寫 Game Boy、GBA 模擬器的基本功。
+      </p>
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">為什麼要學</span>
+          <p>這一章是任務線「模擬器三部曲」(emu)的第二站。第一站在<a href="133-c-deep-dive.html#lab-emu-bus">第 51 章</a>:任務「位元與記憶體匯流排」做出 <code>emu/bits.h</code> 與 <code>emu/bus.c</code>。
+          這一章的兩個任務「CHIP-8 CPU」與「CHIP-8 畫面與按鍵」都建在那個匯流排上,合起來就是 Boss 戰「CHIP-8 隱藏 ROM」與「CHIP-8 畫面重播」。
+          之後的 Game Boy(SM83 CPU、PPU、計時器與中斷)與 GBA(ARM7TDMI)用的是同一套主迴圈和同一個匯流排,只是指令多了很多。
+          取指、解碼、執行的寫法,也和 RISC-V 指令集模擬器、第 23 章的虛擬機是同一件事。</p>
+        </div>
+      </div>
+      <p>本章的範例程式全部用 C 寫(C17 標準),每一段都可以這樣編譯,零警告:</p>
+<pre><code class="language-bash">gcc -std=c17 -Wall -Wextra -O2 chip8demo.c -o chip8demo</code></pre>
+      <p>本章用到的測試 ROM 全部是我們自己寫的,一個位元組一個位元組地列在書裡。網路上很多現成的 CHIP-8 遊戲與測試 ROM 授權不明,本書不收錄,也不拿來判題。</p>
+
+      <h2>CHIP-8 這台機器</h2>
+      <p>先看整台機器有哪些零件。圖 134-1 左邊是記憶體,中間是 CPU 的狀態(也就是直譯器要記住的東西),右邊是畫面和鍵盤。</p>
+
+      <div class="diagram">
+<svg viewBox="0 0 780 420" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="c8-a" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#2f6f6a"/></marker>
+    <marker id="c8-b" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#b4541f"/></marker>
+    <marker id="c8-c" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8b5cf6"/></marker>
+  </defs>
+  <!-- 記憶體 -->
+  <text x="95" y="30" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">記憶體 4 KiB</text>
+  <text x="95" y="46" text-anchor="middle" font-size="10.5" fill="#4a5159">位址 000–FFF,每格 8 位元</text>
+  <rect x="20" y="56" width="150" height="34" fill="#f3f4f6" stroke="#8a929b"/>
+  <text x="95" y="70" text-anchor="middle" font-size="10.5" fill="#4a5159">000–04F</text>
+  <text x="95" y="84" text-anchor="middle" font-size="10" fill="#8a929b">原機:直譯器本身</text>
+  <rect x="20" y="90" width="150" height="34" fill="#ede7fb" stroke="#8b5cf6"/>
+  <text x="95" y="104" text-anchor="middle" font-size="10.5" font-weight="700" fill="#1f2328">050–09F 字型 0–F</text>
+  <text x="95" y="118" text-anchor="middle" font-size="10" fill="#4a5159">16 個字 × 5 位元組</text>
+  <rect x="20" y="124" width="150" height="34" fill="#f3f4f6" stroke="#8a929b"/>
+  <text x="95" y="138" text-anchor="middle" font-size="10.5" fill="#4a5159">0A0–1FF</text>
+  <text x="95" y="152" text-anchor="middle" font-size="10" fill="#8a929b">原機:直譯器本身</text>
+  <rect x="20" y="158" width="150" height="196" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="95" y="178" text-anchor="middle" font-size="11" font-weight="800" fill="#1f2328">200 ← PC 從這裡開始</text>
+  <text x="95" y="250" text-anchor="middle" font-size="11" fill="#1f2328">200–FFF</text>
+  <text x="95" y="266" text-anchor="middle" font-size="11" fill="#1f2328">ROM(程式與資料)</text>
+  <text x="95" y="282" text-anchor="middle" font-size="10" fill="#4a5159">最多 3584 位元組</text>
+  <rect x="20" y="322" width="150" height="32" fill="#ffffff" stroke="#8a929b" stroke-dasharray="4 3"/>
+  <text x="95" y="336" text-anchor="middle" font-size="9.5" fill="#8a929b">EA0–FFF:原機放堆疊、</text>
+  <text x="95" y="348" text-anchor="middle" font-size="9.5" fill="#8a929b">變數與畫面;模擬器不用</text>
+  <!-- CPU -->
+  <rect x="240" y="56" width="270" height="298" rx="12" fill="#f6e7dd" stroke="#b4541f" stroke-width="2"/>
+  <text x="375" y="80" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">CPU 狀態(直譯器記住的東西)</text>
+  <text x="256" y="106" font-size="11" font-weight="700" fill="#1f2328">V0 … VF:16 個 8 位元暫存器</text>
+  <rect x="256" y="114" width="14" height="14" fill="#ffffff" stroke="#b4541f"/><rect x="270" y="114" width="14" height="14" fill="#ffffff" stroke="#b4541f"/>
+  <rect x="284" y="114" width="14" height="14" fill="#ffffff" stroke="#b4541f"/><rect x="298" y="114" width="14" height="14" fill="#ffffff" stroke="#b4541f"/>
+  <rect x="312" y="114" width="14" height="14" fill="#ffffff" stroke="#b4541f"/><rect x="326" y="114" width="14" height="14" fill="#ffffff" stroke="#b4541f"/>
+  <rect x="340" y="114" width="14" height="14" fill="#ffffff" stroke="#b4541f"/><rect x="354" y="114" width="14" height="14" fill="#ffffff" stroke="#b4541f"/>
+  <rect x="368" y="114" width="14" height="14" fill="#ffffff" stroke="#b4541f"/><rect x="382" y="114" width="14" height="14" fill="#ffffff" stroke="#b4541f"/>
+  <rect x="396" y="114" width="14" height="14" fill="#ffffff" stroke="#b4541f"/><rect x="410" y="114" width="14" height="14" fill="#ffffff" stroke="#b4541f"/>
+  <rect x="424" y="114" width="14" height="14" fill="#ffffff" stroke="#b4541f"/><rect x="438" y="114" width="14" height="14" fill="#ffffff" stroke="#b4541f"/>
+  <rect x="452" y="114" width="14" height="14" fill="#ffffff" stroke="#b4541f"/><rect x="466" y="114" width="14" height="14" fill="#fde2d2" stroke="#b4541f" stroke-width="2"/>
+  <text x="473" y="145" text-anchor="middle" font-size="10" fill="#b4541f">VF</text>
+  <text x="256" y="145" font-size="10" fill="#4a5159">VF 也是旗標:進位、借位、碰撞</text>
+  <text x="256" y="174" font-size="11" font-weight="700" fill="#1f2328">I:16 位元的位址暫存器</text>
+  <text x="256" y="190" font-size="10" fill="#4a5159">sprite、BCD、FX55/FX65 都從 I 指的地方讀寫</text>
+  <text x="256" y="216" font-size="11" font-weight="700" fill="#1f2328">PC:下一條指令的位址(12 位元)</text>
+  <text x="256" y="242" font-size="11" font-weight="700" fill="#1f2328">SP + 堆疊:16 層返回位址</text>
+  <text x="256" y="258" font-size="10" fill="#4a5159">2NNN 推進去,00EE 彈出來</text>
+  <text x="256" y="284" font-size="11" font-weight="700" fill="#1f2328">DT 延遲計時器、ST 聲音計時器</text>
+  <text x="256" y="300" font-size="10" fill="#4a5159">8 位元;大於 0 就每秒減 60 次(每幀一次)</text>
+  <text x="256" y="316" font-size="10" fill="#4a5159">ST 大於 0 的時候,喇叭發出嗶聲</text>
+  <text x="256" y="340" font-size="10" fill="#8a929b">沒有其他暫存器,也沒有中斷</text>
+  <!-- 畫面 -->
+  <rect x="570" y="56" width="190" height="130" rx="10" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="665" y="78" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">畫面 64 × 32</text>
+  <rect x="601" y="88" width="128" height="64" fill="#1f2328"/>
+  <rect x="633" y="104" width="8" height="8" fill="#e3efed"/><rect x="641" y="104" width="8" height="8" fill="#e3efed"/>
+  <rect x="633" y="112" width="8" height="8" fill="#e3efed"/><rect x="681" y="120" width="8" height="8" fill="#e3efed"/>
+  <text x="665" y="168" text-anchor="middle" font-size="10" fill="#4a5159">每格 1 位元(亮/暗),原點在左上</text>
+  <text x="665" y="181" text-anchor="middle" font-size="10" fill="#4a5159">DXYN 用 XOR 畫,00E0 清掉</text>
+  <!-- 鍵盤 -->
+  <rect x="570" y="214" width="190" height="140" rx="10" fill="#ede7fb" stroke="#8b5cf6"/>
+  <text x="665" y="234" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">鍵盤 16 鍵(0–F)</text>
+  <g font-size="11" font-weight="700" fill="#1f2328" text-anchor="middle">
+    <rect x="605" y="244" width="26" height="22" rx="4" fill="#ffffff" stroke="#8b5cf6"/><text x="618" y="259">1</text>
+    <rect x="635" y="244" width="26" height="22" rx="4" fill="#ffffff" stroke="#8b5cf6"/><text x="648" y="259">2</text>
+    <rect x="665" y="244" width="26" height="22" rx="4" fill="#ffffff" stroke="#8b5cf6"/><text x="678" y="259">3</text>
+    <rect x="695" y="244" width="26" height="22" rx="4" fill="#ffffff" stroke="#8b5cf6"/><text x="708" y="259">C</text>
+    <rect x="605" y="270" width="26" height="22" rx="4" fill="#ffffff" stroke="#8b5cf6"/><text x="618" y="285">4</text>
+    <rect x="635" y="270" width="26" height="22" rx="4" fill="#ffffff" stroke="#8b5cf6"/><text x="648" y="285">5</text>
+    <rect x="665" y="270" width="26" height="22" rx="4" fill="#ffffff" stroke="#8b5cf6"/><text x="678" y="285">6</text>
+    <rect x="695" y="270" width="26" height="22" rx="4" fill="#ffffff" stroke="#8b5cf6"/><text x="708" y="285">D</text>
+    <rect x="605" y="296" width="26" height="22" rx="4" fill="#ffffff" stroke="#8b5cf6"/><text x="618" y="311">7</text>
+    <rect x="635" y="296" width="26" height="22" rx="4" fill="#ffffff" stroke="#8b5cf6"/><text x="648" y="311">8</text>
+    <rect x="665" y="296" width="26" height="22" rx="4" fill="#ffffff" stroke="#8b5cf6"/><text x="678" y="311">9</text>
+    <rect x="695" y="296" width="26" height="22" rx="4" fill="#ffffff" stroke="#8b5cf6"/><text x="708" y="311">E</text>
+    <rect x="605" y="322" width="26" height="22" rx="4" fill="#ffffff" stroke="#8b5cf6"/><text x="618" y="337">A</text>
+    <rect x="635" y="322" width="26" height="22" rx="4" fill="#ffffff" stroke="#8b5cf6"/><text x="648" y="337">0</text>
+    <rect x="665" y="322" width="26" height="22" rx="4" fill="#ffffff" stroke="#8b5cf6"/><text x="678" y="337">B</text>
+    <rect x="695" y="322" width="26" height="22" rx="4" fill="#ffffff" stroke="#8b5cf6"/><text x="708" y="337">F</text>
+  </g>
+  <!-- 箭頭 -->
+  <line x1="172" y1="196" x2="236" y2="196" stroke="#2f6f6a" stroke-width="2.5" marker-end="url(#c8-a)"/>
+  <line x1="236" y1="226" x2="174" y2="226" stroke="#2f6f6a" stroke-width="2.5" marker-end="url(#c8-a)"/>
+  <text x="204" y="190" text-anchor="middle" font-size="9.5" fill="#2f6f6a">取指、讀</text>
+  <text x="204" y="242" text-anchor="middle" font-size="9.5" fill="#2f6f6a">寫</text>
+  <line x1="512" y1="120" x2="566" y2="120" stroke="#b4541f" stroke-width="2.5" marker-end="url(#c8-b)"/>
+  <text x="539" y="112" text-anchor="middle" font-size="9.5" fill="#b4541f">DXYN</text>
+  <text x="539" y="138" text-anchor="middle" font-size="9.5" fill="#b4541f">00E0</text>
+  <line x1="566" y1="284" x2="514" y2="284" stroke="#8b5cf6" stroke-width="2.5" marker-end="url(#c8-c)"/>
+  <text x="540" y="276" text-anchor="middle" font-size="9.5" fill="#8b5cf6">EX9E</text>
+  <text x="540" y="302" text-anchor="middle" font-size="9.5" fill="#8b5cf6">FX0A</text>
+  <text x="20" y="384" font-size="11" fill="#4a5159">每一條指令 2 個位元組,大端(高位元組在前):PC 指到 0x200,就讀 [200] 和 [201] 拼成一個 16 位元的 opcode。</text>
+  <text x="20" y="404" font-size="11" fill="#4a5159">計時器和畫面更新跟著 60 Hz 走;CPU 每一幀(1/60 秒)執行固定的幾條指令。</text>
+</svg>
+        <figcaption>圖 134-1:CHIP-8 的零件。左:4 KiB 記憶體,ROM 從 0x200 載入;中:CPU 的全部狀態;右:64×32 的畫面和 16 鍵的鍵盤。</figcaption>
+      </div>
+      <p>圖 134-1 的文字版:</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>零件</th><th>大小</th><th>說明</th></tr></thead>
+        <tbody>
+          <tr><td>記憶體</td><td>4096 位元組(000–FFF)</td><td>ROM 從 0x200 載入,最多 3584 位元組。原機的 000–1FF 是直譯器本身;模擬器把字型放在 050–09F。</td></tr>
+          <tr><td>V0–VF</td><td>16 個 × 8 位元</td><td>一般用途的暫存器。VF 同時是旗標:加法的進位、減法的「沒有借位」、移位移出去的位元、畫圖的碰撞。</td></tr>
+          <tr><td>I</td><td>16 位元</td><td>位址暫存器。畫 sprite、FX33(BCD)、FX55/FX65(存取多個暫存器)都用它指的位址。位址只看低 12 位元。</td></tr>
+          <tr><td>PC</td><td>12 位元位址</td><td>下一條指令的位址。開機時是 0x200;每取一條指令就加 2。</td></tr>
+          <tr><td>SP 與堆疊</td><td>16 層 × 16 位元</td><td>只放副程式的返回位址。原機的堆疊比較淺(常見的說法是 12 層);現代直譯器多半給 16 層,本書照 16 層。</td></tr>
+          <tr><td>DT、ST</td><td>各 8 位元</td><td>延遲計時器(delay timer)與聲音計時器(sound timer)。大於 0 時每秒減 60 次;ST 大於 0 時發出嗶聲。</td></tr>
+          <tr><td>畫面</td><td>64 × 32 格,每格 1 位元</td><td>原點 (0, 0) 在左上,x 往右、y 往下。只能用 XOR 畫 sprite,或整個清掉。</td></tr>
+          <tr><td>鍵盤</td><td>16 個鍵 0–F</td><td>排成 4×4:<code>1 2 3 C</code> / <code>4 5 6 D</code> / <code>7 8 9 E</code> / <code>A 0 B F</code>。電腦上常對應到 <code>1 2 3 4</code> / <code>Q W E R</code> / <code>A S D F</code> / <code>Z X C V</code>。</td></tr>
+        </tbody>
+      </table></div>
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">核心觀念</span>
+          <p>模擬器就是一個<strong>狀態</strong>加一個<strong>函式</strong>:狀態是上面這張表(記憶體、暫存器、計時器、畫面、按鍵),
+          函式是「執行一條指令,把狀態變成下一個狀態」。寫模擬器的工作,就是把每一條指令對狀態做了什麼,一條一條寫清楚。</p>
+        </div>
+      </div>
+
+      <h3>記憶體地圖:為什麼程式從 0x200 開始</h3>
+      <p>
+        COSMAC VIP 的記憶體只有 2 KiB 到 4 KiB,直譯器自己就佔掉前面 512 位元組。所以 CHIP-8 程式一律從 0x200(十進位 512)開始放,
+        也不去碰 0x200 以下的位址。原機在記憶體的最上面也留了地方:EA0–EFF 放呼叫堆疊和直譯器的變數,F00–FFF 是畫面的內容。
+      </p>
+      <p>
+        模擬器不需要真的把直譯器放進記憶體,堆疊和畫面也另外存。於是 0x000–0x1FF 空了出來,大家習慣把<strong>內建字型</strong>放在這裡。
+        本書和地下城的 Lab 都把字型放在 0x050–0x09F。
+      </p>
+
+      <h3>內建字型:16 個 4×5 的數字</h3>
+      <p>
+        CHIP-8 內建十六進位數字 0–F 的字型,每個字 4 格寬、5 格高,一列用一個位元組(只用高 4 位元)。例如「0」:
+      </p>
+<pre><code class="language-text">F0  1111 0000   ####
+90  1001 0000   #  #
+90  1001 0000   #  #
+90  1001 0000   #  #
+F0  1111 0000   ####</code></pre>
+      <p>16 個字依序排好,每個字 5 個位元組,共 80 個位元組。字 <var>d</var> 的位址就是 <code>0x050 + 5 × d</code>,FX29 指令會幫你算。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>字</th><th>5 個位元組</th><th>字</th><th>5 個位元組</th></tr></thead>
+        <tbody>
+          <tr><td>0</td><td><code>F0 90 90 90 F0</code></td><td>8</td><td><code>F0 90 F0 90 F0</code></td></tr>
+          <tr><td>1</td><td><code>20 60 20 20 70</code></td><td>9</td><td><code>F0 90 F0 10 F0</code></td></tr>
+          <tr><td>2</td><td><code>F0 10 F0 80 F0</code></td><td>A</td><td><code>F0 90 F0 90 90</code></td></tr>
+          <tr><td>3</td><td><code>F0 10 F0 10 F0</code></td><td>B</td><td><code>E0 90 E0 90 E0</code></td></tr>
+          <tr><td>4</td><td><code>90 90 F0 10 10</code></td><td>C</td><td><code>F0 80 80 80 F0</code></td></tr>
+          <tr><td>5</td><td><code>F0 80 F0 10 F0</code></td><td>D</td><td><code>E0 90 90 90 E0</code></td></tr>
+          <tr><td>6</td><td><code>F0 80 F0 90 F0</code></td><td>E</td><td><code>F0 80 F0 80 F0</code></td></tr>
+          <tr><td>7</td><td><code>F0 10 20 40 40</code></td><td>F</td><td><code>F0 80 F0 80 80</code></td></tr>
+        </tbody>
+      </table></div>
+      <p>這是現代直譯器最常用的一組字型(不同的直譯器,字型的形狀可能略有不同)。字型的形狀不影響指令怎麼執行,但會影響畫面:判題比對畫面時,大家要用同一組字型。</p>
+
+      <h2>指令長什麼樣子:四個 nibble</h2>
+      <p>
+        CHIP-8 每一條指令都是 2 個位元組,也就是 16 位元,寫成 4 個十六進位數字。一個十六進位數字是 4 個位元,叫做一個 <strong>nibble</strong>(半個位元組)。
+        解碼的訣竅只有一句:<strong>先看第一個 nibble 決定是哪一類,剩下的 nibble 是參數</strong>。參數只有五種切法(圖 134-2)。
+      </p>
+      <div class="diagram">
+<svg viewBox="0 0 700 210" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="170" y="26" text-anchor="middle" font-size="10" fill="#8a929b">位元 15–12</text>
+  <text x="290" y="26" text-anchor="middle" font-size="10" fill="#8a929b">位元 11–8</text>
+  <text x="410" y="26" text-anchor="middle" font-size="10" fill="#8a929b">位元 7–4</text>
+  <text x="530" y="26" text-anchor="middle" font-size="10" fill="#8a929b">位元 3–0</text>
+  <rect x="110" y="34" width="120" height="50" fill="#f6e7dd" stroke="#b4541f" stroke-width="2"/>
+  <rect x="230" y="34" width="120" height="50" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <rect x="350" y="34" width="120" height="50" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <rect x="470" y="34" width="120" height="50" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="170" y="68" text-anchor="middle" font-size="26" font-weight="800" fill="#1f2328">D</text>
+  <text x="290" y="68" text-anchor="middle" font-size="26" font-weight="800" fill="#1f2328">0</text>
+  <text x="410" y="68" text-anchor="middle" font-size="26" font-weight="800" fill="#1f2328">1</text>
+  <text x="530" y="68" text-anchor="middle" font-size="26" font-weight="800" fill="#1f2328">4</text>
+  <text x="170" y="102" text-anchor="middle" font-size="11.5" font-weight="700" fill="#b4541f">種類(哪一類指令)</text>
+  <text x="290" y="102" text-anchor="middle" font-size="11.5" font-weight="700" fill="#2f6f6a">X = 0</text>
+  <text x="410" y="102" text-anchor="middle" font-size="11.5" font-weight="700" fill="#2f6f6a">Y = 1</text>
+  <text x="530" y="102" text-anchor="middle" font-size="11.5" font-weight="700" fill="#2f6f6a">N = 4</text>
+  <path d="M352,118 L352,126 L588,126 L588,118" fill="none" stroke="#8b5cf6" stroke-width="2"/>
+  <text x="470" y="144" text-anchor="middle" font-size="11.5" fill="#8b5cf6">NN = 14(低 8 位元:一個數值)</text>
+  <path d="M232,160 L232,168 L588,168 L588,160" fill="none" stroke="#8b5cf6" stroke-width="2"/>
+  <text x="410" y="186" text-anchor="middle" font-size="11.5" fill="#8b5cf6">NNN = 014(低 12 位元:一個位址)</text>
+  <text x="20" y="64" font-size="12" fill="#4a5159">opcode</text>
+</svg>
+        <figcaption>圖 134-2:把 opcode <code>D014</code> 拆成四個 nibble。第一個 nibble 決定種類;X、Y 是暫存器編號;N、NN、NNN 是常數,用哪一種由種類決定。</figcaption>
+      </div>
+      <p>
+        圖 134-2 的文字版:opcode 由高到低是四個 nibble。第一個(位元 15–12)是種類;第二個叫 X、第三個叫 Y,都是暫存器編號(VX、VY);
+        最後一個叫 N。最後兩個 nibble 合起來叫 NN(一個 8 位元常數),最後三個合起來叫 NNN(一個 12 位元位址)。
+        <code>D014</code> 就是種類 D、X=0、Y=1、N=4:「在 (V0, V1) 畫一個 4 列高的 sprite」。
+      </p>
+      <p>
+        用 C 取出這些欄位,只要移位和遮罩(<a href="133-c-deep-dive.html">第 51 章</a>的位元操作):
+        <code>op &gt;&gt; 12</code> 是種類,<code>(op &gt;&gt; 8) &amp; 0xF</code> 是 X,<code>(op &gt;&gt; 4) &amp; 0xF</code> 是 Y,
+        <code>op &amp; 0xF</code> 是 N,<code>op &amp; 0xFF</code> 是 NN,<code>op &amp; 0xFFF</code> 是 NNN。
+      </p>
+
+      <h3>35 條指令,依第一個 nibble 分組</h3>
+      <p>
+        下表是全部 35 條標準指令。「VF」欄寫出這條指令會不會改 VF;「怪癖」欄打勾的,COSMAC VIP 和後來的直譯器做法不一樣(後面一節細講)。
+        種類 0、8、E、F 的第一個 nibble 不夠分,要再看最後一個或兩個 nibble。
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>opcode</th><th>助記符</th><th>做什麼</th><th>VF</th><th>怪癖</th></tr></thead>
+        <tbody>
+          <tr><td><code>00E0</code></td><td>CLS</td><td>清畫面(全部變暗)</td><td></td><td></td></tr>
+          <tr><td><code>00EE</code></td><td>RET</td><td>從堆疊彈出返回位址,放進 PC</td><td></td><td></td></tr>
+          <tr><td><code>0NNN</code></td><td>SYS NNN</td><td>原機:呼叫 1802 的機器碼副程式。模擬器做不到,當成不做事</td><td></td><td></td></tr>
+          <tr><td><code>1NNN</code></td><td>JP NNN</td><td>PC = NNN</td><td></td><td></td></tr>
+          <tr><td><code>2NNN</code></td><td>CALL NNN</td><td>把目前的 PC(已經指向下一條)推進堆疊,PC = NNN</td><td></td><td></td></tr>
+          <tr><td><code>3XNN</code></td><td>SE VX, NN</td><td>VX == NN 就跳過下一條(PC 再加 2)</td><td></td><td></td></tr>
+          <tr><td><code>4XNN</code></td><td>SNE VX, NN</td><td>VX != NN 就跳過下一條</td><td></td><td></td></tr>
+          <tr><td><code>5XY0</code></td><td>SE VX, VY</td><td>VX == VY 就跳過下一條</td><td></td><td></td></tr>
+          <tr><td><code>6XNN</code></td><td>LD VX, NN</td><td>VX = NN</td><td></td><td></td></tr>
+          <tr><td><code>7XNN</code></td><td>ADD VX, NN</td><td>VX = VX + NN(超過 255 就捨掉進位)</td><td>不改</td><td></td></tr>
+          <tr><td><code>8XY0</code></td><td>LD VX, VY</td><td>VX = VY</td><td></td><td></td></tr>
+          <tr><td><code>8XY1</code></td><td>OR VX, VY</td><td>VX = VX | VY</td><td>VIP:設 0</td><td>✓</td></tr>
+          <tr><td><code>8XY2</code></td><td>AND VX, VY</td><td>VX = VX &amp; VY</td><td>VIP:設 0</td><td>✓</td></tr>
+          <tr><td><code>8XY3</code></td><td>XOR VX, VY</td><td>VX = VX ^ VY</td><td>VIP:設 0</td><td>✓</td></tr>
+          <tr><td><code>8XY4</code></td><td>ADD VX, VY</td><td>VX = VX + VY</td><td>進位(1 = 超過 255)</td><td></td></tr>
+          <tr><td><code>8XY5</code></td><td>SUB VX, VY</td><td>VX = VX − VY</td><td>1 = 沒有借位(VX ≥ VY)</td><td></td></tr>
+          <tr><td><code>8XY6</code></td><td>SHR VX, VY</td><td>VIP:VX = VY 右移 1 位;現代:VX 自己右移</td><td>移出去的最低位</td><td>✓</td></tr>
+          <tr><td><code>8XY7</code></td><td>SUBN VX, VY</td><td>VX = VY − VX</td><td>1 = 沒有借位(VY ≥ VX)</td><td></td></tr>
+          <tr><td><code>8XYE</code></td><td>SHL VX, VY</td><td>VIP:VX = VY 左移 1 位;現代:VX 自己左移</td><td>移出去的最高位</td><td>✓</td></tr>
+          <tr><td><code>9XY0</code></td><td>SNE VX, VY</td><td>VX != VY 就跳過下一條</td><td></td><td></td></tr>
+          <tr><td><code>ANNN</code></td><td>LD I, NNN</td><td>I = NNN</td><td></td><td></td></tr>
+          <tr><td><code>BNNN</code></td><td>JP V0, NNN</td><td>VIP:PC = NNN + V0;後來的直譯器:PC = XNN + VX</td><td></td><td>✓</td></tr>
+          <tr><td><code>CXNN</code></td><td>RND VX, NN</td><td>VX = 亂數 &amp; NN</td><td></td><td></td></tr>
+          <tr><td><code>DXYN</code></td><td>DRW VX, VY, N</td><td>從 I 讀 N 個位元組,在 (VX, VY) 用 XOR 畫 8 格寬、N 列高的 sprite</td><td>碰撞(1 = 有格子亮變暗)</td><td>✓(邊緣)</td></tr>
+          <tr><td><code>EX9E</code></td><td>SKP VX</td><td>鍵 VX 按著,就跳過下一條</td><td></td><td></td></tr>
+          <tr><td><code>EXA1</code></td><td>SKNP VX</td><td>鍵 VX 沒按,就跳過下一條</td><td></td><td></td></tr>
+          <tr><td><code>FX07</code></td><td>LD VX, DT</td><td>VX = DT</td><td></td><td></td></tr>
+          <tr><td><code>FX0A</code></td><td>LD VX, K</td><td>停下來等一個按鍵,VX = 那個鍵</td><td></td><td></td></tr>
+          <tr><td><code>FX15</code></td><td>LD DT, VX</td><td>DT = VX</td><td></td><td></td></tr>
+          <tr><td><code>FX18</code></td><td>LD ST, VX</td><td>ST = VX</td><td></td><td></td></tr>
+          <tr><td><code>FX1E</code></td><td>ADD I, VX</td><td>I = I + VX</td><td>不改</td><td></td></tr>
+          <tr><td><code>FX29</code></td><td>LD F, VX</td><td>I = 字型「VX 的低 4 位」的位址</td><td></td><td></td></tr>
+          <tr><td><code>FX33</code></td><td>LD B, VX</td><td>VX 的百位、十位、個位分別寫進 [I]、[I+1]、[I+2]</td><td></td><td></td></tr>
+          <tr><td><code>FX55</code></td><td>LD [I], VX</td><td>V0..VX 依序寫進 [I]..[I+X]</td><td></td><td>✓(I 改不改)</td></tr>
+          <tr><td><code>FX65</code></td><td>LD VX, [I]</td><td>[I]..[I+X] 依序讀進 V0..VX</td><td></td><td>✓(I 改不改)</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        表裡沒有的組合(例如 <code>5XY1</code>、<code>8XY8</code>、<code>EX00</code>、<code>FX00</code>)不是合法的指令。
+        你的模擬器遇到它們,要明確地報錯,不要悄悄當成別的指令。地下城的 Lab 規定要回傳錯誤碼,而且出錯時機器狀態完全不變。
+      </p>
+
+      <h3>手算:把 opcode 拆開解碼</h3>
+      <p>拿到一個 opcode,先寫出四個 nibble,看第一個 nibble 決定種類;種類是 0、8、E、F 時,再看後面的 nibble;最後把 X、Y、N、NN、NNN 代進去。每一列是一個 opcode。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>opcode</th><th>四個 nibble</th><th>種類怎麼決定</th><th>參數</th><th>指令</th></tr></thead>
+        <tbody>
+          <tr><td><code>6A1C</code></td><td>6 | A | 1 | C</td><td>6 → LD VX, NN</td><td>X=A,NN=1C</td><td>VA = 0x1C(28)</td></tr>
+          <tr><td><code>8124</code></td><td>8 | 1 | 2 | 4</td><td>8 → 再看 N=4 → ADD VX, VY</td><td>X=1,Y=2</td><td>V1 = V1 + V2,VF = 進位</td></tr>
+          <tr><td><code>8316</code></td><td>8 | 3 | 1 | 6</td><td>8 → 再看 N=6 → SHR</td><td>X=3,Y=1</td><td>VIP:V3 = V1 &gt;&gt; 1;現代:V3 = V3 &gt;&gt; 1</td></tr>
+          <tr><td><code>D014</code></td><td>D | 0 | 1 | 4</td><td>D → DRW</td><td>X=0,Y=1,N=4</td><td>在 (V0, V1) 畫 4 列</td></tr>
+          <tr><td><code>2208</code></td><td>2 | 2 | 0 | 8</td><td>2 → CALL</td><td>NNN=208</td><td>呼叫 0x208(X=2 在這裡沒有意義)</td></tr>
+          <tr><td><code>F155</code></td><td>F | 1 | 5 | 5</td><td>F → 再看 NN=55 → LD [I], VX</td><td>X=1</td><td>[I] = V0,[I+1] = V1</td></tr>
+          <tr><td><code>300A</code></td><td>3 | 0 | 0 | A</td><td>3 → SE VX, NN</td><td>X=0,NN=0A</td><td>V0 == 10 就跳過下一條</td></tr>
+          <tr><td><code>5121</code></td><td>5 | 1 | 2 | 1</td><td>5 → 最後一個 nibble 必須是 0</td><td>N=1</td><td>不合法的 opcode</td></tr>
+        </tbody>
+      </table></div>
+      <p>下面這支小程式 <code>disasm.c</code> 就是解碼表的 C 版:它把 opcode 拆成 nibble,再用兩層 <code>switch</code> 查出是哪一條。拿它來驗算你的手算。</p>
+<pre><code class="language-c">// disasm.c:把 CHIP-8 opcode 拆成 nibble,再查出是哪一條指令
+// 編譯:gcc -std=c17 -Wall -Wextra disasm.c -o disasm
+// 用法:./disasm D014 8326 F155 …
+#include &lt;stdint.h&gt;
+#include &lt;stdio.h&gt;
+#include &lt;stdlib.h&gt;
+
+static const char *name(uint16_t op) {
+    unsigned n = op &amp; 0xF, nn = op &amp; 0xFF;
+    switch (op &gt;&gt; 12) {                       // 先看最高的 nibble
+    case 0x0: return op == 0x00E0 ? "CLS     清畫面"
+                   : op == 0x00EE ? "RET     從副程式返回"
+                   : "SYS NNN 呼叫機器碼(現代不做事)";
+    case 0x1: return "JP NNN  跳到 NNN";
+    case 0x2: return "CALL NNN 呼叫 NNN";
+    case 0x3: return "SE VX,NN  VX == NN 就跳過下一條";
+    case 0x4: return "SNE VX,NN VX != NN 就跳過下一條";
+    case 0x5: return n == 0 ? "SE VX,VY  VX == VY 就跳過下一條" : NULL;
+    case 0x6: return "LD VX,NN  VX = NN";
+    case 0x7: return "ADD VX,NN VX = VX + NN(不改 VF)";
+    case 0x8:                                  // 8 開頭:再看最低的 nibble
+        switch (n) {
+        case 0x0: return "LD VX,VY  VX = VY";
+        case 0x1: return "OR VX,VY  VX = VX | VY";
+        case 0x2: return "AND VX,VY VX = VX &amp; VY";
+        case 0x3: return "XOR VX,VY VX = VX ^ VY";
+        case 0x4: return "ADD VX,VY VX = VX + VY,VF = 進位";
+        case 0x5: return "SUB VX,VY VX = VX - VY,VF = 沒有借位";
+        case 0x6: return "SHR VX,VY 右移 1 位,VF = 移出去的位";
+        case 0x7: return "SUBN VX,VY VX = VY - VX,VF = 沒有借位";
+        case 0xE: return "SHL VX,VY 左移 1 位,VF = 移出去的位";
+        default:  return NULL;
+        }
+    case 0x9: return n == 0 ? "SNE VX,VY VX != VY 就跳過下一條" : NULL;
+    case 0xA: return "LD I,NNN  I = NNN";
+    case 0xB: return "JP V0,NNN 跳到 NNN + V0";
+    case 0xC: return "RND VX,NN VX = 亂數 &amp; NN";
+    case 0xD: return "DRW VX,VY,N 在 (VX, VY) 畫 N 列";
+    case 0xE: return nn == 0x9E ? "SKP VX    鍵 VX 按著就跳過下一條"
+                   : nn == 0xA1 ? "SKNP VX   鍵 VX 沒按就跳過下一條" : NULL;
+    case 0xF:                                  // F 開頭:看最低的兩個 nibble
+        switch (nn) {
+        case 0x07: return "LD VX,DT  VX = DT";
+        case 0x0A: return "LD VX,K   等一個按鍵,VX = 鍵";
+        case 0x15: return "LD DT,VX  DT = VX";
+        case 0x18: return "LD ST,VX  ST = VX";
+        case 0x1E: return "ADD I,VX  I = I + VX";
+        case 0x29: return "LD F,VX   I = 字型「VX」的位址";
+        case 0x33: return "LD B,VX   VX 的百、十、個位寫進 [I] [I+1] [I+2]";
+        case 0x55: return "LD [I],VX V0..VX 寫進 [I]..[I+X]";
+        case 0x65: return "LD VX,[I] [I]..[I+X] 讀進 V0..VX";
+        default:   return NULL;
+        }
+    }
+    return NULL;
+}
+
+int main(int argc, char **argv) {
+    for (int k = 1; k &lt; argc; k++) {
+        uint16_t op = (uint16_t)strtoul(argv[k], NULL, 16);
+        const char *s = name(op);
+        printf("%04X  [%X|%X|%X|%X]  X=%X Y=%X N=%X NN=%02X NNN=%03X  %s\n",
+               op, op &gt;&gt; 12, (op &gt;&gt; 8) &amp; 0xF, (op &gt;&gt; 4) &amp; 0xF, op &amp; 0xF,
+               (op &gt;&gt; 8) &amp; 0xF, (op &gt;&gt; 4) &amp; 0xF, op &amp; 0xF, op &amp; 0xFF, op &amp; 0xFFF,
+               s ? s : "(不認得的 opcode)");
+    }
+    return 0;
+}</code></pre>
+<pre><code class="language-text">$ gcc -std=c17 -Wall -Wextra disasm.c -o disasm
+$ ./disasm 6A1C 8124 8316 D014 2208 F155 300A 5121
+6A1C  [6|A|1|C]  X=A Y=1 N=C NN=1C NNN=A1C  LD VX,NN  VX = NN
+8124  [8|1|2|4]  X=1 Y=2 N=4 NN=24 NNN=124  ADD VX,VY VX = VX + VY,VF = 進位
+8316  [8|3|1|6]  X=3 Y=1 N=6 NN=16 NNN=316  SHR VX,VY 右移 1 位,VF = 移出去的位
+D014  [D|0|1|4]  X=0 Y=1 N=4 NN=14 NNN=014  DRW VX,VY,N 在 (VX, VY) 畫 N 列
+2208  [2|2|0|8]  X=2 Y=0 N=8 NN=08 NNN=208  CALL NNN 呼叫 NNN
+F155  [F|1|5|5]  X=1 Y=5 N=5 NN=55 NNN=155  LD [I],VX V0..VX 寫進 [I]..[I+X]
+300A  [3|0|0|A]  X=0 Y=0 N=A NN=0A NNN=00A  SE VX,NN  VX == NN 就跳過下一條
+5121  [5|1|2|1]  X=1 Y=2 N=1 NN=21 NNN=121  (不認得的 opcode)</code></pre>
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 134.1 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>解碼這 8 個 opcode,寫出四個 nibble、參數和意思:<code>B23A</code>、<code>8EAE</code>、<code>FA1E</code>、<code>5120</code>、<code>E19E</code>、<code>F00A</code>、<code>8AB8</code>、<code>0123</code>。</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <div class="table-wrap"><table>
+              <thead><tr><th>opcode</th><th>四個 nibble</th><th>種類怎麼決定</th><th>參數</th><th>指令</th></tr></thead>
+              <tbody>
+                <tr><td><code>B23A</code></td><td>B | 2 | 3 | A</td><td>B → JP V0, NNN</td><td>NNN=23A</td><td>VIP:跳到 0x23A + V0(後來的直譯器:跳到 0x23A + V2)</td></tr>
+                <tr><td><code>8EAE</code></td><td>8 | E | A | E</td><td>8 → 再看 N=E → SHL</td><td>X=E,Y=A</td><td>VIP:VE = VA &lt;&lt; 1;VF = VA 的最高位</td></tr>
+                <tr><td><code>FA1E</code></td><td>F | A | 1 | E</td><td>F → 再看 NN=1E → ADD I, VX</td><td>X=A</td><td>I = I + VA,VF 不改</td></tr>
+                <tr><td><code>5120</code></td><td>5 | 1 | 2 | 0</td><td>5 → N=0,合法</td><td>X=1,Y=2</td><td>V1 == V2 就跳過下一條</td></tr>
+                <tr><td><code>E19E</code></td><td>E | 1 | 9 | E</td><td>E → 再看 NN=9E → SKP</td><td>X=1</td><td>鍵 V1 按著就跳過下一條</td></tr>
+                <tr><td><code>F00A</code></td><td>F | 0 | 0 | A</td><td>F → 再看 NN=0A → LD VX, K</td><td>X=0</td><td>等一個按鍵,V0 = 那個鍵</td></tr>
+                <tr><td><code>8AB8</code></td><td>8 | A | B | 8</td><td>8 → N=8 不在 0–7、E 裡</td><td></td><td>不合法的 opcode</td></tr>
+                <tr><td><code>0123</code></td><td>0 | 1 | 2 | 3</td><td>0 → 不是 00E0、00EE → SYS</td><td>NNN=123</td><td>原機呼叫機器碼;模擬器不做事</td></tr>
+              </tbody>
+            </table></div>
+            <p>驗算:</p>
+<pre><code class="language-text">$ ./disasm B23A 8EAE FA1E 5120 E19E F00A 8AB8 0123
+B23A  [B|2|3|A]  X=2 Y=3 N=A NN=3A NNN=23A  JP V0,NNN 跳到 NNN + V0
+8EAE  [8|E|A|E]  X=E Y=A N=E NN=AE NNN=EAE  SHL VX,VY 左移 1 位,VF = 移出去的位
+FA1E  [F|A|1|E]  X=A Y=1 N=E NN=1E NNN=A1E  ADD I,VX  I = I + VX
+5120  [5|1|2|0]  X=1 Y=2 N=0 NN=20 NNN=120  SE VX,VY  VX == VY 就跳過下一條
+E19E  [E|1|9|E]  X=1 Y=9 N=E NN=9E NNN=19E  SKP VX    鍵 VX 按著就跳過下一條
+F00A  [F|0|0|A]  X=0 Y=0 N=A NN=0A NNN=00A  LD VX,K   等一個按鍵,VX = 鍵
+8AB8  [8|A|B|8]  X=A Y=B N=8 NN=B8 NNN=AB8  (不認得的 opcode)
+0123  [0|1|2|3]  X=1 Y=2 N=3 NN=23 NNN=123  SYS NNN 呼叫機器碼(現代不做事)</code></pre>
+          </div></details>
+        </div>
+      </div>
+
+      <h2>取指、解碼、執行:模擬器的主迴圈</h2>
+      <p>
+        和第 21 章的 Hack CPU 一樣,CHIP-8 也是一直重複三件事。差別是 Hack 每拍做一條指令,CHIP-8 的直譯器另外還要照顧計時器和畫面。
+        模擬器的骨架長這樣:
+      </p>
+<pre><code class="language-text">每一幀(1/60 秒):
+    重複 ipf 次:                       ← ipf = instructions per frame,每幀幾條指令
+        取指:op = mem[PC] &lt;&lt; 8 | mem[PC + 1]     (大端:高位元組在前)
+              PC = PC + 2                          (先加,跳躍和跳過才會對)
+        解碼:看 op 的第一個 nibble,必要時再看後面的
+        執行:改暫存器、記憶體、堆疊或畫面
+    DT 大於 0 就減 1;ST 大於 0 就減 1
+    把畫面畫到螢幕上(有變的話)</code></pre>
+      <p>幾個容易寫錯的地方:</p>
+      <ul>
+        <li><strong>PC 先加 2,再執行。</strong>這樣 2NNN 推進堆疊的就是「下一條」的位址,3XNN 的「跳過」只要再加 2。</li>
+        <li><strong>大端。</strong>記憶體 [200]=<code>6A</code>、[201]=<code>1C</code>,opcode 是 <code>6A1C</code>,不是 <code>1C6A</code>。</li>
+        <li><strong>位址只有 12 位元。</strong>PC 和 I+k 超過 0xFFF 要繞回 0x000(<code>&amp; 0xFFF</code>),不能讀到陣列外面。</li>
+        <li><strong>計時器一幀減一次</strong>,不是一條指令減一次(後面的手算 134.4 會算給你看)。</li>
+      </ul>
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">核心觀念:每一步之後都要成立的不變式</span>
+          <p>不管執行了哪一條指令,下面這幾件事都要成立:PC ≤ 0xFFF;堆疊裡的返回位址個數 SP 在 0 到 16 之間;畫面每一格只有 0 或 1;
+          計時器只在一幀結束時改變(或被 FX15、FX18 設定)。本章的範例模擬器用 <code>assert</code> 檢查堆疊不會溢出或變成負的;
+          地下城的 Lab 要求更嚴:遇到這些情況要回傳錯誤碼,而且機器狀態一點都不能改,讓你事後看得到「是哪一條指令出事」。</p>
+        </div>
+      </div>
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">和 Hack 模擬器比一比</span>
+          <p>如果你做過第 21 章的選修任務「Hack 模擬器」,主迴圈可以照搬:一樣是「讀 PC 指的指令 → 拆欄位 → 照種類分派」。
+          不同的是 CHIP-8 的指令用 <code>switch</code> 分派(Hack 用 comp、dest、jump 三張表),而且多了「一幀」這一層外迴圈。</p>
+        </div>
+      </div>
+
+      <h2>算術與旗標 VF</h2>
+      <p>
+        種類 8 的九條指令是 CHIP-8 的 ALU。運算本身很簡單,難的是 <strong>VF</strong>:VF 是一個普通的暫存器(程式可以讀寫它),
+        同時也是旗標。8XY4 寫進位、8XY5 和 8XY7 寫「沒有借位」、8XY6 和 8XYE 寫移出去的那一位元。
+      </p>
+      <ul>
+        <li><strong>8XY4</strong>:VX = (VX + VY) 的低 8 位元;和超過 255 時 VF = 1,否則 0。</li>
+        <li><strong>8XY5</strong>:VX = (VX − VY) 的低 8 位元;VX ≥ VY(沒有借位)時 VF = 1,否則 0。</li>
+        <li><strong>8XY7</strong>:VX = (VY − VX) 的低 8 位元;VY ≥ VX 時 VF = 1。</li>
+        <li><strong>7XNN 不改 VF</strong>,就算溢位也一樣。這是新手最常寫錯的一條。</li>
+      </ul>
+      <p>
+        X 或 Y 剛好是 F 的時候,問題就來了。例如 <code>81F4</code>:V1 = V1 + VF。如果你先寫旗標再算結果,算結果時用到的 VF 已經被改掉了。
+        <code>flags.c</code> 把兩種寫法並排跑:
+      </p>
+<pre><code class="language-c">// flags.c:8XY4 的 VF,先寫還是後寫?
+// 編譯:gcc -std=c17 -Wall -Wextra flags.c -o flags
+#include &lt;stdint.h&gt;
+#include &lt;stdio.h&gt;
+
+static void add_flag_first(uint8_t *V, unsigned x, unsigned y) {
+    V[0xF] = (V[x] + V[y]) &gt; 0xFF;       // 先寫旗標……
+    V[x] = (uint8_t)(V[x] + V[y]);       // ……再算結果:VF 可能已經被改掉了
+}
+
+static void add_flag_last(uint8_t *V, unsigned x, unsigned y) {
+    unsigned sum = V[x] + V[y];          // 先用舊值算好
+    V[x] = (uint8_t)sum;
+    V[0xF] = sum &gt; 0xFF;                 // 最後才寫旗標
+}
+
+static void demo(const char *what, unsigned x, unsigned y, uint8_t vx, uint8_t vy) {
+    uint8_t a[16] = {0}, b[16] = {0};
+    a[x] = b[x] = vx;
+    a[y] = b[y] = vy;
+    add_flag_first(a, x, y);
+    add_flag_last(b, x, y);
+    printf("%s\n", what);
+    printf("  先寫 VF:V%X=%02X VF=%02X\n", x, a[x], a[0xF]);
+    printf("  後寫 VF:V%X=%02X VF=%02X\n", x, b[x], b[0xF]);
+}
+
+int main(void) {
+    demo("81F4(V1=F0, VF=20):", 0x1, 0xF, 0xF0, 0x20);
+    demo("8F14(VF=F0, V1=20):", 0xF, 0x1, 0xF0, 0x20);   // X 是 F:印出來的 VF 就是 VX
+    demo("8124(V1=F0, V2=20):", 0x1, 0x2, 0xF0, 0x20);
+    return 0;
+}</code></pre>
+<pre><code class="language-text">$ ./flags
+81F4(V1=F0, VF=20):
+  先寫 VF:V1=F1 VF=01
+  後寫 VF:V1=10 VF=01
+8F14(VF=F0, V1=20):
+  先寫 VF:VF=21 VF=21
+  後寫 VF:VF=01 VF=01
+8124(V1=F0, V2=20):
+  先寫 VF:V1=10 VF=01
+  後寫 VF:V1=10 VF=01</code></pre>
+      <p>
+        第三組 X、Y 都不是 F,兩種寫法一樣;前兩組就不一樣了。正確的規則是:<strong>先用舊值算出結果,寫進 VX,最後才寫 VF</strong>。
+        所以 <code>8F14</code> 這種 X 是 F 的指令,VF 最後是旗標(01),運算結果被旗標蓋掉。
+      </p>
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">看起來對但其實錯:「8XY5 在 VX 大於 VY 時 VF 才是 1」</span>
+          <p>有些文件把 8XY5 的旗標寫成「VX &gt; VY 時 VF = 1」。用 VX = 7、VY = 3 或 VX = 3、VY = 7 去試,兩種寫法的答案都一樣,看起來沒問題。
+          可是 VX = VY = 5 時:5 − 5 = 0,沒有借位,VF 應該是 1;用「&gt;」寫的模擬器給 0。
+          VF 的意思是「沒有借位」,所以條件是 VX ≥ VY。<strong>試過的例子都對,不代表規則對</strong>;邊界(相等)一定要單獨測。</p>
+        </div>
+      </div>
+
+      <h3>手算:一串指令之後的暫存器與記憶體</h3>
+      <p>
+        下面這支 ROM <code>exec.ch8</code> 用到算術、旗標、移位、BCD 與 FX55。每一列寫出那一條指令改了什麼(沒寫的就沒變)。
+        最右欄是「現代」設定(移位只看 VX、FX55 不改 I)的不同之處,怪癖的細節在後面一節。開始時所有暫存器和 0x300 附近的記憶體都是 0。
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>位址</th><th>opcode</th><th>意思</th><th>改變(VIP)</th><th>現代設定不同的地方</th></tr></thead>
+        <tbody>
+          <tr><td>200</td><td><code>60FF</code></td><td>V0 = FF</td><td>V0: 00 → FF</td><td></td></tr>
+          <tr><td>202</td><td><code>7002</code></td><td>V0 = V0 + 02</td><td>FF + 02 = 101,捨掉進位 → V0: FF → 01;VF 不改,還是 00</td><td></td></tr>
+          <tr><td>204</td><td><code>61C8</code></td><td>V1 = C8</td><td>V1: 00 → C8</td><td></td></tr>
+          <tr><td>206</td><td><code>6264</code></td><td>V2 = 64</td><td>V2: 00 → 64</td><td></td></tr>
+          <tr><td>208</td><td><code>8124</code></td><td>V1 = V1 + V2</td><td>C8 + 64 = 12C → V1: C8 → 2C;有進位,VF: 00 → 01</td><td></td></tr>
+          <tr><td>20A</td><td><code>8125</code></td><td>V1 = V1 − V2</td><td>2C − 64 要借位:12C − 64 = C8 → V1: 2C → C8;VF: 01 → 00</td><td></td></tr>
+          <tr><td>20C</td><td><code>6345</code></td><td>V3 = 45</td><td>V3: 00 → 45</td><td></td></tr>
+          <tr><td>20E</td><td><code>8316</code></td><td>右移</td><td>VIP 移 VY:V3 = C8 &gt;&gt; 1 = 64;移出去的是 C8 的最低位 0,VF 還是 00</td><td>移 VX:V3 = 45 &gt;&gt; 1 = 22;45 的最低位是 1,VF = 01</td></tr>
+          <tr><td>210</td><td><code>A300</code></td><td>I = 300</td><td>I: 000 → 300</td><td></td></tr>
+          <tr><td>212</td><td><code>F333</code></td><td>V3 的 BCD</td><td>V3 = 64 = 100 → [300]=01、[301]=00、[302]=00</td><td>V3 = 22 = 34 → [300]=00、[301]=03、[302]=04</td></tr>
+          <tr><td>214</td><td><code>F155</code></td><td>[I], [I+1] = V0, V1</td><td>[300]=01、[301]=C8;I: 300 → 302</td><td>[300]=01、[301]=C8;I 不變,還是 300</td></tr>
+          <tr><td>216</td><td><code>1216</code></td><td>跳到自己</td><td>停住</td><td></td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        最後:VIP 設定 V0=01、V1=C8、V2=64、V3=64、VF=00、I=0x302,記憶體 [300..302] = <code>01 C8 00</code>;
+        現代設定 V3=22、VF=01、I=0x300,記憶體 [300..302] = <code>01 C8 04</code>,其他一樣。
+        後面的範例模擬器有 <code>trace</code> 模式,會把每一步改了什麼印出來,可以拿來對這張表(在「除錯」那一節)。
+      </p>
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 134.2 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>所有暫存器從 0 開始。逐條寫出下面這支 ROM 改了什麼,VIP 與現代設定各算一次(現代設定:8XY1/2/3 不改 VF)。最後 VA、VB、VF、I 是多少?</p>
+<pre><code class="language-text">200: 6A9C   202: 6B8F   204: 8AB4   206: 8BA7   208: 6F05   20A: 8FA5
+20C: 6F07   20E: 8AB1   210: A2F0   212: FA1E   214: 1214</code></pre>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <div class="table-wrap"><table>
+              <thead><tr><th>位址</th><th>opcode</th><th>改變(VIP)</th><th>現代設定不同的地方</th></tr></thead>
+              <tbody>
+                <tr><td>200</td><td><code>6A9C</code></td><td>VA: 00 → 9C</td><td></td></tr>
+                <tr><td>202</td><td><code>6B8F</code></td><td>VB: 00 → 8F</td><td></td></tr>
+                <tr><td>204</td><td><code>8AB4</code></td><td>9C + 8F = 12B → VA: 9C → 2B;VF: 00 → 01</td><td></td></tr>
+                <tr><td>206</td><td><code>8BA7</code></td><td>VB = VA − VB = 2B − 8F,要借位:12B − 8F = 9C → VB: 8F → 9C;VF: 01 → 00</td><td></td></tr>
+                <tr><td>208</td><td><code>6F05</code></td><td>VF: 00 → 05</td><td></td></tr>
+                <tr><td>20A</td><td><code>8FA5</code></td><td>VF = VF − VA = 05 − 2B,結果 DA 先寫進 VF,再被旗標蓋掉:要借位,VF: 05 → 00</td><td></td></tr>
+                <tr><td>20C</td><td><code>6F07</code></td><td>VF: 00 → 07</td><td></td></tr>
+                <tr><td>20E</td><td><code>8AB1</code></td><td>2B | 9C = BF → VA: 2B → BF;VIP 重設 VF: 07 → 00</td><td>VF 不改,還是 07</td></tr>
+                <tr><td>210</td><td><code>A2F0</code></td><td>I: 000 → 2F0</td><td></td></tr>
+                <tr><td>212</td><td><code>FA1E</code></td><td>I = 2F0 + BF = 3AF;VF 不改</td><td></td></tr>
+                <tr><td>214</td><td><code>1214</code></td><td>停住</td><td></td></tr>
+              </tbody>
+            </table></div>
+            <p>答案:VA=BF、VB=9C、I=0x3AF;VF 在 VIP 設定是 00,在現代設定是 07。20A 那一列是本節的重點:X 是 F 時,VF 最後一定是旗標。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <h2>跳躍、跳過與副程式</h2>
+      <p>CHIP-8 沒有「if」,只有「跳過下一條」:3XNN、4XNN、5XY0、9XY0 條件成立時 PC 再加 2。配上 1NNN(跳躍),就能寫出 if 和迴圈:</p>
+<pre><code class="language-text">300A    V0 == 10 就跳過下一條
+1202    (V0 還不是 10)跳回迴圈開頭
+...     (V0 是 10)從這裡繼續</code></pre>
+      <p>
+        副程式用 2NNN 呼叫、00EE 返回。2NNN 執行時 PC 已經加過 2,所以推進堆疊的就是返回位址。
+        堆疊滿了(16 層)還要再呼叫,或堆疊是空的卻執行 00EE,都是程式的錯誤;模擬器要停下來回報,不能讀寫堆疊陣列外面的記憶體。
+      </p>
+      <p>
+        還有一個習慣:CHIP-8 沒有「停機」指令,程式結束時通常寫一個<strong>跳到自己的 1NNN</strong>(例如在 0x21C 寫 <code>121C</code>)。
+        本章的範例模擬器和地下城的判題驅動程式都把它當成「程式跑完了」。
+      </p>
+
+      <h3>手算:追呼叫堆疊</h3>
+      <p>下面這支 <code>call.ch8</code> 有兩層呼叫:主程式呼叫 A 兩次,A 每次都呼叫 B。每一列是一條指令,堆疊由底寫到頂。</p>
+<pre><code class="language-text"># call.hex:兩層副程式呼叫
+6001  # 200  V0 = 1
+2208  # 202  呼叫 208
+2208  # 204  再呼叫一次 208
+1206  # 206  跳到自己:停
+7002  # 208  V0 = V0 + 2          ← 副程式 A
+220E  # 20A  呼叫 20E
+00EE  # 20C  返回
+8004  # 20E  V0 = V0 + V0         ← 副程式 B
+00EE  # 210  返回</code></pre>
+      <div class="table-wrap"><table>
+        <thead><tr><th>步</th><th>PC</th><th>opcode</th><th>做了什麼</th><th>SP</th><th>堆疊(底 → 頂)</th><th>V0</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td>200</td><td><code>6001</code></td><td>V0 = 1</td><td>0</td><td>(空)</td><td>01</td></tr>
+          <tr><td>2</td><td>202</td><td><code>2208</code></td><td>推 204,跳到 208</td><td>1</td><td>204</td><td>01</td></tr>
+          <tr><td>3</td><td>208</td><td><code>7002</code></td><td>V0 = V0 + 2</td><td>1</td><td>204</td><td>03</td></tr>
+          <tr><td>4</td><td>20A</td><td><code>220E</code></td><td>推 20C,跳到 20E</td><td>2</td><td>204, 20C</td><td>03</td></tr>
+          <tr><td>5</td><td>20E</td><td><code>8004</code></td><td>V0 = V0 + V0(VF = 0)</td><td>2</td><td>204, 20C</td><td>06</td></tr>
+          <tr><td>6</td><td>210</td><td><code>00EE</code></td><td>彈出 20C</td><td>1</td><td>204</td><td>06</td></tr>
+          <tr><td>7</td><td>20C</td><td><code>00EE</code></td><td>彈出 204</td><td>0</td><td>(空)</td><td>06</td></tr>
+          <tr><td>8</td><td>204</td><td><code>2208</code></td><td>推 206,跳到 208</td><td>1</td><td>206</td><td>06</td></tr>
+          <tr><td>9</td><td>208</td><td><code>7002</code></td><td>V0 = V0 + 2</td><td>1</td><td>206</td><td>08</td></tr>
+          <tr><td>10</td><td>20A</td><td><code>220E</code></td><td>推 20C,跳到 20E</td><td>2</td><td>206, 20C</td><td>08</td></tr>
+          <tr><td>11</td><td>20E</td><td><code>8004</code></td><td>V0 = V0 + V0</td><td>2</td><td>206, 20C</td><td>10</td></tr>
+          <tr><td>12</td><td>210</td><td><code>00EE</code></td><td>彈出 20C</td><td>1</td><td>206</td><td>10</td></tr>
+          <tr><td>13</td><td>20C</td><td><code>00EE</code></td><td>彈出 206</td><td>0</td><td>(空)</td><td>10</td></tr>
+          <tr><td>14</td><td>206</td><td><code>1206</code></td><td>跳到自己:停</td><td>0</td><td>(空)</td><td>10</td></tr>
+        </tbody>
+      </table></div>
+      <p>注意第 2 步和第 8 步推進去的返回位址不一樣(204 與 206):返回位址是「呼叫那一條的下一條」,所以同一個副程式從不同地方呼叫,會回到不同地方。用範例模擬器的 trace 驗算:</p>
+<pre><code class="language-text">$ ./chip8demo call.ch8 1 20 trace
+200 6001  V0:00-&gt;01
+202 2208  PC-&gt;208 SP:0-&gt;1
+208 7002  V0:01-&gt;03
+20A 220E  PC-&gt;20E SP:1-&gt;2
+20E 8004  V0:03-&gt;06
+210 00EE  PC-&gt;20C SP:2-&gt;1
+20C 00EE  PC-&gt;204 SP:1-&gt;0
+204 2208  PC-&gt;208 SP:0-&gt;1
+208 7002  V0:06-&gt;08
+20A 220E  PC-&gt;20E SP:1-&gt;2
+20E 8004  V0:08-&gt;10
+210 00EE  PC-&gt;20C SP:2-&gt;1
+20C 00EE  PC-&gt;206 SP:1-&gt;0
+206 1206  PC-&gt;206
+停住:PC=0x206 跳到自己。執行了 14 條指令,在第 1 幀。
+V0-V7: 10 00 00 00 00 00 00 00
+V8-VF: 00 00 00 00 00 00 00 00
+I=0x000  DT=0  ST=0  SP=0
+(畫面全暗)</code></pre>
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 134.3 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>追下面這支 ROM,每一列寫出 PC、做了什麼、SP、堆疊、V0、V1,直到停住。總共執行幾條指令?</p>
+<pre><code class="language-text">200: 6002   V0 = 2
+202: 220C   呼叫 20C          ← 迴圈開頭
+204: 3000   V0 == 0 就跳過下一條
+206: 1202   跳回 202
+208: 1208   停
+20A: 0000   (沒用到)
+20C: 70FF   V0 = V0 + FF
+20E: 7101   V1 = V1 + 1
+210: 00EE   返回</code></pre>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <div class="table-wrap"><table>
+              <thead><tr><th>步</th><th>PC</th><th>opcode</th><th>做了什麼</th><th>SP</th><th>堆疊</th><th>V0</th><th>V1</th></tr></thead>
+              <tbody>
+                <tr><td>1</td><td>200</td><td><code>6002</code></td><td>V0 = 2</td><td>0</td><td>(空)</td><td>02</td><td>00</td></tr>
+                <tr><td>2</td><td>202</td><td><code>220C</code></td><td>推 204,跳到 20C</td><td>1</td><td>204</td><td>02</td><td>00</td></tr>
+                <tr><td>3</td><td>20C</td><td><code>70FF</code></td><td>02 + FF = 101,捨掉進位(VF 不改)</td><td>1</td><td>204</td><td>01</td><td>00</td></tr>
+                <tr><td>4</td><td>20E</td><td><code>7101</code></td><td>V1 + 1</td><td>1</td><td>204</td><td>01</td><td>01</td></tr>
+                <tr><td>5</td><td>210</td><td><code>00EE</code></td><td>彈出 204</td><td>0</td><td>(空)</td><td>01</td><td>01</td></tr>
+                <tr><td>6</td><td>204</td><td><code>3000</code></td><td>V0 = 1,不跳過</td><td>0</td><td>(空)</td><td>01</td><td>01</td></tr>
+                <tr><td>7</td><td>206</td><td><code>1202</code></td><td>跳到 202</td><td>0</td><td>(空)</td><td>01</td><td>01</td></tr>
+                <tr><td>8</td><td>202</td><td><code>220C</code></td><td>推 204,跳到 20C</td><td>1</td><td>204</td><td>01</td><td>01</td></tr>
+                <tr><td>9</td><td>20C</td><td><code>70FF</code></td><td>01 + FF = 100 → 00</td><td>1</td><td>204</td><td>00</td><td>01</td></tr>
+                <tr><td>10</td><td>20E</td><td><code>7101</code></td><td>V1 + 1</td><td>1</td><td>204</td><td>00</td><td>02</td></tr>
+                <tr><td>11</td><td>210</td><td><code>00EE</code></td><td>彈出 204</td><td>0</td><td>(空)</td><td>00</td><td>02</td></tr>
+                <tr><td>12</td><td>204</td><td><code>3000</code></td><td>V0 = 0,跳過 206,PC = 208</td><td>0</td><td>(空)</td><td>00</td><td>02</td></tr>
+                <tr><td>13</td><td>208</td><td><code>1208</code></td><td>跳到自己:停</td><td>0</td><td>(空)</td><td>00</td><td>02</td></tr>
+              </tbody>
+            </table></div>
+            <p>共 13 條,最後 V0=00、V1=02、堆疊是空的。<code>70FF</code> 是 CHIP-8 裡「減 1」的寫法:加 FF 再捨掉進位,等於減 1(8 位元的二補數,見第 51 章)。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <h2>計時器與「每幀幾條指令」</h2>
+      <p>
+        CHIP-8 有兩個 8 位元的計時器:<strong>DT(delay timer)</strong>和 <strong>ST(sound timer)</strong>。程式用 FX15、FX18 設定它們,用 FX07 讀 DT。
+        只要大於 0,它們就以每秒 60 次的速度減 1,減到 0 就停;ST 大於 0 的時候喇叭會響。遊戲用 DT 控制速度(「等 1/6 秒」就是設 DT=10 再一直讀到 0),用 ST 發出嗶聲。
+      </p>
+      <p>
+        那 CPU 跑多快?原機上每條指令花的時間不一樣(畫 sprite 最慢),沒有一個標準答案。模擬器通常這樣近似:
+        <strong>每一幀(1/60 秒)執行固定的 ipf 條指令,然後計時器各減 1</strong>。常見的設定是每幀十條左右(每秒幾百條);
+        有些遊戲要調快或調慢才好玩。地下城的 Boss 戰「CHIP-8 畫面重播」固定用每幀 30 條,這樣每個人的結果才能逐幀比對。
+      </p>
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">核心觀念</span>
+          <p>ipf 是規格的一部分。同一支 ROM、同一組按鍵,ipf 不同,結果就可能不同:讀 DT 的迴圈會多跑或少跑幾圈。
+          要讓兩台模擬器的結果可以比對,除了指令的規則,還要說好「一幀幾條指令、計時器在一幀的哪裡減」。</p>
+        </div>
+      </div>
+
+      <h3>手算:計時器一幀一幀倒數</h3>
+      <p><code>timer.ch8</code> 把 DT 設成 5,然後一直讀 DT 直到變 0;V2 數迴圈跑了幾圈。用 ipf = 10 追每一幀:</p>
+<pre><code class="language-text"># timer.hex:DT 設成 5,一直讀 DT 直到變 0,V2 數迴圈跑了幾圈
+6005  # 200  V0 = 5
+F015  # 202  DT = V0
+F107  # 204  V1 = DT              ← 迴圈從這裡開始
+7201  # 206  V2 = V2 + 1
+3100  # 208  V1 == 0 就跳過下一條
+1204  # 20A  跳回 204
+120C  # 20C  跳到自己:停</code></pre>
+      <div class="table-wrap"><table>
+        <thead><tr><th>幀</th><th>這一幀執行的位址(10 條)</th><th>F107 讀到的 DT</th><th>幀尾的 V2</th><th>幀尾 DT 減 1 之後</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td>200 202 204 206 208 20A 204 206 208 20A</td><td>5, 5</td><td>2</td><td>5 → 4</td></tr>
+          <tr><td>2</td><td>204 206 208 20A 204 206 208 20A 204 206</td><td>4, 4, 4</td><td>5</td><td>4 → 3</td></tr>
+          <tr><td>3</td><td>208 20A 204 206 208 20A 204 206 208 20A</td><td>3, 3</td><td>7</td><td>3 → 2</td></tr>
+          <tr><td>4</td><td>204 206 208 20A 204 206 208 20A 204 206</td><td>2, 2, 2</td><td>10</td><td>2 → 1</td></tr>
+          <tr><td>5</td><td>208 20A 204 206 208 20A 204 206 208 20A</td><td>1, 1</td><td>12</td><td>1 → 0</td></tr>
+          <tr><td>6</td><td>204 206 208 20C(第 4 條就停了)</td><td>0</td><td>13</td><td>(停住,不再減)</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        一共 5×10 + 4 = 54 條指令,停在第 6 幀,V2 = 13 = 0x0D。注意第 1 幀:DT 在第 2 條指令才被設成 5,一幀結束時照樣減 1。
+        計時器不管「這一幀它被設定了多久」,它只在幀尾減一次。範例模擬器的結果:
+      </p>
+<pre><code class="language-text">$ ./chip8demo timer.ch8
+停住:PC=0x20C 跳到自己。執行了 54 條指令,在第 6 幀。
+V0-V7: 05 00 0D 00 00 00 00 00
+V8-VF: 00 00 00 00 00 00 00 00
+I=0x000  DT=0  ST=0  SP=0
+(畫面全暗)</code></pre>
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 134.4 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>同一支 <code>timer.ch8</code>,改用 ipf = 7。照上面的表格追每一幀:這一幀執行的位址、F107 讀到的 DT、幀尾的 V2。最後 V2 是多少?一共幾條指令?停在第幾幀?</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <div class="table-wrap"><table>
+              <thead><tr><th>幀</th><th>這一幀執行的位址(7 條)</th><th>F107 讀到的 DT</th><th>幀尾的 V2</th><th>幀尾 DT</th></tr></thead>
+              <tbody>
+                <tr><td>1</td><td>200 202 204 206 208 20A 204</td><td>5, 5</td><td>1</td><td>5 → 4</td></tr>
+                <tr><td>2</td><td>206 208 20A 204 206 208 20A</td><td>4</td><td>3</td><td>4 → 3</td></tr>
+                <tr><td>3</td><td>204 206 208 20A 204 206 208</td><td>3, 3</td><td>5</td><td>3 → 2</td></tr>
+                <tr><td>4</td><td>20A 204 206 208 20A 204 206</td><td>2, 2</td><td>7</td><td>2 → 1</td></tr>
+                <tr><td>5</td><td>208 20A 204 206 208 20A 204</td><td>1, 1</td><td>8</td><td>1 → 0</td></tr>
+                <tr><td>6</td><td>206 208 20A 204 206 208 20C</td><td>0</td><td>10</td><td>(停住)</td></tr>
+              </tbody>
+            </table></div>
+            <p>V2 = 10 = 0x0A,一共 42 條指令,停在第 6 幀。ipf = 10 時 V2 是 13:同一支 ROM,只因為 CPU 快慢不同,迴圈跑的圈數就不一樣。驗算:</p>
+<pre><code class="language-text">$ ./chip8demo timer.ch8 60 7
+停住:PC=0x20C 跳到自己。執行了 42 條指令,在第 6 幀。
+V0-V7: 05 00 0A 00 00 00 00 00
+V8-VF: 00 00 00 00 00 00 00 00
+I=0x000  DT=0  ST=0  SP=0
+(畫面全暗)</code></pre>
+          </div></details>
+        </div>
+      </div>
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">看起來對但其實錯:「每執行一條指令,DT 就減 1」</span>
+          <p>把計時器放進「每條指令」的迴圈裡,寫起來最簡單,而且只要程式不看 DT,一切正常。可是上面的 <code>timer.ch8</code> 用 ipf = 10 跑,
+          DT 會在第 1 幀內就從 5 減到 0,V2 只會是 2 左右,而不是 13;遊戲的速度也會跟著 ipf 一起變。計時器的單位是「幀」(1/60 秒),不是「指令」。</p>
+        </div>
+      </div>
+
+      <h2>按鍵與 FX0A:等一個「放開」</h2>
+      <p>
+        CHIP-8 用三條指令讀鍵盤。EX9E、EXA1 只是「看一眼」:鍵 VX 現在有沒有按著,決定要不要跳過下一條。
+        FX0A 不一樣,它會<strong>停下來等</strong>,直到使用者按了一個鍵,才把鍵的編號放進 VX、往下走。
+      </p>
+      <p>
+        「停下來」在模擬器裡要小心寫:你不能在 FX0A 裡寫一個 <code>while</code> 迴圈等按鍵,因為等的時候主迴圈也停了,計時器不會倒數、畫面不會更新、按鍵事件也進不來。
+        正確的做法是:FX0A 這一步<strong>不把 PC 往下推</strong>,下一步又會取到同一條 FX0A,於是每一步都重新檢查一次;等的時候每一步照樣算一條指令,計時器也照常倒數。
+      </p>
+      <p>
+        還有一個細節:在 COSMAC VIP 上,FX0A 要等到鍵<strong>按下再放開</strong>才算數。地下城的 Lab 也照這個規則:FX0A 開始等之後,某個鍵由「按著」變成「放開」,
+        才把那個鍵交給 VX;按著不放不會繼續;FX0A 開始之前就按完放開的鍵不算。下面是一個例子(ipf = 10,DT 先設成 3):
+      </p>
+<pre><code class="language-text">200: 6003   V0 = 3
+202: F015   DT = 3
+204: F30A   等一個按鍵,V3 = 那個鍵
+206: F407   V4 = DT
+208: 1208   停</code></pre>
+      <div class="table-wrap"><table>
+        <thead><tr><th>幀</th><th>這一幀開始前的按鍵事件</th><th>這一幀裡發生的事</th><th>幀尾的 PC</th><th>幀尾 DT</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td>(沒有)</td><td>6003、F015,然後 F30A 開始等;這一幀剩下的 7 條都是同一條 F30A</td><td>204</td><td>3 → 2</td></tr>
+          <tr><td>2</td><td>按下 7</td><td>10 條都是 F30A:按下不算,要等放開</td><td>204</td><td>2 → 1</td></tr>
+          <tr><td>3</td><td>按下 2</td><td>10 條都是 F30A</td><td>204</td><td>1 → 0</td></tr>
+          <tr><td>4</td><td>放開 2</td><td>F30A 看到 2 放開了:V3 = 2,PC 往下走;F407:V4 = DT = 0;1208 停住</td><td>208</td><td>(停住)</td></tr>
+          <tr><td>5</td><td>放開 7</td><td>程式已經停了,沒有影響</td><td>208</td><td></td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        結果 V3 = 2(先放開的那個鍵,不是先按下的 7)、V4 = 0,一共執行 10 + 10 + 10 + 3 = 33 條指令,其中 F30A 算了 8 + 10 + 10 + 1 = 29 次。
+        等按鍵的三幀裡,DT 照常從 3 倒數到 0。
+      </p>
+      <p>本章的範例模擬器沒有鍵盤,遇到 EX9E、EXA1、FX0A 會停下來說「不支援」。把它們做出來是 Lab 的工作。</p>
+
+      <h2>怪癖:同一個 opcode,兩種答案</h2>
+      <p>
+        CHIP-8 從來沒有一份正式的標準。1990 年前後,有人在 HP-48 計算機上重寫了直譯器(CHIP-48,後來擴充成 SUPER-CHIP),
+        有幾條指令的行為和 COSMAC VIP 原機不一樣;後來的人照著這些版本的文件寫模擬器,差異就一路傳下來。
+        這些差異叫做<strong>怪癖(quirk)</strong>。舊遊戲照 VIP 的行為寫,較新的遊戲照 CHIP-48/SUPER-CHIP 寫,同一台模擬器很難兩邊都跑對,所以好的模擬器把怪癖做成可以切換的設定。
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>指令</th><th>COSMAC VIP(地下城 Lab 的預設)</th><th>後來的做法(Lab 的 MODERN 設定)</th><th>Lab 的旗標</th></tr></thead>
+        <tbody>
+          <tr><td>8XY6、8XYE 移位</td><td>先把 VY 放進 VX 再移:VX = VY &gt;&gt; 1、VX = VY &lt;&lt; 1;VF = 移出去的位元(VY 的)</td><td>只移 VX,不看 VY</td><td><code>C8_Q_SHIFT_VY</code></td></tr>
+          <tr><td>FX55、FX65 存取多個暫存器</td><td>做完之後 I 加 X + 1(I 停在最後一格的下一格)</td><td>I 不變(SUPER-CHIP 的做法)</td><td><code>C8_Q_LOAD_INC_I</code></td></tr>
+          <tr><td>BNNN 跳躍</td><td>跳到 NNN + V0</td><td>當成 BXNN:跳到 XNN + VX</td><td><code>C8_Q_JUMP_V0</code></td></tr>
+          <tr><td>8XY1、8XY2、8XY3 邏輯運算</td><td>做完之後 VF = 0(原機的機器碼副作用)</td><td>VF 不變</td><td><code>C8_Q_VF_RESET</code></td></tr>
+          <tr><td>DXYN 畫到邊緣</td><td>超出右邊或下面的格子丟掉(裁切)</td><td>從另一邊繞回來</td><td><code>C8_Q_CLIP</code></td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        地下城的兩個 CHIP-8 任務<strong>預設照 COSMAC VIP</strong>(<code>C8_PROFILE_VIP</code>:五個旗標全開),但五個旗標都要支援;
+        隱藏檢定會用 MODERN 設定(五個全關)和「只開一個旗標」的設定,再跑同一批 ROM。本章的範例模擬器只做 VIP 一種。
+      </p>
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">「現代」不是一個標準</span>
+          <p>表格右欄只是 Lab 為了測試定出來的一組設定。真實世界的「現代」直譯器各有各的組合:例如很多直譯器移位照 SUPER-CHIP、畫圖卻照 VIP 裁切。
+          還有一個怪癖這張表沒列:VIP 畫 sprite 之前會等畫面的垂直空白期,所以每幀最多畫一次;地下城的 Lab 不模擬這一點。
+          想看各版本的完整差異,可以讀本章最後延伸資源裡的 opcode 對照表。</p>
+        </div>
+      </div>
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">看起來對但其實錯:「8XY6 在每個直譯器上都是把 VX 右移一位」</span>
+          <p>很多網路教學只寫「8XY6:VX = VX &gt;&gt; 1」。你照著寫,再拿 <code>8336</code>、<code>8556</code> 這種 X 等於 Y 的測試去試,答案都對,因為 VX 就是 VY。
+          可是 COSMAC VIP 原機做的是 VX = VY &gt;&gt; 1:手算 134.2 前面那張表的 <code>8316</code>,VIP 得到 V3 = 64,「只移 VX」得到 22。
+          照 VIP 寫的老遊戲,在「只移 VX」的模擬器上就會算錯分數或亂跑。測試要挑 X ≠ Y、而且 VX 和 VY 不一樣的例子,才分得出來。</p>
+        </div>
+      </div>
+      <div class="callout history">
+        <div class="ico">📜</div>
+        <div class="body">
+          <span class="c-title">歷史小注</span>
+          <p>CHIP-8 出現在 1970 年代後期,作者 Joseph Weisbecker 在 RCA 設計了 1802 微處理器和 COSMAC VIP。VIP 是一台用十六進位鍵盤輸入的小電腦,
+          CHIP-8 讓使用者不必寫 1802 的機器碼,也能寫小遊戲。1990 年,Andreas Gustafsson 在 HP-48 繪圖計算機上寫了 CHIP-48;
+          Erik Bryntse 以它為基礎做出 SUPER-CHIP,加了更高的解析度和新指令。本書只做原本的 CHIP-8。</p>
+        </div>
+      </div>
+
+      <h3 id="lab-chip8-cpu">本章 Lab:CHIP-8 CPU chip8/cpu.c</h3>
+      <div class="callout lab" data-task="chip8/cpu">
+        <div class="ico">🧪</div>
+        <div class="body">
+          <span class="c-title">本章 Lab · 任務線「emu」· 任務「CHIP-8 CPU」</span>
+          <p><strong>對應地下城任務:</strong>任務「CHIP-8 CPU」(任務線:emu 模擬器三部曲,第 2 個任務)。零件檔:<code>~/零件庫/chip8/cpu.c</code>。
+          規格標頭 <code>~/零件庫/chip8/chip8.h</code> 由任務給(起始碼),判題一律用規格版,不要改它。</p>
+          <p><strong>要做的零件:</strong>CHIP-8 的 CPU:取指、解碼、執行全部 35 條標準指令,加上計時器和狀態傾印。記憶體一律經過<a href="133-c-deep-dive.html#lab-emu-bus">第 51 章你自己的 <code>emu/bus.c</code></a>。怪癖預設照 COSMAC VIP,但五個旗標都要支援(上一節「怪癖:同一個 opcode,兩種答案」的表)。00E0、DXYN 與按鍵事件是下一個任務的事:這個任務判題時,它們由參考版的 <code>display.c</code> 提供。</p>
+          <p><strong>介面:</strong>整個 <code>chip8.h</code>(兩個 CHIP-8 任務共用;struct 的欄位是規格,判題的驅動程式直接讀它們):</p>
+<pre><code class="language-c">// ~/零件庫/chip8/chip8.h:規格標頭(任務給的,不要改;判題用這一份)
+#ifndef CHIP8_H
+#define CHIP8_H
+#include &lt;stdint.h&gt;
+#include &lt;stddef.h&gt;
+#include &lt;stdio.h&gt;
+#include "emu/bus.h"
+
+#define C8_MEM 4096u               // 記憶體 4 KiB;位址一律 &amp; 0xFFF
+#define C8_W 64
+#define C8_H 32
+#define C8_FONT_ADDR 0x050u        // 字型放在 0x050–0x09F
+#define C8_START 0x200u            // 程式從 0x200 開始
+#define C8_TEXT_SIZE (C8_H * (C8_W + 1) + 1)
+
+// 怪癖旗標:打開＝COSMAC VIP 的做法
+enum {
+    C8_Q_SHIFT_VY = 1,     // 8XY6/8XYE:先 VX = VY 再移位(關:只移 VX)
+    C8_Q_LOAD_INC_I = 2,   // FX55/FX65:做完 I 加 X+1(關:I 不變)
+    C8_Q_JUMP_V0 = 4,      // BNNN:跳到 NNN+V0(關:BXNN 跳到 XNN+VX)
+    C8_Q_VF_RESET = 8,     // 8XY1/8XY2/8XY3:做完 VF = 0(關:VF 不變)
+    C8_Q_CLIP = 16,        // DXYN:超出右邊、下面的格子丟掉(關:繞回另一邊)
+};
+#define C8_PROFILE_VIP (C8_Q_SHIFT_VY | C8_Q_LOAD_INC_I | C8_Q_JUMP_V0 | C8_Q_VF_RESET | C8_Q_CLIP)
+#define C8_PROFILE_MODERN 0u
+
+// chip8_step 的回傳碼
+enum { C8_OK = 0, C8_WAIT = 1, C8_BAD_OPCODE = -1, C8_STACK_OVERFLOW = -2, C8_STACK_UNDERFLOW = -3 };
+
+typedef struct {           // 欄位是規格:驅動程式直接讀它們來比對與傾印
+    uint8_t v[16];         // V0..VF
+    uint16_t i, pc;        // I 是 16 位元;PC 一律在 0x000..0xFFF
+    uint8_t sp;            // 堆疊裡有幾個返回位址(0..16)
+    uint16_t stack[16];
+    uint8_t dt, st;        // 計時器
+    uint8_t keys[16];      // 1 = 按著
+    uint8_t waiting;       // FX0A 正在等
+    uint8_t released;      // 等的時候第一個放開的鍵;0xFF = 還沒有
+    uint8_t fb[C8_H][C8_W];// 畫面,每格 0 或 1
+    uint32_t quirks;
+    uint32_t rng;          // xorshift32 的狀態
+    uint64_t cycles;       // 執行了幾步(C8_WAIT 也算;錯誤不算)
+    Bus *bus;              // 所有記憶體存取都經過它
+} Chip8;
+
+static const uint8_t C8_FONT[80] = {   // 0–F,每個字 5 個位元組
+    0xF0,0x90,0x90,0x90,0xF0, 0x20,0x60,0x20,0x20,0x70, 0xF0,0x10,0xF0,0x80,0xF0, 0xF0,0x10,0xF0,0x10,0xF0,
+    0x90,0x90,0xF0,0x10,0x10, 0xF0,0x80,0xF0,0x10,0xF0, 0xF0,0x80,0xF0,0x90,0xF0, 0xF0,0x10,0x20,0x40,0x40,
+    0xF0,0x90,0xF0,0x90,0xF0, 0xF0,0x90,0xF0,0x10,0xF0, 0xF0,0x90,0xF0,0x90,0x90, 0xE0,0x90,0xE0,0x90,0xE0,
+    0xF0,0x80,0x80,0x80,0xF0, 0xE0,0x90,0x90,0x90,0xE0, 0xF0,0x80,0xF0,0x80,0xF0, 0xF0,0x80,0xF0,0x80,0x80};
+
+// ── chip8/cpu.c(任務「CHIP-8 CPU」)──
+int chip8_init(Chip8 *c, Bus *bus, uint32_t quirks, uint32_t seed);
+int chip8_load(Chip8 *c, const uint8_t *rom, size_t n);
+int chip8_step(Chip8 *c);
+void chip8_tick_timers(Chip8 *c);
+int chip8_sound_on(const Chip8 *c);
+void chip8_dump(const Chip8 *c, FILE *out);
+// ── chip8/display.c(任務「CHIP-8 畫面與按鍵」)──
+void chip8_cls(Chip8 *c);
+int chip8_draw(Chip8 *c, uint8_t x, uint8_t y, uint16_t addr, uint8_t n);
+void chip8_key_event(Chip8 *c, uint8_t key, int down);
+int chip8_run_frame(Chip8 *c, unsigned ipf);
+uint32_t chip8_fb_hash(const Chip8 *c);
+void chip8_fb_text(const Chip8 *c, char *out);   // out 至少 C8_TEXT_SIZE 個字元
+#endif</code></pre>
+<pre><code class="language-c">// chip8/cpu.c 要遵守的規則(標頭裡沒辦法寫的部分)
+// chip8_init  全部清 0,PC=0x200,C8_FONT 經過 bus 寫進 0x050–0x09F,quirks 照參數,
+//             rng = seed(seed 是 0 時用 1),released = 0xFF;bus 是 NULL 或小於 4096 → 回 -1。
+// chip8_load  從 0x200 開始寫;n &gt; 3584 → 回 -1,什麼都不寫。
+// chip8_step  取指:PC、PC+1 兩個位元組,高位元組在前;解碼、執行 35 條標準指令。
+//             成功回 C8_OK,cycles 加 1;FX0A 在等時回 C8_WAIT(PC 不動,cycles 照加)。
+//             不認得的 opcode、第 17 層呼叫、空堆疊的 00EE → 回錯誤碼,狀態完全不變
+//             (PC 不動、cycles 不加、什麼都沒寫)。
+//   位址      PC、I+k 一律 &amp; 0xFFF(在 4 KiB 裡繞回);I 本身是 16 位元;
+//             所有記憶體讀寫都經過 c-&gt;bus,不能另外留一份記憶體。
+//   0NNN      00E0、00EE 以外的 0NNN 當成不做事。
+//   VF        8XY4/5/6/7/E:先算結果寫進 VX,最後才寫 VF(X 是 F 時 VF 就是旗標);
+//             8XY5、8XY7:VF = 1 表示沒有借位;7XNN、FX1E 不改 VF。
+//   CXNN      rng 做一次 xorshift32:x ^= x &lt;&lt; 13; x ^= x &gt;&gt; 17; x ^= x &lt;&lt; 5;
+//             VX = (rng &amp; 0xFF) &amp; NN。
+//   DXYN      VF = chip8_draw(c, VX, VY, I, N)(先讀座標,畫完才寫 VF)。
+//   FX0A      第一次執行:waiting = 1、released = 0xFF,回 C8_WAIT;
+//             之後每一步:released 還是 0xFF 就再回 C8_WAIT;
+//             有值就 VX = released、waiting = 0、released = 0xFF,PC 往下走。
+//   FX29      I = 0x050 + 5 × (VX &amp; 0xF)。
+// chip8_tick_timers  DT、ST 大於 0 就各減 1(一幀一次);chip8_sound_on 回傳 ST &gt; 0。
+// chip8_dump  印三行:
+//             PC=%03X I=%04X SP=%X DT=%02X ST=%02X
+//             V= 後面 16 個 %02X,用一個空白隔開
+//             S= 後面堆疊裡的 sp 個 %03X,用一個空白隔開(空堆疊就只有 S=)</code></pre>
+          <p><strong>公開範例:</strong>(在任務資料夾用 <code>build</code> 編譯:它會加上 <code>-I ~/零件庫</code>、你的 <code>emu/bus.c</code> 與參考版的畫面零件)</p>
+<pre><code class="language-c">// cpu_demo.c:公開範例(用你的 emu/bus.c 與 chip8/cpu.c)
+#include &lt;stdio.h&gt;
+#include "chip8/chip8.h"
+
+static const uint8_t rom[] = {
+    0x61, 0x2D,   // 200: V1 = 0x2D (45)
+    0x62, 0xF0,   // 202: V2 = 0xF0
+    0x81, 0x24,   // 204: V1 += V2 → 0x1D,VF = 1(進位)
+    0x83, 0x26,   // 206: VIP:V3 = V2 &gt;&gt; 1 = 0x78,VF = 0
+    0x22, 0x10,   // 208: call 210
+    0xA3, 0x00,   // 20A: I = 300
+    0xF3, 0x55,   // 20C: [300..303] = V0..V3;VIP:I = 304
+    0x12, 0x0E,   // 20E: 跳到自己(停)
+    0xF1, 0x33,   // 210: [I..I+2] = V1 的百、十、個位(I = 0,寫進 000..002)
+    0x00, 0xEE,   // 212: return
+};
+
+static void run(uint32_t quirks) {
+    Bus *bus = bus_new(C8_MEM);
+    Chip8 c;
+    chip8_init(&amp;c, bus, quirks, 1);
+    chip8_load(&amp;c, rom, sizeof rom);
+    for (int k = 0; k &lt; 9; k++) chip8_step(&amp;c);   // 9 條之後停在 20E
+    chip8_dump(&amp;c, stdout);
+    printf("cycles=%llu mem[000..002]=%u %u %u mem[300..303]=%02X %02X %02X %02X\n",
+           (unsigned long long)c.cycles, bus_read8(bus, 0x000), bus_read8(bus, 0x001),
+           bus_read8(bus, 0x002), bus_read8(bus, 0x300), bus_read8(bus, 0x301),
+           bus_read8(bus, 0x302), bus_read8(bus, 0x303));
+    bus_free(bus);
+}
+
+int main(void) {
+    run(C8_PROFILE_VIP);
+    run(C8_PROFILE_MODERN);
+
+    Bus *bus = bus_new(C8_MEM);
+    Chip8 c;
+    chip8_init(&amp;c, bus, C8_PROFILE_VIP, 1);
+    const uint8_t bad[] = {0x00, 0xEE, 0x51, 0x21};
+    chip8_load(&amp;c, bad, sizeof bad);
+    int r = chip8_step(&amp;c);                       // 空堆疊的 00EE
+    printf("00EE -&gt; %d PC=%03X cycles=%llu\n", r, c.pc, (unsigned long long)c.cycles);
+    c.pc = 0x202;
+    r = chip8_step(&amp;c);                           // 5121 不是合法的指令
+    printf("5121 -&gt; %d PC=%03X\n", r, c.pc);
+    Bus *small = bus_new(16);
+    printf("init small bus -&gt; %d\n", chip8_init(&amp;c, small, C8_PROFILE_VIP, 1));
+    bus_free(small);
+    bus_free(bus);
+    return 0;
+}</code></pre>
+          <p>輸出(前兩段是同一支 ROM 的 VIP 與 MODERN 設定:看 V3 和 I):</p>
+<pre><code class="language-text">PC=20E I=0304 SP=0 DT=00 ST=00
+V=00 1D F0 78 00 00 00 00 00 00 00 00 00 00 00 00
+S=
+cycles=9 mem[000..002]=0 2 9 mem[300..303]=00 1D F0 78
+PC=20E I=0300 SP=0 DT=00 ST=00
+V=00 1D F0 00 00 00 00 00 00 00 00 00 00 00 00 00
+S=
+cycles=9 mem[000..002]=0 2 9 mem[300..303]=00 1D F0 00
+00EE -&gt; -3 PC=200 cycles=0
+5121 -&gt; -1 PC=202
+init small bus -&gt; -1</code></pre>
+          <p><strong>和本章範例不同的地方:</strong>可以參考本章的範例,但介面和要求不同,要自己改寫。<a href="#chip8demo"><code>chip8demo.c</code></a> 和 Lab 不同的地方:</p>
+          <ul>
+            <li>範例只做 VIP 一種怪癖;Lab 要五個怪癖旗標都能切換,MODERN 設定由隱藏檢定檢查。</li>
+            <li>範例沒有 BNNN、EX9E、EXA1、FX0A(遇到就停下來說不支援);Lab 要全部 35 條,FX0A 等「放開」,而且不能在 FX0A 裡寫迴圈等按鍵。</li>
+            <li>範例的 CXNN 用 <code>rand()</code>;Lab 用規定的 xorshift32 與 seed,同一個 seed 每台機器都得到同一串亂數,結果才能比對。</li>
+            <li>範例的記憶體是 <code>struct</code> 裡的 <code>mem</code> 陣列;Lab 的每一次讀寫都要經過 <code>c-&gt;bus</code>(隱藏檢定會在記憶體上掛 MMIO 探針)。</li>
+            <li>範例堆疊出錯時用 <code>assert</code> 中止,不支援的指令也已經把 PC 加 2;Lab 回傳 <code>C8_STACK_OVERFLOW</code>、<code>C8_STACK_UNDERFLOW</code>、<code>C8_BAD_OPCODE</code>,而且錯誤時狀態完全不變。</li>
+            <li>範例在 <code>step()</code> 裡自己判斷「跳到自己就停」,在 <code>main()</code> 裡減計時器、用 <code>show()</code> 印結果;Lab 的 <code>chip8_step</code> 只執行一條(停不停由驅動程式決定),計時器是 <code>chip8_tick_timers</code>,傾印是固定格式的 <code>chip8_dump</code>。</li>
+          </ul>
+          <p><strong>任務目標</strong>(公開的用 <code>test</code> 自己跑;隱藏檢定在 <code>submit</code> 時跑,只看得到名稱和一行說明):</p>
+          <ul class="lab-goals">
+            <li data-group="cpu.alu">☐ <strong>算術與邏輯</strong>〔公開〕公開 ROM:6XNN、7XNN、8XY0–8XY7、8XYE 之後的 V0–VF(VIP 設定),含進位與借位旗標。</li>
+            <li data-group="cpu.flow">☐ <strong>跳躍、呼叫與跳過</strong>〔公開〕公開 ROM:1NNN、2NNN、00EE、BNNN 與 3XNN、4XNN、5XY0、9XY0 的跳過,看 PC、SP 與堆疊。</li>
+            <li data-group="cpu.memory">☐ <strong>記憶體指令</strong>〔公開〕公開 ROM:ANNN、FX1E、FX29、FX33、FX55、FX65 之後的 I 與記憶體傾印。</li>
+            <li data-group="cpu.timers">☐ <strong>計時器</strong>〔公開〕FX07、FX15、FX18;chip8_tick_timers 減到 0 就停;chip8_sound_on。</li>
+            <li data-group="cpu.dump">☐ <strong>狀態傾印</strong>〔公開〕chip8_dump 的三行格式(大寫十六進位、位數、空白)對公開範例逐字相同。</li>
+            <li data-group="cpu.flags">☐ <strong>旗標的先後</strong>〔隱藏檢定〕VF 本身當運算元(X 或 Y 是 F)時,先算結果再寫旗標;7XNN 溢位不改 VF;FX1E 不改 VF。</li>
+            <li data-group="cpu.quirks">☐ <strong>怪癖設定</strong>〔隱藏檢定〕同一批 ROM 在 MODERN 設定與只開單一旗標的設定下,結果各自正確(移位用 VX 或 VY、FX55/FX65 改不改 I、BNNN 或 BXNN、VF 重不重設)。</li>
+            <li data-group="cpu.edge">☐ <strong>邊界</strong>〔隱藏檢定〕PC 與 I+k 在 0xFFF 繞回;剛好 16 層呼叫;FX33 的 0 與 255;X 是 F 的 FX55/FX65;0NNN 不做事;CXNN 的 NN 是 00 與 FF;seed 0;同一個 seed 的亂數序列。</li>
+            <li data-group="cpu.errors">☐ <strong>錯誤處理</strong>〔隱藏檢定〕不認得的 opcode(5XY1、8XY8、EX00、FX00…)回 C8_BAD_OPCODE;第 17 層呼叫回 C8_STACK_OVERFLOW;空堆疊 00EE 回 C8_STACK_UNDERFLOW;三種錯誤之後狀態完全不變;chip8_load 太大、chip8_init 的 bus 太小回 -1。</li>
+            <li data-group="cpu.wait">☐ <strong>等按鍵</strong>〔隱藏檢定〕FX0A:按住不放不會繼續、放開才繼續,VX＝放開的鍵;等的時候 PC 不動、週期照算、計時器照常倒數;FX0A 之前就放開的鍵不算。</li>
+            <li data-group="cpu.uses-bus">☐ <strong>經過自己的匯流排</strong>〔隱藏檢定〕驅動程式在 4 KiB 的某一段掛 MMIO 探針,在那裡取指、FX33、FX55、FX65,探針都要看到正確的位址與順序(不能另外用自己的陣列當記憶體)。</li>
+            <li data-group="cpu.perf">☐ <strong>效能</strong>〔隱藏檢定〕每一步 O(1):不能每步複製記憶體或掃整個指令表。門檻:一支迴圈 ROM 跑 2×10<sup>7</sup> 條指令(算術、跳躍、呼叫、FX55/FX65 混合),1 秒內。這個門檻來自 Boss 戰「CHIP-8 隱藏 ROM」(8 支 ROM 合計 8×10<sup>6</sup> 個週期,2 秒內批改完)與任務「CHIP-8 畫面與按鍵」的效能目標。</li>
+          </ul>
+          <p><strong>規則:</strong>只交 <code>cpu.c</code>,只用 C 標準函式庫;要 <code>#include "chip8/chip8.h"</code>(它會帶進 <code>emu/bus.h</code>),記憶體一律用你的 <code>emu/bus</code>,也可以用你的 <code>emu/bits.h</code> 拆欄位。編譯指令由檢定產生(<code>-std=c17 -Wall -Werror -O2 -I ~/零件庫</code>,加上你的 <code>emu/bus.c</code>),警告就是錯誤。</p>
+          <p><strong>之後會用在:</strong>下一個任務<a href="#lab-chip8-display">畫面與按鍵</a>(DXYN 呼叫它的 <code>chip8_draw</code>,一幀的迴圈呼叫你的 <code>chip8_step</code>);檢查點 1 的 Boss 戰「CHIP-8 隱藏 ROM」。同樣的取指 → 解碼 → 執行,之後換成 Game Boy 的 SM83 與 GBA 的 ARM7TDMI。</p>
+          <p class="lab-rule">這個零件過關之後,後面的專題一律用你自己的版本。規則見<a href="00-about.html#lab-rules">零件庫規則</a>。</p>
+        </div>
+      </div>
+
+      <h2>畫面:用 XOR 畫 sprite</h2>
+      <p>
+        CHIP-8 只有兩條畫圖指令:00E0 清畫面,DXYN 畫一個 <strong>sprite</strong>。sprite 是記憶體裡從 I 開始的 N 個位元組,
+        每個位元組是一列、8 格寬,最高位元在最左邊;N 可以是 1 到 15,所以 sprite 最大 8×15。N = 0 在 CHIP-8 裡什麼都不畫,VF = 0(SUPER-CHIP 才把它當成 16×16 的大 sprite)。
+      </p>
+      <p>DXYN 不是「把 sprite 蓋上去」,而是<strong>XOR</strong>上去:</p>
+      <ul>
+        <li>sprite 那一格是 0:畫面不變。</li>
+        <li>sprite 那一格是 1:畫面那一格翻面,暗變亮、亮變暗。</li>
+        <li>只要有任何一格<strong>由亮變暗</strong>,VF = 1;否則 VF = 0。這叫碰撞旗標(collision flag)。</li>
+      </ul>
+      <p>
+        為什麼用 XOR?因為在同一個位置再畫一次同一個 sprite,它就消失了(1 XOR 1 = 0),而且背景不會被破壞。
+        CHIP-8 的遊戲移動東西都是這樣做的:在舊位置畫一次(擦掉),改座標,在新位置再畫一次。碰撞旗標則免費告訴你「剛剛畫的東西有沒有撞到畫面上已經有的東西」,
+        打磚塊的球撞到磚塊、俄羅斯方塊落到底,都是靠 VF 判斷。
+      </p>
+      <p>圖 134-3 是本章 <code>sprite.ch8</code> 的第二次畫圖:畫面上已經有一個方框(畫在 (2, 2)),再把同一個方框畫在 (6, 4)。</p>
+      <div class="diagram">
+<svg viewBox="0 0 780 250" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <text x="136" y="34" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">畫面(之前)</text>
+  <rect x="40" y="50" width="16" height="16" fill="#2f6f6a" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="56" y="50" width="16" height="16" fill="#2f6f6a" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="72" y="50" width="16" height="16" fill="#2f6f6a" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="88" y="50" width="16" height="16" fill="#2f6f6a" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="104" y="50" width="16" height="16" fill="#2f6f6a" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="120" y="50" width="16" height="16" fill="#2f6f6a" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="136" y="50" width="16" height="16" fill="#2f6f6a" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="152" y="50" width="16" height="16" fill="#2f6f6a" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="168" y="50" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="184" y="50" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="200" y="50" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="216" y="50" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="40" y="66" width="16" height="16" fill="#2f6f6a" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="56" y="66" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="72" y="66" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="88" y="66" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="104" y="66" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="120" y="66" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="136" y="66" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="152" y="66" width="16" height="16" fill="#2f6f6a" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="168" y="66" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="184" y="66" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="200" y="66" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="216" y="66" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="40" y="82" width="16" height="16" fill="#2f6f6a" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="56" y="82" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="72" y="82" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="88" y="82" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="104" y="82" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="120" y="82" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="136" y="82" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="152" y="82" width="16" height="16" fill="#2f6f6a" stroke="#b4541f" stroke-width="2.5"/>
+  <rect x="168" y="82" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="184" y="82" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="200" y="82" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="216" y="82" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="40" y="98" width="16" height="16" fill="#2f6f6a" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="56" y="98" width="16" height="16" fill="#2f6f6a" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="72" y="98" width="16" height="16" fill="#2f6f6a" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="88" y="98" width="16" height="16" fill="#2f6f6a" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="104" y="98" width="16" height="16" fill="#2f6f6a" stroke="#b4541f" stroke-width="2.5"/>
+  <rect x="120" y="98" width="16" height="16" fill="#2f6f6a" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="136" y="98" width="16" height="16" fill="#2f6f6a" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="152" y="98" width="16" height="16" fill="#2f6f6a" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="168" y="98" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="184" y="98" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="200" y="98" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="216" y="98" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="40" y="114" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="56" y="114" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="72" y="114" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="88" y="114" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="104" y="114" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="120" y="114" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="136" y="114" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="152" y="114" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="168" y="114" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="184" y="114" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="200" y="114" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="216" y="114" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="40" y="130" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="56" y="130" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="72" y="130" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="88" y="130" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="104" y="130" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="120" y="130" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="136" y="130" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="152" y="130" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="168" y="130" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="184" y="130" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="200" y="130" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="216" y="130" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <text x="48" y="160" text-anchor="middle" font-size="9" fill="#8a929b">2</text>
+  <text x="64" y="160" text-anchor="middle" font-size="9" fill="#8a929b">3</text>
+  <text x="80" y="160" text-anchor="middle" font-size="9" fill="#8a929b">4</text>
+  <text x="96" y="160" text-anchor="middle" font-size="9" fill="#8a929b">5</text>
+  <text x="112" y="160" text-anchor="middle" font-size="9" fill="#8a929b">6</text>
+  <text x="128" y="160" text-anchor="middle" font-size="9" fill="#8a929b">7</text>
+  <text x="144" y="160" text-anchor="middle" font-size="9" fill="#8a929b">8</text>
+  <text x="160" y="160" text-anchor="middle" font-size="9" fill="#8a929b">9</text>
+  <text x="176" y="160" text-anchor="middle" font-size="9" fill="#8a929b">10</text>
+  <text x="192" y="160" text-anchor="middle" font-size="9" fill="#8a929b">11</text>
+  <text x="208" y="160" text-anchor="middle" font-size="9" fill="#8a929b">12</text>
+  <text x="224" y="160" text-anchor="middle" font-size="9" fill="#8a929b">13</text>
+  <text x="34" y="62" text-anchor="end" font-size="9" fill="#8a929b">2</text>
+  <text x="34" y="78" text-anchor="end" font-size="9" fill="#8a929b">3</text>
+  <text x="34" y="94" text-anchor="end" font-size="9" fill="#8a929b">4</text>
+  <text x="34" y="110" text-anchor="end" font-size="9" fill="#8a929b">5</text>
+  <text x="34" y="126" text-anchor="end" font-size="9" fill="#8a929b">6</text>
+  <text x="34" y="142" text-anchor="end" font-size="9" fill="#8a929b">7</text>
+  <text x="396" y="34" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">sprite:方框畫在 (6, 4)</text>
+  <rect x="300" y="50" width="16" height="16" fill="#f4f1fd" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="316" y="50" width="16" height="16" fill="#f4f1fd" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="332" y="50" width="16" height="16" fill="#f4f1fd" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="348" y="50" width="16" height="16" fill="#f4f1fd" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="364" y="50" width="16" height="16" fill="#f4f1fd" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="380" y="50" width="16" height="16" fill="#f4f1fd" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="396" y="50" width="16" height="16" fill="#f4f1fd" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="412" y="50" width="16" height="16" fill="#f4f1fd" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="428" y="50" width="16" height="16" fill="#f4f1fd" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="444" y="50" width="16" height="16" fill="#f4f1fd" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="460" y="50" width="16" height="16" fill="#f4f1fd" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="476" y="50" width="16" height="16" fill="#f4f1fd" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="300" y="66" width="16" height="16" fill="#f4f1fd" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="316" y="66" width="16" height="16" fill="#f4f1fd" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="332" y="66" width="16" height="16" fill="#f4f1fd" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="348" y="66" width="16" height="16" fill="#f4f1fd" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="364" y="66" width="16" height="16" fill="#f4f1fd" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="380" y="66" width="16" height="16" fill="#f4f1fd" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="396" y="66" width="16" height="16" fill="#f4f1fd" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="412" y="66" width="16" height="16" fill="#f4f1fd" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="428" y="66" width="16" height="16" fill="#f4f1fd" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="444" y="66" width="16" height="16" fill="#f4f1fd" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="460" y="66" width="16" height="16" fill="#f4f1fd" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="476" y="66" width="16" height="16" fill="#f4f1fd" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="300" y="82" width="16" height="16" fill="#f4f1fd" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="316" y="82" width="16" height="16" fill="#f4f1fd" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="332" y="82" width="16" height="16" fill="#f4f1fd" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="348" y="82" width="16" height="16" fill="#f4f1fd" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="364" y="82" width="16" height="16" fill="#8b5cf6" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="380" y="82" width="16" height="16" fill="#8b5cf6" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="396" y="82" width="16" height="16" fill="#8b5cf6" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="412" y="82" width="16" height="16" fill="#8b5cf6" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="428" y="82" width="16" height="16" fill="#8b5cf6" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="444" y="82" width="16" height="16" fill="#8b5cf6" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="460" y="82" width="16" height="16" fill="#8b5cf6" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="476" y="82" width="16" height="16" fill="#8b5cf6" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="300" y="98" width="16" height="16" fill="#f4f1fd" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="316" y="98" width="16" height="16" fill="#f4f1fd" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="332" y="98" width="16" height="16" fill="#f4f1fd" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="348" y="98" width="16" height="16" fill="#f4f1fd" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="364" y="98" width="16" height="16" fill="#8b5cf6" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="380" y="98" width="16" height="16" fill="#f4f1fd" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="396" y="98" width="16" height="16" fill="#f4f1fd" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="412" y="98" width="16" height="16" fill="#f4f1fd" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="428" y="98" width="16" height="16" fill="#f4f1fd" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="444" y="98" width="16" height="16" fill="#f4f1fd" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="460" y="98" width="16" height="16" fill="#f4f1fd" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="476" y="98" width="16" height="16" fill="#8b5cf6" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="300" y="114" width="16" height="16" fill="#f4f1fd" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="316" y="114" width="16" height="16" fill="#f4f1fd" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="332" y="114" width="16" height="16" fill="#f4f1fd" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="348" y="114" width="16" height="16" fill="#f4f1fd" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="364" y="114" width="16" height="16" fill="#8b5cf6" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="380" y="114" width="16" height="16" fill="#f4f1fd" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="396" y="114" width="16" height="16" fill="#f4f1fd" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="412" y="114" width="16" height="16" fill="#f4f1fd" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="428" y="114" width="16" height="16" fill="#f4f1fd" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="444" y="114" width="16" height="16" fill="#f4f1fd" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="460" y="114" width="16" height="16" fill="#f4f1fd" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="476" y="114" width="16" height="16" fill="#8b5cf6" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="300" y="130" width="16" height="16" fill="#f4f1fd" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="316" y="130" width="16" height="16" fill="#f4f1fd" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="332" y="130" width="16" height="16" fill="#f4f1fd" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="348" y="130" width="16" height="16" fill="#f4f1fd" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="364" y="130" width="16" height="16" fill="#8b5cf6" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="380" y="130" width="16" height="16" fill="#8b5cf6" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="396" y="130" width="16" height="16" fill="#8b5cf6" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="412" y="130" width="16" height="16" fill="#8b5cf6" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="428" y="130" width="16" height="16" fill="#8b5cf6" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="444" y="130" width="16" height="16" fill="#8b5cf6" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="460" y="130" width="16" height="16" fill="#8b5cf6" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="476" y="130" width="16" height="16" fill="#8b5cf6" stroke="#c9ced3" stroke-width="1"/>
+  <text x="308" y="160" text-anchor="middle" font-size="9" fill="#8a929b">2</text>
+  <text x="324" y="160" text-anchor="middle" font-size="9" fill="#8a929b">3</text>
+  <text x="340" y="160" text-anchor="middle" font-size="9" fill="#8a929b">4</text>
+  <text x="356" y="160" text-anchor="middle" font-size="9" fill="#8a929b">5</text>
+  <text x="372" y="160" text-anchor="middle" font-size="9" fill="#8a929b">6</text>
+  <text x="388" y="160" text-anchor="middle" font-size="9" fill="#8a929b">7</text>
+  <text x="404" y="160" text-anchor="middle" font-size="9" fill="#8a929b">8</text>
+  <text x="420" y="160" text-anchor="middle" font-size="9" fill="#8a929b">9</text>
+  <text x="436" y="160" text-anchor="middle" font-size="9" fill="#8a929b">10</text>
+  <text x="452" y="160" text-anchor="middle" font-size="9" fill="#8a929b">11</text>
+  <text x="468" y="160" text-anchor="middle" font-size="9" fill="#8a929b">12</text>
+  <text x="484" y="160" text-anchor="middle" font-size="9" fill="#8a929b">13</text>
+  <text x="294" y="62" text-anchor="end" font-size="9" fill="#8a929b">2</text>
+  <text x="294" y="78" text-anchor="end" font-size="9" fill="#8a929b">3</text>
+  <text x="294" y="94" text-anchor="end" font-size="9" fill="#8a929b">4</text>
+  <text x="294" y="110" text-anchor="end" font-size="9" fill="#8a929b">5</text>
+  <text x="294" y="126" text-anchor="end" font-size="9" fill="#8a929b">6</text>
+  <text x="294" y="142" text-anchor="end" font-size="9" fill="#8a929b">7</text>
+  <text x="656" y="34" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">畫面(之後),VF = 1</text>
+  <rect x="560" y="50" width="16" height="16" fill="#2f6f6a" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="576" y="50" width="16" height="16" fill="#2f6f6a" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="592" y="50" width="16" height="16" fill="#2f6f6a" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="608" y="50" width="16" height="16" fill="#2f6f6a" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="624" y="50" width="16" height="16" fill="#2f6f6a" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="640" y="50" width="16" height="16" fill="#2f6f6a" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="656" y="50" width="16" height="16" fill="#2f6f6a" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="672" y="50" width="16" height="16" fill="#2f6f6a" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="688" y="50" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="704" y="50" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="720" y="50" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="736" y="50" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="560" y="66" width="16" height="16" fill="#2f6f6a" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="576" y="66" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="592" y="66" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="608" y="66" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="624" y="66" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="640" y="66" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="656" y="66" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="672" y="66" width="16" height="16" fill="#2f6f6a" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="688" y="66" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="704" y="66" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="720" y="66" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="736" y="66" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="560" y="82" width="16" height="16" fill="#2f6f6a" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="576" y="82" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="592" y="82" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="608" y="82" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="624" y="82" width="16" height="16" fill="#2f6f6a" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="640" y="82" width="16" height="16" fill="#2f6f6a" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="656" y="82" width="16" height="16" fill="#2f6f6a" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="672" y="82" width="16" height="16" fill="#ffffff" stroke="#b4541f" stroke-width="2.5"/>
+  <rect x="688" y="82" width="16" height="16" fill="#2f6f6a" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="704" y="82" width="16" height="16" fill="#2f6f6a" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="720" y="82" width="16" height="16" fill="#2f6f6a" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="736" y="82" width="16" height="16" fill="#2f6f6a" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="560" y="98" width="16" height="16" fill="#2f6f6a" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="576" y="98" width="16" height="16" fill="#2f6f6a" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="592" y="98" width="16" height="16" fill="#2f6f6a" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="608" y="98" width="16" height="16" fill="#2f6f6a" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="624" y="98" width="16" height="16" fill="#ffffff" stroke="#b4541f" stroke-width="2.5"/>
+  <rect x="640" y="98" width="16" height="16" fill="#2f6f6a" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="656" y="98" width="16" height="16" fill="#2f6f6a" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="672" y="98" width="16" height="16" fill="#2f6f6a" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="688" y="98" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="704" y="98" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="720" y="98" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="736" y="98" width="16" height="16" fill="#2f6f6a" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="560" y="114" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="576" y="114" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="592" y="114" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="608" y="114" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="624" y="114" width="16" height="16" fill="#2f6f6a" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="640" y="114" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="656" y="114" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="672" y="114" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="688" y="114" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="704" y="114" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="720" y="114" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="736" y="114" width="16" height="16" fill="#2f6f6a" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="560" y="130" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="576" y="130" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="592" y="130" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="608" y="130" width="16" height="16" fill="#ffffff" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="624" y="130" width="16" height="16" fill="#2f6f6a" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="640" y="130" width="16" height="16" fill="#2f6f6a" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="656" y="130" width="16" height="16" fill="#2f6f6a" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="672" y="130" width="16" height="16" fill="#2f6f6a" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="688" y="130" width="16" height="16" fill="#2f6f6a" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="704" y="130" width="16" height="16" fill="#2f6f6a" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="720" y="130" width="16" height="16" fill="#2f6f6a" stroke="#c9ced3" stroke-width="1"/>
+  <rect x="736" y="130" width="16" height="16" fill="#2f6f6a" stroke="#c9ced3" stroke-width="1"/>
+  <text x="568" y="160" text-anchor="middle" font-size="9" fill="#8a929b">2</text>
+  <text x="584" y="160" text-anchor="middle" font-size="9" fill="#8a929b">3</text>
+  <text x="600" y="160" text-anchor="middle" font-size="9" fill="#8a929b">4</text>
+  <text x="616" y="160" text-anchor="middle" font-size="9" fill="#8a929b">5</text>
+  <text x="632" y="160" text-anchor="middle" font-size="9" fill="#8a929b">6</text>
+  <text x="648" y="160" text-anchor="middle" font-size="9" fill="#8a929b">7</text>
+  <text x="664" y="160" text-anchor="middle" font-size="9" fill="#8a929b">8</text>
+  <text x="680" y="160" text-anchor="middle" font-size="9" fill="#8a929b">9</text>
+  <text x="696" y="160" text-anchor="middle" font-size="9" fill="#8a929b">10</text>
+  <text x="712" y="160" text-anchor="middle" font-size="9" fill="#8a929b">11</text>
+  <text x="728" y="160" text-anchor="middle" font-size="9" fill="#8a929b">12</text>
+  <text x="744" y="160" text-anchor="middle" font-size="9" fill="#8a929b">13</text>
+  <text x="554" y="62" text-anchor="end" font-size="9" fill="#8a929b">2</text>
+  <text x="554" y="78" text-anchor="end" font-size="9" fill="#8a929b">3</text>
+  <text x="554" y="94" text-anchor="end" font-size="9" fill="#8a929b">4</text>
+  <text x="554" y="110" text-anchor="end" font-size="9" fill="#8a929b">5</text>
+  <text x="554" y="126" text-anchor="end" font-size="9" fill="#8a929b">6</text>
+  <text x="554" y="142" text-anchor="end" font-size="9" fill="#8a929b">7</text>
+  <text x="250" y="105" text-anchor="middle" font-size="26" font-weight="800" fill="#4a5159">⊕</text>
+  <text x="510" y="105" text-anchor="middle" font-size="26" font-weight="800" fill="#4a5159">=</text>
+  <text x="30" y="178" font-size="10" fill="#8a929b">x →(下方數字)  y ↓(左方數字)</text>
+  <rect x="30" y="200" width="14" height="14" fill="#2f6f6a" stroke="#c9ced3"/><text x="50" y="211" font-size="11.5" fill="#4a5159">畫面上亮的格子</text>
+  <rect x="170" y="200" width="14" height="14" fill="#8b5cf6" stroke="#c9ced3"/><text x="190" y="211" font-size="11.5" fill="#4a5159">sprite 的 1</text>
+  <rect x="290" y="200" width="14" height="14" fill="#ffffff" stroke="#b4541f" stroke-width="2.5"/><text x="310" y="211" font-size="11.5" fill="#4a5159">兩邊都是 1:亮變暗,這就是「碰撞」(只有 2 格)</text>
+  <text x="30" y="236" font-size="11.5" fill="#4a5159">sprite 的 0 不改畫面;sprite 的 1 把那一格翻面(0→1 或 1→0)。只要有一格 1→0,VF 就是 1。</text>
+</svg>
+        <figcaption>圖 134-3:XOR 畫 sprite。左:畫面上原本的方框;中:要畫的方框(畫在 (6, 4));右:XOR 的結果。磚紅框的兩格原本是亮的、sprite 也是 1,所以變暗,VF = 1。</figcaption>
+      </div>
+      <p>圖 134-3 的文字版(# 是亮、. 是暗,只列出 x = 2..13、y = 2..7 這一塊):</p>
+<pre><code class="language-text">y   畫面(之前)     sprite(6, 4)   畫面(之後)
+    x=2........13  x=2........13  x=2........13
+2   ########....   ............   ########....
+3   #......#....   ............   #......#....
+4   #......#....   ....########   #...###.####
+5   ########....   ....#......#   ####.###...#
+6   ............   ....#......#   ....#......#
+7   ............   ....########   ....########</code></pre>
+      <p>只有 (9, 4) 和 (6, 5) 兩格是「兩邊都是 1」,它們變暗了,所以 VF = 1;其他格子是 0 XOR 1 或 1 XOR 0,都亮著。</p>
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">看起來對但其實錯:「DXYN 之後 VF = 1,表示兩個 sprite 疊在一起了」</span>
+          <p>在小遊戲裡,VF = 1 常常剛好代表「球撞到磚塊」,於是很容易以為碰撞就是「兩個東西重疊」。可是圖 134-3 的兩個方框只在角落交叉,
+          96 格裡只有 2 格兩邊都是 1,VF 一樣是 1。反過來,兩個 sprite 的範圍重疊、但亮的格子剛好錯開(例如一個畫偶數格、一個畫奇數格),VF 是 0。
+          VF 只回答一個問題:<strong>這一次畫圖,有沒有任何一格由亮變暗</strong>。它不說撞到哪裡、撞到幾格,也不說是誰撞到誰。</p>
+        </div>
+      </div>
+
+      <h3>邊緣:裁切還是繞回</h3>
+      <p>sprite 畫到畫面邊緣時,有兩條規則要分清楚:</p>
+      <ol>
+        <li><strong>起點先取餘數。</strong>VX、VY 是 0–255 的數,畫面只有 64×32,所以起點是 (VX % 64, VY % 32)。這一條所有直譯器都一樣。</li>
+        <li><strong>超出去的部分</strong>:COSMAC VIP 把超出右邊或下面的格子<strong>丟掉</strong>(裁切,clipping);有些直譯器讓它從另一邊<strong>繞回來</strong>(wrapping)。
+          地下城的 Lab 用旗標 <code>C8_Q_CLIP</code> 選擇,預設是 VIP 的裁切。被裁掉的格子沒有畫,當然也不算碰撞。</li>
+      </ol>
+      <p><code>sprite.ch8</code> 的第三次畫圖把方框畫在 (60, 20):8 格寬的方框只有 x = 60..63 這 4 欄在畫面裡,右邊 4 欄被裁掉。</p>
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">小技巧</span>
+          <p>DXYN 的 X 或 Y 可以是 F(例如 <code>DF14</code>,座標放在 VF)。規則和算術指令一樣:先讀 VX、VY 當座標,畫完最後才寫 VF。
+          範例模擬器把 <code>V[x]</code>、<code>V[y]</code> 當參數傳給 <code>draw()</code>,回傳之後才寫 <code>V[0xF]</code>,就自然對了。</p>
+        </div>
+      </div>
+
+      <h3>手算:畫一個 sprite(XOR、碰撞與邊緣)</h3>
+      <p>
+        把一個 sprite 畫上去,一列一列算:這一列在畫面的哪個 y、sprite 的 8 個位元、畫面上那 8 格原本的樣子,XOR 之後的樣子,這一列有沒有亮變暗。
+        下表是圖 134-3 那一次:畫面上已經有 (2, 2) 的方框,現在在 (6, 4) 畫 <code>FF 81 81 FF</code>,只看 x = 6..13 這 8 格。
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>列</th><th>y</th><th>sprite 位元組</th><th>sprite 位元</th><th>畫面 x=6..13(之前)</th><th>XOR 之後</th><th>亮變暗?</th></tr></thead>
+        <tbody>
+          <tr><td>0</td><td>4</td><td><code>FF</code></td><td><code>11111111</code></td><td><code>00010000</code></td><td><code>11101111</code></td><td>有:x = 9</td></tr>
+          <tr><td>1</td><td>5</td><td><code>81</code></td><td><code>10000001</code></td><td><code>11110000</code></td><td><code>01110001</code></td><td>有:x = 6</td></tr>
+          <tr><td>2</td><td>6</td><td><code>81</code></td><td><code>10000001</code></td><td><code>00000000</code></td><td><code>10000001</code></td><td>沒有</td></tr>
+          <tr><td>3</td><td>7</td><td><code>FF</code></td><td><code>11111111</code></td><td><code>00000000</code></td><td><code>11111111</code></td><td>沒有</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        「之前」那一欄從第一個方框來:y = 4 是它的第 3 列(<code>81</code>,只有 x = 2 和 x = 9 亮),在 x = 6..13 裡只有 x = 9;
+        y = 5 是它的最後一列(<code>FF</code>,x = 2..9 都亮),在 x = 6..13 裡是 x = 6..9。有兩列有亮變暗,VF = 1。
+        <code>sprite.ch8</code> 把三次畫圖的 VF 分別存進 V5、V6、V7,範例模擬器跑出來是 V5 = 00、V6 = 01、V7 = 00(完整的畫面在後面「自己寫測試 ROM」一節)。
+      </p>
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 134.5 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>畫面全暗。I 指向兩個位元組 <code>3C 66</code>,VA = 124、VB = 63,執行 <code>DAB2</code>。</p>
+          <ol>
+            <li>起點在哪裡?</li>
+            <li>VIP 設定(裁切):哪些格子變亮?VF 是多少?</li>
+            <li>MODERN 設定(繞回):哪些格子變亮?VF 是多少?</li>
+            <li>接著在同樣的位置再執行一次 <code>DAB2</code>,畫面和 VF 會怎樣?(兩種設定各答一次)</li>
+          </ol>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <ol>
+              <li>起點 = (124 % 64, 63 % 32) = (60, 31)。</li>
+              <li>第 0 列 y = 31,<code>3C</code> = <code>00111100</code>,1 在第 2–5 位 → x = 62、63、64、65;64 和 65 超出右邊,裁掉。
+                第 1 列 y = 32 超出下面,整列裁掉。結果只有 (62, 31)、(63, 31) 兩格變亮;畫面原本全暗,VF = 0。</li>
+              <li>第 0 列 y = 31:x = 62、63,以及 64 → 0、65 → 1,所以是 (62, 31)、(63, 31)、(0, 31)、(1, 31)。
+                第 1 列 y = 32 → 0,<code>66</code> = <code>01100110</code>,1 在第 1、2、5、6 位 → x = 61、62、65 → 1、66 → 2,
+                所以是 (61, 0)、(62, 0)、(1, 0)、(2, 0)。一共 8 格變亮,VF = 0。</li>
+              <li>同一個 sprite 在同一個位置再畫一次,每一個剛才變亮的格子都再翻一次,全部變暗:畫面回到全暗,而且有格子由亮變暗,VF = 1。兩種設定都一樣。</li>
+            </ol>
+            <p>VIP 那一題的重點:被裁掉的 x = 64、65 不會繞到 x = 0、1,也不參與碰撞判斷。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <h3 id="lab-chip8-display">本章 Lab:CHIP-8 畫面與按鍵 chip8/display.c</h3>
+      <div class="callout lab" data-task="chip8/display">
+        <div class="ico">🧪</div>
+        <div class="body">
+          <span class="c-title">本章 Lab · 任務線「emu」· 任務「CHIP-8 畫面與按鍵」</span>
+          <p><strong>對應地下城任務:</strong>任務「CHIP-8 畫面與按鍵」(任務線:emu 模擬器三部曲,第 3 個任務)。零件檔:<code>~/零件庫/chip8/display.c</code>。</p>
+          <p><strong>要做的零件:</strong>畫面、按鍵和「一幀」。<code>chip8_draw</code> 照前面兩節的規則用 XOR 畫 sprite、算碰撞、處理邊緣;<code>chip8_key_event</code> 接收按鍵事件,讓上一個任務的 EX9E、EXA1、FX0A 動起來;<code>chip8_run_frame</code> 是主迴圈的一圈;<code>chip8_fb_hash</code> 和 <code>chip8_fb_text</code> 讓驅動程式比對畫面、讓面板顯示它。從這個任務開始,判題用的是你自己的 <code>cpu.c</code> 加你自己的 <code>display.c</code>。</p>
+          <p><strong>介面:</strong></p>
+<pre><code class="language-c">// chip8/display.c 要寫的函式(宣告在 chip8.h 的後半)
+void chip8_cls(Chip8 *c);            // 00E0:fb 全部清 0
+int  chip8_draw(Chip8 *c, uint8_t x, uint8_t y, uint16_t addr, uint8_t n);
+     // DXYN 的本體(cpu.c 呼叫它,把回傳值寫進 VF):
+     // 起點 (x % 64, y % 32);畫 n 列,第 r 列讀 bus 的 (addr + r) &amp; 0xFFF,XOR 進 fb。
+     // 有任何一格由 1 變 0 → 回傳 1,否則 0;n 是 0 → 什麼都不畫,回傳 0。
+     // C8_Q_CLIP 打開(VIP):超出右邊或下面的格子丟掉,不算碰撞;關掉(MODERN):繞回另一邊。
+void chip8_key_event(Chip8 *c, uint8_t key, int down);
+     // keys[key] = down ? 1 : 0;key &gt; 15 忽略;
+     // waiting 時某個鍵由按著變放開,而且 released 還是 0xFF → released = key(只記第一個)。
+int  chip8_run_frame(Chip8 *c, unsigned ipf);
+     // 一幀:最多 ipf 次 chip8_step,遇到負的回傳碼就停並回傳它(這一幀不減計時器);
+     // 否則做滿 ipf 次(C8_WAIT 也算一次),然後 chip8_tick_timers 一次,回 C8_OK。
+uint32_t chip8_fb_hash(const Chip8 *c);
+     // FNV-1a 32 位元:h = 2166136261;fb 的 2048 個位元組(列優先,值 0/1)每個做 h ^= b; h *= 16777619。
+void chip8_fb_text(const Chip8 *c, char *out);
+     // out 至少 C8_TEXT_SIZE(2081)個字元:32 列,每列 64 個 '#'(亮)或 '.'(暗)再加 '\n',最後補 '\0'。</code></pre>
+          <p><strong>公開範例:</strong></p>
+<pre><code class="language-c">// display_demo.c:公開範例(用你的 emu/bus.c、chip8/cpu.c、chip8/display.c)
+#include &lt;stdio.h&gt;
+#include &lt;string.h&gt;
+#include "chip8/chip8.h"
+
+static const uint8_t rom[] = {
+    0x60, 0x0A,   // 200: V0 = A(字型 A)
+    0xF0, 0x29,   // 202: I = A 的字型
+    0x61, 0x3E,   // 204: V1 = 62
+    0x62, 0x01,   // 206: V2 = 1
+    0xD1, 0x25,   // 208: 在 (62, 1) 畫 5 列:右邊超出畫面
+    0xD1, 0x25,   // 20A: 同一個位置再畫一次:擦掉,VF = 1
+    0xD1, 0x25,   // 20C: 第三次:畫回來
+    0x12, 0x0E,   // 20E: 停
+};
+
+static void run(uint32_t quirks, const char *name) {
+    Bus *bus = bus_new(C8_MEM);
+    Chip8 c;
+    chip8_init(&amp;c, bus, quirks, 1);
+    chip8_load(&amp;c, rom, sizeof rom);
+    for (int k = 0; k &lt; 5; k++) chip8_step(&amp;c);
+    printf("%s 第一次 VF=%u hash=%08X\n", name, c.v[15], (unsigned)chip8_fb_hash(&amp;c));
+    chip8_step(&amp;c);
+    printf("%s 第二次 VF=%u hash=%08X\n", name, c.v[15], (unsigned)chip8_fb_hash(&amp;c));
+    chip8_step(&amp;c);
+    char text[C8_TEXT_SIZE];
+    chip8_fb_text(&amp;c, text);
+    for (int y = 1; y &lt;= 5; y++)                     // 只印第 1..5 列的頭尾各 4 格
+        printf("  %.4s ... %.4s\n", text + y * (C8_W + 1), text + y * (C8_W + 1) + 60);
+    bus_free(bus);
+}
+
+int main(void) {
+    run(C8_PROFILE_VIP, "VIP");
+    run(C8_PROFILE_MODERN, "MODERN");
+
+    // 按鍵:E19E 在 V1 那個鍵按著時跳過下一條;F20A 等一個鍵「放開」
+    const uint8_t keys[] = {0x61, 0x05, 0xE1, 0x9E, 0x63, 0x01, 0xF2, 0x0A, 0x12, 0x08};
+    Bus *bus = bus_new(C8_MEM);
+    Chip8 c;
+    chip8_init(&amp;c, bus, C8_PROFILE_VIP, 1);
+    chip8_load(&amp;c, keys, sizeof keys);
+    chip8_key_event(&amp;c, 5, 1);                       // 按下 5
+    chip8_key_event(&amp;c, 20, 1);                      // 不存在的鍵:忽略
+    c.dt = 3;
+    int r = chip8_run_frame(&amp;c, 10);
+    printf("frame1 r=%d PC=%03X V3=%u DT=%u waiting=%u\n", r, c.pc, c.v[3], c.dt, c.waiting);
+    chip8_key_event(&amp;c, 5, 0);                       // 放開 5
+    r = chip8_run_frame(&amp;c, 10);
+    printf("frame2 r=%d PC=%03X V2=%u DT=%u cycles=%llu\n", r, c.pc, c.v[2], c.dt,
+           (unsigned long long)c.cycles);
+    bus_free(bus);
+    return 0;
+}</code></pre>
+          <p>輸出(<code>A</code> 的字型畫在 x = 62:VIP 只留 x = 62、63 兩欄,MODERN 把 x = 64、65 繞到 x = 0、1;擦掉之後兩種設定的畫面都全暗,所以 hash 一樣):</p>
+<pre><code class="language-text">VIP 第一次 VF=0 hash=C0145B5C
+VIP 第二次 VF=1 hash=D2063DC5
+  .... ... ..##
+  .... ... ..#.
+  .... ... ..##
+  .... ... ..#.
+  .... ... ..#.
+MODERN 第一次 VF=0 hash=97C915B7
+MODERN 第二次 VF=1 hash=D2063DC5
+  ##.. ... ..##
+  .#.. ... ..#.
+  ##.. ... ..##
+  .#.. ... ..#.
+  .#.. ... ..#.
+frame1 r=0 PC=206 V3=0 DT=2 waiting=1
+frame2 r=0 PC=208 V2=5 DT=1 cycles=20</code></pre>
+          <p>第一幀:<code>E19E</code> 看到 5 按著,跳過 <code>6301</code>(V3 還是 0),<code>F20A</code> 開始等,剩下的步數都是同一條 <code>F20A</code>。第二幀:放開 5,<code>F20A</code> 把 5 放進 V2 往下走,接著停在 <code>1208</code>。</p>
+          <p>驅動程式 <code>c8run</code> 是公開的(不是秘密):在任務資料夾可以用 <code>c8run --rom x.ch8 --frames N --ipf 30 --keys 按鍵腳本 --dump</code> 跑自己的 ROM,看最後的狀態與畫面。</p>
+          <p><strong>和本章範例不同的地方:</strong>可以參考本章的範例,但介面和要求不同,要自己改寫。<a href="#chip8demo"><code>chip8demo.c</code></a> 和 Lab 不同的地方:</p>
+          <ul>
+            <li>範例的 <code>draw()</code> 只會裁切,直接讀 <code>m-&gt;mem</code>;Lab 的 <code>chip8_draw</code> 依 <code>C8_Q_CLIP</code> 裁切或繞回,sprite 經過你的匯流排讀,位址在 0xFFF 繞回,DXY0 什麼都不畫。</li>
+            <li>範例沒有鍵盤;Lab 要 <code>chip8_key_event</code>,FX0A 只認「等的時候第一個放開的鍵」。</li>
+            <li>範例的幀迴圈寫在 <code>main()</code> 裡,遇到不支援的指令就整個停;Lab 的 <code>chip8_run_frame</code> 是可以單獨呼叫的一幀,出錯時回傳錯誤碼、這一幀不減計時器。</li>
+            <li>範例的 <code>show()</code> 用 <code>#</code> 和空白、外面加框,而且只在最後印一次;Lab 要固定格式的 <code>chip8_fb_text</code>(<code>#</code> 和 <code>.</code>)與 FNV-1a 的 <code>chip8_fb_hash</code>,判題每 60 幀比對一次。</li>
+          </ul>
+          <p><strong>任務目標</strong>(公開的用 <code>test</code> 自己跑;隱藏檢定在 <code>submit</code> 時跑,只看得到名稱和一行說明):</p>
+          <ul class="lab-goals">
+            <li data-group="display.draw">☐ <strong>畫 sprite</strong>〔公開〕公開 ROM:00E0、DXYN 的 XOR 與碰撞旗標(同一個 sprite 畫兩次會擦掉、VF=1)、FX29 的字型。</li>
+            <li data-group="display.text">☐ <strong>畫面 hash 與文字</strong>〔公開〕chip8_fb_hash 對公開範例的數值;chip8_fb_text 的格式逐字相同。</li>
+            <li data-group="display.keys">☐ <strong>按鍵</strong>〔公開〕chip8_key_event 之後 EX9E/EXA1 的跳過;FX0A 在放開時繼續;key &gt; 15 被忽略。</li>
+            <li data-group="display.clip">☐ <strong>邊緣</strong>〔隱藏檢定〕起點座標超過 63/31 先取餘數;sprite 跨右邊或下面時,VIP 設定裁切、MODERN 設定繞回;DXY0;sprite 位址在 0xFFF 附近繞回;sprite 經過你的 emu/bus 讀(探針看得到)。</li>
+            <li data-group="display.collision">☐ <strong>碰撞旗標</strong>〔隱藏檢定〕只有亮變暗才算碰撞,暗變亮不算;被裁掉的格子不算;X 或 Y 是 VF 時先讀座標再寫旗標。</li>
+            <li data-group="display.frames">☐ <strong>一幀一幀跑</strong>〔隱藏檢定〕chip8_run_frame:ipf 次 step 之後計時器只減一次;中途錯誤就停並回傳錯誤碼;等按鍵時照樣用掉週期;腳本化的按鍵序列跑 N 幀之後,每 60 幀的畫面 hash 對參考。</li>
+            <li data-group="display.perf">☐ <strong>效能</strong>〔隱藏檢定〕DXYN 只動 sprite 碰到的格子(不能每次重畫或複製整個畫面);hash 一次 O(2048)。門檻:3×10<sup>6</sup> 條指令(4 成是 DXYF)＋36,000 幀(每幀 30 條指令、每幀算一次 hash),1 秒內。這個門檻來自 Boss 戰「CHIP-8 畫面重播」:4 支 ROM 各 3,600 幀(每幀 30 條指令),要在 2 秒內批改完。</li>
+          </ul>
+          <p><strong>規則:</strong>只交 <code>display.c</code>,只用 C 標準函式庫;要 <code>#include "chip8/chip8.h"</code>。編譯指令由檢定產生(<code>-std=c17 -Wall -Werror -O2 -I ~/零件庫</code>,加上你的 <code>emu/bus.c</code> 與 <code>chip8/cpu.c</code>),警告就是錯誤。</p>
+          <p><strong>之後會用在:</strong>檢查點 1 的三場 Boss 戰:「CHIP-8 隱藏 ROM」「CHIP-8 畫面重播」與「面板上玩」(老師核可:畫面串流到終端旁的側邊面板、鍵盤從終端送;ROM 用自寫的,或老師核可、授權清楚的 homebrew)。之後 Game Boy 的 PPU 也是「一幀一幀畫、用 hash 比對畫面」。</p>
+          <p class="lab-rule">這個零件過關之後,後面的專題一律用你自己的版本。規則見<a href="00-about.html#lab-rules">零件庫規則</a>。</p>
+        </div>
+      </div>
+
+      <h2 id="chip8demo">範例模擬器 chip8demo.c</h2>
+      <p>
+        把前面幾節的規則接起來,就是一台模擬器。下面的 <code>chip8demo.c</code> 大約兩百行,用一個 <code>struct</code> 存整台機器,
+        <code>step()</code> 執行一條指令,<code>main()</code> 跑「每幀 ipf 條指令,然後計時器減 1」的主迴圈,停住之後印出暫存器和畫面。
+      </p>
+      <p>它是<strong>刻意不完整</strong>的教學版:</p>
+      <ul>
+        <li>只做 COSMAC VIP 一種怪癖(移位用 VY、FX55/FX65 之後 I 往前、邏輯運算之後 VF = 0、畫面邊緣裁切)。</li>
+        <li>沒有鍵盤:EX9E、EXA1、FX0A 會停下來說「不支援」。也沒有 BNNN(留給練習 134.3)。</li>
+        <li>亂數用 C 標準函式庫的 <code>rand()</code>:不同的系統給的亂數序列不一樣,所以用到 CXNN 的程式,結果沒辦法和別人的模擬器比對。</li>
+        <li>記憶體就是 <code>struct</code> 裡的一個陣列;堆疊出錯時用 <code>assert</code> 直接中止。</li>
+        <li>停住的條件是「1NNN 跳到自己」;沒有聲音,也不會即時畫到螢幕,只在最後印一次畫面。</li>
+      </ul>
+<pre><code class="language-c">// chip8demo.c:本章的範例 CHIP-8 模擬器(不完整,刻意的)
+//   只做 COSMAC VIP 一種怪癖;沒有按鍵(EX9E、EXA1、FX0A)、沒有 BNNN;亂數用 rand()。
+// 編譯:gcc -std=c17 -Wall -Wextra -O2 chip8demo.c -o chip8demo
+// 用法:./chip8demo ROM檔 [最多幾幀=60] [每幀幾條=10] [trace]
+#include &lt;assert.h&gt;
+#include &lt;stdint.h&gt;
+#include &lt;stdio.h&gt;
+#include &lt;stdlib.h&gt;
+#include &lt;string.h&gt;
+
+#define MEM_SIZE  4096
+#define W 64
+#define H 32
+#define FONT_ADDR 0x050
+
+enum { RUN = 0, HALT = 1, UNSUPPORTED = 2 };
+
+static const uint8_t font[80] = {     // 0–F,每個字 4×5,一列一個位元組(只用高 4 位)
+    0xF0,0x90,0x90,0x90,0xF0, 0x20,0x60,0x20,0x20,0x70,  // 0 1
+    0xF0,0x10,0xF0,0x80,0xF0, 0xF0,0x10,0xF0,0x10,0xF0,  // 2 3
+    0x90,0x90,0xF0,0x10,0x10, 0xF0,0x80,0xF0,0x10,0xF0,  // 4 5
+    0xF0,0x80,0xF0,0x90,0xF0, 0xF0,0x10,0x20,0x40,0x40,  // 6 7
+    0xF0,0x90,0xF0,0x90,0xF0, 0xF0,0x90,0xF0,0x10,0xF0,  // 8 9
+    0xF0,0x90,0xF0,0x90,0x90, 0xE0,0x90,0xE0,0x90,0xE0,  // A B
+    0xF0,0x80,0x80,0x80,0xF0, 0xE0,0x90,0x90,0x90,0xE0,  // C D
+    0xF0,0x80,0xF0,0x80,0xF0, 0xF0,0x80,0xF0,0x80,0x80,  // E F
+};
+
+typedef struct {
+    uint8_t  mem[MEM_SIZE];      // 自己的陣列當記憶體
+    uint8_t  V[16];
+    uint16_t I, PC;
+    uint16_t stack[16];
+    int      sp;                 // 堆疊裡有幾個返回位址
+    uint8_t  delay, sound;       // DT、ST
+    uint8_t  screen[H][W];       // 每格 0 或 1
+    long     executed;           // 執行了幾條指令
+} Machine;
+
+static void reset(Machine *m) {
+    memset(m, 0, sizeof *m);
+    memcpy(&amp;m-&gt;mem[FONT_ADDR], font, sizeof font);
+    m-&gt;PC = 0x200;
+}
+
+static int load_rom(Machine *m, const char *path) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return -1;
+    size_t n = fread(&amp;m-&gt;mem[0x200], 1, MEM_SIZE - 0x200, f);
+    fclose(f);
+    return (int)n;
+}
+
+// DXYN 的本體:XOR 畫上去,超出右邊或下面的格子丟掉(VIP 的裁切);有亮變暗就回傳 1
+static uint8_t draw(Machine *m, uint8_t vx, uint8_t vy, unsigned n) {
+    unsigned x0 = vx % W, y0 = vy % H;   // 起點先取餘數
+    uint8_t hit = 0;
+    for (unsigned row = 0; row &lt; n; row++) {
+        unsigned y = y0 + row;
+        if (y &gt;= H) break;
+        uint8_t bits = m-&gt;mem[(m-&gt;I + row) &amp; 0xFFF];
+        for (unsigned col = 0; col &lt; 8; col++) {
+            unsigned x = x0 + col;
+            if (x &gt;= W) break;
+            if (!(bits &amp; (0x80u &gt;&gt; col))) continue;   // sprite 的 0 不改畫面
+            if (m-&gt;screen[y][x]) hit = 1;            // 1 XOR 1 = 0:亮變暗
+            m-&gt;screen[y][x] ^= 1;
+        }
+    }
+    return hit;
+}
+
+// 8XYN:先算結果,最後才寫 VF(X 或 Y 是 F 時才不會算錯)
+static int alu(Machine *m, unsigned x, unsigned y, unsigned n) {
+    uint8_t a = m-&gt;V[x], b = m-&gt;V[y], r, f = 0;
+    int set_f = 1;
+    switch (n) {
+    case 0x0: r = b; set_f = 0; break;
+    case 0x1: r = a | b; break;                      // VIP:邏輯運算之後 VF = 0
+    case 0x2: r = a &amp; b; break;
+    case 0x3: r = a ^ b; break;
+    case 0x4: r = (uint8_t)(a + b); f = (a + b) &gt; 0xFF; break;
+    case 0x5: r = (uint8_t)(a - b); f = a &gt;= b; break;    // 1 = 沒有借位
+    case 0x6: r = b &gt;&gt; 1; f = b &amp; 1; break;              // VIP:移的是 VY
+    case 0x7: r = (uint8_t)(b - a); f = b &gt;= a; break;
+    case 0xE: r = (uint8_t)(b &lt;&lt; 1); f = b &gt;&gt; 7; break;
+    default:  return UNSUPPORTED;
+    }
+    m-&gt;V[x] = r;
+    if (set_f) m-&gt;V[0xF] = f;
+    return RUN;
+}
+
+static int step(Machine *m) {
+    uint16_t at = m-&gt;PC;
+    uint16_t op = (uint16_t)(m-&gt;mem[at] &lt;&lt; 8 | m-&gt;mem[(at + 1) &amp; 0xFFF]);   // 大端
+    unsigned x = (op &gt;&gt; 8) &amp; 0xF, y = (op &gt;&gt; 4) &amp; 0xF, n = op &amp; 0xF;
+    uint8_t  nn = op &amp; 0xFF;
+    uint16_t nnn = op &amp; 0xFFF;
+    uint8_t *V = m-&gt;V;
+
+    m-&gt;PC = (at + 2) &amp; 0xFFF;
+    m-&gt;executed++;
+    switch (op &gt;&gt; 12) {
+    case 0x0:
+        if (op == 0x00E0) memset(m-&gt;screen, 0, sizeof m-&gt;screen);
+        else if (op == 0x00EE) { assert(m-&gt;sp &gt; 0); m-&gt;PC = m-&gt;stack[--m-&gt;sp]; }
+        break;                                       // 其他 0NNN:不做事
+    case 0x1: if (nnn == at) { m-&gt;PC = at; return HALT; } m-&gt;PC = nnn; break;
+    case 0x2: assert(m-&gt;sp &lt; 16); m-&gt;stack[m-&gt;sp++] = m-&gt;PC; m-&gt;PC = nnn; break;
+    case 0x3: if (V[x] == nn) m-&gt;PC = (m-&gt;PC + 2) &amp; 0xFFF; break;
+    case 0x4: if (V[x] != nn) m-&gt;PC = (m-&gt;PC + 2) &amp; 0xFFF; break;
+    case 0x5: if (n) return UNSUPPORTED; if (V[x] == V[y]) m-&gt;PC = (m-&gt;PC + 2) &amp; 0xFFF; break;
+    case 0x6: V[x] = nn; break;
+    case 0x7: V[x] = (uint8_t)(V[x] + nn); break;    // 溢位也不改 VF
+    case 0x8: return alu(m, x, y, n);
+    case 0x9: if (n) return UNSUPPORTED; if (V[x] != V[y]) m-&gt;PC = (m-&gt;PC + 2) &amp; 0xFFF; break;
+    case 0xA: m-&gt;I = nnn; break;
+    case 0xC: V[x] = (uint8_t)(rand() &amp; nn); break;
+    case 0xD: V[0xF] = draw(m, V[x], V[y], n); break;     // 先讀座標,最後寫 VF
+    case 0xF:
+        switch (nn) {
+        case 0x07: V[x] = m-&gt;delay; break;
+        case 0x15: m-&gt;delay = V[x]; break;
+        case 0x18: m-&gt;sound = V[x]; break;
+        case 0x1E: m-&gt;I = (uint16_t)(m-&gt;I + V[x]); break;    // 不改 VF
+        case 0x29: m-&gt;I = FONT_ADDR + (V[x] &amp; 0xF) * 5; break;
+        case 0x33:
+            m-&gt;mem[m-&gt;I &amp; 0xFFF]       = V[x] / 100;
+            m-&gt;mem[(m-&gt;I + 1) &amp; 0xFFF] = V[x] / 10 % 10;
+            m-&gt;mem[(m-&gt;I + 2) &amp; 0xFFF] = V[x] % 10;
+            break;
+        case 0x55: for (unsigned k = 0; k &lt;= x; k++) m-&gt;mem[(m-&gt;I + k) &amp; 0xFFF] = V[k];
+                   m-&gt;I = (uint16_t)(m-&gt;I + x + 1); break;   // VIP:I 跟著往前
+        case 0x65: for (unsigned k = 0; k &lt;= x; k++) V[k] = m-&gt;mem[(m-&gt;I + k) &amp; 0xFFF];
+                   m-&gt;I = (uint16_t)(m-&gt;I + x + 1); break;
+        default:   return UNSUPPORTED;                       // 含 FX0A
+        }
+        break;
+    default: return UNSUPPORTED;                             // BNNN、EX9E、EXA1
+    }
+    return RUN;
+}
+
+static void show(const Machine *m) {
+    printf("V0-V7:");
+    for (int k = 0; k &lt; 8; k++) printf(" %02X", m-&gt;V[k]);
+    printf("\nV8-VF:");
+    for (int k = 8; k &lt; 16; k++) printf(" %02X", m-&gt;V[k]);
+    printf("\nI=0x%03X  DT=%d  ST=%d  SP=%d\n", m-&gt;I, m-&gt;delay, m-&gt;sound, m-&gt;sp);
+    int lit = 0;
+    for (int y = 0; y &lt; H; y++)
+        for (int x = 0; x &lt; W; x++) lit += m-&gt;screen[y][x];
+    if (!lit) { printf("(畫面全暗)\n"); return; }
+    printf("+%.*s+\n", W, "----------------------------------------------------------------");
+    for (int y = 0; y &lt; H; y++) {
+        putchar('|');
+        for (int x = 0; x &lt; W; x++) putchar(m-&gt;screen[y][x] ? '#' : ' ');
+        printf("|\n");
+    }
+    printf("+%.*s+\n", W, "----------------------------------------------------------------");
+}
+
+// trace:印出這一步改了什麼(只在除錯時用,每步複製整個機器,很慢)
+static void trace(const Machine *before, const Machine *after) {
+    uint16_t op = (uint16_t)(before-&gt;mem[before-&gt;PC] &lt;&lt; 8 | before-&gt;mem[(before-&gt;PC + 1) &amp; 0xFFF]);
+    printf("%03X %04X ", before-&gt;PC, op);
+    for (int k = 0; k &lt; 16; k++)
+        if (before-&gt;V[k] != after-&gt;V[k]) printf(" V%X:%02X-&gt;%02X", k, before-&gt;V[k], after-&gt;V[k]);
+    if (before-&gt;I != after-&gt;I) printf(" I:%03X-&gt;%03X", before-&gt;I, after-&gt;I);
+    if (after-&gt;PC != ((before-&gt;PC + 2) &amp; 0xFFF)) printf(" PC-&gt;%03X", after-&gt;PC);
+    if (before-&gt;sp != after-&gt;sp) printf(" SP:%d-&gt;%d", before-&gt;sp, after-&gt;sp);
+    if (before-&gt;delay != after-&gt;delay) printf(" DT-&gt;%d", after-&gt;delay);
+    if (before-&gt;sound != after-&gt;sound) printf(" ST-&gt;%d", after-&gt;sound);
+    for (int a = 0; a &lt; MEM_SIZE; a++)
+        if (before-&gt;mem[a] != after-&gt;mem[a]) printf(" [%03X]=%02X", a, after-&gt;mem[a]);
+    if (memcmp(before-&gt;screen, after-&gt;screen, sizeof before-&gt;screen)) printf(" 畫面變了");
+    putchar('\n');
+}
+
+int main(int argc, char **argv) {
+    if (argc &lt; 2) { fprintf(stderr, "用法:%s ROM檔 [最多幾幀] [每幀幾條] [trace]\n", argv[0]); return 2; }
+    static Machine m, before;            // 機器有 6 KiB 多,放靜態區
+    reset(&amp;m);
+    if (load_rom(&amp;m, argv[1]) &lt; 0) { perror(argv[1]); return 1; }
+    long frames = argc &gt; 2 ? atol(argv[2]) : 60;
+    int ipf = argc &gt; 3 ? atoi(argv[3]) : 10;
+    int tracing = argc &gt; 4 &amp;&amp; strcmp(argv[4], "trace") == 0;
+    srand(1);
+
+    int r = RUN;
+    long f;
+    for (f = 1; f &lt;= frames &amp;&amp; r == RUN; f++) {
+        for (int k = 0; k &lt; ipf &amp;&amp; r == RUN; k++) {
+            if (tracing) before = m;
+            r = step(&amp;m);
+            if (tracing) trace(&amp;before, &amp;m);
+        }
+        if (r == RUN) {                  // 一幀結束:計時器各減 1
+            if (m.delay) m.delay--;
+            if (m.sound) m.sound--;
+            if (tracing) printf("--- 第 %ld 幀結束 DT=%d ST=%d ---\n", f, m.delay, m.sound);
+        }
+    }
+    f--;
+    if (r == HALT)
+        printf("停住:PC=0x%03X 跳到自己。執行了 %ld 條指令,在第 %ld 幀。\n", m.PC, m.executed, f);
+    else if (r == UNSUPPORTED)
+        printf("不支援的指令:0x%03X 的 %02X%02X。\n", (m.PC - 2) &amp; 0xFFF,
+               m.mem[(m.PC - 2) &amp; 0xFFF], m.mem[(m.PC - 1) &amp; 0xFFF]);
+    else
+        printf("跑完 %ld 幀(每幀 %d 條),執行了 %ld 條指令。\n", frames, ipf, m.executed);
+    show(&amp;m);
+    return 0;
+}</code></pre>
+      <p>讀這支程式時,對照前面幾節:</p>
+      <ul>
+        <li><code>step()</code> 開頭就是取指(大端)和拆欄位,然後 PC 先加 2;<code>switch (op &gt;&gt; 12)</code> 是解碼表的第一層。</li>
+        <li><code>alu()</code> 用區域變數 <code>a</code>、<code>b</code> 先存舊值,算完先寫 <code>V[x]</code>、最後寫 <code>V[0xF]</code>:這就是「VF 最後寫」。</li>
+        <li><code>draw()</code> 先取餘數決定起點,超出畫面的格子 <code>break</code> 掉(裁切),只在「原本亮、sprite 也是 1」時設 <code>hit</code>。</li>
+        <li><code>main()</code> 的兩層 <code>for</code>:外層是幀,內層是 ipf 條指令,幀尾減計時器。</li>
+        <li><code>trace()</code> 是除錯用的:每一步把整台機器複製一份,比較前後有什麼不同。它很慢(每步複製 6 KiB),只在你要看細節時打開。</li>
+      </ul>
+
+      <h2>自己寫測試 ROM</h2>
+      <p>
+        沒有現成的 ROM,就自己寫。CHIP-8 的程式就是一串十六進位數字,本章用「一行一條指令、<code>#</code> 後面是註解」的文字檔來寫,
+        再用一支很短的 Python 程式轉成二進位的 <code>.ch8</code> 檔:
+      </p>
+<pre><code class="language-python"># hex2rom.py:把「十六進位文字 + # 註解」轉成 CHIP-8 的二進位 ROM
+# 用法:python3 hex2rom.py count.hex count.ch8
+import sys
+
+src, dst = sys.argv[1], sys.argv[2]
+digits = []
+with open(src, encoding="utf-8") as f:
+    for line in f:
+        digits.append(line.split("#", 1)[0].replace(" ", "").strip())
+rom = bytes.fromhex("".join(digits))
+with open(dst, "wb") as f:
+    f.write(rom)
+print(f"{dst}: {len(rom)} 位元組")</code></pre>
+      <p>(有 <code>xxd</code> 的話,把註解拿掉之後 <code>xxd -r -p</code> 也可以做同樣的事。)</p>
+
+      <h3>第一支:數到 10,畫出「10」</h3>
+      <p><code>count.hex</code> 用迴圈數到 10,用 FX33 拆出十位和個位,再用 FX29 找到字型、DXYN 畫在畫面中間。它同時測了 7XNN、3XNN、1NNN、ANNN、FX33、FX65、FX29 和 DXYN。</p>
+<pre><code class="language-text"># count.hex:從 0 數到 10,再用內建字型畫出「10」
+6000  # 200  V0 = 0
+7001  # 202  V0 = V0 + 1          ← 迴圈從這裡開始
+300A  # 204  V0 == 10 就跳過下一條
+1202  # 206  跳回 202
+A300  # 208  I = 0x300
+F033  # 20A  V0 的百、十、個位寫進 [300] [301] [302]
+F265  # 20C  V0 V1 V2 = [300] [301] [302];VIP 之後 I = 0x303
+6A1C  # 20E  VA = 28(x)
+6B0D  # 210  VB = 13(y)
+F129  # 212  I = 字型「V1」的位址
+DAB5  # 214  在 (VA, VB) 畫 5 列
+7A05  # 216  VA = VA + 5
+F229  # 218  I = 字型「V2」的位址
+DAB5  # 21A  畫 5 列
+121C  # 21C  跳到自己:停</code></pre>
+<pre><code class="language-text">$ python3 hex2rom.py count.hex count.ch8
+count.ch8: 30 位元組
+$ ./chip8demo count.ch8
+停住:PC=0x21C 跳到自己。執行了 41 條指令,在第 5 幀。
+V0-V7: 00 01 00 00 00 00 00 00
+V8-VF: 00 00 21 0D 00 00 00 00
+I=0x050  DT=0  ST=0  SP=0
++----------------------------------------------------------------+
+|                                                                |
+|                                                                |
+|                                                                |
+|                                                                |
+|                                                                |
+|                                                                |
+|                                                                |
+|                                                                |
+|                                                                |
+|                                                                |
+|                                                                |
+|                                                                |
+|                                                                |
+|                              #  ####                           |
+|                             ##  #  #                           |
+|                              #  #  #                           |
+|                              #  #  #                           |
+|                             ### ####                           |
+|                                                                |
+|                                                                |
+|                                                                |
+|                                                                |
+|                                                                |
+|                                                                |
+|                                                                |
+|                                                                |
+|                                                                |
+|                                                                |
+|                                                                |
+|                                                                |
+|                                                                |
+|                                                                |
++----------------------------------------------------------------+</code></pre>
+      <p>
+        對一下結果:迴圈跑 10 圈(6000 一條,加上每圈 7001、300A 兩條,前 9 圈再加一條 1202),共 1 + 20 + 9 = 30 條;後面 10 條畫圖,最後 1 條跳到自己,
+        一共 41 條。每幀 10 條,所以停在第 5 幀。F265 把 V0 讀回 [300] 的 0(百位),V1 = 1、V2 = 0;VA 從 28 加 5 變成 33 = 0x21;
+        最後一個 FX29 把 I 設成字型「0」的 0x050。畫面上是 x = 28 和 x = 33 開始的兩個字。
+      </p>
+
+      <h3>第二支:XOR、碰撞與裁切</h3>
+      <p><code>sprite.hex</code> 就是圖 134-3 和手算 134.5 前面那張表用的 ROM:同一個方框畫三次,每次把 VF 存起來。</p>
+<pre><code class="language-text"># sprite.hex:同一個方框畫三次,看 XOR、碰撞旗標與右邊的裁切
+00E0  # 200  清畫面
+A21E  # 202  I = 0x21E(方框的資料)
+6002  # 204  V0 = 2
+6102  # 206  V1 = 2
+D014  # 208  在 (2, 2) 畫 4 列
+85F0  # 20A  V5 = VF
+6006  # 20C  V0 = 6
+6104  # 20E  V1 = 4
+D014  # 210  在 (6, 4) 畫:和第一個方框疊到一角
+86F0  # 212  V6 = VF
+603C  # 214  V0 = 60
+6114  # 216  V1 = 20
+D014  # 218  在 (60, 20) 畫:右邊 4 欄超出畫面
+87F0  # 21A  V7 = VF
+121C  # 21C  跳到自己:停
+FF 81 81 FF   # 21E  方框:11111111 / 10000001 / 10000001 / 11111111</code></pre>
+<pre><code class="language-text">$ python3 hex2rom.py sprite.hex sprite.ch8
+sprite.ch8: 34 位元組
+$ ./chip8demo sprite.ch8
+停住:PC=0x21C 跳到自己。執行了 15 條指令,在第 2 幀。
+V0-V7: 3C 14 00 00 00 00 01 00
+V8-VF: 00 00 00 00 00 00 00 00
+I=0x21E  DT=0  ST=0  SP=0
++----------------------------------------------------------------+
+|                                                                |
+|                                                                |
+|  ########                                                      |
+|  #      #                                                      |
+|  #   ### ####                                                  |
+|  #### ###   #                                                  |
+|      #      #                                                  |
+|      ########                                                  |
+|                                                                |
+|                                                                |
+|                                                                |
+|                                                                |
+|                                                                |
+|                                                                |
+|                                                                |
+|                                                                |
+|                                                                |
+|                                                                |
+|                                                                |
+|                                                                |
+|                                                            ####|
+|                                                            #   |
+|                                                            #   |
+|                                                            ####|
+|                                                                |
+|                                                                |
+|                                                                |
+|                                                                |
+|                                                                |
+|                                                                |
+|                                                                |
+|                                                                |
++----------------------------------------------------------------+</code></pre>
+      <p>
+        V5 = 00(第一次畫在空白的畫面上)、V6 = 01(第二次碰到兩格)、V7 = 00(第三次畫在空白處,右邊 4 欄被裁掉)。
+        左上角兩個方框交叉的地方缺了兩格,就是 (9, 4) 和 (6, 5);右邊的方框只剩左半邊。
+      </p>
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">核心觀念:測試 ROM 要能「自己說對不對」</span>
+          <p>上面兩支 ROM 要你用眼睛看畫面、對暫存器。更好的測試 ROM 會自己檢查:算完之後用 3XNN、4XNN 比對答案,對了畫「1」,錯了畫「0」(練習 134.8)。
+          地下城的判題更進一步:用固定的驅動程式跑隱藏的 ROM,把暫存器、記憶體傾印、畫面的 hash 和參考答案逐項比對。
+          那些 ROM 也全部是自己寫的,只是不公開。</p>
+        </div>
+      </div>
+
+      <h2>除錯:trace 與兩台模擬器對照</h2>
+      <p>
+        模擬器出錯時,最終畫面通常只告訴你「不對」,不告訴你「哪一條不對」。範例模擬器的第 4 個參數 <code>trace</code> 會把每一步改了什麼印出來
+        (格式:位址、opcode、改變的暫存器;PC 不是加 2 才印 PC;記憶體寫入印成 <code>[位址]=值</code>;每幀結束印一行分隔):
+      </p>
+<pre><code class="language-text">$ ./chip8demo exec.ch8 1 20 trace
+200 60FF  V0:00-&gt;FF
+202 7002  V0:FF-&gt;01
+204 61C8  V1:00-&gt;C8
+206 6264  V2:00-&gt;64
+208 8124  V1:C8-&gt;2C VF:00-&gt;01
+20A 8125  V1:2C-&gt;C8 VF:01-&gt;00
+20C 6345  V3:00-&gt;45
+20E 8316  V3:45-&gt;64
+210 A300  I:000-&gt;300
+212 F333  [300]=01
+214 F155  I:300-&gt;302 [301]=C8
+216 1216  PC-&gt;216
+停住:PC=0x216 跳到自己。執行了 12 條指令,在第 1 幀。
+V0-V7: 01 C8 64 64 00 00 00 00
+V8-VF: 00 00 00 00 00 00 00 00
+I=0x302  DT=0  ST=0  SP=0
+(畫面全暗)</code></pre>
+      <p>
+        這就是手算 134.2 前面那張表(VIP 欄)。trace 只印「值改變了」的格子:212 那一行的 F333 寫了 [300]=01、[301]=00、[302]=00,但後兩格本來就是 0,所以沒印出來;
+        20E 的 VF 也是一樣,寫了 00,和原本相同。
+      </p>
+      <p>
+        有了 trace,就能做<strong>差異測試(differential testing)</strong>:同一支 ROM 給兩台模擬器跑(例如你的模擬器和一個你信任的參考模擬器,或同一台的 VIP 與 MODERN 設定),
+        逐行比對 trace,第一個不一樣的行就是 bug(或怪癖)所在。第 21 章的任務「CPU 與電腦」和參考 CPU 逐拍比對、顯示第一個不同的拍,也是同一個原理。
+      </p>
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">小技巧:最後狀態一樣,不代表每一步都一樣</span>
+          <p><code>count.ch8</code> 用 VIP 和 MODERN 設定跑,最後的暫存器、記憶體和畫面完全一樣。可是中間 F265 之後,VIP 的 I 是 0x303,MODERN 是 0x300,
+          只是下一條 F129 又把 I 蓋掉了。只比最後狀態的測試抓不到這種差異;比 trace 才抓得到。這也是為什麼判題除了最後的傾印,也比較執行的週期數。</p>
+        </div>
+      </div>
+
+      <h2>動手練習</h2>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 134.1 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>(1) 為什麼 CHIP-8 的程式從 0x200 開始?(2) 現代模擬器為什麼可以把字型放在 0x050?(3) ROM 最大可以多大?</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <p>(1) COSMAC VIP 上,直譯器本身佔了記憶體最前面的 512 位元組(0x000–0x1FF),程式只能從 0x200 開始放。
+            (2) 模擬器的直譯器是你寫的 C 程式,不住在 CHIP-8 的記憶體裡,0x000–0x1FF 就空出來了;程式照慣例不會去碰這一段,放字型不會被蓋掉。
+            (3) 0x200 到 0xFFF 共 0x1000 − 0x200 = 3584 位元組。地下城 Lab 的載入函式遇到比這個大的 ROM 要拒絕,一個位元組都不寫。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 134.2 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>寫一支 ROM,在畫面中間用內建字型畫出「C8」(兩個字,中間空一格)。用 <code>hex2rom.py</code> 轉檔,用 <code>chip8demo</code> 跑出畫面。</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+<pre><code class="language-text"># c8.hex:用內建字型在畫面中央畫出「C8」
+600C  # 200  V0 = 0xC
+F029  # 202  I = 字型「C」
+6A1C  # 204  VA = 28
+6B0D  # 206  VB = 13
+DAB5  # 208  畫 5 列
+6008  # 20A  V0 = 8
+F029  # 20C  I = 字型「8」
+7A05  # 20E  VA = VA + 5
+DAB5  # 210  畫 5 列
+1212  # 212  停</code></pre>
+<pre><code class="language-text">$ python3 hex2rom.py c8.hex c8.ch8 &amp;&amp; ./chip8demo c8.ch8 | head -24 | tail -10
+c8.ch8: 20 位元組
+|                                                                |
+|                                                                |
+|                                                                |
+|                                                                |
+|                            #### ####                           |
+|                            #    #  #                           |
+|                            #    ####                           |
+|                            #    #  #                           |
+|                            #### ####                           |
+|                                                                |</code></pre>
+            <p>字型的字 4 格寬,第二個字的 x 加 5,中間剛好空一格。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 134.3 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>範例模擬器沒有 BNNN。(1) 照 VIP 的規則(跳到 NNN + V0)把它加上去,只要加一行。(2) 寫一支 ROM 測它,讓 VIP 和「BXNN」兩種做法會走到不同的地方。</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <p>(1) 在 <code>step()</code> 的 <code>case 0xA</code> 後面加:</p>
+<pre><code class="language-text">    case 0xB: m-&gt;PC = (nnn + V[0]) &amp; 0xFFF; break;   // VIP:NNN + V0</code></pre>
+            <p>(2) 測試 ROM:V0 = 4,執行 <code>B208</code>。VIP 跳到 208 + 4 = 20C;BXNN 的做法把它讀成「跳到 208 + V2」,V2 = 0,跳到 208。兩條路各寫一個不同的 V1。</p>
+<pre><code class="language-text"># bnnn.hex:測 BNNN(VIP 跳到 NNN + V0)
+6004  # 200  V0 = 4
+B208  # 202  VIP:跳到 208 + V0 = 20C
+61EE  # 204  (不該執行到)
+1206  # 206  停在 206
+61AA  # 208  MODERN 的 BXNN 會跳到這裡(208 + V2 = 208)
+1206  # 20A  跳到 206 停
+6177  # 20C  VIP 走這條:V1 = 77
+120E  # 20E  停在 20E</code></pre>
+<pre><code class="language-text">$ ./chip8demo bnnn.ch8 | head -1          # 加之前
+不支援的指令:0x202 的 B208。
+$ ./chip8demo bnnn.ch8 | head -2          # 加之後
+停住:PC=0x20E 跳到自己。執行了 4 條指令,在第 1 幀。
+V0-V7: 04 77 00 00 00 00 00 00</code></pre>
+            <p>VIP 的答案是 V1 = 77、停在 0x20E;BXNN 的做法會得到 V1 = AA、停在 0x206。第 204 行的 <code>61EE</code> 是「哨兵」:如果它被執行,表示跳躍根本沒發生。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 134.4 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>替範例模擬器加一個設定 <code>modern</code>:打開時,8XY6/8XYE 只移 VX,FX55/FX65 不改 I。用環境變數 <code>CHIP8_MODERN</code> 打開它,再跑 <code>exec.ch8</code>,和手算 134.2 前面那張表的右欄對答案。
+          (這只是五個怪癖裡的兩個;地下城的 Lab 要五個旗標都能單獨開關。)</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <p>改這幾個地方(<code>-</code> 是原來的行,<code>+</code> 是改成的行):</p>
+<pre><code class="language-text">+ static int modern;                    // 1:移位只看 VX、FX55/FX65 不改 I
+
+-     case 0x6: r = b &gt;&gt; 1; f = b &amp; 1; break;              // VIP:移的是 VY
++     case 0x6: { uint8_t s = modern ? a : b; r = s &gt;&gt; 1; f = s &amp; 1; } break;
+-     case 0xE: r = (uint8_t)(b &lt;&lt; 1); f = b &gt;&gt; 7; break;
++     case 0xE: { uint8_t s = modern ? a : b; r = (uint8_t)(s &lt;&lt; 1); f = s &gt;&gt; 7; } break;
+
+  (FX55 與 FX65 兩處)
+-                    m-&gt;I = (uint16_t)(m-&gt;I + x + 1); break;
++                    if (!modern) m-&gt;I = (uint16_t)(m-&gt;I + x + 1);
++                    break;
+
+  (main 裡,srand(1); 的下一行)
++     modern = getenv("CHIP8_MODERN") != NULL;</code></pre>
+<pre><code class="language-text">$ CHIP8_MODERN=1 ./chip8demo exec.ch8 1 20 trace
+200 60FF  V0:00-&gt;FF
+202 7002  V0:FF-&gt;01
+204 61C8  V1:00-&gt;C8
+206 6264  V2:00-&gt;64
+208 8124  V1:C8-&gt;2C VF:00-&gt;01
+20A 8125  V1:2C-&gt;C8 VF:01-&gt;00
+20C 6345  V3:00-&gt;45
+20E 8316  V3:45-&gt;22 VF:00-&gt;01
+210 A300  I:000-&gt;300
+212 F333  [301]=03 [302]=04
+214 F155  [300]=01 [301]=C8
+216 1216  PC-&gt;216
+停住:PC=0x216 跳到自己。執行了 12 條指令,在第 1 幀。
+V0-V7: 01 C8 64 22 00 00 00 00
+V8-VF: 00 00 00 00 00 00 00 01
+I=0x300  DT=0  ST=0  SP=0
+(畫面全暗)</code></pre>
+            <p>V3 = 22、VF = 01、I = 0x300,[302] = 04,和表的右欄一致。FX55 那一行要拆成兩行並加上 <code>break</code>:
+            如果寫成 <code>if (!modern) m-&gt;I = …; break;</code> 擠在同一行,<code>gcc -Wall</code> 會警告縮排誤導(<code>-Wmisleading-indentation</code>),因為 <code>break</code> 看起來像是在 <code>if</code> 裡面。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 134.5 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p><code>timer.ch8</code> 用 ipf = 3 跑,V2 最後是多少?停在第幾幀?先猜,再用 <code>./chip8demo timer.ch8 60 3</code> 驗證。為什麼 ipf 越小,V2 越小?</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+<pre><code class="language-text">$ ./chip8demo timer.ch8 60 3 | head -2
+停住:PC=0x20C 跳到自己。執行了 22 條指令,在第 8 幀。
+V0-V7: 05 00 05 00 00 00 00 00</code></pre>
+            <p>V2 = 5,停在第 8 幀,共 22 條。迴圈一圈是 4 條指令,DT 的倒數速度固定(每幀減 1,共 5 幀),
+            所以 V2 大約等於「5 幀裡能跑幾圈」:ipf = 10 時約 2.5 圈/幀,ipf = 3 時不到 1 圈/幀。ipf = 3 時第 2 幀和第 6 幀甚至一次都沒讀到 DT(F107 剛好落在別的幀),
+            所以 DT 歸零之後,還要再等 F107 下一次被執行才會發現,一直到第 8 幀才停。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 134.6 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>判斷對錯,錯的舉一個反例(一組 opcode 和暫存器值):</p>
+          <ol>
+            <li>「7XNN 溢位時,VF 會被設成 1。」</li>
+            <li>「8XY4 的 X 是 F 時,VF 最後是 VX + VY 的低 8 位元。」</li>
+            <li>「DXYN 回傳 VF = 0,表示 sprite 沒有碰到畫面上任何亮的格子。」</li>
+            <li>「FX1E 加完之後 I 超過 0xFFF,VF 要設成 1。」</li>
+          </ol>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <ol>
+              <li>錯。<code>60FF</code> 再 <code>7002</code>:V0 = 01,VF 不變(手算 134.2 前面那張表的第 2 列)。只有 8XY4 會寫進位。</li>
+              <li>錯。先寫結果、最後寫旗標,所以 VF 最後是進位旗標。<code>flags.c</code> 的 <code>8F14</code>(VF = F0、V1 = 20):VF 最後是 01,不是 10。</li>
+              <li>錯。VF = 0 只表示「沒有格子由亮變暗」。sprite 的 0 位元蓋在亮的格子上不算碰撞;
+                在 VIP 設定下,被裁掉的部分就算「蓋在」繞回來那一邊的亮格子上也不算。例如畫面上 (0, 0) 亮著,在 (60, 0) 畫 <code>FF</code>:VIP 裁掉 x = 64..67,VF = 0。</li>
+              <li>錯。標準的 CHIP-8 裡 FX1E 不改 VF(地下城的 Lab 也這樣規定);I 是 16 位元暫存器,用它存取記憶體時才取低 12 位元。
+                有少數直譯器會設 VF,那是另一個沒有列入 Lab 的怪癖。</li>
+            </ol>
+          </div></details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 134.7 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>用「按鍵與 FX0A」那一節的 ROM 和 ipf = 10。這次的按鍵事件是:第 2 幀開始前按下 5,第 3 幀開始前放開 5;第 1 幀開始前(F30A 還沒執行)按下又放開 9。
+          V3、V4 最後是多少?一共執行幾條指令?F30A 算了幾次?</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <p>第 1 幀:9 在 F30A 開始等之前就按完放開了,不算;6003、F015、F30A 開始等,剩下 7 條也是 F30A,DT 3 → 2。
+            第 2 幀:按下 5,按下不算,10 條 F30A,DT 2 → 1。第 3 幀:5 放開了,第一條 F30A 就完成:V3 = 5;F407 讀到 DT = 1,V4 = 1;1208 停。</p>
+            <p>V3 = 5、V4 = 1。指令數 10 + 10 + 3 = 23,F30A 算了 8 + 10 + 1 = 19 次。和本文的例子比,早一幀放開,V4 就從 0 變成 1:等按鍵的時候計時器照常倒數。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 134.8 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>寫一支「會自己判斷對錯」的測試 ROM:檢查 <code>8014</code>(V0 = 80、V1 = 80)之後 V0 是 00 而且 VF 是 1;兩個都對就在畫面中間畫「1」,否則畫「0」。
+          再把範例模擬器的進位判斷故意改壞(把 <code>(a + b) &gt; 0xFF</code> 改成 <code>(a + b) &gt; 0x100</code>),確認你的 ROM 抓得到。</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+<pre><code class="language-text"># selftest.hex:檢查 8XY4 的進位;對了畫「1」,錯了畫「0」
+6080  # 200  V0 = 80
+6180  # 202  V1 = 80
+6200  # 204  V2 = 0(先假設沒過)
+8014  # 206  V0 = V0 + V1:應該 V0 = 00、VF = 1
+3F01  # 208  VF == 1 就跳過下一條
+1210  # 20A  VF 不對:直接去畫 V2(= 0)
+4000  # 20C  V0 != 0 就跳過下一條
+6201  # 20E  兩個都對:V2 = 1
+F229  # 210  I = 字型「V2」
+6A1E  # 212  VA = 30
+6B0D  # 214  VB = 13
+DAB5  # 216  畫 5 列
+1218  # 218  停</code></pre>
+<pre><code class="language-text">$ ./chip8demo selftest.ch8 | head -24 | tail -10        # 正確的模擬器
+|                                                                |
+|                                                                |
+|                                                                |
+|                                                                |
+|                                #                               |
+|                               ##                               |
+|                                #                               |
+|                                #                               |
+|                               ###                              |
+|                                                                |
+$ ./chip8demo_broken selftest.ch8 | head -24 | tail -10 # 進位判斷改壞的版本
+|                                                                |
+|                                                                |
+|                                                                |
+|                                                                |
+|                              ####                              |
+|                              #  #                              |
+|                              #  #                              |
+|                              #  #                              |
+|                              ####                              |
+|                                                                |</code></pre>
+            <p>80 + 80 = 100,剛好等於 0x100:改壞的版本用「&gt; 0x100」,VF 變成 0,ROM 畫出「0」。這個測試值是故意挑在邊界上的;
+            如果選 F0 + 20 = 110,兩個版本都會給 VF = 1,抓不到這個錯。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 134.9 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>一支 ROM 一直遞迴呼叫自己(例如 0x200 寫 <code>2200</code>)。(1) 範例模擬器執行到第幾條指令會出事?會怎樣?
+          (2) 地下城的 Lab 規定「第 17 層呼叫回傳錯誤碼,而且機器狀態完全不變」。和 <code>assert</code> 中止比,這樣有什麼好處?</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <p>(1) 每一次 <code>2200</code> 推一個返回位址(0x202)。前 16 次把堆疊填滿,第 17 條指令(第 17 次呼叫)執行時 <code>assert(m-&gt;sp &lt; 16)</code> 失敗,程式印出斷言訊息並中止,畫面和暫存器都看不到。
+            如果沒有這個 <code>assert</code>,<code>m-&gt;stack[16]</code> 會寫到陣列外面,可能蓋掉 <code>struct</code> 裡下一個欄位 <code>sp</code>(這是未定義行為,見第 51 章)。</p>
+            <p>(2) 回傳錯誤碼,呼叫你的程式(判題驅動程式、除錯器、面板)可以自己決定要怎麼辦:印出傾印、顯示「0x200 堆疊溢位」、或停在那裡讓人檢查。
+            狀態不變,表示傾印裡的 PC 還指著出事的那一條指令,SP 還是 16,和出事前一刻一模一樣,方便重現與比對;
+            如果 PC 已經加了 2、或 SP 已經變了,你看到的就是一個「做了一半」的狀態,很難判斷是哪裡錯。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 134.10 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>不跑程式,只用本章的規則判斷:<code>count.ch8</code>、<code>sprite.ch8</code>、<code>timer.ch8</code>、<code>call.ch8</code>、<code>exec.ch8</code> 這五支 ROM,
+          用 VIP 和 MODERN 兩種設定跑到停住,哪幾支的<strong>最後狀態</strong>(暫存器、I、記憶體、畫面)會不一樣?各是哪一條指令造成的?</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <ul>
+              <li><code>exec.ch8</code>:不一樣。20E 的 <code>8316</code>(移位怪癖)讓 V3、VF 不同,連帶 212 的 BCD 寫出不同的數字;214 的 <code>F155</code> 讓 I 不同。</li>
+              <li><code>sprite.ch8</code>:不一樣。218 的第三次畫圖在 (60, 20),VIP 裁掉右邊 4 欄,MODERN 把它們繞到 x = 0..3。</li>
+              <li><code>count.ch8</code>:最後一樣。20C 的 <code>F265</code> 讓 I 暫時不同(0x303 和 0x300),但 212 的 <code>F129</code> 又把 I 設成字型位址,蓋掉了差異。</li>
+              <li><code>timer.ch8</code>、<code>call.ch8</code>:一樣。它們沒有用到任何有怪癖的指令。</li>
+            </ul>
+            <p>這也說明了為什麼地下城的隱藏檢定要用「只開一個旗標」的設定再跑一次:每個怪癖都要有一支 ROM 讓它的差異留到最後,檢查才有意義。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <h2>把這一章串起來</h2>
+      <ul>
+        <li><strong>機器</strong>:4 KiB 記憶體(ROM 從 0x200 開始,字型放 0x050)、V0–VF(VF 兼當旗標)、16 位元的 I、PC、16 層堆疊、DT 與 ST、64×32 單色畫面、16 鍵鍵盤。</li>
+        <li><strong>解碼</strong>:opcode 是 4 個 nibble,第一個決定種類,0、8、E、F 再看後面;參數只有 X、Y、N、NN、NNN 五種切法。表裡沒有的組合要報錯。</li>
+        <li><strong>主迴圈</strong>:取指(大端)→ PC 加 2 → 解碼 → 執行;每幀 ipf 條,幀尾計時器減 1。ipf 是規格的一部分。</li>
+        <li><strong>旗標</strong>:先算結果、寫 VX,最後才寫 VF;7XNN 和 FX1E 不改 VF;8XY5 的 VF 是「沒有借位」(VX ≥ VY)。</li>
+        <li><strong>流程</strong>:跳過 = PC 再加 2;2NNN 推的是下一條的位址;程式用「跳到自己」表示結束;堆疊溢位與下溢要報錯。</li>
+        <li><strong>畫面</strong>:DXYN 用 XOR 畫,起點先取餘數;VF = 1 只代表「有格子由亮變暗」;邊緣 VIP 裁切、有些直譯器繞回。</li>
+        <li><strong>按鍵</strong>:FX0A 不能用 <code>while</code> 等,要讓 PC 停在原地、每步重新檢查;VIP 等的是「放開」。</li>
+        <li><strong>怪癖</strong>:移位用 VY 還是 VX、FX55/FX65 改不改 I、BNNN 還是 BXNN、邏輯運算重不重設 VF、裁切還是繞回。地下城 Lab 預設 COSMAC VIP,五個都做成旗標。</li>
+        <li><strong>測試</strong>:自己用十六進位寫 ROM;挑邊界值;讓 ROM 自己判斷對錯;用 trace 和差異測試找出第一個出錯的指令。</li>
+      </ul>
+      <p>
+        下一步是把範例模擬器沒做的事做完:經過你自己的記憶體匯流排存取記憶體、五個怪癖旗標、固定的亂數產生器、錯誤碼、鍵盤與 FX0A、固定格式的狀態傾印和畫面 hash。
+        這些就是本章兩個 Lab 的內容。做完之後,任務線 emu 的下一站是 Game Boy:CPU 換成 SM83,多了旗標的細節、CB 前綴指令、計時器、中斷和一個會逐條掃描線畫圖的 PPU。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">延伸資源</span>
+          <p>下面的規格文件授權不明,本書只連結、不轉載;本章的文字、表格與 ROM 都是自己寫的。</p>
+          <ul>
+            <li>Thomas P. Greene(Cowgod):<a href="http://devernay.free.fr/hacks/chip8/C8TECH10.HTM">Cowgod's Chip-8 Technical Reference</a>。最常被引用的指令說明;注意它的移位、FX55/FX65 與邏輯運算寫的是後來直譯器的行為,和 COSMAC VIP 不同。</li>
+            <li>Matthew Mikolay:<a href="http://mattmik.com/files/chip8/mastering/chip8.html">Mastering CHIP-8</a>。照 COSMAC VIP 原機的行為寫的說明。</li>
+            <li>Tobias V. Langhoff:<a href="https://tobiasvl.github.io/blog/write-a-chip-8-emulator/">Guide to making a CHIP-8 emulator</a>。從零寫模擬器的步驟與怪癖說明,不給程式碼。</li>
+            <li><a href="https://chip8.gulrak.net/">CHIP-8 Variant Opcode Table</a>:CHIP-8、CHIP-48、SUPER-CHIP 等版本逐條指令的差異對照。</li>
+            <li>Timendus:<a href="https://github.com/Timendus/chip8-test-suite">chip8-test-suite</a>。社群常用的測試 ROM 與怪癖說明;授權確認之前,本書與地下城不收錄、不拿來判題。</li>
+            <li>Wikipedia:<a href="https://en.wikipedia.org/wiki/CHIP-8">CHIP-8</a>(歷史、記憶體配置、指令表)。</li>
+          </ul>
+        </div>
+      </div>
+</article>
+  </main>
+</div>
+<script src="../assets/book.js"></script>
+</body>
+</html>
