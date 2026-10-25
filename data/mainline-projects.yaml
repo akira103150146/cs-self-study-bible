@@ -9,7 +9,7 @@
 # 書端多加的欄位(9Jang 不讀,data/README.md 有完整清單):頂層 date、planned_chapters、node_extra、exam_lines;
 #   mainline 的 code、also_tracks、checkpoints、level、status、summary、note、future_acceptance(perf.budget)、steps;
 #   acceptance 的 visibility、perf、checkpoint;task 的 lab_no、anchor、gap、gap_title、also_chapters、optional、status、
-#   used_by、note、interface、internal、provided、forbid、forbid_calls、forbidAttrTypes、require、invariants;group 的 perf_ref、perf_basis、runner。
+#   used_by、note、interface、internal、forbid、forbid_calls、forbidAttrTypes、require、invariants、runner、lint、provided;group 的 perf_ref、perf_basis、runner。
 #
 # 對照(老師 2026-10-25):主線專題＝任務線;零件＝任務;測試組＝任務目標;公開＝test／F5;隱藏檢定＝submit;
 #   整合測試＝Boss 戰。由上而下:先定 Boss 戰,再拆零件;每組測試寫 requiredBy(是哪個 Boss 或下游測試組需要它)。
@@ -38,8 +38,6 @@ date: 2026-10-25
 
 planned_chapters:
   131-security-law-ethics: {gap: G55, title: 動手之前:資安的法律與倫理}
-  136-verilog: {gap: G34, title: Verilog}
-  137-verification-cocotb: {gap: G35, title: cocotb 驗證}
 
 node_extra:
   be-web-basics: [129-http-rest-api]
@@ -1934,6 +1932,7 @@ mainlines:
     - {id: fw/uart, order: 5, name: 序列埠指令列, files: [fw/ringbuf.c, fw/cli.c], language: c, chapter: "G46:本章 Lab:序列埠指令列 fw/cli.c", evidenceFor: [em-serial, em-adc-signals], consumes: [hzip/crc], groups: [], lab_no: L4, anchor: lab-fw-uart, gap: G46, gap_title: 序列通訊, used_by: [cp3.uart-console, rtl/uart-tx]}
     - {id: fw/pid, order: 6, name: PID 與 RTOS 任務, files: [fw/pid.c], language: c, chapter: "G48:本章 Lab:PID 與 RTOS 任務 fw/pid.c", evidenceFor: [em-rtos, em-control], consumes: [numkit/ode], groups: [], lab_no: L5, anchor: lab-fw-pid, gap: G48, gap_title: ESP32 與 FreeRTOS(含 G52 PID), used_by: [cp4.rtos-node]}
 
+# ═════════════════════════════ I1 rtl(檢查點 1 proj-ic-alu 詳細;檢查點 2 的零件 outline) ═════════════════════════════
 - id: rtl
   code: I1
   name: 自己的 RV32I CPU
@@ -1942,18 +1941,144 @@ mainlines:
   project: proj-ic-alu
   checkpoints: [proj-ic-alu, proj-ic-riscv]
   level: 大學
-  status: outline
-  summary: "用 Verilog 把 Hack 的閘與 ALU 重寫成 RV32I 版,學 cocotb 驗證,最後做出單週期 RV32I CPU;參考模型是 rv32 任務線的指令集模擬器。"
+  status: detailed
+  summary: "用 Verilog 把 Hack 的多工器與加法器重寫成可以調寬度的版本,組成 RV32I 的 ALU,再用 cocotb 寫自己的測試去抓突變版;最後做出單週期 RV32I CPU,參考模型是 rv32 任務線的指令集模擬器。"
+  note: "判題 runner 是新的 verilog-cocotb(Icarus Verilog 11＋cocotb 1.9.2,見 data/README 待決事項 12–15)。效能數字是 book-hwtools 映像在 i7-12700KF 上實測的 CPU 秒(user),含編譯與 cocotb 啟動(每次約 2.8 秒)。Verilog 任務不 consumes Hack 的 .hdl:觀念接 hack/gates、hack/alu(Mux16、Add16、ALU),但判題不會用到你的 Hack 晶片。檢查點 2(proj-ic-riscv)的 regfile、decode、cpu 還是 outline,它們的書(G36)還沒寫。"
   acceptance:
-    - {id: boss.alu-mutants, name: ALU 與突變, checkpoint: proj-ic-alu, consumes: [rtl/alu, rtl/tb], description: "正確的 ALU 全過;3 個突變版各至少一項失敗(讀 results.xml)。"}
+    - id: boss.alu-exhaustive
+      name: ALU 窮舉
+      checkpoint: proj-ic-alu
+      consumes: [rtl/gates, rtl/alu]
+      description: "用你現在的 rtl/*.v 重跑閘與 ALU 兩個任務的全部隱藏檢定:Icarus 隱藏 testbench 把 8 位元版(W=8)的所有輸入與運算碼窮舉一遍,32 位元版用 cocotb 隨機向量對 Python 參考模型;每一層都要用你自己的 adder 與 full_adder。"
+      perf: {statement: "閘與 ALU 的全部隱藏檢定(含每次編譯)60 秒內", seconds: 60}
+    - id: boss.alu-mutants
+      name: ALU 與突變
+      checkpoint: proj-ic-alu
+      consumes: [rtl/tb]
+      description: "你的 rtl/tests/test_alu.py 在參考 ALU 上全過,而且 3 個隱藏突變版每個都至少一項失敗(讀 cocotb 的 results.xml)。"
+      perf: {statement: "你的測試跑 4 個 ALU 版本(參考版＋3 個突變版),合計 60 秒內", seconds: 60}
     - {id: cp2.riscv-tests, name: RV32I 測試, checkpoint: proj-ic-riscv, consumes: [rtl/cpu], description: "rv32ui 測試＋一支 C 程式(排序＋CRC)經 MMIO 印字,對 rv32 指令集模擬器的輸出。"}
   tasks:
-    - {id: rtl/gates, order: 1, name: Verilog 閘, files: [rtl/mux.v, rtl/add16.v], language: verilog, chapter: "136-verilog:本章 Lab:Verilog 閘 rtl/mux.v", evidenceFor: [ic-verilog-basics], consumes: [hack/gates], groups: [], lab_no: L1, anchor: lab-rtl-gates, used_by: [rtl/alu]}
-    - {id: rtl/alu, order: 2, name: RV32I ALU, files: [rtl/alu.v], language: verilog, chapter: "20-combinational-sequential:本章 Lab:RV32I ALU rtl/alu.v", evidenceFor: [ic-comb], consumes: [rtl/gates], groups: [], lab_no: L2, anchor: lab-rtl-alu, gap: G37, gap_title: 算術電路, used_by: [rtl/tb, rtl/cpu]}
-    - {id: rtl/tb, order: 3, name: cocotb 測試, files: [rtl/tests/test_alu.py], language: python, chapter: "137-verification-cocotb:本章 Lab:cocotb 測試 rtl/tests/test_alu.py", evidenceFor: [ic-testbench], consumes: [rtl/alu], groups: [], lab_no: L3, anchor: lab-rtl-tb, used_by: [boss.alu-mutants]}
-    - {id: rtl/regfile, order: 4, name: 暫存器檔與 PC, files: [rtl/regfile.v, rtl/pc.v], language: verilog, chapter: "47-digital-circuits:本章 Lab:暫存器檔與 PC rtl/regfile.v", evidenceFor: [ic-cpu], consumes: [], groups: [], lab_no: L4, anchor: lab-rtl-regfile, also_chapters: [136-verilog], used_by: [rtl/cpu]}
-    - {id: rtl/decode, order: 5, name: 解碼與立即值, files: [rtl/decode.v, rtl/immgen.v], language: verilog, chapter: "G36:本章 Lab:解碼與立即值 rtl/decode.v", evidenceFor: [ic-cpu], consumes: [rv32/iss], groups: [], lab_no: L5, anchor: lab-rtl-decode, gap: G36, gap_title: 設計 RV32I CPU, also_chapters: [135-riscv-assembly], used_by: [rtl/cpu]}
-    - {id: rtl/cpu, order: 6, name: 單週期 CPU, files: [rtl/cpu.v], language: verilog, chapter: "G36:本章 Lab:單週期 CPU rtl/cpu.v", evidenceFor: [ic-cpu], consumes: [rtl/alu, rtl/regfile, rtl/decode, rv32/iss, hzip/crc], groups: [], lab_no: L6, anchor: lab-rtl-cpu, gap: G36, gap_title: 設計 RV32I CPU, also_chapters: [48-computer-architecture], used_by: [cp2.riscv-tests, soc/top]}
+    - id: rtl/gates
+      order: 1
+      name: Verilog 閘與加法器
+      files: [rtl/mux.v, rtl/full_adder.v, rtl/adder.v]
+      language: verilog
+      runner: verilog-cocotb
+      chapter: "136-verilog:本章 Lab:Verilog 閘與加法器 rtl/*.v"
+      evidenceFor: [ic-verilog-basics]
+      consumes: []
+      lab_no: L1
+      anchor: lab-rtl-gates
+      also_chapters: [19-boolean-logic, 20-combinational-sequential]
+      used_by: [rtl/alu, rtl/cpu]
+      interface:
+        - "module mux2 #(parameter W = 16) (input [W-1:0] a, b, input sel, output [W-1:0] y);   // rtl/mux.v;sel=0 → y=a,sel=1 → y=b"
+        - "module mux4 #(parameter W = 16) (input [W-1:0] a, b, c, d, input [1:0] sel, output [W-1:0] y);   // rtl/mux.v;sel 00→a、01→b、10→c、11→d(建議用三個 mux2)"
+        - "module full_adder (input a, b, cin, output sum, cout);   // rtl/full_adder.v,這個檔案只放這一個模組"
+        - "module adder #(parameter W = 16) (input [W-1:0] a, b, input cin, output [W-1:0] sum, output cout, output ovf);   // rtl/adder.v;漣波進位:用 generate 串 W 個 full_adder;cout＝最高位的進位;ovf＝有號溢位(a、b、sum 當二補數)"
+        - "W 會測 1、4、8、16、32;純組合電路"
+      require: [full_adder]
+      lint:
+        compile: "只編譯你的檔案時 iverilog -g2012 -Wall 不能有錯誤或警告"
+        allow_system: ["$signed", "$unsigned", "$clog2", "$display"]
+        forbid: ["`include", "`timescale", "階層參照(例 tb.x)", "其他 $ 系統任務(檔案讀寫、$finish、$random…)", "initial 區塊", "宣告時給初值(例 reg q = 0;)"]
+      note: "require:adder.v 必須 instantiate full_adder(用換成壞掉的 full_adder 來檢查,見 gates.structure)。和 Hack 晶片(hack/gates 的 Mux16、Mux4Way16,hack/alu 的 FullAdder、Add16)不同:寬度用 parameter W 調整、輸出叫 y、mux4 的 sel 是 2 位元向量、adder 多了 cin、cout、ovf。和本章範例(136-verilog)不同:範例的 mux2 是 1 位元、全加器叫 fa(埠 ci、s、co)、add4 固定 4 位元而且沒有 cin 與 ovf、沒有 mux4;9Jang 把範例當突變版,它在介面檢查就會失敗。"
+      groups:
+        - {id: gates.mux, name: 多工器, kind: function, visibility: public, requiredBy: [boss.alu-exhaustive, cp2.riscv-tests], description: "mux2、mux4(W=16)的公開向量:每個 sel 值都試,y 對參考模型。"}
+        - {id: gates.adder, name: 加法器, kind: function, visibility: public, requiredBy: [boss.alu-exhaustive, alu.ops], description: "full_adder 的 8 列真值表;adder(W=16)的公開向量:sum、cout、ovf,含 cin=1。"}
+        - {id: gates.exhaustive, name: 窮舉, kind: edge, visibility: hidden, requiredBy: [boss.alu-exhaustive, alu.exhaustive], description: "mux4 在 W=4 時 a、b、c、d、sel 的全部組合;adder 在 W=8 時 a、b、cin 的全部組合;W=1 的 adder。"}
+        - {id: gates.random, name: 寬的版本, kind: edge, visibility: hidden, requiredBy: [boss.alu-exhaustive, alu.random], description: "W=16、32 的邊界值(0、1、全 1、只有最高位、交替位元)與每人 seed 決定的隨機向量;ovf 的四種情況(正＋正、負＋負、異號、剛好不溢位)。"}
+        - {id: gates.structure, name: 真的用 full_adder, kind: spec, visibility: hidden, requiredBy: [boss.alu-exhaustive, alu.uses-adder], description: "把 full_adder 換成故意弄壞的版本,你的 adder 結果要跟著錯(證明 adder 真的由 full_adder 串成,不是直接寫 a + b)。"}
+        - id: gates.perf
+          name: 模擬時間
+          kind: perf
+          visibility: hidden
+          description: "漣波進位在事件驅動的模擬器裡一級一級傳,電路不能大到讓上層的 ALU 測不完。"
+          perf: {statement: "W=4 mux4 窮舉 262,144 組＋W=8 adder 窮舉 131,072 組 2 秒內;W=32 adder 10^4 組隨機向量 3 秒內", seconds: 3, n: 262144}
+          perf_ref: "0.21＋0.35 秒;0.97 秒(參考解:generate 串 full_adder;book-hwtools 的 Icarus 11,vvp 的 CPU user,不含編譯)"
+          requiredBy: [boss.alu-exhaustive, alu.perf]
+
+    - id: rtl/alu
+      order: 2
+      name: RV32I ALU
+      files: [rtl/alu.v]
+      language: verilog
+      runner: verilog-cocotb
+      chapter: "136-verilog:本章 Lab:RV32I ALU rtl/alu.v"
+      evidenceFor: [ic-comb]
+      consumes: [rtl/gates]
+      lab_no: L2
+      anchor: lab-rtl-alu
+      also_chapters: [20-combinational-sequential, 135-riscv-assembly]
+      used_by: [rtl/tb, rtl/cpu]
+      interface:
+        - "module alu #(parameter W = 32) (input [W-1:0] a, b, input [3:0] op, output [W-1:0] y, output zero);   // 純組合電路;W 會測 8、16、32"
+        - "op＝{funct7[5], funct3}:0000 add、1000 sub、0001 sll、0010 slt、0011 sltu、0100 xor、0101 srl、1101 sra、0110 or、0111 and;其他 6 個值 → y = 0"
+        - "移位量只看 b 的低 $clog2(W) 位元(W=32 時是 b[4:0]);sra 補符號位元、srl 補 0"
+        - "slt 把 a、b 當二補數比,sltu 當無號數比;結果是 0 或 1(其他位元都是 0)"
+        - "zero = (y == 0)"
+        - "add 與 sub 必須經過你的 rtl/adder.v 的 adder #(W)(sub＝a＋~b＋1);判題時和你的 adder.v、full_adder.v 一起編譯"
+      provided: ["alu_model.py:Python 參考模型 alu_ref(op, a, b, w=32) -> (y, zero)", "tests/test_public.py:公開的 cocotb 測試(test 會跑它)"]
+      require: [adder]
+      lint:
+        compile: "只編譯你的檔案時 iverilog -g2012 -Wall 不能有錯誤或警告"
+        allow_system: ["$signed", "$unsigned", "$clog2", "$display"]
+        forbid: ["`include", "`timescale", "階層參照(例 tb.x)", "其他 $ 系統任務(檔案讀寫、$finish、$random…)", "initial 區塊", "宣告時給初值(例 reg q = 0;)"]
+      note: "require:alu.v 必須 instantiate adder(用換成壞掉的 adder 來檢查,見 alu.uses-adder)。ALU 語意和 rv32 任務線的指令集模擬器(rv32/iss)相同,但 rv32/iss 的節點 hw-riscv-asm 不在 ic-comb 的先修閉包裡,所以不 consumes,參考模型 alu_model.py 由任務資料夾提供(到 rtl/cpu 才用 rv32/iss 當參考模型)。和 Hack ALU(hack/alu)不同:Hack 是 6 個控制位元(zx、nx、zy、ny、f、no)加 zr、ng 旗標;這裡是 RV32I 的 10 種運算、op 照 funct7[5] 與 funct3 編碼、寬度可調、只有 zero 旗標。和本章範例不同:範例(136-verilog)的 alu8 固定 8 位元、op 只有 2 位元 4 種運算(00 add、01 sub、10 and、11 or)、直接用 + 與 -;Lab 多了移位與比較、W 參數、未定義 op 的規定,而且加減法要經過自己的 adder。原本規劃在 20-combinational-sequential(G37 還沒寫),改放 136-verilog。"
+      groups:
+        - {id: alu.ops, name: 十種運算, kind: function, visibility: public, requiredBy: [boss.alu-exhaustive], description: "test 跑公開的 cocotb 測試:W=32 時 10 種運算各幾組向量,y 與 zero 對 alu_model.py。"}
+        - {id: alu.shift, name: 移位, kind: edge, visibility: hidden, requiredBy: [boss.alu-exhaustive, cp2.riscv-tests], description: "移位量 0、1、W-1;b 的高位元有值(只看低 $clog2(W) 位元);sra 對負數補 1、srl 補 0。"}
+        - {id: alu.compare, name: 有號與無號比較, kind: spec, visibility: hidden, requiredBy: [boss.alu-exhaustive, cp2.riscv-tests], description: "slt 與 sltu:最小負數對 1、-1 對 0、相等、只差最高位元;a - b 溢位時 slt 也要對;結果只能是 0 或 1。"}
+        - {id: alu.illegal, name: 未定義的運算碼, kind: error, visibility: hidden, requiredBy: [boss.alu-exhaustive], description: "6 個未定義的 op 一律 y = 0、zero = 1。"}
+        - {id: alu.exhaustive, name: 8 位元窮舉, kind: edge, visibility: hidden, requiredBy: [boss.alu-exhaustive], description: "W=8:a、b 的 65,536 種組合 × 16 個 op,y 與 zero 全部對參考模型(Icarus 隱藏 testbench)。"}
+        - {id: alu.random, name: 32 位元隨機, kind: spec, visibility: hidden, requiredBy: [boss.alu-exhaustive, cp2.riscv-tests], description: "W=32 與 W=16:邊界值(0、1、-1、最大正數、最小負數、交替位元)＋每人 seed 決定的隨機向量,cocotb 對 Python 參考模型。"}
+        - {id: alu.uses-adder, name: 用自己的加法器, kind: spec, visibility: hidden, requiredBy: [boss.alu-exhaustive], description: "把 adder 換成故意弄壞的版本,add 與 sub 的結果都要跟著錯(證明加減法真的經過你的 adder)。"}
+        - id: alu.perf
+          name: 模擬時間
+          kind: perf
+          visibility: hidden
+          description: "ALU 是純組合電路,每組向量都要很快算完;檢查點 2 的 CPU 每個時脈週期都會用到它。"
+          perf: {statement: "W=8 窮舉 1,048,576 組向量(Icarus testbench)6 秒內;W=32 cocotb 隨機 4,000 組(含編譯與啟動)15 秒內", seconds: 15, n: 1048576}
+          perf_ref: "1.84 秒(testbench 讓 op 在最內層迴圈;op 放最外層時加法器每組都重新漣波,要 9.0 秒);4.6 秒(參考解:兩個 adder＋case 選輸出;book-hwtools、CPU user)"
+          requiredBy: [boss.alu-exhaustive, cp2.riscv-tests]
+
+    - id: rtl/tb
+      order: 3
+      name: cocotb 測試
+      files: [rtl/tests/test_alu.py]
+      language: python
+      runner: verilog-cocotb
+      chapter: "137-verification-cocotb:本章 Lab:cocotb 測試 rtl/tests/test_alu.py"
+      evidenceFor: [ic-testbench]
+      consumes: [rtl/alu]
+      lab_no: L3
+      anchor: lab-rtl-tb
+      used_by: [boss.alu-mutants]
+      interface:
+        - "rtl/tests/test_alu.py:至少一個 @cocotb.test() 協程;DUT 是頂層的 alu(W=32,用預設值)"
+        - "判題:SIM=icarus、TOPLEVEL=alu、MODULE=test_alu,PYTHONPATH 只有 rtl/tests/;可以 import 同資料夾裡你自己的 .py(例如你自己的參考模型)、Python 標準函式庫與 cocotb"
+        - "要同時能在 cocotb 1.9 與 2.x 跑:等待寫 Timer(1, \"ns\")(單位用位置參數),讀值寫 int(dut.y.value)"
+        - "一個 ALU 版本「被抓到」＝results.xml 裡至少一個測試失敗或出錯;參考版要零失敗、零錯誤、至少一個測試"
+      provided: ["mutants/alu_sub_off.v:公開突變版(sub 少加 1)"]
+      forbid: [numpy]
+      note: "學生自寫測試(9Jang 設計 §5.3):consumes rtl/alu,所以 ALU 任務通過之後才開放,參考 ALU 對這個人已經沒有作答價值。判題建議:每個 ALU 版本在各自全新的沙盒、同樣的路徑與檔名、隨機順序跑,判決只看 results.xml;隱藏版只回「抓到/沒抓到」與類別。和本章範例不同:137 章的範例(改寫自 cocotb examples/adder,CC0)測的是加法器與 8 位元的 alu8(4 種運算,M1–M6 突變版);Lab 要測 32 位元 RV32I ALU 的 10 種運算、未定義的 op 與 zero,要有自己的參考模型。公開突變版 alu_sub_off.v 和 137 章的 M1 是同一種錯(sub 少加 1)。"
+      groups:
+        - {id: tb.public-mutant, name: 抓公開突變, kind: function, visibility: public, requiredBy: [boss.alu-mutants], description: "test 把你的測試跑在你自己的 rtl/alu.v 上(要全過)與公開突變版 alu_sub_off.v 上(要至少一項失敗)。"}
+        - {id: tb.green, name: 參考版全過, kind: function, visibility: hidden, requiredBy: [boss.alu-mutants], description: "你的測試在參考 ALU(W=32)上全過:沒有失敗、沒有錯誤、至少一個測試。"}
+        - {id: tb.mutants, name: 抓隱藏突變, kind: spec, visibility: hidden, requiredBy: [boss.alu-mutants], description: "3 個隱藏突變版(例:有號與無號弄反),每個都至少一項失敗。"}
+        - id: tb.perf
+          name: 跑得夠快
+          kind: perf
+          visibility: hidden
+          description: "判題要把整套測試跑 4 次(參考版＋3 個突變版)。"
+          perf: {statement: "整套測試跑一個 ALU 版本(含編譯與啟動)15 秒內", seconds: 15}
+          perf_ref: "3.4 秒(參考測試:16 個 op × 11 個邊界值兩兩組合＋1,000 組隨機,約 2,900 組向量;只有編譯與啟動是 2.8 秒)"
+          requiredBy: [boss.alu-mutants]
+
+    - {id: rtl/regfile, order: 4, name: 暫存器檔與 PC, files: [rtl/regfile.v, rtl/pc.v], language: verilog, chapter: "47-digital-circuits:本章 Lab:暫存器檔與 PC rtl/regfile.v", evidenceFor: [ic-cpu], consumes: [], groups: [], lab_no: L4, anchor: lab-rtl-regfile, also_chapters: [136-verilog], status: outline, used_by: [rtl/cpu]}
+    - {id: rtl/decode, order: 5, name: 解碼與立即值, files: [rtl/decode.v, rtl/immgen.v], language: verilog, chapter: "G36:本章 Lab:解碼與立即值 rtl/decode.v", evidenceFor: [ic-cpu], consumes: [rv32/iss], groups: [], lab_no: L5, anchor: lab-rtl-decode, gap: G36, gap_title: 設計 RV32I CPU, also_chapters: [135-riscv-assembly], status: outline, used_by: [rtl/cpu]}
+    - {id: rtl/cpu, order: 6, name: 單週期 CPU, files: [rtl/cpu.v], language: verilog, chapter: "G36:本章 Lab:單週期 CPU rtl/cpu.v", evidenceFor: [ic-cpu], consumes: [rtl/gates, rtl/alu, rtl/regfile, rtl/decode, rv32/iss], groups: [], lab_no: L6, anchor: lab-rtl-cpu, gap: G36, gap_title: 設計 RV32I CPU, also_chapters: [48-computer-architecture], status: outline, used_by: [cp2.riscv-tests, soc/top], note: "不 consumes hzip/crc:驗收用的 C 程式(排序＋CRC)由我們離線用 riscv gcc 編好,判題不會用到學生的 crc.py;hzip/crc 的節點 f-discrete 也不在 ic-cpu 的先修閉包裡。"}
 
 - id: uart
   code: I2

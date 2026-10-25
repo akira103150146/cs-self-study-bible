@@ -1,0 +1,2740 @@
+<!--meta
+title: Verilog:用文字描述硬體
+description: 接續數位電路與有限狀態機:用 Verilog 把 Hack HDL 寫過的晶片重寫一次。module 與埠、wire 與 reg(以及 SystemVerilog 的 logic)、assign 與兩種 always、阻塞與非阻塞指定、參數與 generate、意外長出的閂鎖、正反器與計數器、FSM 的三段式寫法、事件佇列與 delta cycle、可合成子集、testbench 與 VCD 波形,以及 Hack HDL 與 Verilog 對照表。每段程式都用 Icarus Verilog 實際跑過。
+-->
+      <div class="eyebrow">{{part:136-verilog}}</div>
+      <h1>Verilog:用文字描述硬體</h1>
+      <p class="subtitle">你已經用 Hack HDL 一顆一顆接過閘。這一章換成業界在用的語言:同樣的多工器、加法器和狀態機,寫成 Verilog,再讓模擬器一拍一拍跑給你看。</p>
+      <div class="byline">
+        <span class="tag">{{ch:136-verilog}}</span>
+        <span>閱讀時間 ≈ 120 分鐘</span>
+        <span>難度:★★★☆☆</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>一個 Verilog 模組(module)的骨架:埠、內部線、實例化,以及它和 Hack 的 <code>CHIP</code> 一一對應的地方</li>
+          <li><code>wire</code> 和 <code>reg</code> 差在哪裡、為什麼 <code>reg</code> 不等於暫存器,以及 SystemVerilog 的 <code>logic</code></li>
+          <li>四值邏輯 0、1、x、z,向量、位元寬度、拼接,以及寬度不合時會發生什麼事</li>
+          <li><code>assign</code>、<code>always @*</code>、<code>always @(posedge clk)</code> 三種寫法各自變成什麼電路</li>
+          <li>阻塞指定 <code>=</code> 和非阻塞指定 <code>&lt;=</code> 的差別:交換兩個暫存器、移位暫存器,以及不照規則寫時的競賽(race)</li>
+          <li>用 <code>parameter</code> 調整寬度,用 <code>generate</code> 把全加器串成漣波進位加法器</li>
+          <li>組合邏輯最常見的陷阱:if 或 case 沒寫完整,就長出閂鎖(latch)</li>
+          <li>RV32I ALU 的十種運算,尤其是 <code>sra</code> 與 <code>srl</code>、<code>slt</code> 與 <code>sltu</code>,以及 Verilog 有號運算的陷阱</li>
+          <li>正反器、帶致能的暫存器、計數器,以及有限狀態機的三段式寫法(Moore 與 Mealy)</li>
+          <li>模擬器的事件佇列與 delta cycle,為什麼 <code>$display</code> 會印出「舊的值」</li>
+          <li>哪些寫法能合成成電路、哪些只能模擬,以及 testbench、<code>$display</code>、<code>$finish</code> 與 VCD 波形</li>
+        </ul>
+      </div>
+
+      <h2>從 Hack HDL 到 Verilog:同一件事,換一種寫法</h2>
+      <p>
+        在<a href="19-boolean-logic.html">{{ch:19-boolean-logic}}</a>和<a href="20-combinational-sequential.html">{{ch:20-combinational-sequential}}</a>,
+        你用 Hack HDL 從 Nand 一路接出 Mux、加法器、ALU 和暫存器。Hack HDL 很單純:只有「零件」和「線」,沒有運算子、沒有 if、也沒有參數。
+        這種單純是好事,它逼你看清每一顆閘。但真的設計晶片時,沒有人一顆一顆接 32 位元的加法器。
+      </p>
+      <p>
+        業界用的硬體描述語言(hardware description language,HDL)主要是 <strong>Verilog</strong>(和它的後繼者 SystemVerilog)與 VHDL。
+        Verilog 讓你寫 <code>assign y = a + b;</code>,再交給<strong>合成工具(synthesis tool)</strong>把它變成閘;
+        也讓你寫 testbench、在模擬器裡一拍一拍看訊號怎麼變。
+        <a href="47-digital-circuits.html">{{ch:47-digital-circuits}}</a>講的卡諾圖、關鍵路徑、正反器和有限狀態機,在這一章都會變成幾行 Verilog。
+      </p>
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">核心觀念</span>
+          <p>Verilog 看起來像 C,但它<strong>不是</strong>在描述「先做什麼、再做什麼」。它描述的是<strong>一堆同時存在、同時運作的電路</strong>。
+          每一行 <code>assign</code> 是一塊一直在算的組合邏輯;每一個 <code>always @(posedge clk)</code> 是一排在時脈邊緣同時更新的正反器。
+          用寫軟體的直覺讀 Verilog,是本章大部分陷阱的來源。</p>
+        </div>
+      </div>
+      <p>
+        本章的工具是 <strong>Icarus Verilog</strong>(指令是 <code>iverilog</code> 和 <code>vvp</code>),一套開源的 Verilog 模擬器。
+        書裡每一段程式都用 Icarus Verilog 11 實際跑過,下面印出的輸出就是它的輸出。
+        你在 Linux 上可以 <code>sudo apt install iverilog</code>;macOS 用 <code>brew install icarus-verilog</code>。
+        版本不同時,訊息的字句可能略有不同(例如較新的版本在 <code>$finish</code> 時會多印一行),但數值應該一樣。
+      </p>
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">為什麼要學:IC 設計路線的入口</span>
+          <p>這一章是任務線「自己的 RV32I CPU」(rtl)的起點。本章有兩個 Lab:
+          先用 Verilog 重寫 Hack 的多工器與加法器(任務「Verilog 閘與加法器」,<code>rtl/gates</code>),
+          再組成 RV32I 的 ALU(任務「RV32I ALU」,<code>rtl/alu</code>)。
+          <a href="137-verification-cocotb.html">{{ch:137-verification-cocotb}}</a>用 cocotb 替這顆 ALU 寫測試;
+          之後的暫存器檔、解碼器和單週期 CPU,也都用本章的寫法。</p>
+        </div>
+      </div>
+
+      <h2>第一個模組:module、埠與實例化</h2>
+      <p>先寫一顆 1 位元的 2 選 1 多工器(multiplexer)。<code>sel</code> 是 0 時輸出 <code>a</code>,是 1 時輸出 <code>b</code>:</p>
+<pre><code class="language-verilog">// 1 位元 2 選 1 多工器:sel=0 選 a,sel=1 選 b
+module mux2 (
+    input  a,
+    input  b,
+    input  sel,
+    output y
+);
+    assign y = sel ? b : a;
+endmodule</code></pre>
+      <ul>
+        <li><code>module mux2 ( … );</code> 到 <code>endmodule</code>:一個模組(module),相當於 Hack 的 <code>CHIP Mux { … }</code>。</li>
+        <li>括號裡是<strong>埠(port)</strong>:<code>input</code> 是輸入腳,<code>output</code> 是輸出腳。沒寫寬度就是 1 位元。</li>
+        <li><code>assign y = sel ? b : a;</code>:<strong>連續指定(continuous assignment)</strong>。右邊任何一個訊號變了,左邊就重新算。
+          <code>? :</code> 和 C 的條件運算子一樣,在硬體裡就是一顆多工器。</li>
+        <li><code>//</code> 是註解,和 C 一樣;也可以用 <code>/* … */</code>。</li>
+      </ul>
+      <p>模組本身不會動。要看它的行為,得寫一個<strong>測試平台(testbench)</strong>:另一個模組,裡面放一顆 mux2,再餵它輸入、印出輸出。</p>
+<pre><code class="language-verilog">module tb_mux2;
+    reg a, b, sel;          // testbench 自己驅動的訊號用 reg
+    wire y;                 // 被模組輸出驅動的訊號用 wire
+    integer i;
+
+    mux2 dut (.a(a), .b(b), .sel(sel), .y(y));   // 用名字接腳
+
+    initial begin
+        $display("sel a b | y");
+        for (i = 0; i &lt; 8; i = i + 1) begin
+            {sel, a, b} = i[2:0];   // 一次指定三個位元
+            #1;                     // 等 1 個時間單位,讓 assign 算完
+            $display(" %b  %b %b | %b", sel, a, b, y);
+        end
+        $finish;
+    end
+endmodule</code></pre>
+      <p>編譯再執行。<code>-g2012</code> 打開 SystemVerilog 2012 的語法,<code>-Wall</code> 打開大部分警告:</p>
+<pre><code class="language-bash">iverilog -g2012 -Wall -o sim tb_mux2.v mux2.v   # 編譯:兩個檔案 → 模擬檔 sim
+vvp sim                                       # 執行模擬</code></pre>
+<pre><code class="language-text">sel a b | y
+ 0  0 0 | 0
+ 0  0 1 | 0
+ 0  1 0 | 1
+ 0  1 1 | 1
+ 1  0 0 | 0
+ 1  0 1 | 1
+ 1  1 0 | 0
+ 1  1 1 | 1</code></pre>
+      <p>和真值表一致。這個 testbench 裡有幾個新東西:</p>
+      <ul>
+        <li><code>mux2 dut (.a(a), .b(b), .sel(sel), .y(y));</code>:<strong>實例化(instantiation)</strong>一顆 mux2,名字叫 <code>dut</code>(device under test,待測元件)。
+          <code>.a(a)</code> 的意思是「mux2 的 a 腳接到我的 a 訊號」。這和 Hack 的 <code>Mux(a=a, …)</code> 完全一樣:<strong>左邊是零件的腳,右邊是我的線</strong>。</li>
+        <li><code>initial begin … end</code>:模擬一開始就執行一次的區塊。<code>begin</code>/<code>end</code> 相當於 C 的大括號。</li>
+        <li><code>#1</code>:等 1 個時間單位。testbench 改了輸入之後要等一下,讓電路算完再讀輸出。</li>
+        <li><code>{sel, a, b} = i[2:0];</code>:大括號是<strong>拼接(concatenation)</strong>,把三個 1 位元訊號當成一個 3 位元的值一次指定。</li>
+        <li><code>$display</code> 像 C 的 <code>printf</code>(會自動換行);<code>%b</code> 印二進位、<code>%h</code> 十六進位、<code>%d</code> 十進位(<code>%0d</code> 不補空白)。<code>$finish</code> 結束模擬。</li>
+      </ul>
+
+      <h3>結構式寫法:把 Hack 的晶片一顆一顆翻過來</h3>
+      <p><a href="130-hack-hdl-reference.html">附錄 G</a>用三輸入的 And3 示範 Hack HDL 的語法。同一顆晶片用 Verilog 的結構式(structural)寫法,幾乎是逐行對應:</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Hack HDL(And3.hdl)</th><th>Verilog(and3.v)</th></tr></thead>
+        <tbody>
+          <tr><td><pre><code class="language-text">CHIP And3 {
+    IN a, b, c;
+    OUT out;
+    PARTS:
+    And(a=a, b=b, out=ab);
+    And(a=ab, b=c, out=out);
+}</code></pre></td>
+          <td><pre><code class="language-verilog">module and2 (input a, b, output out);
+    assign out = a &amp; b;
+endmodule
+
+module and3 (input a, b, c, output out);
+    wire ab;                                // 內部線要先宣告
+    and2 g1 (.a(a),  .b(b), .out(ab));      // .腳(訊號):左邊是零件的腳,右邊是我的線
+    and2 g2 (.a(ab), .b(c), .out(out));
+endmodule</code></pre></td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        兩個差別:Verilog 沒有內建的 <code>And</code> 零件可以直接叫(其實有內建的閘,後面練習 136.10 會用到),所以先寫一顆 <code>and2</code>;
+        而且<strong>內部線 <code>ab</code> 要先用 <code>wire</code> 宣告</strong>。忘了宣告會怎樣?Verilog 會自己幫你生一條 1 位元的線,叫<strong>隱含線(implicit net)</strong>。
+        拼錯字也一樣不會報錯,只會多一條沒人驅動的線:
+      </p>
+<pre><code class="language-verilog">module and2 (input a, b, output out);
+    assign out = a &amp; b;
+endmodule
+module and3_typo (input a, b, c, output out);
+    and2 g1 (.a(a),  .b(b), .out(ab));      // 忘了宣告 ab
+    and2 g2 (.a(abb), .b(c), .out(out));    // 又拼錯成 abb
+endmodule</code></pre>
+<pre><code class="language-text">typo.v:5: warning: implicit definition of wire 'ab'.
+typo.v:6: warning: implicit definition of wire 'abb'.</code></pre>
+      <p>
+        只是警告,程式照樣編得過,<code>and3_typo</code> 的 <code>out</code> 卻永遠算錯。這就是要一直開 <code>-Wall</code> 的理由。
+        更嚴格的做法是在檔案開頭寫 <code>`default_nettype none</code>,讓「沒宣告就用」直接變成錯誤(埠也要寫明 <code>input wire</code>):
+      </p>
+<pre><code class="language-verilog">`default_nettype none
+module and2 (input wire a, b, output wire out);
+    assign out = a &amp; b;
+endmodule
+module and3_typo (input wire a, b, c, output wire out);
+    and2 g1 (.a(a),  .b(b), .out(ab));
+    and2 g2 (.a(abb), .b(c), .out(out));
+endmodule</code></pre>
+<pre><code class="language-text">typo2.v:6: error: Net ab is not defined in this context.
+typo2.v:6: error: Output port expression must support continuous assignment.
+typo2.v:6:      : Port 3 (out) of and2 is connected to ab
+typo2.v:7: error: Unable to bind wire/reg/memory `abb' in `and3_typo'
+typo2.v:7: error: Failed to elaborate port expression.
+4 error(s) during elaboration.</code></pre>
+
+      <h2>訊號與數值:wire、reg 與 logic</h2>
+      <p>Verilog 的訊號有兩大類,差別在「<strong>誰可以驅動它</strong>」:</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>型別</th><th>誰可以寫它</th><th>沒人寫時的值</th><th>常見用途</th></tr></thead>
+        <tbody>
+          <tr><td><code>wire</code></td><td><code>assign</code>、模組實例的輸出腳</td><td><code>z</code>(高阻抗,沒接)</td><td>接線、組合邏輯的輸出</td></tr>
+          <tr><td><code>reg</code></td><td><code>always</code>、<code>initial</code> 區塊裡的指定</td><td><code>x</code>(未知)</td><td>always 區塊算出來的值;testbench 驅動的輸入</td></tr>
+          <tr><td><code>logic</code>(SystemVerilog)</td><td>兩種都可以,但只能有一個驅動者</td><td><code>x</code></td><td>新的程式碼大多用它取代 wire 與 reg</td></tr>
+        </tbody>
+      </table></div>
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">reg 不等於暫存器</span>
+          <p><code>reg</code> 這個名字是歷史包袱。它只表示「這個訊號在 always 或 initial 裡被指定」,<strong>不表示會合成出正反器</strong>。
+          <code>always @*</code> 裡的 <code>reg</code> 是組合邏輯;只有 <code>always @(posedge clk)</code> 裡的 <code>reg</code> 才是暫存器。
+          SystemVerilog 改用 <code>logic</code>,就是為了不再讓人誤會。</p>
+        </div>
+      </div>
+      <p>寫錯型別會怎樣?下面兩段都是錯的:</p>
+<pre><code class="language-verilog">module err1 (input a, output reg y);
+    assign y = a;      // 錯:用 assign 驅動 reg
+endmodule
+module err2 (input a, output y);   // y 沒寫型別,預設是 wire
+    always @* y = a;   // 錯:在 always 裡對 wire 賦值
+endmodule</code></pre>
+      <p>用 <code>-g2012</code> 編譯,<code>err2.v</code> 是錯誤:</p>
+<pre><code class="language-text">err2.v:2: error: y is not a valid l-value in err2.
+err2.v:1:      : y is declared here as wire.
+Elaboration failed</code></pre>
+      <p>
+        <code>err1.v</code> 在 <code>-g2012</code> 下反而<strong>編得過</strong>,因為 SystemVerilog 放寬了規則,准許用 <code>assign</code> 驅動變數。
+        改用舊標準 <code>-g2005</code> 才會看到錯誤:
+      </p>
+<pre><code class="language-text">err1.v:2: error: reg y; cannot be driven by primitives or continuous assignment.
+1 error(s) during elaboration.</code></pre>
+      <p>
+        <code>logic</code> 兩種寫法都接受,但它管另一件事:<strong>只能有一個驅動者</strong>。同一條 <code>wire</code> 被兩個 <code>assign</code> 驅動,
+        Verilog 不會擋,兩邊打架的位元就變成 <code>x</code>(這個例子先送 a=1、b=0,再送 a=1、b=1):
+      </p>
+<pre><code class="language-verilog">module err4 (input a, b, output y);
+    assign y = a &amp; b;
+    assign y = a | b;   // 同一條線兩個驅動者
+endmodule
+module tb;
+    reg a, b; wire y;
+    err4 d(.a(a), .b(b), .y(y));
+    initial begin
+        a = 1; b = 0; #1 $display("y = %b", y);
+        a = 1; b = 1; #1 $display("y = %b", y);
+    end
+endmodule</code></pre>
+<pre><code class="language-text">y = x
+y = 1</code></pre>
+      <p>第一列 <code>a &amp; b</code> 是 0、<code>a | b</code> 是 1,兩個驅動者不同意,結果是 <code>x</code>;第二列兩邊都是 1,才看起來「正常」。同樣的事改用 <code>logic</code>,編譯就會擋下來:</p>
+<pre><code class="language-text">err5.v:3: error: Unresolved net/uwire y cannot have multiple drivers.
+1 error(s) during elaboration.</code></pre>
+
+      <h3>四值邏輯、向量與常數</h3>
+      <p>
+        Hack 的線只有 0 和 1。Verilog 的每個位元有<strong>四個值</strong>:<code>0</code>、<code>1</code>、<code>x</code>(未知:還沒初始化,或兩個驅動者打架)、
+        <code>z</code>(高阻抗:沒有人驅動)。多位元的訊號叫<strong>向量(vector)</strong>,寬度寫在名字前面:<code>reg [7:0] a</code> 是 8 位元,<code>a[7]</code> 是最高位元。
+        常數寫成「位元數 ' 進位 值」:<code>8'b1011_0110</code>、<code>4'hA</code>、<code>32'd100</code>。
+      </p>
+<pre><code class="language-verilog">module tb_vec;
+    reg  [7:0] a;
+    reg  [3:0] n;
+    wire [7:0] u;          // 沒有人驅動的線
+    reg        r;          // 還沒指定過的 reg
+
+    initial begin
+        a = 8'b1011_0110;                   // 底線只是給人看的分隔
+        n = 4'hA;                           // 4 位元、十六進位 A = 1010
+        $display("a        = %b (%0d, 0x%h)", a, a, a);
+        $display("a[7:4]   = %b", a[7:4]);           // 取高 4 位元
+        $display("a[0]     = %b", a[0]);
+        $display("{n, n}   = %b", {n, n});           // 拼接
+        $display("{4{2'b10}} = %b", {4{2'b10}});     // 重複 4 次
+        $display("sign-ext = %b", {{4{n[3]}}, n});   // 符號延伸成 8 位元
+        $display("zero-ext = %b", {4'b0000, n});     // 補 0 延伸
+        $display("u = %b, r = %b", u, r);            // z 與 x
+        $display("r &amp; 0 = %b, r | 1 = %b, r + 1 = %b", r &amp; 1'b0, r | 1'b1, r + 1'b1);
+    end
+endmodule</code></pre>
+<pre><code class="language-text">a        = 10110110 (182, 0xb6)
+a[7:4]   = 1011
+a[0]     = 0
+{n, n}   = 10101010
+{4{2'b10}} = 10101010
+sign-ext = 11111010
+zero-ext = 00001010
+u = zzzzzzzz, r = x
+r &amp; 0 = 0, r | 1 = 1, r + 1 = x</code></pre>
+      <p>
+        看最後一列:<code>x &amp; 0</code> 是 0(不管 x 是什麼,AND 0 都是 0),<code>x | 1</code> 是 1,但 <code>x + 1</code> 整個變成 <code>x</code>。
+        x 會一路往下傳。模擬時看到一片 x,通常是忘了重置、忘了接線,或兩個驅動者打架。
+      </p>
+
+      <h3>位元寬度:多出來的位元去哪了</h3>
+      <p>Verilog 很少因為寬度不合而報錯,它會默默截掉或補 0。這是加法器最常見的 bug:</p>
+<pre><code class="language-verilog">module tb_width;
+    reg  [3:0] a = 4'd12, b = 4'd7;
+    wire [3:0] s4  = a + b;          // 結果只留 4 位元:進位丟了
+    wire [4:0] s5  = a + b;          // 左邊 5 位元:運算也用 5 位元做
+    wire [4:0] s5b = {1'b0, a + b};  // 拼接裡的 a + b 是「自己決定寬度」:4 位元
+    wire [3:0] s;  wire co;
+    assign {co, s} = a + b;          // 拼接當左邊:進位落到 co
+    initial #1 $display("s4=%0d s5=%0d s5b=%0d co=%b s=%0d", s4, s5, s5b, co, s);
+endmodule</code></pre>
+<pre><code class="language-text">s4=3 s5=19 s5b=3 co=1 s=3</code></pre>
+      <p>
+        12 + 7 = 19 = <code>1_0011</code>。<code>s4</code> 只有 4 位元,進位被截掉,剩 3。<code>s5</code> 是 5 位元,Verilog 會把運算放大到左邊的寬度再算,所以得到 19。
+        但 <code>s5b</code> 也是 5 位元,卻得到 3:拼接 <code>{…}</code> 裡的每一項都用<strong>自己的寬度</strong>算,<code>a + b</code> 在拼接裡只有 4 位元。
+        要拿到進位,最清楚的寫法是讓左邊變成拼接:<code>assign {co, s} = a + b;</code>。
+      </p>
+      <p>模組的埠寬度不合時,<code>-Wall</code> 會警告。把 8 位元的訊號接到等一下要寫的 4 位元加法器 <code>add4</code>:</p>
+<pre><code class="language-text">tb_portw.v:3: warning: Port 1 (a) of add4 expects 4 bits, got 8.
+tb_portw.v:3:        : Pruning 4 high bits of the expression.
+tb_portw.v:3: warning: Port 2 (b) of add4 expects 4 bits, got 8.
+tb_portw.v:3:        : Pruning 4 high bits of the expression.</code></pre>
+
+      <h2>三種寫法:assign、always @* 與 always @(posedge clk)</h2>
+      <p>同一個函式 $y = (a \cdot b) + c$,可以用三種方式寫。前兩種是組合邏輯,第三種多了一個正反器:</p>
+<pre><code class="language-verilog">module styles (
+    input            clk,
+    input            a, b, c,
+    output           y1,        // assign 驅動:wire
+    output reg       y2,        // always @* 驅動:reg(但不是暫存器)
+    output reg       q          // always @(posedge clk) 驅動:真的暫存器
+);
+    // ① 連續指定:右邊任何一個訊號變了,左邊立刻重算
+    assign y1 = (a &amp; b) | c;
+
+    // ② 組合 always:@* 讓模擬器自己找出「讀了哪些訊號」
+    always @* begin
+        y2 = (a &amp; b) | c;
+    end
+
+    // ③ 時脈 always:只有 clk 從 0 變 1 的那一刻才更新
+    always @(posedge clk) begin
+        q &lt;= (a &amp; b) | c;
+    end
+endmodule</code></pre>
+      <div class="table-wrap"><table>
+        <thead><tr><th>寫法</th><th>左邊的型別</th><th>什麼時候重算</th><th>變成什麼電路</th></tr></thead>
+        <tbody>
+          <tr><td><code>assign</code></td><td><code>wire</code></td><td>右邊任何一個訊號變了</td><td>組合邏輯</td></tr>
+          <tr><td><code>always @*</code></td><td><code>reg</code></td><td>區塊裡讀到的任何訊號變了</td><td>組合邏輯(每條路徑都有指定時)</td></tr>
+          <tr><td><code>always @(posedge clk)</code></td><td><code>reg</code></td><td>只在 clk 從 0 變 1 的瞬間</td><td>正反器(加上前面的組合邏輯)</td></tr>
+        </tbody>
+      </table></div>
+      <p>用一個 testbench 同時看三個輸出。<code>always #5 clk = ~clk;</code> 讓時脈每 5 個時間單位翻一次,上升邊緣在 t = 5、15、25:</p>
+<pre><code class="language-verilog">module tb_styles;
+    reg clk = 0, a = 0, b = 0, c = 0;
+    wire y1, y2, q;
+    styles dut (.clk(clk), .a(a), .b(b), .c(c), .y1(y1), .y2(y2), .q(q));
+
+    always #5 clk = ~clk;              // 每 5 個時間單位翻一次:週期 10
+
+    initial begin
+        $display(" t  clk a b c | y1 y2 q");
+        $monitor("%2t   %b  %b %b %b |  %b  %b %b", $time, clk, a, b, c, y1, y2, q);
+        #2  c = 1;                     // t=2:c 變 1
+        #10 c = 0; a = 1;              // t=12
+        #6  b = 1;                     // t=18
+        #10 $finish;                   // t=28
+    end
+endmodule</code></pre>
+<pre><code class="language-text"> t  clk a b c | y1 y2 q
+ 0   0  0 0 0 |  0  x x
+ 2   0  0 0 1 |  1  1 x
+ 5   1  0 0 1 |  1  1 1
+10   0  0 0 1 |  1  1 1
+12   0  1 0 0 |  0  0 1
+15   1  1 0 0 |  0  0 0
+18   1  1 1 0 |  1  1 0
+20   0  1 1 0 |  1  1 0
+25   1  1 1 0 |  1  1 1</code></pre>
+      <p>
+        <code>$monitor</code> 會在它列出的任何訊號變化時印一列。讀這張表:<code>y1</code> 和 <code>y2</code> 在輸入一變就跟著變(t = 2、12、18);
+        <code>q</code> 只在上升邊緣(t = 5、15、25)才更新,而且存的是<strong>邊緣那一刻</strong>的值:t = 12 時 y1 已經變成 0,但 q 要等到 t = 15 才變 0。
+      </p>
+      <p>
+        還有一個細節:t = 0 時 <code>y1</code> 是 0,<code>y2</code> 卻是 <code>x</code>。<code>assign</code> 在模擬一開始就算一次;
+        <code>always @*</code> 要等到它讀的訊號<strong>變化</strong>才會第一次執行,這裡的輸入在宣告時就是 0,沒有「變化」,所以 y2 一直是 x,直到 t = 2 c 變了才算。
+        SystemVerilog 的 <code>always_comb</code> 會在 0 時刻自己先跑一次,沒有這個問題:
+      </p>
+<pre><code class="language-verilog">module tb_comb;
+    reg a = 0;
+    reg y_star; logic y_comb;
+    always @* y_star = ~a;
+    always_comb y_comb = ~a;
+    initial begin
+        #1 $display("t=1: y_star=%b y_comb=%b", y_star, y_comb);
+        a = 1;
+        #1 $display("t=2: y_star=%b y_comb=%b", y_star, y_comb);
+    end
+endmodule</code></pre>
+<pre><code class="language-text">t=1: y_star=x y_comb=1
+t=2: y_star=0 y_comb=0</code></pre>
+
+      <h2>阻塞與非阻塞:= 和 &lt;=</h2>
+      <p>
+        always 區塊裡有兩種指定。<strong>阻塞指定(blocking assignment)</strong><code>a = b;</code> 和寫程式一樣:這一行做完,a 就是新值,下一行讀到的是新的 a。
+        <strong>非阻塞指定(nonblocking assignment)</strong><code>a &lt;= b;</code> 不一樣:右邊<strong>現在</strong>就算好,但左邊要等到這個時間點的所有區塊都跑完,才<strong>一起</strong>更新。
+      </p>
+      <p>
+        為什麼要有第二種?因為正反器就是這樣運作的。時脈邊緣一到,所有正反器<strong>同時</strong>取樣自己的輸入、同時更新輸出;
+        沒有哪一顆「先更新」,讓別顆讀到新值。<code>&lt;=</code> 正好模擬這件事:大家都讀邊緣<strong>之前</strong>的值。
+      </p>
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">為什麼要學:每一個有時脈的零件都靠它</span>
+          <p>暫存器檔、PC、計數器、FSM 的狀態暫存器,在硬體上都是「同時更新」。本章的序向邏輯、之後 rtl 任務線的暫存器檔與單週期 CPU、
+          UART 的鮑率產生器,全部都用 <code>&lt;=</code>。<a href="137-verification-cocotb.html">{{ch:137-verification-cocotb}}</a>的 cocotb 也會碰到同一件事:
+          在時脈邊緣讀訊號,讀到的是更新之前還是之後的值。</p>
+        </div>
+      </div>
+
+      <h3>交換兩個暫存器</h3>
+      <p>a 是 1、b 是 2,想在每個時脈邊緣交換它們。同一件事寫兩次,一次用 <code>=</code>,一次用 <code>&lt;=</code>:</p>
+<pre><code class="language-verilog">module tb_swap;
+    reg clk = 0;
+    reg [3:0] a1 = 1, b1 = 2;    // 用阻塞 = 交換
+    reg [3:0] a2 = 1, b2 = 2;    // 用非阻塞 &lt;= 交換
+
+    always @(posedge clk) begin
+        a1 = b1;
+        b1 = a1;
+    end
+
+    always @(posedge clk) begin
+        a2 &lt;= b2;
+        b2 &lt;= a2;
+    end
+
+    initial begin
+        $display("edge | a1 b1 | a2 b2");
+        $display("  -  |  %0d  %0d |  %0d  %0d", a1, b1, a2, b2);
+        repeat (3) begin
+            #5 clk = 1;          // 上升邊緣
+            #5 clk = 0;
+            $display("  ^  |  %0d  %0d |  %0d  %0d", a1, b1, a2, b2);
+        end
+    end
+endmodule</code></pre>
+<pre><code class="language-text">edge | a1 b1 | a2 b2
+  -  |  1  2 |  1  2
+  ^  |  2  2 |  2  1
+  ^  |  2  2 |  1  2
+  ^  |  2  2 |  2  1</code></pre>
+      <p>
+        阻塞版第一行 <code>a1 = b1</code> 做完,a1 已經是 2;第二行 <code>b1 = a1</code> 讀到的是新的 2。兩個都變成 2,之後就一直是 2。
+        非阻塞版兩行都讀邊緣之前的值(a2=1、b2=2),再一起更新成 a2=2、b2=1,每一拍都真的交換。這就是兩顆正反器交叉連接的電路。
+      </p>
+
+      <h3>移位暫存器</h3>
+      <p>三顆正反器串成一列:每一拍,d 進到 q1、q1 進到 q2、q2 進到 q3。同樣寫成兩個版本:</p>
+<pre><code class="language-verilog">// 三級移位暫存器:兩種寫法
+module shift_nb (input clk, input d, output reg q1, q2, q3);
+    always @(posedge clk) begin
+        q1 &lt;= d;      // 非阻塞:三行都讀「邊緣之前」的值
+        q2 &lt;= q1;
+        q3 &lt;= q2;
+    end
+endmodule
+
+module shift_b (input clk, input d, output reg q1, q2, q3);
+    always @(posedge clk) begin
+        q1 = d;       // 阻塞:下一行讀到的是這一行剛寫的新值
+        q2 = q1;
+        q3 = q2;
+    end
+endmodule</code></pre>
+<pre><code class="language-verilog">module tb_shift;
+    reg clk = 0, d = 0;
+    wire n1, n2, n3, b1, b2, b3;
+    shift_nb u_nb (.clk(clk), .d(d), .q1(n1), .q2(n2), .q3(n3));
+    shift_b  u_b  (.clk(clk), .d(d), .q1(b1), .q2(b2), .q3(b3));
+
+    reg [4:0] stim = 5'b00101;   // 第 1..5 拍的 d:1,0,1,0,0(從低位元往高位元送)
+    integer k;
+    initial begin
+        $display("拍 d | 非阻塞 q1 q2 q3 | 阻塞 q1 q2 q3");
+        for (k = 0; k &lt; 5; k = k + 1) begin
+            d = stim[k];
+            #5 clk = 1;
+            #5 clk = 0;
+            $display("%0d  %b |         %b  %b  %b |      %b  %b  %b",
+                     k + 1, d, n1, n2, n3, b1, b2, b3);
+        end
+    end
+endmodule</code></pre>
+<pre><code class="language-text">拍 d | 非阻塞 q1 q2 q3 | 阻塞 q1 q2 q3
+1  1 |         1  x  x |      1  1  1
+2  0 |         0  1  x |      0  0  0
+3  1 |         1  0  1 |      1  1  1
+4  0 |         0  1  0 |      0  0  0
+5  0 |         0  0  1 |      0  0  0</code></pre>
+      <div class="diagram">
+<svg viewBox="0 0 760 300" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs><marker id="v-ar" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#4a5159"/></marker></defs>
+  <text x="20" y="28" font-size="13" font-weight="800" fill="#2f6f6a">非阻塞 &lt;=:三顆正反器串成一列</text>
+  <text x="40" y="84" font-size="13" font-weight="700" fill="#1f2328">d</text>
+  <line x1="55" y1="80" x2="148" y2="80" stroke="#4a5159" stroke-width="2" marker-end="url(#v-ar)"/>
+  <rect x="150" y="50" width="90" height="60" rx="6" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="195" y="85" text-anchor="middle" font-size="13" font-weight="700" fill="#2f6f6a">DFF</text>
+  <line x1="240" y1="80" x2="338" y2="80" stroke="#4a5159" stroke-width="2" marker-end="url(#v-ar)"/>
+  <text x="290" y="72" text-anchor="middle" font-size="12" fill="#b4541f">q1</text>
+  <rect x="340" y="50" width="90" height="60" rx="6" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="385" y="85" text-anchor="middle" font-size="13" font-weight="700" fill="#2f6f6a">DFF</text>
+  <line x1="430" y1="80" x2="528" y2="80" stroke="#4a5159" stroke-width="2" marker-end="url(#v-ar)"/>
+  <text x="480" y="72" text-anchor="middle" font-size="12" fill="#b4541f">q2</text>
+  <rect x="530" y="50" width="90" height="60" rx="6" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="575" y="85" text-anchor="middle" font-size="13" font-weight="700" fill="#2f6f6a">DFF</text>
+  <line x1="620" y1="80" x2="700" y2="80" stroke="#4a5159" stroke-width="2" marker-end="url(#v-ar)"/>
+  <text x="712" y="84" font-size="12" fill="#b4541f">q3</text>
+  <text x="380" y="132" text-anchor="middle" font-size="11" fill="#8a929b">每一拍,資料往右走一格:d 要三拍之後才出現在 q3</text>
+
+  <text x="20" y="178" font-size="13" font-weight="800" fill="#b4541f">阻塞 =(同一個區塊、照順序寫):三顆正反器都接 d</text>
+  <text x="40" y="244" font-size="13" font-weight="700" fill="#1f2328">d</text>
+  <line x1="55" y1="240" x2="148" y2="240" stroke="#4a5159" stroke-width="2" marker-end="url(#v-ar)"/>
+  <circle cx="100" cy="240" r="3.5" fill="#4a5159"/>
+  <path d="M100 240 L100 280 L310 280 L310 240 L338 240" fill="none" stroke="#4a5159" stroke-width="2" marker-end="url(#v-ar)"/>
+  <circle cx="310" cy="280" r="3.5" fill="#4a5159"/>
+  <path d="M310 280 L500 280 L500 240 L528 240" fill="none" stroke="#4a5159" stroke-width="2" marker-end="url(#v-ar)"/>
+  <rect x="150" y="210" width="90" height="60" rx="6" fill="#f6e7dd" stroke="#b4541f" stroke-width="2"/>
+  <text x="195" y="245" text-anchor="middle" font-size="13" font-weight="700" fill="#b4541f">DFF</text>
+  <line x1="240" y1="230" x2="285" y2="230" stroke="#4a5159" stroke-width="2"/>
+  <text x="262" y="222" text-anchor="middle" font-size="12" fill="#b4541f">q1</text>
+  <rect x="340" y="210" width="90" height="60" rx="6" fill="#f6e7dd" stroke="#b4541f" stroke-width="2"/>
+  <text x="385" y="245" text-anchor="middle" font-size="13" font-weight="700" fill="#b4541f">DFF</text>
+  <line x1="430" y1="230" x2="475" y2="230" stroke="#4a5159" stroke-width="2"/>
+  <text x="452" y="222" text-anchor="middle" font-size="12" fill="#b4541f">q2</text>
+  <rect x="530" y="210" width="90" height="60" rx="6" fill="#f6e7dd" stroke="#b4541f" stroke-width="2"/>
+  <text x="575" y="245" text-anchor="middle" font-size="13" font-weight="700" fill="#b4541f">DFF</text>
+  <line x1="620" y1="230" x2="700" y2="230" stroke="#4a5159" stroke-width="2"/>
+  <text x="712" y="234" font-size="12" fill="#b4541f">q3</text>
+</svg>
+        <figcaption>圖 136-1:同樣三行,兩種指定做出兩種電路。上:非阻塞,每顆正反器讀前一顆在邊緣之前的輸出,是真正的移位暫存器。下:阻塞,q2 讀到的是 q1 剛寫的新值(也就是 d),q3 也一樣,三顆都接到 d。</figcaption>
+      </div>
+      <p>圖 136-1 的文字版:</p>
+<pre><code class="language-text">非阻塞 &lt;=:  d ──▶[DFF]── q1 ──▶[DFF]── q2 ──▶[DFF]── q3     (每拍往右一格)
+
+阻塞 =:     d ──┬──▶[DFF]── q1
+                ├──▶[DFF]── q2                            (三顆都直接接 d)
+                └──▶[DFF]── q3</code></pre>
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">兩條規則,照著寫就不會出事</span>
+          <p>① <strong>有時脈的 always(<code>always @(posedge clk)</code>)一律用 <code>&lt;=</code></strong>。<br>
+          ② <strong>組合的 always(<code>always @*</code>)一律用 <code>=</code></strong>。<br>
+          同一個 always 區塊裡不要混用兩種;同一個訊號只在一個 always 區塊裡指定。</p>
+        </div>
+      </div>
+
+      <h3>看起來對但其實錯:「阻塞只要把順序倒過來就好」</h3>
+      <p>
+        有人發現:把阻塞版的三行倒過來寫(<code>q3 = q2; q2 = q1; q1 = d;</code>),每一行都先讀舊值再被覆蓋,結果和非阻塞一樣。這在<strong>一個</strong>區塊裡確實成立。
+        但真實的設計會拆成很多個 always 區塊、很多個模組。把移位暫存器拆成三個區塊看看:
+      </p>
+<pre><code class="language-verilog">// 同一個移位暫存器,拆成三個 always 區塊
+module shift_race_b (input clk, input d, output reg q1, q2, q3);
+    always @(posedge clk) q1 = d;     // 阻塞
+    always @(posedge clk) q2 = q1;
+    always @(posedge clk) q3 = q2;
+endmodule
+
+module shift_race_b_rev (input clk, input d, output reg q1, q2, q3);
+    always @(posedge clk) q3 = q2;    // 只是把三行的順序倒過來
+    always @(posedge clk) q2 = q1;
+    always @(posedge clk) q1 = d;
+endmodule
+
+module shift_race_nb (input clk, input d, output reg q1, q2, q3);
+    always @(posedge clk) q1 &lt;= d;    // 非阻塞:順序怎麼排都一樣
+    always @(posedge clk) q2 &lt;= q1;
+    always @(posedge clk) q3 &lt;= q2;
+endmodule</code></pre>
+<pre><code class="language-text">拍 d | 阻塞 q1q2q3 | 阻塞(倒序) q1q2q3 | 非阻塞 q1q2q3
+1  1 |    1xx    |        111       |     1xx
+2  0 |    000    |        011       |     01x
+3  1 |    100    |        111       |     101
+4  0 |    000    |        011       |     010</code></pre>
+      <p>
+        同一個時脈邊緣,三個 always 區塊都被喚醒,<strong>標準沒有規定誰先執行</strong>。阻塞版的結果取決於模擬器剛好用什麼順序:
+        Icarus 在第 1 拍和第 2 拍甚至用了不同的順序(第 1 拍 q2 讀到舊的 q1,第 2 拍讀到新的),「倒序」那一版也沒有得到移位暫存器。
+        換一套模擬器,或同一套換個版本,都可能印出別的結果。這叫<strong>競賽(race condition)</strong>。
+        只有非阻塞版的輸出和寫的順序、模擬器都無關(第 1、2 拍的 x 是還沒移進來的初值)。
+        <strong>例子都對 ≠ 寫法正確</strong>:一個區塊裡試過一次是對的,不代表拆開之後還對。
+      </p>
+
+      <h3>手算:阻塞與非阻塞,一拍一拍追</h3>
+      <p>
+        讀 always 區塊時,照這個方法追:每一列是一個時脈邊緣。對 <code>=</code>,在「區塊內」欄寫出每一行做完後的值,下一行讀新值;
+        對 <code>&lt;=</code>,先把右邊用<strong>邊緣之前</strong>的值算好,記在「排隊的更新」欄,區塊全部跑完才寫進去。用上面的交換和移位暫存器當例子:
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>邊緣</th><th>邊緣之前</th><th>阻塞:區塊內一行一行</th><th>非阻塞:排隊的更新</th><th>邊緣之後</th></tr></thead>
+        <tbody>
+          <tr><td>交換 1</td><td>a1=1 b1=2;a2=1 b2=2</td><td><code>a1 = b1</code> → a1=2;<code>b1 = a1</code> → b1=2</td><td>a2 ← b2=2;b2 ← a2=1</td><td>a1=2 b1=2;a2=2 b2=1</td></tr>
+          <tr><td>交換 2</td><td>a1=2 b1=2;a2=2 b2=1</td><td>a1=2;b1=2</td><td>a2 ← 1;b2 ← 2</td><td>a1=2 b1=2;a2=1 b2=2</td></tr>
+          <tr><td>交換 3</td><td>a1=2 b1=2;a2=1 b2=2</td><td>a1=2;b1=2</td><td>a2 ← 2;b2 ← 1</td><td>a1=2 b1=2;a2=2 b2=1</td></tr>
+          <tr><td>移位 1(d=1)</td><td>q1 q2 q3 = x x x</td><td>q1=1;q2=q1=1;q3=q2=1</td><td>q1 ← 1;q2 ← x;q3 ← x</td><td>阻塞 1 1 1;非阻塞 1 x x</td></tr>
+          <tr><td>移位 2(d=0)</td><td>阻塞 1 1 1;非阻塞 1 x x</td><td>q1=0;q2=0;q3=0</td><td>q1 ← 0;q2 ← 1;q3 ← x</td><td>阻塞 0 0 0;非阻塞 0 1 x</td></tr>
+          <tr><td>移位 3(d=1)</td><td>阻塞 0 0 0;非阻塞 0 1 x</td><td>q1=1;q2=1;q3=1</td><td>q1 ← 1;q2 ← 0;q3 ← 1</td><td>阻塞 1 1 1;非阻塞 1 0 1</td></tr>
+          <tr><td>移位 4(d=0)</td><td>阻塞 1 1 1;非阻塞 1 0 1</td><td>q1=0;q2=0;q3=0</td><td>q1 ← 0;q2 ← 1;q3 ← 0</td><td>阻塞 0 0 0;非阻塞 0 1 0</td></tr>
+          <tr><td>移位 5(d=0)</td><td>阻塞 0 0 0;非阻塞 0 1 0</td><td>q1=0;q2=0;q3=0</td><td>q1 ← 0;q2 ← 0;q3 ← 1</td><td>阻塞 0 0 0;非阻塞 0 0 1</td></tr>
+        </tbody>
+      </table></div>
+      <p>每一格「邊緣之後」都和上面兩次模擬的輸出一致。非阻塞版的 q3 在第 3 拍出現 1,正是第 1 拍送進去的 d。</p>
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 136.1 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>(1)三個 4 位元暫存器一開始 p=1、q=2、r=3(u=1、v=2、w=3)。寫出前 3 個時脈邊緣之後的值:</p>
+<pre><code class="language-verilog">always @(posedge clk) begin
+    p &lt;= q;  q &lt;= r;  r &lt;= p;
+end
+always @(posedge clk) begin
+    u = v;   v = w;   w = u;
+end</code></pre>
+          <p>(2)一開始 x=1、y=2、z=0(都是 8 位元)。這個區塊混用了兩種指定(實務上別這樣寫,這裡是為了練習讀)。寫出前 3 個邊緣之後的 x、y、z:</p>
+<pre><code class="language-verilog">always @(posedge clk) begin
+    x = y + 1;       // 阻塞
+    y &lt;= x + 1;      // 非阻塞
+    z &lt;= x + y;      // 非阻塞
+end</code></pre>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p>(1)非阻塞版每拍都讀舊值,三個值一起往左轉一格;阻塞版的 <code>w = u</code> 讀到的是剛寫的新 u:</p>
+              <div class="table-wrap"><table>
+                <thead><tr><th>邊緣</th><th>非阻塞:排隊的更新</th><th>p q r</th><th>阻塞:區塊內</th><th>u v w</th></tr></thead>
+                <tbody>
+                  <tr><td>0(初值)</td><td>—</td><td>1 2 3</td><td>—</td><td>1 2 3</td></tr>
+                  <tr><td>1</td><td>p←2 q←3 r←1</td><td>2 3 1</td><td>u=2;v=3;w=u=2</td><td>2 3 2</td></tr>
+                  <tr><td>2</td><td>p←3 q←1 r←2</td><td>3 1 2</td><td>u=3;v=2;w=u=3</td><td>3 2 3</td></tr>
+                  <tr><td>3</td><td>p←1 q←2 r←3</td><td>1 2 3</td><td>u=2;v=3;w=u=2</td><td>2 3 2</td></tr>
+                </tbody>
+              </table></div>
+              <p>(2)<code>x = y + 1</code> 立刻生效,後面兩行讀到新的 x;<code>y</code> 還是舊的,因為它的更新在排隊:</p>
+              <div class="table-wrap"><table>
+                <thead><tr><th>邊緣</th><th>區塊內</th><th>排隊的更新</th><th>x y z</th></tr></thead>
+                <tbody>
+                  <tr><td>0(初值)</td><td>—</td><td>—</td><td>1 2 0</td></tr>
+                  <tr><td>1</td><td>x = 2+1 = 3</td><td>y ← 3+1 = 4;z ← 3+2 = 5</td><td>3 4 5</td></tr>
+                  <tr><td>2</td><td>x = 4+1 = 5</td><td>y ← 6;z ← 5+4 = 9</td><td>5 6 9</td></tr>
+                  <tr><td>3</td><td>x = 6+1 = 7</td><td>y ← 8;z ← 7+6 = 13</td><td>7 8 13</td></tr>
+                </tbody>
+              </table></div>
+              <p>用 Icarus 跑過(testbench 和上面交換的寫法一樣,每個邊緣之後印一列):</p>
+<pre><code class="language-text">邊緣 | p q r | u v w
+  0  | 1 2 3 | 1 2 3
+  1  | 2 3 1 | 2 3 2
+  2  | 3 1 2 | 3 2 3
+  3  | 1 2 3 | 2 3 2
+邊緣 x y z
+  0  1 2 0
+  1  3 4 5
+  2  5 6 9
+  3  7 8 13</code></pre>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>參數與 generate:從全加器串出加法器</h2>
+      <p>
+        Hack 要 16 位元就寫 <code>Mux16</code>、要 8 選 1 就再寫一顆 <code>Mux8Way16</code>,寬度寫死在晶片裡。
+        Verilog 用<strong>參數(parameter)</strong>把寬度變成一個可以調的數字,用 <code>generate</code> 迴圈把同一個零件複製很多份。
+      </p>
+
+      <h3>parameter:寬度可以調的模組</h3>
+      <p>一個例子:W 位元的同位產生器。<code>^d</code> 是<strong>歸約運算子(reduction operator)</strong>,把 d 的所有位元 XOR 起來:</p>
+<pre><code class="language-verilog">// W 位元的偶同位產生器:d 裡 1 的個數是奇數時 p=1
+module parity #(parameter W = 8) (
+    input  [W-1:0] d,
+    output         p
+);
+    assign p = ^d;            // 歸約 XOR:d[0] ^ d[1] ^ … ^ d[W-1]
+endmodule</code></pre>
+<pre><code class="language-verilog">module tb_parity;
+    reg  [7:0]  d8  = 8'b1011_0001;
+    reg  [15:0] d16 = 16'hFFFF;
+    wire p8, p16, p3;
+    parity             u8  (.d(d8),      .p(p8));    // 用預設 W=8
+    parity #(.W(16))   u16 (.d(d16),     .p(p16));   // 覆寫成 16 位元
+    parity #(.W(3))    u3  (.d(3'b111),  .p(p3));
+    initial #1 $display("p8=%b p16=%b p3=%b", p8, p16, p3);
+endmodule</code></pre>
+<pre><code class="language-text">p8=0 p16=0 p3=1</code></pre>
+      <p>
+        <code>#(parameter W = 8)</code> 宣告參數和預設值;實例化時用 <code>#(.W(16))</code> 覆寫。參數在<strong>編譯時</strong>就決定,不是執行時可以改的訊號:
+        <code>parity #(.W(16))</code> 和 <code>parity #(.W(3))</code> 是兩塊大小不同的電路。
+        只在模組內部用、不讓外面覆寫的常數用 <code>localparam</code>(後面 FSM 的狀態編碼就是)。<code>$clog2(n)</code> 算「n 個值要幾個位元」,常拿來從參數推出寬度。
+      </p>
+
+      <h3>generate:把 4 個全加器串起來</h3>
+      <p>
+        <a href="20-combinational-sequential.html">{{ch:20-combinational-sequential}}</a>的漣波進位加法器(ripple-carry adder)是一排全加器(full adder),
+        每一級的進位輸出接到下一級的進位輸入。先寫一顆 1 位元全加器 <code>fa</code>:
+      </p>
+<pre><code class="language-verilog">// 1 位元全加器:s = a ^ b ^ ci;co = 「至少兩個是 1」
+module fa (
+    input  a, b, ci,
+    output s, co
+);
+    assign s  = a ^ b ^ ci;
+    assign co = (a &amp; b) | (a &amp; ci) | (b &amp; ci);
+endmodule</code></pre>
+      <p>再用 <code>generate</code> 迴圈放 4 顆,串成 4 位元的 <code>add4</code>:</p>
+<pre><code class="language-verilog">// 4 位元漣波進位加法器:用 generate 串 4 個 fa
+module add4 (
+    input  [3:0] a, b,
+    output [3:0] s,
+    output       co
+);
+    wire [4:0] c;              // c[i] 是第 i 級的進位輸入
+    assign c[0] = 1'b0;        // 最低位沒有進位輸入
+
+    genvar i;
+    generate
+        for (i = 0; i &lt; 4; i = i + 1) begin : stage
+            fa u (.a(a[i]), .b(b[i]), .ci(c[i]), .s(s[i]), .co(c[i+1]));
+        end
+    endgenerate
+
+    assign co = c[4];
+endmodule</code></pre>
+      <ul>
+        <li><code>genvar i</code>:generate 迴圈專用的變數。迴圈在<strong>編譯時</strong>展開,產生 4 顆 fa,名字是 <code>stage[0].u</code> 到 <code>stage[3].u</code>(<code>begin : stage</code> 替每一份取名)。</li>
+        <li><code>wire [4:0] c</code>:5 條進位線。c[0] 接常數 0,c[i+1] 是第 i 級的進位輸出,c[4] 就是 co。</li>
+        <li>這個 add4 寬度固定 4 位元、沒有進位輸入、也沒有溢位旗標。把它改成寬度可調的版本,是本章 Lab 的工作。</li>
+      </ul>
+      <div class="diagram">
+<svg viewBox="0 0 760 240" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs><marker id="v-ar2" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#b4541f"/></marker>
+        <marker id="v-ar3" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#4a5159"/></marker></defs>
+  <!-- stage boxes: bit3 left .. bit0 right -->
+  <rect x="80"  y="80" width="110" height="70" rx="8" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <rect x="250" y="80" width="110" height="70" rx="8" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <rect x="420" y="80" width="110" height="70" rx="8" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <rect x="590" y="80" width="110" height="70" rx="8" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="135" y="112" text-anchor="middle" font-size="13" font-weight="800" fill="#2f6f6a">fa</text>
+  <text x="135" y="130" text-anchor="middle" font-size="10" fill="#8a929b">stage[3]</text>
+  <text x="305" y="112" text-anchor="middle" font-size="13" font-weight="800" fill="#2f6f6a">fa</text>
+  <text x="305" y="130" text-anchor="middle" font-size="10" fill="#8a929b">stage[2]</text>
+  <text x="475" y="112" text-anchor="middle" font-size="13" font-weight="800" fill="#2f6f6a">fa</text>
+  <text x="475" y="130" text-anchor="middle" font-size="10" fill="#8a929b">stage[1]</text>
+  <text x="645" y="112" text-anchor="middle" font-size="13" font-weight="800" fill="#2f6f6a">fa</text>
+  <text x="645" y="130" text-anchor="middle" font-size="10" fill="#8a929b">stage[0]</text>
+  <!-- a, b inputs -->
+  <g stroke="#4a5159" stroke-width="1.8">
+    <line x1="115" y1="40" x2="115" y2="78" marker-end="url(#v-ar3)"/><line x1="155" y1="40" x2="155" y2="78" marker-end="url(#v-ar3)"/>
+    <line x1="285" y1="40" x2="285" y2="78" marker-end="url(#v-ar3)"/><line x1="325" y1="40" x2="325" y2="78" marker-end="url(#v-ar3)"/>
+    <line x1="455" y1="40" x2="455" y2="78" marker-end="url(#v-ar3)"/><line x1="495" y1="40" x2="495" y2="78" marker-end="url(#v-ar3)"/>
+    <line x1="625" y1="40" x2="625" y2="78" marker-end="url(#v-ar3)"/><line x1="665" y1="40" x2="665" y2="78" marker-end="url(#v-ar3)"/>
+  </g>
+  <g font-size="11" fill="#1f2328" text-anchor="middle">
+    <text x="115" y="34">a[3]</text><text x="155" y="34">b[3]</text>
+    <text x="285" y="34">a[2]</text><text x="325" y="34">b[2]</text>
+    <text x="455" y="34">a[1]</text><text x="495" y="34">b[1]</text>
+    <text x="625" y="34">a[0]</text><text x="665" y="34">b[0]</text>
+  </g>
+  <!-- sum outputs -->
+  <g stroke="#2f6f6a" stroke-width="1.8">
+    <line x1="135" y1="150" x2="135" y2="188" marker-end="url(#v-ar3)"/>
+    <line x1="305" y1="150" x2="305" y2="188" marker-end="url(#v-ar3)"/>
+    <line x1="475" y1="150" x2="475" y2="188" marker-end="url(#v-ar3)"/>
+    <line x1="645" y1="150" x2="645" y2="188" marker-end="url(#v-ar3)"/>
+  </g>
+  <g font-size="11" fill="#1f2328" text-anchor="middle">
+    <text x="135" y="204">s[3]</text><text x="305" y="204">s[2]</text><text x="475" y="204">s[1]</text><text x="645" y="204">s[0]</text>
+  </g>
+  <!-- carry chain right to left -->
+  <g stroke="#b4541f" stroke-width="2.2">
+    <line x1="745" y1="115" x2="702" y2="115" marker-end="url(#v-ar2)"/>
+    <line x1="590" y1="115" x2="532" y2="115" marker-end="url(#v-ar2)"/>
+    <line x1="420" y1="115" x2="362" y2="115" marker-end="url(#v-ar2)"/>
+    <line x1="250" y1="115" x2="192" y2="115" marker-end="url(#v-ar2)"/>
+    <line x1="80"  y1="115" x2="22"  y2="115" marker-end="url(#v-ar2)"/>
+  </g>
+  <g font-size="11" font-weight="700" fill="#b4541f" text-anchor="middle">
+    <text x="728" y="106">c[0]=0</text><text x="561" y="106">c[1]</text><text x="391" y="106">c[2]</text><text x="221" y="106">c[3]</text><text x="45" y="106">c[4]=co</text>
+  </g>
+  <text x="380" y="230" text-anchor="middle" font-size="11" fill="#8a929b">進位從右(第 0 級)一級一級往左傳:這就是「漣波」</text>
+</svg>
+        <figcaption>圖 136-2:add4 的 generate 迴圈展開後的樣子。每一級 fa 吃 a[i]、b[i] 和右邊來的進位 c[i],輸出 s[i] 和往左送的 c[i+1]。</figcaption>
+      </div>
+      <p>圖 136-2 的文字版:</p>
+<pre><code class="language-text">          a[3] b[3]       a[2] b[2]       a[1] b[1]       a[0] b[0]
+            │    │          │    │          │    │          │    │
+co = c[4] ◀─[ fa stage[3] ]◀─c[3]─[ fa stage[2] ]◀─c[2]─[ fa stage[1] ]◀─c[1]─[ fa stage[0] ]◀─ c[0] = 0
+                 │                    │                    │                    │
+                s[3]                 s[2]                 s[1]                 s[0]</code></pre>
+      <p>寫一個窮舉所有輸入的 testbench。最後一段用 <code>dut.c</code> 偷看 add4 內部的進位線,等一下手算要用:</p>
+<pre><code class="language-verilog">module tb_add4;
+    reg  [3:0] a, b;
+    wire [3:0] s;
+    wire       co;
+    integer i, j, errors;
+
+    add4 dut (.a(a), .b(b), .s(s), .co(co));
+
+    initial begin
+        errors = 0;
+        for (i = 0; i &lt; 16; i = i + 1)
+            for (j = 0; j &lt; 16; j = j + 1) begin
+                a = i; b = j;
+                #1;
+                if ({co, s} !== i + j) begin      // !== 連 x、z 也比
+                    errors = errors + 1;
+                    $display("FAIL a=%0d b=%0d got co=%b s=%b", i, j, co, s);
+                end
+            end
+        $display("add4: 256 組,錯 %0d 組", errors);
+
+        a = 4'b1011; b = 4'b0110; #1;           // 手算 136.2 的例子:11 + 6
+        $display("c = %b (c[4]..c[0]), s = %b, co = %b", dut.c, s, co);
+        $finish;
+    end
+endmodule</code></pre>
+<pre><code class="language-bash">iverilog -g2012 -Wall -o sim tb_add4.v add4.v fa.v
+vvp sim</code></pre>
+<pre><code class="language-text">add4: 256 組,錯 0 組
+c = 11100 (c[4]..c[0]), s = 0001, co = 1</code></pre>
+      <p>
+        <code>!==</code> 是「不全等」:連 x 和 z 也逐位元比較。<code>!=</code> 遇到 x 會得到 x(既不是真也不是假),if 會當成假,壞掉的輸出就被放過了。
+        testbench 裡做檢查,一律用 <code>===</code> 和 <code>!==</code>。
+      </p>
+
+      <h3>證明(參考):漣波進位加法器為什麼是對的</h3>
+      <p>
+        記號:$A_k = a[k{-}1{:}0]$ 是 a 的低 k 位元代表的數,$B_k$、$S_k$ 同理。要證明的是 <strong>對每個 k = 0, 1, …, 4,$2^k \cdot c[k] + S_k = A_k + B_k$</strong>(k = 0 時兩邊都是 0,因為 c[0] = 0)。
+        k = 4 就是 $16 \cdot co + s = a + b$,也就是 <code>{co, s} == a + b</code>。
+      </p>
+      <p>
+        <strong>歸納步驟</strong>:假設對 k 成立。全加器的真值表保證 $a[k] + b[k] + c[k] = 2 \cdot c[k{+}1] + s[k]$(三個位元相加,結果最多是 3,剛好用兩個位元 $c[k{+}1]\,s[k]$ 表示)。
+        兩邊乘 $2^k$ 再加上歸納假設:
+        $$A_{k+1} + B_{k+1} = A_k + B_k + 2^k(a[k] + b[k]) = S_k + 2^k(a[k] + b[k] + c[k]) = S_k + 2^k s[k] + 2^{k+1} c[k{+}1] = S_{k+1} + 2^{k+1} c[k{+}1]$$
+        所以對 k+1 也成立。同一個論證對任何寬度 W 都成立,只要把 4 換成 W。
+      </p>
+      <p>
+        這個歸納法的「每一步都成立的式子」,就是程式裡的<strong>不變式(invariant)</strong>。把它寫進 testbench,每一組輸入、每一級都檢查一次:
+      </p>
+<pre><code class="language-verilog">module tb_add4_inv;
+    reg  [3:0] a, b;
+    wire [3:0] s;
+    wire       co;
+    integer i, j, k, m, lhs, rhs, bad;
+
+    add4 dut (.a(a), .b(b), .s(s), .co(co));
+
+    initial begin
+        bad = 0;
+        for (i = 0; i &lt; 16; i = i + 1)
+            for (j = 0; j &lt; 16; j = j + 1) begin
+                a = i; b = j; #1;
+                // 不變式:做完第 k 級,{c[k+1], s[k:0]} == a[k:0] + b[k:0]
+                for (k = 0; k &lt; 4; k = k + 1) begin
+                    m   = (1 &lt;&lt; (k + 1)) - 1;                 // 低 k+1 位元的遮罩
+                    lhs = dut.c[k+1] * (m + 1) + (s &amp; m);     // {c[k+1], s[k:0]}
+                    rhs = (i &amp; m) + (j &amp; m);
+                    if (lhs != rhs) bad = bad + 1;
+                end
+            end
+        $display("不變式檢查 256 x 4 = %0d 次,失敗 %0d 次", 256 * 4, bad);
+    end
+endmodule</code></pre>
+<pre><code class="language-text">不變式檢查 256 x 4 = 1024 次,失敗 0 次</code></pre>
+      <p>
+        最後的 <code>{co, s} == a + b</code> 只告訴你「錯了」;逐級的不變式還告訴你<strong>從哪一級開始錯</strong>。
+        把 fa 的 <code>co</code> 故意少寫一項(<code>(b &amp; ci)</code>),兩個 testbench 都抓得到:
+      </p>
+<pre><code class="language-text">add4: 256 組,錯 56 組
+c = 00100 (c[4]..c[0]), s = 1001, co = 0
+不變式檢查 256 x 4 = 1024 次,失敗 108 次</code></pre>
+      <p>256 組裡有 200 組還是對的。練習 136.3 會問你:只測幾組「看起來有代表性」的輸入,為什麼抓不到它。</p>
+
+      <h3>手算:add4 的進位一級一級傳</h3>
+      <p>
+        追 a = 1011(11)、b = 0110(6)。每一列是一級全加器,從第 0 級(最低位)往上。
+        「不變式」欄是 $2^{k+1} c[k{+}1] + S_{k+1}$ 和 $A_{k+1} + B_{k+1}$,兩邊要相等。
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>級 k</th><th>a[k]</th><th>b[k]</th><th>c[k](進位入)</th><th>a+b+c</th><th>s[k]</th><th>c[k+1](進位出)</th><th>不變式</th></tr></thead>
+        <tbody>
+          <tr><td>0</td><td>1</td><td>0</td><td>0</td><td>1</td><td>1</td><td>0</td><td>2·0 + 1 = 1;1 + 0 = 1</td></tr>
+          <tr><td>1</td><td>1</td><td>1</td><td>0</td><td>2</td><td>0</td><td>1</td><td>4·1 + 01 = 5;3 + 2 = 5</td></tr>
+          <tr><td>2</td><td>0</td><td>1</td><td>1</td><td>2</td><td>0</td><td>1</td><td>8·1 + 001 = 9;3 + 6 = 9</td></tr>
+          <tr><td>3</td><td>1</td><td>0</td><td>1</td><td>2</td><td>0</td><td>1</td><td>16·1 + 0001 = 17;11 + 6 = 17</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        結果 s = 0001、co = 1,也就是 1_0001 = 17。進位線 c[4..0] = 1 1 1 0 0,和 testbench 印出的 <code>c = 11100</code> 一致。
+      </p>
+      <p>
+        上面的表是「最後的穩定值」。真實的閘有延遲,進位要一級一級傳過去。把 fa 的兩個 <code>assign</code> 改成 <code>assign #1</code>(每個輸出晚 1 個時間單位才變),
+        讓 a = 0111 保持不動,在 t = 10 把 b 從 0000 改成 0001,看輸出怎麼變:
+      </p>
+<pre><code class="language-verilog">// 和 fa 一樣,只是每個輸出晚 1 個時間單位才變(模擬閘延遲)
+module fa (
+    input  a, b, ci,
+    output s, co
+);
+    assign #1 s  = a ^ b ^ ci;
+    assign #1 co = (a &amp; b) | (a &amp; ci) | (b &amp; ci);
+endmodule</code></pre>
+<pre><code class="language-verilog">module tb_ripple;
+    reg [3:0] a = 4'b0111, b = 4'b0000;
+    wire [3:0] s; wire co;
+    add4 dut (.a(a), .b(b), .s(s), .co(co));
+    initial begin
+        #10 $display(" t | c(4..0) s    co");
+        $monitor("%2t | %b  %b %b", $time, dut.c, s, co);
+        b = 4'b0001;            // t=10:0111 + 0001
+        #10 $finish;
+    end
+endmodule</code></pre>
+<pre><code class="language-text"> t | c(4..0) s    co
+10 | 00000  0111 0
+11 | 00010  0110 0
+12 | 00110  0100 0
+13 | 01110  0000 0
+14 | 01110  1000 0</code></pre>
+      <div class="table-wrap"><table>
+        <thead><tr><th>t</th><th>發生什麼事</th><th>c[4..0]</th><th>s</th></tr></thead>
+        <tbody>
+          <tr><td>10</td><td>b[0] 變 1;所有 fa 還沒反應</td><td>00000</td><td>0111</td></tr>
+          <tr><td>11</td><td>第 0 級:1+1+0 = 2 → s[0]=0、c[1]=1</td><td>00010</td><td>0110</td></tr>
+          <tr><td>12</td><td>第 1 級收到 c[1]=1:1+0+1 = 2 → s[1]=0、c[2]=1</td><td>00110</td><td>0100</td></tr>
+          <tr><td>13</td><td>第 2 級:1+0+1 = 2 → s[2]=0、c[3]=1</td><td>01110</td><td>0000</td></tr>
+          <tr><td>14</td><td>第 3 級:0+0+1 = 1 → s[3]=1、c[4]=0</td><td>01110</td><td>1000</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        答案 1000(8)要等 4 個延遲才出現,中間 s 先後是 0110、0100、0000 這些錯的值。這就是<a href="47-digital-circuits.html">{{ch:47-digital-circuits}}</a>講的毛刺(glitch)與關鍵路徑:
+        W 位元的漣波加法器,最壞要等 W 級。事件驅動的模擬器也要一級一級處理這些事件,所以寬的漣波加法器模擬起來也比較慢。
+      </p>
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 136.2 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>(1)用上面的表格格式,追 add4 計算 a = 1101(13)、b = 0111(7):寫出每一級的 s[k] 與 c[k+1]、最後的 c[4..0]、s、co,並檢查每一級的不變式。</p>
+          <p>(2)同樣用每個輸出延遲 1 的 fa。a = 1111 保持不動,t = 10 時 b 從 0000 變成 0001。寫出 t = 10 到 14 的 c[4..0] 與 s。答案要等幾個延遲才穩定?</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p>(1)</p>
+              <div class="table-wrap"><table>
+                <thead><tr><th>級 k</th><th>a[k]</th><th>b[k]</th><th>c[k]</th><th>a+b+c</th><th>s[k]</th><th>c[k+1]</th><th>不變式</th></tr></thead>
+                <tbody>
+                  <tr><td>0</td><td>1</td><td>1</td><td>0</td><td>2</td><td>0</td><td>1</td><td>2·1 + 0 = 2;1 + 1 = 2</td></tr>
+                  <tr><td>1</td><td>0</td><td>1</td><td>1</td><td>2</td><td>0</td><td>1</td><td>4·1 + 00 = 4;1 + 3 = 4</td></tr>
+                  <tr><td>2</td><td>1</td><td>1</td><td>1</td><td>3</td><td>1</td><td>1</td><td>8·1 + 100 = 12;5 + 7 = 12</td></tr>
+                  <tr><td>3</td><td>1</td><td>0</td><td>1</td><td>2</td><td>0</td><td>1</td><td>16·1 + 0100 = 20;13 + 7 = 20</td></tr>
+                </tbody>
+              </table></div>
+              <p>c[4..0] = 11110,s = 0100,co = 1:13 + 7 = 20 = 1_0100。用 Icarus 跑過(第二列就是這一題;另外兩列是 9 + 6 沒有任何進位、7 + 1 進位傳了三級):</p>
+<pre><code class="language-text">1011 + 0110: c=11100 s=0001 co=1
+1101 + 0111: c=11110 s=0100 co=1
+1001 + 0110: c=00000 s=1111 co=0
+0111 + 0001: c=01110 s=1000 co=0</code></pre>
+              <p>(2)每一級都是 1 + 0 + 1:s 變 0、進位往上送,四級都要等。答案 1_0000 在 t = 14 才穩定,共 4 個延遲:</p>
+<pre><code class="language-text"> t | c(4..0) s    co
+10 | 00000  1111 0
+11 | 00010  1110 0
+12 | 00110  1100 0
+13 | 01110  1000 0
+14 | 11110  0000 1</code></pre>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">判題接受的 Verilog:比本章的 testbench 嚴格</span>
+          <p>rtl 任務線的判題,會把你的 Verilog 和隱藏 testbench(或 cocotb)編在同一個模擬程序裡跑。為了公平,交出去的設計檔有這些限制:</p>
+          <ul>
+            <li><strong>只編譯你的檔案時,<code>iverilog -g2012 -Wall</code> 不能有任何錯誤或警告</strong>。本章看過的隱含線、埠寬度不合,都會被擋。</li>
+            <li><strong>不准 <code>`include</code></strong>:每個檔案自己完整;要用別的模組,判題時會把你的檔案一起編譯。</li>
+            <li><strong>不准階層參照</strong>(例如 <code>tb.expected</code>、<code>dut.c</code>)。本章的 testbench 用 <code>dut.c</code> 偷看內部線,那是 testbench 的特權;設計檔這樣做,就能偷看隱藏 testbench 的訊號。</li>
+            <li><strong>不准 <code>initial</code> 區塊,也不准宣告時給初值</strong>(例如 <code>reg q = 0;</code>):硬體沒有「模擬開始」這回事,這兩種寫法都只在模擬裡有效,初值要靠重置訊號。</li>
+            <li><strong>不准 <code>`timescale</code></strong>:只有部分檔案寫的話,<code>-Wall</code> 會警告(見本章「Testbench 入門」那一節);設計檔一律不寫,時間單位由判題的 testbench 決定。</li>
+            <li><strong>系統函式只准 <code>$signed</code>、<code>$unsigned</code>、<code>$clog2</code>、<code>$display</code></strong>。<code>$finish</code>、<code>$random</code>、檔案讀寫都屬於 testbench。</li>
+          </ul>
+          <p>本章所有的設計檔(不含 tb_ 開頭的 testbench)都符合這些規則:每個都單獨用 <code>iverilog -g2012 -Wall</code> 編譯過,零警告。</p>
+        </div>
+      </div>
+      <div class="callout note">
+        <div class="ico">🧭</div>
+        <div class="body">
+          <span class="c-title">任務線總覽:rtl 自己的 RV32I CPU</span>
+          <p>從這一章開始,Lab 串成程式地下城的一條<strong>任務線</strong>「rtl」:
+          每個 Lab 是一個<strong>任務</strong>(有自己的資料夾),每組測試是一個<strong>任務目標</strong>(打勾的格子),最後的整合測試是 <strong>Boss 戰</strong>。
+          先看 Boss 戰要什麼,每個任務的門檻都是從它推回來的。〔公開〕的目標用 <code>test</code>(或 F5)自己跑;〔隱藏檢定〕在 <code>submit</code> 時跑,只看得到名稱和一行說明。</p>
+<pre><code class="language-text">rtl 自己的 RV32I CPU(任務線)
+├─ 檢查點 1:🏆 8-bit ALU(Verilog)與 testbench
+│  ├─ Boss 戰
+│  │  ├─ ALU 窮舉〔隱藏檢定〕用你現在的 rtl/*.v 重跑閘與 ALU 的全部隱藏檢定:
+│  │  │     W=8 窮舉所有輸入與運算碼,W=32 用 cocotb 隨機向量對參考模型;60 秒內
+│  │  └─ ALU 與突變〔隱藏檢定〕你的 test_alu.py 在參考 ALU 上全過,
+│  │        3 個隱藏突變版各至少一項失敗;4 個版本合計 60 秒內
+│  ├─ L1 Verilog 閘與加法器  mux.v、full_adder.v、adder.v ← {{ch:136-verilog}} Lab
+│  │     多工器 · 加法器 · 窮舉 · 寬的版本 · 真的用 full_adder · 模擬時間
+│  ├─ L2 RV32I ALU           alu.v                       ← {{ch:136-verilog}} Lab
+│  │     十種運算 · 移位 · 有號與無號比較 · 未定義的運算碼 · 8 位元窮舉
+│  │     · 32 位元隨機 · 用自己的加法器 · 模擬時間
+│  └─ L3 cocotb 測試         tests/test_alu.py           ← {{ch:137-verification-cocotb}} Lab
+│        抓公開突變 · 參考版全過 · 抓隱藏突變 · 跑得夠快
+└─ 檢查點 2:🏆 IC 畢業專題:自己的 RV32I CPU(任務目標設計中)
+   ├─ Boss 戰 RV32I 測試:rv32ui 測試＋一支 C 程式經 MMIO 印字,對 rv32 指令集模擬器
+   ├─ L4 暫存器檔與 PC       regfile.v、pc.v             ← {{ch:47-digital-circuits}} Lab(之後才寫)
+   ├─ L5 解碼與立即值       decode.v、immgen.v          ← 新章「設計 RV32I CPU」(之後才寫)
+   └─ L6 單週期 CPU          cpu.v                       ← 新章「設計 RV32I CPU」(之後才寫)</code></pre>
+          <p>每個 Boss 戰用到哪些任務:「ALU 窮舉」用 L1、L2;「ALU 與突變」用 L3(L3 要等 L2 過了才開放)。檢查點 2 的 CPU 會用到 L1 的多工器與 L2 的 ALU。</p>
+        </div>
+      </div>
+
+      <h3 id="lab-rtl-gates">本章 Lab:Verilog 閘與加法器 rtl/*.v</h3>
+      <div class="callout lab" data-task="rtl/gates">
+        <div class="ico">🧪</div>
+        <div class="body">
+          <span class="c-title">本章 Lab · 任務線「rtl」· 任務「Verilog 閘與加法器」</span>
+          <p><strong>對應地下城任務:</strong>任務「Verilog 閘與加法器」(任務線:rtl 自己的 RV32I CPU,第 1／6 個任務)。零件檔 3 個:<code>~/零件庫/rtl/mux.v</code>、<code>~/零件庫/rtl/full_adder.v</code>、<code>~/零件庫/rtl/adder.v</code>;任務資料夾:<code>~/任務線/rtl/01-gates/</code>。</p>
+          <p><strong>要做的零件:</strong>把 Hack 的 <code>Mux16</code>、<code>Mux4Way16</code>、<code>FullAdder</code>、<code>Add16</code> 用 Verilog 重寫成寬度可以調的版本:<code>mux2</code>、<code>mux4</code>、<code>full_adder</code>,以及用 <code>generate</code> 串 <code>full_adder</code> 的漣波進位加法器 <code>adder</code>(多了 <code>cin</code>、<code>cout</code> 與有號溢位 <code>ovf</code>)。下一個任務的 ALU 會用你的 <code>adder</code> 做加減法。</p>
+          <p><strong>介面:</strong>模組名、埠名、參數名都要一模一樣。W 會測 1、4、8、16、32;全部是純組合電路。</p>
+<pre><code class="language-verilog">// ~/零件庫/rtl/mux.v
+module mux2 #(parameter W = 16) (
+    input  [W-1:0] a, b,
+    input          sel,      // 0 → y = a;1 → y = b
+    output [W-1:0] y
+);
+    // 你的設計
+endmodule
+
+module mux4 #(parameter W = 16) (
+    input  [W-1:0] a, b, c, d,
+    input  [1:0]   sel,      // 00 → a、01 → b、10 → c、11 → d(建議用三個 mux2)
+    output [W-1:0] y
+);
+    // 你的設計
+endmodule
+
+// ~/零件庫/rtl/full_adder.v(這個檔案只放這一個模組)
+module full_adder (input a, b, cin, output sum, cout);
+    // 你的設計
+endmodule
+
+// ~/零件庫/rtl/adder.v
+module adder #(parameter W = 16) (
+    input  [W-1:0] a, b,
+    input          cin,
+    output [W-1:0] sum,
+    output         cout,     // 最高位的進位
+    output         ovf       // 有號溢位:把 a、b、sum 當二補數
+);
+    // 漣波進位:用 generate 串 W 個 full_adder
+endmodule</code></pre>
+          <p><strong>公開範例:</strong>下面的 testbench 可以照抄,和你的三個檔一起編譯:<code>iverilog -g2012 -o lab.out tb_lab_gates.v mux.v full_adder.v adder.v &amp;&amp; vvp -n lab.out</code>。輸出要和下面一模一樣:</p>
+<pre><code class="language-verilog">module tb_lab_gates;
+    reg  [15:0] a, b, c, d;
+    reg         sel;
+    reg  [1:0]  sel2;
+    reg         cin;
+    wire [15:0] y2, y4, sum;
+    wire        cout, ovf;
+    mux2  #(16) m2 (.a(a), .b(b), .sel(sel), .y(y2));
+    mux4  #(16) m4 (.a(a), .b(b), .c(c), .d(d), .sel(sel2), .y(y4));
+    adder #(16) ad (.a(a), .b(b), .cin(cin), .sum(sum), .cout(cout), .ovf(ovf));
+
+    task add(input [15:0] xa, input [15:0] xb, input xc);
+        begin
+            a = xa; b = xb; cin = xc; #1;
+            $display("adder %h + %h + %b = %h cout=%b ovf=%b", a, b, cin, sum, cout, ovf);
+        end
+    endtask
+
+    initial begin
+        a = 16'h1111; b = 16'h2222; c = 16'h3333; d = 16'h4444;
+        sel = 0; #1 $display("mux2 sel=0 y=%h", y2);
+        sel = 1; #1 $display("mux2 sel=1 y=%h", y2);
+        sel2 = 2'b00; #1 $display("mux4 sel=%b y=%h", sel2, y4);
+        sel2 = 2'b01; #1 $display("mux4 sel=%b y=%h", sel2, y4);
+        sel2 = 2'b10; #1 $display("mux4 sel=%b y=%h", sel2, y4);
+        sel2 = 2'b11; #1 $display("mux4 sel=%b y=%h", sel2, y4);
+        add(16'h0001, 16'h0002, 1'b0);
+        add(16'h7FFF, 16'h0001, 1'b0);   // 正 + 正 → 負:有號溢位
+        add(16'hFFFF, 16'h0001, 1'b0);   // 無號進位,但有號沒有溢位
+        add(16'h8000, 16'h8000, 1'b0);   // 負 + 負 → 0:有號溢位
+        add(16'h1234, 16'hEDCB, 1'b1);   // cin = 1
+    end
+endmodule</code></pre>
+<pre><code class="language-text">mux2 sel=0 y=1111
+mux2 sel=1 y=2222
+mux4 sel=00 y=1111
+mux4 sel=01 y=2222
+mux4 sel=10 y=3333
+mux4 sel=11 y=4444
+adder 0001 + 0002 + 0 = 0003 cout=0 ovf=0
+adder 7fff + 0001 + 0 = 8000 cout=0 ovf=1
+adder ffff + 0001 + 0 = 0000 cout=1 ovf=0
+adder 8000 + 8000 + 0 = 0000 cout=1 ovf=1
+adder 1234 + edcb + 1 = 0000 cout=1 ovf=0</code></pre>
+          <p>第二、四列是有號溢位:7FFF + 1 是「正＋正得到負」,8000 + 8000 是「負＋負得到 0」;第三列只有無號的進位(cout = 1),有號是 −1 + 1 = 0,沒有溢位。</p>
+          <p><strong>和本章範例不同的地方:</strong></p>
+          <ul>
+            <li>本章的 <code>mux2</code> 是 1 位元;Lab 的 <code>mux2</code>、<code>mux4</code> 用 <code>parameter W</code> 調寬度,本章沒有 <code>mux4</code>。</li>
+            <li>本章的全加器叫 <code>fa</code>,埠是 <code>ci</code>、<code>s</code>、<code>co</code>;Lab 叫 <code>full_adder</code>,埠是 <code>cin</code>、<code>sum</code>、<code>cout</code>,而且要自己一個檔案。</li>
+            <li>本章的 <code>add4</code> 固定 4 位元、沒有進位輸入、沒有溢位旗標;Lab 的 <code>adder</code> 寬度可調,多了 <code>cin</code> 與 <code>ovf</code>。</li>
+            <li>和 Hack 的晶片比:Hack 的 <code>Mux16</code>、<code>Add16</code> 固定 16 位元、輸出叫 <code>out</code>,<code>Add16</code> 沒有進位輸入與輸出。</li>
+          </ul>
+          <p>可以參考本章的範例,但介面和要求不同,要自己改寫。</p>
+          <p><strong>任務目標</strong>(公開的用 <code>test</code> 自己跑;隱藏檢定在 <code>submit</code> 時跑,只看得到名稱和一行說明):</p>
+          <ul class="lab-goals">
+            <li data-group="gates.mux">☐ <strong>多工器</strong>〔公開〕mux2、mux4(W=16)的公開向量:每個 sel 值都試,y 對參考模型。</li>
+            <li data-group="gates.adder">☐ <strong>加法器</strong>〔公開〕full_adder 的 8 列真值表;adder(W=16)的公開向量:sum、cout、ovf,含 cin=1。</li>
+            <li data-group="gates.exhaustive">☐ <strong>窮舉</strong>〔隱藏檢定〕mux4 在 W=4 時 a、b、c、d、sel 的全部組合;adder 在 W=8 時 a、b、cin 的全部組合;W=1 的 adder。</li>
+            <li data-group="gates.random">☐ <strong>寬的版本</strong>〔隱藏檢定〕W=16、32 的邊界值(0、1、全 1、只有最高位、交替位元)與每人 seed 決定的隨機向量;ovf 的四種情況(正＋正、負＋負、異號、剛好不溢位)。</li>
+            <li data-group="gates.structure">☐ <strong>真的用 full_adder</strong>〔隱藏檢定〕把 full_adder 換成故意弄壞的版本,你的 adder 結果要跟著錯(證明 adder 真的由 full_adder 串成,不是直接寫 a + b)。</li>
+            <li data-group="gates.perf">☐ <strong>模擬時間</strong>〔隱藏檢定〕漣波進位在事件驅動的模擬器裡一級一級傳,電路不能大到讓上層的 ALU 測不完。門檻:W=4 mux4 窮舉 262,144 組＋W=8 adder 窮舉 131,072 組 2 秒內;W=32 adder 10<sup>4</sup> 組隨機向量 3 秒內。這個門檻來自任務「RV32I ALU」的「模擬時間」(ALU 用你的 adder),以及 Boss 戰「ALU 窮舉」:閘與 ALU 的全部隱藏檢定要在 60 秒內跑完。</li>
+          </ul>
+          <p><strong>規則:</strong><code>adder.v</code> 必須 instantiate <code>full_adder</code>(檢定會把 <code>full_adder</code> 換成壞掉的版本,你的 <code>adder</code> 要跟著錯)。判題接受的 Verilog 照本章的「判題接受的 Verilog」:只編譯你的檔案時 <code>iverilog -g2012 -Wall</code> 零警告;不准 <code>`include</code>、<code>`timescale</code>、階層參照、<code>initial</code> 區塊與宣告時給初值;系統函式只准 <code>$signed</code>、<code>$unsigned</code>、<code>$clog2</code>、<code>$display</code>。</p>
+          <p><strong>之後會用在:</strong><a href="#lab-rtl-alu">本章的任務「RV32I ALU」</a>(加減法經過你的 <code>adder</code>),以及檢查點 2 的任務「單週期 CPU」(資料路徑上的多工器;那一章之後才寫)。</p>
+          <p class="lab-rule">這個零件過關之後,後面的專題一律用你自己的版本。規則見<a href="00-about.html#lab-rules">零件庫規則</a>。</p>
+        </div>
+      </div>
+
+      <h2>組合邏輯的陷阱:意外長出閂鎖</h2>
+      <p>
+        <code>always @*</code> 寫的是組合邏輯:輸出只由「現在的輸入」決定。但如果某一條路徑<strong>沒有指定</strong>輸出,
+        Verilog 的語意是「那就保持原來的值」。要保持舊值,電路就得<strong>記住</strong>東西,合成工具只好替你放一顆<strong>閂鎖(latch)</strong>。
+        這幾乎都是 bug:閂鎖是準位觸發的(<a href="47-digital-circuits.html">{{ch:47-digital-circuits}}</a>講過它和正反器的差別),時序難分析,而且你根本沒打算要它。
+      </p>
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">為什麼要學:簽核時不准有閂鎖</span>
+          <p>組合電路長出閂鎖,模擬時常常看不出來(下面的例子在你測的輸入上全對)。任務線「UART 收發器」最後的 Boss 戰「合成與時序簽核」會用合成工具 Yosys 檢查「沒有 latch」;
+          RV32I ALU 的隱藏檢定也會送未定義的運算碼,檢查輸出是不是規定的 0,而不是「上一次的值」。</p>
+        </div>
+      </div>
+
+      <h3>看起來對但其實錯:測過的輸入都對</h3>
+      <p>想做一個 3 選 1:sel = 00 選 a、01 選 b、10 選 c。11「不會用到」,所以沒寫:</p>
+<pre><code class="language-verilog">// 想做的是:sel=00 選 a、01 選 b、10 選 c;11 不會用到(所以沒寫)
+module pick_bad (input [1:0] sel, input a, b, c, output reg y);
+    always @* begin
+        case (sel)
+            2'b00: y = a;
+            2'b01: y = b;
+            2'b10: y = c;
+        endcase              // sel=11 時沒有指定 y → y 要「記住」舊值 → 閂鎖
+    end
+endmodule
+
+// 修法:一開頭先給預設值(或補 default)
+module pick_good (input [1:0] sel, input a, b, c, output reg y);
+    always @* begin
+        y = 1'b0;            // 每條路徑都有值
+        case (sel)
+            2'b00: y = a;
+            2'b01: y = b;
+            2'b10: y = c;
+            default: ;       // 11:維持上面的預設值 0
+        endcase
+    end
+endmodule</code></pre>
+<pre><code class="language-verilog">module tb_latch;
+    reg [1:0] sel; reg a, b, c;
+    wire y_bad, y_good;
+    pick_bad  u1 (.sel(sel), .a(a), .b(b), .c(c), .y(y_bad));
+    pick_good u2 (.sel(sel), .a(a), .b(b), .c(c), .y(y_good));
+    task show(input integer k);
+        #1 $display("%0d  %b  %b %b %b |  %b   %b", k, sel, a, b, c, y_bad, y_good);
+    endtask
+    initial begin
+        $display("步 sel a b c | bad good");
+        sel = 2'b00; a = 1; b = 0; c = 0;  show(1);
+        sel = 2'b11;                       show(2);
+        a = 0;                             show(3);
+        sel = 2'b01;                       show(4);
+        sel = 2'b11; a = 1; b = 1; c = 1;  show(5);
+        sel = 2'b10;                       show(6);
+    end
+endmodule</code></pre>
+<pre><code class="language-text">步 sel a b c | bad good
+1  00  1 0 0 |  1   1
+2  11  1 0 0 |  1   0
+3  11  0 0 0 |  1   0
+4  01  0 0 0 |  0   0
+5  11  1 1 1 |  0   0
+6  10  1 1 1 |  1   1</code></pre>
+      <p>
+        只要 sel 是 00、01、10,兩個版本完全一樣(第 1、4、6 步)。只測這三種,<code>pick_bad</code> 會「通過」。
+        sel = 11 時差別就出來了:<code>pick_bad</code> 停在上一次的值。第 2、3 步它記住 1(第 3 步 a 已經變 0 了也不理),第 5 步記住 0(這時 a、b、c 全是 1)。
+        <code>pick_good</code> 照預設值輸出 0。<strong>例子都對 ≠ 電路正確</strong>:沒測到的那一列,正是閂鎖藏身的地方。
+      </p>
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">iverilog -Wall 不會警告閂鎖</span>
+          <p>上面兩個模組用 <code>iverilog -g2012 -Wall</code> 編譯,<strong>都沒有任何警告</strong>。Icarus 是模擬器,不做合成,它只照語意模擬「保持舊值」。
+          要抓閂鎖,得靠合成工具的報告(例如 Yosys 會列出它推論出的 latch),或從寫法上避免。</p>
+        </div>
+      </div>
+      <p>避免閂鎖的三個習慣:</p>
+      <ol>
+        <li><strong>區塊一開頭先給每個輸出一個預設值</strong>(像 <code>pick_good</code> 的 <code>y = 1'b0;</code>)。後面的 if、case 只需要寫「不一樣」的情況。</li>
+        <li><strong>case 一律寫 <code>default</code></strong>,if 一律配 <code>else</code>。</li>
+        <li><strong>一個 always 區塊指定好幾個輸出時,每一條路徑都要指定到每一個輸出</strong>。最容易漏的是「這條路徑只改了 y1,忘了 y2」。</li>
+      </ol>
+      <p>
+        反過來,在 <code>always @(posedge clk)</code> 裡「沒寫就保持」是<strong>正確</strong>的:那本來就是正反器,保持舊值正是它的工作。
+        後面帶致能的暫存器就是這樣寫的。
+      </p>
+
+      <h3>另外兩個組合邏輯陷阱</h3>
+      <p><strong>敏感列表不完整</strong>。舊式的寫法是把會觸發區塊的訊號列在 <code>@( )</code> 裡。漏了一個,模擬就不會在它變化時重算:</p>
+<pre><code class="language-verilog">module and_bad (input a, b, output reg y);
+    always @(a) y = a &amp; b;      // 敏感列表漏了 b
+endmodule
+module tb_sens;
+    reg a, b; wire y;
+    and_bad u (.a(a), .b(b), .y(y));
+    initial begin
+        a = 1; b = 0; #1 $display("a=%b b=%b y=%b", a, b, y);
+        b = 1;        #1 $display("a=%b b=%b y=%b  &lt;- b 變了,y 沒重算", a, b, y);
+        a = 0;        #1 $display("a=%b b=%b y=%b", a, b, y);
+        a = 1;        #1 $display("a=%b b=%b y=%b  &lt;- a 變了才重算", a, b, y);
+    end
+endmodule</code></pre>
+<pre><code class="language-text">a=1 b=0 y=0
+a=1 b=1 y=0  &lt;- b 變了,y 沒重算
+a=0 b=1 y=0
+a=1 b=1 y=1  &lt;- a 變了才重算</code></pre>
+      <p>
+        合成工具通常不管敏感列表,照「a AND b」做出電路;於是模擬和合成出來的電路<strong>行為不一樣</strong>,這是最難查的一種 bug。
+        解法很簡單:組合邏輯一律寫 <code>always @*</code>(或 SystemVerilog 的 <code>always_comb</code>),讓工具自己找。
+      </p>
+      <p>
+        <strong>同一個訊號被兩個地方驅動</strong>。前面已經看過:兩個 <code>assign</code> 打架會變成 x;兩個 always 區塊指定同一個 reg,則是誰最後執行誰贏,又是一種競賽。
+        規則是:<strong>每個訊號只在一個地方指定</strong>。用 <code>logic</code> 宣告的話,兩個連續指定會直接編譯失敗。
+      </p>
+
+      <h2>組合電路實例:8 位元 ALU 與 RV32I 的運算</h2>
+      <p>
+        <a href="20-combinational-sequential.html">{{ch:20-combinational-sequential}}</a>的 Hack ALU 用 6 個控制位元(zx、nx、zy、ny、f、no)拼出 18 種函式。
+        Verilog 有現成的運算子,一個小 ALU 寫成 case 就好。下面是 8 位元、4 種運算的範例,加減法直接用 <code>+</code> 和 <code>-</code>:
+      </p>
+<pre><code class="language-verilog">// 8 位元、4 種運算的小 ALU(範例用:直接寫 + 與 -)
+module alu8 (
+    input      [7:0] a, b,
+    input      [1:0] op,      // 00 add、01 sub、10 and、11 or
+    output reg [7:0] y,
+    output           zero
+);
+    always @* begin
+        case (op)
+            2'b00:   y = a + b;
+            2'b01:   y = a - b;
+            2'b10:   y = a &amp; b;
+            2'b11:   y = a | b;
+            default: y = 8'h00;   // op 有 x 或 z 時也有值:不會長出閂鎖
+        endcase
+    end
+    assign zero = (y == 8'h00);
+endmodule</code></pre>
+<pre><code class="language-verilog">module tb_alu8;
+    reg  [7:0] a, b;
+    reg  [1:0] op;
+    wire [7:0] y;
+    wire       zero;
+    alu8 dut (.a(a), .b(b), .op(op), .y(y), .zero(zero));
+
+    task show(input [7:0] xa, input [7:0] xb, input [1:0] xop);
+        begin
+            a = xa; b = xb; op = xop; #1;
+            $display("op=%b a=%h b=%h -&gt; y=%h (%0d) zero=%b", op, a, b, y, y, zero);
+        end
+    endtask
+
+    initial begin
+        show(8'h7F, 8'h01, 2'b00);   // 127 + 1:8 位元裝得下,但有號溢位
+        show(8'hFF, 8'h01, 2'b00);   // 255 + 1:進位丟掉,結果 0
+        show(8'h05, 8'h07, 2'b01);   // 5 - 7 = -2 → FE
+        show(8'h3C, 8'h0F, 2'b10);   // and
+        show(8'h3C, 8'h0F, 2'b11);   // or
+        show(8'h3C, 8'h3C, 2'b01);   // 相等相減 → zero=1
+    end
+endmodule</code></pre>
+<pre><code class="language-text">op=00 a=7f b=01 -&gt; y=80 (128) zero=0
+op=00 a=ff b=01 -&gt; y=00 (0) zero=1
+op=01 a=05 b=07 -&gt; y=fe (254) zero=0
+op=10 a=3c b=0f -&gt; y=0c (12) zero=0
+op=11 a=3c b=0f -&gt; y=3f (63) zero=0
+op=01 a=3c b=3c -&gt; y=00 (0) zero=1</code></pre>
+      <ul>
+        <li><code>task</code> 是 testbench 裡的副程式,把「設定輸入、等一下、印出來」包成一行。</li>
+        <li>7F + 01 = 80:8 位元裝得下,但把它們當二補數看是 127 + 1 = −128,<strong>有號溢位</strong>。這顆 ALU 沒有溢位旗標,所以看不出來。</li>
+        <li>FF + 01 的進位被截掉,結果 0,<code>zero</code> 變 1。</li>
+        <li>2 位元的 op 四種值都寫了,<code>default</code> 看起來多餘;但 op 是 x 或 z 時(例如還沒接好),default 讓 y 有確定的值,寫法上也保證不會長出閂鎖。</li>
+      </ul>
+
+      <h3>RV32I 的十種 ALU 運算</h3>
+      <p>
+        RISC-V 是一套開放的精簡指令集(<a href="48-computer-architecture.html">{{ch:48-computer-architecture}}</a>介紹過 RISC 與 CISC 的取捨)。它最基本的 RV32I 有十種整數運算。
+        ALU 的運算碼 op 是 4 位元,照指令編碼取 <code>{funct7[5], funct3}</code>:funct3 分出運算種類,funct7 的第 5 位元分開 add/sub 與 srl/sra。
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>op</th><th>名稱</th><th>結果 y</th><th>注意</th></tr></thead>
+        <tbody>
+          <tr><td>0000</td><td>add</td><td>a + b</td><td>進位丟掉</td></tr>
+          <tr><td>1000</td><td>sub</td><td>a − b</td><td>= a + ~b + 1</td></tr>
+          <tr><td>0001</td><td>sll</td><td>a 左移 sh 位</td><td>sh 只看 b 的低 $\log_2 W$ 位元(W=32 時 b[4:0])</td></tr>
+          <tr><td>0010</td><td>slt</td><td>有號比較 a &lt; b ? 1 : 0</td><td>a、b 當二補數</td></tr>
+          <tr><td>0011</td><td>sltu</td><td>無號比較 a &lt; b ? 1 : 0</td><td>a、b 當無號數</td></tr>
+          <tr><td>0100</td><td>xor</td><td>a ^ b</td><td></td></tr>
+          <tr><td>0101</td><td>srl</td><td>a 邏輯右移 sh 位</td><td>左邊補 0</td></tr>
+          <tr><td>1101</td><td>sra</td><td>a 算術右移 sh 位</td><td>左邊補符號位元</td></tr>
+          <tr><td>0110</td><td>or</td><td>a | b</td><td></td></tr>
+          <tr><td>0111</td><td>and</td><td>a &amp; b</td><td></td></tr>
+          <tr><td>其他 6 個</td><td>(未定義)</td><td>0</td><td>本書的 Lab 規定輸出 0,zero = 1</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        <strong>有號和無號的差別只在三個地方</strong>:slt 與 sltu、sra 與 srl,以及溢位怎麼解讀。add、sub、and、or、xor、sll 對有號和無號的位元結果完全一樣,
+        這正是二補數的好處(<a href="20-combinational-sequential.html">{{ch:20-combinational-sequential}}</a>「同一個加法器,順便就會減法」)。
+      </p>
+      <p>Verilog 裡,這些運算都有對應的運算子。注意兩個要用 <code>$signed</code> 的地方:</p>
+<pre><code class="language-verilog">module tb_ops;
+    reg  [31:0] a, b;
+    wire [4:0]  sh = b[4:0];            // RV32I:移位量只看低 5 位元
+    initial begin
+        a = 32'hFFFF_FFF0;              // 有號是 -16,無號是 4294967280
+        b = 32'h0000_0024;              // 36;低 5 位元是 4
+        #1;                             // 讓 sh 的 assign 先算好
+        $display("add  %h", a + b);
+        $display("sub  %h", a - b);
+        $display("sll  %h", a &lt;&lt; sh);
+        $display("slt  %0d", $signed(a) &lt; $signed(b));   // 兩邊都有號
+        $display("sltu %0d", a &lt; b);                     // 兩邊都無號
+        $display("xor  %h", a ^ b);
+        $display("srl  %h", a &gt;&gt; sh);                    // 邏輯右移:補 0
+        $display("sra  %h", $signed(a) &gt;&gt;&gt; sh);          // 算術右移:補符號位元
+        $display("or   %h", a | b);
+        $display("and  %h", a &amp; b);
+    end
+endmodule</code></pre>
+<pre><code class="language-text">add  00000014
+sub  ffffffcc
+sll  ffffff00
+slt  1
+sltu 0
+xor  ffffffd4
+srl  0fffffff
+sra  ffffffff
+or   fffffff4
+and  00000020</code></pre>
+      <ul>
+        <li><code>&gt;&gt;</code> 永遠補 0。<code>&gt;&gt;&gt;</code> 只有在左邊的運算元是<strong>有號</strong>時才補符號位元,所以要寫 <code>$signed(a) &gt;&gt;&gt; sh</code>。</li>
+        <li><code>&lt;</code> 只有在<strong>兩邊都有號</strong>時才做有號比較。</li>
+        <li>b = 0x24 = 36,但移位量只看低 5 位元 00100 = 4,所以 sll、srl、sra 都是移 4 位,不是 36 位。</li>
+      </ul>
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">看起來對但其實錯:Verilog 的有號運算會被「傳染」成無號</span>
+          <p>Verilog 的規則是:<strong>一個運算式裡只要有一個運算元是無號的,整個運算式就用無號算</strong>。這會產生兩個看起來很對的 bug:</p>
+<pre><code class="language-verilog">module tb_gotcha;
+    reg  [7:0] a, b;
+    reg  [2:0] sh;
+    reg        is_sra;
+    reg  [7:0] y1, y2;
+    initial begin
+        a = 8'hF0; b = 8'h01; sh = 3'd2; is_sra = 1;
+        // 陷阱一:只把一邊轉成有號,整個比較還是無號
+        $display("$signed(a) &lt; $signed(b) = %0d", $signed(a) &lt; $signed(b));
+        $display("$signed(a) &lt; b          = %0d", $signed(a) &lt; b);
+        // 陷阱二:?: 的另一邊是無號,&gt;&gt;&gt; 就退化成邏輯右移
+        y1 = is_sra ? ($signed(a) &gt;&gt;&gt; sh) : (a &gt;&gt; sh);
+        y2 = $signed(a) &gt;&gt;&gt; sh;
+        $display("y1 = %h(放在 ?: 裡)  y2 = %h(單獨一行)", y1, y2);
+    end
+endmodule</code></pre>
+<pre><code class="language-text">$signed(a) &lt; $signed(b) = 1
+$signed(a) &lt; b          = 0
+y1 = 3c(放在 ?: 裡)  y2 = fc(單獨一行)</code></pre>
+          <p>a = F0(有號是 −16)、b = 01。只轉一邊的 <code>$signed(a) &lt; b</code> 退回無號比較(240 &lt; 1),答案錯了。
+          第二個更隱蔽:<code>$signed(a) &gt;&gt;&gt; sh</code> 單獨一行是對的(FC),放進 <code>? :</code> 之後,因為另一個分支 <code>a &gt;&gt; sh</code> 是無號,整個條件運算式變成無號,<code>&gt;&gt;&gt;</code> 退化成邏輯右移(3C)。
+          單獨測 sra 那一行會過,組進 ALU 才錯。<strong>例子都對 ≠ 組起來也對</strong>。修法:每種運算分開寫成 case 的一個分支,或先把有號的結果存進一條自己的線。</p>
+        </div>
+      </div>
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">為什麼要學:ALU 是 CPU 每一拍都在用的零件</span>
+          <p>本章 Lab「RV32I ALU」就是這張表;它的隱藏檢定會窮舉 8 位元版的所有輸入,也會專挑移位量、有號比較的邊界。
+          之後任務線的單週期 CPU 每執行一條指令都會用到它,檢查點「RV32I 測試」用官方的 rv32ui 測試程式驗收,ALU 錯一個位元,整支程式就印錯。
+          rv32 任務線的指令集模擬器用 Python 實作同一套語意,兩邊可以互相對照。</p>
+        </div>
+      </div>
+
+      <h3>手算:RV32I ALU 的運算結果</h3>
+      <p>
+        W = 32,a = 0xFFFF_FFF0,b = 0x0000_0024。先寫出兩種解讀:a 無號是 4294967280、有號是 −16;b 兩種都是 36;移位量 sh = b[4:0] = 4。
+        每一列是一個 op。
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>op</th><th>名稱</th><th>怎麼算</th><th>y(十六進位)</th><th>y 當有號</th><th>zero</th></tr></thead>
+        <tbody>
+          <tr><td>0000</td><td>add</td><td>−16 + 36 = 20(無號看:進位丟掉)</td><td>0000_0014</td><td>20</td><td>0</td></tr>
+          <tr><td>1000</td><td>sub</td><td>−16 − 36 = −52</td><td>FFFF_FFCC</td><td>−52</td><td>0</td></tr>
+          <tr><td>0001</td><td>sll</td><td>左移 4 位,右邊補 0</td><td>FFFF_FF00</td><td>−256</td><td>0</td></tr>
+          <tr><td>0010</td><td>slt</td><td>−16 &lt; 36 成立</td><td>0000_0001</td><td>1</td><td>0</td></tr>
+          <tr><td>0011</td><td>sltu</td><td>4294967280 &lt; 36 不成立</td><td>0000_0000</td><td>0</td><td>1</td></tr>
+          <tr><td>0100</td><td>xor</td><td>…F0 ^ …24:低 8 位 1111_0000 ^ 0010_0100 = 1101_0100</td><td>FFFF_FFD4</td><td>−44</td><td>0</td></tr>
+          <tr><td>0101</td><td>srl</td><td>右移 4 位,左邊補 0</td><td>0FFF_FFFF</td><td>268435455</td><td>0</td></tr>
+          <tr><td>1101</td><td>sra</td><td>右移 4 位,左邊補 1(−16 / 16 = −1)</td><td>FFFF_FFFF</td><td>−1</td><td>0</td></tr>
+          <tr><td>0110</td><td>or</td><td>1111_0000 | 0010_0100 = 1111_0100</td><td>FFFF_FFF4</td><td>−12</td><td>0</td></tr>
+          <tr><td>0111</td><td>and</td><td>1111_0000 &amp; 0010_0100 = 0010_0000</td><td>0000_0020</td><td>32</td><td>0</td></tr>
+          <tr><td>1001</td><td>(未定義)</td><td>規定輸出 0</td><td>0000_0000</td><td>0</td><td>1</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        y 欄和上面 <code>tb_ops.v</code> 的輸出逐列一致(未定義那列是 Lab 的規定,不是 Verilog 運算子)。
+        兩組最值得記的對照:<strong>slt = 1 但 sltu = 0</strong>,因為同一串位元,有號是 −16、無號是很大的正數;
+        <strong>srl 和 sra 只差最高 4 位</strong>,srl 補 0、sra 補 1。
+        注意 sra 不等於「除以 16 再往 0 捨去」:−20 算術右移 4 位是 −2(往負無限大捨去),C 的 −20 / 16 是 −1。
+      </p>
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 136.3 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>改用 W = 8(移位量看 b 的低 3 位元)。</p>
+          <p>(1)a = 0x7A、b = 0xB4。先寫出 a、b 的無號與有號值、sh,再填出 10 種運算與 op = 1111 的 y(十六進位)和 zero。</p>
+          <p>(2)對調:a = 0xB4、b = 0x7A。只算 srl 和 sra,以及 slt 和 sltu。</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p>(1)a = 0x7A:無號 122、有號 122。b = 0xB4:無號 180、有號 −76。sh = 0xB4 的低 3 位元 = 100 = 4。</p>
+              <div class="table-wrap"><table>
+                <thead><tr><th>op</th><th>名稱</th><th>怎麼算</th><th>y</th><th>zero</th></tr></thead>
+                <tbody>
+                  <tr><td>0000</td><td>add</td><td>122 + 180 = 302,去掉進位 302 − 256 = 46</td><td>2E</td><td>0</td></tr>
+                  <tr><td>1000</td><td>sub</td><td>122 − 180 = −58 → 256 − 58 = 198</td><td>C6</td><td>0</td></tr>
+                  <tr><td>0001</td><td>sll</td><td>0111_1010 左移 4 → 1010_0000</td><td>A0</td><td>0</td></tr>
+                  <tr><td>0010</td><td>slt</td><td>122 &lt; −76 不成立</td><td>00</td><td>1</td></tr>
+                  <tr><td>0011</td><td>sltu</td><td>122 &lt; 180 成立</td><td>01</td><td>0</td></tr>
+                  <tr><td>0100</td><td>xor</td><td>0111_1010 ^ 1011_0100 = 1100_1110</td><td>CE</td><td>0</td></tr>
+                  <tr><td>0101</td><td>srl</td><td>右移 4,補 0 → 0000_0111</td><td>07</td><td>0</td></tr>
+                  <tr><td>1101</td><td>sra</td><td>a 是正數,補的符號位元是 0,和 srl 一樣</td><td>07</td><td>0</td></tr>
+                  <tr><td>0110</td><td>or</td><td>1111_1110</td><td>FE</td><td>0</td></tr>
+                  <tr><td>0111</td><td>and</td><td>0011_0000</td><td>30</td><td>0</td></tr>
+                  <tr><td>1111</td><td>(未定義)</td><td>規定 0</td><td>00</td><td>1</td></tr>
+                </tbody>
+              </table></div>
+              <p>這組剛好和上面的例子相反:slt = 0、sltu = 1。注意 slt 的結果是 0,所以 zero = 1,雖然這是一個「真的有算」的運算。</p>
+              <p>(2)a = 0xB4 = 1011_0100(有號 −76),sh = 0x7A 的低 3 位元 = 010 = 2。srl:0010_1101 = 2D;sra:1110_1101 = ED(= −19,−76 / 4 = −19 剛好整除)。
+              slt:−76 &lt; 122 成立,1;sltu:180 &lt; 122 不成立,0。</p>
+              <p>用 Verilog 運算子跑過(第一列是另一組 a = 9C、b = 0B,可以自己再練一次):</p>
+<pre><code class="language-verilog">module tb_ops8;
+    reg [7:0] a, b; reg [2:0] sh;
+    task run8(input [7:0] xa, input [7:0] xb);
+        begin
+            a = xa; b = xb; sh = xb[2:0];
+            $display("a=%h b=%h sh=%0d: add %h sub %h sll %h slt %0d sltu %0d xor %h srl %h sra %h or %h and %h",
+              a, b, sh, a+b, a-b, a&lt;&lt;sh, $signed(a)&lt;$signed(b), a&lt;b, a^b, a&gt;&gt;sh, $signed(a)&gt;&gt;&gt;sh, a|b, a&amp;b);
+        end
+    endtask
+    initial begin
+        run8(8'h9C, 8'h0B);
+        run8(8'h7A, 8'hB4);
+        run8(8'hB4, 8'h7A);
+    end
+endmodule</code></pre>
+<pre><code class="language-text">a=9c b=0b sh=3: add a7 sub 91 sll e0 slt 1 sltu 0 xor 97 srl 13 sra f3 or 9f and 08
+a=7a b=b4 sh=4: add 2e sub c6 sll a0 slt 0 sltu 1 xor ce srl 07 sra 07 or fe and 30
+a=b4 b=7a sh=2: add 2e sub 3a sll d0 slt 1 sltu 0 xor ce srl 2d sra ed or fe and 30</code></pre>
+            </div>
+          </details>
+        </div>
+      </div>
+      <h3 id="lab-rtl-alu">本章 Lab:RV32I ALU rtl/alu.v</h3>
+      <div class="callout lab" data-task="rtl/alu">
+        <div class="ico">🧪</div>
+        <div class="body">
+          <span class="c-title">本章 Lab · 任務線「rtl」· 任務「RV32I ALU」</span>
+          <p><strong>對應地下城任務:</strong>任務「RV32I ALU」(任務線:rtl 自己的 RV32I CPU,第 2／6 個任務)。零件檔:<code>~/零件庫/rtl/alu.v</code>;任務資料夾:<code>~/任務線/rtl/02-alu/</code>。要先完成任務「Verilog 閘與加法器」。</p>
+          <p><strong>要做的零件:</strong>RV32I 的 ALU:上一節的十種運算,寬度用 <code>parameter W</code> 調整,加減法經過你自己的 <code>adder</code>。檢查點 2 的 CPU 每執行一條算術、邏輯、比較或移位指令,都會用到它。</p>
+          <p><strong>介面:</strong>W 會測 8、16、32;純組合電路。</p>
+<pre><code class="language-verilog">// ~/零件庫/rtl/alu.v(判題時和你的 adder.v、full_adder.v 一起編譯)
+module alu #(parameter W = 32) (
+    input  [W-1:0] a, b,
+    input  [3:0]   op,       // {funct7[5], funct3}
+    output [W-1:0] y,        // 要用 always @* 的話可以寫成 output reg
+    output         zero      // y == 0
+);
+    // 你的設計:add 與 sub 要經過 adder #(W)
+endmodule</code></pre>
+<pre><code class="language-text">op    運算   y
+0000  add    a + b(進位丟掉)
+1000  sub    a - b,要經過你的 adder:a + ~b + 1
+0001  sll    a 左移,移位量是 b 的低 $clog2(W) 位元(W=32 時是 b[4:0])
+0010  slt    a、b 當二補數比:a &lt; b 是 1,否則是 0
+0011  sltu   a、b 當無號數比:a &lt; b 是 1,否則是 0
+0100  xor    a ^ b
+0101  srl    a 右移,補 0
+1101  sra    a 右移,補符號位元
+0110  or     a | b
+0111  and    a &amp; b
+其他 6 個值  y = 0(所以 zero = 1)</code></pre>
+          <p>任務資料夾裡有 Python 參考模型 <code>alu_model.py</code>(<code>alu_ref(op, a, b, w=32)</code> 回傳 <code>(y, zero)</code>)與公開的 cocotb 測試 <code>tests/test_public.py</code>,<code>test</code> 會跑它。</p>
+          <p><strong>公開範例:</strong>下面的 testbench 可以照抄,和你的 <code>alu.v</code>、<code>adder.v</code>、<code>full_adder.v</code> 一起編譯執行,輸出要一模一樣:</p>
+<pre><code class="language-verilog">module tb_lab_alu;
+    reg  [31:0] a, b;
+    reg  [3:0]  op;
+    wire [31:0] y;
+    wire        zero;
+    alu #(32) dut (.a(a), .b(b), .op(op), .y(y), .zero(zero));
+
+    task run(input [3:0] xop, input [31:0] xa, input [31:0] xb);
+        begin
+            op = xop; a = xa; b = xb; #1;
+            $display("op=%b a=%h b=%h -&gt; y=%h zero=%b", op, a, b, y, zero);
+        end
+    endtask
+
+    initial begin
+        run(4'b0000, 32'hFFFFFFFF, 32'h00000001);   // add:進位丟掉
+        run(4'b1000, 32'h00000005, 32'h00000007);   // sub:5 - 7 = -2
+        run(4'b0001, 32'h00000001, 32'h00000024);   // sll:只看 b[4:0] = 4
+        run(4'b0010, 32'hFFFFFFFF, 32'h00000001);   // slt:-1 &lt; 1
+        run(4'b0011, 32'hFFFFFFFF, 32'h00000001);   // sltu:0xFFFFFFFF &lt; 1 不成立
+        run(4'b0101, 32'h80000000, 32'h00000004);   // srl 補 0
+        run(4'b1101, 32'h80000000, 32'h00000004);   // sra 補符號位元
+        run(4'b1111, 32'h12345678, 32'h9ABCDEF0);   // 未定義的 op
+    end
+endmodule</code></pre>
+<pre><code class="language-text">op=0000 a=ffffffff b=00000001 -&gt; y=00000000 zero=1
+op=1000 a=00000005 b=00000007 -&gt; y=fffffffe zero=0
+op=0001 a=00000001 b=00000024 -&gt; y=00000010 zero=0
+op=0010 a=ffffffff b=00000001 -&gt; y=00000001 zero=0
+op=0011 a=ffffffff b=00000001 -&gt; y=00000000 zero=1
+op=0101 a=80000000 b=00000004 -&gt; y=08000000 zero=0
+op=1101 a=80000000 b=00000004 -&gt; y=f8000000 zero=0
+op=1111 a=12345678 b=9abcdef0 -&gt; y=00000000 zero=1</code></pre>
+          <p><strong>和本章範例不同的地方:</strong></p>
+          <ul>
+            <li>本章的 <code>alu8</code> 固定 8 位元、<code>op</code> 只有 2 位元(00 add、01 sub、10 and、11 or);Lab 的 <code>alu</code> 寬度可調,<code>op</code> 是 4 位元,照 RV32I 的 <code>{funct7[5], funct3}</code> 編碼,有十種運算。</li>
+            <li>本章的 <code>alu8</code> 直接寫 <code>+</code> 與 <code>-</code>;Lab 的加減法必須經過你的 <code>adder</code>。</li>
+            <li>Lab 多了移位(移位量只看 b 的低 <code>$clog2(W)</code> 位元)、有號與無號比較,以及「未定義的 op 輸出 0」的規定。</li>
+            <li>和 Hack 的 ALU 比:Hack 用 6 個控制位元(zx、nx、zy、ny、f、no)與 zr、ng 兩個旗標;這裡只有 <code>zero</code> 一個旗標。</li>
+          </ul>
+          <p>可以參考本章的範例,但介面和要求不同,要自己改寫。</p>
+          <p><strong>任務目標</strong>(公開的用 <code>test</code> 自己跑;隱藏檢定在 <code>submit</code> 時跑,只看得到名稱和一行說明):</p>
+          <ul class="lab-goals">
+            <li data-group="alu.ops">☐ <strong>十種運算</strong>〔公開〕test 跑公開的 cocotb 測試:W=32 時 10 種運算各幾組向量,y 與 zero 對 alu_model.py。</li>
+            <li data-group="alu.shift">☐ <strong>移位</strong>〔隱藏檢定〕移位量 0、1、W-1;b 的高位元有值(只看低 $clog2(W) 位元);sra 對負數補 1、srl 補 0。</li>
+            <li data-group="alu.compare">☐ <strong>有號與無號比較</strong>〔隱藏檢定〕slt 與 sltu:最小負數對 1、-1 對 0、相等、只差最高位元;a - b 溢位時 slt 也要對;結果只能是 0 或 1。</li>
+            <li data-group="alu.illegal">☐ <strong>未定義的運算碼</strong>〔隱藏檢定〕6 個未定義的 op 一律 y = 0、zero = 1。</li>
+            <li data-group="alu.exhaustive">☐ <strong>8 位元窮舉</strong>〔隱藏檢定〕W=8:a、b 的 65,536 種組合 × 16 個 op,y 與 zero 全部對參考模型(Icarus 隱藏 testbench)。</li>
+            <li data-group="alu.random">☐ <strong>32 位元隨機</strong>〔隱藏檢定〕W=32 與 W=16:邊界值(0、1、-1、最大正數、最小負數、交替位元)＋每人 seed 決定的隨機向量,cocotb 對 Python 參考模型。</li>
+            <li data-group="alu.uses-adder">☐ <strong>用自己的加法器</strong>〔隱藏檢定〕把 adder 換成故意弄壞的版本,add 與 sub 的結果都要跟著錯(證明加減法真的經過你的 adder)。</li>
+            <li data-group="alu.perf">☐ <strong>模擬時間</strong>〔隱藏檢定〕ALU 是純組合電路,每組向量都要很快算完;檢查點 2 的 CPU 每個時脈週期都會用到它。門檻:W=8 窮舉 1,048,576 組向量(Icarus testbench)6 秒內;W=32 cocotb 隨機 4,000 組(含編譯與啟動)15 秒內。這個門檻來自 Boss 戰「ALU 窮舉」(閘與 ALU 的全部隱藏檢定 60 秒內),以及檢查點 2 的 Boss 戰「RV32I 測試」。</li>
+          </ul>
+          <p><strong>規則:</strong><code>alu.v</code> 必須 instantiate <code>adder</code>,add 與 sub 都要經過它(檢定會把 <code>adder</code> 換成壞掉的版本)。判題接受的 Verilog 照本章的「判題接受的 Verilog」:只編譯你的檔案時 <code>iverilog -g2012 -Wall</code> 零警告;不准 <code>`include</code>、<code>`timescale</code>、階層參照、<code>initial</code> 區塊與宣告時給初值;系統函式只准 <code>$signed</code>、<code>$unsigned</code>、<code>$clog2</code>、<code>$display</code>。</p>
+          <p><strong>之後會用在:</strong><a href="137-verification-cocotb.html#lab-rtl-tb">{{ch:137-verification-cocotb}}的任務「cocotb 測試」</a>(替 ALU 寫自己的測試),以及檢查點 2 的任務「單週期 CPU」(那一章之後才寫)。</p>
+          <p class="lab-rule">這個零件過關之後,後面的專題一律用你自己的版本。規則見<a href="00-about.html#lab-rules">零件庫規則</a>。</p>
+        </div>
+      </div>
+
+      <h2>序向邏輯:正反器、致能暫存器與計數器</h2>
+      <p>
+        <a href="20-combinational-sequential.html">{{ch:20-combinational-sequential}}</a>用 Hack 內建的 DFF 一層一層蓋出 Bit、Register 和 PC。
+        Verilog 沒有內建的 DFF 零件,<code>always @(posedge clk)</code> 加上 <code>&lt;=</code> 就是正反器。下面四個模組放在同一個檔案 <code>seq.v</code>:
+      </p>
+<pre><code class="language-verilog">// D 正反器:同步重置(只在時脈邊緣看 rst)
+module dff_sync (input clk, rst, d, output reg q);
+    always @(posedge clk) begin
+        if (rst) q &lt;= 1'b0;
+        else     q &lt;= d;
+    end
+endmodule
+
+// D 正反器:非同步重置(rst 一變 1 就立刻清 0,不等時脈)
+module dff_async (input clk, rst, d, output reg q);
+    always @(posedge clk or posedge rst) begin
+        if (rst) q &lt;= 1'b0;
+        else     q &lt;= d;
+    end
+endmodule
+
+// 帶致能的暫存器:寬度用參數 W 決定(預設 8)
+module reg_en #(parameter W = 8) (
+    input              clk, rst, en,
+    input      [W-1:0] d,
+    output reg [W-1:0] q
+);
+    always @(posedge clk) begin
+        if (rst)     q &lt;= {W{1'b0}};
+        else if (en) q &lt;= d;
+        // en=0:什麼都不寫 → q 保持。這在時脈 always 裡是正確的「記住」,不是閂鎖
+    end
+endmodule
+
+// 0..MAX 循環的計數器(預設 MAX=9:十進位一位數)
+module counter #(
+    parameter MAX = 9,
+    parameter N   = $clog2(MAX + 1)   // 裝得下 MAX 要幾個位元:MAX=9 → 4
+) (
+    input              clk, rst, en,
+    output reg [N-1:0] count,
+    output             wrap           // count==MAX 而且 en=1:下一拍要繞回 0
+);
+    assign wrap = en &amp;&amp; (count == MAX);
+    always @(posedge clk) begin
+        if (rst)       count &lt;= {N{1'b0}};
+        else if (wrap) count &lt;= {N{1'b0}};
+        else if (en)   count &lt;= count + 1'b1;
+    end
+endmodule</code></pre>
+      <ul>
+        <li><strong>同步重置(synchronous reset)</strong>:rst 只在時脈邊緣被看見。<strong>非同步重置(asynchronous reset)</strong>:rst 也寫進敏感列表(<code>or posedge rst</code>),一拉高就立刻清 0。兩種都常見,一個設計裡選一種用到底。</li>
+        <li><code>reg_en</code> 的 en = 0 時什麼都不寫,q 保持。在時脈 always 裡這是正確的「記住」,合成出來是正反器前面加一顆多工器(選 d 或選 q 自己),和 Hack 的 Bit 一樣。</li>
+        <li><code>counter</code> 的寬度 N 由參數 MAX 推出:<code>$clog2(MAX + 1)</code>。MAX = 9 要 4 位元,MAX = 3 只要 2 位元。<code>wrap</code> 是組合輸出,在「這一拍數到 MAX 而且 en = 1」時是 1,告訴外面「下一個邊緣要繞回 0」。很多計數器串接(秒、分、時)就是靠這種訊號。</li>
+        <li><code>{W{1'b0}}</code> 是「W 個 0」:用重複拼接寫出和參數一樣寬的常數。</li>
+      </ul>
+      <p>用一個 testbench 同時驅動四個模組。輸入只在 t = 10、20、30… 改(時脈的下降邊緣),上升邊緣在 t = 5、15、25…,這樣輸入和取樣不會撞在同一個時間點。
+        <code>counter #(.MAX(3))</code> 把 MAX 覆寫成 3,很快就能看到繞回:</p>
+<pre><code class="language-verilog">module tb_seq;
+    reg clk = 0, rst = 1, en = 0, d = 0;
+    reg [7:0] din = 8'h00;
+    wire qs, qa, wrap;
+    wire [7:0] r8;
+    wire [1:0] cnt;      // MAX=3 只要 2 位元
+
+    dff_sync  u_s (.clk(clk), .rst(rst), .d(d), .q(qs));
+    dff_async u_a (.clk(clk), .rst(rst), .d(d), .q(qa));
+    reg_en    u_r (.clk(clk), .rst(rst), .en(en), .d(din), .q(r8));     // W 用預設值 8
+    counter #(.MAX(3)) u_c (.clk(clk), .rst(rst), .en(en),
+                            .count(cnt), .wrap(wrap));                   // 把 MAX 覆寫成 3
+
+    always #5 clk = ~clk;      // 上升邊緣在 t = 5, 15, 25, …;輸入只在 t = 10, 20, … 改
+
+    integer edge_no = 0;
+    always @(posedge clk) begin
+        edge_no = edge_no + 1;
+        #1 $display("%0d | %b  %b  %b  %h | %b  %b  %h  %0d   %b",
+                    edge_no, rst, en, d, din, qs, qa, r8, cnt, wrap);
+    end
+
+    initial begin
+        $display("邊緣 | rst en d din | qs qa r8 cnt wrap");
+        #10 rst = 0; en = 1; d = 1; din = 8'hA5;
+        #10 din = 8'h3C; d = 0;
+        #10 en = 0; din = 8'hFF;
+        #10 en = 1; d = 1;
+        #20 ;
+        #2  rst = 1;                       // t=62:在兩個邊緣之間拉高 rst
+        #1  $display("t=63(邊緣之間):qs=%b qa=%b", qs, qa);
+        #7  rst = 0;                       // t=70
+        #20 $finish;
+    end
+endmodule</code></pre>
+<pre><code class="language-text">邊緣 | rst en d din | qs qa r8 cnt wrap
+1 | 1  0  0  00 | 0  0  00  0   0
+2 | 0  1  1  a5 | 1  1  a5  1   0
+3 | 0  1  0  3c | 0  0  3c  2   0
+4 | 0  0  0  ff | 0  0  3c  2   0
+5 | 0  1  1  ff | 1  1  ff  3   1
+6 | 0  1  1  ff | 1  1  ff  0   0
+t=63(邊緣之間):qs=1 qa=0
+7 | 1  1  1  ff | 0  0  00  0   0
+8 | 0  1  1  ff | 1  1  ff  1   0
+9 | 0  1  1  ff | 1  1  ff  2   0</code></pre>
+      <div class="diagram">
+<svg viewBox="0 0 740 250" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <line x1="125.0" y1="24" x2="125.0" y2="222" stroke="#8a929b" stroke-width="1" stroke-dasharray="3 3"/>
+  <text x="125.0" y="18" text-anchor="middle" font-size="10" fill="#8a929b">1</text>
+  <line x1="191.0" y1="24" x2="191.0" y2="222" stroke="#8a929b" stroke-width="1" stroke-dasharray="3 3"/>
+  <text x="191.0" y="18" text-anchor="middle" font-size="10" fill="#8a929b">2</text>
+  <line x1="257.0" y1="24" x2="257.0" y2="222" stroke="#8a929b" stroke-width="1" stroke-dasharray="3 3"/>
+  <text x="257.0" y="18" text-anchor="middle" font-size="10" fill="#8a929b">3</text>
+  <line x1="323.0" y1="24" x2="323.0" y2="222" stroke="#8a929b" stroke-width="1" stroke-dasharray="3 3"/>
+  <text x="323.0" y="18" text-anchor="middle" font-size="10" fill="#8a929b">4</text>
+  <line x1="389.0" y1="24" x2="389.0" y2="222" stroke="#8a929b" stroke-width="1" stroke-dasharray="3 3"/>
+  <text x="389.0" y="18" text-anchor="middle" font-size="10" fill="#8a929b">5</text>
+  <line x1="455.0" y1="24" x2="455.0" y2="222" stroke="#8a929b" stroke-width="1" stroke-dasharray="3 3"/>
+  <text x="455.0" y="18" text-anchor="middle" font-size="10" fill="#8a929b">6</text>
+  <line x1="521.0" y1="24" x2="521.0" y2="222" stroke="#8a929b" stroke-width="1" stroke-dasharray="3 3"/>
+  <text x="521.0" y="18" text-anchor="middle" font-size="10" fill="#8a929b">7</text>
+  <line x1="587.0" y1="24" x2="587.0" y2="222" stroke="#8a929b" stroke-width="1" stroke-dasharray="3 3"/>
+  <text x="587.0" y="18" text-anchor="middle" font-size="10" fill="#8a929b">8</text>
+  <line x1="653.0" y1="24" x2="653.0" y2="222" stroke="#8a929b" stroke-width="1" stroke-dasharray="3 3"/>
+  <text x="653.0" y="18" text-anchor="middle" font-size="10" fill="#8a929b">9</text>
+  <text x="14" y="18" font-size="10" fill="#8a929b">邊緣</text>
+  <text x="14" y="49" font-size="12" font-weight="700" fill="#1f2328">clk</text>
+  <polyline points="92.0,55 125.0,55 125.0,35 158.0,35 158.0,55 191.0,55 191.0,35 224.0,35 224.0,55 257.0,55 257.0,35 290.0,35 290.0,55 323.0,55 323.0,35 356.0,35 356.0,55 389.0,55 389.0,35 422.0,35 422.0,55 455.0,55 455.0,35 488.0,35 488.0,55 521.0,55 521.0,35 554.0,35 554.0,55 587.0,55 587.0,35 620.0,35 620.0,55 653.0,55 653.0,35 686.0,35 686.0,55 719.0,55" fill="none" stroke="#4a5159" stroke-width="2"/>
+  <text x="14" y="89" font-size="12" font-weight="700" fill="#1f2328">rst</text>
+  <polyline points="92.0,75 158.0,75 158.0,95 501.2,95 501.2,75 554.0,75 554.0,95 719.0,95" fill="none" stroke="#b4541f" stroke-width="2"/>
+  <text x="14" y="129" font-size="12" font-weight="700" fill="#1f2328">en</text>
+  <polyline points="92.0,135 158.0,135 158.0,115 290.0,115 290.0,135 356.0,135 356.0,115 719.0,115" fill="none" stroke="#8b5cf6" stroke-width="2"/>
+  <text x="14" y="169" font-size="12" font-weight="700" fill="#1f2328">count</text>
+  <polygon points="92.0,165 95.0,155 122.0,155 125.0,165 122.0,175 95.0,175" fill="#eceef0" stroke="#2f6f6a" stroke-width="1.5"/>
+  <text x="108.5" y="169" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2328">x</text>
+  <polygon points="125.0,165 128.0,155 188.0,155 191.0,165 188.0,175 128.0,175" fill="#e3efed" stroke="#2f6f6a" stroke-width="1.5"/>
+  <text x="158.0" y="169" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2328">0</text>
+  <polygon points="191.0,165 194.0,155 254.0,155 257.0,165 254.0,175 194.0,175" fill="#e3efed" stroke="#2f6f6a" stroke-width="1.5"/>
+  <text x="224.0" y="169" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2328">1</text>
+  <polygon points="257.0,165 260.0,155 386.0,155 389.0,165 386.0,175 260.0,175" fill="#e3efed" stroke="#2f6f6a" stroke-width="1.5"/>
+  <text x="323.0" y="169" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2328">2</text>
+  <polygon points="389.0,165 392.0,155 452.0,155 455.0,165 452.0,175 392.0,175" fill="#e3efed" stroke="#2f6f6a" stroke-width="1.5"/>
+  <text x="422.0" y="169" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2328">3</text>
+  <polygon points="455.0,165 458.0,155 584.0,155 587.0,165 584.0,175 458.0,175" fill="#e3efed" stroke="#2f6f6a" stroke-width="1.5"/>
+  <text x="521.0" y="169" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2328">0</text>
+  <polygon points="587.0,165 590.0,155 650.0,155 653.0,165 650.0,175 590.0,175" fill="#e3efed" stroke="#2f6f6a" stroke-width="1.5"/>
+  <text x="620.0" y="169" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2328">1</text>
+  <polygon points="653.0,165 656.0,155 716.0,155 719.0,165 716.0,175 656.0,175" fill="#e3efed" stroke="#2f6f6a" stroke-width="1.5"/>
+  <text x="686.0" y="169" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2328">2</text>
+  <text x="14" y="209" font-size="12" font-weight="700" fill="#1f2328">wrap</text>
+  <polyline points="92.0,215 389.0,215 389.0,195 455.0,195 455.0,215 719.0,215" fill="none" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="501.2" y="240" text-anchor="middle" font-size="10" fill="#b4541f">t=62 rst 拉高</text>
+</svg>
+        <figcaption>圖 136-3:tb_seq 的波形(只畫 clk、rst、en、counter 的 count 與 wrap)。虛線是上升邊緣,上面的數字是邊緣編號。count 只在邊緣改變;wrap 是組合輸出,在 count = 3 而且 en = 1 的那一拍是 1。</figcaption>
+      </div>
+      <p>圖 136-3 的文字版就是下面手算的表格。</p>
+
+      <h3>手算:一個邊緣一個邊緣追波形</h3>
+      <p>
+        每一列是一個上升邊緣。「邊緣看到的輸入」是邊緣那一刻的 rst、en、d、din;「邊緣之後」是正反器更新後的值。
+        wrap 是組合的,用「邊緣之後」的 count 和 en 重算。
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>邊緣</th><th>邊緣看到的輸入</th><th>規則</th><th>qs</th><th>qa</th><th>r8</th><th>count</th><th>wrap</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td>rst=1 en=0 d=0 din=00</td><td>rst 優先:全部清 0</td><td>0</td><td>0</td><td>00</td><td>0</td><td>0</td></tr>
+          <tr><td>2</td><td>rst=0 en=1 d=1 din=A5</td><td>DFF 存 d;en=1 → r8 存 din、count+1</td><td>1</td><td>1</td><td>A5</td><td>1</td><td>0</td></tr>
+          <tr><td>3</td><td>rst=0 en=1 d=0 din=3C</td><td>同上</td><td>0</td><td>0</td><td>3C</td><td>2</td><td>0</td></tr>
+          <tr><td>4</td><td>rst=0 en=0 d=0 din=FF</td><td>en=0:r8、count 保持</td><td>0</td><td>0</td><td>3C</td><td>2</td><td>0</td></tr>
+          <tr><td>5</td><td>rst=0 en=1 d=1 din=FF</td><td>count 2 → 3;3 = MAX 且 en=1 → wrap=1</td><td>1</td><td>1</td><td>FF</td><td>3</td><td>1</td></tr>
+          <tr><td>6</td><td>rst=0 en=1 d=1 din=FF</td><td>邊緣時 wrap=1 → count 繞回 0</td><td>1</td><td>1</td><td>FF</td><td>0</td><td>0</td></tr>
+          <tr><td>(t=62)</td><td>rst 在兩個邊緣之間拉高</td><td>只有非同步的 qa 立刻清 0</td><td>1</td><td>0</td><td>FF</td><td>0</td><td>0</td></tr>
+          <tr><td>7</td><td>rst=1 en=1 d=1 din=FF</td><td>rst 優先:全部清 0</td><td>0</td><td>0</td><td>00</td><td>0</td><td>0</td></tr>
+          <tr><td>8</td><td>rst=0 en=1 d=1 din=FF</td><td>正常</td><td>1</td><td>1</td><td>FF</td><td>1</td><td>0</td></tr>
+          <tr><td>9</td><td>rst=0 en=1 d=1 din=FF</td><td>正常</td><td>1</td><td>1</td><td>FF</td><td>2</td><td>0</td></tr>
+        </tbody>
+      </table></div>
+      <p>第 (t=62) 列是重點:同步的 qs 要等到第 7 個邊緣才清 0,非同步的 qa 在 rst 拉高的瞬間就清 0。</p>
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 136.4 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>同樣的 <code>reg_en</code>(W = 8)和 <code>counter</code>,這次 MAX = 2。輸入同樣只在兩個邊緣之間改。8 個邊緣看到的輸入如下,填出每個邊緣之後的 r8、count、wrap:</p>
+          <div class="table-wrap"><table>
+            <thead><tr><th>邊緣</th><th>1</th><th>2</th><th>3</th><th>4</th><th>5</th><th>6</th><th>7</th><th>8</th></tr></thead>
+            <tbody>
+              <tr><td>rst</td><td>1</td><td>0</td><td>0</td><td>0</td><td>0</td><td>0</td><td>1</td><td>0</td></tr>
+              <tr><td>en</td><td>0</td><td>1</td><td>1</td><td>0</td><td>1</td><td>1</td><td>1</td><td>1</td></tr>
+              <tr><td>din</td><td>11</td><td>22</td><td>33</td><td>44</td><td>44</td><td>55</td><td>55</td><td>55</td></tr>
+            </tbody>
+          </table></div>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <div class="table-wrap"><table>
+                <thead><tr><th>邊緣</th><th>規則</th><th>r8</th><th>count</th><th>wrap</th></tr></thead>
+                <tbody>
+                  <tr><td>1</td><td>重置</td><td>00</td><td>0</td><td>0</td></tr>
+                  <tr><td>2</td><td>en=1:存 22,count 0 → 1</td><td>22</td><td>1</td><td>0</td></tr>
+                  <tr><td>3</td><td>存 33,count 1 → 2;2 = MAX 且 en=1</td><td>33</td><td>2</td><td>1</td></tr>
+                  <tr><td>4</td><td>en=0:全部保持;wrap 跟著 en 變 0</td><td>33</td><td>2</td><td>0</td></tr>
+                  <tr><td>5</td><td>en=1 而且 count = MAX:繞回 0;存 44</td><td>44</td><td>0</td><td>0</td></tr>
+                  <tr><td>6</td><td>存 55,count 0 → 1</td><td>55</td><td>1</td><td>0</td></tr>
+                  <tr><td>7</td><td>重置</td><td>00</td><td>0</td><td>0</td></tr>
+                  <tr><td>8</td><td>存 55,count 0 → 1</td><td>55</td><td>1</td><td>0</td></tr>
+                </tbody>
+              </table></div>
+              <p>第 4 列容易錯:count 停在 2(等於 MAX),但 en = 0,所以 wrap = 0,也不會繞回。第 5 列 en 回到 1,才在邊緣繞回。用 Icarus 跑過(testbench 和 tb_seq 同一種寫法):</p>
+<pre><code class="language-text">邊緣 | rst en din | r8 cnt wrap
+1 | 1  0  11 | 00  0   0
+2 | 0  1  22 | 22  1   0
+3 | 0  1  33 | 33  2   1
+4 | 0  0  44 | 33  2   0
+5 | 0  1  44 | 44  0   0
+6 | 0  1  55 | 55  1   0
+7 | 1  1  55 | 00  0   0
+8 | 0  1  55 | 55  1   0</code></pre>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>用 Verilog 寫有限狀態機</h2>
+      <p>
+        <a href="47-digital-circuits.html">{{ch:47-digital-circuits}}</a>把有限狀態機(FSM)拆成三塊:狀態暫存器、次態邏輯、輸出邏輯,並設計了偵測 "101" 的 Moore 機(S0–S3,可重疊)。
+        Verilog 的標準寫法就是照這三塊各寫一段,叫<strong>三段式(three-block)</strong>寫法:
+      </p>
+<pre><code class="language-verilog">// Moore 版 "101" 偵測器(可重疊):輸出只看現態
+module det101_moore (input clk, rst, x, output y);
+    localparam S0 = 2'd0,   // 還沒有有用的前綴
+               S1 = 2'd1,   // 看到 "1"
+               S2 = 2'd2,   // 看到 "10"
+               S3 = 2'd3;   // 看到 "101":輸出 1
+    reg [1:0] state, next;
+
+    // ① 狀態暫存器:唯一一個用時脈的區塊,用 &lt;=
+    always @(posedge clk) begin
+        if (rst) state &lt;= S0;
+        else     state &lt;= next;
+    end
+
+    // ② 次態邏輯:純組合,用 =,每條路徑都要給 next 一個值
+    always @* begin
+        next = S0;
+        case (state)
+            S0: next = x ? S1 : S0;
+            S1: next = x ? S1 : S2;
+            S2: next = x ? S3 : S0;
+            S3: next = x ? S1 : S2;
+            default: next = S0;
+        endcase
+    end
+
+    // ③ 輸出邏輯:Moore 只看 state
+    assign y = (state == S3);
+endmodule
+
+// Mealy 版:輸出看「現態 + 現在的輸入」,只要 3 個狀態
+module det101_mealy (input clk, rst, x, output y);
+    localparam M0 = 2'd0, M1 = 2'd1, M2 = 2'd2;   // 前綴長度 0、"1"、"10"
+    reg [1:0] state, next;
+
+    always @(posedge clk) begin
+        if (rst) state &lt;= M0;
+        else     state &lt;= next;
+    end
+
+    always @* begin
+        next = M0;
+        case (state)
+            M0: next = x ? M1 : M0;
+            M1: next = x ? M1 : M2;
+            M2: next = x ? M1 : M0;    // "101" 的最後一個 1 也是下一個 "1"
+            default: next = M0;
+        endcase
+    end
+
+    assign y = (state == M2) &amp;&amp; x;     // 在 "10" 之後看到 1:當拍就喊
+endmodule</code></pre>
+      <ul>
+        <li><strong>① 狀態暫存器</strong>:唯一用時脈的區塊,只有一行 <code>state &lt;= next</code>(加上重置)。</li>
+        <li><strong>② 次態邏輯</strong>:<code>always @*</code>,先給 <code>next = S0</code> 的預設值,再用 case 照 ch47 的狀態轉移表填。表上的每一格就是一行。</li>
+        <li><strong>③ 輸出邏輯</strong>:Moore 只看 state;Mealy 看 state 和 x。</li>
+        <li><code>localparam</code> 替狀態取名字,編碼和 ch47 一樣(S0 = 00 … S3 = 11)。Moore 輸出 <code>state == S3</code> 在這個編碼下就是 $Q_1 \cdot Q_0$。</li>
+      </ul>
+      <p>
+        Mealy 版只要 3 個狀態:在 "10"(M2)之後看到 1,當拍就輸出 1,然後去 M1(最後的 1 可以當下一個 "101" 的開頭)。
+        用 ch47 的同一串輸入 <code>1101011010101</code> 跑兩個版本,每一列印出「邊緣之前」的現態和輸出:
+      </p>
+<pre><code class="language-verilog">module tb_det;
+    reg clk = 0, rst = 1, x = 0;
+    wire y_moore, y_mealy;
+    det101_moore u1 (.clk(clk), .rst(rst), .x(x), .y(y_moore));
+    det101_mealy u2 (.clk(clk), .rst(rst), .x(x), .y(y_mealy));
+
+    reg [12:0] bits = 13'b1101011010101;   // 第 0 個位元在最左邊
+    integer i;
+    initial begin
+        #1 clk = 1; #1 clk = 0;            // 一個重置用的邊緣
+        rst = 0;
+        $display("i x | Moore 現態 y | Mealy 現態 y");
+        for (i = 0; i &lt; 13; i = i + 1) begin
+            x = bits[12 - i];
+            #1 $display("%2d %b |        %0d   %b |       %0d   %b",
+                        i, x, u1.state, y_moore, u2.state, y_mealy);
+            clk = 1; #1 clk = 0;           // 時脈邊緣:吃進 x
+        end
+        #1 $display("最後  |        %0d   %b |       %0d   -", u1.state, y_moore, u2.state);
+    end
+endmodule</code></pre>
+<pre><code class="language-text">i x | Moore 現態 y | Mealy 現態 y
+ 0 1 |        0   0 |       0   0
+ 1 1 |        1   0 |       1   0
+ 2 0 |        1   0 |       1   0
+ 3 1 |        2   0 |       2   1
+ 4 0 |        3   1 |       1   0
+ 5 1 |        2   0 |       2   1
+ 6 1 |        3   1 |       1   0
+ 7 0 |        1   0 |       1   0
+ 8 1 |        2   0 |       2   1
+ 9 0 |        3   1 |       1   0
+10 1 |        2   0 |       2   1
+11 0 |        3   1 |       1   0
+12 1 |        2   0 |       2   1
+最後  |        3   1 |       1   -</code></pre>
+
+      <h3>手算:Moore 與 Mealy 一拍一拍追</h3>
+      <p>
+        每一列是一拍:「現態」是這一拍的狀態,y 是這一拍的輸出,邊緣一到就換成「次態」。Moore 的 y 只看現態;Mealy 的 y 看現態和這一拍的 x。
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>i</th><th>x</th><th>Moore 現態</th><th>Moore y</th><th>Moore 次態</th><th>Mealy 現態</th><th>Mealy y</th><th>Mealy 次態</th></tr></thead>
+        <tbody>
+          <tr><td>0</td><td>1</td><td>S0</td><td>0</td><td>S1</td><td>M0</td><td>0</td><td>M1</td></tr>
+          <tr><td>1</td><td>1</td><td>S1</td><td>0</td><td>S1</td><td>M1</td><td>0</td><td>M1</td></tr>
+          <tr><td>2</td><td>0</td><td>S1</td><td>0</td><td>S2</td><td>M1</td><td>0</td><td>M2</td></tr>
+          <tr><td>3</td><td>1</td><td>S2</td><td>0</td><td>S3</td><td>M2</td><td><strong>1</strong></td><td>M1</td></tr>
+          <tr><td>4</td><td>0</td><td>S3</td><td><strong>1</strong></td><td>S2</td><td>M1</td><td>0</td><td>M2</td></tr>
+          <tr><td>5</td><td>1</td><td>S2</td><td>0</td><td>S3</td><td>M2</td><td><strong>1</strong></td><td>M1</td></tr>
+          <tr><td>6</td><td>1</td><td>S3</td><td><strong>1</strong></td><td>S1</td><td>M1</td><td>0</td><td>M1</td></tr>
+          <tr><td>7</td><td>0</td><td>S1</td><td>0</td><td>S2</td><td>M1</td><td>0</td><td>M2</td></tr>
+          <tr><td>8</td><td>1</td><td>S2</td><td>0</td><td>S3</td><td>M2</td><td><strong>1</strong></td><td>M1</td></tr>
+          <tr><td>9</td><td>0</td><td>S3</td><td><strong>1</strong></td><td>S2</td><td>M1</td><td>0</td><td>M2</td></tr>
+          <tr><td>10</td><td>1</td><td>S2</td><td>0</td><td>S3</td><td>M2</td><td><strong>1</strong></td><td>M1</td></tr>
+          <tr><td>11</td><td>0</td><td>S3</td><td><strong>1</strong></td><td>S2</td><td>M1</td><td>0</td><td>M2</td></tr>
+          <tr><td>12</td><td>1</td><td>S2</td><td>0</td><td>S3</td><td>M2</td><td><strong>1</strong></td><td>M1</td></tr>
+          <tr><td>(之後)</td><td>—</td><td>S3</td><td><strong>1</strong></td><td>—</td><td>M1</td><td>—</td><td>—</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        Mealy 的 y 在 i = 3、5、8、10、12 是 1,正好是 ch47 的 Python 模擬印出的 <code>[3, 5, 8, 10, 12]</code>:讀到 "101" 最後那個 1 的同一拍就喊。
+        Moore 的 y 晚一拍才出現(i = 4、6、9、11 和最後),因為它要先進到 S3 這個狀態,輸出才會變。
+      </p>
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">看起來對但其實錯:「兩台偵測器,同一拍的輸出應該一樣」</span>
+          <p>如果你寫一個 testbench 把 Moore 和 Mealy 的 y 在同一拍互相比較,13 拍裡有 9 拍會「不一致」(Moore 是 1 的 4 拍、Mealy 是 1 的 5 拍),但兩台都是對的。
+          它們偵測到同樣的 5 次 "101",只是 Moore 每次晚一拍。寫參考模型時要先決定「輸出在哪一拍出現」,這也是規格的一部分。</p>
+        </div>
+      </div>
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 136.5 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>輸入改成 <code>10110101</code>(i = 0 是最左邊的 1)。照上表的格式,追 det101_moore 與 det101_mealy 的現態與 y。Mealy 在哪幾拍輸出 1?Moore 呢?</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <div class="table-wrap"><table>
+                <thead><tr><th>i</th><th>x</th><th>Moore 現態</th><th>Moore y</th><th>Mealy 現態</th><th>Mealy y</th></tr></thead>
+                <tbody>
+                  <tr><td>0</td><td>1</td><td>S0</td><td>0</td><td>M0</td><td>0</td></tr>
+                  <tr><td>1</td><td>0</td><td>S1</td><td>0</td><td>M1</td><td>0</td></tr>
+                  <tr><td>2</td><td>1</td><td>S2</td><td>0</td><td>M2</td><td><strong>1</strong></td></tr>
+                  <tr><td>3</td><td>1</td><td>S3</td><td><strong>1</strong></td><td>M1</td><td>0</td></tr>
+                  <tr><td>4</td><td>0</td><td>S1</td><td>0</td><td>M1</td><td>0</td></tr>
+                  <tr><td>5</td><td>1</td><td>S2</td><td>0</td><td>M2</td><td><strong>1</strong></td></tr>
+                  <tr><td>6</td><td>0</td><td>S3</td><td><strong>1</strong></td><td>M1</td><td>0</td></tr>
+                  <tr><td>7</td><td>1</td><td>S2</td><td>0</td><td>M2</td><td><strong>1</strong></td></tr>
+                  <tr><td>(之後)</td><td>—</td><td>S3</td><td><strong>1</strong></td><td>M1</td><td>—</td></tr>
+                </tbody>
+              </table></div>
+              <p>"101" 出現在位置 0–2、3–5、5–7(後兩個共用位置 5 的 1)。Mealy 在 i = 2、5、7 輸出 1;Moore 晚一拍,在 i = 3、6 和最後。
+              注意 i = 3:Moore 在 S3 讀到 1,去 S1(不是 S0),因為最後那個 1 還能當下一個 "101" 的開頭。用 Icarus 跑過(把 tb_det 的輸入換成 8 位元的這一串):</p>
+<pre><code class="language-text">i x | Moore 現態 y | Mealy 現態 y
+ 0 1 |        0   0 |       0   0
+ 1 0 |        1   0 |       1   0
+ 2 1 |        2   0 |       2   1
+ 3 1 |        3   1 |       1   0
+ 4 0 |        1   0 |       1   0
+ 5 1 |        2   0 |       2   1
+ 6 0 |        3   1 |       1   0
+ 7 1 |        2   0 |       2   1
+最後  |        3   1 |       1   -</code></pre>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>★深入(選讀):模擬語意、事件佇列與 delta cycle</h2>
+      <p>
+        前面看過三件怪事:阻塞的移位暫存器拆成三個區塊會競賽;<code>always @*</code> 在 0 時刻不會先跑;<code>&lt;=</code> 的新值要「等一下」才看得到。
+        它們都來自同一個機制:模擬器的<strong>事件佇列(event queue)</strong>。
+      </p>
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">為什麼要學:testbench 讀錯一拍,是最常見的驗證 bug</span>
+          <p><a href="137-verification-cocotb.html">{{ch:137-verification-cocotb}}</a>的 cocotb 測試在 Python 裡等時脈邊緣、讀 DUT 的輸出;讀到的是邊緣「之前」還是「之後」的值,就取決於這一節的排程。
+          rtl/tb 任務要你寫測試抓突變版的 ALU,測試自己讀錯時間點,就會把正確的版本判成錯。</p>
+        </div>
+      </div>
+      <p>
+        Verilog 的模擬時間是一格一格的整數(t = 0、1、2…)。<strong>同一個時間點裡</strong>,模擬器把要做的事分成幾個<strong>區(region)</strong>,照順序處理
+        (這是 IEEE 1364 的四個區;SystemVerilog 為了 assertion 和 testbench 又多加了幾區,但順序的精神一樣):
+      </p>
+      <div class="diagram">
+<svg viewBox="0 0 760 260" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs><marker id="v-ar4" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#4a5159"/></marker>
+        <marker id="v-ar5" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#b4541f"/></marker></defs>
+  <text x="20" y="26" font-size="13" font-weight="800" fill="#1f2328">同一個模擬時間點 t 裡的處理順序</text>
+  <rect x="20"  y="70" width="150" height="80" rx="8" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="95" y="96" text-anchor="middle" font-size="13" font-weight="800" fill="#2f6f6a">① Active</text>
+  <text x="95" y="116" text-anchor="middle" font-size="10" fill="#4a5159">阻塞 =、assign 重算</text>
+  <text x="95" y="132" text-anchor="middle" font-size="10" fill="#4a5159">$display、算 &lt;= 的右邊</text>
+  <rect x="210" y="70" width="150" height="80" rx="8" fill="#f3f4f6" stroke="#8a929b" stroke-width="2"/>
+  <text x="285" y="96" text-anchor="middle" font-size="13" font-weight="800" fill="#4a5159">② Inactive</text>
+  <text x="285" y="116" text-anchor="middle" font-size="10" fill="#4a5159">#0 之後的敘述</text>
+  <rect x="400" y="70" width="150" height="80" rx="8" fill="#f6e7dd" stroke="#b4541f" stroke-width="2"/>
+  <text x="475" y="96" text-anchor="middle" font-size="13" font-weight="800" fill="#b4541f">③ NBA</text>
+  <text x="475" y="116" text-anchor="middle" font-size="10" fill="#4a5159">把排隊的 &lt;= 一起寫進去</text>
+  <rect x="590" y="70" width="150" height="80" rx="8" fill="#ede7fb" stroke="#8b5cf6" stroke-width="2"/>
+  <text x="665" y="96" text-anchor="middle" font-size="13" font-weight="800" fill="#8b5cf6">④ Monitor</text>
+  <text x="665" y="116" text-anchor="middle" font-size="10" fill="#4a5159">$strobe、$monitor</text>
+  <text x="665" y="132" text-anchor="middle" font-size="10" fill="#4a5159">(只讀不寫)</text>
+  <line x1="170" y1="110" x2="208" y2="110" stroke="#4a5159" stroke-width="2" marker-end="url(#v-ar4)"/>
+  <line x1="360" y1="110" x2="398" y2="110" stroke="#4a5159" stroke-width="2" marker-end="url(#v-ar4)"/>
+  <line x1="550" y1="110" x2="588" y2="110" stroke="#4a5159" stroke-width="2" marker-end="url(#v-ar4)"/>
+  <path d="M285 150 C285 190, 120 190, 100 152" fill="none" stroke="#b4541f" stroke-width="1.8" marker-end="url(#v-ar5)"/>
+  <path d="M475 150 C475 222, 110 222, 88 152" fill="none" stroke="#b4541f" stroke-width="1.8" marker-end="url(#v-ar5)"/>
+  <text x="215" y="166" text-anchor="middle" font-size="10" fill="#b4541f">做完又喚醒了誰 → 回到 Active</text>
+  <text x="300" y="236" text-anchor="middle" font-size="10" fill="#b4541f">&lt;= 寫進去後有訊號變了 → 回到 Active:又一輪 delta cycle</text>
+  <line x1="665" y1="150" x2="665" y2="190" stroke="#4a5159" stroke-width="2" marker-end="url(#v-ar4)"/>
+  <text x="665" y="206" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2328">前進到下一個時間點</text>
+</svg>
+        <figcaption>圖 136-4:一個時間點裡的四個區。Active 清空後才輪到 Inactive,再輪到 NBA;NBA 寫進去的新值又可能喚醒別的區塊,於是回到 Active。全部安靜下來,才跑 Monitor 區、前進時間。</figcaption>
+      </div>
+      <p>圖 136-4 的文字版:</p>
+<pre><code class="language-text">時間點 t:
+  ① Active    阻塞指定、assign 重算、$display、算好 &lt;= 的右邊(還不寫)
+       │  空了
+  ② Inactive  #0 之後的敘述          ── 喚醒了新事件 → 回到 ①
+       │  空了
+  ③ NBA       把排隊的 &lt;= 一起寫進去  ── 有訊號變了 → 回到 ①(新的一輪 delta cycle)
+       │  全部安靜
+  ④ Monitor   $strobe、$monitor 印出這個時間點的最後結果
+       │
+  前進到下一個有事件的時間點</code></pre>
+      <p>
+        「回到 ①」的每一輪,叫一個 <strong>delta cycle</strong>:模擬時間沒有前進,但訊號又變了一次。
+        一個時脈邊緣通常要好幾輪 delta cycle 才會安靜:正反器的 <code>&lt;=</code> 寫進去 → 後面的組合邏輯重算 → 再下一級的組合邏輯重算……
+        delta 是零時間,所以它只決定「順序」,不代表延遲。
+      </p>
+      <p>這也解釋了前面的現象:</p>
+      <ul>
+        <li><strong>非阻塞為什麼沒有競賽</strong>:所有正反器的 always 都在 ① 裡讀值、算右邊,寫入全部延到 ③。不管 ① 裡誰先執行,大家讀到的都是邊緣之前的值。</li>
+        <li><strong>阻塞為什麼有競賽</strong>:寫入在 ① 裡就發生了,而 ① 裡的事件順序標準沒規定。</li>
+      </ul>
+      <p>用一個小例子看 <code>$display</code>、<code>#0</code> 和 <code>$strobe</code> 各自在哪一區印:</p>
+<pre><code class="language-verilog">module tb_sched;
+    reg  [3:0] q = 0;
+    reg        clk = 0;
+    wire [3:0] w1, w2;
+    assign w1 = q + 1;          // q 變了 → w1 重算(一個 delta)
+    assign w2 = w1 * 2;         // w1 變了 → w2 重算(再一個 delta)
+
+    always @(posedge clk) begin
+        q &lt;= 4'd5;
+        $display("display: q=%0d w1=%0d w2=%0d", q, w1, w2);   // 現在就印
+        $strobe ("strobe : q=%0d w1=%0d w2=%0d", q, w1, w2);   // 這個時間點的事全做完才印
+    end
+
+    initial begin
+        #10 clk = 1;
+        #0  $display("#0     : q=%0d w1=%0d w2=%0d", q, w1, w2);
+        #1  $display("t=11   : q=%0d w1=%0d w2=%0d", q, w1, w2);
+    end
+endmodule</code></pre>
+<pre><code class="language-text">display: q=0 w1=1 w2=2
+#0     : q=0 w1=1 w2=2
+strobe : q=5 w1=6 w2=12
+t=11   : q=5 w1=6 w2=12</code></pre>
+
+      <h3>手算:一個時間點裡的 delta cycle</h3>
+      <p>追上面的 tb_sched 在 t = 10 發生的事。每一列是一件事,「區」欄是它在哪一區執行:</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>步</th><th>區</th><th>發生什麼事</th><th>之後 q / w1 / w2</th><th>印出</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td>Active</td><td>initial 執行 <code>clk = 1</code>,喚醒 always @(posedge clk)</td><td>0 / 1 / 2</td><td></td></tr>
+          <tr><td>2</td><td>Active</td><td>initial 碰到 <code>#0</code>,把剩下的敘述放進 Inactive</td><td>0 / 1 / 2</td><td></td></tr>
+          <tr><td>3</td><td>Active</td><td>always:<code>q &lt;= 5</code> 算好右邊,排進 NBA</td><td>0 / 1 / 2</td><td></td></tr>
+          <tr><td>4</td><td>Active</td><td>always:<code>$display</code> 立刻印</td><td>0 / 1 / 2</td><td>display: q=0 w1=1 w2=2</td></tr>
+          <tr><td>5</td><td>Active</td><td>always:<code>$strobe</code> 登記到 Monitor 區</td><td>0 / 1 / 2</td><td></td></tr>
+          <tr><td>6</td><td>Inactive</td><td>Active 空了;執行 <code>#0</code> 之後的 <code>$display</code></td><td>0 / 1 / 2</td><td>#0     : q=0 w1=1 w2=2</td></tr>
+          <tr><td>7</td><td>NBA</td><td>q 寫成 5</td><td>5 / 1 / 2</td><td></td></tr>
+          <tr><td>8</td><td>Active(delta 2)</td><td>q 變了 → <code>assign w1</code> 重算</td><td>5 / 6 / 2</td><td></td></tr>
+          <tr><td>9</td><td>Active(delta 3)</td><td>w1 變了 → <code>assign w2</code> 重算</td><td>5 / 6 / 12</td><td></td></tr>
+          <tr><td>10</td><td>Monitor</td><td>全部安靜;<code>$strobe</code> 印最後結果</td><td>5 / 6 / 12</td><td>strobe : q=5 w1=6 w2=12</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        第 2 步和第 3–5 步的先後,標準沒有規定(都在 Active 裡),但不影響結果:<code>#0</code> 的敘述一定等 Active 清空才跑。
+        注意 <code>#0</code> 那一行還是印出 q = 0:<code>#0</code> 只能排在 NBA <strong>之前</strong>,所以「加一個 <code>#0</code> 就能讀到新值」是錯的想法。
+        想在 testbench 裡讀到時脈邊緣之後的穩定值,就等一個真的時間(例如本章常用的 <code>#1</code>),或用 <code>$strobe</code>。
+      </p>
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 136.6 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>預測 B、C、D 三行印出的 a、b、c。A 那一行標準有規定嗎?</p>
+<pre><code class="language-verilog">module tb_ex_sched;
+    reg  [3:0] a = 1, b = 0;
+    wire [3:0] c = a + b;
+    initial begin
+        #5 a &lt;= 3;
+           b  = 2;
+           $display("A: a=%0d b=%0d c=%0d", a, b, c);
+        #0 $display("B: a=%0d b=%0d c=%0d", a, b, c);
+           $strobe ("C: a=%0d b=%0d c=%0d", a, b, c);
+        #1 $display("D: a=%0d b=%0d c=%0d", a, b, c);
+    end
+endmodule</code></pre>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p>t = 5 時:<code>a &lt;= 3</code> 排進 NBA;<code>b = 2</code> 立刻生效,並讓 <code>c = a + b</code> 的重算排進 Active。</p>
+              <ul>
+                <li><strong>B</strong>(<code>#0</code> 之後,Inactive):Active 已經清空,c 已重算成 1 + 2 = 3;a 的更新還在 NBA 排隊,所以 a=1 b=2 c=3。</li>
+                <li><strong>C</strong>(<code>$strobe</code>,Monitor):NBA 把 a 寫成 3,c 重算成 3 + 2 = 5,全部安靜後才印:a=3 b=2 c=5。</li>
+                <li><strong>D</strong>(t = 6):a=3 b=2 c=5。</li>
+                <li><strong>A</strong>:a 一定是 1、b 一定是 2,但 <strong>c 標準沒有規定</strong>。initial 區塊執行到 <code>$display</code> 時,c 的重算事件還在 Active 裡排隊,模擬器可以先做它、也可以先繼續執行 initial。Icarus 先重算了,印出 c=3;別的模擬器可以印 c=1。</li>
+              </ul>
+              <p>Icarus 11 的輸出:</p>
+<pre><code class="language-text">A: a=1 b=2 c=3
+B: a=1 b=2 c=3
+C: a=3 b=2 c=5
+D: a=3 b=2 c=5</code></pre>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>可合成的子集:哪些寫法會變成電路</h2>
+      <p>
+        Verilog 一開始是為了<strong>模擬</strong>設計的語言,後來才拿來<strong>合成</strong>。所以它有一大塊語法只在模擬器裡有意義,合成工具不會(也沒辦法)把它變成閘。
+        能合成的那一部分叫<strong>可合成子集(synthesizable subset)</strong>。寫設計檔只用這一部分;testbench 才用其他的。
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>寫法</th><th>能合成嗎</th><th>變成什麼/說明</th></tr></thead>
+        <tbody>
+          <tr><td><code>assign</code>、模組實例、閘(<code>and</code>、<code>or</code>…)</td><td>能</td><td>組合邏輯與接線</td></tr>
+          <tr><td><code>always @*</code>/<code>always_comb</code>,每條路徑都有指定</td><td>能</td><td>組合邏輯</td></tr>
+          <tr><td><code>always @*</code>,有路徑沒指定</td><td>能,但多半是 bug</td><td>閂鎖</td></tr>
+          <tr><td><code>always @(posedge clk)</code></td><td>能</td><td>正反器(加上前面的組合邏輯)</td></tr>
+          <tr><td><code>always @(posedge clk or posedge rst)</code></td><td>能</td><td>有非同步重置的正反器</td></tr>
+          <tr><td><code>parameter</code>、<code>localparam</code>、<code>generate</code>、次數固定的 <code>for</code></td><td>能</td><td>編譯時展開成好幾份硬體</td></tr>
+          <tr><td><code>+</code>、<code>-</code>、比較、移位、位元運算</td><td>能</td><td>加法器、比較器、多工器</td></tr>
+          <tr><td><code>*</code></td><td>多半能</td><td>乘法器,電路很大</td></tr>
+          <tr><td><code>/</code>、<code>%</code></td><td>看情況</td><td>除數是 2 的次方常數時就是移位;一般的除法很多工具不支援,或做出很大很慢的電路</td></tr>
+          <tr><td>指定成 <code>x</code>(例如 <code>y = 8'bx;</code>)</td><td>能</td><td>很多工具當成 don't-care,隨它化簡(<a href="47-digital-circuits.html">{{ch:47-digital-circuits}}</a>);模擬時則真的是 x</td></tr>
+          <tr><td><code>initial</code>、宣告時給初值</td><td>不能(ASIC)</td><td>只有模擬裡有效。有些 FPGA 工具拿來當開機初值,但不要依賴;用重置</td></tr>
+          <tr><td><code>#延遲</code></td><td>不能</td><td>合成時直接忽略;真正的延遲由閘和連線決定</td></tr>
+          <tr><td><code>$display</code>、<code>$finish</code>、<code>$dumpvars</code>、<code>$random</code></td><td>不能</td><td>只給模擬</td></tr>
+          <tr><td><code>===</code>、<code>!==</code></td><td>不能(或當成 <code>==</code>)</td><td>硬體裡沒有 x 和 z 可以比</td></tr>
+          <tr><td><code>while</code>、次數由訊號決定的迴圈</td><td>不能</td><td>硬體的大小要在編譯時決定</td></tr>
+          <tr><td><code>real</code>(浮點數)</td><td>不能</td><td>要浮點就自己做浮點運算單元</td></tr>
+        </tbody>
+      </table></div>
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">寫每一行之前,先想它是哪一塊硬體</span>
+          <p>可合成的 Verilog 裡,每一行都能指出它對應的電路:這個 <code>?:</code> 是一顆多工器,這個 <code>+</code> 是一顆加法器,這個 always @(posedge clk) 是一排正反器。
+          說不出來的那一行,通常就是不能合成、或合成出你沒想到的東西(例如閂鎖)。<code>for</code> 迴圈也一樣:它不是「跑 8 次」,而是「做 8 份」。</p>
+        </div>
+      </div>
+
+      <h2>Testbench 入門:$display、$finish 與 VCD 波形</h2>
+      <p>
+        本章已經寫了很多 testbench,它們都有同樣的骨架:產生時脈、重置、送輸入、檢查輸出、印結果、結束。
+        把它寫完整一點,就是一個<strong>會自己判斷對錯</strong>(self-checking)的 testbench。下面測 MAX = 9 的計數器 25 拍,
+        在 testbench 裡用一行 <code>expect_cnt</code> 當參考模型,每拍比對;同時把所有訊號存成波形檔:
+      </p>
+<pre><code class="language-verilog">module tb_counter;
+    reg clk = 0, rst = 1, en = 1;
+    wire [3:0] count;
+    wire wrap;
+    integer errors = 0, expect_cnt = 0, cycle;
+
+    counter #(.MAX(9)) dut (.clk(clk), .rst(rst), .en(en), .count(count), .wrap(wrap));
+
+    always #5 clk = ~clk;                  // 10 個時間單位一個週期
+
+    initial begin
+        $dumpfile("counter.vcd");          // 波形檔的名字
+        $dumpvars(0, tb_counter);          // 0 = 這一層和底下所有訊號都記
+        @(posedge clk); #1 rst = 0;        // 重置一拍
+        for (cycle = 0; cycle &lt; 25; cycle = cycle + 1) begin
+            @(posedge clk); #1;
+            expect_cnt = (expect_cnt == 9) ? 0 : expect_cnt + 1;   // 參考模型
+            if (count !== expect_cnt) begin
+                errors = errors + 1;
+                $display("FAIL cycle %0d: count=%0d expect=%0d", cycle, count, expect_cnt);
+            end
+        end
+        if (errors == 0) $display("PASS: 25 拍全部正確");
+        else             $display("FAIL: %0d 拍錯", errors);
+        $finish;
+    end
+endmodule</code></pre>
+<pre><code class="language-bash">iverilog -g2012 -Wall -o sim tb_counter.v seq.v
+vvp sim</code></pre>
+<pre><code class="language-text">VCD info: dumpfile counter.vcd opened for output.
+PASS: 25 拍全部正確</code></pre>
+      <ul>
+        <li><code>@(posedge clk);</code>:等到下一個上升邊緣。再 <code>#1</code> 讓正反器的 <code>&lt;=</code> 寫完,才讀 count(上一節的排程)。</li>
+        <li><code>$finish</code>:結束模擬。沒有它,<code>always #5 clk = ~clk;</code> 會讓模擬永遠跑下去。</li>
+        <li><code>$dumpfile</code>/<code>$dumpvars</code>:把訊號的每一次變化寫進 <strong>VCD(Value Change Dump)</strong> 檔。第一個參數 0 表示「這一層和底下所有的模組」。</li>
+      </ul>
+      <p>VCD 是純文字,開頭宣告每個訊號的代號,之後是「時間點 + 哪個訊號變成什麼」。<code>counter.vcd</code> 的前面一段:</p>
+<pre><code class="language-text">$scope module tb_counter $end
+$var wire 1 ! wrap $end
+$var wire 4 " count [3:0] $end
+$var reg 1 # clk $end
+$var reg 1 $ en $end
+$var reg 1 % rst $end
+$var integer 32 &amp; cycle [31:0] $end
+$var integer 32 ' errors [31:0] $end
+$var integer 32 ( expect_cnt [31:0] $end
+$scope module dut $end
+$var wire 1 # clk $end
+$var wire 1 $ en $end
+$var wire 1 % rst $end
+$var wire 1 ! wrap $end
+$var reg 4 ) count [3:0] $end
+$upscope $end
+$upscope $end
+$enddefinitions $end
+#0
+$dumpvars
+bx )
+b0 (
+b0 '
+bx &amp;
+1%
+1$
+0#
+bx "
+x!
+$end
+#5
+0!
+b0 "
+b0 )
+1#
+#6
+b0 &amp;
+0%
+#10
+0#
+#15
+b1 "
+b1 )
+1#
+#16
+b1 &amp;
+b1 (
+#20
+0#
+#25
+b10 "
+b10 )
+1#
+#26
+…</code></pre>
+      <p>
+        讀法:<code>$var reg 1 # clk</code> 說代號 <code>#</code> 是 clk;<code>#15</code> 是時間 15;<code>b1 "</code> 是「代號 <code>"</code>(count)變成二進位 1」,<code>1#</code> 是「clk 變成 1」。
+        平常不會用眼睛讀它,而是用波形檢視器打開:開源的 <strong>GTKWave</strong>(<code>gtkwave counter.vcd</code>)或 VS Code 的波形外掛。
+        看到的就是像圖 136-3 那樣的時序圖。
+      </p>
+      <p>這個 testbench 真的抓得到錯嗎?把 counter 的 <code>count == MAX</code> 寫錯成 <code>count &gt; MAX</code>(數到 10 才繞回),重跑:</p>
+<pre><code class="language-text">VCD info: dumpfile counter.vcd opened for output.
+FAIL cycle 9: count=10 expect=0
+FAIL cycle 10: count=0 expect=1
+FAIL cycle 11: count=1 expect=2
+…(中間省略)
+FAIL cycle 24: count=3 expect=5
+FAIL: 16 拍錯</code></pre>
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">`timescale:要嘛每個檔案都寫,要嘛都不寫</span>
+          <p>本章的檔案都沒寫 <code>`timescale</code>,時間單位就是模擬器的預設值。如果只在 testbench 開頭加一行 <code>`timescale 1ns/1ps</code>,<code>-Wall</code> 會對每個沒寫的模組警告:</p>
+<pre><code class="language-text">seq.v:2: warning: timescale for dff_sync inherited from another file.
+tb_counter_ts.v:1: ...: The inherited timescale is here.
+…(其他三個模組同樣的警告)</code></pre>
+          <p>判題只編譯你的設計檔、要求零警告,所以設計檔裡就不要寫 <code>`timescale</code>;要用就讓 testbench 和所有檔案一致。</p>
+        </div>
+      </div>
+      <p>
+        這個 testbench 有一個限制:參考模型(<code>expect_cnt</code> 那一行)和檢查都寫在 Verilog 裡。ALU 這種有十種運算、有號無號的零件,用 Verilog 寫參考模型很累,也容易和設計犯同樣的錯。
+        <a href="137-verification-cocotb.html">{{ch:137-verification-cocotb}}</a>改用 <strong>cocotb</strong>:testbench 用 Python 寫,參考模型就是一個 Python 函式,還可以做隨機測試、算覆蓋率,
+        並且用「故意埋 bug 的突變版」檢查你的測試夠不夠嚴格。
+      </p>
+
+      <h2>Hack HDL 與 Verilog 對照表</h2>
+      <p>把兩種語言放在一起,你會發現你在 Hack 學的觀念全部用得上,Verilog 只是多給了你很多「不用一顆一顆接」的工具(也多了很多可以出錯的地方)。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>項目</th><th>Hack HDL(<a href="130-hack-hdl-reference.html">附錄 G</a>)</th><th>Verilog</th></tr></thead>
+        <tbody>
+          <tr><td>一個零件</td><td><code>CHIP Mux { IN …; OUT …; PARTS: … }</code></td><td><code>module mux2 (input …, output …); … endmodule</code></td></tr>
+          <tr><td>寬度</td><td><code>IN a[16];</code></td><td><code>input [15:0] a</code>;可以用參數 <code>[W-1:0]</code></td></tr>
+          <tr><td>取一段位元</td><td><code>a[0..7]</code>,只能在零件那一側切</td><td><code>a[7:0]</code>,哪裡都能切;還有拼接 <code>{a, b}</code></td></tr>
+          <tr><td>內部線</td><td>第一次出現就算,不用宣告</td><td>要宣告 <code>wire</code>;沒宣告會變成 1 位元的隱含線(<code>-Wall</code> 警告)</td></tr>
+          <tr><td>接線</td><td><code>And(a=x, b=y, out=z);</code></td><td><code>and2 g (.a(x), .b(y), .out(z));</code>:一樣是「左邊零件的腳,右邊我的線」</td></tr>
+          <tr><td>運算</td><td>沒有運算子,只能接零件</td><td><code>&amp; | ^ ~ + - &lt;&lt; &gt;&gt; ?:</code> 等,合成工具負責變成閘</td></tr>
+          <tr><td>行為描述</td><td>沒有</td><td><code>always</code>、<code>if</code>、<code>case</code></td></tr>
+          <tr><td>常數</td><td><code>true</code>、<code>false</code>(自動填滿寬度)</td><td><code>1'b1</code>、<code>8'hFF</code>、<code>{16{1'b1}}</code></td></tr>
+          <tr><td>參數化</td><td>沒有:Mux16、Mux4Way16、Mux8Way16 各寫一顆</td><td><code>parameter W</code>、<code>generate</code>:一顆模組任意寬度</td></tr>
+          <tr><td>時序元件</td><td>內建 <code>DFF</code>;時脈是隱含的(tick、tock)</td><td><code>always @(posedge clk)</code> + <code>&lt;=</code>;時脈是一條真的訊號</td></tr>
+          <tr><td>重置</td><td>沒有(Hack 的 Register 從 0 開始)</td><td>自己設計:同步或非同步 rst</td></tr>
+          <tr><td>訊號的值</td><td>0、1</td><td>0、1、x、z</td></tr>
+          <tr><td>回授</td><td>一定要經過 DFF,否則模擬器報錯</td><td>不擋;組合迴路會讓模擬卡住或出現閂鎖</td></tr>
+          <tr><td>測試</td><td><code>.tst</code> 腳本 + <code>.cmp</code> 比對檔</td><td>testbench(也是 Verilog),或 cocotb(Python,{{ch:137-verification-cocotb}})</td></tr>
+          <tr><td>模擬器</td><td>nand2tetris 的硬體模擬器</td><td>Icarus Verilog、Verilator、商用模擬器</td></tr>
+          <tr><td>最後變成</td><td>只能模擬</td><td>可合成的部分可以燒進 FPGA,或做成真的晶片</td></tr>
+        </tbody>
+      </table></div>
+      <div class="callout history">
+        <div class="ico">📜</div>
+        <div class="body">
+          <span class="c-title">Verilog 的來歷</span>
+          <p>Verilog 在 1984 年前後由 Gateway Design Automation 的 Phil Moorby 等人設計,原本是一套模擬器的語言;Cadence 在 1989 年買下 Gateway,1990 年把語言公開,1995 年成為 IEEE 1364 標準。
+          這段歷史解釋了為什麼它有那麼多「只能模擬」的語法。2005 年起,擴充版 SystemVerilog 成為 IEEE 1800 標準,加入 <code>logic</code>、<code>always_comb</code>、assertion 與大量驗證用的功能;
+          之後的 IEEE 1800 版本已經把 Verilog 併進去。</p>
+        </div>
+      </div>
+
+      <h2>動手練習</h2>
+      <p>每一題的程式都可以存成檔案,用 <code>iverilog -g2012 -Wall</code> 編譯、<code>vvp</code> 執行,對照解答裡的輸出。</p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 136.1 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>下面四段,哪些在 <code>iverilog -g2012</code> 下編譯失敗?哪一段換成 <code>-g2005</code> 才會失敗?</p>
+<pre><code class="language-verilog">// (甲)
+module err1 (input a, output reg y);
+    assign y = a;
+endmodule
+// (乙)
+module err2 (input a, output y);
+    always @* y = a;
+endmodule
+// (丙)
+module err3 (input a, output logic y);
+    assign y = a;
+endmodule
+// (丁)
+module err5 (input a, b, output logic y);
+    assign y = a &amp; b;
+    assign y = a | b;
+endmodule</code></pre>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p>(乙)和(丁)在 <code>-g2012</code> 下失敗;(甲)只有在 <code>-g2005</code> 才失敗;(丙)都能編譯。</p>
+              <ul>
+                <li>(乙)y 預設是 wire,always 裡不能指定 wire:<code>y is not a valid l-value</code>。</li>
+                <li>(丁)logic 只能有一個連續驅動者:<code>Unresolved net/uwire y cannot have multiple drivers.</code>(如果是 wire,能編譯,但打架的位元會是 x。)</li>
+                <li>(甲)SystemVerilog 准許 assign 驅動變數;Verilog-2005 不准:<code>reg y; cannot be driven by primitives or continuous assignment.</code></li>
+              </ul>
+              <p>結論:新程式用 <code>logic</code>,一個訊號只在一個地方指定,就不必背這些規則。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 136.2 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>預測五個值(用十六進位)。哪幾個 <code>-Wall</code> 會警告?</p>
+<pre><code class="language-verilog">module tb_ex_width;
+    wire        [7:0] p = 4'hF + 4'h1;
+    wire        [7:0] q = {4'hF + 4'h1};
+    wire        [3:0] r = 8'hAB;
+    wire        [7:0] s = 4'b1010;
+    wire signed [7:0] t = 4'sb1010;
+    initial #1 $display("p=%h q=%h r=%h s=%h t=%h", p, q, r, s, t);
+endmodule</code></pre>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+<pre><code class="language-text">p=10 q=00 r=b s=0a t=fa</code></pre>
+              <ul>
+                <li>p:左邊 8 位元,運算放大到 8 位元做,F + 1 = 10。</li>
+                <li>q:拼接裡的 <code>4'hF + 4'h1</code> 只有 4 位元,進位丟掉得 0,再補 0 成 00。</li>
+                <li>r:8 位元給 4 位元,截掉高位,剩 B。</li>
+                <li>s:無號的 1010 補 0,0A。</li>
+                <li>t:<code>4'sb1010</code> 是有號的 −6,延伸時補符號位元,FA。</li>
+              </ul>
+              <p>五個都沒有任何警告。<code>-Wall</code> 只警告埠的寬度不合,不管指定時的截斷或延伸,這些要靠你自己算清楚。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 136.3 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p><strong>看起來對但其實錯</strong>。小明的 fa 把進位寫成 <code>assign co = (a &amp; b) | (a &amp; ci);</code>(少了 <code>b &amp; ci</code>)。他用 add4 測了 1+1、2+2、7+1、15+1、5+10,五組全對,於是交了出去。</p>
+          <p>(1)找一組 4 位元的 a、b,讓他的 add4 算錯,並說明錯在哪一級。(2)為什麼他測的五組都沒抓到?(3)窮舉 256 組,會錯幾組?</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p>(1)錯誤只在某一級的 a[k] = 0、b[k] = 1、c[k] = 1 時出現:正確的 co 是 1,他的是 0。例如 1 + 3:第 0 級 1 + 1 產生進位;第 1 級 a[1] = 0、b[1] = 1、c[1] = 1,進位被吃掉。他的 add4 算出 0000、co = 0,正確答案是 0100。</p>
+              <p>(2)他的五組裡,沒有任何一級同時是「a[k] = 0、b[k] = 1、而且有進位送進來」:1+1 和 2+2 的進位送進的那一級 a、b 都是 0;7+1 和 15+1 的進位一路遇到的都是 a 的 1;5+10 根本沒有進位。
+              <strong>例子都對 ≠ 電路正確</strong>。用本章的不變式 testbench 跑,失敗的檢查會指出「從第幾級開始錯」。</p>
+              <p>(3)窮舉的結果(上面 tb_add4 換成壞掉的 fa):</p>
+<pre><code class="language-text">add4: 256 組,錯 56 組
+c = 00100 (c[4]..c[0]), s = 1001, co = 0</code></pre>
+              <p>錯 56 組,200 組是對的。這就是 Lab 的隱藏檢定要對小寬度窮舉、還要把 full_adder 換成壞掉的版本來檢查的原因。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 136.4 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>這個模組想做「en = 1 時輸出 d 的絕對值與符號」。照順序送下面 5 組輸入(每組之間等 1 個時間單位),寫出每一步的 y 與 neg。它長出了什麼?怎麼修?</p>
+<pre><code class="language-verilog">module abs_or_hold (input en, input [3:0] d, output reg [3:0] y, output reg neg);
+    always @* begin
+        if (en) begin
+            y   = d[3] ? -d : d;   // en=1:取絕對值(把 d 當 4 位元二補數)
+            neg = d[3];
+        end
+    end
+endmodule
+module tb_ex_latch;
+    reg en; reg [3:0] d; wire [3:0] y; wire neg;
+    abs_or_hold u (.en(en), .d(d), .y(y), .neg(neg));
+    initial begin
+        en = 1; d = 4'b1101; #1 $display("1: en=%b d=%b -&gt; y=%b neg=%b", en, d, y, neg);
+        en = 0; d = 4'b0011; #1 $display("2: en=%b d=%b -&gt; y=%b neg=%b", en, d, y, neg);
+        en = 1;              #1 $display("3: en=%b d=%b -&gt; y=%b neg=%b", en, d, y, neg);
+        en = 0; d = 4'b1000; #1 $display("4: en=%b d=%b -&gt; y=%b neg=%b", en, d, y, neg);
+        en = 1;              #1 $display("5: en=%b d=%b -&gt; y=%b neg=%b", en, d, y, neg);
+    end
+endmodule</code></pre>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+<pre><code class="language-text">1: en=1 d=1101 -&gt; y=0011 neg=1
+2: en=0 d=0011 -&gt; y=0011 neg=1
+3: en=1 d=0011 -&gt; y=0011 neg=0
+4: en=0 d=1000 -&gt; y=0011 neg=0
+5: en=1 d=1000 -&gt; y=1000 neg=1</code></pre>
+              <p>en = 0 時 y、neg 都沒有指定,所以兩個都長出閂鎖:第 2、4 步停在上一次的值。第 3 步 en 變回 1,才算出 0011 的結果。
+              第 5 步順便看到二補數的特例:−8(1000)取負還是 1000,4 位元裝不下 +8。</p>
+              <p>修法:區塊一開頭給預設值,例如 <code>y = 4'd0; neg = 1'b0;</code>,或補上 <code>else begin y = 4'd0; neg = 1'b0; end</code>。如果真的需要「en = 0 時保持」,那是暫存器,就改成 <code>always @(posedge clk)</code> 加 <code>&lt;=</code>。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 136.5 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p><strong>看起來對但其實錯</strong>。有人說:「a &lt; b(有號)就是 a − b 是負數,所以 slt 只要取差的最高位元 <code>diff[W-1]</code>。」他測了 3 &lt; 5、5 &lt; 3、−2 &lt; 1,全對。</p>
+          <p>(1)W = 8,找一組反例。(2)8 位元的 65,536 組輸入裡,這個做法錯幾組?(3)怎麼修?</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+<pre><code class="language-verilog">module tb_slt;
+    reg [7:0] a, b; wire [7:0] diff = a - b;
+    integer i, j, bad;
+    task t(input [7:0] xa, input [7:0] xb);
+        begin a = xa; b = xb; #1
+            $display("a=%h b=%h diff=%h diff[7]=%b  真正的 slt=%0d", a, b, diff, diff[7], $signed(a) &lt; $signed(b));
+        end
+    endtask
+    initial begin
+        t(8'h03, 8'h05); t(8'h05, 8'h03); t(8'hFE, 8'h01); t(8'h80, 8'h01); t(8'h7F, 8'hFF);
+        bad = 0;
+        for (i = 0; i &lt; 256; i = i + 1) for (j = 0; j &lt; 256; j = j + 1) begin
+            a = i; b = j; #1 if (diff[7] != ($signed(a) &lt; $signed(b))) bad = bad + 1;
+        end
+        $display("65536 組裡,diff[7] 答錯 %0d 組", bad);
+    end
+endmodule</code></pre>
+<pre><code class="language-text">a=03 b=05 diff=fe diff[7]=1  真正的 slt=1
+a=05 b=03 diff=02 diff[7]=0  真正的 slt=0
+a=fe b=01 diff=fd diff[7]=1  真正的 slt=1
+a=80 b=01 diff=7f diff[7]=0  真正的 slt=1
+a=7f b=ff diff=80 diff[7]=1  真正的 slt=0
+65536 組裡,diff[7] 答錯 16384 組</code></pre>
+              <p>(1)a = 0x80(−128)、b = 0x01:−128 − 1 = −129 超出 8 位元的範圍,溢位成 0x7F,最高位元是 0,說「不小於」,但 −128 &lt; 1。反方向的 0x7F(127)和 0xFF(−1)也一樣:差是 128,溢位成 0x80。</p>
+              <p>(2)錯 16,384 組,剛好四分之一:a、b 異號時,差有一半的機會溢位。</p>
+              <p>(3)有號比較要把溢位算進去:<code>slt = diff[W-1] ^ ovf</code>,其中 ovf 是減法的有號溢位(a、b 異號,而且差的符號和 a 不同)。或者直接用 <code>$signed(a) &lt; $signed(b)</code>,讓合成工具處理。Lab 的隱藏檢定「有號與無號比較」就專挑會溢位的情況。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 136.6 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>寫一個 4 位元上下數計數器 <code>updown4</code>:輸入 clk、rst(同步重置)、load(載入 d,優先於計數)、en(計數)、up(1 往上、0 往下)、4 位元的 d;輸出 4 位元的 q。數到 15 再往上是 0,0 再往下是 15。用 testbench 驗證:載入 14,往上數兩拍,再往下數兩拍,最後關掉 en。</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+<pre><code class="language-verilog">// 4 位元上下數計數器,可以載入
+module updown4 (
+    input            clk, rst,
+    input            load,       // 1:這一拍載入 d(優先於計數)
+    input            en,         // 1:計數
+    input            up,         // 1:往上數,0:往下數
+    input      [3:0] d,
+    output reg [3:0] q
+);
+    always @(posedge clk) begin
+        if (rst)       q &lt;= 4'd0;
+        else if (load) q &lt;= d;
+        else if (en)   q &lt;= up ? q + 4'd1 : q - 4'd1;
+    end
+endmodule</code></pre>
+<pre><code class="language-verilog">module tb_updown;
+    reg clk = 0, rst = 1, load = 0, en = 0, up = 1;
+    reg [3:0] d = 4'd0;
+    wire [3:0] q;
+    updown4 dut (.clk(clk), .rst(rst), .load(load), .en(en), .up(up), .d(d), .q(q));
+    always #5 clk = ~clk;
+    always @(posedge clk) #1 $display("rst=%b load=%b en=%b up=%b d=%0d -&gt; q=%0d", rst, load, en, up, d, q);
+    initial begin
+        #10 rst = 0; load = 1; d = 4'd14;
+        #10 load = 0; en = 1;
+        #10 ;
+        #10 up = 0;
+        #10 ;
+        #10 en = 0;
+        #10 $finish;
+    end
+endmodule</code></pre>
+<pre><code class="language-text">rst=1 load=0 en=0 up=1 d=0 -&gt; q=0
+rst=0 load=1 en=0 up=1 d=14 -&gt; q=14
+rst=0 load=0 en=1 up=1 d=14 -&gt; q=15
+rst=0 load=0 en=1 up=1 d=14 -&gt; q=0
+rst=0 load=0 en=1 up=0 d=14 -&gt; q=15
+rst=0 load=0 en=1 up=0 d=14 -&gt; q=14
+rst=0 load=0 en=0 up=0 d=14 -&gt; q=14</code></pre>
+              <p>14 → 15 → 0(4 位元自然繞回)→ 15 → 14,關掉 en 後保持。if/else if 的順序就是優先權:rst &gt; load &gt; en。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 136.7 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>用三段式寫法,寫一個偵測 "110" 的 Mealy 機(可重疊)。先畫狀態圖、列轉移表,再寫 Verilog。對輸入 <code>1101110110</code> 追出每一拍的現態與 y。</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p>三個狀態:A(前綴長度 0)、B(看到 "1")、C(看到 "11")。轉移:A 讀 1 → B、讀 0 → A;B 讀 1 → C、讀 0 → A;C 讀 1 → C("111" 還是以 "11" 結尾)、讀 0 → A,而且這時輸出 1。</p>
+<pre><code class="language-verilog">// Mealy 版 "110" 偵測器(可重疊)
+module det110_mealy (input clk, rst, x, output y);
+    localparam A = 2'd0,   // 前綴長度 0
+               B = 2'd1,   // 看到 "1"
+               C = 2'd2;   // 看到 "11"
+    reg [1:0] state, next;
+
+    always @(posedge clk) begin
+        if (rst) state &lt;= A;
+        else     state &lt;= next;
+    end
+
+    always @* begin
+        next = A;
+        case (state)
+            A: next = x ? B : A;
+            B: next = x ? C : A;
+            C: next = x ? C : A;   // "111" 還是以 "11" 結尾;"110" 之後從頭來
+            default: next = A;
+        endcase
+    end
+
+    assign y = (state == C) &amp;&amp; !x;
+endmodule</code></pre>
+<pre><code class="language-verilog">module tb_det110;
+    reg clk = 0, rst = 1, x = 0;
+    wire y;
+    det110_mealy dut (.clk(clk), .rst(rst), .x(x), .y(y));
+    reg [9:0] bits = 10'b1101110110;
+    integer i;
+    initial begin
+        #1 clk = 1; #1 clk = 0; rst = 0;
+        for (i = 0; i &lt; 10; i = i + 1) begin
+            x = bits[9 - i];
+            #1 $display("%0d x=%b state=%0d y=%b", i, x, dut.state, y);
+            clk = 1; #1 clk = 0;
+        end
+    end
+endmodule</code></pre>
+<pre><code class="language-text">0 x=1 state=0 y=0
+1 x=1 state=1 y=0
+2 x=0 state=2 y=1
+3 x=1 state=0 y=0
+4 x=1 state=1 y=0
+5 x=1 state=2 y=0
+6 x=0 state=2 y=1
+7 x=1 state=0 y=0
+8 x=1 state=1 y=0
+9 x=0 state=2 y=1</code></pre>
+              <p>state 0、1、2 就是 A、B、C。y 在 i = 2、6、9 是 1,對應輸入裡位置 0–2、4–6、7–9 的三個 "110"。第 5 拍讀到第三個 1 時停在 C,這就是「111 還是以 11 結尾」那一條轉移。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 136.8 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>替本章的 <code>alu8</code> 寫一個窮舉的 self-checking testbench:4 種 op × 256 × 256 組輸入,在 testbench 裡算出期望的 y,比對 y 和 zero,只印前 5 個錯誤和總數。
+          再把 alu8 的減法故意寫錯成 <code>a + ~b</code>(少加 1),確認你的 testbench 抓得到。</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+<pre><code class="language-verilog">module tb_alu8_full;
+    reg  [7:0] a, b;
+    reg  [1:0] op;
+    wire [7:0] y;
+    wire       zero;
+    reg  [7:0] expect_y;
+    integer i, j, k, errors;
+
+    alu8 dut (.a(a), .b(b), .op(op), .y(y), .zero(zero));
+
+    initial begin
+        errors = 0;
+        for (k = 0; k &lt; 4; k = k + 1)
+            for (i = 0; i &lt; 256; i = i + 1)
+                for (j = 0; j &lt; 256; j = j + 1) begin
+                    a = i; b = j; op = k;
+                    #1;
+                    case (k)                      // testbench 裡的參考模型
+                        0: expect_y = i + j;
+                        1: expect_y = i - j;
+                        2: expect_y = i &amp; j;
+                        default: expect_y = i | j;
+                    endcase
+                    if (y !== expect_y || zero !== (expect_y == 0)) begin
+                        if (errors &lt; 5)
+                            $display("FAIL op=%0d a=%h b=%h y=%h expect=%h", k, a, b, y, expect_y);
+                        errors = errors + 1;
+                    end
+                end
+        $display("alu8: %0d 組,錯 %0d 組", 4 * 256 * 256, errors);
+        $finish;
+    end
+endmodule</code></pre>
+              <p>原本的 alu8:</p>
+<pre><code class="language-text">alu8: 262144 組,錯 0 組</code></pre>
+              <p>減法少加 1 的版本:</p>
+<pre><code class="language-text">FAIL op=1 a=00 b=00 y=ff expect=00
+FAIL op=1 a=00 b=01 y=fe expect=ff
+FAIL op=1 a=00 b=02 y=fd expect=fe
+FAIL op=1 a=00 b=03 y=fc expect=fd
+FAIL op=1 a=00 b=04 y=fb expect=fc
+alu8: 262144 組,錯 65536 組</code></pre>
+              <p>只有 op = 01 的 65,536 組全錯(每一組都差 1)。注意這個 testbench 的參考模型用的是 Verilog 自己的 <code>+</code>、<code>-</code>:如果設計和參考模型犯同一個錯,就抓不到。
+              <a href="137-verification-cocotb.html">{{ch:137-verification-cocotb}}</a>改用另一種語言(Python)寫參考模型,就是為了避開這件事。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 136.9 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>下面每一段,合成工具會做出什麼?還是不能合成?</p>
+<pre><code class="language-verilog">// (甲)
+always @(posedge clk) if (load) q &lt;= d;
+// (乙)
+always @* if (load) q = d;
+// (丙)
+initial q = 8'd0;
+// (丁)
+assign #3 y = a &amp; b;
+// (戊)y 是 4 位元、d 是 8 位元,i 是 integer
+always @* begin
+    y = 4'd0;
+    for (i = 0; i &lt; 8; i = i + 1)
+        y = y + d[i];
+end
+// (己)
+always @(posedge clk) while (q != 0) q &lt;= q - 1;</code></pre>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <ul>
+                <li>(甲)8 顆正反器,前面各一顆 2 選 1 多工器(load 選 d,否則選 q 自己):帶致能的暫存器。</li>
+                <li>(乙)load = 0 時沒有指定:8 顆<strong>閂鎖</strong>。</li>
+                <li>(丙)ASIC 不能合成;只有模擬有效。要初值就用重置。</li>
+                <li>(丁)一顆 AND 閘;<code>#3</code> 被忽略。</li>
+                <li>(戊)能合成:for 迴圈展開成 8 個加法,算 d 裡 1 的個數(population count)。它不是「跑 8 次」,而是「8 份加法器串起來」。模擬 d = 1011_0110 印出 <code>1 的個數 = 5</code>。</li>
+                <li>(己)不能合成:迴圈次數由 q 決定,編譯時不知道要做幾份硬體。(而且在模擬裡,同一個時間點的 <code>q &lt;= q - 1</code> 永遠讀到舊的 q,迴圈不會結束。)要「每拍減 1 直到 0」,就寫 <code>if (q != 0) q &lt;= q - 1;</code>,讓時脈來做迴圈。</li>
+              </ul>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 136.10 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>把這顆 Hack 晶片(三輸入多數決,不在 Lab 的晶片清單裡)翻成結構式的 Verilog。Verilog 有內建的閘(gate primitive):<code>and g (out, in1, in2);</code>,<strong>第一個腳是輸出</strong>。寫完用窮舉 8 列的 testbench 驗證。</p>
+<pre><code class="language-text">CHIP Maj3 {
+    IN a, b, c;
+    OUT out;
+    PARTS:
+    And(a=a, b=b, out=ab);
+    And(a=a, b=c, out=ac);
+    And(a=b, b=c, out=bc);
+    Or(a=ab, b=ac, out=t);
+    Or(a=t, b=bc, out=out);
+}</code></pre>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+<pre><code class="language-verilog">// 照 Hack 的 Maj3 一顆一顆翻:Verilog 內建的閘(gate primitive)第一個腳是輸出
+module maj3 (input a, b, c, output out);
+    wire ab, ac, bc, t;          // Hack 的內部線,在 Verilog 要先宣告
+    and g1 (ab, a, b);
+    and g2 (ac, a, c);
+    and g3 (bc, b, c);
+    or  g4 (t, ab, ac);
+    or  g5 (out, t, bc);
+endmodule</code></pre>
+<pre><code class="language-verilog">module tb_maj3;
+    reg a, b, c; wire out; integer i, bad;
+    maj3 dut (.a(a), .b(b), .c(c), .out(out));
+    initial begin
+        bad = 0;
+        for (i = 0; i &lt; 8; i = i + 1) begin
+            {a, b, c} = i[2:0]; #1;
+            if (out !== ((a &amp; b) | (a &amp; c) | (b &amp; c))) bad = bad + 1;
+        end
+        $display("maj3: 8 列,錯 %0d 列", bad);
+    end
+endmodule</code></pre>
+<pre><code class="language-text">maj3: 8 列,錯 0 列</code></pre>
+              <p>逐行對應:Hack 的每一顆零件變成一顆閘,內部線 ab、ac、bc、t 要先宣告成 wire。順序不重要,和 Hack 一樣是「接線」而不是「執行步驟」。
+              這顆晶片其實就是全加器的進位輸出;用行為式寫法只要一行 <code>assign out = (a &amp; b) | (a &amp; c) | (b &amp; c);</code>。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>把這一章串起來</h2>
+      <p>
+        Verilog 是你在 Hack HDL 學過的同一件事:用文字描述「有哪些電路、線怎麼接」。它多給你的,是運算子、always、參數和 generate,讓 32 位元的加法器只要幾行;
+        它多要求你的,是時時記得自己在寫硬體:
+      </p>
+      <ul>
+        <li><strong>模組、埠、實例化</strong>和 Hack 的 CHIP、IN/OUT、零件一一對應:<code>.a(x)</code> 一樣是「左邊零件的腳,右邊我的線」。內部線要宣告,並且一直開著 <code>-Wall</code>。</li>
+        <li><strong>wire 與 reg</strong>只差在「誰能寫它」;reg 不等於暫存器。新程式用 SystemVerilog 的 <code>logic</code>。訊號有 0、1、x、z 四個值,寬度不合時 Verilog 會默默截斷或延伸。</li>
+        <li><strong>assign 和 always @*</strong> 是組合邏輯;<strong>always @(posedge clk)</strong> 是正反器。有時脈的區塊用 <code>&lt;=</code>,組合的區塊用 <code>=</code>,不照規則寫就會競賽。</li>
+        <li><strong>parameter 與 generate</strong>讓一個模組任意寬度;漣波加法器的正確性是一個歸納法,它的程式版本是逐級的不變式 testbench。</li>
+        <li><strong>組合邏輯的每一條路徑都要指定每一個輸出</strong>,否則長出閂鎖;先給預設值、case 寫 default。</li>
+        <li><strong>RV32I 的 ALU</strong> 有十種運算;有號和無號只在 slt/sltu、sra/srl 與溢位上不同。Verilog 的有號運算會被無號的運算元「傳染」。</li>
+        <li><strong>FSM 用三段式</strong>:狀態暫存器、次態邏輯、輸出邏輯。Moore 的輸出比 Mealy 晚一拍。</li>
+        <li><strong>模擬器的事件佇列</strong>決定同一個時間點裡誰先誰後:Active、Inactive、NBA、Monitor,每回到 Active 一次是一個 delta cycle。</li>
+        <li>只有<strong>可合成子集</strong>會變成電路;<code>initial</code>、<code>#延遲</code>、<code>$display</code> 屬於 testbench。self-checking testbench 加上 VCD 波形,是驗證的第一步。</li>
+      </ul>
+      <p>
+        接下來,<a href="137-verification-cocotb.html">{{ch:137-verification-cocotb}}</a>把 testbench 搬到 Python:用 cocotb 驅動同一顆 DUT、用參考模型對拍、用隨機向量和突變版檢查測試夠不夠好。
+        之後 rtl 任務線會用本章的寫法做暫存器檔、解碼器,最後組成一顆跑得動 C 程式的單週期 RV32I CPU。
+      </p>
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">延伸資源</span>
+          <ul>
+            <li><strong>Icarus Verilog</strong>:本章用的模擬器,文件與原始碼在 <a href="https://steveicarus.github.io/iverilog/">steveicarus.github.io/iverilog</a>。波形檢視器 <a href="https://gtkwave.sourceforge.net/">GTKWave</a>。</li>
+            <li><strong>HDLBits</strong>(<a href="https://hdlbits.01xz.net/">hdlbits.01xz.net</a>):一百多題線上 Verilog 小題,從一條線寫到 FSM,送出就有模擬器判對錯,很適合配著本章練。</li>
+            <li>Sarah L. Harris、David Harris,<em>Digital Design and Computer Architecture, RISC-V Edition</em>:Chapter 4 是 HDL(SystemVerilog 與 VHDL 對照),後面的章節用它做出 RISC-V 處理器,正好是 rtl 任務線的路線。</li>
+            <li>Clifford E. Cummings,〈Nonblocking Assignments in Verilog Synthesis, Coding Styles That Kill!〉(SNUG 2000):阻塞與非阻塞的經典整理,本章的兩條規則就是它的結論。</li>
+            <li>Samir Palnitkar,<em>Verilog HDL: A Guide to Digital Design and Synthesis</em>:完整的 Verilog 語法參考。</li>
+            <li>標準本身:IEEE 1800(SystemVerilog,已包含 Verilog)。第 4 節「Scheduling semantics」就是本章 ★深入 那一節的正式版本。</li>
+          </ul>
+        </div>
+      </div>

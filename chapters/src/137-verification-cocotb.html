@@ -1,0 +1,2043 @@
+<!--meta
+title: 驗證:testbench、cocotb 與參考模型
+description: 寫好的電路怎麼知道它是對的?自我檢查的 testbench、用 Python 寫測試的 cocotb、參考模型與 scoreboard、導向測試與隨機測試、讀 VCD 波形、功能覆蓋率、硬體的突變測試與擊殺矩陣、斷言,以及形式驗證入門。
+-->
+      <div class="eyebrow">{{part:137-verification-cocotb}}</div>
+      <h1>驗證:testbench、cocotb 與參考模型</h1>
+      <p class="subtitle">電路寫完只是一半。另一半是證明它對:用另一份程式產生輸入、算出答案、一格一格對,直到你敢把它交給工廠。</p>
+      <div class="byline">
+        <span class="tag">{{ch:137-verification-cocotb}}</span>
+        <span>閱讀時間 ≈ 100 分鐘</span>
+        <span>難度:★★★★☆</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>testbench 的四個角色:產生輸入、被測電路、檢查器、參考模型,以及 scoreboard 怎麼處理有延遲的電路</li>
+          <li>怎麼寫一個「自己說 PASS 或 FAIL」的 testbench,先用純 Verilog,再用 Python 的 cocotb</li>
+          <li>cocotb 的基本功:<code>dut</code> 把手、<code>await Timer</code>、<code>RisingEdge</code>、<code>cocotb.start_soon(Clock(...))</code>、Makefile 與 <code>results.xml</code></li>
+          <li>導向測試與隨機測試各自抓得到什麼,以及用機率算「隨機測試漏掉一個 bug」有多容易</li>
+          <li>怎麼讀 VCD 波形檔,把它變成一張文字的波形表</li>
+          <li>功能覆蓋率(functional coverage)的 bin 怎麼手算,以及為什麼 toggle 覆蓋率 100% 也不代表沒有 bug</li>
+          <li>硬體的突變測試:把電路故意改壞,用擊殺矩陣看「哪一個突變版被哪一條測試抓到」</li>
+          <li>斷言(assertion)與形式驗證(formal verification)的基本想法</li>
+        </ul>
+      </div>
+
+      <h2>晶片沒有「下一版修正」</h2>
+      <p>
+        1994 年,一位數學教授 Thomas Nicely 發現他的 Pentium 電腦算某些除法時,答案在小數點後好幾位開始出錯。
+        原因是硬體除法器用的一張查表少了幾格。軟體的 bug 可以發一個更新檔;晶片的 bug 已經燒在矽裡了。
+        Intel 最後提供更換處理器,並為此認列了 4 億 7500 萬美元的費用。
+      </p>
+      <p>
+        這就是硬體和軟體最大的不同:<strong>晶片送去製造之後就改不了</strong>。所以晶片團隊把大量的人力花在「下線之前確定它是對的」。
+        業界常說,驗證占了一個晶片專案一半以上的工作量。這件事有一個專門的名字:<strong>驗證(verification)</strong>。
+      </p>
+      <p>
+        在<a href="136-verilog.html">{{ch:136-verilog}}</a>,你學會用 Verilog 描述電路。這一章學另一半:怎麼寫程式去檢查電路。
+        先認識幾個名詞:
+      </p>
+      <ul>
+        <li><strong>DUT(design under test,被測電路)</strong>:你要檢查的那個模組,例如一個加法器。</li>
+        <li><strong>testbench(測試平台)</strong>:包住 DUT 的程式。它餵輸入給 DUT、讀 DUT 的輸出、判斷對不對。testbench 本身不會變成晶片,它只在模擬器裡跑。</li>
+        <li><strong>測試向量(test vector)</strong>:一組輸入,加上它應該得到的輸出。</li>
+        <li><strong>模擬器(simulator)</strong>:在電腦上「假裝」電路在運作的程式。本章用開源的 Icarus Verilog(指令 <code>iverilog</code> 與 <code>vvp</code>)。</li>
+      </ul>
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">為什麼要學</span>
+          <p>rtl 任務線(自己的 RV32I CPU)的 Boss 戰「ALU 與突變」不考你寫電路,考你寫測試:你的 cocotb 測試要在正確的 ALU 上全過,而且在 3 個藏起來的突變版上每個都至少失敗一項。
+          本章 Lab 的任務「cocotb 測試」就是為它準備的。之後的單週期 CPU 會用 rv32 任務線的指令集模擬器當參考模型,SoC 的驗收則要看 cocotb 的覆蓋率;本章教的 testbench 結構,在那些地方都會再用到。</p>
+        </div>
+      </div>
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">核心觀念</span>
+          <p>測試能證明「有 bug」,很難證明「沒有 bug」。驗證的工作,是用有限的時間,讓剩下的 bug 盡量少、盡量不重要。本章每一種技巧,都在回答同一個問題:<strong>我的測試夠不夠強?</strong></p>
+        </div>
+      </div>
+
+      <h2>testbench 的四個角色</h2>
+      <p>
+        不管用什麼語言寫,一個好的 testbench 裡都有同樣幾個角色。先看圖,再一個一個說明。
+      </p>
+      <div class="diagram">
+<svg viewBox="0 0 640 270" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="ar137a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#8a929b"/>
+    </marker>
+  </defs>
+  <rect x="10" y="10" width="620" height="250" rx="10" fill="none" stroke="#8a929b" stroke-dasharray="5 4"/>
+  <text x="24" y="32" font-size="12" fill="#8a929b">testbench(只在模擬器裡跑)</text>
+  <!-- stimulus -->
+  <rect x="30" y="60" width="140" height="60" rx="8" fill="#e3efed" stroke="#2f6f6a" stroke-width="1.8"/>
+  <text x="100" y="86" text-anchor="middle" font-size="14" font-weight="700" fill="#2f6f6a">產生輸入</text>
+  <text x="100" y="106" text-anchor="middle" font-size="11" fill="#2f6f6a">導向/隨機向量</text>
+  <!-- DUT -->
+  <rect x="250" y="60" width="140" height="60" rx="8" fill="#f6e2d6" stroke="#b4541f" stroke-width="1.8"/>
+  <text x="320" y="86" text-anchor="middle" font-size="14" font-weight="700" fill="#b4541f">DUT</text>
+  <text x="320" y="106" text-anchor="middle" font-size="11" fill="#9b481b">被測電路(Verilog)</text>
+  <!-- monitor -->
+  <rect x="470" y="60" width="140" height="60" rx="8" fill="#e3efed" stroke="#2f6f6a" stroke-width="1.8"/>
+  <text x="540" y="86" text-anchor="middle" font-size="14" font-weight="700" fill="#2f6f6a">監看器</text>
+  <text x="540" y="106" text-anchor="middle" font-size="11" fill="#2f6f6a">讀出 DUT 的輸出</text>
+  <!-- model -->
+  <rect x="250" y="170" width="140" height="60" rx="8" fill="#ede7fb" stroke="#8b5cf6" stroke-width="1.8"/>
+  <text x="320" y="196" text-anchor="middle" font-size="14" font-weight="700" fill="#8b5cf6">參考模型</text>
+  <text x="320" y="216" text-anchor="middle" font-size="11" fill="#6d42d9">另一份寫法的答案</text>
+  <!-- scoreboard -->
+  <rect x="470" y="170" width="140" height="60" rx="8" fill="#ede7fb" stroke="#8b5cf6" stroke-width="1.8"/>
+  <text x="540" y="196" text-anchor="middle" font-size="14" font-weight="700" fill="#8b5cf6">scoreboard</text>
+  <text x="540" y="216" text-anchor="middle" font-size="11" fill="#6d42d9">排隊、比對、判定</text>
+  <!-- arrows -->
+  <line x1="170" y1="90" x2="248" y2="90" stroke="#8a929b" stroke-width="2" marker-end="url(#ar137a)"/>
+  <line x1="390" y1="90" x2="468" y2="90" stroke="#8a929b" stroke-width="2" marker-end="url(#ar137a)"/>
+  <polyline points="100,120 100,200 248,200" fill="none" stroke="#8a929b" stroke-width="2" marker-end="url(#ar137a)"/>
+  <text x="108" y="160" font-size="11" fill="#8a929b">同樣的輸入</text>
+  <line x1="390" y1="200" x2="468" y2="200" stroke="#8a929b" stroke-width="2" marker-end="url(#ar137a)"/>
+  <text x="400" y="192" font-size="11" fill="#8a929b">預期值</text>
+  <line x1="540" y1="120" x2="540" y2="168" stroke="#8a929b" stroke-width="2" marker-end="url(#ar137a)"/>
+  <text x="548" y="148" font-size="11" fill="#8a929b">實際值</text>
+  <text x="540" y="252" text-anchor="middle" font-size="12" font-weight="700" fill="#b4541f">PASS / FAIL</text>
+</svg>
+        <figcaption>圖 137-1:testbench 的結構。同一組輸入同時送給 DUT 和參考模型;scoreboard 拿 DUT 的實際輸出和模型的預期輸出比對,最後由 testbench 自己判定 PASS 或 FAIL。</figcaption>
+      </div>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>角色</th><th>做什麼</th><th>本章的例子</th></tr></thead>
+        <tbody>
+          <tr><td>產生輸入(stimulus)</td><td>決定這一次要餵什麼給 DUT</td><td>固定的 <code>(5, 10)</code>;或用 <code>random.Random(2026)</code> 抽 200 組</td></tr>
+          <tr><td>DUT</td><td>被檢查的電路</td><td><code>adder.v</code>、<code>alu8.v</code>、<code>add_pipe2.v</code></td></tr>
+          <tr><td>監看器(monitor)</td><td>在對的時間點讀 DUT 的輸出</td><td><code>int(dut.X.value)</code>,有時脈的電路要在正緣之後讀</td></tr>
+          <tr><td>參考模型(reference model)</td><td>用另一種寫法算出「應該是多少」</td><td><code>adder_model(a, b)</code>:Python 的 <code>a + b</code></td></tr>
+          <tr><td>scoreboard(計分板)</td><td>把預期值排隊,等 DUT 的輸出來了再比對;記錄錯誤</td><td><code>test_pipe.py</code> 裡的 <code>deque</code></td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>
+        組合電路(沒有時脈)很單純:輸入一給,等一下,輸出就出來了,監看器和 scoreboard 可以合成一行 <code>assert</code>。
+        有時脈、有延遲的電路才需要 scoreboard 把預期值「排隊」,本章後面會看到。
+      </p>
+
+      <h2>第一個自我檢查的 testbench</h2>
+      <p>
+        先用最熟悉的工具:純 Verilog。被測的是一個 8 位元加法器。輸出 <code>X</code> 比輸入多一個位元,用來裝最高位的進位。
+        這個加法器改寫自 cocotb 專案的範例 <code>examples/adder</code>(cocotb contributors,CC0 公有領域貢獻,<a href="https://github.com/cocotb/cocotb">github.com/cocotb/cocotb</a>),
+        原版是 SystemVerilog、預設 4 位元,這裡改成純 Verilog、預設 8 位元。
+      </p>
+<pre><code class="language-verilog">// adder.v:改寫自 cocotb examples/adder(CC0)
+// X 比 A、B 多一個位元,用來裝進位
+`timescale 1ns/1ps
+module adder #(parameter DATA_WIDTH = 8) (
+    input  [DATA_WIDTH-1:0] A,
+    input  [DATA_WIDTH-1:0] B,
+    output [DATA_WIDTH:0]   X
+);
+    assign X = A + B;
+endmodule</code></pre>
+      <p>
+        初學者寫 testbench,常常只是「給輸入、跑模擬、打開波形用眼睛看」。這樣的 testbench 不會告訴你錯了,你要自己發現。
+        更好的做法是<strong>自我檢查的 testbench(self-checking testbench)</strong>:每一組輸入都附上預期的輸出,testbench 自己比對,最後印 PASS 或 FAIL。
+      </p>
+<pre><code class="language-verilog">// tb_adder.v:自我檢查的 testbench(純 Verilog)
+`timescale 1ns/1ps
+module tb_adder;
+    reg  [7:0] A, B;
+    wire [8:0] X;
+    integer errors = 0;
+
+    adder #(.DATA_WIDTH(8)) dut (.A(A), .B(B), .X(X));
+
+    // 送一組輸入、等 1 ns、和預期值比
+    task check(input [7:0] a, input [7:0] b, input [8:0] expected);
+        begin
+            A = a; B = b;
+            #1;
+            if (X !== expected) begin
+                $display("FAIL: %0d + %0d = %0d,預期 %0d", a, b, X, expected);
+                errors = errors + 1;
+            end
+        end
+    endtask
+
+    initial begin
+        $dumpfile("wave.vcd");
+        $dumpvars(0, A, B, X);    // 只記這三條訊號
+        check(8'd5,   8'd10,  9'd15);    // 一般情況
+        check(8'd0,   8'd0,   9'd0);     // 全 0
+        check(8'd255, 8'd1,   9'd256);   // 進位一路傳到最高位
+        check(8'd255, 8'd255, 9'd510);   // 最大值
+        check(8'd15,  8'd1,   9'd16);    // 第 3 位元的進位傳到第 4 位元
+        if (errors == 0) $display("PASS: 5 組全對");
+        else             $display("共 %0d 組錯", errors);
+        $finish;
+    end
+endmodule</code></pre>
+      <p>幾個重點:</p>
+      <ul>
+        <li><code>task check</code> 把「給輸入、等 1 ns、比對」包成一個動作。<code>#1</code> 讓模擬時間前進 1 ns,組合電路的輸出才會更新。</li>
+        <li>比對用 <code>!==</code>,不用 <code>!=</code>。如果 <code>X</code> 是未知值 <code>x</code>,<code>X != expected</code> 的結果也是 <code>x</code>,<code>if</code> 會當成「不成立」而<strong>漏報</strong>;<code>!==</code> 連 <code>x</code>、<code>z</code> 都逐位比,一定得到 0 或 1。</li>
+        <li>5 組向量是挑過的:一般情況、全 0、進位一路傳到最高位、最大值、第 3 位元的進位傳到第 4 位元。這種「自己想、自己挑」的向量叫<strong>導向測試(directed test)</strong>。</li>
+      </ul>
+      <p>用 Icarus Verilog 編譯、執行:</p>
+<pre><code class="language-bash">iverilog -g2012 -Wall -o tb.out tb_adder.v adder.v
+vvp tb.out</code></pre>
+<pre><code class="language-text">VCD info: dumpfile wave.vcd opened for output.
+PASS: 5 組全對</code></pre>
+      <p>
+        為了看 testbench 會不會抓錯,準備一個故意弄壞的版本 <code>adder_bad.v</code>:第 3 位元進到第 4 位元的進位,只算了「兩個位元都是 1」(產生),
+        忘了「低位的進位經過這一位傳上來」(傳遞)。這是手寫進位電路時很容易犯的錯。
+      </p>
+<pre><code class="language-verilog">// adder_bad.v:故意弄壞的加法器(突變版)
+// 第 3 位元進到第 4 位元的進位,只算了「產生」(a3 &amp; b3),忘了「傳遞」
+`timescale 1ns/1ps
+module adder #(parameter DATA_WIDTH = 8) (
+    input  [DATA_WIDTH-1:0] A,
+    input  [DATA_WIDTH-1:0] B,
+    output [DATA_WIDTH:0]   X
+);
+    wire [4:0] lo = A[3:0] + B[3:0];
+    wire       c4 = A[3] &amp; B[3];          // 應該是 lo[4]
+    wire [4:0] hi = A[7:4] + B[7:4] + c4;
+    assign X = {hi, lo[3:0]};
+endmodule</code></pre>
+<pre><code class="language-bash">iverilog -g2012 -Wall -o tb.out tb_adder.v adder_bad.v
+vvp tb.out</code></pre>
+<pre><code class="language-text">VCD info: dumpfile wave.vcd opened for output.
+FAIL: 255 + 1 = 240,預期 256
+FAIL: 15 + 1 = 0,預期 16
+共 2 組錯</code></pre>
+      <p>
+        第 1 組 <code>5 + 10</code> 沒有抓到它:5 是 <code>0101</code>,10 是 <code>1010</code>,低 4 位元相加是 15,根本沒有進位。
+        抓到它的是第 3 組和第 5 組,兩組都需要「低位的進位經過第 3 位元往上傳」。<strong>測試向量挑得好不好,決定了測試抓不抓得到 bug。</strong>
+      </p>
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">核心觀念</span>
+          <p>testbench 必須自己說 PASS 或 FAIL。需要人眼看波形才知道對錯的測試,不能重複跑、不能交給機器判,也不能抓突變版。看波形是<strong>除錯</strong>用的,不是<strong>判定</strong>用的。</p>
+        </div>
+      </div>
+
+      <h2>cocotb:用 Python 寫 testbench</h2>
+      <p>
+        純 Verilog 的 testbench 寫起來很囉嗦:沒有方便的資料結構、沒有好用的亂數、參考模型要用 Verilog 再寫一次。
+        <strong>cocotb</strong>(coroutine cosimulation testbench)換一個做法:電路還是 Verilog,跑在原本的模擬器裡;testbench 改用 <strong>Python</strong> 寫。
+        Python 透過模擬器的 C 介面(VPI)讀寫電路裡的訊號,並且決定模擬時間什麼時候往前走。
+      </p>
+<pre><code class="language-text">test_adder.py(Python 的 async 函式)
+      │   dut.A.value = 5        ← 寫訊號
+      │   await Timer(2, "ns")   ← 讓模擬時間前進
+      │   int(dut.X.value)       ← 讀訊號
+      ▼
+cocotb(排程器:記住每個測試在等什麼)
+      │   VPI(模擬器提供的 C 介面)
+      ▼
+Icarus Verilog(vvp)── adder.v</code></pre>
+      <p>
+        安裝:<code>pip install cocotb</code>,另外要有模擬器(Ubuntu/Debian:<code>sudo apt install iverilog</code>)。
+        本章的輸出都是在 Debian 12 的容器裡,用 Icarus Verilog 11 與 cocotb 1.9.2 實際執行的結果;cocotb 2.x 的差別在本節最後整理。
+      </p>
+      <p>一個 cocotb 專案最少四個檔案:電路、參考模型、測試、Makefile。參考模型和測試同樣改寫自 cocotb 的 <code>examples/adder</code>(CC0):</p>
+<pre><code class="language-python"># adder_model.py:加法器的參考模型(改寫自 cocotb examples/adder,CC0)
+def adder_model(a, b, width=8):
+    """回傳 a + b;結果有 width+1 個位元,不會溢位"""
+    return (a + b) &amp; ((1 &lt;&lt; (width + 1)) - 1)</code></pre>
+<pre><code class="language-python"># test_adder.py:加法器的 cocotb 測試(改寫自 cocotb examples/adder,CC0)
+import random
+
+import cocotb
+from cocotb.triggers import Timer
+
+from adder_model import adder_model
+
+
+@cocotb.test()
+async def adder_basic_test(dut):
+    """導向測試:5 + 10"""
+    dut.A.value = 5
+    dut.B.value = 10
+    await Timer(2, "ns")                    # 等組合電路算完
+    assert int(dut.X.value) == adder_model(5, 10), f"5 + 10 = {int(dut.X.value)}?"
+
+
+@cocotb.test()
+async def adder_randomised_test(dut):
+    """隨機測試:200 組隨機的 A、B,和參考模型比"""
+    rng = random.Random(2026)               # 固定種子,失敗才能重現
+    for _ in range(200):
+        a = rng.randrange(256)
+        b = rng.randrange(256)
+        dut.A.value = a
+        dut.B.value = b
+        await Timer(2, "ns")
+        got = int(dut.X.value)
+        assert got == adder_model(a, b), f"{a} + {b}:DUT={got},模型={adder_model(a, b)}"</code></pre>
+      <p>Makefile 只要設定幾個變數,然後 include cocotb 附的規則:</p>
+<pre><code class="language-text"># Makefile:cocotb 1.9 的寫法(2.x 改名成 COCOTB_TOPLEVEL、COCOTB_TEST_MODULES)
+SIM ?= icarus
+TOPLEVEL_LANG ?= verilog
+DUT ?= adder.v
+VERILOG_SOURCES = $(PWD)/$(DUT)
+TOPLEVEL = adder
+MODULE = test_adder
+include $(shell cocotb-config --makefiles)/Makefile.sim</code></pre>
+      <p>在這個資料夾打 <code>make</code>。cocotb 先呼叫 <code>iverilog</code> 編譯,再用 <code>vvp</code> 執行,同時把 Python 載進模擬器。輸出(節錄):</p>
+<pre><code class="language-text">/usr/bin/iverilog -o sim_build/sim.vvp -D COCOTB_SIM=1 -s adder -g2012 -f sim_build/cmds.f  /ch/book/adder/adder.v
+     0.00ns INFO     cocotb                             Running on Icarus Verilog version 11.0 (stable)
+     0.00ns INFO     cocotb                             Running tests with cocotb v1.9.2 from /opt/v/lib/python3.11/site-packages/cocotb
+     0.00ns INFO     cocotb                             Seeding Python random module with 1792952295
+     0.00ns INFO     cocotb.regression                  Found test test_adder.adder_basic_test
+     0.00ns INFO     cocotb.regression                  Found test test_adder.adder_randomised_test
+     0.00ns INFO     cocotb.regression                  running adder_basic_test (1/2)
+                                                          導向測試:5 + 10
+     2.00ns INFO     cocotb.regression                  adder_basic_test passed
+     2.00ns INFO     cocotb.regression                  running adder_randomised_test (2/2)
+                                                          隨機測試:200 組隨機的 A、B,和參考模型比
+   402.00ns INFO     cocotb.regression                  adder_randomised_test passed
+   402.00ns INFO     cocotb.regression                  ******************************************************************************************
+                                                        ** TEST                              STATUS  SIM TIME (ns)  REAL TIME (s)  RATIO (ns/s) **
+                                                        ******************************************************************************************
+                                                        ** test_adder.adder_basic_test        PASS           2.00           0.00       6725.00  **
+                                                        ** test_adder.adder_randomised_test   PASS         400.00           0.00      80520.53  **
+                                                        ******************************************************************************************
+                                                        ** TESTS=2 PASS=2 FAIL=0 SKIP=0                    402.00           0.02      16472.60  **</code></pre>
+      <p>
+        最後那張表是給人看的成績單。<code>SIM TIME</code> 是模擬時間(第 1 個測試等了一次 2 ns,第 2 個等了 200 次),<code>REAL TIME</code> 是真實花的秒數,每次跑都不太一樣。
+        換成壞掉的 <code>adder_bad.v</code>(<code>make clean</code> 之後 <code>make DUT=adder_bad.v</code>,為什麼要先 clean,見本章「突變測試」那一節的陷阱):
+      </p>
+<pre><code class="language-text">     2.00ns INFO     cocotb.regression                  running adder_randomised_test (2/2)
+                                                          隨機測試:200 組隨機的 A、B,和參考模型比
+     8.00ns INFO     cocotb.regression                  adder_randomised_test failed
+                                                        Traceback (most recent call last):
+                                                          File "/ch/book/adder/test_adder.py", line 30, in adder_randomised_test
+                                                            assert got == adder_model(a, b), f"{a} + {b}:DUT={got},模型={adder_model(a, b)}"
+                                                        AssertionError: 215 + 251:DUT=450,模型=466
+                                                        assert 450 == 466
+                                                         +  where 466 = adder_model(215, 251)
+     8.00ns INFO     cocotb.regression                  ******************************************************************************************
+                                                        ** TEST                              STATUS  SIM TIME (ns)  REAL TIME (s)  RATIO (ns/s) **
+                                                        ******************************************************************************************
+                                                        ** test_adder.adder_basic_test        PASS           2.00           0.00       6396.95  **
+                                                        ** test_adder.adder_randomised_test   FAIL           6.00           0.00      18252.37  **
+                                                        ******************************************************************************************
+                                                        ** TESTS=2 PASS=1 FAIL=1 SKIP=0                      8.00           0.02        410.82  **</code></pre>
+      <p>
+        隨機測試在第 3 組(模擬時間 8 ns)就抓到了:215 + 251,DUT 說 450,模型說 466,差 16,正好是那個漏掉的進位。
+        cocotb 1.9 會把失敗的 <code>assert</code> 兩邊的值展開印出來(<code>assert 450 == 466</code>);這個功能要裝 pytest(上面的容器有裝,沒有裝也能跑,只是訊息比較短)。
+      </p>
+
+      <h3>dut 把手:讀寫訊號</h3>
+      <p>
+        每個測試函式的參數 <code>dut</code> 是頂層模組的<strong>把手(handle)</strong>。用點號往下找訊號:<code>dut.A</code>、<code>dut.X</code>;
+        子模組也可以:<code>dut.u_alu.y</code>。
+      </p>
+      <ul>
+        <li>寫:<code>dut.A.value = 5</code>。這個寫入不會馬上生效,cocotb 會在這個時間點的稍後才交給模擬器。</li>
+        <li>讀:<code>dut.X.value</code> 是一個「邏輯值陣列」,每個位元可能是 0、1、<code>x</code>(未知)、<code>z</code>(高阻抗)。要當整數比,寫 <code>int(dut.X.value)</code>。</li>
+        <li>讀到 <code>x</code> 時,<code>int()</code> 會出錯。最常見的原因是忘了給某個輸入:</li>
+      </ul>
+<pre><code class="language-python"># test_undriven.py:忘了給 B 值
+import cocotb
+from cocotb.triggers import Timer
+
+
+@cocotb.test()
+async def forgot_b(dut):
+    dut.A.value = 5                     # B 沒有設定
+    await Timer(2, "ns")
+    dut._log.info(f"X = {dut.X.value}")
+    assert int(dut.X.value) == 5</code></pre>
+<pre><code class="language-text">     0.00ns INFO     cocotb.regression                  running forgot_b (1/1)
+     2.00ns INFO     cocotb.adder                       X = xxxxxxxxx
+     2.00ns INFO     cocotb.regression                  forgot_b failed
+                                                        ValueError: Unresolvable bit in binary string: 'x'. Set the COCOTB_RESOLVE_X environment variable to configure how special values are resolved.
+                                                        ** test_undriven.forgot_b         FAIL           2.00           0.00       6959.21  **</code></pre>
+      <p>這其實是好事:電路裡出現 <code>x</code>,通常就是 testbench 或電路有地方沒接好,讓測試直接失敗比較安全。</p>
+
+      <h3>await:讓模擬時間往前走</h3>
+      <p>
+        測試函式是 <code>async def</code>:它是一個<strong>協程(coroutine)</strong>,可以在中間「暫停,等某件事發生再回來」。
+        <code>await Timer(2, "ns")</code> 的意思是「我先暫停,讓模擬器往前跑 2 ns,再叫醒我」。<strong>沒有 await,模擬時間就不會前進</strong>,電路也不會反應你剛寫的輸入。
+      </p>
+<pre><code class="language-python"># test_noawait.py:忘了 await,時間就不會前進
+import cocotb
+from cocotb.triggers import Timer
+
+
+@cocotb.test()
+async def forgot_await(dut):
+    dut.A.value = 1
+    dut.B.value = 1
+    await Timer(2, "ns")
+    dut._log.info(f"第一組 1 + 1:X = {int(dut.X.value)}")
+    dut.A.value = 5
+    dut.B.value = 10
+    Timer(2, "ns")                      # 少了 await:這一行什麼都沒做
+    dut._log.info(f"第二組 5 + 10:X = {int(dut.X.value)}")</code></pre>
+<pre><code class="language-text">     2.00ns INFO     cocotb.adder                       第一組 1 + 1:X = 2
+     2.00ns INFO     cocotb.adder                       第二組 5 + 10:X = 2
+                                                        ** TESTS=1 PASS=1 FAIL=0 SKIP=0                  2.00           0.02        122.72  **</code></pre>
+      <p>第二組讀到的還是第一組的答案 2,而且這個測試<strong>通過</strong>了,因為裡面根本沒有 <code>assert</code>。</p>
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">看起來對但其實錯:「我設定了輸入,馬上讀輸出就是新的答案」</span>
+          <p>少寫 <code>await</code> 的 <code>Timer(2, "ns")</code> 只是建立一個物件,什麼都沒做;Python 不會報錯。結果是你讀到舊的輸出。
+          如果舊的輸出剛好等於預期值,測試還會「通過」。寫完測試,一定要拿一個壞掉的電路跑一次,確定它真的會失敗。</p>
+        </div>
+      </div>
+
+      <h3>測試怎麼被找到:MODULE、TOPLEVEL 與 TESTCASE</h3>
+      <ul>
+        <li><code>MODULE = test_adder</code>:cocotb 匯入這個 Python 模組(可以用逗號列好幾個),把裡面所有加了 <code>@cocotb.test()</code> 的 <code>async</code> 函式收集起來,<strong>照定義的順序</strong>一個一個跑(輸出裡的 <code>Found test …</code>)。</li>
+        <li><code>TOPLEVEL = adder</code>:頂層模組的名字,也就是 <code>dut</code> 指的那一個。</li>
+        <li><code>VERILOG_SOURCES</code>:要編譯的 Verilog 檔,用絕對路徑最保險(上面用 <code>$(PWD)</code>)。</li>
+        <li>只想跑其中一個測試:<code>make TESTCASE=adder_basic_test</code>。</li>
+      </ul>
+<pre><code class="language-text">     0.00ns INFO     cocotb.regression                  Found test test_adder.adder_basic_test
+     0.00ns INFO     cocotb.regression                  running adder_basic_test (1/1)
+                                                        ** TESTS=1 PASS=1 FAIL=0 SKIP=0                  2.00           0.02        125.14  **</code></pre>
+      <p>
+        一個測試失敗,cocotb 會記下來,接著跑下一個;所以一個測試檔裡分成好幾個測試,失敗時比較容易看出是哪一類出錯。
+        測試函式裡 <code>import random</code> 時,cocotb 會先用一個種子設定 <code>random</code> 模組,並印在輸出裡(<code>Seeding Python random module with …</code>);要重現某一次失敗,用 <code>RANDOM_SEED=那個數字 make</code>。
+        本章的測試都自己建 <code>random.Random(固定種子)</code>,不受它影響。
+      </p>
+
+      <h3>results.xml:給機器看的成績單</h3>
+      <p>每次跑完,cocotb 會在同一個資料夾寫出 <code>results.xml</code>,格式是常見的 JUnit XML。這是壞掉的加法器那一次的結果:</p>
+<pre><code class="language-xml">&lt;testsuites name="results"&gt;
+  &lt;testsuite name="all" package="all"&gt;
+    &lt;property name="random_seed" value="1792952299" /&gt;
+    &lt;testcase name="adder_basic_test" classname="test_adder" file="/ch/book/adder/test_adder.py" lineno="10" time="0.00031280517578125" sim_time_ns="2.001" ratio_time="6396.952975609755" /&gt;
+    &lt;testcase name="adder_randomised_test" classname="test_adder" file="/ch/book/adder/test_adder.py" lineno="19" time="0.0003287792205810547" sim_time_ns="6.001000000000001" ratio_time="18252.370053662078"&gt;
+      &lt;failure message="Test failed with RANDOM_SEED=1792952299" /&gt;
+    &lt;/testcase&gt;
+  &lt;/testsuite&gt;
+&lt;/testsuites&gt;</code></pre>
+      <p>
+        每個測試一個 <code>&lt;testcase&gt;</code>;失敗的測試裡面多了一個 <code>&lt;failure&gt;</code>(執行時發生例外則是 <code>&lt;error&gt;</code>)。
+        持續整合系統和判題程式都是讀這個檔,不是讀上面那張給人看的表。用 Python 標準函式庫的 <code>xml.etree.ElementTree</code> 就能讀,本章「突變測試」那一節會用到。
+      </p>
+      <h3>cocotb 1.9 與 2.x 的差別</h3>
+      <p>cocotb 2.0 改了一些名字。本章的寫法刻意兩邊都能跑(我們也用 cocotb 2.0.1 實際跑過本章的加法器、正反器、管線與 ALU 的例子):</p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>項目</th><th>cocotb 1.9</th><th>cocotb 2.x</th><th>本章的寫法(兩邊都能跑)</th></tr></thead>
+        <tbody>
+          <tr><td>等待時間</td><td><code>Timer(2, units="ns")</code></td><td><code>Timer(2, unit="ns")</code></td><td><code>Timer(2, "ns")</code>,單位用位置參數</td></tr>
+          <tr><td>讀整數</td><td><code>dut.X.value.integer</code> 或 <code>int(...)</code></td><td><code>dut.X.value.to_unsigned()</code> 或 <code>int(...)</code></td><td><code>int(dut.X.value)</code></td></tr>
+          <tr><td>Makefile 的模組名</td><td><code>MODULE</code>、<code>TOPLEVEL</code></td><td><code>COCOTB_TEST_MODULES</code>、<code>COCOTB_TOPLEVEL</code>(舊名還能用,會印 deprecated 警告)</td><td>用舊名</td></tr>
+          <tr><td>只跑一個測試</td><td><code>TESTCASE=</code></td><td><code>COCOTB_TEST_FILTER=</code></td><td>—</td></tr>
+          <tr><td>啟動時脈</td><td><code>cocotb.start_soon(Clock(...).start())</code></td><td><code>Clock(...).start()</code> 自己就會開始;包在 <code>start_soon</code> 裡也可以</td><td><code>cocotb.start_soon(Clock(...).start())</code></td></tr>
+        </tbody>
+      </table>
+      </div>
+
+      <h2>參考模型:另外寫一份「答案」</h2>
+      <p>
+        導向測試的預期值是你自己算好寫死的;隨機測試抽到哪一組事先不知道,預期值就要有人「當場算」。那個人就是<strong>參考模型</strong>:用另一種寫法描述同一個規格的程式。
+      </p>
+      <p>好的參考模型有三個特點:</p>
+      <ul>
+        <li><strong>簡單到一眼看得出對不對。</strong>加法器的模型就是 <code>a + b</code>。它不在乎進位怎麼一級一級傳,只在乎答案。</li>
+        <li><strong>和 DUT 用不同的方法寫。</strong>如果模型和 DUT 是同一份邏輯的兩份拷貝,它們會一起錯。Python 的整數、<code>if</code>/<code>else</code> 和 Verilog 的位元向量,本來就是不同的思考方式。</li>
+        <li><strong>位元寬度要自己處理。</strong>Python 的整數沒有上限,也有負數;硬體只有固定的位元數。模型最後一定要遮罩(mask):<code>&amp; 0xFF</code> 留下 8 位元,負數就自動變成二補數。</li>
+      </ul>
+      <p>
+        接下來的例子用<a href="136-verilog.html">{{ch:136-verilog}}</a>的範例 ALU:8 位元、4 種運算(add、sub、and、or),加減法直接用 <code>+</code> 和 <code>-</code>。
+        埠名與運算碼都和那一章一樣,這裡只多了 <code>`timescale</code> 和幾行註解:
+      </p>
+<pre><code class="language-verilog">// alu8.v:8 位元、4 種運算的小 ALU(本章的被測電路)
+`timescale 1ns/1ps
+module alu8 (
+    input      [7:0] a,
+    input      [7:0] b,
+    input      [1:0] op,     // 00 add、01 sub、10 and、11 or
+    output reg [7:0] y,
+    output           zero    // y == 0 時為 1
+);
+    always @* begin
+        case (op)
+            2'b00:   y = a + b;
+            2'b01:   y = a - b;
+            2'b10:   y = a &amp; b;
+            2'b11:   y = a | b;
+            default: y = 8'h00;     // op 有 x 或 z 時也有值
+        endcase
+    end
+    assign zero = (y == 8'd0);
+endmodule</code></pre>
+      <p>它的參考模型和 cocotb 測試放在同一個檔案 <code>test_alu8.py</code>(完整檔案在「突變測試」那一節):</p>
+<pre><code class="language-python">ADD, SUB, AND, OR = 0, 1, 2, 3
+
+
+def alu8_model(op, a, b):
+    """參考模型:回傳 (y, zero)"""
+    if op == ADD:
+        y = a + b
+    elif op == SUB:
+        y = a - b
+    elif op == AND:
+        y = a &amp; b
+    else:
+        y = a | b
+    y &amp;= 0xFF                       # 只留 8 位元:負數變成二補數
+    return y, int(y == 0)</code></pre>
+
+      <h3>手算:用參考模型算出預期輸出</h3>
+      <p>
+        手算參考模型,就是在紙上當 Python。每一列先照運算算出「數學上的答案」,再取 8 位元(加 256 或減 256,直到落在 0–255),最後決定 <code>zero</code>。
+        「有號」那一欄把同一個 8 位元當成二補數讀:128 以上要減 256。表格每一格都用上面的 <code>alu8_model</code> 算過,也用 <code>alu8.v</code> 在模擬器裡對過。
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>#</th><th>op</th><th>a</th><th>b</th><th>數學上的答案</th><th>y(十六進位)</th><th>y 當無號</th><th>y 當有號</th><th>zero</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td>add</td><td>100</td><td>27</td><td>127</td><td><code>0x7F</code></td><td>127</td><td>127</td><td>0</td></tr>
+          <tr><td>2</td><td>add</td><td>200</td><td>100</td><td>300 → 300 − 256</td><td><code>0x2C</code></td><td>44</td><td>44</td><td>0</td></tr>
+          <tr><td>3</td><td>sub</td><td>7</td><td>7</td><td>0</td><td><code>0x00</code></td><td>0</td><td>0</td><td>1</td></tr>
+          <tr><td>4</td><td>sub</td><td>3</td><td>10</td><td>−7 → −7 + 256</td><td><code>0xF9</code></td><td>249</td><td>−7</td><td>0</td></tr>
+          <tr><td>5</td><td>sub</td><td>0</td><td>1</td><td>−1 → −1 + 256</td><td><code>0xFF</code></td><td>255</td><td>−1</td><td>0</td></tr>
+          <tr><td>6</td><td>and</td><td><code>0xAA</code></td><td><code>0x0F</code></td><td><code>1010 1010 &amp; 0000 1111</code></td><td><code>0x0A</code></td><td>10</td><td>10</td><td>0</td></tr>
+          <tr><td>7</td><td>or</td><td><code>0x80</code></td><td><code>0x01</code></td><td><code>1000 0000 | 0000 0001</code></td><td><code>0x81</code></td><td>129</td><td>−127</td><td>0</td></tr>
+        </tbody>
+      </table></div>
+      <p>第 2 列是「加法溢出 8 位元」,第 4、5 列是「減出負數」。這兩種情況,一個沒有做遮罩的模型會得到 300 和 −7,和電路永遠對不上。</p>
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 137.1 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>用同一個參考模型,算出下面 6 組的 y(十六進位、無號、有號)與 zero。哪幾列的「無號」和「有號」讀法不一樣?</p>
+          <ol>
+            <li>add,<code>a = 0x7F</code>,<code>b = 0x01</code></li>
+            <li>add,<code>a = 0x80</code>,<code>b = 0x80</code></li>
+            <li>sub,<code>a = 0x00</code>,<code>b = 0xFF</code></li>
+            <li>sub,<code>a = 0x80</code>,<code>b = 0x01</code></li>
+            <li>and,<code>a = 0x55</code>,<code>b = 0xAA</code></li>
+            <li>or,<code>a = 0x00</code>,<code>b = 0x00</code></li>
+          </ol>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <div class="table-wrap"><table>
+                <thead><tr><th>#</th><th>數學上的答案</th><th>y</th><th>無號</th><th>有號</th><th>zero</th></tr></thead>
+                <tbody>
+                  <tr><td>1</td><td>127 + 1 = 128</td><td><code>0x80</code></td><td>128</td><td>−128</td><td>0</td></tr>
+                  <tr><td>2</td><td>128 + 128 = 256 → 0</td><td><code>0x00</code></td><td>0</td><td>0</td><td>1</td></tr>
+                  <tr><td>3</td><td>0 − 255 = −255 → 1</td><td><code>0x01</code></td><td>1</td><td>1</td><td>0</td></tr>
+                  <tr><td>4</td><td>128 − 1 = 127</td><td><code>0x7F</code></td><td>127</td><td>127</td><td>0</td></tr>
+                  <tr><td>5</td><td><code>0101 0101 &amp; 1010 1010</code></td><td><code>0x00</code></td><td>0</td><td>0</td><td>1</td></tr>
+                  <tr><td>6</td><td>0</td><td><code>0x00</code></td><td>0</td><td>0</td><td>1</td></tr>
+                </tbody>
+              </table></div>
+              <p>只有第 1 列不一樣:<code>0x80</code> 當無號是 128,當有號是 −128。第 1 列是有號溢位(兩個正數相加得到負數),第 4 列反過來(−128 − 1 得到 127)。
+              ALU 測試最愛挑這幾個邊界值:0、1、<code>0x7F</code>、<code>0x80</code>、<code>0xFF</code>。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">模型和電路一起錯</span>
+          <p>參考模型抓得到「電路和模型不一樣」,抓不到「兩個都和規格不一樣」。如果你誤以為 sub 是 <code>b - a</code>,而模型和電路都是你寫的,兩邊會一起錯、測試全過。
+          解法:從規格裡抄幾個寫死的導向測試(例如「<code>2 - 7</code> 應該是 <code>0xFB</code>」),讓規格本身也參與比對;能的話,讓不同的人寫模型和電路。</p>
+        </div>
+      </div>
+
+      <h2>導向測試與隨機測試</h2>
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">為什麼要學</span>
+          <p>本章 Lab 的隱藏突變版裡,有的錯只在少數輸入出現。你要決定:哪些向量要自己挑(導向),哪些交給亂數(隨機),亂數要抽幾組才夠。
+          這一節用<a href="14-combinatorics-probability.html">{{ch:14-combinatorics-probability}}</a>的計數與機率,算出「隨機測試漏掉一個 bug」的機率。</p>
+        </div>
+      </div>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th></th><th>導向測試(directed)</th><th>隨機測試(random)</th></tr></thead>
+        <tbody>
+          <tr><td>向量從哪裡來</td><td>人想出來、寫死在程式裡</td><td>亂數產生器;預期值由參考模型當場算</td></tr>
+          <tr><td>擅長</td><td>你想得到的邊界:0、最大值、溢位、相等、只有最高位</td><td>你沒想到的組合;數量大</td></tr>
+          <tr><td>弱點</td><td>你沒想到的,它也沒測</td><td>「很窄」的情況(例如 <code>a == b</code>)很難剛好抽到</td></tr>
+          <tr><td>重現</td><td>每次都一樣</td><td>要固定種子(seed),失敗時才能重跑同一組</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>
+        實務上兩種一起用,而且常用<strong>受限隨機(constrained random)</strong>:亂數不是完全平均,而是故意偏向邊界值,例如一半機率從 <code>[0, 1, 0x7F, 0x80, 0xFF]</code> 裡挑,一半機率完全隨機。
+        純 Python 就寫得出來:<code>rng.choice(EDGES) if rng.random() &lt; 0.5 else rng.randrange(256)</code>。
+      </p>
+      <h3>看起來對但其實錯:「隨機測試全過,設計就是對的」</h3>
+      <p>
+        看一個真實會犯的錯:<code>zero</code> 的位元範圍少寫一位,只看了低 7 位元。
+      </p>
+<pre><code class="language-verilog">assign zero = (y[6:0] == 7'd0);   // 突變:範圍少寫一位,只看了低 7 位元</code></pre>
+      <p>
+        它只在 <code>y</code> 剛好等於 <code>0x80</code> 時答錯(<code>y</code> 不是 0,<code>zero</code> 卻是 1)。
+        用 200 組隨機的 op、a、b 測它(<code>test_alu8_random.py</code>,種子由環境變數 <code>SEED</code> 決定):
+      </p>
+<pre><code class="language-python"># test_alu8_random.py:隨機測試。SEED 決定這一次抽到哪些向量
+import os
+import random
+
+import cocotb
+
+from test_alu8 import check
+
+
+@cocotb.test()
+async def random_vectors(dut):
+    """200 組隨機的 op、a、b"""
+    rng = random.Random(int(os.environ.get("SEED", "1")))
+    for _ in range(200):
+        await check(dut, rng.randrange(4), rng.randrange(256), rng.randrange(256))</code></pre>
+      <p>種子 1 到 10 各跑一次(<code>SEED=1 make DUT=rare/zero7.v MODULE=test_alu8_random</code>,其他依此類推),看 <code>results.xml</code> 有沒有 <code>&lt;failure&gt;</code>:</p>
+<pre><code class="language-text">rare/zero7.v seed=1 FAIL
+rare/zero7.v seed=2 PASS
+rare/zero7.v seed=3 PASS
+rare/zero7.v seed=4 FAIL
+rare/zero7.v seed=5 FAIL
+rare/zero7.v seed=6 FAIL
+rare/zero7.v seed=7 FAIL
+rare/zero7.v seed=8 FAIL
+rare/zero7.v seed=9 FAIL
+rare/zero7.v seed=10 FAIL</code></pre>
+      <p>
+        種子 2 和 3 的 200 組向量全過。如果你只跑了種子 2,你會很有信心地說「我的 ALU 沒問題」。<strong>例子都對 ≠ 敘述為真</strong>:
+        200 個通過的例子,一個反例(<code>0x80</code>)就推翻了。下面的手算把「漏掉的機率」算出來。
+      </p>
+
+      <h3>手算:隨機測試抓不到 bug 的機率</h3>
+      <p>
+        步驟:(1)數出這個突變版在多少種輸入上會答錯;(2)除以全部的輸入數,得到「一組隨機向量抓到它」的機率 $p$;
+        (3)$n$ 組獨立的隨機向量<strong>全部</strong>沒抓到的機率是 $(1-p)^n$。
+      </p>
+      <p>全部輸入:op 有 4 種,a、b 各 256 種,共 $4 \times 256 \times 256 = 262144$ 種。zero7 答錯 ⇔ $y = $ <code>0x80</code>。逐一數每種運算:</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>運算</th><th>什麼時候 y = <code>0x80</code></th><th>怎麼數</th><th>組數</th></tr></thead>
+        <tbody>
+          <tr><td>add</td><td>$a + b \equiv 128 \pmod{256}$</td><td>每個 a 剛好有一個 b</td><td>256</td></tr>
+          <tr><td>sub</td><td>$a - b \equiv 128 \pmod{256}$</td><td>每個 a 剛好有一個 b</td><td>256</td></tr>
+          <tr><td>and</td><td>a、b 的第 7 位元都是 1,其他 7 個位元不能兩個都是 1</td><td>其他每個位元有 (0,0)、(0,1)、(1,0) 三種:$3^7$</td><td>2187</td></tr>
+          <tr><td>or</td><td>其他 7 個位元都是 0,第 7 位元至少一個是 1</td><td>第 7 位元有 (0,1)、(1,0)、(1,1) 三種</td><td>3</td></tr>
+          <tr><td colspan="3">合計</td><td>2702</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        $p = 2702 / 262144 \approx 0.0103$,大約 1%。200 組全部沒抓到:$(1 - 0.0103)^{200} \approx 0.126$,大約八次裡有一次漏掉;上面 10 個種子漏了 2 個,很接近。
+        要讓漏掉的機率小於 1%,需要 $(1-p)^n &lt; 0.01$,也就是 $n &gt; \ln 0.01 / \ln(1-p) \approx 444.5$,至少 445 組。
+      </p>
+      <p>
+        2702 這個數字也可以讓電腦數:本章「形式驗證」那一節的窮舉比對程式,對 zero7 印出「不同的輸入:2702 / 262144」。
+        機率公式則用蒙地卡羅模擬對照(這不是證明,是建立直覺):
+      </p>
+<pre><code class="language-python"># mc.py:蒙地卡羅:200 組隨機向量抓不到 zero7 突變版的機率
+import random
+
+def caught_by_one(op, a, b):
+    y = [a + b, a - b, a &amp; b, a | b][op] &amp; 0xFF
+    return y == 0x80                       # zero7 只在 y = 0x80 時答錯
+
+rng = random.Random(137)
+trials, missed = 20000, 0
+for _ in range(trials):
+    if not any(caught_by_one(rng.randrange(4), rng.randrange(256), rng.randrange(256))
+               for _ in range(200)):
+        missed += 1
+p = 2702 / 262144
+print(f"模擬:{missed / trials:.4f}")
+print(f"公式:{(1 - p) ** 200:.4f}")</code></pre>
+<pre><code class="language-text">模擬:0.1271
+公式:0.1259</code></pre>
+      <p>
+        換成 32 位元的 ALU,同樣的錯(zero 只看低 31 位元)只在 $y = $ <code>0x80000000</code> 時出現,$p$ 大約是 $2^{-32}$。
+        就算跑 $10^6$ 組隨機向量,漏掉的機率還是 $(1-2^{-32})^{10^6} \approx 0.99977$。隨機測試幾乎不可能抓到它,一條「最小負數」的導向測試卻一定抓得到。
+        這就是為什麼 ALU 的測試總是「邊界值的兩兩組合」加上「隨機向量」。
+      </p>
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">證明(參考):$(1-p)^n \le e^{-np}$</span>
+          <p>對所有實數 $x$,$1 + x \le e^x$(曲線 $e^x$ 在 $x=0$ 的切線就是 $1+x$,而 $e^x$ 是凸函數,永遠在切線上方)。取 $x = -p$ 再兩邊 $n$ 次方,得到 $(1-p)^n \le e^{-np}$。
+          所以「漏掉的機率」至多 $e^{-np}$:要讓它小於 $\varepsilon$,只要 $n \ge \ln(1/\varepsilon)/p$。$p$ 小一半,向量數就要多一倍。
+          zero7 的例子:$e^{-200 \times 0.0103} \approx 0.127$,和精確值 0.126 很接近。</p>
+        </div>
+      </div>
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 137.2 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>另一個突變版 zero6 寫成 <code>assign zero = (y[5:0] == 6'd0);</code>(只看低 6 位元)。(1)它在什麼樣的 y 上答錯?(2)在 262144 種輸入裡,它答錯幾種?照上面的表一種運算一種運算數。(3)200 組隨機向量全部沒抓到它的機率大約多少?</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p>(1)y 的低 6 位元都是 0、但 y 不是 0:y 是 <code>0x40</code>、<code>0x80</code>、<code>0xC0</code> 三個值之一。</p>
+              <div class="table-wrap"><table>
+                <thead><tr><th>運算</th><th>怎麼數</th><th>組數</th></tr></thead>
+                <tbody>
+                  <tr><td>add</td><td>三個目標值,每個 a 各有一個 b:$3 \times 256$</td><td>768</td></tr>
+                  <tr><td>sub</td><td>同上</td><td>768</td></tr>
+                  <tr><td>and</td><td>低 6 位元每位 3 種($3^6 = 729$);高 2 位元的 and 結果是 01、10、11:01 和 10 各有 $3 \times 1$ 種、11 有 $1 \times 1$ 種,共 7 種:$7 \times 729$</td><td>5103</td></tr>
+                  <tr><td>or</td><td>低 6 位元兩個都是 0(1 種);高 2 位元的 or 結果是 01、10、11:01 和 10 各 $1 \times 3$ 種、11 有 $3 \times 3$ 種,共 15 種</td><td>15</td></tr>
+                  <tr><td colspan="2">合計</td><td>6654</td></tr>
+                </tbody>
+              </table></div>
+              <p>(3)$p = 6654/262144 \approx 0.0254$,$(1-p)^{200} \approx 0.0058$,大約 0.6%。zero6 比 zero7 好抓得多,因為錯的地方「比較寬」。
+              窮舉比對程式對 zero6 印出「不同的輸入:6654 / 262144」,和手算一樣。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>時脈、正緣與 scoreboard</h2>
+      <p>
+        組合電路只要「給輸入、等一下、讀輸出」。有時脈的電路(循序電路,見<a href="47-digital-circuits.html">{{ch:47-digital-circuits}}</a>)要多學三件事:產生時脈、等正緣、在對的時間點讀值。
+        先用 cocotb 的另一個範例 <code>examples/simple_dff</code>(CC0)改寫的 D 型正反器:
+      </p>
+<pre><code class="language-verilog">// dff.v:D 型正反器(改寫自 cocotb examples/simple_dff,CC0)
+`timescale 1us/1us
+module dff (
+    input      clk,
+    input      d,
+    output reg q
+);
+    always @(posedge clk)
+        q &lt;= d;
+endmodule</code></pre>
+<pre><code class="language-python"># test_dff.py:看清楚「正緣之後讀到的是哪一個值」(改寫自 cocotb examples/simple_dff,CC0)
+import cocotb
+from cocotb.clock import Clock
+from cocotb.triggers import FallingEdge, ReadOnly, RisingEdge
+from cocotb.utils import get_sim_time
+
+
+@cocotb.test()
+async def dff_trace(dut):
+    """一拍一拍印出 d 與 q"""
+    dut.d.value = 0
+    cocotb.start_soon(Clock(dut.clk, 10, "us").start(start_high=False))
+    await RisingEdge(dut.clk)                       # 第 0 個正緣:存進 d=0
+    for k, val in enumerate([1, 0, 1, 1, 0], start=1):
+        await FallingEdge(dut.clk)                  # 在負緣改輸入,離正緣最遠
+        dut.d.value = val
+        await RisingEdge(dut.clk)                   # 第 k 個正緣
+        q_edge = int(dut.q.value)                   # 正緣剛發生時讀
+        await ReadOnly()                            # 等這個時間點的所有更新做完
+        q_settled = int(dut.q.value)
+        t = get_sim_time("us")
+        dut._log.info(f"正緣 {k}:t={t:.0f}us d={val} q(正緣時)={q_edge} q(ReadOnly)={q_settled}")</code></pre>
+      <ul>
+        <li><code>Clock(dut.clk, 10, "us")</code>:週期 10 µs 的時脈。<code>.start(start_high=False)</code> 從 0 開始,所以第一個正緣在 5 µs。</li>
+        <li><code>cocotb.start_soon(...)</code>:把時脈放到「背景」去跑。它是另一個協程,和測試同時進行;測試不必自己一直翻轉 <code>clk</code>。</li>
+        <li><code>await RisingEdge(dut.clk)</code>:暫停到下一個正緣。<code>FallingEdge</code> 是負緣。</li>
+        <li><code>await ReadOnly()</code>:暫停到「這個時間點的所有更新都做完」。在這之後只能讀,不能寫。</li>
+      </ul>
+<pre><code class="language-text"> 15000.00ns INFO     cocotb.dff                         正緣 1:t=15us d=1 q(正緣時)=0 q(ReadOnly)=1
+ 25000.00ns INFO     cocotb.dff                         正緣 2:t=25us d=0 q(正緣時)=1 q(ReadOnly)=0
+ 35000.00ns INFO     cocotb.dff                         正緣 3:t=35us d=1 q(正緣時)=0 q(ReadOnly)=1
+ 45000.00ns INFO     cocotb.dff                         正緣 4:t=45us d=1 q(正緣時)=1 q(ReadOnly)=1
+ 55000.00ns INFO     cocotb.dff                         正緣 5:t=55us d=0 q(正緣時)=1 q(ReadOnly)=0
+                                                        ** TESTS=1 PASS=1 FAIL=0 SKIP=0              55000.00           0.02    3049999.66  **</code></pre>
+      <p>
+        注意「正緣時」和「ReadOnly」兩欄不一樣。<code>q &lt;= d</code> 是非阻隔賦值,正緣一發生,模擬器先叫醒所有在等正緣的程式(包括你的測試),等大家都看過了,才把 <code>q</code> 換成新值。
+        所以<strong>正緣剛發生時讀到的是正緣之前的舊值</strong>,等到 <code>ReadOnly</code> 才看得到這個正緣存進去的新值。
+        cocotb 官方的 simple_dff 範例就是用前一種讀法:它在正緣之後檢查 <code>q</code> 等於「上一拍」送進去的 <code>d</code>。兩種都可以,但要<strong>知道自己用的是哪一種</strong>,預期值才會對。
+      </p>
+
+      <h3>scoreboard:輸入端放進去,輸出端拿出來</h3>
+      <p>
+        真實的電路常常有延遲:這一拍送進去的資料,過幾拍才出來;中間有的拍沒有資料(用 <code>valid</code> 訊號標示)。下面是兩級管線的加法器:
+      </p>
+<pre><code class="language-verilog">// add_pipe2.v:兩級管線的加法器。輸入在第 k 個正緣存進第一級,第 k+1 個正緣出現在 x
+`timescale 1ns/1ps
+module add_pipe2 (
+    input            clk,
+    input            rst,        // 同步重置,1 = 清掉 valid
+    input            in_valid,   // 這一拍的 a、b 是不是有效資料
+    input      [7:0] a,
+    input      [7:0] b,
+    output reg       out_valid,
+    output reg [8:0] x
+);
+    reg       v1;
+    reg [8:0] s1;
+    always @(posedge clk) begin
+        if (rst) begin
+            v1        &lt;= 1'b0;
+            out_valid &lt;= 1'b0;
+        end else begin
+            v1        &lt;= in_valid;
+            out_valid &lt;= v1;
+        end
+        s1 &lt;= a + b;      // 第一級
+        x  &lt;= s1;         // 第二級
+    end
+endmodule</code></pre>
+      <p>
+        scoreboard 的想法很簡單:<strong>輸入端</strong>每看到一筆有效資料,就用參考模型算出預期值,放進佇列的尾端;<strong>輸出端</strong>每看到 <code>out_valid = 1</code>,就從佇列的前端拿一個出來比。
+        參考模型完全不用知道「延遲幾拍」,先進先出的順序就夠了。結束時佇列必須是空的,否則就是有資料「進去了沒出來」。
+      </p>
+<pre><code class="language-python"># test_pipe.py:用 scoreboard 檢查有延遲的電路
+from collections import deque
+
+import cocotb
+from cocotb.clock import Clock
+from cocotb.triggers import FallingEdge, ReadOnly, RisingEdge
+
+
+def model(a, b):
+    return a + b                                    # 參考模型:不管時序,只管答案
+
+
+@cocotb.test()
+async def pipe_scoreboard(dut):
+    """輸入端放進預期值,輸出端拿出來比"""
+    cocotb.start_soon(Clock(dut.clk, 10, "ns").start(start_high=False))
+    dut.rst.value = 1
+    dut.in_valid.value = 0
+    dut.a.value = 0
+    dut.b.value = 0
+    await RisingEdge(dut.clk)                       # 第 0 個正緣:重置
+    await FallingEdge(dut.clk)
+    dut.rst.value = 0
+
+    stimulus = [(1, 10, 20), (1, 200, 100), (0, 7, 7), (1, 255, 255), (0, 0, 0), (0, 0, 0)]
+    expected = deque()                              # scoreboard 的佇列
+    checked = 0
+    for k, (v, a, b) in enumerate(stimulus, start=1):
+        dut.in_valid.value = v                      # 負緣時送下一筆
+        dut.a.value = a
+        dut.b.value = b
+        await RisingEdge(dut.clk)                   # 第 k 個正緣:存進 (v, a, b)
+        if v:
+            expected.append(model(a, b))            # 輸入端:放進預期值
+        await ReadOnly()
+        action = "—"
+        if int(dut.out_valid.value):                # 輸出端:有效時拿出來比
+            want = expected.popleft()
+            got = int(dut.x.value)
+            assert got == want, f"正緣 {k}:x={got},預期 {want}"
+            checked += 1
+            action = f"比對 x={got} 對 {want}"
+        dut._log.info(f"正緣 {k}:存進 v={v} a={a} b={b};out_valid={int(dut.out_valid.value)};"
+                      f"{action};佇列={list(expected)}")
+        await FallingEdge(dut.clk)
+    assert not expected, f"還有 {len(expected)} 筆沒出來"
+    assert checked == 3</code></pre>
+<pre><code class="language-text">    15.00ns INFO     cocotb.add_pipe2                   正緣 1:存進 v=1 a=10 b=20;out_valid=0;—;佇列=[30]
+    25.00ns INFO     cocotb.add_pipe2                   正緣 2:存進 v=1 a=200 b=100;out_valid=1;比對 x=30 對 30;佇列=[300]
+    35.00ns INFO     cocotb.add_pipe2                   正緣 3:存進 v=0 a=7 b=7;out_valid=1;比對 x=300 對 300;佇列=[]
+    45.00ns INFO     cocotb.add_pipe2                   正緣 4:存進 v=1 a=255 b=255;out_valid=0;—;佇列=[510]
+    55.00ns INFO     cocotb.add_pipe2                   正緣 5:存進 v=0 a=0 b=0;out_valid=1;比對 x=510 對 510;佇列=[]
+    65.00ns INFO     cocotb.add_pipe2                   正緣 6:存進 v=0 a=0 b=0;out_valid=0;—;佇列=[]
+                                                        ** TESTS=1 PASS=1 FAIL=0 SKIP=0                 70.00           0.02       3881.41  **</code></pre>
+
+      <h3>手算:追 scoreboard 的佇列</h3>
+      <p>
+        每一列是一個正緣。「存進」是這個正緣存進第一級的輸入;v1、s1 是第一級暫存器在這個正緣<strong>之後</strong>的值;
+        out_valid、x 是第二級在這個正緣之後的值(測試用 <code>ReadOnly</code> 讀,讀到的就是這兩欄)。第 0 個正緣是重置,存進 a = b = 0,所以 s1 從 0 開始。
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>正緣</th><th>存進 (in_valid, a, b)</th><th>v1</th><th>s1</th><th>out_valid</th><th>x</th><th>scoreboard 的動作</th><th>之後的佇列</th></tr></thead>
+        <tbody>
+          <tr><td>0</td><td>重置,(0, 0, 0)</td><td>0</td><td>0</td><td>0</td><td><code>x</code></td><td>—</td><td>[]</td></tr>
+          <tr><td>1</td><td>(1, 10, 20)</td><td>1</td><td>30</td><td>0</td><td>0</td><td>放進 30</td><td>[30]</td></tr>
+          <tr><td>2</td><td>(1, 200, 100)</td><td>1</td><td>300</td><td>1</td><td>30</td><td>放進 300;拿出 30 和 x = 30 比:對</td><td>[300]</td></tr>
+          <tr><td>3</td><td>(0, 7, 7)</td><td>0</td><td>14</td><td>1</td><td>300</td><td>拿出 300 和 x = 300 比:對</td><td>[]</td></tr>
+          <tr><td>4</td><td>(1, 255, 255)</td><td>1</td><td>510</td><td>0</td><td>14</td><td>放進 510;out_valid = 0,不比(x = 14 是無效資料)</td><td>[510]</td></tr>
+          <tr><td>5</td><td>(0, 0, 0)</td><td>0</td><td>0</td><td>1</td><td>510</td><td>拿出 510 和 x = 510 比:對</td><td>[]</td></tr>
+          <tr><td>6</td><td>(0, 0, 0)</td><td>0</td><td>0</td><td>0</td><td>0</td><td>—</td><td>[]</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        第 4 列值得看:<code>x</code> 是 14(第 3 拍那筆 <code>in_valid = 0</code> 的 7 + 7 流過來了),但 <code>out_valid = 0</code>,scoreboard 不理它。
+        如果你的測試不看 valid、每一拍都比,就會在這裡誤報。比對的三筆和上面 cocotb 的輸出一致。
+      </p>
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 137.3 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>(1)把 <code>stimulus</code> 換成 <code>[(1, 1, 2), (0, 9, 9), (1, 128, 128), (1, 0, 255), (0, 0, 0), (0, 0, 0)]</code>,照上面的表追出每個正緣的 out_valid、x、scoreboard 的動作與佇列。</p>
+          <p>(2)有人把 <code>out_valid &lt;= v1;</code> 寫成 <code>out_valid &lt;= in_valid;</code>(valid 早到一拍,資料沒有)。用 (1) 的輸入,scoreboard 在第幾個正緣報錯?錯誤訊息裡的 x 和預期值是多少?</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <div class="table-wrap"><table>
+                <thead><tr><th>正緣</th><th>存進</th><th>v1</th><th>s1</th><th>out_valid</th><th>x</th><th>動作</th><th>佇列</th></tr></thead>
+                <tbody>
+                  <tr><td>1</td><td>(1, 1, 2)</td><td>1</td><td>3</td><td>0</td><td>0</td><td>放進 3</td><td>[3]</td></tr>
+                  <tr><td>2</td><td>(0, 9, 9)</td><td>0</td><td>18</td><td>1</td><td>3</td><td>拿出 3 比:對</td><td>[]</td></tr>
+                  <tr><td>3</td><td>(1, 128, 128)</td><td>1</td><td>256</td><td>0</td><td>18</td><td>放進 256;不比</td><td>[256]</td></tr>
+                  <tr><td>4</td><td>(1, 0, 255)</td><td>1</td><td>255</td><td>1</td><td>256</td><td>放進 255;拿出 256 比:對</td><td>[255]</td></tr>
+                  <tr><td>5</td><td>(0, 0, 0)</td><td>0</td><td>0</td><td>1</td><td>255</td><td>拿出 255 比:對</td><td>[]</td></tr>
+                  <tr><td>6</td><td>(0, 0, 0)</td><td>0</td><td>0</td><td>0</td><td>0</td><td>—</td><td>[]</td></tr>
+                </tbody>
+              </table></div>
+              <p>實際執行的輸出:</p>
+<pre><code class="language-text">    15.00ns INFO     cocotb.add_pipe2                   正緣 1:存進 v=1 a=1 b=2;out_valid=0;—;佇列=[3]
+    25.00ns INFO     cocotb.add_pipe2                   正緣 2:存進 v=0 a=9 b=9;out_valid=1;比對 x=3 對 3;佇列=[]
+    35.00ns INFO     cocotb.add_pipe2                   正緣 3:存進 v=1 a=128 b=128;out_valid=0;—;佇列=[256]
+    45.00ns INFO     cocotb.add_pipe2                   正緣 4:存進 v=1 a=0 b=255;out_valid=1;比對 x=256 對 256;佇列=[255]
+    55.00ns INFO     cocotb.add_pipe2                   正緣 5:存進 v=0 a=0 b=0;out_valid=1;比對 x=255 對 255;佇列=[]
+    65.00ns INFO     cocotb.add_pipe2                   正緣 6:存進 v=0 a=0 b=0;out_valid=0;—;佇列=[]
+                                                        ** TESTS=1 PASS=1 FAIL=0 SKIP=0                 70.00           0.02       3507.66  **</code></pre>
+              <p>(2)第 1 個正緣就報錯。valid 早到一拍:第 1 個正緣之後 out_valid 已經是 1,但 x 是第 0 個正緣時 s1 的值(重置時的 0 + 0 = 0)。scoreboard 拿出 3 和 0 比:</p>
+<pre><code class="language-text">                                                        AssertionError: 正緣 1:x=0,預期 3
+                                                        ** TESTS=1 PASS=0 FAIL=1 SKIP=0                 15.00           0.02        932.61  **</code></pre>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>讀波形:VCD 檔與文字波形表</h2>
+      <p>
+        測試失敗之後,你要知道「那一刻電路裡發生了什麼」。這時就要看<strong>波形(waveform)</strong>:每條訊號隨時間變化的圖。
+        模擬器可以把波形存成 <strong>VCD(Value Change Dump)</strong>檔,格式定義在 Verilog 標準 IEEE 1364 裡。它是純文字,只記「什麼時候、哪條訊號、變成什麼值」。
+      </p>
+      <p>
+        前面的 <code>tb_adder.v</code> 已經有這兩行:<code>$dumpfile("wave.vcd")</code> 指定檔名,<code>$dumpvars(0, A, B, X)</code> 指定要記哪些訊號。
+        跑壞掉的 <code>adder_bad.v</code> 那一次,<code>wave.vcd</code> 的內容是(開頭的日期與版本省略):
+      </p>
+<pre><code class="language-text">$timescale
+	1ps
+$end
+$scope module tb_adder $end
+$var reg 8 ! A [7:0] $end
+$upscope $end
+$scope module tb_adder $end
+$var reg 8 " B [7:0] $end
+$upscope $end
+$scope module tb_adder $end
+$var wire 9 # X [8:0] $end
+$upscope $end
+$enddefinitions $end
+#0
+$dumpvars
+b1111 #
+b1010 "
+b101 !
+$end
+#1000
+b0 #
+b0 "
+b0 !
+#2000
+b11110000 #
+b1 "
+b11111111 !
+#3000
+b111111110 #
+b11111111 "
+#4000
+b0 #
+b1 "
+b1111 !
+#5000</code></pre>
+      <p>讀法:</p>
+      <ul>
+        <li><code>$timescale 1ps</code>:時間單位。<code>tb_adder.v</code> 寫的是 <code>`timescale 1ns/1ps</code>,VCD 用精度 1 ps 記,所以 <code>#2000</code> 是 2 ns。</li>
+        <li><code>$var reg 8 ! A [7:0] $end</code>:8 位元的訊號 <code>A</code>,在後面用代號 <code>!</code> 表示。<code>B</code> 是 <code>"</code>,<code>X</code> 是 <code>#</code>。</li>
+        <li><code>#1000</code>:時間來到 1000 ps。後面每一行是「這個時間點有變的訊號」。</li>
+        <li><code>b11110000 #</code>:向量用 <code>b</code> 加二進位值,再空一格寫代號。單一位元的訊號沒有 <code>b</code>,寫成 <code>1!</code> 這種樣子。</li>
+        <li>沒列出來的訊號就是沒有變,維持上一個值。</li>
+      </ul>
+
+      <h3>手算:把 VCD 讀成波形表</h3>
+      <p>一行一行讀,每遇到一個 <code>#時間</code> 就開一列;沒變的訊號抄上一列。把二進位換成十進位,再和預期值比:</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>時間(ps)</th><th>A</th><th>B</th><th>X</th><th>預期 A + B</th><th>對嗎</th></tr></thead>
+        <tbody>
+          <tr><td>0</td><td>5(<code>101</code>)</td><td>10(<code>1010</code>)</td><td>15(<code>1111</code>)</td><td>15</td><td>對</td></tr>
+          <tr><td>1000</td><td>0</td><td>0</td><td>0</td><td>0</td><td>對</td></tr>
+          <tr><td>2000</td><td>255(<code>11111111</code>)</td><td>1</td><td>240(<code>11110000</code>)</td><td>256</td><td>錯</td></tr>
+          <tr><td>3000</td><td>255(沒變)</td><td>255</td><td>510(<code>111111110</code>)</td><td>510</td><td>對</td></tr>
+          <tr><td>4000</td><td>15(<code>1111</code>)</td><td>1</td><td>0</td><td>16</td><td>錯</td></tr>
+          <tr><td>5000</td><td>15</td><td>1</td><td>0</td><td>—</td><td><code>$finish</code>,沒有變化</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        波形說的故事和 testbench 的 FAIL 訊息一樣:2 ns 和 4 ns 錯了。再看錯的值:240 = 256 − 16,0 = 16 − 16,兩次都少了 16,也就是少了「進到第 4 位元的那個進位」。
+        在 3 ns,255 + 255 的第 3 位元兩個都是 1,自己就「產生」進位,所以沒錯。從波形推回 bug 在哪裡,這就是除錯。
+        手讀 VCD 很慢,實際工作用 GTKWave 這類看波形的程式;想把 VCD 轉成表格,Python 幾十行就夠了:
+      </p>
+<pre><code class="language-python"># vcd_table.py:把 VCD 檔印成「時間 × 訊號」的表格(只處理本章用到的簡單 VCD)
+import sys
+
+
+def read_vcd(path):
+    names = {}            # 代號 → 訊號名稱
+    unit = "?"
+    rows = []             # [(時間, {名稱: 值})]
+    now = None
+    values = {}
+    in_defs = True
+    want_unit = False
+    for line in open(path):
+        tok = line.split()
+        if not tok:
+            continue
+        if in_defs:
+            if want_unit and tok[0] != "$end":
+                unit = tok[0]                     # 例如 1ps、1us
+                want_unit = False
+            if tok[0] == "$timescale":
+                want_unit = True
+            elif tok[0] == "$var":                # $var wire 9 # X [8:0] $end
+                names[tok[3]] = tok[4]
+            elif tok[0] == "$enddefinitions":
+                in_defs = False
+            continue
+        if tok[0].startswith("#"):                # 新的時間點
+            if now is not None:
+                rows.append((now, dict(values)))
+            now = int(tok[0][1:])
+        elif tok[0].startswith("b"):              # 向量:b1010 "
+            bits = tok[0][1:]
+            values[names[tok[1]]] = int(bits, 2) if set(bits) &lt;= {"0", "1"} else bits
+        elif tok[0][0] in "01xz":                 # 單一位元:1!
+            values[names[tok[0][1:]]] = tok[0][0]
+    if now is not None:
+        rows.append((now, dict(values)))
+    return unit, list(names.values()), rows
+
+
+if __name__ == "__main__":
+    unit, order, rows = read_vcd(sys.argv[1])
+    print(f"時間({unit})", *order, sep="\t")
+    for t, v in rows:
+        print(t, *(v.get(n, "") for n in order), sep="\t")</code></pre>
+<pre><code class="language-text">$ python3 vcd_table.py wave.vcd
+時間(1ps)	A	B	X
+0	5	10	15
+1000	0	0	0
+2000	255	1	240
+3000	255	255	510
+4000	15	1	0
+5000	15	1	0</code></pre>
+      <p>
+        cocotb 也能存波形:Icarus 加 <code>make WAVES=1</code>,會在 <code>sim_build/</code> 下存一個 <code>adder.fst</code>。FST 是壓縮過的二進位格式,要用 GTKWave 打開;想要純文字的 VCD,就像上面一樣在 Verilog 裡寫 <code>$dumpfile</code>。
+      </p>
+      <p>有時脈的訊號畫成圖比較好看。下面是 <code>tb_dff.v</code>(和前面 cocotb 測試同樣的 d 序列)存下來的波形:</p>
+<pre><code class="language-verilog">// tb_dff.v:產生 D 型正反器的波形檔
+`timescale 1us/1us
+module tb_dff;
+    reg clk = 0, d = 0;
+    wire q;
+    dff dut(.clk(clk), .d(d), .q(q));
+
+    always #5 clk = ~clk;            // 週期 10 us:5、15、25… us 是正緣
+
+    initial begin
+        $dumpfile("dff.vcd");
+        $dumpvars(0, clk, d, q);
+        #12 d = 1;
+        #10 d = 0;
+        #10 d = 1;
+        #20 d = 0;
+        #10 $finish;
+    end
+endmodule</code></pre>
+      <div class="diagram">
+<svg viewBox="0 0 640 250" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- edge guides -->
+  <g stroke="#8a929b" stroke-width="1" stroke-dasharray="3 4">
+    <line x1="120" y1="28" x2="120" y2="200"/><line x1="200" y1="28" x2="200" y2="200"/>
+    <line x1="280" y1="28" x2="280" y2="200"/><line x1="360" y1="28" x2="360" y2="200"/>
+    <line x1="440" y1="28" x2="440" y2="200"/><line x1="520" y1="28" x2="520" y2="200"/>
+  </g>
+  <g font-size="10" fill="#8a929b" text-anchor="middle">
+    <text x="120" y="22">正緣 0</text><text x="200" y="22">正緣 1</text><text x="280" y="22">正緣 2</text>
+    <text x="360" y="22">正緣 3</text><text x="440" y="22">正緣 4</text><text x="520" y="22">正緣 5</text>
+  </g>
+  <!-- labels -->
+  <g font-size="13" font-weight="700" fill="#1f2328" text-anchor="end">
+    <text x="66" y="60">clk</text><text x="66" y="120">d</text><text x="66" y="180">q</text>
+  </g>
+  <!-- clk -->
+  <path d="M80,70 H120 V40 H160 V70 H200 V40 H240 V70 H280 V40 H320 V70 H360 V40 H400 V70 H440 V40 H480 V70 H520 V40 H560 V70 H576" fill="none" stroke="#2f6f6a" stroke-width="2"/>
+  <!-- d -->
+  <path d="M80,130 H176 V100 H256 V130 H336 V100 H496 V130 H576" fill="none" stroke="#b4541f" stroke-width="2"/>
+  <!-- q -->
+  <rect x="80" y="160" width="40" height="30" fill="#e3e6ea" stroke="#8a929b"/>
+  <text x="100" y="180" text-anchor="middle" font-size="11" fill="#8a929b">x</text>
+  <path d="M120,190 H200 V160 H280 V190 H360 V160 H520 V190 H576" fill="none" stroke="#8b5cf6" stroke-width="2"/>
+  <!-- axis -->
+  <line x1="80" y1="215" x2="576" y2="215" stroke="#8a929b"/>
+  <g font-size="10" fill="#8a929b" text-anchor="middle">
+    <text x="80" y="230">0</text><text x="160" y="230">10</text><text x="240" y="230">20</text><text x="320" y="230">30</text>
+    <text x="400" y="230">40</text><text x="480" y="230">50</text><text x="560" y="230">60 µs</text>
+  </g>
+</svg>
+        <figcaption>圖 137-2:D 型正反器的波形。d 在兩個正緣之間改變(12、22、32、52 µs);q 只在正緣更新,變成正緣那一刻的 d。0–5 µs 的 q 還沒被存過值,是未知的 x。文字版就是手算 137.4 要你填的表。</figcaption>
+      </div>
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 137.4 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p><code>tb_dff.v</code> 存下的 <code>dff.vcd</code>,定義區之後的內容如下。它的定義區把 <code>clk</code> 記成 <code>!</code>、<code>d</code> 記成 <code>"</code>、<code>q</code> 記成 <code>#</code>,時間單位 1 us。</p>
+<pre><code class="language-text">$enddefinitions $end
+#0
+$dumpvars
+x#
+0"
+0!
+$end
+#5
+0#
+1!
+#10
+0!
+#12
+1"
+#15
+1#
+1!
+#20
+0!
+#22
+0"
+#25
+0#
+1!
+#30
+0!
+#32
+1"
+#35
+1#
+1!
+#40
+0!
+#45
+1!
+#50
+0!
+#52
+0"
+#55
+0#
+1!
+#60
+0!
+#62</code></pre>
+          <p>(1)把它讀成「時間 × clk、d、q」的波形表。(2)每個正緣(5、15、25、35、45、55 us)之後,q 是多少?和前面 cocotb 那段輸出的哪一欄一致?(3)d 在 12 us 變成 1,q 在什麼時候變成 1?為什麼不是 12 us?</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p>(1)</p>
+<pre><code class="language-text">時間(1us)	clk	d	q
+0	0	0	x
+5	1	0	0
+10	0	0	0
+12	0	1	0
+15	1	1	1
+20	0	1	1
+22	0	0	1
+25	1	0	0
+30	0	0	0
+32	0	1	0
+35	1	1	1
+40	0	1	1
+45	1	1	1
+50	0	1	1
+52	0	0	1
+55	1	0	0
+60	0	0	0
+62	0	0	0</code></pre>
+              <p>(2)5 us 之後是 0、15 us 之後是 1、25 us 之後是 0、35 us 之後是 1、45 us 之後是 1、55 us 之後是 0。
+              cocotb 那段輸出的正緣 1–5 在 15–55 us,這 5 個值和「q(ReadOnly)」一欄一致(1、0、1、1、0);「q(正緣時)」一欄則是前一列的值。</p>
+              <p>(3)15 us。正反器只在正緣取樣 d;12 us 到 15 us 之間沒有正緣,所以 q 一直維持 0,到 15 us 的正緣才存進 1。
+              注意 45 us 那一列:d 一直是 1,q 也一直是 1,VCD 裡 <code>#</code> 沒有出現,因為值沒有改變;但 clk 還是變了,所以這個時間點仍然有一列。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>覆蓋率:測試到底碰到了哪裡</h2>
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">為什麼要學</span>
+          <p>「我跑了 1000 組,應該夠了吧?」覆蓋率把這句話變成可以量的數字:哪些情況測過、哪些沒有。迷你 SoC 任務線的驗收會看 cocotb 的覆蓋率;本章 Lab 雖然不量覆蓋率,但你挑邊界值時,心裡想的就是 bin。</p>
+        </div>
+      </div>
+      <p>覆蓋率(coverage)分兩大類:</p>
+      <ul>
+        <li><strong>程式碼覆蓋率(code coverage)</strong>:工具自動量。<em>行覆蓋率</em>:每一行 Verilog 有沒有執行過;<em>toggle 覆蓋率</em>:每條訊號的每個位元有沒有 0→1、1→0 都翻過。</li>
+        <li><strong>功能覆蓋率(functional coverage)</strong>:你自己定義「哪些情況重要」,每一種情況叫一個 <strong>bin</strong>(箱子),測試跑過時就在對應的箱子打勾。兩個項目的組合叫<em>交叉覆蓋(cross coverage)</em>,例如「op × zero」。</li>
+      </ul>
+      <p>
+        程式碼覆蓋率回答「電路的每個部分有沒有被動到」,功能覆蓋率回答「規格裡的每種情況有沒有被測到」。專業的流程兩種都量(SystemVerilog 有 <code>covergroup</code> 語法,cocotb 有 cocotb-coverage 套件)。
+        本章自己用 Python 寫,看清楚 bin 是什麼。對 8 位元加法器定義 13 個 bin:
+      </p>
+<pre><code class="language-python"># coverage.py:手工的功能覆蓋率(bins)與埠的 toggle 覆蓋率,對 8 位元加法器
+def range_bin(v):
+    if v == 0:
+        return "0"
+    if v == 255:
+        return "255"
+    return "1–127" if v &lt; 128 else "128–254"
+
+
+def carry4_bin(a, b):
+    """第 3 位元進到第 4 位元的進位是怎麼來的"""
+    if ((a &amp; 0xF) + (b &amp; 0xF)) &lt; 16:
+        return "沒有進位"
+    if (a &gt;&gt; 3) &amp; 1 and (b &gt;&gt; 3) &amp; 1:
+        return "產生"                  # a3、b3 都是 1,自己就產生進位
+    return "傳遞"                      # 低位的進位經過第 3 位元傳上去
+
+
+BINS = {
+    "A": ["0", "1–127", "128–254", "255"],
+    "B": ["0", "1–127", "128–254", "255"],
+    "X[8]": ["0", "1"],
+    "進位 3→4": ["沒有進位", "產生", "傳遞"],
+}
+
+
+def functional(vectors):
+    hit = {k: set() for k in BINS}
+    for a, b in vectors:
+        hit["A"].add(range_bin(a))
+        hit["B"].add(range_bin(b))
+        hit["X[8]"].add(str((a + b) &gt;&gt; 8))
+        hit["進位 3→4"].add(carry4_bin(a, b))
+    return hit
+
+
+def toggle(vectors):
+    """每個埠的每個位元,是否 0→1 和 1→0 都發生過"""
+    ports = [("A", 8, lambda a, b: a), ("B", 8, lambda a, b: b), ("X", 9, lambda a, b: a + b)]
+    done = total = 0
+    for name, width, f in ports:
+        vals = [f(a, b) for a, b in vectors]
+        for bit in range(width):
+            seq = [(v &gt;&gt; bit) &amp; 1 for v in vals]
+            rise = any(p == 0 and q == 1 for p, q in zip(seq, seq[1:]))
+            fall = any(p == 1 and q == 0 for p, q in zip(seq, seq[1:]))
+            total += 1
+            done += rise and fall
+    return done, total
+
+
+def report(vectors):
+    hit = functional(vectors)
+    n_hit = sum(len(hit[k]) for k in BINS)
+    n_all = sum(len(v) for v in BINS.values())
+    for k, names in BINS.items():
+        marks = "  ".join(("■" if n in hit[k] else "□") + n for n in names)
+        print(f"{k:8} {marks}")
+    print(f"功能覆蓋率 {n_hit}/{n_all} = {n_hit / n_all:.0%}")
+    d, t = toggle(vectors)
+    print(f"toggle 覆蓋率 {d}/{t} = {d / t:.0%}")
+
+
+if __name__ == "__main__":
+    print("== 四組向量 ==")
+    report([(0, 0), (255, 255), (1, 0), (0, 0)])
+    print("== 練習的六組向量 ==")
+    report([(5, 10), (0, 0), (255, 1), (255, 255), (15, 1), (200, 100)])</code></pre>
+      <p>其中「進位 3→4」的三個 bin 是從電路結構想出來的:第 3 位元往第 4 位元的進位,可能沒有、可能是第 3 位元自己「產生」的、也可能是更低位的進位「傳遞」上來的。</p>
+
+      <h3>手算:功能覆蓋率的 bin</h3>
+      <p>四組向量 <code>(0, 0)</code>、<code>(255, 255)</code>、<code>(1, 0)</code>、<code>(0, 0)</code>。一組一組看它落在哪個 bin:</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>向量</th><th>A 的 bin</th><th>B 的 bin</th><th>X[8]</th><th>低 4 位元相加</th><th>進位 3→4</th></tr></thead>
+        <tbody>
+          <tr><td>(0, 0)</td><td>0</td><td>0</td><td>0</td><td>0 + 0 = 0</td><td>沒有進位</td></tr>
+          <tr><td>(255, 255)</td><td>255</td><td>255</td><td>1(510 ≥ 256)</td><td>15 + 15 = 30 ≥ 16;a3 = b3 = 1</td><td>產生</td></tr>
+          <tr><td>(1, 0)</td><td>1–127</td><td>0</td><td>0</td><td>1 + 0 = 1</td><td>沒有進位</td></tr>
+          <tr><td>(0, 0)</td><td>0</td><td>0</td><td>0</td><td>0</td><td>沒有進位</td></tr>
+        </tbody>
+      </table></div>
+      <p>把打勾的 bin 收起來(■ 有、□ 沒有):</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>項目</th><th>bin</th><th>打勾</th></tr></thead>
+        <tbody>
+          <tr><td>A</td><td>■ 0、■ 1–127、□ 128–254、■ 255</td><td>3 / 4</td></tr>
+          <tr><td>B</td><td>■ 0、□ 1–127、□ 128–254、■ 255</td><td>2 / 4</td></tr>
+          <tr><td>X[8]</td><td>■ 0、■ 1</td><td>2 / 2</td></tr>
+          <tr><td>進位 3→4</td><td>■ 沒有進位、■ 產生、□ 傳遞</td><td>2 / 3</td></tr>
+          <tr><td colspan="2">功能覆蓋率</td><td>9 / 13 ≈ 69%</td></tr>
+        </tbody>
+      </table></div>
+      <p>同樣這四組,算埠的 toggle 覆蓋率:</p>
+      <ul>
+        <li>A 依序是 0、255、1、0。第 0 位元:0→1→1→0,升、降都有;第 1–7 位元:0→1→0→0,也都有。8 / 8。</li>
+        <li>B 依序是 0、255、0、0:每個位元都 0→1→0。8 / 8。</li>
+        <li>X 依序是 0、510、1、0。510 是 <code>1 1111 1110</code>,第 0 位元是 0;它的第 0 位元在 (1, 0) 那一組才變 1、最後變回 0。第 1–8 位元:0→1→0→0。9 / 9。</li>
+      </ul>
+      <p><code>coverage.py</code> 的輸出和手算一致:</p>
+<pre><code class="language-text">A        ■0  ■1–127  □128–254  ■255
+B        ■0  □1–127  □128–254  ■255
+X[8]     ■0  ■1
+進位 3→4   ■沒有進位  ■產生  □傳遞
+功能覆蓋率 9/13 = 69%
+toggle 覆蓋率 25/25 = 100%</code></pre>
+      <h3>看起來對但其實錯:「toggle 覆蓋率 100%,就沒有 bug」</h3>
+      <p>
+        把這四組寫成 cocotb 測試 <code>four_vectors</code>,再加一條只有一組向量的 <code>propagate_bin</code>,補上那個空著的「傳遞」bin:
+      </p>
+<pre><code class="language-python"># test_toggle.py:四組向量,埠的 toggle 覆蓋率 100%
+import cocotb
+from cocotb.triggers import Timer
+
+from adder_model import adder_model
+
+
+@cocotb.test()
+async def four_vectors(dut):
+    for a, b in [(0, 0), (255, 255), (1, 0), (0, 0)]:
+        dut.A.value = a
+        dut.B.value = b
+        await Timer(2, "ns")
+        assert int(dut.X.value) == adder_model(a, b), f"{a} + {b} = {int(dut.X.value)}"
+
+
+@cocotb.test()
+async def propagate_bin(dut):
+    """補上「傳遞」那一格"""
+    dut.A.value = 15
+    dut.B.value = 1
+    await Timer(2, "ns")
+    assert int(dut.X.value) == adder_model(15, 1), f"15 + 1 = {int(dut.X.value)}"</code></pre>
+      <p>在正確的 <code>adder.v</code> 上兩條都過。換成前面那個「忘了傳遞」的 <code>adder_bad.v</code>:</p>
+<pre><code class="language-text">                                                        AssertionError: 15 + 1 = 0
+                                                        ** test_toggle.four_vectors       PASS           8.00           0.00      19286.57  **
+                                                        ** test_toggle.propagate_bin      FAIL           2.00           0.00      10970.98  **
+                                                        ** TESTS=2 PASS=1 FAIL=1 SKIP=0                 10.00           0.02        621.11  **</code></pre>
+      <p>
+        <code>four_vectors</code> 的 toggle 覆蓋率是 100%,卻<strong>通過</strong>了壞掉的加法器;抓到它的是那個補「傳遞」bin 的 15 + 1。
+        toggle 覆蓋率只說「每個位元都翻過」,不說「每種進位的情況都發生過」。<strong>覆蓋率低,一定有沒測到的地方;覆蓋率高,不代表測到了重要的地方。</strong>
+        而且覆蓋率只量「有沒有碰到」,不管「碰到時有沒有檢查」:一個完全沒有 <code>assert</code> 的測試,覆蓋率也可以是 100%。
+      </p>
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 137.5 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>換成 6 組向量:<code>(5, 10)</code>、<code>(0, 0)</code>、<code>(255, 1)</code>、<code>(255, 255)</code>、<code>(15, 1)</code>、<code>(200, 100)</code>。(1)每一組落在哪些 bin?功能覆蓋率是多少?(2)還缺哪個 bin?寫一組能補上它的向量。(3)埠的 toggle 覆蓋率是多少?哪幾個位元沒有升、降都翻過?</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <div class="table-wrap"><table>
+                <thead><tr><th>向量</th><th>A</th><th>B</th><th>X(X[8])</th><th>進位 3→4</th></tr></thead>
+                <tbody>
+                  <tr><td>(5, 10)</td><td>1–127</td><td>1–127</td><td>15(0)</td><td>沒有進位(5 + 10 = 15)</td></tr>
+                  <tr><td>(0, 0)</td><td>0</td><td>0</td><td>0(0)</td><td>沒有進位</td></tr>
+                  <tr><td>(255, 1)</td><td>255</td><td>1–127</td><td>256(1)</td><td>傳遞(15 + 1 = 16;b3 = 0)</td></tr>
+                  <tr><td>(255, 255)</td><td>255</td><td>255</td><td>510(1)</td><td>產生</td></tr>
+                  <tr><td>(15, 1)</td><td>1–127</td><td>1–127</td><td>16(0)</td><td>傳遞</td></tr>
+                  <tr><td>(200, 100)</td><td>128–254</td><td>1–127</td><td>300(1)</td><td>沒有進位(低 4 位元 8 + 4 = 12)</td></tr>
+                </tbody>
+              </table></div>
+              <p>(1)A 4/4、B 3/4、X[8] 2/2、進位 3/3,共 12/13 ≈ 92%。(2)缺 B 的「128–254」,例如 <code>(0, 128)</code>。</p>
+              <p>(3)23/25 ≈ 92%。A 的第 3 位元依序是 0、0、1、1、1、1(5、0、255、255、15、200 的第 3 位元),只升不降;X 依序是 15、0、256、510、16、300,第 0 位元是 1、0、0、0、0、0,只降不升。<code>coverage.py</code> 的輸出:</p>
+<pre><code class="language-text">A        ■0  ■1–127  ■128–254  ■255
+B        ■0  ■1–127  □128–254  ■255
+X[8]     ■0  ■1
+進位 3→4   ■沒有進位  ■產生  ■傳遞
+功能覆蓋率 12/13 = 92%
+toggle 覆蓋率 23/25 = 92%</code></pre>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>突變測試:測試你的測試</h2>
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">為什麼要學</span>
+          <p>Boss 戰「ALU 與突變」的判法就是突變測試:你的測試跑在參考 ALU 上要全過,跑在每個隱藏突變版上要至少失敗一項。這一節的擊殺矩陣,就是判題程式在做的事。</p>
+        </div>
+      </div>
+      <p>
+        覆蓋率量「碰到了沒」,<strong>突變測試(mutation testing)</strong>量「抓不抓得到」:把電路故意改壞一個小地方,得到一個<strong>突變版(mutant)</strong>,
+        再拿你的測試去跑。測試失敗,就說這個突變版被<strong>殺死(killed)</strong>了;測試全過,它就<strong>存活(survived)</strong>,表示你的測試有一個漏洞。
+        <a href="46-debugging-testing.html">{{ch:46-debugging-testing}}</a>用 Python 函式講過同樣的想法(那一章叫「變異測試」、「變異體」);硬體的突變通常長這樣:
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>突變的種類</th><th>例子</th><th>像哪一種真實的 bug</th></tr></thead>
+        <tbody>
+          <tr><td>運算子換掉</td><td><code>a &amp; b</code> ↔ <code>a | b</code>;<code>a - b</code> → <code>b - a</code></td><td>複製貼上之後忘了改</td></tr>
+          <tr><td>少一個常數</td><td><code>a - b</code> → <code>a + ~b</code>(二補數減法少加 1)</td><td>用加法器做減法時忘了進位輸入 = 1</td></tr>
+          <tr><td>位元範圍錯</td><td><code>y == 0</code> → <code>y[3:0] == 0</code></td><td>寬度改了,某一行沒跟著改</td></tr>
+          <tr><td>進位鏈斷掉</td><td>第 6 位元進到第 7 位元的進位不見</td><td>手接漣波加法器時少接一條線</td></tr>
+          <tr><td>有號/無號弄反</td><td><code>$signed(a) &lt; $signed(b)</code> ↔ <code>a &lt; b</code></td><td>slt 與 sltu 搞混</td></tr>
+          <tr><td>卡住的位元(stuck-at)</td><td>某個輸出位元永遠是 0</td><td>製造缺陷;測試晶片時也用這個模型</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>對 <code>alu8.v</code> 做 6 個突變版,每個只改一行(或一對 case):</p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>突變版</th><th>改了什麼</th></tr></thead>
+        <tbody>
+          <tr><td>M1 <code>m1_sub_off.v</code></td><td><code>y = a - b</code> → <code>y = a + ~b</code>(少加 1)</td></tr>
+          <tr><td>M2 <code>m2_and_or.v</code></td><td>and 與 or 的兩行對調</td></tr>
+          <tr><td>M3 <code>m3_zero_lo.v</code></td><td><code>zero = (y == 8'd0)</code> → <code>zero = (y[3:0] == 4'd0)</code></td></tr>
+          <tr><td>M4 <code>m4_sub_swap.v</code></td><td><code>y = a - b</code> → <code>y = b - a</code></td></tr>
+          <tr><td>M5 <code>m5_carry7.v</code></td><td><code>y = a + b</code> → <code>y = {a[7] ^ b[7], a[6:0] + b[6:0]}</code>(第 6 位元的進位進不到第 7 位元)</td></tr>
+          <tr><td>M6 <code>m6_or_equiv.v</code></td><td><code>y = a | b</code> → <code>y = (a ^ b) | (a &amp; b)</code></td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>例如 M1 的完整檔案(其他突變版也一樣,模組名都還是 <code>alu8</code>,才能直接替換):</p>
+<pre><code class="language-verilog">// m1_sub_off.v:alu8 的突變版
+`timescale 1ns/1ps
+module alu8 (
+    input      [7:0] a,
+    input      [7:0] b,
+    input      [1:0] op,     // 00 add、01 sub、10 and、11 or
+    output reg [7:0] y,
+    output           zero    // y == 0 時為 1
+);
+    always @* begin
+        case (op)
+            2'b00:   y = a + b;
+            2'b01:   y = a + ~b;           // 突變:少加 1
+            2'b10:   y = a &amp; b;
+            2'b11:   y = a | b;
+            default: y = 8'h00;     // op 有 x 或 z 時也有值
+        endcase
+    end
+    assign zero = (y == 8'd0);
+endmodule</code></pre>
+      <p>測試是 5 條導向測試,<strong>一個向量一條測試</strong>,這樣 <code>results.xml</code> 才看得出是哪一條抓到的:</p>
+<pre><code class="language-python"># test_alu8.py:alu8 的導向測試,一個向量一個測試,擊殺矩陣才看得出是哪一條抓到的
+import cocotb
+from cocotb.triggers import Timer
+
+ADD, SUB, AND, OR = 0, 1, 2, 3
+
+
+def alu8_model(op, a, b):
+    """參考模型:回傳 (y, zero)"""
+    if op == ADD:
+        y = a + b
+    elif op == SUB:
+        y = a - b
+    elif op == AND:
+        y = a &amp; b
+    else:
+        y = a | b
+    y &amp;= 0xFF                       # 只留 8 位元:負數變成二補數
+    return y, int(y == 0)
+
+
+async def check(dut, op, a, b):
+    dut.op.value = op
+    dut.a.value = a
+    dut.b.value = b
+    await Timer(1, "ns")
+    y, zero = alu8_model(op, a, b)
+    assert int(dut.y.value) == y, f"op={op} a={a:#04x} b={b:#04x}:y={int(dut.y.value):#04x},預期 {y:#04x}"
+    assert int(dut.zero.value) == zero, f"op={op} a={a:#04x} b={b:#04x}:zero={int(dut.zero.value)},預期 {zero}"
+
+
+@cocotb.test()
+async def t1_add(dut):
+    await check(dut, ADD, 3, 4)          # 7
+
+@cocotb.test()
+async def t2_sub_equal(dut):
+    await check(dut, SUB, 5, 5)          # 0,zero = 1
+
+@cocotb.test()
+async def t3_and(dut):
+    await check(dut, AND, 0xF0, 0x3C)    # 0x30
+
+@cocotb.test()
+async def t4_or(dut):
+    await check(dut, OR, 0x0F, 0xF0)     # 0xFF
+
+@cocotb.test()
+async def t5_sub_negative(dut):
+    await check(dut, SUB, 2, 7)          # 0xFB(-5 的二補數)</code></pre>
+
+      <h3>手算:哪個突變版被哪條測試抓到</h3>
+      <p>
+        做法和<a href="46-debugging-testing.html">{{ch:46-debugging-testing}}</a>的擊殺矩陣一樣:每個突變版,把 5 條測試的輸入代進去,算出它的 y 和 zero,和「預期」那一列比。
+        y 或 zero 有一個不一樣,就標 ✗(這條測試殺死了它)。每一格寫「突變版的 y/zero」:
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>版本</th><th>T1 add 3, 4</th><th>T2 sub 5, 5</th><th>T3 and <code>F0</code>, <code>3C</code></th><th>T4 or <code>0F</code>, <code>F0</code></th><th>T5 sub 2, 7</th><th>結果</th></tr></thead>
+        <tbody>
+          <tr><td>預期</td><td><code>07</code>/0</td><td><code>00</code>/1</td><td><code>30</code>/0</td><td><code>FF</code>/0</td><td><code>FB</code>/0</td><td></td></tr>
+          <tr><td>M1 少加 1</td><td><code>07</code>/0</td><td><code>FF</code>/0 ✗</td><td><code>30</code>/0</td><td><code>FF</code>/0</td><td><code>FA</code>/0 ✗</td><td>被 T2、T5 殺死</td></tr>
+          <tr><td>M2 and↔or</td><td><code>07</code>/0</td><td><code>00</code>/1</td><td><code>FC</code>/0 ✗</td><td><code>00</code>/1 ✗</td><td><code>FB</code>/0</td><td>被 T3、T4 殺死</td></tr>
+          <tr><td>M3 zero 看低 4 位元</td><td><code>07</code>/0</td><td><code>00</code>/1</td><td><code>30</code>/1 ✗</td><td><code>FF</code>/0</td><td><code>FB</code>/0</td><td>被 T3 殺死</td></tr>
+          <tr><td>M4 <code>b - a</code></td><td><code>07</code>/0</td><td><code>00</code>/1</td><td><code>30</code>/0</td><td><code>FF</code>/0</td><td><code>05</code>/0 ✗</td><td>被 T5 殺死</td></tr>
+          <tr><td>M5 進位鏈斷</td><td><code>07</code>/0</td><td><code>00</code>/1</td><td><code>30</code>/0</td><td><code>FF</code>/0</td><td><code>FB</code>/0</td><td>存活</td></tr>
+          <tr><td>M6 另一種 or</td><td><code>07</code>/0</td><td><code>00</code>/1</td><td><code>30</code>/0</td><td><code>FF</code>/0</td><td><code>FB</code>/0</td><td>存活</td></tr>
+        </tbody>
+      </table></div>
+      <p>幾格算給你看:</p>
+      <ul>
+        <li>M1、T2:<code>~5</code> 是 <code>1111 1010</code> = 250,5 + 250 = 255 = <code>FF</code>;y 不是 0,zero 也跟著錯。T5:2 + <code>~7</code> = 2 + 248 = 250 = <code>FA</code>,比正確的 <code>FB</code> 少 1。這就是「少加 1」的指紋。</li>
+        <li>M3、T3:y = <code>0x30</code> = <code>0011 0000</code>,低 4 位元剛好全是 0,M3 就說 zero = 1。其他 4 條的 y 低 4 位元都不是 0(或 y 本來就是 0),所以只有 T3 抓到。</li>
+        <li>M4、T2:<code>5 - 5</code> 和 <code>5 - 5</code> 對調還是 0,抓不到;要靠 T5 的 <code>7 - 2 = 5</code>。<strong>「相等」的輸入對「兩邊對調」的 bug 完全沒用。</strong></li>
+        <li>M5:T1 的 3 + 4 低 7 位元沒有進位,根本沒用到被弄斷的那條線。</li>
+      </ul>
+      <p>
+        突變分數 = 被殺死的 / 全部 = 4 / 6 ≈ 67%。兩個存活者要分開看:<strong>M6 是等價突變版(equivalent mutant)</strong>:
+        <code>(a ^ b) | (a &amp; b)</code> 對每個位元都等於 <code>a | b</code>(真值表 4 列逐一檢查就知道),沒有任何測試殺得死它,算分數時要從分母拿掉:4 / 5 = 80%。
+        本章最後一節會用窮舉證明它真的等價。<strong>M5 才是真的漏洞</strong>:5 條測試沒有一條讓進位進到第 7 位元。補一條 T6:add <code>0x40</code> + <code>0x40</code> = <code>0x80</code>。
+        M5 算出低 7 位元 <code>0x40 + 0x40</code> = <code>0x80</code>,截成 7 位元變 0,第 7 位元 0 ^ 0 = 0,所以 y = 0、zero = 1,被殺死。
+      </p>
+      <p>手算完,讓電腦跑一次。腳本把同一套測試輪流跑在原版與每個突變版上,讀 <code>results.xml</code> 填矩陣:</p>
+<pre><code class="language-bash">#!/bin/sh
+# run_mutants.sh:同一套測試跑在原版與每個突變版上,各自留下 results.xml
+# 用法:sh run_mutants.sh [測試模組],預設 test_alu8
+mod=${1:-test_alu8}
+mkdir -p res
+rm -f res/*.xml
+for dut in alu8.v mutants/*.v; do
+    name=$(basename "$dut" .v)
+    make clean &gt; /dev/null              # 換 DUT 之前一定要清掉舊的編譯結果
+    make DUT="$dut" MODULE="$mod" &gt; /dev/null 2&gt;&amp;1
+    cp results.xml "res/$name.xml"
+done
+python3 kill_matrix.py res/alu8.xml res/m*.xml</code></pre>
+<pre><code class="language-python"># kill_matrix.py:讀每個版本的 results.xml,印出擊殺矩陣
+import sys
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+rows = []
+for path in sys.argv[1:]:
+    cases = ET.parse(path).getroot().iter("testcase")
+    result = {c.get("name"): ("✗" if c.find("failure") is not None or c.find("error") is not None else "·")
+              for c in cases}
+    rows.append((Path(path).stem, result))
+
+tests = list(rows[0][1])
+print("版本".ljust(14), *(t.split("_")[0].upper() for t in tests), "結果")
+for name, result in rows:
+    killed = [t.split("_")[0].upper() for t in tests if result[t] == "✗"]
+    if name == "alu8":                                  # 原版:應該全過
+        verdict = "全過" if not killed else "原版就失敗了,先修測試"
+    else:
+        verdict = "被 " + "、".join(killed) + " 抓到" if killed else "存活"
+    print(name.ljust(14), *(result[t].ljust(2) for t in tests), verdict)</code></pre>
+<pre><code class="language-text">$ sh run_mutants.sh
+版本             T1 T2 T3 T4 T5 結果
+alu8           ·  ·  ·  ·  ·  全過
+m1_sub_off     ·  ✗  ·  ·  ✗  被 T2、T5 抓到
+m2_and_or      ·  ·  ✗  ✗  ·  被 T3、T4 抓到
+m3_zero_lo     ·  ·  ✗  ·  ·  被 T3 抓到
+m4_sub_swap    ·  ·  ·  ·  ✗  被 T5 抓到
+m5_carry7      ·  ·  ·  ·  ·  存活
+m6_or_equiv    ·  ·  ·  ·  ·  存活</code></pre>
+      <p>在 <code>test_alu8.py</code> 後面補上 T6,另存成 <code>test_alu8_t6.py</code> 再跑:</p>
+<pre><code class="language-python">@cocotb.test()
+async def t6_add_carry7(dut):
+    await check(dut, ADD, 0x40, 0x40)    # 0x80:第 6 位元的進位要進到第 7 位元</code></pre>
+<pre><code class="language-text">$ sh run_mutants.sh test_alu8_t6
+版本             T1 T2 T3 T4 T5 T6 結果
+alu8           ·  ·  ·  ·  ·  ·  全過
+m1_sub_off     ·  ✗  ·  ·  ✗  ·  被 T2、T5 抓到
+m2_and_or      ·  ·  ✗  ✗  ·  ·  被 T3、T4 抓到
+m3_zero_lo     ·  ·  ✗  ·  ·  ✗  被 T3、T6 抓到
+m4_sub_swap    ·  ·  ·  ·  ✗  ·  被 T5 抓到
+m5_carry7      ·  ·  ·  ·  ·  ✗  被 T6 抓到
+m6_or_equiv    ·  ·  ·  ·  ·  ·  存活</code></pre>
+      <p>
+        M5 被 T6 抓到;T6 順便也抓到 M3(y = <code>0x80</code> 的低 4 位元是 0)。非等價的 5 個全部被殺:5 / 5 = 100%。
+        注意原版那一列必須「全過」:如果原版就有測試失敗,表示你的測試(或你的參考模型)本身有錯,這時突變版「被抓到」一點意義都沒有。
+      </p>
+      <h3>看起來對但其實錯:「換一個 DUT 再 make,跑的就是新的 DUT」</h3>
+      <p>
+        <code>run_mutants.sh</code> 每次換 DUT 之前都 <code>make clean</code>,不是多此一舉。cocotb 的 Makefile 只在「Verilog 檔比編譯結果新」時才重新編譯;
+        換成一個比較舊的檔案,它會沿用上一次編好的 <code>sim_build/sim.vvp</code>:
+      </p>
+<pre><code class="language-text">$ make clean
+$ make                    # 先跑原版:全過
+$ make DUT=adder_bad.v     # 換成壞的版本,但沒有 make clean
+                                                        ** TESTS=2 PASS=2 FAIL=0 SKIP=0                    402.00           0.03      15983.23  **</code></pre>
+      <p>
+        第二次 <code>make</code> 沒有重新編譯(輸出裡沒有 <code>iverilog</code> 那一行),跑的其實還是原版的加法器,所以「壞的版本」也全過。
+        用突變版檢查測試時,這會讓你以為「測試抓不到這個突變版」。每次換 DUT,先 <code>make clean</code>(或刪掉 <code>sim_build/</code>)。
+      </p>
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 137.6 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>換一套 4 條測試:U1 add <code>0xFF</code> + <code>0x01</code>;U2 sub <code>0x10</code> − <code>0x01</code>;U3 or <code>0x00</code> | <code>0x00</code>;U4 and <code>0xFF</code> &amp; <code>0x81</code>。對同樣的 M1–M6 填出擊殺矩陣(每格寫 y/zero),算突變分數(扣掉等價的 M6)。哪一個非等價的突變版存活?補一條什麼樣的測試能殺死它?</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <div class="table-wrap"><table>
+                <thead><tr><th>版本</th><th>U1</th><th>U2</th><th>U3</th><th>U4</th><th>結果</th></tr></thead>
+                <tbody>
+                  <tr><td>預期</td><td><code>00</code>/1</td><td><code>0F</code>/0</td><td><code>00</code>/1</td><td><code>81</code>/0</td><td></td></tr>
+                  <tr><td>M1</td><td><code>00</code>/1</td><td><code>0E</code>/0 ✗</td><td><code>00</code>/1</td><td><code>81</code>/0</td><td>被 U2 殺死(16 + 254 = 270,取 8 位元是 14)</td></tr>
+                  <tr><td>M2</td><td><code>00</code>/1</td><td><code>0F</code>/0</td><td><code>00</code>/1</td><td><code>FF</code>/0 ✗</td><td>被 U4 殺死;U3 的 0 &amp; 0 和 0 | 0 一樣,抓不到</td></tr>
+                  <tr><td>M3</td><td><code>00</code>/1</td><td><code>0F</code>/0</td><td><code>00</code>/1</td><td><code>81</code>/0</td><td>存活</td></tr>
+                  <tr><td>M4</td><td><code>00</code>/1</td><td><code>F1</code>/0 ✗</td><td><code>00</code>/1</td><td><code>81</code>/0</td><td>被 U2 殺死(1 − 16 = −15 → 241)</td></tr>
+                  <tr><td>M5</td><td><code>80</code>/0 ✗</td><td><code>0F</code>/0</td><td><code>00</code>/1</td><td><code>81</code>/0</td><td>被 U1 殺死(<code>0x7F + 0x01</code> 截成 7 位元是 0,第 7 位元 1 ^ 0 = 1)</td></tr>
+                  <tr><td>M6</td><td><code>00</code>/1</td><td><code>0F</code>/0</td><td><code>00</code>/1</td><td><code>81</code>/0</td><td>存活(等價)</td></tr>
+                </tbody>
+              </table></div>
+              <p>突變分數 4/5 = 80%。M3 存活:4 條測試的 y 是 0、<code>0x0F</code>、0、<code>0x81</code>,沒有一個是「不是 0、但低 4 位元是 0」。
+              補一條讓 y 的高 4 位元有值、低 4 位元是 0 的測試,例如 U5 and <code>0xF0</code> &amp; <code>0xF0</code> = <code>0xF0</code>:M3 會說 zero = 1。實際執行:</p>
+<pre><code class="language-text">$ sh run_mutants.sh test_alu8_u
+版本             U1 U2 U3 U4 結果
+alu8           ·  ·  ·  ·  全過
+m1_sub_off     ·  ✗  ·  ·  被 U2 抓到
+m2_and_or      ·  ·  ·  ✗  被 U4 抓到
+m3_zero_lo     ·  ·  ·  ·  存活
+m4_sub_swap    ·  ✗  ·  ·  被 U2 抓到
+m5_carry7      ✗  ·  ·  ·  被 U1 抓到
+m6_or_equiv    ·  ·  ·  ·  存活</code></pre>
+            </div>
+          </details>
+        </div>
+      </div>
+      <h3 id="lab-rtl-tb">本章 Lab:cocotb 測試 rtl/tests/test_alu.py</h3>
+      <div class="callout lab" data-task="rtl/tb">
+        <div class="ico">🧪</div>
+        <div class="body">
+          <span class="c-title">本章 Lab · 任務線「rtl」· 任務「cocotb 測試」</span>
+          <p><strong>對應地下城任務:</strong>任務「cocotb 測試」(任務線:rtl 自己的 RV32I CPU,第 3／6 個任務)。零件檔:<code>~/零件庫/rtl/tests/test_alu.py</code>(同資料夾可以再放你自己的 .py);任務資料夾:<code>~/任務線/rtl/03-tb/</code>。任務「RV32I ALU」過了才開放。</p>
+          <p><strong>要做的零件:</strong>替<a href="136-verilog.html#lab-rtl-alu">{{ch:136-verilog}}的 RV32I ALU</a> 寫 cocotb 測試與自己的參考模型。這次被打分數的是<strong>測試</strong>:它在正確的 ALU 上要全過,在每個突變版上要至少一項失敗。</p>
+          <p><strong>介面:</strong></p>
+<pre><code class="language-text">~/零件庫/rtl/tests/test_alu.py   至少一個 @cocotb.test() 的 async 函式
+~/零件庫/rtl/tests/*.py          你自己的其他模組(例如參考模型),可以 import
+DUT                              頂層模組 alu(W=32,用預設值)
+判題的設定                       SIM=icarus、TOPLEVEL=alu、MODULE=test_alu;
+                                 PYTHONPATH 只有 rtl/tests/
+可以 import                      Python 標準函式庫、cocotb、rtl/tests/ 裡你自己的 .py
+寫法                             cocotb 1.9 與 2.x 都要能跑:Timer(1, "ns")、int(dut.y.value)
+「被抓到」                       results.xml 裡至少一個測試失敗或出錯
+參考版                           零失敗、零錯誤、至少一個測試</code></pre>
+          <p><strong>公開範例:</strong>下面是一個起點(只有一條導向測試),還不夠抓到隱藏突變版。公開突變版在任務資料夾的 <code>~/任務線/rtl/03-tb/mutants/alu_sub_off.v</code>(sub 少加 1,和本章的 M1 同一種錯)。把下面的 Makefile 放在 <code>~/零件庫</code>,就能自己跑、看到它被抓到:</p>
+<pre><code class="language-python"># rtl/tests/test_alu.py 的起點:只有一條導向測試,要自己補成完整的測試
+import cocotb
+from cocotb.triggers import Timer
+
+SUB = 0b1000
+
+
+async def apply(dut, op, a, b):
+    dut.op.value = op
+    dut.a.value = a
+    dut.b.value = b
+    await Timer(1, "ns")
+    return int(dut.y.value), int(dut.zero.value)
+
+
+@cocotb.test()
+async def sub_small(dut):
+    """導向測試:5 - 7 = -2"""
+    y, zero = await apply(dut, SUB, 5, 7)
+    assert y == 0xFFFFFFFE, f"5 - 7:y={y:#010x}"
+    assert zero == 0</code></pre>
+<pre><code class="language-text"># 放在 ~/零件庫:make 測自己的 ALU;make DUT=&lt;檔案的完整路徑&gt; 測別的版本(換版本前先 make clean)
+SIM ?= icarus
+TOPLEVEL_LANG ?= verilog
+DUT ?= rtl/alu.v
+VERILOG_SOURCES = $(abspath $(DUT)) $(PWD)/rtl/adder.v $(PWD)/rtl/full_adder.v
+TOPLEVEL = alu
+MODULE = test_alu
+export PYTHONPATH := $(PWD)/rtl/tests:$(PYTHONPATH)
+include $(shell cocotb-config --makefiles)/Makefile.sim</code></pre>
+<pre><code class="language-text">$ make                  # 測你自己的 ALU(節錄)
+** TESTS=1 PASS=1 FAIL=0 SKIP=0 …
+$ make clean
+$ make DUT=$HOME/任務線/rtl/03-tb/mutants/alu_sub_off.v   # 公開突變版(節錄)
+AssertionError: 5 - 7:y=0xfffffffd
+** TESTS=1 PASS=0 FAIL=1 SKIP=0 …</code></pre>
+          <p><strong>和本章範例不同的地方:</strong></p>
+          <ul>
+            <li>本章測的是加法器與 8 位元、4 種運算的 <code>alu8</code>;Lab 測 32 位元 RV32I ALU 的十種運算、未定義的 op 與 <code>zero</code>。</li>
+            <li>本章的突變版 M1–M6 是公開的,可以一個一個對;Lab 的突變版是隱藏的,只知道「例:有號與無號弄反」這種類別,測試要靠參考模型＋邊界值＋隨機向量全面檢查。</li>
+            <li>本章用的參考模型是現成的;Lab 要自己寫 ALU 的參考模型(放在 <code>rtl/tests/</code>)。</li>
+          </ul>
+          <p>可以參考本章的範例,但介面和要求不同,要自己改寫。</p>
+          <p><strong>任務目標</strong>(公開的用 <code>test</code> 自己跑;隱藏檢定在 <code>submit</code> 時跑,只看得到名稱和一行說明):</p>
+          <ul class="lab-goals">
+            <li data-group="tb.public-mutant">☐ <strong>抓公開突變</strong>〔公開〕test 把你的測試跑在你自己的 rtl/alu.v 上(要全過)與公開突變版 alu_sub_off.v 上(要至少一項失敗)。</li>
+            <li data-group="tb.green">☐ <strong>參考版全過</strong>〔隱藏檢定〕你的測試在參考 ALU(W=32)上全過:沒有失敗、沒有錯誤、至少一個測試。</li>
+            <li data-group="tb.mutants">☐ <strong>抓隱藏突變</strong>〔隱藏檢定〕3 個隱藏突變版(例:有號與無號弄反),每個都至少一項失敗。</li>
+            <li data-group="tb.perf">☐ <strong>跑得夠快</strong>〔隱藏檢定〕判題要把整套測試跑 4 次(參考版＋3 個突變版)。門檻:整套測試跑一個 ALU 版本(含編譯與啟動)15 秒內。這個門檻來自 Boss 戰「ALU 與突變」:4 個版本合計 60 秒內。</li>
+          </ul>
+          <p><strong>規則:</strong>不能 <code>import numpy</code>(判題環境沒有)。判題時每個 ALU 版本在各自全新的環境、同樣的路徑與檔名、隨機的順序跑:測試只能靠 ALU 的<strong>行為</strong>分辨對錯。</p>
+          <p><strong>之後會用在:</strong>檢查點 1 的 Boss 戰「ALU 與突變」。</p>
+          <p class="lab-rule">這個零件過關之後,後面的專題一律用你自己的版本。規則見<a href="00-about.html#lab-rules">零件庫規則</a>。</p>
+        </div>
+      </div>
+
+      <h2>斷言:把不變式寫進測試</h2>
+      <p>
+        前面的檢查都是「拿 DUT 的輸出和參考模型比」。還有一種檢查不需要模型:<strong>不變式(invariant)</strong>,也就是「不管輸入是什麼,都必須成立」的性質。
+        對 alu8 來說,<code>zero == (y == 0)</code> 永遠要成立。把不變式寫成程式,就是<strong>斷言(assertion)</strong>。
+      </p>
+      <p>
+        cocotb 測試裡的 <code>assert</code> 就是一種斷言。Verilog 這邊,SystemVerilog 有<strong>即時斷言(immediate assertion)</strong>,
+        寫在程序區塊裡,執行到那一行就檢查一次。Icarus Verilog 11 在 <code>-g2012</code> 下支援這種寫法:
+      </p>
+<pre><code class="language-verilog">// tb_assert.v:在 testbench 裡放即時斷言(immediate assertion)
+`timescale 1ns/1ps
+module tb_assert;
+    reg  [7:0] a, b;
+    reg  [1:0] op;
+    wire [7:0] y;
+    wire       zero;
+    integer i;
+
+    alu8 dut(.a(a), .b(b), .op(op), .y(y), .zero(zero));
+
+    initial begin
+        for (i = 0; i &lt; 16; i = i + 1) begin
+            op = 2'b10;                  // and
+            a  = 8'hF0;
+            b  = i * 16;                 // 0x00、0x10、…、0xF0
+            #1;
+            // 不變式:zero 一定等於 (y == 0),不管 op 是什麼
+            assert (zero == (y == 8'd0))
+                else $error("a=%h b=%h y=%h zero=%b", a, b, y, zero);
+        end
+        $display("跑完 16 組");
+        $finish;
+    end
+endmodule</code></pre>
+      <p>在 alu8 上跑,印出「跑完 16 組」。換成 M3(zero 只看低 4 位元):</p>
+<pre><code class="language-text">ERROR: tb_assert.v:20: a=f0 b=10 y=10 zero=1
+       Time: 2000 Scope: tb_assert
+ERROR: tb_assert.v:20: a=f0 b=20 y=20 zero=1
+       Time: 3000 Scope: tb_assert
+(中間省略 12 筆)
+ERROR: tb_assert.v:20: a=f0 b=f0 y=f0 zero=1
+       Time: 16000 Scope: tb_assert
+跑完 16 組
+exit=0</code></pre>
+      <p>
+        除了 b = 0 那一組,15 組都違反不變式。斷言不必知道正確答案是多少,只檢查「答案之間的關係」;它抓得到 M3,但抓不到 M1、M2、M4、M5,因為那些突變版的 y 雖然錯了,<code>zero</code> 和 y 仍然一致(見練習 137.8)。
+        <strong>不變式和參考模型互補,不是互相取代。</strong>
+      </p>
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">常見陷阱:印了 ERROR,結束碼還是 0</span>
+          <p>上面最後一行 <code>exit=0</code> 是 <code>vvp</code> 的結束碼:<code>$error</code> 只印訊息,模擬照樣跑完、照樣回 0。用結束碼判斷成敗的腳本(例如持續整合)會以為測試通過。
+          要讓它失敗,用 <code>$fatal(1, "…")</code>(Icarus 11 會回 1),或像 <code>tb_adder.v</code> 那樣自己數錯誤、最後印出結論。cocotb 沒有這個問題:<code>assert</code> 失敗就記在 <code>results.xml</code> 裡。</p>
+        </div>
+      </div>
+      <p>
+        斷言也是讓證明變成程式的方法。<a href="20-combinational-sequential.html">{{ch:20-combinational-sequential}}</a>講加法器時說「漣波加法器算出來的就是 $a + b$」;
+        寫成程式就是 <code>assert int(dut.X.value) == a + b</code>。<a href="47-digital-circuits.html">{{ch:47-digital-circuits}}</a>的有限狀態機「只會在合法的狀態之間移動」,
+        寫成斷言就是每個正緣檢查 <code>state</code> 是合法狀態之一。方法裡的斷言檢查「這一刻」的性質;整體的性質(例如 scoreboard 最後佇列是空的)放在測試結束時檢查。
+      </p>
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">★深入(選讀):SystemVerilog 的並行斷言(SVA)</span>
+          <p>即時斷言只看「這一刻」。SystemVerilog Assertions(SVA)還有<strong>並行斷言(concurrent assertion)</strong>,描述跨越好幾個時脈週期的性質,例如「<code>req</code> 變成 1 之後,1 到 3 個週期內 <code>ack</code> 一定要變成 1」:</p>
+<pre><code class="language-text">assert property (@(posedge clk) req |-&gt; ##[1:3] ack);</code></pre>
+          <p>Icarus Verilog 11 不支援這個語法(我們實際編譯,得到 <code>syntax error</code>)。商用模擬器支援完整的 SVA;開源的 Verilator 與 Yosys 支援一部分。
+          在 cocotb 裡,同樣的性質可以寫成一個背景協程:每個正緣看 <code>req</code>,看到 1 就數接下來 3 拍裡有沒有 <code>ack</code>。</p>
+        </div>
+      </div>
+
+      <h2>★深入(選讀):形式驗證入門</h2>
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">為什麼要學</span>
+          <p>Boss 戰「ALU 窮舉」對 8 位元版的 ALU 把所有輸入窮舉一遍,這就是最小的形式驗證:不是抽樣,而是全部。這一節說明窮舉為什麼等於證明、為什麼 32 位元就窮舉不完,以及形式驗證工具怎麼繞過去。它不擋關,是給想走 IC 驗證的人的路標。</p>
+        </div>
+      </div>
+      <p>
+        Dijkstra 有一句名言:「程式測試可以用來證明 bug 存在,但永遠不能證明 bug 不存在。」測試是抽樣,前面的機率計算說明了抽樣會漏。
+        <strong>形式驗證(formal verification)</strong>換一個問法:不是「這些輸入對不對」,而是「<strong>有沒有任何</strong>輸入會讓性質不成立」。
+      </p>
+      <p>
+        對很小的電路,最直接的形式驗證就是窮舉。alu8 的輸入是 op(2 位元)、a、b(各 8 位元),一共 $2^{18} = 262144$ 種,模擬器一下子就跑完了。
+        下面的 testbench 把原版和突變版接上同樣的輸入,每一種輸入都比一次輸出。這種「兩個電路接同樣的輸入、比輸出」的結構叫 <strong>miter</strong>,是形式工具做等價檢查(equivalence checking)的基本形狀:
+      </p>
+<pre><code class="language-verilog">// tb_miter.v:把原版和突變版接上同樣的輸入,窮舉 2^18 種輸入,數有幾種輸出不同
+`timescale 1ns/1ps
+module tb_miter;
+    reg  [7:0] a, b;
+    reg  [1:0] op;
+    wire [7:0] y_ref, y_mut;
+    wire       z_ref, z_mut;
+    integer i, diff = 0;
+
+    alu8     ref_(.a(a), .b(b), .op(op), .y(y_ref), .zero(z_ref));
+    alu8_mut mut_(.a(a), .b(b), .op(op), .y(y_mut), .zero(z_mut));
+
+    initial begin
+        for (i = 0; i &lt; (1 &lt;&lt; 18); i = i + 1) begin
+            {op, a, b} = i;
+            #1;
+            if ({y_ref, z_ref} !== {y_mut, z_mut}) begin
+                if (diff == 0)
+                    $display("第一個反例:op=%0d a=%0d b=%0d,原版 y=%0d zero=%0d,突變版 y=%0d zero=%0d", op, a, b, y_ref, z_ref, y_mut, z_mut);
+                diff = diff + 1;
+            end
+        end
+        $display("不同的輸入:%0d / %0d", diff, 1 &lt;&lt; 18);
+        $finish;
+    end
+endmodule</code></pre>
+<pre><code class="language-bash">#!/bin/sh
+# miter_all.sh:每個突變版都和原版窮舉比一次
+for m in mutants/*.v rare/*.v; do
+    sed 's/^module alu8 /module alu8_mut /' "$m" &gt; mut.v     # 改模組名,才能和原版一起編譯
+    iverilog -g2012 -o miter.out tb_miter.v alu8.v mut.v
+    echo "$(basename "$m" .v):$(vvp miter.out | tr '\n' ' ')"
+done</code></pre>
+<pre><code class="language-text">m1_sub_off:第一個反例:op=1 a=0 b=0,原版 y=0 zero=1,突變版 y=255 zero=0 不同的輸入:65536 / 262144 
+m2_and_or:第一個反例:op=2 a=0 b=1,原版 y=0 zero=1,突變版 y=1 zero=0 不同的輸入:130560 / 262144 
+m3_zero_lo:第一個反例:op=0 a=0 b=16,原版 y=16 zero=0,突變版 y=16 zero=1 不同的輸入:22110 / 262144 
+m4_sub_swap:第一個反例:op=1 a=0 b=1,原版 y=255 zero=0,突變版 y=1 zero=0 不同的輸入:65024 / 262144 
+m5_carry7:第一個反例:op=0 a=1 b=127,原版 y=128 zero=0,突變版 y=0 zero=1 不同的輸入:32512 / 262144 
+m6_or_equiv:不同的輸入:0 / 262144 
+zero7:第一個反例:op=0 a=0 b=128,原版 y=128 zero=0,突變版 y=128 zero=1 不同的輸入:2702 / 262144 </code></pre>
+      <ul>
+        <li><strong>M6 在全部 262144 種輸入上都和原版一樣</strong>:它真的是等價突變版。這不是「很多例子都對」,是「所有例子都對」;對有限的輸入,窮舉就是證明。所以上一節把它從分母拿掉是對的。</li>
+        <li>每個突變版「錯在多少種輸入上」也算出來了。M5 錯 32512 種,占所有 add 輸入(65536)的一半左右,隨機測試很容易抓到,它能存活只是因為那 5 條導向測試剛好沒碰到;zero7 只錯 2702 種,就是前面手算 137.2 要數的那個數字。</li>
+      </ul>
+      <p>
+        32 位元的 ALU 呢?a、b 各 32 位元,光是一種運算就有 $2^{64}$ 種輸入。就算每秒模擬一百萬組,16 個 op 要跑上將近一千萬年(練習 137.10)。
+        形式驗證工具不逐一列舉:它把電路和「性質不成立」一起翻譯成一個很大的邏輯式,交給 <strong>SAT 求解器</strong>去找「有沒有一組變數讓它為真」
+        (SAT 是<a href="33-np-completeness.html">{{ch:33-np-completeness}}</a>的第一個 NP 完全問題;最壞情況很難,但實際電路常常解得很快)。找到了,那組變數就是反例;證明找不到,性質就對所有輸入成立。
+        有時脈的電路則用<strong>有界模型檢查(bounded model checking)</strong>:把電路展開 k 個週期,問「k 步之內有沒有走到壞狀態」。
+      </p>
+      <p>
+        開源的形式驗證流程是 Yosys 加 SymbiYosys(<a href="https://github.com/YosysHQ/sby">github.com/YosysHQ/sby</a>):在 Verilog 裡寫 <code>assert</code>(要證明的性質)與 <code>assume</code>(輸入的限制),工具自動找反例或證明它成立。
+        本書不教它的用法,有興趣可以從它的文件開始。
+      </p>
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">看起來對但其實錯:「8 位元版窮舉全對,32 位元版一定也對」</span>
+          <p>窮舉證明的是「這個寬度」。假設一個參數化的 ALU 在算 slt 時,把符號位元寫死成 <code>y[7]</code> 而不是 <code>y[W-1]</code>:W = 8 時它剛好是對的,窮舉全過;W = 32 時它看的是中間的一個位元,錯得一塌糊塗。
+          這就是 Boss 戰「ALU 窮舉」除了 8 位元窮舉,還要對 32 位元版跑隨機向量與邊界值的原因。證明只對它證明的那個東西成立。</p>
+        </div>
+      </div>
+
+      <h2>動手練習</h2>
+      <p>需要跑模擬的題目,環境和本章一樣:Icarus Verilog 加 cocotb,例子的檔案照本章的內容建立。</p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 137.1 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>圖 137-1 的五個角色(產生輸入、DUT、監看器、參考模型、scoreboard),分別對應 <code>test_pipe.py</code> 的哪幾行?</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <ul>
+                <li>產生輸入:<code>stimulus = [...]</code> 與迴圈裡的 <code>dut.in_valid.value = v</code>、<code>dut.a.value = a</code>、<code>dut.b.value = b</code>。</li>
+                <li>DUT:<code>add_pipe2.v</code>,在 Makefile 的 <code>TOPLEVEL = add_pipe2</code> 指定,測試裡是 <code>dut</code>。</li>
+                <li>監看器:<code>await ReadOnly()</code> 之後讀 <code>dut.out_valid.value</code> 與 <code>dut.x.value</code>。</li>
+                <li>參考模型:<code>def model(a, b): return a + b</code>。</li>
+                <li>scoreboard:<code>expected = deque()</code>、輸入端的 <code>expected.append(model(a, b))</code>、輸出端的 <code>expected.popleft()</code> 與 <code>assert got == want</code>,以及最後的 <code>assert not expected</code>。</li>
+              </ul>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 137.2 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>替加法器寫一條邊界值的導向測試 <code>adder_edge_test</code>,至少包含:全 0、進位一路傳到最高位、最大值、只有最高位、第 3 位元往上傳的進位。確認它在 <code>adder.v</code> 上通過、在 <code>adder_bad.v</code> 上失敗。</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+<pre><code class="language-python"># test_adder_edge.py:練習 137.2 的解答,邊界值的導向測試
+import cocotb
+from cocotb.triggers import Timer
+
+from adder_model import adder_model
+
+EDGES = [(0, 0), (255, 1), (1, 255), (255, 255), (128, 128), (15, 1), (127, 1)]
+
+
+@cocotb.test()
+async def adder_edge_test(dut):
+    """邊界值:全 0、進位一路傳到最高位、最大值、只有最高位、半字節的進位"""
+    for a, b in EDGES:
+        dut.A.value = a
+        dut.B.value = b
+        await Timer(2, "ns")
+        got = int(dut.X.value)
+        assert got == adder_model(a, b), f"{a} + {b}:DUT={got},模型={adder_model(a, b)}"</code></pre>
+              <p><code>make clean</code> 之後 <code>make MODULE=test_adder_edge</code>,再 <code>make clean</code> 之後 <code>make DUT=adder_bad.v MODULE=test_adder_edge</code>:</p>
+<pre><code class="language-text">$ make MODULE=test_adder_edge
+                                                        ** TESTS=1 PASS=1 FAIL=0 SKIP=0                    14.00           0.02        757.20  **
+$ make DUT=adder_bad.v MODULE=test_adder_edge
+                                                        AssertionError: 255 + 1:DUT=240,模型=256
+                                                        ** TESTS=1 PASS=0 FAIL=1 SKIP=0                     4.00           0.02        240.95  **</code></pre>
+              <p>第二組 <code>(255, 1)</code> 就抓到了:低 4 位元 15 + 1 的進位要經過第 3 位元往上「傳遞」。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 137.3 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>下面的測試想檢查 5 + 10。它會通過還是失敗?為什麼?怎麼改?</p>
+<pre><code class="language-python">@cocotb.test()
+async def quick(dut):
+    dut.A.value = 5
+    dut.B.value = 10
+    assert int(dut.X.value) == 15</code></pre>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p>會失敗,而且是丟出例外(ValueError),不是一般的比對失敗。測試開始時模擬時間是 0,寫入要等這個時間點稍後才生效,中間又沒有 <code>await</code>,所以電路還沒算出 <code>X</code>(我們用 Icarus 11 與 cocotb 1.9.2 實測,讀到的是 <code>z</code>),<code>int()</code> 丟出本章看過的 <code>Unresolvable bit in binary string: 'z'</code>。
+              在 <code>assert</code> 前面加 <code>await Timer(2, "ns")</code>。更危險的情況是同一個測試裡的第二組向量:那時 <code>X</code> 已經有上一組的值,少了 <code>await</code> 不會報錯,只會默默讀到舊值。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 137.4 <span class="badge">計算</span></div>
+        <div class="ex-body">
+          <p>一個 16 位元的比較器有個 bug,只在 <code>a == b</code> 時答錯。a、b 各自平均隨機。(1)一組隨機向量抓到它的機率 $p$?(2)1000 組全部沒抓到的機率?(3)要讓漏掉的機率小於 1%,至少要幾組?(4)換成只有一條導向測試 <code>a = b = 0x1234</code> 呢?</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p>(1)不管 a 是多少,b 剛好等於 a 的機率是 $p = 1/65536 = 2^{-16}$。(2)$(1 - 2^{-16})^{1000} \approx 0.985$:98.5% 的機率漏掉。
+              (3)$n &gt; \ln 0.01 / \ln(1 - 2^{-16}) \approx 301802.1$,至少 301803 組(用 $e^{-np}$ 估:$n \ge 65536 \times \ln 100 \approx 301804$,幾乎一樣)。
+              (4)一條就抓到,機率 1。「相等」是很窄的情況,要用導向測試專門去打。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 137.5 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>小明把 alu8 的 sub 寫成 <code>b - a</code>,參考模型也寫成 <code>y = b - a</code>,而且他的測試全部是隨機向量。(1)他的測試會發現 M4 這種錯嗎?(2)哪一種測試能救他?(3)判題時,出題者的參考 ALU 是對的,小明的測試在參考 ALU 上會怎樣?</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p>(1)不會。電路和模型一起錯,每一組都「一致」。(2)從規格抄來的導向測試,預期值寫死:例如「<code>2 - 7</code> 的 y 是 <code>0xFB</code>」。寫死的預期值不經過他的模型,電路錯了就會失敗。
+              (3)他的測試在正確的參考 ALU 上會失敗(模型說 <code>7 - 2 = 5</code>,ALU 說 <code>0xFB</code>)。所以「參考版要全過」這個條件,同時也在檢查你的參考模型。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 137.6 <span class="badge">計算</span></div>
+        <div class="ex-body">
+          <p>替 alu8 定義交叉覆蓋「op × zero」:4 種 op、zero 是 0 或 1,一共 8 個 bin。「突變測試」那一節的 T1–T6 打到了哪幾個?覆蓋率多少?空著的 bin 各舉一組能打到的向量,並說明哪一個本章的突變版和這些空 bin 有關。</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p>T1 add→<code>0x07</code>(zero 0);T2 sub→0(zero 1);T3 and→<code>0x30</code>(0);T4 or→<code>0xFF</code>(0);T5 sub→<code>0xFB</code>(0);T6 add→<code>0x80</code>(0)。
+              打到 add·0、sub·0、sub·1、and·0、or·0,共 5/8 = 62.5%。空著的是 add·1(例如 <code>0x80 + 0x80</code>)、and·1(例如 <code>0x0F &amp; 0xF0</code>)、or·1(只有 <code>0 | 0</code>)。
+              M2(and、or 對調)就和它們有關:T3、T4 已經殺死它,但如果只有 or·1 那一組(<code>0 | 0</code> 和 <code>0 &amp; 0</code> 一樣是 0),是殺不死它的。空 bin 告訴你哪裡沒測,不保證補上就抓得到。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 137.7 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>(1)為什麼不管你寫多少條測試,M6 都殺不死?(2)判題用的隱藏突變版裡,會不會放等價突變版?如果放了,會發生什麼事?(3)你的測試殺不死某個突變版時,怎麼判斷它是「等價」還是「你的測試有漏洞」?</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p>(1)對每個位元,<code>(x ^ y) | (x &amp; y)</code> 和 <code>x | y</code> 的真值表一模一樣(00→0、01→1、10→1、11→1),所以對所有輸入,M6 的輸出都和原版相同;測試只看輸出,不可能分辨。窮舉也證明了這件事(262144 種輸入裡 0 種不同)。
+              (2)不會,也不應該:那樣沒有人能過關。出題者會先用窮舉或形式工具確認每個隱藏突變版都至少在一組輸入上和參考版不同。
+              (3)找一組讓兩者輸出不同的輸入。找得到,就是你的測試有漏洞,把那組加進去;小電路可以像本章一樣窮舉,大電路要用形式工具的等價檢查。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 137.8 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>只用不變式 <code>zero == (y == 0)</code>、不用參考模型,寫一個 200 組隨機向量的 cocotb 測試。先預測它殺得死 M1–M6 和 zero7 的哪幾個,再實際跑一次。</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+<pre><code class="language-python"># test_alu8_invariant.py:練習 137.8,只檢查不變式 zero == (y == 0),不用參考模型
+import random
+
+import cocotb
+from cocotb.triggers import Timer
+
+
+@cocotb.test()
+async def zero_invariant(dut):
+    rng = random.Random(1)
+    for _ in range(200):
+        dut.op.value = rng.randrange(4)
+        dut.a.value = rng.randrange(256)
+        dut.b.value = rng.randrange(256)
+        await Timer(1, "ns")
+        y = int(dut.y.value)
+        assert int(dut.zero.value) == int(y == 0), f"y={y:#04x} zero={int(dut.zero.value)}"</code></pre>
+              <p>預測:只有「zero 算錯」的突變版會違反不變式,也就是 M3 和 zero7;M1、M2、M4、M5 的 y 錯了,但 zero 仍然照著錯的 y 算,和 y 一致;M6 等價。
+              逐一跑完(<code>make clean</code> 之後 <code>make DUT=… MODULE=test_alu8_invariant</code>),數 <code>results.xml</code> 裡的 <code>&lt;failure&gt;</code>:</p>
+<pre><code class="language-text">alu8.v:&lt;failure&gt; 0 個
+mutants/m1_sub_off.v:&lt;failure&gt; 0 個
+mutants/m2_and_or.v:&lt;failure&gt; 0 個
+mutants/m3_zero_lo.v:&lt;failure&gt; 1 個
+mutants/m4_sub_swap.v:&lt;failure&gt; 0 個
+mutants/m5_carry7.v:&lt;failure&gt; 0 個
+mutants/m6_or_equiv.v:&lt;failure&gt; 0 個
+rare/zero7.v:&lt;failure&gt; 1 個</code></pre>
+              <p>和預測一樣。zero7 這次也被抓到,但那是運氣:用種子 1 的這 200 組裡剛好有 y = <code>0x80</code>(手算 137.2 算過,漏掉的機率約 13%)。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 137.9 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>把 <code>add_pipe2</code> 改成三級管線(多一級暫存器,valid 也多一級)。(1)<code>test_pipe.py</code> 的 scoreboard 要改哪裡?(2)如果有人把電路做錯,讓兩筆連續的結果順序對調輸出,scoreboard 會在什麼時候報錯?(3)如果電路把某一筆資料「吞掉」(那一筆的 out_valid 一直沒有變成 1),會怎樣?</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p>(1)scoreboard 完全不用改,這正是它的好處:輸入端照樣放進去、輸出端看到 valid 照樣拿出來,延遲幾拍由佇列吸收。唯一要注意的是測試最後要留夠空拍,讓最後一筆資料流出來:本例最後一筆有效輸入在第 4 個正緣存進去,三級管線在第 6 個正緣輸出,而迴圈剛好跑到第 6 個正緣,所以 <code>test_pipe.py</code> 原封不動就能通過(我們實際做了一個三級版本跑過);空拍不夠的話,最後的 <code>assert not expected</code> 會失敗。
+              (2)第一筆對調的結果一出來就報錯:佇列前端是先進去的那筆的預期值,輸出卻是後面那筆。(3)那一拍不會報錯(沒有 valid 就不比);但之後的每一筆都會和「錯一個位置」的預期值比而失敗。如果被吞掉的是最後一筆,測試結束時佇列不是空的,<code>assert not expected</code> 會抓到。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 137.10 <span class="badge">計算</span></div>
+        <div class="ex-body">
+          <p>32 位元的 ALU 有 a、b(各 32 位元)與 op(4 位元,16 種)。如果每秒能模擬 $10^6$ 組向量,把所有輸入窮舉一遍要多久?8 位元版(a、b 各 8 位元、16 種 op)呢?</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p>32 位元:$2^{32} \times 2^{32} \times 16 = 2^{68} \approx 2.95 \times 10^{20}$ 組;除以 $10^6$ 是 $2.95 \times 10^{14}$ 秒,約 $9.4 \times 10^{6}$ 年,將近一千萬年。
+              8 位元:$2^{8} \times 2^{8} \times 16 = 2^{20} = 1048576$ 組,大約 1 秒。所以 8 位元版窮舉、32 位元版只能抽樣(邊界值加隨機)或用形式工具。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>把這一章串起來</h2>
+      <ul>
+        <li><strong>testbench 的角色</strong>:產生輸入、DUT、監看器、參考模型、scoreboard。testbench 要自己說 PASS 或 FAIL;波形是除錯用的。</li>
+        <li><strong>cocotb</strong>:電路照樣是 Verilog,測試改用 Python。<code>dut.X.value</code> 讀寫訊號、<code>int()</code> 轉整數;<code>await Timer</code>、<code>RisingEdge</code>、<code>ReadOnly</code> 讓時間前進;<code>cocotb.start_soon(Clock(...).start())</code> 在背景產生時脈;Makefile 設 <code>SIM</code>、<code>TOPLEVEL</code>、<code>MODULE</code>、<code>VERILOG_SOURCES</code>;結果寫在 <code>results.xml</code>。</li>
+        <li><strong>參考模型</strong>:用另一種寫法、簡單到一眼看得出對錯,最後要遮罩成固定位元數。它和電路可能一起錯,所以要有從規格抄來的導向測試。</li>
+        <li><strong>導向與隨機</strong>:導向測試打你想得到的邊界,隨機測試打你沒想到的組合。只錯在 $p$ 比例輸入上的 bug,$n$ 組隨機向量漏掉的機率是 $(1-p)^n \le e^{-np}$;很窄的情況要用導向測試。</li>
+        <li><strong>時序</strong>:正緣剛發生時讀到的是舊值,<code>ReadOnly</code> 之後才是新值;有延遲的電路用 scoreboard 的佇列對齊,只在 valid 時比對。</li>
+        <li><strong>波形</strong>:VCD 是純文字,只記變化;讀成「時間 × 訊號」的表,從錯的值推回 bug。</li>
+        <li><strong>覆蓋率</strong>:程式碼覆蓋率量「碰到了沒」,功能覆蓋率的 bin 量「規格裡的情況測到了沒」。toggle 100% 不代表沒有 bug。</li>
+        <li><strong>突變測試</strong>:把電路改壞,看測試抓不抓得到;擊殺矩陣找出存活者,區分「等價」與「真的漏洞」。原版要全過,換 DUT 要 <code>make clean</code>。</li>
+        <li><strong>斷言與形式驗證</strong>:不變式寫成斷言,和參考模型互補。小電路窮舉就是證明;大電路靠 SAT 與模型檢查,證明也只對它證明的寬度與性質成立。</li>
+      </ul>
+      <p>
+        下一步就是本章 Lab:替 RV32I ALU 寫自己的 cocotb 測試與參考模型,讓它在正確的 ALU 上全過,在公開突變版 <code>alu_sub_off.v</code>(sub 少加 1,和本章的 M1 同一種錯)和隱藏突變版上失敗。
+        之後設計單週期 CPU 時,同樣的結構會再出現一次:DUT 換成 CPU,參考模型換成 rv32 任務線的指令集模擬器。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">延伸資源</span>
+          <ul>
+            <li>cocotb 官方文件:<a href="https://docs.cocotb.org/">docs.cocotb.org</a>(BSD-3 授權);原始碼與範例:<a href="https://github.com/cocotb/cocotb">github.com/cocotb/cocotb</a>,本章的加法器與正反器改寫自 <code>examples/adder</code>、<code>examples/simple_dff</code>(CC0)。</li>
+            <li>Icarus Verilog 文件:<a href="https://steveicarus.github.io/iverilog/">steveicarus.github.io/iverilog</a>;看波形的 GTKWave:<a href="https://gtkwave.sourceforge.net/">gtkwave.sourceforge.net</a>。</li>
+            <li>形式驗證:YosysHQ 的 SymbiYosys,<a href="https://github.com/YosysHQ/sby">github.com/YosysHQ/sby</a>。</li>
+            <li>Chris Spear、Greg Tumbush《SystemVerilog for Verification》:業界 testbench(受限隨機、covergroup、scoreboard)的經典教科書。</li>
+            <li>變異測試的軟體版本:<a href="46-debugging-testing.html">{{ch:46-debugging-testing}}</a>的「變異測試」與擊殺矩陣手算。</li>
+          </ul>
+        </div>
+      </div>

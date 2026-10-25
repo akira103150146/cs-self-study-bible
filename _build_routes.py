@@ -1039,15 +1039,20 @@ def validate_mainlines(ml, book, tree_nodes, tree_projects):
         if tid not in ml.tasks:
             err(f'{cid}: 標記 <!-- LAB: {tid} --> 不在 yaml')
     for m in ml.mainlines:
-        pending = []
+        pending, outline_tasks = [], []
         for t in m.get('tasks') or []:
             cid, gap, _ = split_chapter(t.get('chapter'))
             if gap or cid not in book:
+                continue
+            if m.get('status') == 'detailed' and ml.task_status(m, t) == 'outline':
+                outline_tasks.append(t.get('id'))       # 任務目標還沒設計,方框之後才寫
                 continue
             if cid not in in_chapter.get(t.get('id'), set()):
                 pending.append(f'{cid} 還沒有 Lab 方框 {t.get("id")}')
             elif not anchor_exists(cid, t.get('anchor')):
                 pending.append(f'{cid} 有 {t.get("id")} 的標記但還沒有 #{t.get("anchor")}')
+        if outline_tasks:
+            infos.append(f'任務線 {m.get("id")}:outline 任務 {"、".join(outline_tasks)} 的任務目標還沒設計,Lab 方框之後再寫')
         if pending and m.get('status') == 'detailed':
             infos.extend(f'任務線 {m.get("id")}: {x}' for x in pending)
         elif pending:
