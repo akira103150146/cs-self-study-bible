@@ -985,6 +985,7 @@ mainlines:
       used_by: [boss.knn]
       note: "要 AI 層(判題映像有 numpy);待決見 data/README。和第 132 章範例的差別(給章作者):章裡可以示範 for 迴圈版與三維廣播版 ((A[:, None] − B[None]) ** 2).sum(-1)(1,620×4,000×64 要 3 GB 記憶體,過不了效能組),但不要寫出 Lab 要的展開式、夾 0、uint8 先轉 float、穩定的同票規則。手算(132):廣播後的形狀(參數化,答案是形狀或「不相容」)。反例題建議:「兩個形狀的維度數不同就不能廣播」(反例 (3, 1) 和 (4,))。"
       interface:
+        - "所有函式:輸入可以是 list 或 ndarray,函式內先 np.asarray(...) 再算"
         - "broadcast_shape(*shapes) -> tuple            # 照 NumPy 的廣播規則算結果形狀(從最後一維往前比);不相容 → ValueError;不准呼叫 np.broadcast_shapes"
         - "standardize(X, axis=0, eps=1e-8) -> (Z, mean, std)   # mean、std 保留維度(keepdims);std < eps 的位置當成 1(不產生 nan);任何 axis(含負數)"
         - "one_hot(y, n_classes) -> ndarray              # 形狀 (len(y), n_classes)、float;標籤 < 0 或 ≥ n_classes → ValueError"
@@ -1076,11 +1077,11 @@ mainlines:
         - "cross_entropy(logits, y) -> float          # logits:list[list[float]]、y:list[int];平均的 −log_softmax(z)[y](log-sum-exp,不能加 eps)"
         - "class SoftmaxRegression(n_features, n_classes, l2=0.0)   # W:n_classes×n_features 的 list[list[float]]、b:list[float],都從 0 開始"
         - "loss_and_grad(X, y) -> (loss, dW, db)      # 平均交叉熵＋l2/2·ΣW²(b 不算);∂L/∂z = softmax(z) − onehot(y),再對批次取平均"
-        - "fit(X, y, lr=0.1, epochs=100, batch_size=None, seed=0) -> list[float]   # 每批更新一次 W -= lr·dW、b -= lr·db(最後不滿一批也算);batch_size=None 是全批次;給了就用 random.Random(seed) 每個 epoch 洗牌;回傳每個 epoch 的平均損失(更新前算、依筆數加權)"
+        - "fit(X, y, lr=0.1, epochs=100, batch_size=None, seed=0) -> list[float]   # 每批更新一次 W -= lr·dW、b -= lr·db(最後不滿一批也算);batch_size=None 是全批次(不洗牌);給了 batch_size 就洗牌:rng = random.Random(seed) 在 fit 開頭只建一次,idx = list(range(len(X))),每個 epoch 先 rng.shuffle(idx)(對同一個 idx 原地再洗,不重建),再依序每 batch_size 個切一批;回傳每個 epoch 的平均損失(更新前算、依筆數加權)"
         - "predict_proba(X) -> list[list[float]];predict(X) -> list[int]   # 同分取最小的類別"
         - "nn/metrics.py:accuracy(y_true, y_pred) -> float"
         - "nn/metrics.py:confusion_matrix(y_true, y_pred, n_classes=None) -> list[list[int]]   # cm[真][預測];n_classes 預設是兩邊出現過的最大標籤 + 1"
-        - "nn/metrics.py:precision_recall_f1(y_true, y_pred, average='macro') -> (p, r, f1)   # average='macro' | 'micro' | None(None 回傳三個 list,每類一個);macro 是每一類的 P、R、F1 各自平均(macro F1 是每類 F1 的平均,不是拿 macro P、R 再算一次);分母是 0 時那一項算 0.0"
+        - "nn/metrics.py:precision_recall_f1(y_true, y_pred, average='macro') -> (p, r, f1)   # average='macro' | 'micro' | None(None 回傳三個 list,每類一個);類別數 K = 兩邊出現過的最大標籤 + 1(和 confusion_matrix 的預設一樣);macro 是每一類的 P、R、F1 各自平均(macro F1 是每類 F1 的平均,不是拿 macro P、R 再算一次),兩邊都沒出現的類別照樣算進 macro 的除數(它的 P、R、F1 都是 0.0);分母是 0 時那一項算 0.0;micro 平均永遠等於 accuracy(單標籤分類)"
         - "nn/metrics.py:top_confusions(cm, k=3) -> list[tuple[int, int, int]]   # (真, 預測, 次數):對角線以外最大的 k 格,次數多到少;同次數時真類別小的先,真類別也一樣時預測類別小的先;次數 0 的不列"
         - "錯誤:長度不同、空的輸入、負的標籤、標籤 ≥ n_classes、不認得的 average → ValueError"
       forbid: [numpy, sklearn, torch]
@@ -1090,7 +1091,7 @@ mainlines:
         - {id: linear.metrics, name: 評估指標, kind: function, visibility: public, requiredBy: [boss.report], description: "accuracy、confusion_matrix、precision_recall_f1(macro、micro、None;macro F1 是每類 F1 的平均)、top_confusions(同次數時真類別小的先)對公開範例。"}
         - {id: linear.grad, name: 梯度檢查, kind: function, visibility: hidden, requiredBy: [boss.baseline, mlp.loss], description: "隨機的 W、b、資料與 l2:loss_and_grad 的梯度對有限差分,相對誤差 1e-6 內。"}
         - {id: linear.stable, name: 數值穩定, kind: edge, visibility: hidden, requiredBy: [mlp.loss, boss.baseline], description: "logits 有 ±1000、全部相同、只有一類;損失不能是 inf 或 nan;predict 同分取最小的類別。"}
-        - {id: linear.metrics-edge, name: 指標的邊界, kind: edge, visibility: hidden, requiredBy: [boss.report], description: "某一類從來沒被預測(precision 的分母是 0)、某一類沒出現(recall 的分母是 0)、全部答對、n_classes 比出現過的大;單一標籤時 micro 平均等於 accuracy。"}
+        - {id: linear.metrics-edge, name: 指標的邊界, kind: edge, visibility: hidden, requiredBy: [boss.report], description: "某一類從來沒被預測(precision 的分母是 0)、某一類沒出現(recall 的分母是 0)、全部答對、n_classes 比出現過的大(confusion_matrix 給了比較大的 n_classes;precision_recall_f1 則是中間有類別兩邊都沒出現);micro 平均永遠等於 accuracy(單標籤分類)。"}
         - {id: linear.errors, name: 錯誤處理, kind: error, visibility: hidden, requiredBy: [boss.report, boss.baseline], description: "長度不同、空的輸入、負的標籤、標籤 ≥ n_classes、不認得的 average,都要 ValueError。"}
         - id: linear.perf
           name: 效能

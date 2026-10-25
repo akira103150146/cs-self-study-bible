@@ -935,7 +935,7 @@ for h in [1e-1, 1e-2, 1e-3, 1e-5, 1e-8, 1e-12]:
           <tr><td>1e-03</td><td>3.0e-03</td><td>1.0e-06</td><td></td></tr>
           <tr><td>1e-05</td><td>3.0e-05</td><td>9.7e-11</td><td>中央差分最好的區域</td></tr>
           <tr><td>1e-08</td><td>4.0e-09</td><td>7.1e-09</td><td>捨入誤差開始主導,中央反而變差</td></tr>
-          <tr><td>1e-12</td><td>2.7e-04</td><td>1.0e-04</td><td>比 $h = 10^{-2}$ 還差</td></tr>
+          <tr><td>1e-12</td><td>2.7e-04</td><td>1.0e-04</td><td>中央誤差已和 $h = 10^{-2}$ 一樣差,比 $h = 10^{-5}$ 差一百萬倍</td></tr>
         </tbody>
       </table></div>
       <p>
@@ -1292,6 +1292,136 @@ print(all(p.data == 0.0 for layer in zero.layers[:-1] for p in layer.parameters(
         </div>
       </div>
 
+      <h3>手算:一個隱藏層的反向傳播走一步</h3>
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">為什麼要學</span>
+          <p>本章 Lab 的任務「多層感知機」(nn/mlp)要你寫手推的 <code>loss_and_backward</code>,而且它的梯度要和 <code>value_loss(...).backward()</code> 一模一樣(任務目標「兩條反向傳播一致」);
+          Boss 戰「梯度檢查」再拿有限差分對一次。先用一筆資料、一個隱藏層把每一格算出來,寫程式時才知道每個陣列該長什麼樣子。</p>
+        </div>
+      </div>
+      <p>
+        網路是 2-3-2:兩個輸入、三個 ReLU 隱藏單元、兩類(softmax＋交叉熵),只有一筆資料。記號照〈反向傳播 = 連鎖律〉:$\mathbf{z}^{(1)} = \mathbf{W}^{(1)}\mathbf{x} + \mathbf{b}^{(1)}$,
+        $\mathbf{W}^{(1)}$ 的第 $j$ 列是第 $j$ 個隱藏單元的權重(和 Lab 的 <code>parameters()</code> 順序一樣)。設定:
+        $\mathbf{x} = (1, 2)$、
+        $\mathbf{W}^{(1)} = \begin{pmatrix} 0.5 &amp; -0.5 \\ 1 &amp; 0.5 \\ -1 &amp; 1 \end{pmatrix}$、$\mathbf{b}^{(1)} = (0, -1, 0.5)$、
+        $\mathbf{W}^{(2)} = \begin{pmatrix} 2 &amp; 1 &amp; -1 \\ 1 &amp; -1 &amp; 1 \end{pmatrix}$、$\mathbf{b}^{(2)} = (0, 0.5)$,
+        正確答案是第 0 類,所以 $\mathbf{y} = (1, 0)$。前 4 列是前向,後 5 列是反向(數字四捨五入到四位):
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>步驟</th><th>算什麼</th><th>代入</th><th>結果</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td>$\mathbf{z}^{(1)} = \mathbf{W}^{(1)}\mathbf{x} + \mathbf{b}^{(1)}$</td><td>(0.5·1 − 0.5·2 + 0, 1·1 + 0.5·2 − 1, −1·1 + 1·2 + 0.5)</td><td>(−0.5, 1, 1.5)</td></tr>
+          <tr><td>2</td><td>$\mathbf{h} = \text{ReLU}(\mathbf{z}^{(1)})$</td><td>負的變 0</td><td>(0, 1, 1.5)</td></tr>
+          <tr><td>3</td><td>$\mathbf{z}^{(2)} = \mathbf{W}^{(2)}\mathbf{h} + \mathbf{b}^{(2)}$</td><td>(2·0 + 1·1 − 1·1.5 + 0, 1·0 − 1·1 + 1·1.5 + 0.5)</td><td>(−0.5, 1)</td></tr>
+          <tr><td>4</td><td>$\mathbf{p} = \text{softmax}(\mathbf{z}^{(2)})$,$L = -\log p_0$</td><td>$p_0 = e^{-0.5}/(e^{-0.5} + e^{1})$</td><td>$\mathbf{p} = (0.1824, 0.8176)$,$L = 1.7014$</td></tr>
+          <tr><td>5</td><td>$\boldsymbol{\delta}^{(2)} = \mathbf{p} - \mathbf{y}$(也是 $\partial L/\partial \mathbf{b}^{(2)}$)</td><td>(0.1824 − 1, 0.8176 − 0)</td><td>(−0.8176, 0.8176)</td></tr>
+          <tr><td>6</td><td>$\partial L/\partial \mathbf{W}^{(2)} = \boldsymbol{\delta}^{(2)}\mathbf{h}^\top$(2×3 外積)</td><td>第 $k$ 列 = $\delta^{(2)}_k \cdot (0, 1, 1.5)$</td><td>$\begin{pmatrix} 0 &amp; -0.8176 &amp; -1.2264 \\ 0 &amp; 0.8176 &amp; 1.2264 \end{pmatrix}$</td></tr>
+          <tr><td>7</td><td>$\partial L/\partial \mathbf{h} = (\mathbf{W}^{(2)})^\top \boldsymbol{\delta}^{(2)}$</td><td>(2·(−0.8176) + 1·0.8176, 1·(−0.8176) − 1·0.8176, −1·(−0.8176) + 1·0.8176)</td><td>(−0.8176, −1.6351, 1.6351)</td></tr>
+          <tr><td>8</td><td>$\boldsymbol{\delta}^{(1)} = \partial L/\partial \mathbf{h} \odot \mathbf{1}[\mathbf{z}^{(1)} &gt; 0]$(也是 $\partial L/\partial \mathbf{b}^{(1)}$)</td><td>遮罩 (0, 1, 1)</td><td>(0, −1.6351, 1.6351)</td></tr>
+          <tr><td>9</td><td>$\partial L/\partial \mathbf{W}^{(1)} = \boldsymbol{\delta}^{(1)}\mathbf{x}^\top$(3×2 外積)</td><td>第 $j$ 列 = $\delta^{(1)}_j \cdot (1, 2)$</td><td>$\begin{pmatrix} 0 &amp; 0 \\ -1.6351 &amp; -3.2703 \\ 1.6351 &amp; 3.2703 \end{pmatrix}$</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        看第 0 個隱藏單元:$z^{(1)}_0 = -0.5$,ReLU 把它關掉了。它在 $\partial L/\partial \mathbf{W}^{(2)}$ 那一欄是 0(因為 $h_0 = 0$),
+        在 $\partial L/\partial \mathbf{W}^{(1)}$ 那一列也是 0(第 8 步的遮罩),雖然第 7 步的 $\partial L/\partial h_0 = -0.8176$ 不是 0。
+        第 7 步最容易寫錯:要乘的是 $\mathbf{W}^{(2)}$ 的<strong>轉置</strong>,結果長度是隱藏單元的個數 3,不是類別數 2。
+        一批 $B$ 筆資料時,每一筆各走一次第 5–9 步再相加,最後除以 $B$(損失取平均);有 L2 時,每個權重的梯度再加上 l2·$W$(偏差不加)。
+        下面的程式只用標準函式庫,印出表裡每一格,再用中央差分把 17 個梯度全部對一次:
+      </p>
+      <pre><code class="language-python">import math
+
+x = [1.0, 2.0]
+W1 = [[0.5, -0.5], [1.0, 0.5], [-1.0, 1.0]]     # 3×2:W1[j] 是第 j 個隱藏單元的權重
+b1 = [0.0, -1.0, 0.5]
+W2 = [[2.0, 1.0, -1.0], [1.0, -1.0, 1.0]]       # 2×3:W2[k] 是第 k 類的權重
+b2 = [0.0, 0.5]
+y = 0                                           # 正確答案是第 0 類
+
+def affine(W, v, b):                            # W v + b
+    return [sum(wi * vi for wi, vi in zip(row, v)) + bk for row, bk in zip(W, b)]
+
+def forward():
+    z1 = affine(W1, x, b1)
+    h = [max(0.0, v) for v in z1]               # ReLU
+    z2 = affine(W2, h, b2)
+    m = max(z2)                                 # 先減最大值再 exp
+    e = [math.exp(v - m) for v in z2]
+    p = [v / sum(e) for v in e]
+    return z1, h, z2, p, -math.log(p[y])
+
+z1, h, z2, p, L = forward()
+d2 = [pk - (1.0 if k == y else 0.0) for k, pk in enumerate(p)]     # δ² = p − y
+dW2 = [[dk * hj for hj in h] for dk in d2]                         # δ² hᵀ
+dh = [sum(W2[k][j] * d2[k] for k in range(2)) for j in range(3)]   # (W²)ᵀ δ²
+d1 = [g if zj &gt; 0 else 0.0 for g, zj in zip(dh, z1)]               # ⊙ 1[z¹ &gt; 0]
+dW1 = [[dj * xi for xi in x] for dj in d1]                         # δ¹ xᵀ
+assert abs(sum(d2)) &lt; 1e-12                     # p 與 one-hot 都加起來是 1
+
+def r(v):                                       # 四位小數,順便把 -0.0 印成 0.0
+    return round(v, 4) + 0.0
+
+for name, v in [("z1", z1), ("h", h), ("z2", z2), ("p", p), ("d2", d2),
+                ("dW2", dW2), ("dh", dh), ("d1", d1), ("dW1", dW1)]:
+    print(f"{name:3} =", [[r(a) for a in row] for row in v] if isinstance(v[0], list) else [r(a) for a in v])
+print("L   =", r(L))
+
+# 17 個參數都用中央差分對一次:(參數所在的列表, 位置, 公式算的梯度)
+checks = ([(W1[j], i, dW1[j][i]) for j in range(3) for i in range(2)]
+          + [(b1, j, d1[j]) for j in range(3)]
+          + [(W2[k], j, dW2[k][j]) for k in range(2) for j in range(3)]
+          + [(b2, k, d2[k]) for k in range(2)])
+eps, worst = 1e-5, 0.0
+for row, i, g in checks:
+    old = row[i]
+    row[i] = old + eps; Lp = forward()[4]
+    row[i] = old - eps; Lm = forward()[4]
+    row[i] = old
+    worst = max(worst, abs((Lp - Lm) / (2 * eps) - g))
+print(f"{len(checks)} 個梯度和中央差分的最大差 {worst:.0e}")</code></pre>
+      <pre><code class="language-text">z1  = [-0.5, 1.0, 1.5]
+h   = [0.0, 1.0, 1.5]
+z2  = [-0.5, 1.0]
+p   = [0.1824, 0.8176]
+d2  = [-0.8176, 0.8176]
+dW2 = [[0.0, -0.8176, -1.2264], [0.0, 0.8176, 1.2264]]
+dh  = [-0.8176, -1.6351, 1.6351]
+d1  = [0.0, -1.6351, 1.6351]
+dW1 = [[0.0, 0.0], [-1.6351, -3.2703], [1.6351, 3.2703]]
+L   = 1.7014
+17 個梯度和中央差分的最大差 1e-10</code></pre>
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 111.6 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>同一個 2-3-2 網路換一組數字:$\mathbf{x} = (2, -1)$、
+          $\mathbf{W}^{(1)} = \begin{pmatrix} 1 &amp; 1 \\ 0.5 &amp; -1 \\ -0.5 &amp; 0.5 \end{pmatrix}$、$\mathbf{b}^{(1)} = (0, 0, 0.5)$、
+          $\mathbf{W}^{(2)} = \begin{pmatrix} 0 &amp; 1 &amp; 1 \\ 1 &amp; -1 &amp; 2 \end{pmatrix}$、$\mathbf{b}^{(2)} = (0, 0)$,正確答案是第 1 類。
+          (a) 算出 $\mathbf{z}^{(1)}$、$\mathbf{h}$、$\mathbf{z}^{(2)}$、$\mathbf{p}$(四位小數)與 $L$。
+          (b) 算出 $\boldsymbol{\delta}^{(2)}$、$\partial L/\partial \mathbf{W}^{(2)}$、$\partial L/\partial \mathbf{h}$、$\boldsymbol{\delta}^{(1)}$ 與 $\partial L/\partial \mathbf{W}^{(1)}$。
+          (c) 哪一個隱藏單元的權重這一步完全不會動?</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <div class="table-wrap"><table>
+              <thead><tr><th>步驟</th><th>算什麼</th><th>結果</th></tr></thead>
+              <tbody>
+                <tr><td>1</td><td>$\mathbf{z}^{(1)}$</td><td>(1·2 + 1·(−1) + 0, 0.5·2 − 1·(−1) + 0, −0.5·2 + 0.5·(−1) + 0.5) = (1, 2, −1)</td></tr>
+                <tr><td>2</td><td>$\mathbf{h}$</td><td>(1, 2, 0)</td></tr>
+                <tr><td>3</td><td>$\mathbf{z}^{(2)}$</td><td>(0·1 + 1·2 + 1·0, 1·1 − 1·2 + 2·0) = (2, −1)</td></tr>
+                <tr><td>4</td><td>$\mathbf{p}$、$L$</td><td>$\mathbf{p} = (0.9526, 0.0474)$,$L = -\log 0.0474 = 3.0486$</td></tr>
+                <tr><td>5</td><td>$\boldsymbol{\delta}^{(2)}$</td><td>(0.9526, −0.9526)</td></tr>
+                <tr><td>6</td><td>$\partial L/\partial \mathbf{W}^{(2)}$</td><td>$\begin{pmatrix} 0.9526 &amp; 1.9051 &amp; 0 \\ -0.9526 &amp; -1.9051 &amp; 0 \end{pmatrix}$</td></tr>
+                <tr><td>7</td><td>$\partial L/\partial \mathbf{h}$</td><td>(0·0.9526 + 1·(−0.9526), 1·0.9526 − 1·(−0.9526), 1·0.9526 + 2·(−0.9526)) = (−0.9526, 1.9051, −0.9526)</td></tr>
+                <tr><td>8</td><td>$\boldsymbol{\delta}^{(1)}$</td><td>遮罩 (1, 1, 0):(−0.9526, 1.9051, 0)</td></tr>
+                <tr><td>9</td><td>$\partial L/\partial \mathbf{W}^{(1)}$</td><td>$\begin{pmatrix} -1.9051 &amp; 0.9526 \\ 3.8103 &amp; -1.9051 \\ 0 &amp; 0 \end{pmatrix}$</td></tr>
+              </tbody>
+            </table></div>
+            <p>(c) 第 2 個隱藏單元(從 0 數起):$z^{(1)}_2 = -1$ 被 ReLU 關掉,它的 $\mathbf{W}^{(1)}$ 那一列、$b^{(1)}_2$ 和 $\mathbf{W}^{(2)}$ 那一欄的梯度都是 0。
+            驗證:把上面程式的 <code>x</code>、<code>W1</code>、<code>b1</code>、<code>W2</code>、<code>b2</code>、<code>y</code> 換成這組數字再執行,印出的每一格都和表一樣,
+            最後一行是 <code>17 個梯度和中央差分的最大差 2e-11</code>。</p>
+          </div></details>
+        </div>
+      </div>
+
       <h3 id="lab-nn-mlp">本章 Lab:多層感知機 nn/mlp.py</h3>
       <div class="callout lab" data-task="nn/mlp">
         <div class="ico">🧪</div>
@@ -1383,7 +1513,7 @@ True
             <li data-group="mlp.perf">☐ <strong>效能</strong>〔隱藏檢定〕訓練要用手推的 loss_and_backward;用 value_loss 建圖訓練一個 epoch 要好幾分鐘。門檻:64-64-10 網路、4,000 筆、batch 32 跑一個 epoch(loss_and_backward＋Adam step)5 秒內。這個門檻來自 Boss 戰「手寫數字辨識」:train_digits(4,000 張)＋predict(1,620 張)合計 60 秒內,要夠跑十幾個 epoch。</li>
           </ul>
           <p><strong>Boss 戰的資料:</strong>任務資料夾的 <code>data/</code> 有公開的 4,000 張 8×8 手寫數字(每張 64 個 0–16 的整數像素與標籤);判題機另外拿 1,620 張你沒看過的圖測準確率。資料來自 UCI Machine Learning Repository 的 Optical Recognition of Handwritten Digits(E. Alpaydin、C. Kaynak,CC BY 4.0,doi:10.24432/C50P49)。</p>
-          <p><strong>規則:</strong>不能 <code>import numpy</code>、<code>torch</code>、<code>sklearn</code>;必須 import 你的 <code>nn.value</code>、<code>nn.optim</code>、<code>nn.linear</code>(參數是 <code>Value</code>、訓練用你的最佳化器、損失用你的 <code>log_softmax</code>)。</p>
+          <p><strong>規則:</strong>不能 <code>import numpy</code>、<code>torch</code>、<code>sklearn</code>;必須 import 你的 <code>nn.value</code>、<code>nn.optim</code>、<code>nn.linear</code>(參數是 <code>Value</code>、訓練用你的最佳化器、<code>loss_and_backward</code> 的損失用你的 <code>log_softmax</code>;<code>value_loss</code> 用 <code>Value</code> 的 exp、log 自己組)。</p>
           <p><strong>之後會用在:</strong>Boss 戰「手寫數字辨識」「梯度檢查」「評估報告」;之後專題「影像分類＋迷你 GPT」的訓練迴圈。</p>
           <p class="lab-rule">這個零件過關之後,後面的專題一律用你自己的版本。規則見<a href="00-about.html#lab-rules">零件庫規則</a>。</p>
         </div>

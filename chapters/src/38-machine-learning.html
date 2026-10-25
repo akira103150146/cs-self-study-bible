@@ -666,6 +666,86 @@ print([round(v, 4) for v in new_w], round(new_b, 4))
           </div></details>
         </div>
       </div>
+      <p>
+        本章 Lab 是十類的 softmax 迴歸,不是兩類。換成 $K$ 類時,每一類有自己的一列權重 $\mathbf{W}_k$ 和偏差 $b_k$,
+        $z_k = \mathbf{W}_k\cdot\mathbf{x} + b_k$,$\hat{\mathbf{y}} = \text{softmax}(\mathbf{z})$,損失是 $-\log \hat y_y$;
+        梯度的形狀和上面一模一樣,只是 $p - y$ 變成一個向量:$\partial L/\partial \mathbf{z} = \hat{\mathbf{y}} - \text{onehot}(y)$、
+        $\partial L/\partial \mathbf{W}_k = (\hat y_k - [k = y])\,\mathbf{x}$、$\partial L/\partial b_k = \hat y_k - [k = y]$。
+        下一題就是 Lab 的 <code>loss_and_grad</code> 對一筆資料做的事。
+      </p>
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 38.2 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>三類,一筆資料 $\mathbf{x} = (1, 2)$,$\mathbf{W} = \begin{pmatrix} 0 &amp; 1 \\ 0.5 &amp; -0.25 \\ -1 &amp; 0 \end{pmatrix}$(第 $k$ 列是第 $k$ 類的權重)、$\mathbf{b} = \mathbf{0}$,
+          正確答案是第 1 類(類別從 0 數起)。
+          (a) 算出 logits $\mathbf{z}$、$\hat{\mathbf{y}} = \text{softmax}(\mathbf{z})$(四位小數)與損失 $L$。
+          (b) 算出 $\partial L/\partial \mathbf{z}$、$\partial L/\partial \mathbf{b}$ 與 $\partial L/\partial \mathbf{W}$。
+          (c) 改用 log-sum-exp 的穩定寫法 $L = \text{LSE}(\mathbf{z}) - z_y$、$\text{LSE}(\mathbf{z}) = m + \log\sum_k e^{z_k - m}$($m = \max_k z_k$)再算一次 $L$。
+          logits 換成 $(1002, 1000, 999)$ 時,哪一種寫法會壞掉?</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <div class="table-wrap"><table>
+              <thead><tr><th>類別 $k$</th><th>$z_k$</th><th>$e^{z_k}$</th><th>$\hat y_k$</th><th>$[k = y]$</th><th>$\partial L/\partial z_k = \partial L/\partial b_k$</th><th>$\partial L/\partial W_{k1}$</th><th>$\partial L/\partial W_{k2}$</th></tr></thead>
+              <tbody>
+                <tr><td>0</td><td>0·1 + 1·2 = 2</td><td>7.3891</td><td>0.8438</td><td>0</td><td>0.8438</td><td>0.8438</td><td>1.6876</td></tr>
+                <tr><td>1</td><td>0.5·1 − 0.25·2 = 0</td><td>1</td><td>0.1142</td><td>1</td><td>−0.8858</td><td>−0.8858</td><td>−1.7716</td></tr>
+                <tr><td>2</td><td>−1·1 + 0·2 = −1</td><td>0.3679</td><td>0.0420</td><td>0</td><td>0.0420</td><td>0.0420</td><td>0.0840</td></tr>
+                <tr><td>合計</td><td></td><td>8.7569</td><td>1</td><td>1</td><td><strong>0</strong></td><td></td><td></td></tr>
+              </tbody>
+            </table></div>
+            <p>(a) $\mathbf{z} = (2, 0, -1)$,$\hat{\mathbf{y}} = (0.8438, 0.1142, 0.0420)$,$L = -\log 0.1142 \approx 2.1698$。
+            (b) $\partial L/\partial \mathbf{z} = \partial L/\partial \mathbf{b} = (0.8438, -0.8858, 0.0420)$,加起來是 0;$\partial L/\partial \mathbf{W}$ 是表的最後兩欄,也就是外積 $(\hat{\mathbf{y}} - \text{onehot}(y))\,\mathbf{x}^\top$。
+            模型把最高的機率給了第 0 類,所以第 0 類的權重被往下推(梯度是正的),第 1 類被往上拉。</p>
+            <p>(c) $m = 2$,$\mathbf{z} - m = (0, -2, -3)$,$\sum_k e^{z_k - m} = 1 + 0.1353 + 0.0498 = 1.1851$,
+            $\text{LSE} = 2 + \log 1.1851 = 2 + 0.1698 = 2.1698$,$L = 2.1698 - z_1 = 2.1698 - 0 = 2.1698$,和 (a) 一樣
+            (這一題 $z_1$ 剛好是 0,所以 LSE 和 $L$ 的數字相同)。
+            logits 是 $(1002, 1000, 999)$ 時,照定義算的 <code>math.exp(1002)</code> 會丟出 <code>OverflowError: math range error</code>;
+            穩定寫法減掉 $m = 1002$ 之後算的還是 $e^0, e^{-2}, e^{-3}$,得到一樣的 $\hat{\mathbf{y}}$ 與 $L = 2.1698$。這就是 Lab 規定「用 log-sum-exp、不准加 eps」的原因。</p>
+            <p>驗證程式(只用標準函式庫):</p>
+            <pre><code class="language-python">import math
+
+x = [1.0, 2.0]                                 # 一筆資料,兩個特徵
+W = [[0.0, 1.0], [0.5, -0.25], [-1.0, 0.0]]    # n_classes×n_features:W[k] 是第 k 類的權重
+b = [0.0, 0.0, 0.0]
+y = 1                                          # 正確答案是第 1 類
+
+z = [sum(wj * xj for wj, xj in zip(row, x)) + bk for row, bk in zip(W, b)]
+e = [math.exp(v) for v in z]                   # 照定義:e^z / Σe^z
+p = [v / sum(e) for v in e]
+L = -math.log(p[y])
+
+m = max(z)                                     # log-sum-exp:先減最大值
+lse = m + math.log(sum(math.exp(v - m) for v in z))
+log_p = [v - lse for v in z]                   # log_softmax
+L_stable = -log_p[y]
+
+dz = [pk - (1.0 if k == y else 0.0) for k, pk in enumerate(p)]   # ŷ − onehot(y)
+dW = [[dk * xj for xj in x] for dk in dz]                         # 第 k 列 = dz[k]·x
+db = dz[:]
+assert abs(sum(dz)) &lt; 1e-12
+
+print("z  =", z)
+print("p  =", [round(v, 4) for v in p])
+print(f"L  = {L:.4f}  log-sum-exp = {lse:.4f}  穩定版 L = {L_stable:.4f}")
+print("dz =", [round(v, 4) for v in dz])
+print("dW =", [[round(v, 4) for v in row] for row in dW])
+
+h = 1e-5                                       # 用中央差分檢查 dW[1][1]
+def loss_at(w11):
+    W2 = [row[:] for row in W]; W2[1][1] = w11
+    zz = [sum(wj * xj for wj, xj in zip(row, x)) + bk for row, bk in zip(W2, b)]
+    mm = max(zz)
+    return -(zz[y] - mm - math.log(sum(math.exp(v - mm) for v in zz)))
+num = (loss_at(W[1][1] + h) - loss_at(W[1][1] - h)) / (2 * h)
+print(f"dW[1][1]: 公式 {dW[1][1]:.6f}  差分 {num:.6f}")
+# z  = [2.0, 0.0, -1.0]
+# p  = [0.8438, 0.1142, 0.042]
+# L  = 2.1698  log-sum-exp = 2.1698  穩定版 L = 2.1698
+# dz = [0.8438, -0.8858, 0.042]
+# dW = [[0.8438, 1.6876], [-0.8858, -1.7716], [0.042, 0.084]]
+# dW[1][1]: 公式 -1.771610  差分 -1.771610</code></pre>
+          </div></details>
+        </div>
+      </div>
 
       <h2>過擬合與正則化:ML 的第一道難關</h2>
       <p>
@@ -1015,7 +1095,7 @@ print(f"accuracy = {TP / sum(map(sum, cm)):.4f}")
         本書和本章 Lab 都約定算 0(scikit-learn 的 <code>zero_division=0</code> 也是),否則一個 <code>nan</code> 會讓 macro 平均整個變成 <code>nan</code>。
       </p>
       <div class="exercise">
-        <div class="ex-head">✏️ 手算 38.2 <span class="badge">手算</span></div>
+        <div class="ex-head">✏️ 手算 38.3 <span class="badge">手算</span></div>
         <div class="ex-body">
           <p>混淆矩陣(列是真、欄是預測)<code>cm = [[6, 2, 0], [1, 4, 0], [2, 1, 0]]</code>。
           (a) 算出每一類的 TP、FP、FN、precision、recall、F1。(b) 算出 macro 與 micro 的 precision、recall、F1。
@@ -1038,7 +1118,7 @@ print(f"accuracy = {TP / sum(map(sum, cm)):.4f}")
         </div>
       </div>
       <div class="exercise">
-        <div class="ex-head">✏️ 手算 38.3 <span class="badge">手算</span></div>
+        <div class="ex-head">✏️ 手算 38.4 <span class="badge">手算</span></div>
         <div class="ex-body">
           <p><strong>看起來對但其實錯:</strong>「準確率 98% 就是好模型。」100 筆資料裡 98 筆是類別 0、類別 1 與 2 各 1 筆;
           一個「模型」永遠猜 0。算出它的準確率、macro F1、micro F1。哪一個數字揭穿了它?</p>
@@ -1077,8 +1157,10 @@ class SoftmaxRegression:
     def loss_and_grad(self, X, y) -&gt; tuple:
         """回傳 (loss, dW, db):平均交叉熵 + l2/2·ΣW²(b 不算);∂L/∂z = softmax(z) − onehot(y),再對批次取平均。"""
     def fit(self, X, y, lr=0.1, epochs=100, batch_size=None, seed=0) -&gt; list:
-        """每批更新一次 W -= lr·dW、b -= lr·db(最後不滿一批也算);batch_size=None 是全批次;
-        給了就用 random.Random(seed) 每個 epoch 洗牌;回傳每個 epoch 的平均損失(更新前算、依筆數加權)。"""
+        """每批更新一次 W -= lr·dW、b -= lr·db(最後不滿一批也算);batch_size=None 是全批次(不洗牌);
+        給了 batch_size 就洗牌:rng = random.Random(seed) 在 fit 開頭只建一次,idx = list(range(len(X))),
+        每個 epoch 先 rng.shuffle(idx)(對同一個 idx 原地再洗,不重建),再依序每 batch_size 個切一批;
+        回傳每個 epoch 的平均損失(更新前算、依筆數加權)。"""
     def predict_proba(self, X) -&gt; list: ...
     def predict(self, X) -&gt; list:
         """同分取最小的類別。"""
@@ -1091,8 +1173,10 @@ def confusion_matrix(y_true, y_pred, n_classes=None) -&gt; list:
 
 def precision_recall_f1(y_true, y_pred, average='macro') -&gt; tuple:
     """回傳 (p, r, f1)。average='macro' | 'micro' | None(None 回傳三個 list,每類一個)。
+    類別數 K = 兩邊出現過的最大標籤 + 1(和 confusion_matrix 的預設一樣);
     macro 是每一類的 P、R、F1 各自平均(macro F1 是每類 F1 的平均,不是拿 macro P、R 再算一次);
-    分母是 0 時那一項算 0.0。"""
+    兩邊都沒出現的類別照樣算進 macro 的除數(它的 P、R、F1 都是 0.0);
+    分母是 0 時那一項算 0.0;micro 平均永遠等於 accuracy(單標籤分類)。"""
 
 def top_confusions(cm, k=3) -&gt; list:
     """(真, 預測, 次數):對角線以外最大的 k 格,次數多到少;同次數時真類別小的先,
@@ -1152,7 +1236,7 @@ def top_confusions(cm, k=3) -&gt; list:
             <li data-group="linear.metrics">☐ <strong>評估指標</strong>〔公開〕accuracy、confusion_matrix、precision_recall_f1(macro、micro、None;macro F1 是每類 F1 的平均)、top_confusions(同次數時真類別小的先)對公開範例。</li>
             <li data-group="linear.grad">☐ <strong>梯度檢查</strong>〔隱藏檢定〕隨機的 W、b、資料與 l2:loss_and_grad 的梯度對有限差分,相對誤差 1e-6 內。(任務「多層感知機」的「兩條反向傳播一致」也需要它。)</li>
             <li data-group="linear.stable">☐ <strong>數值穩定</strong>〔隱藏檢定〕logits 有 ±1000、全部相同、只有一類;損失不能是 inf 或 nan;predict 同分取最小的類別。(任務「多層感知機」的「兩條反向傳播一致」也需要它。)</li>
-            <li data-group="linear.metrics-edge">☐ <strong>指標的邊界</strong>〔隱藏檢定〕某一類從來沒被預測(precision 的分母是 0)、某一類沒出現(recall 的分母是 0)、全部答對、n_classes 比出現過的大;單一標籤時 micro 平均等於 accuracy。</li>
+            <li data-group="linear.metrics-edge">☐ <strong>指標的邊界</strong>〔隱藏檢定〕某一類從來沒被預測(precision 的分母是 0)、某一類沒出現(recall 的分母是 0)、全部答對、n_classes 比出現過的大(confusion_matrix 給了比較大的 n_classes;precision_recall_f1 則是中間有類別兩邊都沒出現);micro 平均永遠等於 accuracy(單標籤分類)。</li>
             <li data-group="linear.errors">☐ <strong>錯誤處理</strong>〔隱藏檢定〕長度不同、空的輸入、負的標籤、標籤 ≥ n_classes、不認得的 average,都要 ValueError。</li>
             <li data-group="linear.perf">☐ <strong>效能</strong>〔隱藏檢定〕每批的前向與梯度都是 O(批次 × 特徵 × 類別);不能每筆重算整個資料集。門檻:fit:4,000 筆、64 個特徵、10 類、10 個 epoch、batch 32,7 秒內。這個門檻來自 Boss 戰「線性基準線」:fit＋predict 10 秒內。</li>
           </ul>
