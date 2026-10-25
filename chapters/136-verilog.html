@@ -873,6 +873,48 @@ c = 00100 (c[4]..c[0]), s = 1001, co = 0
 不變式檢查 256 x 4 = 1024 次,失敗 108 次</code></pre>
       <p>256 組裡有 200 組還是對的。練習 136.3 會問你:只測幾組「看起來有代表性」的輸入,為什麼抓不到它。</p>
 
+      <h3>cin 與 ovf:進位輸入、有號溢位與減法</h3>
+      <p>
+        本章 Lab 的 <code>adder</code> 比 add4 多了進位輸入 <code>cin</code>、進位輸出 <code>cout</code> 和有號溢位旗標 <code>ovf</code>。這三個都只是接線,不用多加全加器:
+      </p>
+      <ul>
+        <li><strong>c[0] = cin</strong>:最低位那條原本接常數 0 的進位線,改接 <code>cin</code>。上面的證明照樣成立,只是 k = 0 時兩邊都多了 cin,最後變成 <code>{cout, sum} == a + b + cin</code>。</li>
+        <li><strong>cout = c[W]</strong>:最高一級送出的進位,也就是無號加法結果的第 W+1 個位元(add4 的 <code>co = c[4]</code>)。</li>
+        <li><strong>ovf = c[W] ^ c[W−1]</strong>:把 a、b、sum 當二補數時的溢位。溢位的意思是「兩個同號的數相加,結果卻是另一個號」。</li>
+      </ul>
+      <p>
+        為什麼看最高兩級的進位就知道?最高一級(第 W−1 級)吃的是兩個符號位元 a[W−1]、b[W−1] 和進位 c[W−1]。照兩個符號位元分三種情況:
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>a[W−1] b[W−1]</th><th>意思</th><th>sum[W−1]</th><th>c[W]</th><th>什麼時候溢位</th><th>c[W] ^ c[W−1]</th></tr></thead>
+        <tbody>
+          <tr><td>0 0</td><td>正 + 正</td><td>= c[W−1]</td><td>0</td><td>sum 變成負的,也就是 c[W−1] = 1</td><td>= c[W−1]</td></tr>
+          <tr><td>1 1</td><td>負 + 負</td><td>= c[W−1]</td><td>1</td><td>sum 變成非負,也就是 c[W−1] = 0</td><td>= 1 − c[W−1]</td></tr>
+          <tr><td>0 1 或 1 0</td><td>異號</td><td>= 1 − c[W−1]</td><td>= c[W−1]</td><td>永遠不會溢位</td><td>0</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        三種情況裡,「什麼時候溢位」和最後一欄都對得上:<strong>同號相加、結果異號 ⇔ 最高兩級的進位 c[W]、c[W−1] 不同</strong>。
+        例:上面 testbench 印的 1011 + 0110,c[4..0] = 11100,c[4] = c[3] = 1,所以 ovf = 0;當有號讀是 −5 + 6 = 1,確實沒有溢位(cout = 1 只是無號的進位)。
+      </p>
+      <p>
+        <strong>減法用同一個 adder</strong>:二補數的 −b = ~b + 1,所以 a − b = a + ~b + 1。把 b 每個位元取反(<code>~b</code>)送進 b 腳、cin 接 1,不用另外做減法器。
+        這時 cout = 1 表示「沒有借位」(當無號看 a ≥ b),ovf 照樣是有號溢位。例:W = 4,3 − 5,送進去的是 0011 + 1010 + 1:
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>級 k</th><th>a[k]</th><th>~b[k]</th><th>c[k](進位入)</th><th>a+~b+c</th><th>s[k]</th><th>c[k+1](進位出)</th></tr></thead>
+        <tbody>
+          <tr><td>0</td><td>1</td><td>0</td><td>1(cin)</td><td>2</td><td>0</td><td>1</td></tr>
+          <tr><td>1</td><td>1</td><td>1</td><td>1</td><td>3</td><td>1</td><td>1</td></tr>
+          <tr><td>2</td><td>0</td><td>0</td><td>1</td><td>1</td><td>1</td><td>0</td></tr>
+          <tr><td>3</td><td>0</td><td>1</td><td>0</td><td>1</td><td>1</td><td>0</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        c[4..0] = 00111,sum = 1110(有號 −2,3 − 5 = −2),cout = 0(3 &lt; 5,有借位),ovf = c[4] ^ c[3] = 0 ^ 0 = 0。
+        這幾條就是 Lab 的 <code>adder</code> 比 add4 多的地方;用 <code>generate</code> 串起來、寬度改成 W,留給你在 Lab 裡寫。手算 136.2 的第 (3) 小題練這一段。
+      </p>
+
       <h3>手算:add4 的進位一級一級傳</h3>
       <p>
         追 a = 1011(11)、b = 0110(6)。每一列是一級全加器,從第 0 級(最低位)往上。
@@ -938,6 +980,7 @@ endmodule</code></pre>
         <div class="ex-body">
           <p>(1)用上面的表格格式,追 add4 計算 a = 1101(13)、b = 0111(7):寫出每一級的 s[k] 與 c[k+1]、最後的 c[4..0]、s、co,並檢查每一級的不變式。</p>
           <p>(2)同樣用每個輸出延遲 1 的 fa。a = 1111 保持不動,t = 10 時 b 從 0000 變成 0001。寫出 t = 10 到 14 的 c[4..0] 與 s。答案要等幾個延遲才穩定?</p>
+          <p>(3)換成 W = 8、c[0] = cin 的加法器(cout = c[8]、ovf = c[8] ^ c[7])。對下面三題寫出 sum、c[8]、c[7]、cout、ovf,再用有號的讀法檢查 ovf 對不對:(a)<code>0x7F + 0x01</code>,cin = 0;(b)<code>0xFF + 0x01</code>,cin = 0;(c)減法 <code>0x80 − 0x01</code>,也就是 <code>0x80 + ~0x01 + 1</code>。</p>
           <details class="solution"><summary>看解答</summary>
             <div class="sol-body">
               <p>(1)</p>
@@ -962,6 +1005,24 @@ endmodule</code></pre>
 12 | 00110  1100 0
 13 | 01110  1000 0
 14 | 11110  0000 1</code></pre>
+              <p>(3)</p>
+              <div class="table-wrap"><table>
+                <thead><tr><th>題</th><th>送進加法器</th><th>c[8..0]</th><th>sum</th><th>c[8]</th><th>c[7]</th><th>cout</th><th>ovf</th><th>有號的讀法</th></tr></thead>
+                <tbody>
+                  <tr><td>(a)</td><td><code>7F + 01</code> + 0</td><td>0_1111_1110</td><td><code>80</code></td><td>0</td><td>1</td><td>0</td><td>1</td><td>127 + 1 = 128,超出 −128..127;sum 讀成 −128</td></tr>
+                  <tr><td>(b)</td><td><code>FF + 01</code> + 0</td><td>1_1111_1110</td><td><code>00</code></td><td>1</td><td>1</td><td>1</td><td>0</td><td>−1 + 1 = 0,沒有溢位;cout = 1 只是無號的進位</td></tr>
+                  <tr><td>(c)</td><td><code>80 + FE</code> + 1</td><td>1_0000_0001</td><td><code>7F</code></td><td>1</td><td>0</td><td>1</td><td>1</td><td>−128 − 1 = −129,超出範圍;sum 讀成 127。cout = 1:無號 128 ≥ 1,沒有借位</td></tr>
+                </tbody>
+              </table></div>
+              <p>
+                (a)第 0 級 1 + 1 產生進位,第 1–6 級都是 1 + 0 + 1,進位一路傳到 c[7] = 1;第 7 級 0 + 0 + 1 = 1,s[7] = 1、c[8] = 0。正 + 正得到負,ovf = 0 ^ 1 = 1。
+                (b)每一級都是「1 + 進位」,c[1] 到 c[8] 全是 1;ovf = 1 ^ 1 = 0。
+                (c)~0x01 = 0xFE。第 0 級 0 + 0 + 1(cin)= 1,沒有進位;第 1–6 級 0 + 1 + 0 = 1,也沒有進位,c[7] = 0;第 7 級 1 + 1 + 0 = 2,s[7] = 0、c[8] = 1。負 − 正得到正,ovf = 1 ^ 0 = 1。
+                用 Icarus 跑過一個 W = 8 的版本(同時窮舉 256 × 256 × 2 組加法、256 × 256 組減法,對 cout、ovf 的定義全對):
+              </p>
+<pre><code class="language-text">W=8 7f + 01 + 0: c(8..0)=011111110 sum=80 c8=0 c7=1 cout=0 ovf=1
+W=8 ff + 01 + 0: c(8..0)=111111110 sum=00 c8=1 c7=1 cout=1 ovf=0
+W=8 80 + fe + 1: c(8..0)=100000001 sum=7f c8=1 c7=0 cout=1 ovf=1</code></pre>
             </div>
           </details>
         </div>
@@ -971,7 +1032,7 @@ endmodule</code></pre>
         <div class="ico">⚠️</div>
         <div class="body">
           <span class="c-title">判題接受的 Verilog:比本章的 testbench 嚴格</span>
-          <p>rtl 任務線的判題,會把你的 Verilog 和隱藏 testbench(或 cocotb)編在同一個模擬程序裡跑。為了公平,交出去的設計檔有這些限制:</p>
+          <p>rtl 任務線的判題,會把你的 Verilog 和隱藏 testbench(或 cocotb)編在同一次模擬裡跑。為了公平,交出去的設計檔有這些限制:</p>
           <ul>
             <li><strong>只編譯你的檔案時,<code>iverilog -g2012 -Wall</code> 不能有任何錯誤或警告</strong>。本章看過的隱含線、埠寬度不合,都會被擋。</li>
             <li><strong>不准 <code>`include</code></strong>:每個檔案自己完整;要用別的模組,判題時會把你的檔案一起編譯。</li>
@@ -980,7 +1041,7 @@ endmodule</code></pre>
             <li><strong>不准 <code>`timescale</code></strong>:只有部分檔案寫的話,<code>-Wall</code> 會警告(見本章「Testbench 入門」那一節);設計檔一律不寫,時間單位由判題的 testbench 決定。</li>
             <li><strong>系統函式只准 <code>$signed</code>、<code>$unsigned</code>、<code>$clog2</code>、<code>$display</code></strong>。<code>$finish</code>、<code>$random</code>、檔案讀寫都屬於 testbench。</li>
           </ul>
-          <p>本章所有的設計檔(不含 tb_ 開頭的 testbench)都符合這些規則:每個都單獨用 <code>iverilog -g2012 -Wall</code> 編譯過,零警告。</p>
+          <p>本章所有的設計檔(不含 tb_ 開頭的 testbench,刻意示範錯誤的檔案除外)都符合這些規則:每個都單獨用 <code>iverilog -g2012 -Wall</code> 編譯過,零警告。</p>
         </div>
       </div>
       <div class="callout note">
@@ -1598,7 +1659,7 @@ module reg_en #(parameter W = 8) (
     end
 endmodule
 
-// 0..MAX 循環的計數器(預設 MAX=9:十進位一位數)
+// 0..MAX 反覆計數的計數器(預設 MAX=9:十進位一位數)
 module counter #(
     parameter MAX = 9,
     parameter N   = $clog2(MAX + 1)   // 裝得下 MAX 要幾個位元:MAX=9 → 4
@@ -1842,13 +1903,13 @@ module det101_mealy (input clk, rst, x, output y);
 endmodule</code></pre>
       <ul>
         <li><strong>① 狀態暫存器</strong>:唯一用時脈的區塊,只有一行 <code>state &lt;= next</code>(加上重置)。</li>
-        <li><strong>② 次態邏輯</strong>:<code>always @*</code>,先給 <code>next = S0</code> 的預設值,再用 case 照 ch47 的狀態轉移表填。表上的每一格就是一行。</li>
+        <li><strong>② 次態邏輯</strong>:<code>always @*</code>,先給 <code>next = S0</code> 的預設值,再用 case 照<a href="47-digital-circuits.html">第 49 章</a>的狀態轉移表填。表上的每一格就是一行。</li>
         <li><strong>③ 輸出邏輯</strong>:Moore 只看 state;Mealy 看 state 和 x。</li>
-        <li><code>localparam</code> 替狀態取名字,編碼和 ch47 一樣(S0 = 00 … S3 = 11)。Moore 輸出 <code>state == S3</code> 在這個編碼下就是 $Q_1 \cdot Q_0$。</li>
+        <li><code>localparam</code> 替狀態取名字,編碼和<a href="47-digital-circuits.html">第 49 章</a>一樣(S0 = 00 … S3 = 11)。Moore 輸出 <code>state == S3</code> 在這個編碼下就是 $Q_1 \cdot Q_0$。</li>
       </ul>
       <p>
         Mealy 版只要 3 個狀態:在 "10"(M2)之後看到 1,當拍就輸出 1,然後去 M1(最後的 1 可以當下一個 "101" 的開頭)。
-        用 ch47 的同一串輸入 <code>1101011010101</code> 跑兩個版本,每一列印出「邊緣之前」的現態和輸出:
+        用<a href="47-digital-circuits.html">第 49 章</a>的同一串輸入 <code>1101011010101</code> 跑兩個版本,每一列印出「邊緣之前」的現態和輸出:
       </p>
 <pre><code class="language-verilog">module tb_det;
     reg clk = 0, rst = 1, x = 0;
@@ -1911,7 +1972,7 @@ endmodule</code></pre>
         </tbody>
       </table></div>
       <p>
-        Mealy 的 y 在 i = 3、5、8、10、12 是 1,正好是 ch47 的 Python 模擬印出的 <code>[3, 5, 8, 10, 12]</code>:讀到 "101" 最後那個 1 的同一拍就喊。
+        Mealy 的 y 在 i = 3、5、8、10、12 是 1,正好是<a href="47-digital-circuits.html">第 49 章</a>的 Python 模擬印出的 <code>[3, 5, 8, 10, 12]</code>:讀到 "101" 最後那個 1 的同一拍就喊。
         Moore 的 y 晚一拍才出現(i = 4、6、9、11 和最後),因為它要先進到 S3 這個狀態,輸出才會變。
       </p>
       <div class="callout warn">
@@ -2280,7 +2341,7 @@ tb_counter_ts.v:1: ...: The inherited timescale is here.
         <tbody>
           <tr><td>一個零件</td><td><code>CHIP Mux { IN …; OUT …; PARTS: … }</code></td><td><code>module mux2 (input …, output …); … endmodule</code></td></tr>
           <tr><td>寬度</td><td><code>IN a[16];</code></td><td><code>input [15:0] a</code>;可以用參數 <code>[W-1:0]</code></td></tr>
-          <tr><td>取一段位元</td><td><code>a[0..7]</code>,只能在零件那一側切</td><td><code>a[7:0]</code>,哪裡都能切;還有拼接 <code>{a, b}</code></td></tr>
+          <tr><td>取一段位元</td><td><code>a[0..7]</code>,內部線不能切;要在零件的腳那一側切</td><td><code>a[7:0]</code>,哪裡都能切;還有拼接 <code>{a, b}</code></td></tr>
           <tr><td>內部線</td><td>第一次出現就算,不用宣告</td><td>要宣告 <code>wire</code>;沒宣告會變成 1 位元的隱含線(<code>-Wall</code> 警告)</td></tr>
           <tr><td>接線</td><td><code>And(a=x, b=y, out=z);</code></td><td><code>and2 g (.a(x), .b(y), .out(z));</code>:一樣是「左邊零件的腳,右邊我的線」</td></tr>
           <tr><td>運算</td><td>沒有運算子,只能接零件</td><td><code>&amp; | ^ ~ + - &lt;&lt; &gt;&gt; ?:</code> 等,合成工具負責變成閘</td></tr>
@@ -2380,7 +2441,7 @@ endmodule</code></pre>
           <details class="solution"><summary>看解答</summary>
             <div class="sol-body">
               <p>(1)錯誤只在某一級的 a[k] = 0、b[k] = 1、c[k] = 1 時出現:正確的 co 是 1,他的是 0。例如 1 + 3:第 0 級 1 + 1 產生進位;第 1 級 a[1] = 0、b[1] = 1、c[1] = 1,進位被吃掉。他的 add4 算出 0000、co = 0,正確答案是 0100。</p>
-              <p>(2)他的五組裡,沒有任何一級同時是「a[k] = 0、b[k] = 1、而且有進位送進來」:1+1 和 2+2 的進位送進的那一級 a、b 都是 0;7+1 和 15+1 的進位一路遇到的都是 a 的 1;5+10 根本沒有進位。
+              <p>(2)他的五組裡,沒有任何一級同時是「a[k] = 0、b[k] = 1、而且有進位送進來」:1+1 和 2+2 的進位送進的那一級 a、b 都是 0;7+1 和 15+1 的進位一路遇到的 b 都是 0;5+10 根本沒有進位。
               <strong>例子都對 ≠ 電路正確</strong>。用本章的不變式 testbench 跑,失敗的檢查會指出「從第幾級開始錯」。</p>
               <p>(3)窮舉的結果(上面 tb_add4 換成壞掉的 fa):</p>
 <pre><code class="language-text">add4: 256 組,錯 56 組

@@ -241,6 +241,7 @@ cocotb(排程器:記住每個測試在等什麼)
 Icarus Verilog(vvp)── adder.v</code></pre>
       <p>
         安裝:<code>pip install cocotb</code>,另外要有模擬器(Ubuntu/Debian:<code>sudo apt install iverilog</code>)。
+        cocotb 會把 Python 載進模擬器,所以還要有 Python 的共用函式庫 libpython(例 <code>sudo apt install libpython3-dev</code>);終端機要用 UTF-8(例 <code>export LANG=C.UTF-8</code>),否則印出中文的失敗訊息時會出現 <code>UnicodeEncodeError</code>。
         本章的輸出都是在 Debian 12 的容器裡,用 Icarus Verilog 11 與 cocotb 1.9.2 實際執行的結果;cocotb 2.x 的差別在本節最後整理。
       </p>
       <p>一個 cocotb 專案最少四個檔案:電路、參考模型、測試、Makefile。參考模型和測試同樣改寫自 cocotb 的 <code>examples/adder</code>(CC0):</p>
@@ -438,6 +439,10 @@ async def forgot_await(dut):
         </tbody>
       </table>
       </div>
+      <p>
+        本章印出的輸出都是 cocotb 1.9.2 的。2.x 的訊息文字不同(例如讀到 x 值的錯誤是 <code>ValueError: Can't convert LogicArray to int: it contains non-0/1 values</code>),<code>results.xml</code> 也多了一些欄位;
+        但 <code>&lt;testcase&gt;</code> 的名稱和 <code>&lt;failure&gt;</code> 標記一樣,所以本章「突變測試」那一節的 <code>kill_matrix.py</code> 兩版都能讀(我們用 cocotb 2.1.0 跑過,擊殺矩陣一模一樣)。
+      </p>
 
       <h2>參考模型:另外寫一份「答案」</h2>
       <p>
@@ -596,6 +601,10 @@ async def random_vectors(dut):
     rng = random.Random(int(os.environ.get("SEED", "1")))
     for _ in range(200):
         await check(dut, rng.randrange(4), rng.randrange(256), rng.randrange(256))</code></pre>
+      <p>
+        這個突變版要自己做:建一個 <code>rare/</code> 資料夾,把 <code>alu8.v</code> 複製成 <code>rare/zero7.v</code>,只把 <code>zero</code> 那一行改成上面那樣(模組名還是 <code>alu8</code>)。
+        <code>test_alu8_random.py</code> 用到的 <code>check</code> 在 <code>test_alu8.py</code> 裡;alu8 用的 Makefile 和完整的 <code>test_alu8.py</code> 都在本章「突變測試」那一節。
+      </p>
       <p>種子 1 到 10 各跑一次(<code>SEED=1 make DUT=rare/zero7.v MODULE=test_alu8_random</code>,其他依此類推),看 <code>results.xml</code> 有沒有 <code>&lt;failure&gt;</code>:</p>
 <pre><code class="language-text">rare/zero7.v seed=1 FAIL
 rare/zero7.v seed=2 PASS
@@ -1484,7 +1493,27 @@ async def t5_sub_negative(dut):
         本章最後一節會用窮舉證明它真的等價。<strong>M5 才是真的漏洞</strong>:5 條測試沒有一條讓進位進到第 7 位元。補一條 T6:add <code>0x40</code> + <code>0x40</code> = <code>0x80</code>。
         M5 算出低 7 位元 <code>0x40 + 0x40</code> = <code>0x80</code>,截成 7 位元變 0,第 7 位元 0 ^ 0 = 0,所以 y = 0、zero = 1,被殺死。
       </p>
-      <p>手算完,讓電腦跑一次。腳本把同一套測試輪流跑在原版與每個突變版上,讀 <code>results.xml</code> 填矩陣:</p>
+      <p>手算完,讓電腦跑一次。先準備資料夾。alu8 用的 Makefile 和加法器那一份只差 <code>DUT</code>、<code>TOPLEVEL</code>、<code>MODULE</code> 三行:</p>
+<pre><code class="language-text"># Makefile:alu8 用(cocotb 1.9 的寫法),和 alu8.v、test_alu8.py 放在同一個資料夾
+SIM ?= icarus
+TOPLEVEL_LANG ?= verilog
+DUT ?= alu8.v
+VERILOG_SOURCES = $(PWD)/$(DUT)
+TOPLEVEL = alu8
+MODULE = test_alu8
+include $(shell cocotb-config --makefiles)/Makefile.sim</code></pre>
+      <p>
+        <code>mutants/</code> 和 <code>rare/</code> 兩個子資料夾要自己建。<code>mutants/</code> 放上面表格的 6 個檔:每個都從 <code>alu8.v</code> 複製一份,照表改一行(M2 是把兩行對調),檔名照表。
+        <code>rare/</code> 放「導向測試與隨機測試」那一節的 <code>zero7.v</code>。指令列的 <code>DUT=…</code>、<code>MODULE=…</code> 會蓋過 Makefile 裡的值,所以同一份 Makefile 可以測每一個版本、跑每一個測試模組:
+      </p>
+<pre><code class="language-text">alu8/
+├── Makefile
+├── alu8.v
+├── test_alu8.py、test_alu8_t6.py、test_alu8_random.py …
+├── run_mutants.sh、kill_matrix.py
+├── mutants/   m1_sub_off.v … m6_or_equiv.v
+└── rare/      zero7.v</code></pre>
+      <p>腳本把同一套測試輪流跑在原版與每個突變版上,讀 <code>results.xml</code> 填矩陣:</p>
 <pre><code class="language-bash">#!/bin/sh
 # run_mutants.sh:同一套測試跑在原版與每個突變版上,各自留下 results.xml
 # 用法:sh run_mutants.sh [測試模組],預設 test_alu8
@@ -1645,6 +1674,7 @@ $ make clean
 $ make DUT=$HOME/任務線/rtl/03-tb/mutants/alu_sub_off.v   # 公開突變版(節錄)
 AssertionError: 5 - 7:y=0xfffffffd
 ** TESTS=1 PASS=0 FAIL=1 SKIP=0 …</code></pre>
+          <p>寫完可以看後面「斷言」那一節,不變式和參考模型互補。</p>
           <p><strong>和本章範例不同的地方:</strong></p>
           <ul>
             <li>本章測的是加法器與 8 位元、4 種運算的 <code>alu8</code>;Lab 測 32 位元 RV32I ALU 的十種運算、未定義的 op 與 <code>zero</code>。</li>
@@ -1926,7 +1956,7 @@ async def quick(dut):
             <div class="sol-body">
               <p>T1 add→<code>0x07</code>(zero 0);T2 sub→0(zero 1);T3 and→<code>0x30</code>(0);T4 or→<code>0xFF</code>(0);T5 sub→<code>0xFB</code>(0);T6 add→<code>0x80</code>(0)。
               打到 add·0、sub·0、sub·1、and·0、or·0,共 5/8 = 62.5%。空著的是 add·1(例如 <code>0x80 + 0x80</code>)、and·1(例如 <code>0x0F &amp; 0xF0</code>)、or·1(只有 <code>0 | 0</code>)。
-              M2(and、or 對調)就和它們有關:T3、T4 已經殺死它,但如果只有 or·1 那一組(<code>0 | 0</code> 和 <code>0 &amp; 0</code> 一樣是 0),是殺不死它的。空 bin 告訴你哪裡沒測,不保證補上就抓得到。</p>
+              M2(and、or 對調)就和它們有關:T3、T4 已經殺死它;or·1 只能用 <code>0 | 0</code> 打到,而 <code>0 &amp; 0</code> 也是 0,所以這格殺不死 M2。空 bin 告訴你哪裡沒測,不保證補上就抓得到。</p>
             </div>
           </details>
         </div>
