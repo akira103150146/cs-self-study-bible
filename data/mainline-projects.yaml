@@ -567,7 +567,7 @@ mainlines:
           name: 效能
           kind: perf
           visibility: hidden
-          description: "主迴圈要夠快,才能拿來流暢地跑、除錯自己的互動程式(之後寫 CHIP-8 模擬器時也可以參考同一種主迴圈)。"
+          description: "主迴圈要夠快,才能拿來流暢地跑、除錯自己的互動程式(之後寫 CHIP-8 模擬器時也可以參考同一種主迴圈)。選修時的門檻:用自己的模擬器跑自己的互動程式要跟得上按鍵(按鍵塗滿整個螢幕一次最多 2×10^5 條指令)。"
           perf: {statement: "10^6 條指令,2 秒內", seconds: 2, n: 1000000}
           perf_ref: "0.2 秒(簡單參考解)"
           requiredBy: [boss.own-program]
@@ -1658,8 +1658,8 @@ mainlines:
         - "uint32_t mask(unsigned width)                         // 低 width 位全是 1;mask(0)=0、mask(32)=0xFFFFFFFF"
         - "uint32_t bit_get(uint32_t x, unsigned n)              // 第 n 位,回傳 0 或 1"
         - "uint32_t bit_set(uint32_t x, unsigned n, int v)       // 第 n 位設成 v(非 0 當 1),回傳新值"
-        - "uint32_t bits_get(uint32_t x, unsigned lo, unsigned width)                 // 取出 [lo, lo+width) 這段"
-        - "uint32_t bits_set(uint32_t x, unsigned lo, unsigned width, uint32_t v)     // 把那段換成 v 的低 width 位,其他位不變"
+        - "uint32_t bits_get(uint32_t x, unsigned lo, unsigned width)                 // 取出 [lo, lo+width) 這段;lo 0..31,lo+width 超過 32 時超出第 31 位的部分當成不存在(上面補 0)"
+        - "uint32_t bits_set(uint32_t x, unsigned lo, unsigned width, uint32_t v)     // 把那段換成 v 的低 width 位,其他位不變;lo+width 超過 32 時只改 [lo, 32),v 多出來的位元丟掉"
         - "int32_t  sign_extend(uint32_t x, unsigned width)      // 把低 width 位當二補數;width 1..32"
         - "uint32_t rotr32(uint32_t x, unsigned n)               // 右旋;n 取 n % 32"
         - "uint16_t load16_le/load16_be(const uint8_t *p);uint32_t load32_le/load32_be(const uint8_t *p)"
@@ -1668,12 +1668,12 @@ mainlines:
         - "typedef uint8_t (*bus_read_fn)(void *ctx, uint32_t offset);typedef void (*bus_write_fn)(void *ctx, uint32_t offset, uint8_t value)"
         - "Bus *bus_new(uint32_t size)        // RAM 0..size-1 全是 0;size 是 0 或大於 2^24 → NULL"
         - "void bus_free(Bus *b)              // b 是 NULL 時什麼都不做;uint32_t bus_size(const Bus *b)"
-        - "int bus_map(Bus *b, uint32_t base, uint32_t len, bus_read_fn rd, bus_write_fn wr, void *ctx)   // 0 成功;len 是 0、超出 [0, size)、和已經註冊的區段重疊、已經有 16 段 → -1,什麼都不改;rd 是 NULL 時讀回 0xFF,wr 是 NULL 時寫入被忽略"
+        - "int bus_map(Bus *b, uint32_t base, uint32_t len, bus_read_fn rd, bus_write_fn wr, void *ctx)   // 0 成功;len 是 0、超出 [0, size)、和已經註冊的區段重疊、已經有 16 段 → -1,什麼都不改(base+len 超過 uint32_t 也算超出範圍,不能讓它溢位繞回);rd 是 NULL 時讀回 0xFF,wr 是 NULL 時寫入被忽略"
         - "uint8_t bus_read8(Bus *b, uint32_t addr);void bus_write8(Bus *b, uint32_t addr, uint8_t v)   // 落在區段裡 → 呼叫 rd/wr(ctx, addr - base);超出 [0, size) → 讀回 0xFF(open bus)、寫入忽略,而且 bus_faults 加 1"
         - "uint16_t bus_read16le/bus_read16be(Bus *b, uint32_t addr);void bus_write16le/bus_write16be(Bus *b, uint32_t addr, uint16_t v)"
         - "uint32_t bus_read32le(Bus *b, uint32_t addr);void bus_write32le(Bus *b, uint32_t addr, uint32_t v)   // 多位元組存取一律拆成 read8/write8,依位址由小到大(addr, addr+1, …;uint32_t 自然進位)"
-        - "int bus_load(Bus *b, uint32_t addr, const uint8_t *data, uint32_t n)   // 直接寫進 RAM(不經過 MMIO 區段);超出範圍 → -1,一個位元組都不寫"
-        - "uint32_t bus_faults(const Bus *b)  // 到目前為止超出範圍的存取次數"
+        - "int bus_load(Bus *b, uint32_t addr, const uint8_t *data, uint32_t n)   // 直接寫進 RAM(不經過 MMIO 區段);超出範圍(含 addr+n 溢位)→ -1,一個位元組都不寫,也不算進 bus_faults"
+        - "uint32_t bus_faults(const Bus *b)  // 到目前為止超出範圍的存取次數(只算 bus_read*/bus_write*,bus_load 失敗不算)"
       note: "和 133-c-deep-dive 章內範例刻意不同(章作者請不要把下面這些寫完整):章裡的範例可以用全域的 uint8_t mem[] 與 BIT() 這類巨集;Lab 要的是不透明的 Bus*、帶 ctx 與 offset 的 MMIO 處理函式登錄(拒絕重疊、最多 16 段)、open bus 0xFF 與 bus_faults 計數、多位元組存取依位址順序拆成單一位元組(MMIO 副作用的順序是規格)、32 位元 LE 與 rotr32/sign_extend(給之後的 GB/GBA),以及 bits.h 一律 static inline、參數只求值一次、寬度 0/32 沒有未定義行為。bits.h 之後也給 fw/*(暫存器位元操作)與 pwn 用。"
       groups:
         - {id: bus.bits, name: 位元操作, kind: function, visibility: public, requiredBy: [boss.chip8-rom, cpu.alu], description: "mask、bit_get、bit_set、bits_get、bits_set、sign_extend、rotr32 對公開範例。"}
@@ -1711,14 +1711,14 @@ mainlines:
         - "// chip8/chip8.h(規格給的標頭):typedef struct { uint8_t v[16]; uint16_t i, pc; uint8_t sp; uint16_t stack[16]; uint8_t dt, st; uint8_t keys[16]; uint8_t waiting, released; uint8_t fb[32][64]; uint32_t quirks, rng; uint64_t cycles; Bus *bus; } Chip8;(欄位是規格,驅動程式直接讀它們傾印)"
         - "// quirks 旗標:C8_Q_SHIFT_VY、C8_Q_LOAD_INC_I、C8_Q_JUMP_V0、C8_Q_VF_RESET、C8_Q_CLIP;C8_PROFILE_VIP＝全部打開(預設)、C8_PROFILE_MODERN＝0"
         - "// 回傳碼:C8_OK=0、C8_WAIT=1(FX0A 等按鍵)、C8_BAD_OPCODE=-1、C8_STACK_OVERFLOW=-2、C8_STACK_UNDERFLOW=-3"
-        - "int  chip8_init(Chip8 *c, Bus *bus, uint32_t quirks, uint32_t seed)   // 全部清 0、PC=0x200、字型寫進 0x050–0x09F(C8_FONT)、rng=seed(seed 是 0 時用 1)、released=0xFF;bus 小於 4096 → -1"
+        - "int  chip8_init(Chip8 *c, Bus *bus, uint32_t quirks, uint32_t seed)   // 全部清 0、PC=0x200、字型寫進 0x050–0x09F(C8_FONT)、rng=seed(seed 是 0 時用 1)、released=0xFF;bus 是 NULL 或小於 4096 → -1"
         - "int  chip8_load(Chip8 *c, const uint8_t *rom, size_t n)   // 從 0x200 寫進去;n > 3584 → -1,什麼都不寫"
         - "int  chip8_step(Chip8 *c)          // 取指(PC、PC+1,大端)→ 解碼 → 執行 35 條標準指令;錯誤時狀態完全不變(PC 不動、cycles 不加);C8_WAIT 也算一個週期"
         - "void chip8_tick_timers(Chip8 *c)   // DT、ST 大於 0 就減 1(60 Hz 一次);int chip8_sound_on(const Chip8 *c) → ST > 0"
         - "void chip8_dump(const Chip8 *c, FILE *out)   // 三行:「PC=%03X I=%04X SP=%X DT=%02X ST=%02X」「V=」16 個 %02X 用空白隔開、「S=」堆疊裡的 sp 個 %03X"
         - "// 規則:位址一律 & 0xFFF(PC、I+k 都在 4 KiB 裡繞回);I 是 16 位元暫存器(FX1E 不改 VF);所有記憶體存取都經過 c->bus;0NNN(00E0、00EE 以外)當成不做事"
         - "// VF:8XY4/5/6/7/E 先算結果、最後才寫 VF(X 是 F 時 VF 是旗標);CXNN:rng 做一次 xorshift32(x^=x<<13; x^=x>>17; x^=x<<5),VX=(rng & 0xFF) & NN"
-        - "// FX0A:第一次執行時 waiting=1、released=0xFF 並回 C8_WAIT(PC 不動);之後每步檢查 released(由 chip8_key_event 在按鍵放開時填),有值就 VX=那個鍵、waiting=0,PC 往下走"
+        - "// FX0A:第一次執行時 waiting=1、released=0xFF 並回 C8_WAIT(PC 不動);之後每步檢查 released(由 chip8_key_event 在按鍵放開時填),有值就 VX=那個鍵、waiting=0、released=0xFF,PC 往下走"
       note: "怪癖(quirk)的選擇:預設照 COSMAC VIP 原機(8XY6/8XYE 先把 VY 搬進 VX 再移位、FX55/FX65 之後 I 加 X+1、BNNN 跳到 NNN+V0、8XY1/2/3 之後 VF=0、畫面邊緣裁切),但五個旗標都要支援,MODERN(全關:只移 VX、I 不變、BXNN 跳到 XNN+VX、VF 不重設、畫面繞回)由隱藏檢定 cpu.quirks 檢查。和 134-chip8-emulator 章內範例刻意不同(章作者請不要把下面這些寫完整):章的範例可以只做一種怪癖、用自己的陣列當記憶體、亂數用 rand();Lab 要五個怪癖旗標、固定的 xorshift32、錯誤回傳碼且錯誤時狀態不變、FX0A 等「放開」、所有存取經過自己的 emu/bus(隱藏檢定會在記憶體上掛 MMIO 探針)、固定格式的 chip8_dump。cpu 任務判題時,00E0／DXYN／chip8_key_event 用我們的參考 display.c 連結(chip8/display 還沒做);display 任務才換成你的。主迴圈可以參考 H1 的 hack/emulator(選修),但不 consumes:它是 Python 的選修任務,C 版連結不到;先修閉包上 hw-machine-lang 在 em-emu-chip8 的先修裡,之後真的要接也合法。"
       groups:
         - {id: cpu.alu, name: 算術與邏輯, kind: function, visibility: public, requiredBy: [boss.chip8-rom], description: "公開 ROM:6XNN、7XNN、8XY0–8XY7、8XYE 之後的 V0–VF(VIP 設定),含進位與借位旗標。"}
@@ -1730,7 +1730,7 @@ mainlines:
         - {id: cpu.quirks, name: 怪癖設定, kind: spec, visibility: hidden, requiredBy: [boss.chip8-rom], description: "同一批 ROM 在 MODERN 設定與只開單一旗標的設定下,結果各自正確(移位用 VX 或 VY、FX55/FX65 改不改 I、BNNN 或 BXNN、VF 重不重設)。"}
         - {id: cpu.edge, name: 邊界, kind: edge, visibility: hidden, requiredBy: [boss.chip8-rom], description: "PC 與 I+k 在 0xFFF 繞回;剛好 16 層呼叫;FX33 的 0 與 255;X 是 F 的 FX55/FX65;0NNN 不做事;CXNN 的 NN 是 00 與 FF;seed 0;同一個 seed 的亂數序列。"}
         - {id: cpu.errors, name: 錯誤處理, kind: error, visibility: hidden, requiredBy: [boss.chip8-rom], description: "不認得的 opcode(5XY1、8XY8、EX00、FX00…)回 C8_BAD_OPCODE;第 17 層呼叫回 C8_STACK_OVERFLOW;空堆疊 00EE 回 C8_STACK_UNDERFLOW;三種錯誤之後狀態完全不變;chip8_load 太大、chip8_init 的 bus 太小回 -1。"}
-        - {id: cpu.wait, name: 等按鍵, kind: function, visibility: hidden, requiredBy: [boss.chip8-rom, display.keys], description: "FX0A:按住不放不會繼續、放開才繼續,VX＝放開的鍵;等的時候 PC 不動、週期照算、計時器照常倒數;FX0A 之前就放開的鍵不算。"}
+        - {id: cpu.wait, name: 等按鍵, kind: function, visibility: hidden, requiredBy: [boss.chip8-rom, display.keys], description: "FX0A:按住不放不會繼續、放開才繼續,VX＝放開的鍵;等的時候 PC 不動、週期照算(這裡的週期＝一次 chip8_step,也就是 cycles 加 1)、計時器照常倒數;FX0A 之前就放開的鍵不算。"}
         - {id: cpu.uses-bus, name: 經過自己的匯流排, kind: spec, visibility: hidden, requiredBy: [boss.chip8-rom], description: "驅動程式在 4 KiB 的某一段掛 MMIO 探針,在那裡取指、FX33、FX55、FX65,探針都要看到正確的位址與順序(不能另外用自己的陣列當記憶體)。"}
         - id: cpu.perf
           name: 效能
