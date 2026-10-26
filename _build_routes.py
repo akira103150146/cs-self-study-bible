@@ -1024,7 +1024,7 @@ def validate_mainlines(ml, book, tree_nodes, tree_projects):
             if not desc.startswith(html_text(g.get('description', ''))):
                 infos.append(f'{cid}: Lab 方框 {tid} 的 {gid} 說明和 yaml 不同')
             stmt = (g.get('perf') or {}).get('statement')
-            if stmt and f'門檻:{html_text(stmt)}' not in desc:
+            if stmt and not any(f'{w}{c}{html_text(stmt)}' in desc for w in ('門檻', '效能') for c in (':', '：')):
                 err(f'{cid}: Lab 方框 {tid} 的 {gid} 沒有照抄 yaml 的效能門檻「門檻:{stmt}」')
     for cid, tid in markers:
         in_chapter.setdefault(tid, set()).add(cid)
