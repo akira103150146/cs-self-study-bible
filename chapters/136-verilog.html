@@ -200,7 +200,7 @@ typo2.v:7: error: Failed to elaborate port expression.
         <tbody>
           <tr><td><code>wire</code></td><td><code>assign</code>、模組實例的輸出腳</td><td><code>z</code>(高阻抗,沒接)</td><td>接線、組合邏輯的輸出</td></tr>
           <tr><td><code>reg</code></td><td><code>always</code>、<code>initial</code> 區塊裡的指定</td><td><code>x</code>(未知)</td><td>always 區塊算出來的值;testbench 驅動的輸入</td></tr>
-          <tr><td><code>logic</code>(SystemVerilog)</td><td>兩種都可以,但只能有一個驅動者</td><td><code>x</code></td><td>新的程式碼大多用它取代 wire 與 reg</td></tr>
+          <tr><td><code>logic</code>(SystemVerilog)</td><td>兩種都可以,但不能有好幾個連續指定(或連續指定和 always 混用)驅動它</td><td><code>x</code></td><td>新的程式碼大多用它取代 wire 與 reg</td></tr>
         </tbody>
       </table></div>
       <div class="callout warn">
@@ -230,7 +230,7 @@ Elaboration failed</code></pre>
 <pre><code class="language-text">err1.v:2: error: reg y; cannot be driven by primitives or continuous assignment.
 1 error(s) during elaboration.</code></pre>
       <p>
-        <code>logic</code> 兩種寫法都接受,但它管另一件事:<strong>只能有一個驅動者</strong>。同一條 <code>wire</code> 被兩個 <code>assign</code> 驅動,
+        <code>logic</code> 兩種寫法都接受,但它管另一件事:<strong>不能被好幾個連續指定驅動</strong>(連續指定和 always 混用也不行)。同一條 <code>wire</code> 被兩個 <code>assign</code> 驅動,
         Verilog 不會擋,兩邊打架的位元就變成 <code>x</code>(這個例子先送 a=1、b=0,再送 a=1、b=1):
       </p>
 <pre><code class="language-verilog">module err4 (input a, b, output y);
@@ -407,7 +407,7 @@ t=2: y_star=0 y_comb=0</code></pre>
         <div class="ico">💡</div>
         <div class="body">
           <span class="c-title">為什麼要學:每一個有時脈的零件都靠它</span>
-          <p>暫存器檔、PC、計數器、FSM 的狀態暫存器,在硬體上都是「同時更新」。本章的序向邏輯、之後 rtl 任務線的暫存器檔與單週期 CPU、
+          <p>暫存器檔、PC、計數器、FSM 的狀態暫存器,在硬體上都是「同時更新」。本章的循序邏輯、之後 rtl 任務線的暫存器檔與單週期 CPU、
           UART 的鮑率產生器,全部都用 <code>&lt;=</code>。<a href="137-verification-cocotb.html">第 51 章</a>的 cocotb 也會碰到同一件事:
           在時脈邊緣讀訊號,讀到的是更新之前還是之後的值。</p>
         </div>
@@ -868,7 +868,8 @@ endmodule</code></pre>
         最後的 <code>{co, s} == a + b</code> 只告訴你「錯了」;逐級的不變式還告訴你<strong>從哪一級開始錯</strong>。
         把 fa 的 <code>co</code> 故意少寫一項(<code>(b &amp; ci)</code>),兩個 testbench 都抓得到:
       </p>
-<pre><code class="language-text">add4: 256 組,錯 56 組
+<pre><code class="language-text">…(前面先印出 56 行 FAIL,這裡省略)
+add4: 256 組,錯 56 組
 c = 00100 (c[4]..c[0]), s = 1001, co = 0
 不變式檢查 256 x 4 = 1024 次,失敗 108 次</code></pre>
       <p>256 組裡有 200 組還是對的。練習 136.3 會問你:只測幾組「看起來有代表性」的輸入,為什麼抓不到它。</p>
@@ -878,24 +879,24 @@ c = 00100 (c[4]..c[0]), s = 1001, co = 0
         本章 Lab 的 <code>adder</code> 比 add4 多了進位輸入 <code>cin</code>、進位輸出 <code>cout</code> 和有號溢位旗標 <code>ovf</code>。這三個都只是接線,不用多加全加器:
       </p>
       <ul>
-        <li><strong>c[0] = cin</strong>:最低位那條原本接常數 0 的進位線,改接 <code>cin</code>。上面的證明照樣成立,只是 k = 0 時兩邊都多了 cin,最後變成 <code>{cout, sum} == a + b + cin</code>。</li>
+        <li><strong>c[0] = cin</strong>:最低位那條原本接常數 0 的進位線,改接 <code>cin</code>。上面的證明照樣成立:左邊的 c[0] 本來就是 cin,只是 k = 0 時右邊多加一個 cin,最後變成 <code>{cout, sum} == a + b + cin</code>。</li>
         <li><strong>cout = c[W]</strong>:最高一級送出的進位,也就是無號加法結果的第 W+1 個位元(add4 的 <code>co = c[4]</code>)。</li>
-        <li><strong>ovf = c[W] ^ c[W−1]</strong>:把 a、b、sum 當二補數時的溢位。溢位的意思是「兩個同號的數相加,結果卻是另一個號」。</li>
+        <li><strong>ovf</strong>:把 a、b、sum 當二補數時的溢位。溢位的意思是「兩個同號的數相加,結果卻是另一個號」。它也只用到進位鏈上已經有的線,不用另外做一個加法器。</li>
       </ul>
       <p>
-        為什麼看最高兩級的進位就知道?最高一級(第 W−1 級)吃的是兩個符號位元 a[W−1]、b[W−1] 和進位 c[W−1]。照兩個符號位元分三種情況:
+        怎麼判斷溢位?最高一級(第 W−1 級)吃的是兩個符號位元 a[W−1]、b[W−1] 和進位 c[W−1]。照兩個符號位元分三種情況:
       </p>
       <div class="table-wrap"><table>
-        <thead><tr><th>a[W−1] b[W−1]</th><th>意思</th><th>sum[W−1]</th><th>c[W]</th><th>什麼時候溢位</th><th>c[W] ^ c[W−1]</th></tr></thead>
+        <thead><tr><th>a[W−1] b[W−1]</th><th>意思</th><th>sum[W−1]</th><th>c[W]</th><th>什麼時候溢位</th></tr></thead>
         <tbody>
-          <tr><td>0 0</td><td>正 + 正</td><td>= c[W−1]</td><td>0</td><td>sum 變成負的,也就是 c[W−1] = 1</td><td>= c[W−1]</td></tr>
-          <tr><td>1 1</td><td>負 + 負</td><td>= c[W−1]</td><td>1</td><td>sum 變成非負,也就是 c[W−1] = 0</td><td>= 1 − c[W−1]</td></tr>
-          <tr><td>0 1 或 1 0</td><td>異號</td><td>= 1 − c[W−1]</td><td>= c[W−1]</td><td>永遠不會溢位</td><td>0</td></tr>
+          <tr><td>0 0</td><td>正 + 正</td><td>= c[W−1]</td><td>0</td><td>sum 變成負的,也就是 c[W−1] = 1</td></tr>
+          <tr><td>1 1</td><td>負 + 負</td><td>= c[W−1]</td><td>1</td><td>sum 變成非負,也就是 c[W−1] = 0</td></tr>
+          <tr><td>0 1 或 1 0</td><td>異號</td><td>= 1 − c[W−1]</td><td>= c[W−1]</td><td>永遠不會溢位</td></tr>
         </tbody>
       </table></div>
       <p>
-        三種情況裡,「什麼時候溢位」和最後一欄都對得上:<strong>同號相加、結果異號 ⇔ 最高兩級的進位 c[W]、c[W−1] 不同</strong>。
-        例:上面 testbench 印的 1011 + 0110,c[4..0] = 11100,c[4] = c[3] = 1,所以 ovf = 0;當有號讀是 −5 + 6 = 1,確實沒有溢位(cout = 1 只是無號的進位)。
+        把 c[W] 那一欄和「什麼時候溢位」那一欄並排看,就找得到一條只用最高兩級進位 c[W]、c[W−1] 判斷溢位的規則;手算 136.2 的第 (3) 小題請你自己找出來。
+        例:上面 testbench 印的 1011 + 0110,當有號讀是 −5 + 6 = 1:異號相加,照表永遠不會溢位(cout = 1 只是無號的進位)。
       </p>
       <p>
         <strong>減法用同一個 adder</strong>:二補數的 −b = ~b + 1,所以 a − b = a + ~b + 1。把 b 每個位元取反(<code>~b</code>)送進 b 腳、cin 接 1,不用另外做減法器。
@@ -911,8 +912,8 @@ c = 00100 (c[4]..c[0]), s = 1001, co = 0
         </tbody>
       </table></div>
       <p>
-        c[4..0] = 00111,sum = 1110(有號 −2,3 − 5 = −2),cout = 0(3 &lt; 5,有借位),ovf = c[4] ^ c[3] = 0 ^ 0 = 0。
-        這幾條就是 Lab 的 <code>adder</code> 比 add4 多的地方;用 <code>generate</code> 串起來、寬度改成 W,留給你在 Lab 裡寫。手算 136.2 的第 (3) 小題練這一段。
+        c[4..0] = 00111,sum = 1110(有號 −2,3 − 5 = −2),cout = 0(3 &lt; 5,有借位);−2 在 4 位元的有號範圍 −8..7 裡,沒有溢位。
+        手算 136.2 的第 (3) 小題練這一段。
       </p>
 
       <h3>手算:add4 的進位一級一級傳</h3>
@@ -980,7 +981,7 @@ endmodule</code></pre>
         <div class="ex-body">
           <p>(1)用上面的表格格式,追 add4 計算 a = 1101(13)、b = 0111(7):寫出每一級的 s[k] 與 c[k+1]、最後的 c[4..0]、s、co,並檢查每一級的不變式。</p>
           <p>(2)同樣用每個輸出延遲 1 的 fa。a = 1111 保持不動,t = 10 時 b 從 0000 變成 0001。寫出 t = 10 到 14 的 c[4..0] 與 s。答案要等幾個延遲才穩定?</p>
-          <p>(3)換成 W = 8、c[0] = cin 的加法器(cout = c[8]、ovf = c[8] ^ c[7])。對下面三題寫出 sum、c[8]、c[7]、cout、ovf,再用有號的讀法檢查 ovf 對不對:(a)<code>0x7F + 0x01</code>,cin = 0;(b)<code>0xFF + 0x01</code>,cin = 0;(c)減法 <code>0x80 − 0x01</code>,也就是 <code>0x80 + ~0x01 + 1</code>。</p>
+          <p>(3)換成 W = 8、c[0] = cin 的加法器(cout = c[8])。對下面三題寫出 sum、c[8]、c[7]、cout,再用有號的讀法判斷有沒有溢位(ovf);最後回答:<strong>用最高兩級的進位 c[8]、c[7] 怎麼判斷 ovf?</strong>寫成一條式子,並用上面的三種情況表說明為什麼對所有輸入都成立。(a)<code>0x7F + 0x01</code>,cin = 0;(b)<code>0xFF + 0x01</code>,cin = 0;(c)減法 <code>0x80 − 0x01</code>,也就是 <code>0x80 + ~0x01 + 1</code>。</p>
           <details class="solution"><summary>看解答</summary>
             <div class="sol-body">
               <p>(1)</p>
@@ -993,7 +994,7 @@ endmodule</code></pre>
                   <tr><td>3</td><td>1</td><td>0</td><td>1</td><td>2</td><td>0</td><td>1</td><td>16·1 + 0100 = 20;13 + 7 = 20</td></tr>
                 </tbody>
               </table></div>
-              <p>c[4..0] = 11110,s = 0100,co = 1:13 + 7 = 20 = 1_0100。用 Icarus 跑過(第二列就是這一題;另外兩列是 9 + 6 沒有任何進位、7 + 1 進位傳了三級):</p>
+              <p>c[4..0] = 11110,s = 0100,co = 1:13 + 7 = 20 = 1_0100。用 Icarus 跑過(第一列是正文的 11 + 6,第二列就是這一題,後兩列是 9 + 6 沒有任何進位、7 + 1 進位傳了三級):</p>
 <pre><code class="language-text">1011 + 0110: c=11100 s=0001 co=1
 1101 + 0111: c=11110 s=0100 co=1
 1001 + 0110: c=00000 s=1111 co=0
@@ -1018,6 +1019,11 @@ endmodule</code></pre>
                 (a)第 0 級 1 + 1 產生進位,第 1–6 級都是 1 + 0 + 1,進位一路傳到 c[7] = 1;第 7 級 0 + 0 + 1 = 1,s[7] = 1、c[8] = 0。正 + 正得到負,ovf = 0 ^ 1 = 1。
                 (b)每一級都是「1 + 進位」,c[1] 到 c[8] 全是 1;ovf = 1 ^ 1 = 0。
                 (c)~0x01 = 0xFE。第 0 級 0 + 0 + 1(cin)= 1,沒有進位;第 1–6 級 0 + 1 + 0 = 1,也沒有進位,c[7] = 0;第 7 級 1 + 1 + 0 = 2,s[7] = 0、c[8] = 1。負 − 正得到正,ovf = 1 ^ 0 = 1。
+              </p>
+              <p>
+                規則:<strong>ovf = c[8] ^ c[7]</strong>,一般寬度是 <strong>ovf = c[W] ^ c[W−1]</strong>:最高兩級的進位不同,就是溢位。
+                對照三種情況表:正 + 正時 c[W] = 0,溢位 ⇔ c[W−1] = 1 ⇔ 兩個進位不同;負 + 負時 c[W] = 1,溢位 ⇔ c[W−1] = 0 ⇔ 兩個進位不同;
+                異號時 c[W] = c[W−1],兩個進位一定相同,也正好永遠不會溢位。三種情況涵蓋了所有輸入,所以這條式子永遠對。
                 用 Icarus 跑過一個 W = 8 的版本(同時窮舉 256 × 256 × 2 組加法、256 × 256 組減法,對 cout、ovf 的定義全對):
               </p>
 <pre><code class="language-text">W=8 7f + 01 + 0: c(8..0)=011111110 sum=80 c8=0 c7=1 cout=0 ovf=1
@@ -1110,7 +1116,7 @@ module adder #(parameter W = 16) (
     input          cin,
     output [W-1:0] sum,
     output         cout,     // 最高位的進位
-    output         ovf       // 有號溢位:把 a、b、sum 當二補數
+    output         ovf       // 有號溢位:把 a、b、sum 當二補數;用手算 136.2(3) 找到的規則從進位鏈算
 );
     // 漣波進位:用 generate 串 W 個 full_adder
 endmodule</code></pre>
@@ -1171,7 +1177,7 @@ adder 1234 + edcb + 1 = 0000 cout=1 ovf=0</code></pre>
           <p><strong>任務目標</strong>(公開的用 <code>test</code> 自己跑;隱藏檢定在 <code>submit</code> 時跑,只看得到名稱和一行說明):</p>
           <ul class="lab-goals">
             <li data-group="gates.mux">☐ <strong>多工器</strong>〔公開〕mux2、mux4(W=16)的公開向量:每個 sel 值都試,y 對參考模型。</li>
-            <li data-group="gates.adder">☐ <strong>加法器</strong>〔公開〕full_adder 的 8 列真值表;adder(W=16)的公開向量:sum、cout、ovf,含 cin=1。</li>
+            <li data-group="gates.adder">☐ <strong>加法器</strong>〔公開〕full_adder 的 8 列真值表;adder(W=16)的公開向量:sum、cout、ovf,含 cin=1;ovf 要用你在手算 136.2(3) 找到的規則,從進位鏈算出來。</li>
             <li data-group="gates.exhaustive">☐ <strong>窮舉</strong>〔隱藏檢定〕mux4 在 W=4 時 a、b、c、d、sel 的全部組合;adder 在 W=8 時 a、b、cin 的全部組合;W=1 的 adder。</li>
             <li data-group="gates.random">☐ <strong>寬的版本</strong>〔隱藏檢定〕W=16、32 的邊界值(0、1、全 1、只有最高位、交替位元)與每人 seed 決定的隨機向量;ovf 的四種情況(正＋正、負＋負、異號、剛好不溢位)。</li>
             <li data-group="gates.structure">☐ <strong>真的用 full_adder</strong>〔隱藏檢定〕把 full_adder 換成故意弄壞的版本,你的 adder 結果要跟著錯(證明 adder 真的由 full_adder 串成,不是直接寫 a + b)。</li>
@@ -1361,7 +1367,7 @@ op=01 a=3c b=3c -&gt; y=00 (0) zero=1</code></pre>
 
       <h3>RV32I 的十種 ALU 運算</h3>
       <p>
-        RISC-V 是一套開放的精簡指令集(<a href="48-computer-architecture.html">第 53 章</a>介紹過 RISC 與 CISC 的取捨)。它最基本的 RV32I 有十種整數運算。
+        RISC-V 是一套開放的精簡指令集(RISC 與 CISC 的取捨,之後的<a href="48-computer-architecture.html">第 53 章</a>會介紹)。它最基本的 RV32I 有十種整數運算。
         ALU 的運算碼 op 是 4 位元,照指令編碼取 <code>{funct7[5], funct3}</code>:funct3 分出運算種類,funct7 的第 5 位元分開 add/sub 與 srl/sra。
       </p>
       <div class="table-wrap"><table>
@@ -1453,7 +1459,7 @@ y1 = 3c(放在 ?: 裡)  y2 = fc(單獨一行)</code></pre>
         <div class="body">
           <span class="c-title">為什麼要學:ALU 是 CPU 每一拍都在用的零件</span>
           <p>本章 Lab「RV32I ALU」就是這張表;它的隱藏檢定會窮舉 8 位元版的所有輸入,也會專挑移位量、有號比較的邊界。
-          之後任務線的單週期 CPU 每執行一條指令都會用到它,檢查點「RV32I 測試」用官方的 rv32ui 測試程式驗收,ALU 錯一個位元,整支程式就印錯。
+          之後任務線的單週期 CPU 每執行一條指令都會用到它,檢查點 2 的 Boss 戰「RV32I 測試」用官方的 rv32ui 測試程式驗收,ALU 錯一個位元,整支程式就印錯。
           rv32 任務線的指令集模擬器用 Python 實作同一套語意,兩邊可以互相對照。</p>
         </div>
       </div>
@@ -1625,7 +1631,7 @@ op=1111 a=12345678 b=9abcdef0 -&gt; y=00000000 zero=1</code></pre>
         </div>
       </div>
 
-      <h2>序向邏輯:正反器、致能暫存器與計數器</h2>
+      <h2>循序邏輯:正反器、致能暫存器與計數器</h2>
       <p>
         <a href="20-combinational-sequential.html">第 20 章</a>用 Hack 內建的 DFF 一層一層蓋出 Bit、Register 和 PC。
         Verilog 沒有內建的 DFF 零件,<code>always @(posedge clk)</code> 加上 <code>&lt;=</code> 就是正反器。下面四個模組放在同一個檔案 <code>seq.v</code>:
@@ -2393,11 +2399,12 @@ module err5 (input a, b, output logic y);
 endmodule</code></pre>
           <details class="solution"><summary>看解答</summary>
             <div class="sol-body">
-              <p>(乙)和(丁)在 <code>-g2012</code> 下失敗;(甲)只有在 <code>-g2005</code> 才失敗;(丙)都能編譯。</p>
+              <p>(乙)和(丁)在 <code>-g2012</code> 下失敗;(甲)和(丙)只有在 <code>-g2005</code> 才失敗。</p>
               <ul>
                 <li>(乙)y 預設是 wire,always 裡不能指定 wire:<code>y is not a valid l-value</code>。</li>
                 <li>(丁)logic 只能有一個連續驅動者:<code>Unresolved net/uwire y cannot have multiple drivers.</code>(如果是 wire,能編譯,但打架的位元會是 x。)</li>
                 <li>(甲)SystemVerilog 准許 assign 驅動變數;Verilog-2005 不准:<code>reg y; cannot be driven by primitives or continuous assignment.</code></li>
+                <li>(丙)<code>-g2012</code> 下可以編譯。Icarus 在 <code>-g2005</code> 下把 <code>logic</code> 當成 <code>reg</code>,所以錯誤訊息和(甲)一模一樣。</li>
               </ul>
               <p>結論:新程式用 <code>logic</code>,一個訊號只在一個地方指定,就不必背這些規則。</p>
             </div>
@@ -2444,7 +2451,8 @@ endmodule</code></pre>
               <p>(2)他的五組裡,沒有任何一級同時是「a[k] = 0、b[k] = 1、而且有進位送進來」:1+1 和 2+2 的進位送進的那一級 a、b 都是 0;7+1 和 15+1 的進位一路遇到的 b 都是 0;5+10 根本沒有進位。
               <strong>例子都對 ≠ 電路正確</strong>。用本章的不變式 testbench 跑,失敗的檢查會指出「從第幾級開始錯」。</p>
               <p>(3)窮舉的結果(上面 tb_add4 換成壞掉的 fa):</p>
-<pre><code class="language-text">add4: 256 組,錯 56 組
+<pre><code class="language-text">…(前面先印出 56 行 FAIL,這裡省略)
+add4: 256 組,錯 56 組
 c = 00100 (c[4]..c[0]), s = 1001, co = 0</code></pre>
               <p>錯 56 組,200 組是對的。這就是 Lab 的隱藏檢定要對小寬度窮舉、還要把 full_adder 換成壞掉的版本來檢查的原因。</p>
             </div>
@@ -2700,7 +2708,7 @@ alu8: 262144 組,錯 65536 組</code></pre>
       <div class="exercise">
         <div class="ex-head">✏️ 練習 136.9 <span class="badge">思考</span></div>
         <div class="ex-body">
-          <p>下面每一段,合成工具會做出什麼?還是不能合成?</p>
+          <p>下面每一段,合成工具會做出什麼?還是不能合成?(q、d 都是 8 位元。)</p>
 <pre><code class="language-verilog">// (甲)
 always @(posedge clk) if (load) q &lt;= d;
 // (乙)

@@ -83,7 +83,7 @@ mainlines:
 ## 書端決定的介面(rtl,檢查點 1)
 
 - `rtl/gates`:`mux2 #(W)`、`mux4 #(W)`(`rtl/mux.v`)、`full_adder`(`rtl/full_adder.v`,自己一個檔)、`adder #(W)(a, b, cin, sum, cout, ovf)`(`rtl/adder.v`,generate 串 full_adder);W 測 1、4、8、16、32。
-- `rtl/alu`:`alu #(W=32)(a, b, op[3:0], y, zero)`;`op＝{funct7[5], funct3}`(10 種 RV32I 運算,其他 → 0);移位量看 b 的低 `$clog2(W)` 位元;add、sub 必須經過自己的 `adder`。參考模型 `alu_model.py` 由任務資料夾提供(不 consumes `rv32/iss`,見待決事項 15)。
+- `rtl/alu`:`alu #(W=32)(a, b, op[3:0], y, zero)`;`op＝{funct7[5], funct3}`(10 種 RV32I 運算,其他 → 0);移位量看 b 的低 `$clog2(W)` 位元;add、sub 必須經過自己的 `adder`。參考模型 `alu_model.py` 由任務資料夾提供(不 consumes `rv32/iss`,見待決事項 24)。
 - `rtl/tb`:`rtl/tests/test_alu.py`,`TOPLEVEL=alu`、`MODULE=test_alu`;參考版零失敗、3 個隱藏突變版各至少一項失敗(讀 results.xml)。
 
 ## 待決事項的決定(書端先定,9Jang 可推翻)
@@ -111,7 +111,7 @@ mainlines:
 21. 新 runner `verilog-cocotb`(rtl 任務線;之後 uart、soc 也用):判題沙盒要裝 Icarus Verilog 11、cocotb(先釘 1.9.2,是 book-hwtools 實測的版本)與 **`libpython3.11`**(cocotb 把 Python 嵌進 vvp;book-hwtools 映像沒有這個套件,cocotb 的 Makefile 會停在 find_libpython,實測時是在容器裡 `apt-get install libpython3.11` 才跑得動)。隱藏 testbench、參考 ALU、突變版只放 judge 端,不進學生容器。學生容器要不要裝 iverilog＋cocotb(給 `test` 用)由 9Jang 決定;不裝的話公開組只能在 `submit` 跑。cocotb 2.x 的 API 有改(`Timer(..., unit=)`),公開測試一律寫成兩版都能跑的寫法。runner 的環境變數要設 `LANG=C.UTF-8`、`PYTHONIOENCODING=utf-8`(測試訊息與 assert 字串有中文,沒設時 cocotb 印訊息會出編碼錯誤)。
 22. Verilog 原始碼規則(task 的 `lint`):學生的 Verilog 和隱藏 testbench、cocotb 跑在同一個 vvp 程序裡,所以編譯前先檢查:只准 `$signed`、`$unsigned`、`$clog2`、`$display` 這幾個系統函式;不准 `` `include ``、`` `timescale ``(只有部分檔案寫會讓 `-Wall` 警告)、階層參照(例 `tb.expected`,可以偷看 testbench 的訊號)、`initial` 區塊與宣告時給初值(例 `reg q = 0;`,和 `initial` 一樣只在模擬裡有效);只編譯學生檔案時 `iverilog -g2012 -Wall` 零警告。判決以 cocotb 的 results.xml 或 testbench 由 judge 端讀到的結果為準,學生的 Verilog 不能寫檔,也就改不到結果。
 23. `rtl/tb` 是學生自寫測試(9Jang 設計 §5.3):學生的 Python 和 cocotb 在同一個程序裡,results.xml 理論上可以被改;只有在學生分得出「現在跑的是哪個版本」時才有用,所以每個 ALU 版本要在各自全新的沙盒、同樣的路徑與檔名、隨機順序跑。`rtl/tb` consumes `rtl/alu`,ALU 任務過了才開放,參考 ALU 對他已經沒有作答價值。
-24. Verilog 任務的 `consumes` 只寫真的會一起編譯的零件:`rtl/gates` 不 consumes `hack/gates`(Verilog 不讀 .hdl,觀念上的關係寫在 note 與 Hack 那邊的 `used_by`);`rtl/alu` 不 consumes `rv32/iss`(`hw-riscv-asm` 不在 `ic-comb` 的先修閉包裡),參考模型由任務資料夾提供,語意和 rv32/iss 的 ALU 相同;rv32 任務線設計時請把 `rv32/iss` 的 `used_by` 裡的 `rtl/alu` 拿掉,或保留成「觀念上接著用」。
+24. Verilog 任務的 `consumes` 只寫真的會一起編譯的零件:`rtl/gates` 不 consumes `hack/gates`(Verilog 不讀 .hdl,觀念上的關係只寫在 note 與 Hack 章的文字;不寫進 Hack 那邊的 `used_by`,因為 `used_by` 要和 `consumes` 對稱);`rtl/alu` 不 consumes `rv32/iss`(`hw-riscv-asm` 不在 `ic-comb` 的先修閉包裡),參考模型由任務資料夾提供,語意和 rv32/iss 的 ALU 相同;rv32 任務線設計時請把 `rv32/iss` 的 `used_by` 裡的 `rtl/alu` 拿掉,或保留成「觀念上接著用」。
 
 ## 檢查
 

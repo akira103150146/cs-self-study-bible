@@ -435,6 +435,8 @@ async def forgot_await(dut):
           <tr><td>讀整數</td><td><code>dut.X.value.integer</code> 或 <code>int(...)</code></td><td><code>dut.X.value.to_unsigned()</code> 或 <code>int(...)</code></td><td><code>int(dut.X.value)</code></td></tr>
           <tr><td>Makefile 的模組名</td><td><code>MODULE</code>、<code>TOPLEVEL</code></td><td><code>COCOTB_TEST_MODULES</code>、<code>COCOTB_TOPLEVEL</code>(舊名還能用,會印 deprecated 警告)</td><td>用舊名</td></tr>
           <tr><td>只跑一個測試</td><td><code>TESTCASE=</code></td><td><code>COCOTB_TEST_FILTER=</code></td><td>—</td></tr>
+          <tr><td>測試失敗時 <code>make</code> 的結束狀態碼</td><td>0(要讀 <code>results.xml</code> 才知道)</td><td>非 0</td><td>一律讀 <code>results.xml</code></td></tr>
+          <tr><td>亂數種子的環境變數</td><td><code>RANDOM_SEED</code></td><td><code>COCOTB_RANDOM_SEED</code>(舊名在 2.1 還能用)</td><td>本章的測試自己讀 <code>SEED</code></td></tr>
           <tr><td>啟動時脈</td><td><code>cocotb.start_soon(Clock(...).start())</code></td><td><code>Clock(...).start()</code> 自己就會開始;包在 <code>start_soon</code> 裡也可以</td><td><code>cocotb.start_soon(Clock(...).start())</code></td></tr>
         </tbody>
       </table>
@@ -664,8 +666,12 @@ print(f"公式:{(1 - p) ** 200:.4f}")</code></pre>
 <pre><code class="language-text">模擬:0.1271
 公式:0.1259</code></pre>
       <p>
-        換成 32 位元的 ALU,同樣的錯(zero 只看低 31 位元)只在 $y = $ <code>0x80000000</code> 時出現,$p$ 大約是 $2^{-32}$。
-        就算跑 $10^6$ 組隨機向量,漏掉的機率還是 $(1-2^{-32})^{10^6} \approx 0.99977$。隨機測試幾乎不可能抓到它,一條「最小負數」的導向測試卻一定抓得到。
+        換成 32 位元的 ALU,同樣的錯(zero 只看低 31 位元)只在 $y = $ <code>0x80000000</code> 時出現。照上表一種一種算:
+        add 與 sub 各是 $2^{-32}$;and 要兩個最高位元都是 1、其他 31 個位元不能兩個都是 1,機率 $\frac14 \left(\frac34\right)^{31} \approx 3.35 \times 10^{-5}$;
+        or 小到可以不計。四種運算平均,$p \approx 8.4 \times 10^{-6}$,幾乎全部來自 and。
+        跑 1000 組隨機向量,漏掉的機率 $(1-p)^{1000} \approx 0.99$;跑 $10^6$ 組,漏掉的機率降到 $(1-p)^{10^6} \approx 2.3 \times 10^{-4}$;
+        要壓到 1% 以下,大約要 $5.5 \times 10^5$ 組。也就是說,平常跑的幾百、幾千組隨機向量幾乎一定漏掉它(而且只有 and 抓得到;只測 add 時 $p = 2^{-32}$,$10^6$ 組也幾乎一定漏掉),
+        一條「最小負數」的導向測試卻一定抓得到。
         這就是為什麼 ALU 的測試總是「邊界值的兩兩組合」加上「隨機向量」。
       </p>
       <div class="callout note">
@@ -1606,7 +1612,7 @@ $ make DUT=adder_bad.v     # 換成壞的版本,但沒有 make clean
                 </tbody>
               </table></div>
               <p>突變分數 4/5 = 80%。M3 存活:4 條測試的 y 是 0、<code>0x0F</code>、0、<code>0x81</code>,沒有一個是「不是 0、但低 4 位元是 0」。
-              補一條讓 y 的高 4 位元有值、低 4 位元是 0 的測試,例如 U5 and <code>0xF0</code> &amp; <code>0xF0</code> = <code>0xF0</code>:M3 會說 zero = 1。實際執行:</p>
+              實際執行 U1–U4:</p>
 <pre><code class="language-text">$ sh run_mutants.sh test_alu8_u
 版本             U1 U2 U3 U4 結果
 alu8           ·  ·  ·  ·  全過
@@ -1616,6 +1622,7 @@ m3_zero_lo     ·  ·  ·  ·  存活
 m4_sub_swap    ·  ✗  ·  ·  被 U2 抓到
 m5_carry7      ✗  ·  ·  ·  被 U1 抓到
 m6_or_equiv    ·  ·  ·  ·  存活</code></pre>
+              <p>補一條讓 y 的高 4 位元有值、低 4 位元是 0 的測試,例如 U5 and <code>0xF0</code> &amp; <code>0xF0</code> = <code>0xF0</code>:M3 會說 zero = 1。U5 只殺得了 M3(其他突變版在這組輸入上和原版一樣),加上它之後突變分數變成 5/5 = 100%。</p>
             </div>
           </details>
         </div>
@@ -1746,8 +1753,8 @@ exit=0</code></pre>
       <div class="callout warn">
         <div class="ico">⚠️</div>
         <div class="body">
-          <span class="c-title">常見陷阱:印了 ERROR,結束碼還是 0</span>
-          <p>上面最後一行 <code>exit=0</code> 是 <code>vvp</code> 的結束碼:<code>$error</code> 只印訊息,模擬照樣跑完、照樣回 0。用結束碼判斷成敗的腳本(例如持續整合)會以為測試通過。
+          <span class="c-title">常見陷阱:印了 ERROR,結束狀態碼還是 0</span>
+          <p>上面最後一行 <code>exit=0</code> 是 <code>vvp</code> 的結束狀態碼:<code>$error</code> 只印訊息,模擬照樣跑完、照樣回 0。用結束狀態碼判斷成敗的腳本(例如持續整合)會以為測試通過。
           要讓它失敗,用 <code>$fatal(1, "…")</code>(Icarus 11 會回 1),或像 <code>tb_adder.v</code> 那樣自己數錯誤、最後印出結論。cocotb 沒有這個問題:<code>assert</code> 失敗就記在 <code>results.xml</code> 裡。</p>
         </div>
       </div>
@@ -1825,7 +1832,7 @@ m6_or_equiv:不同的輸入:0 / 262144
 zero7:第一個反例:op=0 a=0 b=128,原版 y=128 zero=0,突變版 y=128 zero=1 不同的輸入:2702 / 262144 </code></pre>
       <ul>
         <li><strong>M6 在全部 262144 種輸入上都和原版一樣</strong>:它真的是等價突變版。這不是「很多例子都對」,是「所有例子都對」;對有限的輸入,窮舉就是證明。所以上一節把它從分母拿掉是對的。</li>
-        <li>每個突變版「錯在多少種輸入上」也算出來了。M5 錯 32512 種,占所有 add 輸入(65536)的一半左右,隨機測試很容易抓到,它能存活只是因為那 5 條導向測試剛好沒碰到;zero7 只錯 2702 種,就是前面手算 137.2 要數的那個數字。</li>
+        <li>每個突變版「錯在多少種輸入上」也算出來了。M5 錯 32512 種,占所有 add 輸入(65536)的一半左右,隨機測試很容易抓到,它能存活只是因為那 5 條導向測試剛好沒碰到;zero7 只錯 2702 種,就是前面「手算:隨機測試抓不到 bug 的機率」數出來的那個數字。</li>
       </ul>
       <p>
         32 位元的 ALU 呢?a、b 各 32 位元,光是一種運算就有 $2^{64}$ 種輸入。就算每秒模擬一百萬組,16 個 op 要跑上將近一千萬年(練習 137.10)。
@@ -2009,7 +2016,7 @@ mutants/m4_sub_swap.v:&lt;failure&gt; 0 個
 mutants/m5_carry7.v:&lt;failure&gt; 0 個
 mutants/m6_or_equiv.v:&lt;failure&gt; 0 個
 rare/zero7.v:&lt;failure&gt; 1 個</code></pre>
-              <p>和預測一樣。zero7 這次也被抓到,但那是運氣:用種子 1 的這 200 組裡剛好有 y = <code>0x80</code>(手算 137.2 算過,漏掉的機率約 13%)。</p>
+              <p>和預測一樣。zero7 這次也被抓到,但那是運氣:用種子 1 的這 200 組裡剛好有 y = <code>0x80</code>(前面「手算:隨機測試抓不到 bug 的機率」算過,漏掉的機率約 13%)。</p>
             </div>
           </details>
         </div>
