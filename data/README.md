@@ -91,6 +91,7 @@ mainlines:
 9. 和 9Jang spec 的命名:`invariants[].sabotage.attr` 照 spec §3.3b 的名稱,但我們允許寫成列表(例 `attr: [a, pos]`,spec 的例子是單一 `attr: a`);hashmap「不能用 dict 當底層儲存」的欄位照 plan Task 12 的驅動程式設定取名 `forbidAttrTypes`(spec 的 `task.yaml` 寫成 `imports.forbid` 的一條規則)。
 10. 任務 id 的前綴是**零件庫資料夾**:`<零件庫資料夾>/<名>`,也就是 `~/零件庫/<資料夾>/`;不一定等於任務線的 `lib`(例 bookapi 線的 `srv/http`、`srv/pool`)。
 11. 已知的順序例外:`srv/pool`(Lab 在 `24-operating-system`)用到 `srv/http`(Lab 在書裡比較後面的 `25-networking`)。算數的是任務線內的 `order`(http 是 1、pool 是 2),不是書的章序。
+12. **已定:(b)**(老師 2026-10-26):`puzzle/astar`(節點 `ai-classical`)用 `libds/heap`,而 tree.yaml v3 的 `ai-classical` 沒有 `t-adv-ds` 先修。做法:`libds/heap` 的 `evidenceFor` 加 `t-graph`(`t-graph` 的 Lab `libds/graph` 本來就要先有 heap),`puzzle/astar` 的 `evidenceFor` 只留 `ai-classical`。`ai-classical` 的先修是 `t-graph`,跨任務線先修閉包檢查因此通過;A* 不會變成主幹節點的 Lab。另外考慮過的:(a) astar 多列 `t-graph-adv`(副作用是主幹學生要做 A* 才能完成 `t-graph-adv`);(c) A* 改回 heapq、不用 `libds/heap`。
 
 ## 檢查
 

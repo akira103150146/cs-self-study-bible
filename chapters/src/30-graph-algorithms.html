@@ -1466,7 +1466,7 @@ None</code></pre>
             <li data-group="graph.errors">☐ <strong>錯誤處理</strong>〔隱藏檢定〕負權邊要 ValueError;起點不在圖上要 KeyError;無向圖做 topo_sort 要 ValueError。</li>
             <li data-group="graph.deep">☐ <strong>很深的圖</strong>〔隱藏檢定〕10<sup>5</sup> 個點連成一條鏈:dfs_order 不能 RecursionError。</li>
             <li data-group="graph.uses-heap">☐ <strong>用自己的優先佇列</strong>〔隱藏檢定〕dijkstra 與 topo_sort 必須用 libds.heap 的 PriorityQueue;dijkstra 要用 decrease_key 更新距離(檢定會檢查呼叫的順序)。</li>
-            <li data-group="graph.perf">☐ <strong>效能</strong>〔隱藏檢定〕走訪 O(n+m)、Dijkstra O(m log n)。門檻:n=10<sup>5</sup>、m=3×10<sup>5</sup>:dijkstra 3 秒內;bfs、dfs_order、topo_sort 各 1 秒內。這個門檻來自之後的整合題「路網導航」(dijkstra 一次 3 秒內＋10<sup>4</sup> 筆路線查詢 0.5 秒內,合計 3.5 秒)、任務線 puzzle「解謎 AI」的 Boss 戰「十五數碼」、面試 Boss 的「全套檢定:圖與最短路徑」。</li>
+            <li data-group="graph.perf">☐ <strong>效能</strong>〔隱藏檢定〕走訪 O(n+m)、Dijkstra O(m log n)。門檻:n=10<sup>5</sup>、m=3×10<sup>5</sup>:dijkstra 3 秒內;bfs、dfs_order、topo_sort 各 1 秒內。這個門檻來自之後的整合題「路網導航」(dijkstra 一次 3 秒內＋10<sup>4</sup> 筆路線查詢 0.5 秒內,合計 3.5 秒)、任務線 puzzle「解謎 AI」的任務「狀態空間 BFS」的任務目標「效能」(3×3 的 distance_table,全部 181,440 個狀態,3 秒內)、面試 Boss 的「全套檢定:圖與最短路徑」。</li>
           </ul>
           <p><strong>規則:</strong>必須 <code>from libds.heap import PriorityQueue</code>(用你自己的優先佇列);不能 <code>import heapq</code>。<code>dijkstra</code> 更新距離時要呼叫 <code>decrease_key</code>,檢定會檢查呼叫的順序。</p>
           <p><strong>之後會用在:</strong>任務線 puzzle 的任務「狀態空間 BFS」(這個任務的 Lab 之後會補在本章);任務線 agent 的任務「PageRank」(<a href="126-capstone-search-engine.html">{{ch:126-capstone-search-engine}}</a>;這個任務的 Lab 之後會補在那一章);面試 Boss 的「全套檢定:圖與最短路徑」(連同它用到的 <code>heap.py</code>)。之後的整合題「路網導航」「選課排程」也會用它(還不是 Boss 戰)。</p>
@@ -1565,6 +1565,429 @@ for row in floyd_warshall(g):
           <tr><td>Floyd-Warshall</td><td><strong>全點對</strong></td><td>✅</td><td>(可改裝)</td><td>$O(V^3)$</td><td>動態規劃</td></tr>
         </tbody>
       </table>
+      </div>
+
+      <h2>狀態空間:謎題也是一張圖</h2>
+      <p>
+        到目前為止,圖都是先畫好的:有幾個點、哪些邊,一開始就寫在字典裡。可是很多問題的圖<strong>大到畫不出來</strong>,
+        只知道「從這裡走一步可以到哪裡」。滑塊拼圖(sliding puzzle)就是這樣:把每一種盤面當成一個點,
+        「空格和旁邊的一塊交換」當成一條邊,問「最少滑幾步能還原」,就是在這張圖上問最短路徑。
+        這種圖叫<strong>狀態空間(state space)</strong>;鄰居不是查表,而是<strong>現算</strong>出來的,所以也叫<strong>隱式圖(implicit graph)</strong>。
+      </p>
+      <p>
+        這一節用最小、但還有一點意思的 2×3 盤面。盤面寫成「上一列/下一列」,<code>_</code> 是空格,目標是 <code>123/45_</code>。
+        一步就是空格往上、下、左、右和旁邊那一塊交換(出界的方向不算)。6 塊位置共有 6! = 720 種擺法,
+        但等一下會看到,只有一半走得到目標。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 560 230" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs><marker id="sp-arw" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#8a929b"/></marker></defs>
+  <text x="280" y="18" text-anchor="middle" font-size="12" font-weight="700" fill="#2f6f6a">第 0 層:起點 2_3/145</text>
+  <rect x="235" y="28" width="30" height="30" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="250" y="48" text-anchor="middle" font-size="14" font-weight="700" fill="#1f2328">2</text>
+  <rect x="265" y="28" width="30" height="30" fill="#ffffff" stroke="#8a929b" stroke-dasharray="3,2"/>
+  <rect x="295" y="28" width="30" height="30" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="310" y="48" text-anchor="middle" font-size="14" font-weight="700" fill="#1f2328">3</text>
+  <rect x="235" y="58" width="30" height="30" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="250" y="78" text-anchor="middle" font-size="14" font-weight="700" fill="#1f2328">1</text>
+  <rect x="265" y="58" width="30" height="30" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="280" y="78" text-anchor="middle" font-size="14" font-weight="700" fill="#1f2328">4</text>
+  <rect x="295" y="58" width="30" height="30" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="310" y="78" text-anchor="middle" font-size="14" font-weight="700" fill="#1f2328">5</text>
+  <line x1="280" y1="92" x2="105" y2="140" stroke="#8a929b" stroke-width="1.5" marker-end="url(#sp-arw)"/>
+  <rect x="60" y="146" width="30" height="30" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="75" y="166" text-anchor="middle" font-size="14" font-weight="700" fill="#1f2328">2</text>
+  <rect x="90" y="146" width="30" height="30" fill="#f6e7dd" stroke="#b4541f"/>
+  <text x="105" y="166" text-anchor="middle" font-size="14" font-weight="700" fill="#1f2328">4</text>
+  <rect x="120" y="146" width="30" height="30" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="135" y="166" text-anchor="middle" font-size="14" font-weight="700" fill="#1f2328">3</text>
+  <rect x="60" y="176" width="30" height="30" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="75" y="196" text-anchor="middle" font-size="14" font-weight="700" fill="#1f2328">1</text>
+  <rect x="90" y="176" width="30" height="30" fill="#ffffff" stroke="#8a929b" stroke-dasharray="3,2"/>
+  <rect x="120" y="176" width="30" height="30" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="135" y="196" text-anchor="middle" font-size="14" font-weight="700" fill="#1f2328">5</text>
+  <text x="105" y="222" text-anchor="middle" font-size="11" fill="#444">243/1_5:空格往下(4 上來)</text>
+  <line x1="280" y1="92" x2="280" y2="140" stroke="#8a929b" stroke-width="1.5" marker-end="url(#sp-arw)"/>
+  <rect x="235" y="146" width="30" height="30" fill="#ffffff" stroke="#8a929b" stroke-dasharray="3,2"/>
+  <rect x="265" y="146" width="30" height="30" fill="#f6e7dd" stroke="#b4541f"/>
+  <text x="280" y="166" text-anchor="middle" font-size="14" font-weight="700" fill="#1f2328">2</text>
+  <rect x="295" y="146" width="30" height="30" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="310" y="166" text-anchor="middle" font-size="14" font-weight="700" fill="#1f2328">3</text>
+  <rect x="235" y="176" width="30" height="30" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="250" y="196" text-anchor="middle" font-size="14" font-weight="700" fill="#1f2328">1</text>
+  <rect x="265" y="176" width="30" height="30" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="280" y="196" text-anchor="middle" font-size="14" font-weight="700" fill="#1f2328">4</text>
+  <rect x="295" y="176" width="30" height="30" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="310" y="196" text-anchor="middle" font-size="14" font-weight="700" fill="#1f2328">5</text>
+  <text x="280" y="222" text-anchor="middle" font-size="11" fill="#444">_23/145:空格往左(2 過來)</text>
+  <line x1="280" y1="92" x2="455" y2="140" stroke="#8a929b" stroke-width="1.5" marker-end="url(#sp-arw)"/>
+  <rect x="410" y="146" width="30" height="30" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="425" y="166" text-anchor="middle" font-size="14" font-weight="700" fill="#1f2328">2</text>
+  <rect x="440" y="146" width="30" height="30" fill="#f6e7dd" stroke="#b4541f"/>
+  <text x="455" y="166" text-anchor="middle" font-size="14" font-weight="700" fill="#1f2328">3</text>
+  <rect x="470" y="146" width="30" height="30" fill="#ffffff" stroke="#8a929b" stroke-dasharray="3,2"/>
+  <rect x="410" y="176" width="30" height="30" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="425" y="196" text-anchor="middle" font-size="14" font-weight="700" fill="#1f2328">1</text>
+  <rect x="440" y="176" width="30" height="30" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="455" y="196" text-anchor="middle" font-size="14" font-weight="700" fill="#1f2328">4</text>
+  <rect x="470" y="176" width="30" height="30" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="485" y="196" text-anchor="middle" font-size="14" font-weight="700" fill="#1f2328">5</text>
+  <text x="455" y="222" text-anchor="middle" font-size="11" fill="#444">23_/145:空格往右(3 過來)</text>
+  <text x="20" y="125" font-size="11" fill="#8a929b">第 1 層</text>
+</svg>
+        <figcaption>圖 30-10:2×3 滑塊的狀態空間。起點 2_3/145 的空格在上排中間,可以往下、左、右,所以有 3 個鄰居(上面出界)。紅框是和空格交換的那一塊。每個盤面都是圖上的一個點,鄰居要用「空格怎麼動」現算。</figcaption>
+      </div>
+      <p>圖的文字版:第 0 層 <code>2_3/145</code>;第 1 層 <code>243/1_5</code>(空格往下)、<code>_23/145</code>(空格往左)、<code>23_/145</code>(空格往右)。</p>
+
+      <p>
+        BFS 一行都不用改,只是把「查鄰接串列」換成「呼叫一個算鄰居的函式」。下面的版本一層一層展開,回傳每一層有哪些盤面:
+      </p>
+      <pre><code class="language-python"># 2×3 滑塊:盤面是長度 6 的 tuple,0 是空格。位置編號:
+#   0 1 2
+#   3 4 5
+GOAL = (1, 2, 3, 4, 5, 0)
+
+def slide(board):
+    """空格往上、下、左、右換一格得到的盤面(出界的不列)。"""
+    z = board.index(0)
+    r, c = divmod(z, 3)
+    result = []
+    for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:   # 上、下、左、右
+        r2, c2 = r + dr, c + dc
+        if 0 &lt;= r2 &lt; 2 and 0 &lt;= c2 &lt; 3:
+            b = list(board)
+            j = r2 * 3 + c2
+            b[z], b[j] = b[j], b[z]
+            result.append(tuple(b))
+    return result
+
+def show(board):
+    s = ''.join(str(x) if x else '_' for x in board)
+    return s[:3] + '/' + s[3:]
+
+def bfs_layers(start):
+    """一層一層展開,回傳 [第 0 層, 第 1 層, ...];每一層是盤面的列表。"""
+    seen = {start}
+    layers = [[start]]
+    while True:
+        nxt = []
+        for b in layers[-1]:
+            for nb in slide(b):
+                if nb not in seen:          # 入列時就標記
+                    seen.add(nb)
+                    nxt.append(nb)
+        if not nxt:                         # 沒有新盤面:走完了
+            return layers
+        layers.append(nxt)
+
+start = (2, 0, 3, 1, 4, 5)                  # 2_3/145
+layers = bfs_layers(start)
+for d in range(5):
+    print(d, [show(b) for b in layers[d]])
+print(len(layers) - 1, sum(len(L) for L in layers))</code></pre>
+      <pre><code class="language-text">0 ['2_3/145']
+1 ['243/1_5', '_23/145', '23_/145']
+2 ['243/_15', '243/15_', '123/_45', '235/14_']
+3 ['_43/215', '24_/153', '123/4_5', '235/1_4']
+4 ['4_3/215', '2_4/153', '1_3/425', '123/45_', '2_5/134', '235/_14']
+21 360</code></pre>
+      <p>
+        最後一行說:從 <code>2_3/145</code> 出發,最遠的盤面要 21 步,走得到的盤面一共 <strong>360</strong> 個,剛好是 720 的一半。
+        目標 <code>123/45_</code> 出現在第 4 層,所以最少要 4 步。
+      </p>
+
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">隱式圖:不先建圖</span>
+          <p>2×3 只有 360 個走得到的盤面,先建好整張圖也沒關係。3×3(八數碼)有 181,440 個,還可以。4×4(十五數碼)有 16!/2 ≈ 1.05×10<sup>13</sup> 個,
+          一個盤面就算只佔 16 個位元組,也要 160 TB 以上。所以搜尋要邊走邊算鄰居,只記「看過的」盤面;要走得夠遠,還要{{ch:110-classical-ai}}的 A* 幫忙少看一點。</p>
+        </div>
+      </div>
+
+      <h3>手算:2×3 滑塊的狀態空間 BFS(一層一層)</h3>
+      <p>
+        從 <code>2_3/145</code> 出發,一列是「把這一層(frontier)的盤面全部展開一次」。「新發現」寫出盤面、它是從誰來的、空格怎麼動,那欄的盤面屬於下一層(就是下一列的「這一層」);
+        「跳過」是已經在 visited 裡的鄰居(多半是走回頭路)。鄰居照上、下、左、右的順序看,visited 在入列時就標記。
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>層</th><th>這一層(frontier)</th><th>新發現(← 從誰,空格怎麼動)</th><th>跳過(已在 visited)</th><th>visited 大小(之後)</th></tr></thead>
+        <tbody>
+          <tr><td>0</td><td><code>2_3/145</code></td><td><code>243/1_5</code>(下)、<code>_23/145</code>(左)、<code>23_/145</code>(右)</td><td>—</td><td>4</td></tr>
+          <tr><td>1</td><td><code>243/1_5</code>、<code>_23/145</code>、<code>23_/145</code></td><td><code>243/_15</code>(← 243/1_5,左)、<code>243/15_</code>(← 243/1_5,右)、<code>123/_45</code>(← _23/145,下)、<code>235/14_</code>(← 23_/145,下)</td><td><code>2_3/145</code> × 3</td><td>8</td></tr>
+          <tr><td>2</td><td><code>243/_15</code>、<code>243/15_</code>、<code>123/_45</code>、<code>235/14_</code></td><td><code>_43/215</code>(← 243/_15,上)、<code>24_/153</code>(← 243/15_,上)、<code>123/4_5</code>(← 123/_45,右)、<code>235/1_4</code>(← 235/14_,左)</td><td><code>243/1_5</code> × 2、<code>_23/145</code>、<code>23_/145</code></td><td>12</td></tr>
+          <tr><td>3</td><td><code>_43/215</code>、<code>24_/153</code>、<code>123/4_5</code>、<code>235/1_4</code></td><td><code>4_3/215</code>(← _43/215,右)、<code>2_4/153</code>(← 24_/153,左)、<code>1_3/425</code>(← 123/4_5,上)、<strong><code>123/45_</code></strong>(← 123/4_5,右)、<code>2_5/134</code>(← 235/1_4,上)、<code>235/_14</code>(← 235/1_4,左)</td><td><code>243/_15</code>、<code>243/15_</code>、<code>123/_45</code>、<code>235/14_</code></td><td>18</td></tr>
+          <tr><td>4</td><td>6 個盤面,含目標 <code>123/45_</code></td><td>(找到目標,停止)</td><td>—</td><td>—</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        目標在第 4 層,所以最少 4 步。從目標沿著「← 從誰」往回走:<code>123/45_</code> ← <code>123/4_5</code>(右)← <code>123/_45</code>(右)← <code>_23/145</code>(下)← <code>2_3/145</code>(左)。
+        反過來,空格依序往<strong>左、下、右、右</strong>。和前面的 <code>bfs_path</code> 一樣:要還原路徑,就要在<strong>第一次</strong>發現每個盤面時記下它的 parent 和那一步。
+      </p>
+      <p>
+        表裡兩個現象值得記住。第一,每個盤面展開時,都有一個鄰居是「剛剛來的地方」,所以每一列都有跳過;不在入列時標記,同一個盤面會一直被塞回佇列。
+        第二,第 1 層到第 3 層每層只有 3–4 個盤面,但層數一多,一層的盤面數就會很快變多(下一題會數到),這就是 BFS 在大盤面上撐不住的原因。
+      </p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 30.7 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>從 <code>413/_25</code> 出發,照上面的規則(鄰居順序上、下、左、右;入列時標記)做一層一層的 BFS,畫出同樣的追蹤表,
+          直到目標 <code>123/45_</code> 出現。最少幾步?空格要怎麼動?</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <div class="table-wrap"><table>
+              <thead><tr><th>層</th><th>這一層(frontier)</th><th>新發現(← 從誰,空格怎麼動)</th><th>跳過</th><th>visited 大小(之後)</th></tr></thead>
+              <tbody>
+                <tr><td>0</td><td><code>413/_25</code></td><td><code>_13/425</code>(上)、<code>413/2_5</code>(右)</td><td>—</td><td>3</td></tr>
+                <tr><td>1</td><td><code>_13/425</code>、<code>413/2_5</code></td><td><code>1_3/425</code>(← _13/425,右)、<code>4_3/215</code>(← 413/2_5,上)、<code>413/25_</code>(← 413/2_5,右)</td><td><code>413/_25</code> × 2</td><td>6</td></tr>
+                <tr><td>2</td><td><code>1_3/425</code>、<code>4_3/215</code>、<code>413/25_</code></td><td><code>123/4_5</code>(← 1_3/425,下)、<code>13_/425</code>(← 1_3/425,右)、<code>_43/215</code>(← 4_3/215,左)、<code>43_/215</code>(← 4_3/215,右)、<code>41_/253</code>(← 413/25_,上)</td><td><code>_13/425</code>、<code>413/2_5</code> × 2</td><td>11</td></tr>
+                <tr><td>3</td><td><code>123/4_5</code>、<code>13_/425</code>、<code>_43/215</code>、<code>43_/215</code>、<code>41_/253</code></td><td><code>123/_45</code>(← 123/4_5,左)、<strong><code>123/45_</code></strong>(← 123/4_5,右)、<code>135/42_</code>(← 13_/425,下)、<code>243/_15</code>(← _43/215,下)、<code>435/21_</code>(← 43_/215,下)、<code>4_1/253</code>(← 41_/253,左)</td><td><code>1_3/425</code> × 2、<code>4_3/215</code> × 2、<code>413/25_</code></td><td>17</td></tr>
+                <tr><td>4</td><td>6 個盤面,含目標</td><td>(停止)</td><td>—</td><td>—</td></tr>
+              </tbody>
+            </table></div>
+            <p>最少 <strong>4 步</strong>。往回走:<code>123/45_</code> ← <code>123/4_5</code>(右)← <code>1_3/425</code>(下)← <code>_13/425</code>(右)← <code>413/_25</code>(上),
+            所以空格依序往<strong>上、右、下、右</strong>。用上面的程式驗算:<code>bfs_layers((4, 1, 3, 0, 2, 5))</code> 的第 4 層裡有 <code>(1, 2, 3, 4, 5, 0)</code>。</p>
+            <p>延伸:把程式改成從 <code>GOAL</code> 出發,數每一層有幾個盤面。你會得到 1、2、3、5、6、7、10、12、12、16、23、25、28、39、44、40、29、21、18、12、6、1(第 0 到 21 層,合計 360)。
+            最多的一層(第 14 層)有 44 個盤面。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <h3>手算:逆序數與有沒有解</h3>
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">為什麼要學</span>
+          <p>任務線 puzzle(解謎 AI)的 Boss 戰「十五數碼」會給你無解的盤面,要求一個節點都不展開就回答「沒有解」。
+          4×4 走得到的盤面有 10<sup>13</sup> 個,想靠 BFS「走完了都沒碰到目標」來判斷,永遠等不到。這一節的奇偶規則是 O(n<sup>2</sup>) 的小計算,
+          而且它的證明就是一條<strong>不變式</strong>,可以直接寫成 <code>assert</code>。</p>
+        </div>
+      </div>
+      <p>
+        把盤面照「先上排、再下排」讀成一串數字,<strong>跳過空格</strong>。一對數字如果「前面的比後面的大」,就叫一個<strong>逆序對(inversion)</strong>;
+        逆序對的個數叫<strong>逆序數</strong>。目標 <code>123/45_</code> 讀成 1 2 3 4 5,逆序數是 0。
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>盤面</th><th>讀成一串</th><th>逆序對</th><th>逆序數</th><th>奇偶</th><th>走得到 <code>123/45_</code>?</th></tr></thead>
+        <tbody>
+          <tr><td><code>2_3/145</code></td><td>2 3 1 4 5</td><td>(2,1)(3,1)</td><td>2</td><td>偶</td><td>走得到(4 步)</td></tr>
+          <tr><td><code>413/_25</code></td><td>4 1 3 2 5</td><td>(4,1)(4,3)(4,2)(3,2)</td><td>4</td><td>偶</td><td>走得到(4 步)</td></tr>
+          <tr><td><code>321/54_</code></td><td>3 2 1 5 4</td><td>(3,2)(3,1)(2,1)(5,4)</td><td>4</td><td>偶</td><td>走得到(20 步)</td></tr>
+          <tr><td><code>123/54_</code></td><td>1 2 3 5 4</td><td>(5,4)</td><td>1</td><td>奇</td><td><strong>走不到</strong></td></tr>
+          <tr><td><code>213/45_</code></td><td>2 1 3 4 5</td><td>(2,1)</td><td>1</td><td>奇</td><td><strong>走不到</strong></td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        <strong>看起來對但其實錯。</strong><code>123/54_</code> 和目標只差「4、5 換一下」,看起來一兩步就好;<code>321/54_</code> 亂得多。
+        結果剛好相反:<code>321/54_</code> 要 20 步,<code>123/54_</code> 怎麼滑都到不了。「看起來很接近」不是證據,要算逆序數。
+      </p>
+      <p>為什麼奇偶不會變?看空格的兩種走法對那一串數字做了什麼:</p>
+      <ul>
+        <li><strong>左右滑</strong>:一塊和空格在同一排交換,讀出來的那一串(跳過空格)完全沒變,逆序數不變。</li>
+        <li><strong>上下滑</strong>:一塊從一排跳到另一排,在那一串裡往前或往後跳過<strong>欄數 − 1</strong> 塊。2×3 是跳過 2 塊,每跳過一塊,逆序數加 1 或減 1,
+        所以總共變 +2、0 或 −2,奇偶不變。</li>
+      </ul>
+      <div class="table-wrap"><table>
+        <thead><tr><th>上下滑一步</th><th>之前(一串)</th><th>逆序數</th><th>之後(一串)</th><th>逆序數</th><th>變化</th><th>原因</th></tr></thead>
+        <tbody>
+          <tr><td><code>123/45_</code> 空格往上 → <code>12_/453</code></td><td>1 2 3 4 5</td><td>0</td><td>1 2 4 5 3</td><td>2</td><td>+2</td><td>3 往後跳過 4、5(都比 3 大)</td></tr>
+          <tr><td><code>_23/145</code> 空格往下 → <code>123/_45</code></td><td>2 3 1 4 5</td><td>2</td><td>1 2 3 4 5</td><td>0</td><td>−2</td><td>1 往前跳過 2、3(都比 1 大)</td></tr>
+          <tr><td><code>_13/254</code> 空格往下 → <code>213/_54</code></td><td>1 3 2 5 4</td><td>2</td><td>2 1 3 5 4</td><td>2</td><td>0</td><td>2 往前跳過 1(比較小)與 3(比較大)</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        <strong>證明(參考)。</strong>欄數是奇數時,每一步都讓逆序數變一個偶數(左右滑變 0;上下滑跳過偶數塊,變化是偶數),
+        所以逆序數的奇偶是一個<strong>不變式</strong>:從起點走到哪裡都一樣。目標的逆序數是 0(偶),所以逆序數是奇數的盤面一定走不到目標。
+        欄數是偶數時(例如 4×4),上下滑跳過奇數塊,逆序數的奇偶會翻轉;但同一步裡空格也換了一排,所以
+        「逆序數 + 空格在底排上面幾排」的奇偶不變,目標時這個和是 0。列數不影響這條規則,只看欄數是奇數還是偶數。
+      </p>
+      <p>
+        ★深入(選讀):反過來也成立——奇偶對的盤面一定走得到目標,所以剛好一半的擺法有解。這一半要構造出走法,
+        證明見 W. W. Johnson 與 W. E. Story 在 1879 年的 <em>Notes on the "15" Puzzle</em>(American Journal of Mathematics 第 2 卷)。
+        下面的程式只做小範圍暴力檢查,<strong>不是證明,是建立直覺</strong>:
+      </p>
+      <pre><code class="language-python">from itertools import permutations
+
+def inversions(board):
+    """空格不算:把數字照列優先讀成一串,數「前面比後面大」的配對。"""
+    tiles = [x for x in board if x != 0]
+    return sum(1 for i in range(len(tiles))
+                 for j in range(i + 1, len(tiles))
+                 if tiles[i] &gt; tiles[j])
+
+reach = set()
+for layer in bfs_layers(GOAL):
+    reach.update(layer)
+
+# 不變式的程式版:每走一步,逆序數的奇偶不變(欄數是奇數時)
+for b in reach:
+    for nb in slide(b):
+        assert inversions(nb) % 2 == inversions(b) % 2
+
+# 小範圍暴力檢查(不是證明,是建立直覺):逆序數偶數 ⇔ 走得到 GOAL
+boards = list(permutations(range(6)))
+even = {b for b in boards if inversions(b) % 2 == 0}
+print(len(boards), len(even), even == reach)      # 720 360 True
+print(inversions((1, 2, 3, 5, 4, 0)), (1, 2, 3, 5, 4, 0) in reach)   # 1 False</code></pre>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 30.8 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>換成 2×4 盤面,目標是 <code>1234/567_</code>。(1)算出 <code>123_/5674</code> 和 <code>123_/5647</code> 的逆序數。
+          (2)有人說:「逆序數是偶數就有解、奇數就無解。」用這兩個盤面檢驗這句話。(3)寫出 2×4 正確的判斷規則,並說明這兩個盤面各自有沒有解。</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <div class="table-wrap"><table>
+              <thead><tr><th>盤面</th><th>讀成一串</th><th>逆序對</th><th>逆序數</th><th>空格在底排上面幾排</th><th>和</th><th>有解?</th></tr></thead>
+              <tbody>
+                <tr><td><code>123_/5674</code></td><td>1 2 3 5 6 7 4</td><td>(5,4)(6,4)(7,4)</td><td>3</td><td>1</td><td>4(偶)</td><td>有解,空格往下 1 步就到</td></tr>
+                <tr><td><code>123_/5647</code></td><td>1 2 3 5 6 4 7</td><td>(5,4)(6,4)</td><td>2</td><td>1</td><td>3(奇)</td><td><strong>無解</strong></td></tr>
+              </tbody>
+            </table></div>
+            <p>(2)那句話在 2×4 上兩個都錯:<code>123_/5674</code> 逆序數是奇數,卻只差一步;<code>123_/5647</code> 逆序數是偶數,卻走不到。
+            它只在欄數是奇數(2×3、3×3)時對。<strong>例子都對 ≠ 敘述為真</strong>:只在 3×3 上試,永遠看不出問題,到了 4×4 才會出錯。</p>
+            <p>(3)欄數是 4,上下滑一步會跳過 3 塊,逆序數變 ±1 或 ±3(奇數),同時空格換一排。所以要看「逆序數 + 空格在底排上面幾排」:
+            偶數有解,奇數無解。用程式把 2×4 的 40,320 種擺法全部試過(從目標 BFS 一次),走得到的 20,160 種剛好是這個和為偶數的那些。
+            這也是 4×4 十五數碼用的規則。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <div class="callout note">
+        <div class="ico">🧭</div>
+        <div class="body">
+          <span class="c-title">任務線總覽:puzzle 解謎 AI</span>
+          <p>下面的 Lab 是任務線 puzzle 的第 1 個任務。這條任務線由上而下設計:先定 Boss 戰(最後的驗收),再拆成零件;每個任務的任務目標都是某一場 Boss 戰需要的。〔公開〕的用 <code>test</code> 自己跑,其他的是 <code>submit</code> 時的隱藏檢定。</p>
+<pre><code class="language-text">puzzle(任務線):解謎 AI
+├─ Boss 戰 🏆 解謎 AI
+│    十五數碼:10 個 4×4 盤面(最短 32–42 步)＋2 個無解盤面,步數最短,
+│              每盤 12 秒、展開 ≤ 1.5×10^5 個節點          ← 用任務 1、2
+│    數獨:20 題隱藏題,每題 solve 與 count_sudoku 各 2 秒   ← 用任務 3
+│    不敗棋手:5 欄×4 列的四子棋 20 局(開局都挑你不會輸的),
+│              每一步都是最佳著,每局 9 秒                  ← 用任務 4
+├─ 任務 1 狀態空間 BFS  puzzle/bfs.py      ← {{ch:30-graph-algorithms}} Lab(本章)
+│    公開:盤面與移動、最少步數、整個狀態空間、有沒有解
+│    隱藏:奇偶規則全對、邊界、錯誤處理、不先建圖、用自己的圖、
+│          效能(3×3 全部 181,440 個狀態 3 秒內)
+│    用到:libds 的圖 libds/graph.py(本章前面的 Lab)
+├─ 任務 2 A* 搜尋       puzzle/astar.py    ← {{ch:110-classical-ai}} Lab
+│    公開:Manhattan 距離、通用 A*、最短解、啟發式不高估
+│    隱藏:重新打開、邊界、無解的盤面、錯誤處理、用自己的優先佇列、
+│          展開的節點數、效能(4×4 每盤 6 秒內)
+│    用到:任務 1、libds 的優先佇列 libds/heap.py({{ch:29-data-structures}} Lab)
+├─ 任務 3 CSP 回溯      puzzle/csp.py      ← {{ch:110-classical-ai}} Lab
+│    公開:一般的 CSP、數獨、數解
+│    隱藏:邊界、錯誤處理、先選最難的變數、效能(每題 2 秒內)
+└─ 任務 4 minimax       puzzle/minimax.py  ← {{ch:51-game-theory}} Lab
+     公開:四子棋規則、局面的分數、最佳著
+     隱藏:真的有剪枝、邊界、錯誤處理、效能(每個局面 3 秒內)</code></pre>
+          <p><strong>A* 要用你自己的優先佇列:</strong>任務 2 必須 <code>from libds.heap import PriorityQueue</code>,用的是{{ch:29-data-structures}}的 Lab「優先佇列」(要有 <code>decrease_key</code>)。那個任務還沒過,A* 的任務不會出現。</p>
+          <p><strong>順序:</strong>任務 1 → 2 要照順序(A* 用任務 1 的盤面與 <code>distance_table</code>);任務 3、4 不用前面的零件,可以先做。章的順序是{{ch:30-graph-algorithms}} → {{ch:110-classical-ai}} → {{ch:51-game-theory}}。每個任務目標的一行說明,在<a href="route-ai.html#mainline-puzzle">AI 路線導讀</a>。</p>
+        </div>
+      </div>
+
+      <h3 id="lab-puzzle-bfs">本章 Lab:狀態空間 BFS puzzle/bfs.py</h3>
+      <div class="callout lab" data-task="puzzle/bfs">
+        <div class="ico">🧪</div>
+        <div class="body">
+          <span class="c-title">本章 Lab · 任務線「puzzle」· 任務「狀態空間 BFS」</span>
+          <p><strong>對應地下城任務:</strong>任務「狀態空間 BFS」(任務線:puzzle 解謎 AI,第 1／4 個任務)。零件檔:<code>~/零件庫/puzzle/bfs.py</code>;任務資料夾:<code>~/任務線/puzzle/01-bfs/</code>。</p>
+          <p><strong>要做的零件:</strong>一個任何 rows×cols 都能用的滑塊盤面 <code>SlidingPuzzle</code>(鄰居、照著走、用前面「手算:逆序數與有沒有解」的規則判斷有沒有解),一個吃「算鄰居的函式」的通用 <code>bfs</code>(回傳最短的走法),以及在小盤面上用你自己的 <code>libds.graph.Graph</code> 建出整個狀態空間、算出每個盤面到目標的真實步數。下一個任務的 A* 會拿這張表當標準答案,檢查你的啟發式有沒有高估。</p>
+          <p><strong>介面:</strong></p>
+<pre><code class="language-python"># ~/零件庫/puzzle/bfs.py
+from collections import deque
+from libds.graph import Graph
+
+class SlidingPuzzle:
+    def __init__(self, rows, cols):
+        """rows、cols 都要 &gt;= 2,否則 ValueError。狀態是長度 rows*cols 的 tuple(列優先),
+        0 是空格;self.goal = (1, 2, ..., rows*cols - 1, 0)。"""
+    def neighbors(self, state) -&gt; list:
+        """[(move, 新狀態), ...];move 是「空格」移動的方向 'U'、'D'、'L'、'R',
+        依這個順序列出,出界的不列。"""
+    def apply(self, state, moves):
+        """照 moves(字串或列表)一步一步走,回傳最後的狀態;
+        走不了的一步、不認得的字 → ValueError。"""
+    def is_solvable(self, state) -&gt; bool:
+        """用逆序數與空格所在的列判斷奇偶,不搜尋;
+        state 不是 0..rows*cols-1 的排列 → ValueError。"""
+
+def bfs(start, is_goal, neighbors):
+    """隱式圖的 BFS:鄰居用 neighbors(state) -&gt; [(move, 狀態), ...] 現算,不先建圖。
+    回傳最少步的 move 列表(start 就是目標 → []);走不到 → None。"""
+
+def state_graph(puzzle, start=None) -&gt; Graph:
+    """從 start(預設 puzzle.goal)走得到的全部狀態,建成 libds.graph 的無向 Graph。
+    只給小盤面用(3×3 有 181,440 個狀態)。"""
+
+def distance_table(puzzle) -&gt; dict:
+    """每個走得到 goal 的狀態 → 最少步數。必須用 state_graph 與你的 Graph.bfs。"""</code></pre>
+          <p><strong>公開範例:</strong></p>
+          <p>在 <code>~/零件庫</code> 裡執行 <code>python3</code>(盤面和本章「狀態空間:謎題也是一張圖」的 2×3 例子一樣):</p>
+<pre><code class="language-python">&gt;&gt;&gt; from puzzle.bfs import SlidingPuzzle, bfs, state_graph, distance_table
+&gt;&gt;&gt; p = SlidingPuzzle(2, 3)
+&gt;&gt;&gt; p.goal
+(1, 2, 3, 4, 5, 0)
+&gt;&gt;&gt; start = (2, 0, 3, 1, 4, 5)
+&gt;&gt;&gt; p.neighbors(start)
+[('D', (2, 4, 3, 1, 0, 5)), ('L', (0, 2, 3, 1, 4, 5)), ('R', (2, 3, 0, 1, 4, 5))]
+&gt;&gt;&gt; p.apply(start, "LDRR")
+(1, 2, 3, 4, 5, 0)
+&gt;&gt;&gt; moves = bfs(start, lambda s: s == p.goal, p.neighbors)
+&gt;&gt;&gt; len(moves), p.apply(start, moves) == p.goal
+(4, True)
+&gt;&gt;&gt; bfs(p.goal, lambda s: s == p.goal, p.neighbors)
+[]
+&gt;&gt;&gt; p.is_solvable((1, 2, 3, 5, 4, 0)), p.is_solvable((3, 2, 1, 5, 4, 0))
+(False, True)
+&gt;&gt;&gt; print(bfs((1, 2, 3, 5, 4, 0), lambda s: s == p.goal, p.neighbors))
+None
+&gt;&gt;&gt; q = SlidingPuzzle(4, 4)
+&gt;&gt;&gt; q.is_solvable((1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15, 14, 0))
+False
+&gt;&gt;&gt; q.is_solvable((1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 0, 13, 14, 15, 12))
+True
+&gt;&gt;&gt; g = state_graph(p)
+&gt;&gt;&gt; type(g).__name__, len(g.bfs(p.goal))
+('Graph', 360)
+&gt;&gt;&gt; d = distance_table(p)
+&gt;&gt;&gt; len(d), max(d.values()), d[start]
+(360, 21, 4)
+&gt;&gt;&gt; from collections import Counter
+&gt;&gt;&gt; sorted(Counter(d.values()).items())[:8]
+[(0, 1), (1, 2), (2, 3), (3, 5), (4, 6), (5, 7), (6, 10), (7, 12)]
+&gt;&gt;&gt; bfs(2, lambda x: x == 7, lambda x: [("-1", x - 1), ("*3", 3 * x)])
+['-1', '*3', '*3', '-1', '-1']
+&gt;&gt;&gt; try:
+...     p.apply(start, "U")
+... except ValueError:
+...     print("空格不能往上")
+...
+空格不能往上</code></pre>
+          <p><strong>和本章範例不同的地方:</strong>可以參考本章的範例,但介面和要求不同,要自己改寫。</p>
+          <ul>
+            <li>本章的 <code>bfs(graph, start)</code> 吃 dict 形式的鄰接串列、回傳走訪順序;Lab 的 <code>bfs</code> 是隱式圖:鄰居用 <code>neighbors</code> 函式現算,目標用 <code>is_goal</code> 判斷,回傳的是<strong>最短的走法</strong>(要記下每個狀態是從誰、用哪一步來的,最後倒著還原)。</li>
+            <li>本章的 <code>slide</code>/<code>bfs_layers</code> 只會 2×3、只回傳一層一層的盤面;Lab 的 <code>SlidingPuzzle</code> 要能處理任何 rows×cols(2×2 到 4×4、長方形也可以),走法要用 <code>U</code>/<code>D</code>/<code>L</code>/<code>R</code> 表示,而且要能照著走(<code>apply</code>)、擋掉不合法的一步。</li>
+            <li>本章的 <code>inversions</code> 只算逆序數;Lab 的 <code>is_solvable</code> 要對欄數是偶數的盤面也對(加上空格所在的列),還要擋掉不是排列的狀態。</li>
+            <li>Lab 多了 <code>state_graph</code> 與 <code>distance_table</code>:用你自己的 <code>Graph</code> 建出整個狀態空間,再用你的 <code>Graph.bfs</code> 算距離。</li>
+          </ul>
+          <p><strong>任務目標</strong>(公開的用 <code>test</code> 自己跑;隱藏檢定在 <code>submit</code> 時跑,只看得到名稱和一行說明):</p>
+          <ul class="lab-goals">
+            <li data-group="bfs.puzzle">☐ <strong>盤面與移動</strong>〔公開〕SlidingPuzzle 的 goal、neighbors(順序 U、D、L、R,move 是空格移動的方向)與 apply 對公開範例(2×3、3×3、4×4)。</li>
+            <li data-group="bfs.solve">☐ <strong>最少步數</strong>〔公開〕bfs 回傳最少步的 move 列表(任何一條最短的都算,檢定會照著走一次確認到得了目標);start 就是目標回傳 []。</li>
+            <li data-group="bfs.table">☐ <strong>整個狀態空間</strong>〔公開〕2×3 盤面:state_graph 有 360 個狀態;distance_table 最遠 21 步,每個步數有幾個狀態對公開答案。</li>
+            <li data-group="bfs.parity">☐ <strong>有沒有解</strong>〔公開〕is_solvable 對公開範例(欄數是奇數與偶數的盤面各幾個)。</li>
+            <li data-group="bfs.parity-all">☐ <strong>奇偶規則全對</strong>〔隱藏檢定〕2×3、3×2、2×4 的每一個排列:is_solvable 和「從 goal 走不走得到」一致;隨機的 3×3、3×4、4×4 盤面對參考答案。</li>
+            <li data-group="bfs.edge">☐ <strong>邊界</strong>〔隱藏檢定〕2×2 盤面;長方形盤面(2×4、4×2、3×4);無解的 2×3 盤面走完整個可達空間後回傳 None;不是滑塊的通用 bfs(例:整數狀態,鄰居是 x+1 與 2x)。</li>
+            <li data-group="bfs.errors">☐ <strong>錯誤處理</strong>〔隱藏檢定〕rows 或 cols 小於 2、apply 出界或不認得的字、is_solvable 收到不是排列的 state(數字重複、缺數字、長度不對),都要 ValueError。</li>
+            <li data-group="bfs.implicit">☐ <strong>不先建圖</strong>〔隱藏檢定〕bfs 不能先建整張圖:4×4 盤面(10<sup>13</sup> 個狀態)上最短 15 步以內的盤面要 1 秒內解出。</li>
+            <li data-group="bfs.uses-graph">☐ <strong>用自己的圖</strong>〔隱藏檢定〕state_graph 回傳 libds.graph 的 Graph(無向);distance_table 呼叫它的 bfs(檢定會檢查)。</li>
+            <li data-group="bfs.perf">☐ <strong>效能</strong>〔隱藏檢定〕每個狀態只進佇列一次(visited 在入列時標記);建圖 O(狀態數＋邊數)。門檻:3×3 的 distance_table(全部 181,440 個狀態)3 秒內;3×3 最難的盤面(31 步)bfs 1 秒內;4×4 上 15 步的盤面 bfs 1 秒內。這個門檻來自任務「A* 搜尋」的任務目標「啟發式不高估」:它要用你的 distance_table 算出 3×3 每一個盤面的真實步數,拿來檢查你的啟發式;也來自 Boss 戰「十五數碼」(每盤 12 秒):distance_table 呼叫 <code>neighbors</code> 181,440 次,Boss 每盤最多 1.5×10<sup>5</sup> 次,所以這 3 秒也管住了你的 <code>neighbors</code> 有多快。</li>
+          </ul>
+          <p><strong>規則:</strong>必須 <code>from libds.graph import Graph</code>(<code>state_graph</code> 用你自己的圖);佇列可以用 <code>collections.deque</code>。</p>
+          <p><strong>之後會用在:</strong><a href="110-classical-ai.html#lab-puzzle-astar">{{ch:110-classical-ai}}的 A* 搜尋</a>(用你的 <code>SlidingPuzzle</code>,拿你的 <code>distance_table</code> 檢查啟發式);Boss 戰「十五數碼」(用你的 <code>SlidingPuzzle</code> 與 <code>is_solvable</code>)。</p>
+          <p class="lab-rule">這個零件過關之後,後面的專題一律用你自己的版本。規則見<a href="00-about.html#lab-rules">零件庫規則</a>。</p>
+        </div>
       </div>
 
       <h2>不只最短路:再往前一步</h2>

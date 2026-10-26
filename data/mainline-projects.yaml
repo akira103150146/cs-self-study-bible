@@ -186,7 +186,7 @@ mainlines:
           description: "push、pop_min、decrease_key 都要 O(log n)(decrease_key 不能掃整個列表)。"
           perf: {statement: "10^5 次 push＋10^5 次 decrease_key＋10^5 次 pop_min,3 秒內", seconds: 3, n: 100000}
           perf_ref: "0.90 秒(計畫原寫 1 秒;CPython 參考解做不到 1/3,改 3 秒)。graph.perf 的 dijkstra 約做 5×10^5 次堆積操作,用參考堆積 0.71 秒;剛好卡 3 秒的堆積(比參考解慢 3.3 倍)跑同一份 dijkstra 最多約 2.4 秒,仍在 graph.perf 的 3 秒內"
-          requiredBy: [boss.heap, graph.perf, puzzle/boss.solve-15]
+          requiredBy: [boss.heap, graph.perf, puzzle/astar.perf]
 
     - id: libds/lru
       order: 3
@@ -335,7 +335,7 @@ mainlines:
           description: "走訪 O(n+m)、Dijkstra O(m log n)。"
           perf: {statement: "n=10^5、m=3×10^5:dijkstra 3 秒內;bfs、dfs_order、topo_sort 各 1 秒內", seconds: 3, n: 100000}
           perf_ref: "dijkstra 0.71 秒(用參考的 libds/heap);bfs／dfs 0.12／0.17 秒"
-          requiredBy: [boss.graph, route-planner, puzzle/boss.solve-15]
+          requiredBy: [boss.graph, route-planner, puzzle/bfs.perf]
 
     - id: libds/dsu
       order: 7
@@ -869,7 +869,7 @@ mainlines:
     - {id: boss.logic-final, name: 邏輯與計算理論期末, consumes: [logic/dpll, logic/automata, logic/tm], description: "從 SAT 到停機問題:隱藏的 CNF、自動機與 Turing 機。"}
   tasks:
     - {id: logic/prop, order: 1, name: 命題邏輯, files: [logic/prop.py], language: python, chapter: "56-formal-logic:本章 Lab:命題邏輯 logic/prop.py", evidenceFor: [f-logic], consumes: [], groups: [], lab_no: L1, anchor: lab-logic-prop, also_chapters: [19-boolean-logic], used_by: [logic/dpll]}
-    - {id: logic/dpll, order: 2, name: SAT 求解器, files: [logic/dpll.py], language: python, chapter: "33-np-completeness:本章 Lab:SAT 求解器 logic/dpll.py", evidenceFor: [f-logic, f-complexity], consumes: [logic/prop], groups: [], lab_no: L2, anchor: lab-logic-dpll, also_chapters: [56-formal-logic], used_by: [puzzle/csp]}
+    - {id: logic/dpll, order: 2, name: SAT 求解器, files: [logic/dpll.py], language: python, chapter: "33-np-completeness:本章 Lab:SAT 求解器 logic/dpll.py", evidenceFor: [f-logic, f-complexity], consumes: [logic/prop], groups: [], lab_no: L2, anchor: lab-logic-dpll, also_chapters: [56-formal-logic], used_by: []}
     - {id: logic/automata, order: 3, name: 有限自動機, files: [logic/automata.py], language: python, chapter: "49-theory-of-computation:本章 Lab:有限自動機 logic/automata.py", evidenceFor: [f-complexity], consumes: [], groups: [], lab_no: L3, anchor: lab-logic-automata, used_by: [logic/regex]}
     - {id: logic/regex, order: 4, name: 正規表示式引擎, files: [logic/regex.py], language: python, chapter: "49-theory-of-computation:本章 Lab:正規表示式引擎 logic/regex.py", evidenceFor: [f-complexity], consumes: [logic/automata], groups: [], lab_no: L4, anchor: lab-logic-regex, also_chapters: [42-compilers], used_by: [blue/timeline]}
     - {id: logic/tm, order: 5, name: Turing 機, files: [logic/tm.py], language: python, chapter: "49-theory-of-computation:本章 Lab:Turing 機 logic/tm.py", evidenceFor: [f-complexity], consumes: [], groups: [], lab_no: L5, anchor: lab-logic-tm}
@@ -976,6 +976,7 @@ mainlines:
     - {id: agent/rag, order: 6, name: RAG, files: [agent/rag.py], language: python, chapter: "102-rag-from-scratch:本章 Lab:RAG agent/rag.py", evidenceFor: [ai-llm-app], consumes: [search/rank, search/vector, agent/react], groups: [], lab_no: L6, anchor: lab-agent-rag, also_chapters: [125-capstone-llm-agent], used_by: [agent/guard, boss.rag-citations]}
     - {id: agent/guard, order: 7, name: 評估與護欄, files: [agent/eval.py, agent/guard.py], language: python, chapter: "106-agent-production:本章 Lab:評估與護欄 agent/guard.py", evidenceFor: [ai-agent, ai-efficient], consumes: [agent/rag], groups: [], lab_no: L7, anchor: lab-agent-guard, also_chapters: [125-capstone-llm-agent, 113-ai-security], used_by: [boss.injection-guard]}
 
+# ═════════════════════════════ A3 puzzle(詳細;夾在 outline 之間,維持原位置) ═════════════════════════════
 - id: puzzle
   code: A3
   name: 解謎 AI
@@ -984,17 +985,180 @@ mainlines:
   project: proj-ai-search
   checkpoints: [proj-ai-search]
   level: 高中
-  status: outline
-  summary: "狀態空間搜尋、A*、CSP 回溯與 minimax,解十五數碼、數獨與小棋類。搜尋直接用 libds 的圖與優先佇列。"
+  status: detailed
+  summary: "狀態空間搜尋、A*、CSP 回溯與 alpha-beta,解十五數碼、數獨與五行四列的四子棋。滑塊盤面與 BFS 先在小盤面上用你的 libds 圖建出整個狀態空間;A* 用你自己的優先佇列與 decrease_key。介面刻意和書上的範例不同:可以參考書,但要自己改寫。"
+  note: "書端決定(2026-10-26):(1) BFS 本身是隱式圖(鄰居現算,用 collections.deque),libds/graph 用在 state_graph／distance_table:小盤面建出整個狀態空間、用 Graph.bfs 算出每個狀態的真實步數,A* 的可採納性檢查拿它當標準答案。(2) 效能預算由上往下推,而且要留餘裕(每個零件剛好卡在自己的門檻時,Boss 照樣要過):十五數碼每盤 12 秒。astar.perf 量的是同一種盤面(用量 1 倍),定 6 秒,剛好卡門檻時佔 Boss 的一半(boss.solve-15 的 perf.budget);bfs.perf 的 distance_table 呼叫 neighbors 181,440 次,Boss 每盤最多 1.5×10^5 次(用量 0.83 倍),另外分 3 秒給它是保守的寫法(neighbors 的時間其實已經算在 A* 裡);參考解最慢 0.80 秒。最難的 4×4 盤面(展開上限 1.5×10^5 個節點)約做 4.3×10^5 次堆積操作,是 libds heap.perf(3×10^5 次、3 秒)的 1.45 倍;堆積剛好卡 3 秒時佔 4.35 秒,在 A* 的 6 秒裡分給它 4.5 秒(astar.perf 的 perf.budget 與 perf.usage)。heap.perf 不能再緊(CPython 參考解 0.90 秒,要留 1/3)。graph.perf 只用在 3×3 的 distance_table,所以 requiredBy 指到 bfs.perf。不敗棋手每局 9 秒:minimax.perf 3 秒 × 用量 1.4 = 4.2 秒,不超過 9 秒的一半(寫在 boss.no-lose 的 perf.budget 與 perf.usage)。用量 1.4 由選局保證:隨機開局裡,一局你這一方全部的 best_move 合計可以到開局那一次 solve 的 3.2 倍(審查實測,不用置換表),所以 Boss 的開局只挑「不用置換表的參考解一局的 best_move 合計 ≤ 它在 minimax.perf 最慢局面用時的 1.4 倍」的。(3) linear conflict 是選做(heuristic 可以只回傳 manhattan),Boss 盤面挑 Manhattan A* 就解得出的(最短 32–42 步)。(4) 「展開的節點數」由驅動程式包裝 neighbors 計數;計數器在學生的程序裡,真正擋得住的是 CPU 時間(harness 量)與步數最短(worker 驗)。(5) 數獨也可以編成 SAT 用 F3 的 logic/dpll 解(選做,不算 consumes)。(6) 老師 2026-10-26 定案(README 待決 12 選 (b)):libds/heap 的 evidenceFor 加 t-graph,puzzle/astar 的 evidenceFor 只留 ai-classical;ai-classical 的先修是 t-graph,跨任務線用 libds/heap 的先修閉包檢查因此通過。"
   acceptance:
-    - {id: boss.solve-15, name: 十五數碼, consumes: [puzzle/astar], description: "A* 找出最短解,展開的節點數在門檻內(harness 計數)。"}
-    - {id: boss.sudoku, name: 數獨, consumes: [puzzle/csp], description: "隱藏數獨限時解完。"}
-    - {id: boss.no-lose, name: 不敗棋手, consumes: [puzzle/minimax], description: "對參考程式下棋不輸。"}
+    - id: boss.solve-15
+      name: 十五數碼
+      consumes: [puzzle/astar, puzzle/bfs]
+      description: "10 個隱藏的 15-puzzle 盤面(最短解 32–42 步)與 2 個無解盤面:回傳的步驟要合法、走得到目標而且步數最短;無解的回傳 None,而且不展開任何節點;每個盤面展開的節點數不超過 1.5×10^5(驅動程式數 neighbors 的呼叫次數)。"
+      perf: {statement: "每個盤面 12 秒、256 MB 內;展開 ≤ 1.5×10^5 個節點", seconds: 12, n: 150000, budget: {astar.perf: 6, bfs.perf: 3}, usage: {bfs.perf: 0.83}}
+    - id: boss.sudoku
+      name: 數獨
+      consumes: [puzzle/csp]
+      description: "20 題隱藏題(9×9 的極小題、反暴力題與它的變形〔重新編號、轉置、換列〕、6×6):唯一解的答案逐字正確;無解的回傳 None;count_sudoku 分得出 0、1、2 個解。"
+      perf: {statement: "每題 solve 2 秒內、count_sudoku 2 秒內", seconds: 2}
+    - id: boss.no-lose
+      name: 不敗棋手
+      consumes: [puzzle/minimax]
+      description: "五行四列(5 欄 × 4 列)的四子棋:20 個隱藏的開局(各已下 6 子),你先手、後手各一半,對手是完美玩家或隨機玩家。開局都用參考解挑過:雙方都下最佳著時,你這一方不會輸(分數 ≥ 0),計算量也挑過(不用置換表的參考解算得完)。你的每一步都要是最佳著(能贏就用最少步贏、和局不能輸;一樣好時取 moves 裡最前面的),所以一局都不會輸。"
+      perf: {statement: "每局你這一方全部的 best_move 合計 9 秒內", seconds: 9, n: 20, budget: {minimax.perf: 4.5}, usage: {minimax.perf: 1.4}}
   tasks:
-    - {id: puzzle/bfs, order: 1, name: 狀態空間 BFS, files: [puzzle/bfs.py], language: python, chapter: "30-graph-algorithms:本章 Lab:狀態空間 BFS puzzle/bfs.py", evidenceFor: [ai-classical], consumes: [libds/graph], groups: [], lab_no: L1, anchor: lab-puzzle-bfs, used_by: [puzzle/astar]}
-    - {id: puzzle/astar, order: 2, name: A* 搜尋, files: [puzzle/astar.py], language: python, chapter: "110-classical-ai:本章 Lab:A* 搜尋 puzzle/astar.py", evidenceFor: [ai-classical], consumes: [puzzle/bfs, libds/heap], groups: [], lab_no: L2, anchor: lab-puzzle-astar, used_by: [boss.solve-15]}
-    - {id: puzzle/csp, order: 3, name: CSP 回溯, files: [puzzle/csp.py], language: python, chapter: "110-classical-ai:本章 Lab:CSP 回溯 puzzle/csp.py", evidenceFor: [ai-classical], consumes: [], groups: [], lab_no: L3, anchor: lab-puzzle-csp, used_by: [boss.sudoku]}
-    - {id: puzzle/minimax, order: 4, name: minimax, files: [puzzle/minimax.py], language: python, chapter: "51-game-theory:本章 Lab:minimax puzzle/minimax.py", evidenceFor: [ai-classical], consumes: [], groups: [], lab_no: L4, anchor: lab-puzzle-minimax, used_by: [boss.no-lose]}
+    - id: puzzle/bfs
+      order: 1
+      name: 狀態空間 BFS
+      files: [puzzle/bfs.py]
+      language: python
+      chapter: "30-graph-algorithms:本章 Lab:狀態空間 BFS puzzle/bfs.py"
+      evidenceFor: [ai-classical]
+      consumes: [libds/graph]
+      lab_no: L1
+      anchor: lab-puzzle-bfs
+      also_chapters: [110-classical-ai]
+      used_by: [puzzle/astar]
+      interface:
+        - "class SlidingPuzzle(rows, cols)        # rows、cols 都要 ≥ 2,否則 ValueError;狀態是長度 rows*cols 的 tuple,0 是空格;self.goal = (1, 2, …, rows*cols-1, 0)"
+        - "neighbors(state) -> list[(move, state)]   # move 是「空格」移動的方向 'U'、'D'、'L'、'R',依這個順序;出界的不列"
+        - "apply(state, moves) -> state         # moves 是字串或列表;走不了的一步、不認得的字 → ValueError"
+        - "is_solvable(state) -> bool           # 用逆序數與空格所在的列判斷奇偶,不搜尋;state 不是 0..rows*cols-1 的排列 → ValueError"
+        - "bfs(start, is_goal, neighbors) -> list | None   # 隱式圖:鄰居現算,不先建圖;回傳最少步的 move 列表(start 就是目標 → []);走不到 → None"
+        - "state_graph(puzzle, start=None) -> Graph   # libds.graph 的無向 Graph:從 start(預設 goal)走得到的全部狀態;只給小盤面用(3×3 有 181,440 個狀態)"
+        - "distance_table(puzzle) -> dict       # 每個走得到 goal 的狀態 → 最少步數;必須用 state_graph 與你的 Graph.bfs"
+      require: [libds.graph]
+      note: "和書上範例不同:30-graph-algorithms 的 bfs(graph, start) 吃 dict 鄰接串列、回傳走訪順序;110-classical-ai 只描述 BFS。Lab 是隱式圖(neighbors 函式、目標用 is_goal 判斷)、回傳最短的 move 列表(要記 parent 還原路徑)、盤面可以是任何 rows×cols、要用逆序數判斷有沒有解;另外在小盤面上用你的 libds Graph 建出整個狀態空間。"
+      groups:
+        - {id: bfs.puzzle, name: 盤面與移動, kind: function, visibility: public, requiredBy: [astar.optimal, boss.solve-15], description: "SlidingPuzzle 的 goal、neighbors(順序 U、D、L、R,move 是空格移動的方向)與 apply 對公開範例(2×3、3×3、4×4)。"}
+        - {id: bfs.solve, name: 最少步數, kind: function, visibility: public, requiredBy: [astar.optimal], description: "bfs 回傳最少步的 move 列表(任何一條最短的都算,檢定會照著走一次確認到得了目標);start 就是目標回傳 []。"}
+        - {id: bfs.table, name: 整個狀態空間, kind: function, visibility: public, requiredBy: [astar.admissible], description: "2×3 盤面:state_graph 有 360 個狀態;distance_table 最遠 21 步,每個步數有幾個狀態對公開答案。"}
+        - {id: bfs.parity, name: 有沒有解, kind: function, visibility: public, requiredBy: [astar.unsolvable, boss.solve-15], description: "is_solvable 對公開範例(欄數是奇數與偶數的盤面各幾個)。"}
+        - {id: bfs.parity-all, name: 奇偶規則全對, kind: spec, visibility: hidden, requiredBy: [astar.unsolvable, boss.solve-15], description: "2×3、3×2、2×4 的每一個排列:is_solvable 和「從 goal 走不走得到」一致;隨機的 3×3、3×4、4×4 盤面對參考答案。"}
+        - {id: bfs.edge, name: 邊界, kind: edge, visibility: hidden, requiredBy: [astar.edge], description: "2×2 盤面;長方形盤面(2×4、4×2、3×4);無解的 2×3 盤面走完整個可達空間後回傳 None;不是滑塊的通用 bfs(例:整數狀態,鄰居是 x+1 與 2x)。"}
+        - {id: bfs.errors, name: 錯誤處理, kind: error, visibility: hidden, requiredBy: [astar.errors], description: "rows 或 cols 小於 2、apply 出界或不認得的字、is_solvable 收到不是排列的 state(數字重複、缺數字、長度不對),都要 ValueError。"}
+        - {id: bfs.implicit, name: 不先建圖, kind: spec, visibility: hidden, requiredBy: [boss.solve-15], description: "bfs 不能先建整張圖:4×4 盤面(10^13 個狀態)上最短 15 步以內的盤面要 1 秒內解出。"}
+        - {id: bfs.uses-graph, name: 用自己的圖, kind: spec, visibility: hidden, requiredBy: [astar.admissible], description: "state_graph 回傳 libds.graph 的 Graph(無向);distance_table 呼叫它的 bfs(檢定會檢查)。"}
+        - id: bfs.perf
+          name: 效能
+          kind: perf
+          visibility: hidden
+          description: "每個狀態只進佇列一次(visited 在入列時標記);建圖 O(狀態數＋邊數)。"
+          perf: {statement: "3×3 的 distance_table(全部 181,440 個狀態)3 秒內;3×3 最難的盤面(31 步)bfs 1 秒內;4×4 上 15 步的盤面 bfs 1 秒內", seconds: 3, n: 181440}
+          perf_ref: "distance_table 0.78 秒(建圖 0.57＋Graph.bfs 0.13,約 100 MB);31 步 bfs 0.22 秒;4×4 15 步 bfs 0.10 秒。distance_table 呼叫 neighbors 181,440 次;Boss 十五數碼每盤最多 1.5×10^5 次(0.83 倍),所以這裡的 3 秒也管住了 neighbors 的速度"
+          requiredBy: [astar.admissible, boss.solve-15]
+
+    - id: puzzle/astar
+      order: 2
+      name: A* 搜尋
+      files: [puzzle/astar.py]
+      language: python
+      chapter: "110-classical-ai:本章 Lab:A* 搜尋 puzzle/astar.py"
+      evidenceFor: [ai-classical]
+      consumes: [puzzle/bfs, libds/heap]
+      lab_no: L2
+      anchor: lab-puzzle-astar
+      also_chapters: [30-graph-algorithms]
+      used_by: [boss.solve-15]
+      interface:
+        - "manhattan(puzzle, state) -> int      # 每一塊(不算空格)到目標位置的列差＋行差;任何 rows×cols"
+        - "heuristic(puzzle, state) -> int      # solve 預設用的啟發式:不能比 manhattan 小、不能高估真實步數(可以直接回傳 manhattan;選做:加上線性衝突)"
+        - "astar(start, is_goal, neighbors, h, cost=None) -> list | None   # 通用 A*;neighbors 同 puzzle.bfs;cost(state, move, next_state) 預設 1,負的 → ValueError;回傳總代價最小的 move 列表;走不到 → None"
+        - "solve(puzzle, start, h=None) -> list | None   # 最短的 move 列表;無解(is_solvable 是 False)→ None,不展開任何節點;h 預設 heuristic;state 不合法 → ValueError"
+        - "規則:必須用 libds.heap 的 PriorityQueue;找到更短的路到還在佇列裡的狀態時呼叫 decrease_key;已經展開過的狀態找到更短的路時要重新放回佇列(啟發式不一致時才不會錯)"
+      require: [libds.heap, puzzle.bfs]
+      forbid: [heapq]
+      note: "和書上範例不同:110-classical-ai 的 astar_puzzle(start) 只解 3×3、目標寫死、用 heapq 重複 push 再跳過舊的、每個佇列元素存整條路徑、回傳狀態的路徑。Lab 是通用的 astar(可以有邊的代價)、必須用你的 PriorityQueue 與 decrease_key、要能重新打開已展開的狀態、回傳 move 列表、無解先用奇偶判斷、解 4×4,而且有展開節點數與 256 MB 的限制(每個佇列元素存整條路徑很浪費:實測 4×4 約 93–115 MB,用 parent 約 73–86 MB;Lab 規定用 parent 還原路徑)。選做:linear conflict(每一列、每一行裡已經在目標列／行的塊,用最長遞增子序列算出至少要離開幾塊,每塊加 2)。"
+      groups:
+        - {id: astar.manhattan, name: Manhattan 距離, kind: function, visibility: public, requiredBy: [astar.admissible, boss.solve-15], description: "manhattan 對公開範例(2×3、3×3、3×4、4×4 的盤面)。"}
+        - {id: astar.search, name: 通用 A*, kind: function, visibility: public, requiredBy: [astar.optimal], description: "astar 在公開的小加權圖上回傳總代價最小的 move 列表(cost 參數);h 恆為 0 時等於 Dijkstra。"}
+        - {id: astar.optimal, name: 最短解, kind: function, visibility: public, requiredBy: [boss.solve-15], description: "solve 對公開的 3×3 與 4×4 盤面:步驟合法、走得到目標、步數等於最短(任何一條最短的都算)。"}
+        - {id: astar.admissible, name: 啟發式不高估, kind: spec, visibility: public, requiredBy: [astar.optimal, boss.solve-15], description: "3×3 的每一個狀態:manhattan(s) ≤ heuristic(s) ≤ 真實步數(用你的 distance_table 當標準答案)。"}
+        - {id: astar.reopen, name: 重新打開, kind: edge, visibility: hidden, requiredBy: [boss.solve-15], description: "檢定自己的小加權圖(不是書上的例子):可採納但不一致的啟發式,已經展開過的狀態後來找到更短的路,要重新放回佇列,答案才會最短;h 恆為 0 也要對。"}
+        - {id: astar.edge, name: 邊界, kind: edge, visibility: hidden, requiredBy: [boss.solve-15], description: "start 就是目標回傳 [];有限的圖上走不到目標回傳 None;代價為 0 的邊;2×2、2×4、3×4 的盤面。"}
+        - {id: astar.unsolvable, name: 無解的盤面, kind: edge, visibility: hidden, requiredBy: [boss.solve-15], description: "3×3、2×4、4×4 的無解盤面:solve 回傳 None,而且一個節點都不展開(neighbors 被呼叫 0 次)。"}
+        - {id: astar.errors, name: 錯誤處理, kind: error, visibility: hidden, requiredBy: [boss.solve-15], description: "cost 回傳負數要 ValueError;solve 收到不合法的 state(長度不對、數字重複)要 ValueError。"}
+        - {id: astar.uses-heap, name: 用自己的優先佇列, kind: spec, visibility: hidden, requiredBy: [boss.solve-15], description: "必須用 libds.heap 的 PriorityQueue;找到更短的路到還在佇列裡的狀態時要呼叫 decrease_key(檢定會檢查呼叫的順序);不能用 heapq。"}
+        - {id: astar.nodes, name: 展開的節點數, kind: spec, visibility: hidden, requiredBy: [boss.solve-15], description: "驅動程式數 neighbors 的呼叫次數:3×3 最難的盤面(31 步)≤ 5×10^4;4×4 盤面(最短 32–42 步)≤ 1.5×10^5。h 恆為 0 或用「放錯位置的塊數」都會超過。"}
+        - id: astar.perf
+          name: 效能
+          kind: perf
+          visibility: hidden
+          description: "佇列操作 O(log n)。真正擋的是時間與 256 MB;每個狀態只存一份(用 parent 還原路徑)是建議,不另外檢查。"
+          perf: {statement: "4×4 盤面(最短 32–42 步)每個 6 秒、256 MB 內", seconds: 6, n: 150000, budget: {libds/heap.perf: 4.5}, usage: {libds/heap.perf: 1.45}}
+          perf_ref: "最慢 0.80 秒、約 100 MB(Manhattan,同 f 不排序;最壞的同 f 順序展開 9.9×10^4 個節點);linear conflict 最慢 0.27 秒;3×3 最難 0.06 秒。38 步盤面實測 158,674 次 push、83,147 次 pop、1,659 次 decrease_key(約 2.4×10^5 次);照展開上限 1.5×10^5 推算約 4.3×10^5 次,是 heap.perf 的 1.45 倍"
+          requiredBy: [boss.solve-15]
+
+    - id: puzzle/csp
+      order: 3
+      name: CSP 回溯
+      files: [puzzle/csp.py]
+      language: python
+      chapter: "110-classical-ai:本章 Lab:CSP 回溯 puzzle/csp.py"
+      evidenceFor: [ai-classical]
+      consumes: []
+      lab_no: L3
+      anchor: lab-puzzle-csp
+      also_chapters: [33-np-completeness]
+      used_by: [boss.sudoku]
+      interface:
+        - "class CSP(variables, domains)        # domains:dict 變數 → 可迭代的值;變數重複 → ValueError;缺某個變數的定義域 → KeyError"
+        - "add_constraint(x, y, ok) -> None     # 二元約束:ok(x 的值, y 的值) -> bool;x 或 y 不是變數 → KeyError;x == y → ValueError"
+        - "add_alldiff(variables) -> None       # 兩兩不同"
+        - "solve() -> dict | None               # 回溯＋MRV(依「目前」剩下的值選變數)＋前向檢查;無解 → None;不改 CSP 本身(可以重複呼叫)"
+        - "count_solutions(limit=2) -> int      # 數到 limit 個就停,回傳 min(解的個數, limit)"
+        - "solve_sudoku(grid, box=(3, 3)) -> str | None   # n = box[0]*box[1](最大 9)、grid 是 n*n 個字元的字串:'1'…'n' 是提示,'.' 或 '0' 是空格;回傳填好的字串;無解(含提示互相衝突)→ None;長度、字元或 box 不對 → ValueError"
+        - "count_sudoku(grid, box=(3, 3), limit=2) -> int"
+      note: "和書上範例不同:110-classical-ai 的 backtrack(assignment, variables, domains, graph) 只有「相鄰不同色」一種約束(鄰居圖)、MRV 看的是不會變的原始定義域、沒有前向檢查,範例是地圖著色。Lab 是 CSP 類別、可以加任意二元約束(ok 函式)、MRV 依目前的定義域、要做前向檢查、能數解的個數,並把 4×4、6×6、9×9 數獨編成 CSP。選做:把數獨編成 CNF,用 F3 的 logic/dpll 解(不計分)。"
+      groups:
+        - {id: csp.basic, name: 一般的 CSP, kind: function, visibility: public, requiredBy: [boss.sudoku], description: "公開範例:地圖著色與 8 皇后(add_constraint 的自訂約束)、三角形只給兩色(add_alldiff,回傳 None);回傳的指派滿足每一條約束(檢定逐條檢查)。"}
+        - {id: csp.sudoku, name: 數獨, kind: function, visibility: public, requiredBy: [boss.sudoku], description: "solve_sudoku 對公開的 4×4、6×6(box=(2, 3))、9×9 題,答案逐字比對(唯一解)。"}
+        - {id: csp.count, name: 數解, kind: function, visibility: public, requiredBy: [boss.sudoku], description: "count_solutions 與 count_sudoku 數到 limit 就停:無解 0、唯一解 1、多解回傳 limit(公開範例:4×4 的空盤面有 288 個解)。"}
+        - {id: csp.edge, name: 邊界, kind: edge, visibility: hidden, requiredBy: [boss.sudoku], description: "已經填滿的盤面;只差一格;全空的 9×9(任何合法解都算);提示互相衝突(要很快回傳 None);只有一個值的定義域、空的定義域、沒有任何約束的變數;solve 重複呼叫結果一樣。"}
+        - {id: csp.errors, name: 錯誤處理, kind: error, visibility: hidden, requiredBy: [boss.sudoku], description: "盤面長度或字元不對、數字超過 n、box 的乘積超過 9 要 ValueError;add_constraint 的變數不存在要 KeyError、x == y 要 ValueError;變數重複要 ValueError。"}
+        - {id: csp.mrv, name: 先選最難的變數, kind: spec, visibility: hidden, requiredBy: [boss.sudoku], description: "40 個自由變數(定義域 {1,2,3},沒有約束)後面接 W{3} 與 X、Y、Z{1,2,3},四個兩兩不同:要 0.5 秒內回傳 None。只看一開始定義域的 MRV 會先填 W,再照順序填 40 個自由變數,要試約 3^40 次;依目前的定義域選變數(加前向檢查)只要試 5 個值。"}
+        - id: csp.perf
+          name: 效能
+          kind: perf
+          visibility: hidden
+          description: "MRV＋前向檢查:反暴力數獨(照順序硬試的回溯要 45 秒)與它的變形都要很快。"
+          perf: {statement: "反暴力數獨與它的變形:每題 solve 2 秒內、count_sudoku 2 秒內;30 皇后 1 秒內", seconds: 2}
+          perf_ref: "solve 最慢 0.34 秒、count_sudoku 最慢 0.64 秒(原題;12 個變形 0.04–0.51 秒);30 皇后 0.002 秒;照順序硬試的回溯 45.7 秒(6.9×10^7 個節點)"
+          requiredBy: [boss.sudoku]
+
+    - id: puzzle/minimax
+      order: 4
+      name: minimax
+      files: [puzzle/minimax.py]
+      language: python
+      chapter: "51-game-theory:本章 Lab:minimax puzzle/minimax.py"
+      evidenceFor: [ai-classical]
+      consumes: []
+      lab_no: L4
+      anchor: lab-puzzle-minimax
+      also_chapters: [110-classical-ai]
+      used_by: [boss.no-lose]
+      interface:
+        - "遊戲介面(game 物件):initial() -> state;to_move(state) -> 0 | 1;moves(state) -> list(搜尋就照這個順序;遊戲結束是 []);play(state, move) -> state(不合法 → ValueError);score(state) -> int | None(沒結束是 None;結束時是「輪到的那一方」的分數)"
+        - "class ConnectFour(cols=5, rows=4, k=4)   # 有重力的連 k 子;cols、rows ≥ 1,2 ≤ k ≤ max(cols, rows),否則 ValueError;move 是欄號 0..cols-1;state 要能當 dict 的鍵"
+        - "ConnectFour.moves(state)             # 沒滿的欄,由中間往兩邊、一樣近時左邊先(5 欄:[2, 1, 3, 0, 4])"
+        - "ConnectFour.score(state)             # 有人連成 k 子:-(空格數＋1)(剛下的人贏、輪到的人輸);下滿沒人贏:0;否則 None"
+        - "solve(game, state) -> int            # 輪到的一方在雙方都最佳時的分數(negamax＋alpha-beta);越快贏分數越高、越慢輸分數越高(負得越少)"
+        - "best_move(game, state)               # 分數等於 solve 的一步;一樣好時取 moves(state) 裡最前面的;遊戲已結束 → ValueError"
+      note: "和書上範例不同:51-game-theory 的 minimax(b, player) 只會下井字棋、X 取最大 O 取最小、分數只有 ±1 與 0;110-classical-ai 的 minimax 用 children_fn／eval_fn／terminal_fn 加深度限制。Lab 是任何遊戲都能用的遊戲介面、negamax(分數一律從輪到的一方看)、越快贏分數越高、有重力的四子棋、搜尋順序由遊戲決定、best_move 的同分規則,而且檢定會數葉子確認你真的有剪枝。選做:記憶(置換表),注意 alpha-beta 剪過的值只是上界或下界。請 9Jang lab:verify 留一份不用置換表的參考解:minimax.perf 的隱藏局面與 Boss 的開局,只挑它在時限 1/3 內(1 秒)解得完的;Boss 的開局另外要用參考解確認你這一方的分數 ≥ 0(先手的開局分數 ≥ 0、後手的開局分數 ≤ 0)。書端實測 30 個隨機的 6 子開局,25 個先手不會輸、19 個後手不會輸,挑得出來。"
+      groups:
+        - {id: minimax.game, name: 四子棋規則, kind: function, visibility: public, requiredBy: [boss.no-lose], description: "ConnectFour:moves 的順序(由中間往兩邊)、play 疊在欄上、橫直斜連成 k 子、score 的分數(-(空格數＋1)／0／None)、to_move 輪流。"}
+        - {id: minimax.value, name: 局面的分數, kind: function, visibility: public, requiredBy: [boss.no-lose], description: "solve 對公開局面:書上那棵小賽局樹(包成遊戲介面)、ConnectFour(4, 4) 的殘局;越快贏分數越高。"}
+        - {id: minimax.best, name: 最佳著, kind: function, visibility: public, requiredBy: [boss.no-lose], description: "best_move 的分數等於 solve;一樣好時取 moves 裡最前面的;一步就能贏時直接贏,對手下一步要贏時要擋。"}
+        - {id: minimax.prune, name: 真的有剪枝, kind: spec, visibility: hidden, requiredBy: [minimax.perf, boss.no-lose], description: "在檢定自己的賽局樹上,solve 看過的葉子(不重複計算)不能比參考的 alpha-beta(照 moves 的順序)多;沒剪枝的 minimax 會超過。剪枝條件是 α ≥ β;不要在展開前先呼叫子節點的 score(例如先掃一遍找一步就贏),看過的葉子會變多。"}
+        - {id: minimax.edge, name: 邊界, kind: edge, visibility: hidden, requiredBy: [boss.no-lose], description: "只剩一步;下滿和局;同時有贏的著法和要擋的著法;k=3 的小盤面、只有 1 欄的盤面;換成檢定自己的遊戲(取石子、賽局樹)也要對(只能透過遊戲介面)。"}
+        - {id: minimax.errors, name: 錯誤處理, kind: error, visibility: hidden, requiredBy: [boss.no-lose], description: "下在滿的欄、欄號超出範圍、遊戲結束之後還下、ConnectFour 的尺寸不合法、遊戲結束時呼叫 best_move,都要 ValueError。"}
+        - id: minimax.perf
+          name: 效能
+          kind: perf
+          visibility: hidden
+          description: "alpha-beta 加上好的搜尋順序;沒剪枝的 minimax 做不到。"
+          perf: {statement: "5×4 盤面的 10 個局面(已下 6 子):每個 solve 3 秒內", seconds: 3, n: 10}
+          perf_ref: "最慢 0.62 秒(alpha-beta＋置換表,由中間往兩邊);不用置換表:書端參考解 30 個隨機開局最慢 1.0 秒,審查實測有一個開局要 2.31 秒;沒剪枝的 minimax 超過 30 秒;Boss 一局你這一方合計最慢 1.04 秒(置換表)／1.14 秒(不用置換表),約是開局 solve 的 1.1–1.4 倍"
+          requiredBy: [boss.no-lose]
 
 - id: emu
   code: E1

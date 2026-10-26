@@ -314,7 +314,8 @@ description: AI 工程師路線的閱讀順序:13 個技能節點依先修排序
       <p class="route-note">這條主線的任務目標(測試組)還在設計;零件、章與誰接著用已經定了。</p>
       <h3 id="mainline-puzzle">A3 解謎 AI</h3>
       <p class="route-prereq">任務線 <code>puzzle</code> · 程度:高中<br>技能樹專題:🏆 解謎 AI(八數碼/數獨/迷宮)</p>
-      <p>狀態空間搜尋、A*、CSP 回溯與 minimax,解十五數碼、數獨與小棋類。搜尋直接用 libds 的圖與優先佇列。</p>
+      <p>狀態空間搜尋、A*、CSP 回溯與 alpha-beta,解十五數碼、數獨與五行四列的四子棋。滑塊盤面與 BFS 先在小盤面上用你的 libds 圖建出整個狀態空間;A* 用你自己的優先佇列與 decrease_key。介面刻意和書上的範例不同:可以參考書,但要自己改寫。</p>
+      <p class="route-note">書端決定(2026-10-26):(1) BFS 本身是隱式圖(鄰居現算,用 collections.deque),libds/graph 用在 state_graph／distance_table:小盤面建出整個狀態空間、用 Graph.bfs 算出每個狀態的真實步數,A* 的可採納性檢查拿它當標準答案。(2) 效能預算由上往下推,而且要留餘裕(每個零件剛好卡在自己的門檻時,Boss 照樣要過):十五數碼每盤 12 秒。astar.perf 量的是同一種盤面(用量 1 倍),定 6 秒,剛好卡門檻時佔 Boss 的一半(boss.solve-15 的 perf.budget);bfs.perf 的 distance_table 呼叫 neighbors 181,440 次,Boss 每盤最多 1.5×10<sup>5</sup> 次(用量 0.83 倍),另外分 3 秒給它是保守的寫法(neighbors 的時間其實已經算在 A* 裡);參考解最慢 0.80 秒。最難的 4×4 盤面(展開上限 1.5×10<sup>5</sup> 個節點)約做 4.3×10<sup>5</sup> 次堆積操作,是 libds heap.perf(3×10<sup>5</sup> 次、3 秒)的 1.45 倍;堆積剛好卡 3 秒時佔 4.35 秒,在 A* 的 6 秒裡分給它 4.5 秒(astar.perf 的 perf.budget 與 perf.usage)。heap.perf 不能再緊(CPython 參考解 0.90 秒,要留 1/3)。graph.perf 只用在 3×3 的 distance_table,所以 requiredBy 指到 bfs.perf。不敗棋手每局 9 秒:minimax.perf 3 秒 × 用量 1.4 = 4.2 秒,不超過 9 秒的一半(寫在 boss.no-lose 的 perf.budget 與 perf.usage)。用量 1.4 由選局保證:隨機開局裡,一局你這一方全部的 best_move 合計可以到開局那一次 solve 的 3.2 倍(審查實測,不用置換表),所以 Boss 的開局只挑「不用置換表的參考解一局的 best_move 合計 ≤ 它在 minimax.perf 最慢局面用時的 1.4 倍」的。(3) linear conflict 是選做(heuristic 可以只回傳 manhattan),Boss 盤面挑 Manhattan A* 就解得出的(最短 32–42 步)。(4) 「展開的節點數」由驅動程式包裝 neighbors 計數;計數器在學生的程序裡,真正擋得住的是 CPU 時間(harness 量)與步數最短(worker 驗)。(5) 數獨也可以編成 SAT 用 F3 的 logic/dpll 解(選做,不算 consumes)。(6) 老師 2026-10-26 定案(README 待決 12 選 (b)):libds/heap 的 evidenceFor 加 t-graph,puzzle/astar 的 evidenceFor 只留 ai-classical;ai-classical 的先修是 t-graph,跨任務線用 libds/heap 的先修閉包檢查因此通過。</p>
       <div class="callout note">
         <div class="ico">🧭</div>
         <div class="body">
@@ -329,18 +330,64 @@ description: AI 工程師路線的閱讀順序:13 個技能節點依先修排序
       </div>
       <p><strong>Boss 戰</strong>(最後專題的驗收):</p>
       <ul>
-        <li data-acceptance="boss.solve-15">⚔️ <strong>十五數碼</strong>〔隱藏檢定〕A* 找出最短解,展開的節點數在門檻內(harness 計數)。<span class="route-note">用到:任務「A* 搜尋」</span></li>
-        <li data-acceptance="boss.sudoku">⚔️ <strong>數獨</strong>〔隱藏檢定〕隱藏數獨限時解完。<span class="route-note">用到:任務「CSP 回溯」</span></li>
-        <li data-acceptance="boss.no-lose">⚔️ <strong>不敗棋手</strong>〔隱藏檢定〕對參考程式下棋不輸。<span class="route-note">用到:任務「minimax」</span></li>
+        <li data-acceptance="boss.solve-15">⚔️ <strong>十五數碼</strong>〔隱藏檢定〕10 個隱藏的 15-puzzle 盤面(最短解 32–42 步)與 2 個無解盤面:回傳的步驟要合法、走得到目標而且步數最短;無解的回傳 None,而且不展開任何節點;每個盤面展開的節點數不超過 1.5×10<sup>5</sup>(驅動程式數 neighbors 的呼叫次數)。(效能:每個盤面 12 秒、256 MB 內;展開 ≤ 1.5×10<sup>5</sup> 個節點)<span class="route-note">用到:任務「A* 搜尋」、任務「狀態空間 BFS」</span></li>
+        <li data-acceptance="boss.sudoku">⚔️ <strong>數獨</strong>〔隱藏檢定〕20 題隱藏題(9×9 的極小題、反暴力題與它的變形〔重新編號、轉置、換列〕、6×6):唯一解的答案逐字正確;無解的回傳 None;count_sudoku 分得出 0、1、2 個解。(效能:每題 solve 2 秒內、count_sudoku 2 秒內)<span class="route-note">用到:任務「CSP 回溯」</span></li>
+        <li data-acceptance="boss.no-lose">⚔️ <strong>不敗棋手</strong>〔隱藏檢定〕五行四列(5 欄 × 4 列)的四子棋:20 個隱藏的開局(各已下 6 子),你先手、後手各一半,對手是完美玩家或隨機玩家。開局都用參考解挑過:雙方都下最佳著時,你這一方不會輸(分數 ≥ 0),計算量也挑過(不用置換表的參考解算得完)。你的每一步都要是最佳著(能贏就用最少步贏、和局不能輸;一樣好時取 moves 裡最前面的),所以一局都不會輸。(效能:每局你這一方全部的 best_move 合計 9 秒內)<span class="route-note">用到:任務「minimax」</span></li>
       </ul>
       <p><strong>零件(任務)</strong>,照 Lab 順序:</p>
       <ol>
-        <li data-task="puzzle/bfs"><strong>任務「狀態空間 BFS」</strong>(L1) <code>puzzle/bfs</code> · <code>~/零件庫/puzzle/bfs.py</code><br>在<a href="30-graph-algorithms.html">{{ch:30-graph-algorithms}} 圖演算法</a>的 Lab<br>先做:<a href="#mainline-libds">libds「libds:自己的資料結構庫」</a>的任務「圖與最短路徑」<br>之後會用在:任務「A* 搜尋」<br><span class="route-note">任務目標設計中。</span></li>
-        <li data-task="puzzle/astar"><strong>任務「A* 搜尋」</strong>(L2) <code>puzzle/astar</code> · <code>~/零件庫/puzzle/astar.py</code><br>在<a href="110-classical-ai.html">{{ch:110-classical-ai}} 傳統/符號 AI:搜尋、CSP、規劃與知識表示</a>的 Lab<br>先做:任務「狀態空間 BFS」、<a href="#mainline-libds">libds「libds:自己的資料結構庫」</a>的任務「優先佇列」<br>之後會用在:Boss「十五數碼」<br><span class="route-note">任務目標設計中。</span></li>
-        <li data-task="puzzle/csp"><strong>任務「CSP 回溯」</strong>(L3) <code>puzzle/csp</code> · <code>~/零件庫/puzzle/csp.py</code><br>在<a href="110-classical-ai.html">{{ch:110-classical-ai}} 傳統/符號 AI:搜尋、CSP、規劃與知識表示</a>的 Lab<br>之後會用在:Boss「數獨」<br><span class="route-note">任務目標設計中。</span></li>
-        <li data-task="puzzle/minimax"><strong>任務「minimax」</strong>(L4) <code>puzzle/minimax</code> · <code>~/零件庫/puzzle/minimax.py</code><br>在<a href="51-game-theory.html">{{ch:51-game-theory}} 演算法賽局理論</a>的 Lab<br>之後會用在:Boss「不敗棋手」<br><span class="route-note">任務目標設計中。</span></li>
+        <li data-task="puzzle/bfs"><strong>任務「狀態空間 BFS」</strong>(L1) <code>puzzle/bfs</code> · <code>~/零件庫/puzzle/bfs.py</code><br>在<a href="30-graph-algorithms.html#lab-puzzle-bfs">{{ch:30-graph-algorithms}} 圖演算法</a>的 Lab<br>先做:<a href="#mainline-libds">libds「libds:自己的資料結構庫」</a>的任務「圖與最短路徑」<br>之後會用在:任務「A* 搜尋」
+          <ul class="lab-goals">
+            <li data-group="bfs.puzzle">☐ <strong>盤面與移動</strong>〔公開〕SlidingPuzzle 的 goal、neighbors(順序 U、D、L、R,move 是空格移動的方向)與 apply 對公開範例(2×3、3×3、4×4)。(← 任務「A* 搜尋」的任務目標「最短解」、Boss「十五數碼」)</li>
+            <li data-group="bfs.solve">☐ <strong>最少步數</strong>〔公開〕bfs 回傳最少步的 move 列表(任何一條最短的都算,檢定會照著走一次確認到得了目標);start 就是目標回傳 []。(← 任務「A* 搜尋」的任務目標「最短解」)</li>
+            <li data-group="bfs.table">☐ <strong>整個狀態空間</strong>〔公開〕2×3 盤面:state_graph 有 360 個狀態;distance_table 最遠 21 步,每個步數有幾個狀態對公開答案。(← 任務「A* 搜尋」的任務目標「啟發式不高估」)</li>
+            <li data-group="bfs.parity">☐ <strong>有沒有解</strong>〔公開〕is_solvable 對公開範例(欄數是奇數與偶數的盤面各幾個)。(← 任務「A* 搜尋」的任務目標「無解的盤面」、Boss「十五數碼」)</li>
+            <li data-group="bfs.parity-all">☐ <strong>奇偶規則全對</strong>〔隱藏檢定〕2×3、3×2、2×4 的每一個排列:is_solvable 和「從 goal 走不走得到」一致;隨機的 3×3、3×4、4×4 盤面對參考答案。(← 任務「A* 搜尋」的任務目標「無解的盤面」、Boss「十五數碼」)</li>
+            <li data-group="bfs.edge">☐ <strong>邊界</strong>〔隱藏檢定〕2×2 盤面;長方形盤面(2×4、4×2、3×4);無解的 2×3 盤面走完整個可達空間後回傳 None;不是滑塊的通用 bfs(例:整數狀態,鄰居是 x+1 與 2x)。(← 任務「A* 搜尋」的任務目標「邊界」)</li>
+            <li data-group="bfs.errors">☐ <strong>錯誤處理</strong>〔隱藏檢定〕rows 或 cols 小於 2、apply 出界或不認得的字、is_solvable 收到不是排列的 state(數字重複、缺數字、長度不對),都要 ValueError。(← 任務「A* 搜尋」的任務目標「錯誤處理」)</li>
+            <li data-group="bfs.implicit">☐ <strong>不先建圖</strong>〔隱藏檢定〕bfs 不能先建整張圖:4×4 盤面(10<sup>13</sup> 個狀態)上最短 15 步以內的盤面要 1 秒內解出。(← Boss「十五數碼」)</li>
+            <li data-group="bfs.uses-graph">☐ <strong>用自己的圖</strong>〔隱藏檢定〕state_graph 回傳 libds.graph 的 Graph(無向);distance_table 呼叫它的 bfs(檢定會檢查)。(← 任務「A* 搜尋」的任務目標「啟發式不高估」)</li>
+            <li data-group="bfs.perf">☐ <strong>效能</strong>〔隱藏檢定〕每個狀態只進佇列一次(visited 在入列時標記);建圖 O(狀態數＋邊數)。(效能:3×3 的 distance_table(全部 181,440 個狀態)3 秒內;3×3 最難的盤面(31 步)bfs 1 秒內;4×4 上 15 步的盤面 bfs 1 秒內 ← 來自 任務「A* 搜尋」的任務目標「啟發式不高估」、Boss「十五數碼」)</li>
+          </ul>
+        </li>
+        <li data-task="puzzle/astar"><strong>任務「A* 搜尋」</strong>(L2) <code>puzzle/astar</code> · <code>~/零件庫/puzzle/astar.py</code><br>在<a href="110-classical-ai.html#lab-puzzle-astar">{{ch:110-classical-ai}} 傳統/符號 AI:搜尋、CSP、規劃與知識表示</a>的 Lab<br>先做:任務「狀態空間 BFS」、<a href="#mainline-libds">libds「libds:自己的資料結構庫」</a>的任務「優先佇列」<br>之後會用在:Boss「十五數碼」
+          <ul class="lab-goals">
+            <li data-group="astar.manhattan">☐ <strong>Manhattan 距離</strong>〔公開〕manhattan 對公開範例(2×3、3×3、3×4、4×4 的盤面)。(← 任務「A* 搜尋」的任務目標「啟發式不高估」、Boss「十五數碼」)</li>
+            <li data-group="astar.search">☐ <strong>通用 A*</strong>〔公開〕astar 在公開的小加權圖上回傳總代價最小的 move 列表(cost 參數);h 恆為 0 時等於 Dijkstra。(← 任務「A* 搜尋」的任務目標「最短解」)</li>
+            <li data-group="astar.optimal">☐ <strong>最短解</strong>〔公開〕solve 對公開的 3×3 與 4×4 盤面:步驟合法、走得到目標、步數等於最短(任何一條最短的都算)。(← Boss「十五數碼」)</li>
+            <li data-group="astar.admissible">☐ <strong>啟發式不高估</strong>〔公開〕3×3 的每一個狀態:manhattan(s) ≤ heuristic(s) ≤ 真實步數(用你的 distance_table 當標準答案)。(← 任務「A* 搜尋」的任務目標「最短解」、Boss「十五數碼」)</li>
+            <li data-group="astar.reopen">☐ <strong>重新打開</strong>〔隱藏檢定〕檢定自己的小加權圖(不是書上的例子):可採納但不一致的啟發式,已經展開過的狀態後來找到更短的路,要重新放回佇列,答案才會最短;h 恆為 0 也要對。(← Boss「十五數碼」)</li>
+            <li data-group="astar.edge">☐ <strong>邊界</strong>〔隱藏檢定〕start 就是目標回傳 [];有限的圖上走不到目標回傳 None;代價為 0 的邊;2×2、2×4、3×4 的盤面。(← Boss「十五數碼」)</li>
+            <li data-group="astar.unsolvable">☐ <strong>無解的盤面</strong>〔隱藏檢定〕3×3、2×4、4×4 的無解盤面:solve 回傳 None,而且一個節點都不展開(neighbors 被呼叫 0 次)。(← Boss「十五數碼」)</li>
+            <li data-group="astar.errors">☐ <strong>錯誤處理</strong>〔隱藏檢定〕cost 回傳負數要 ValueError;solve 收到不合法的 state(長度不對、數字重複)要 ValueError。(← Boss「十五數碼」)</li>
+            <li data-group="astar.uses-heap">☐ <strong>用自己的優先佇列</strong>〔隱藏檢定〕必須用 libds.heap 的 PriorityQueue;找到更短的路到還在佇列裡的狀態時要呼叫 decrease_key(檢定會檢查呼叫的順序);不能用 heapq。(← Boss「十五數碼」)</li>
+            <li data-group="astar.nodes">☐ <strong>展開的節點數</strong>〔隱藏檢定〕驅動程式數 neighbors 的呼叫次數:3×3 最難的盤面(31 步)≤ 5×10<sup>4</sup>;4×4 盤面(最短 32–42 步)≤ 1.5×10<sup>5</sup>。h 恆為 0 或用「放錯位置的塊數」都會超過。(← Boss「十五數碼」)</li>
+            <li data-group="astar.perf">☐ <strong>效能</strong>〔隱藏檢定〕佇列操作 O(log n)。真正擋的是時間與 256 MB;每個狀態只存一份(用 parent 還原路徑)是建議,不另外檢查。(效能:4×4 盤面(最短 32–42 步)每個 6 秒、256 MB 內 ← 來自 Boss「十五數碼」)</li>
+          </ul>
+        </li>
+        <li data-task="puzzle/csp"><strong>任務「CSP 回溯」</strong>(L3) <code>puzzle/csp</code> · <code>~/零件庫/puzzle/csp.py</code><br>在<a href="110-classical-ai.html#lab-puzzle-csp">{{ch:110-classical-ai}} 傳統/符號 AI:搜尋、CSP、規劃與知識表示</a>的 Lab<br>之後會用在:Boss「數獨」
+          <ul class="lab-goals">
+            <li data-group="csp.basic">☐ <strong>一般的 CSP</strong>〔公開〕公開範例:地圖著色與 8 皇后(add_constraint 的自訂約束)、三角形只給兩色(add_alldiff,回傳 None);回傳的指派滿足每一條約束(檢定逐條檢查)。(← Boss「數獨」)</li>
+            <li data-group="csp.sudoku">☐ <strong>數獨</strong>〔公開〕solve_sudoku 對公開的 4×4、6×6(box=(2, 3))、9×9 題,答案逐字比對(唯一解)。(← Boss「數獨」)</li>
+            <li data-group="csp.count">☐ <strong>數解</strong>〔公開〕count_solutions 與 count_sudoku 數到 limit 就停:無解 0、唯一解 1、多解回傳 limit(公開範例:4×4 的空盤面有 288 個解)。(← Boss「數獨」)</li>
+            <li data-group="csp.edge">☐ <strong>邊界</strong>〔隱藏檢定〕已經填滿的盤面;只差一格;全空的 9×9(任何合法解都算);提示互相衝突(要很快回傳 None);只有一個值的定義域、空的定義域、沒有任何約束的變數;solve 重複呼叫結果一樣。(← Boss「數獨」)</li>
+            <li data-group="csp.errors">☐ <strong>錯誤處理</strong>〔隱藏檢定〕盤面長度或字元不對、數字超過 n、box 的乘積超過 9 要 ValueError;add_constraint 的變數不存在要 KeyError、x == y 要 ValueError;變數重複要 ValueError。(← Boss「數獨」)</li>
+            <li data-group="csp.mrv">☐ <strong>先選最難的變數</strong>〔隱藏檢定〕40 個自由變數(定義域 {1,2,3},沒有約束)後面接 W{3} 與 X、Y、Z{1,2,3},四個兩兩不同:要 0.5 秒內回傳 None。只看一開始定義域的 MRV 會先填 W,再照順序填 40 個自由變數,要試約 3<sup>40</sup> 次;依目前的定義域選變數(加前向檢查)只要試 5 個值。(← Boss「數獨」)</li>
+            <li data-group="csp.perf">☐ <strong>效能</strong>〔隱藏檢定〕MRV＋前向檢查:反暴力數獨(照順序硬試的回溯要 45 秒)與它的變形都要很快。(效能:反暴力數獨與它的變形:每題 solve 2 秒內、count_sudoku 2 秒內;30 皇后 1 秒內 ← 來自 Boss「數獨」)</li>
+          </ul>
+        </li>
+        <li data-task="puzzle/minimax"><strong>任務「minimax」</strong>(L4) <code>puzzle/minimax</code> · <code>~/零件庫/puzzle/minimax.py</code><br>在<a href="51-game-theory.html#lab-puzzle-minimax">{{ch:51-game-theory}} 演算法賽局理論</a>的 Lab<br>之後會用在:Boss「不敗棋手」
+          <ul class="lab-goals">
+            <li data-group="minimax.game">☐ <strong>四子棋規則</strong>〔公開〕ConnectFour:moves 的順序(由中間往兩邊)、play 疊在欄上、橫直斜連成 k 子、score 的分數(-(空格數＋1)／0／None)、to_move 輪流。(← Boss「不敗棋手」)</li>
+            <li data-group="minimax.value">☐ <strong>局面的分數</strong>〔公開〕solve 對公開局面:書上那棵小賽局樹(包成遊戲介面)、ConnectFour(4, 4) 的殘局;越快贏分數越高。(← Boss「不敗棋手」)</li>
+            <li data-group="minimax.best">☐ <strong>最佳著</strong>〔公開〕best_move 的分數等於 solve;一樣好時取 moves 裡最前面的;一步就能贏時直接贏,對手下一步要贏時要擋。(← Boss「不敗棋手」)</li>
+            <li data-group="minimax.prune">☐ <strong>真的有剪枝</strong>〔隱藏檢定〕在檢定自己的賽局樹上,solve 看過的葉子(不重複計算)不能比參考的 alpha-beta(照 moves 的順序)多;沒剪枝的 minimax 會超過。剪枝條件是 α ≥ β;不要在展開前先呼叫子節點的 score(例如先掃一遍找一步就贏),看過的葉子會變多。(← 任務「minimax」的任務目標「效能」、Boss「不敗棋手」)</li>
+            <li data-group="minimax.edge">☐ <strong>邊界</strong>〔隱藏檢定〕只剩一步;下滿和局;同時有贏的著法和要擋的著法;k=3 的小盤面、只有 1 欄的盤面;換成檢定自己的遊戲(取石子、賽局樹)也要對(只能透過遊戲介面)。(← Boss「不敗棋手」)</li>
+            <li data-group="minimax.errors">☐ <strong>錯誤處理</strong>〔隱藏檢定〕下在滿的欄、欄號超出範圍、遊戲結束之後還下、ConnectFour 的尺寸不合法、遊戲結束時呼叫 best_move,都要 ValueError。(← Boss「不敗棋手」)</li>
+            <li data-group="minimax.perf">☐ <strong>效能</strong>〔隱藏檢定〕alpha-beta 加上好的搜尋順序;沒剪枝的 minimax 做不到。(效能:5×4 盤面的 10 個局面(已下 6 子):每個 solve 3 秒內 ← 來自 Boss「不敗棋手」)</li>
+          </ul>
+        </li>
       </ol>
-      <p class="route-note">這條主線的任務目標(測試組)還在設計;零件、章與誰接著用已經定了。</p>
       <h3 id="mainline-libds">T2 libds:自己的資料結構庫</h3>
       <p class="route-prereq">任務線 <code>libds</code> · 程度:高中→大學<br>技能樹專題:🏆 演算法面試 Boss(TOI/大廠面試等級)<br>主線在<a href="route-trunk.html#mainline-libds">🌳 共用主幹</a>路線,完整的任務目標在那一頁</p>
       <p>一個會長大的 Python 資料結構庫(樹狀陣列與線段樹用 C++)。介面刻意和書上的範例不同:可以參考書,但要自己改寫。後面的圖演算法、解謎 AI、搜尋引擎與借書 API 的快取,都直接 import 你自己的版本。</p>
