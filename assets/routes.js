@@ -178,8 +178,10 @@ window.BOOK_ROUTES = [
     "guide": "route-ic-design",
     "pages": [],
     "chapters": [
+      "136-verilog",
       "20-combinational-sequential",
       "47-digital-circuits",
+      "137-verification-cocotb",
       "107-floating-point",
       "21-cpu-machine-language",
       "48-computer-architecture"
