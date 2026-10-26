@@ -38,7 +38,6 @@ date: 2026-10-25
 
 planned_chapters:
   131-security-law-ethics: {gap: G55, title: 動手之前:資安的法律與倫理}
-  135-riscv-assembly: {gap: G32, title: RV32I 組合語言}
   136-verilog: {gap: G34, title: Verilog}
   137-verification-cocotb: {gap: G35, title: cocotb 驗證}
 
@@ -494,7 +493,7 @@ mainlines:
       consumes: [hack/gates]
       lab_no: L2
       anchor: lab-hack-alu
-      used_by: [hack/memory, hack/cpu, rtl/alu]
+      used_by: [hack/memory, hack/cpu]
       groups:
         - {id: alu.public, name: 公開向量, kind: function, visibility: public, requiredBy: [boss.hidden-programs], description: "test 跑 HalfAdder、FullAdder、Add16、Inc16、ALU 的前 16 列。"}
         - {id: alu.flags, name: 控制位元與旗標, kind: edge, visibility: hidden, requiredBy: [boss.hidden-programs], description: "ALU 的 18 種控制位元組合 × 邊界值(0、1、-1、0x7FFF、0x8000)的 out、zr、ng;加法溢位要照二補數繞回。"}
@@ -1092,6 +1091,7 @@ mainlines:
     - {id: logic/regex, order: 4, name: 正規表示式引擎, files: [logic/regex.py], language: python, chapter: "49-theory-of-computation:本章 Lab:正規表示式引擎 logic/regex.py", evidenceFor: [f-complexity], consumes: [logic/automata], groups: [], lab_no: L4, anchor: lab-logic-regex, also_chapters: [42-compilers], used_by: [blue/timeline]}
     - {id: logic/tm, order: 5, name: Turing 機, files: [logic/tm.py], language: python, chapter: "49-theory-of-computation:本章 Lab:Turing 機 logic/tm.py", evidenceFor: [f-complexity], consumes: [], groups: [], lab_no: L5, anchor: lab-logic-tm}
 
+# ═════════════════════════════ H2 rv32(詳細;rv32/perf 等 G33,還是 outline) ═════════════════════════════
 - id: rv32
   code: H2
   name: RISC-V:自己的指令集模擬器＋效能挑戰
@@ -1101,15 +1101,146 @@ mainlines:
   project: proj-hw-riscv-perf
   checkpoints: [proj-hw-riscv-perf]
   level: 大學
-  status: outline
-  summary: "寫 RV32I 組合語言、自己的指令集模擬器與快取模擬器,再把程式重排到更少的 stall、更高的命中率。模擬器之後當 IC 路線 CPU 的參考模型。"
+  status: detailed
+  summary: "寫 RV32I 組合語言、自己的指令集模擬器(含反組譯)與快取模擬器;Boss 戰用你的模擬器跑你自己的程式、用你的快取模擬器重播你的模擬器產生的存取紀錄,最後把程式重排到更少的 stall、更高的命中率。模擬器之後當 IC 路線 CPU 的參考模型、資安路線讀組合語言的工具。"
+  note: "介面刻意和書上的範例不同(見各任務的 note)。效能數字:參考解在 i7-12700KF／Python 3.12／gcc 13 -O2 實測。測試程式用 book-hwtools 映像的 riscv64-unknown-elf-gcc 12(-march=rv32i -mabi=ilp32)自己寫、自己編;riscv-tests rv32ui 的授權還沒確認,v1 不用。rv32/perf 與 boss.perf-challenge 的 N、X 等 G33 寫完、參考解量過再定。"
   acceptance:
-    - {id: boss.perf-challenge, name: 效能挑戰, consumes: [rv32/perf], description: "在 Ripes CLI 上:答案對、cycles 不超過 N、D-cache 命中率至少 X%。"}
+    - {id: boss.self-host, name: 自己的模擬器跑自己的程式, consumes: [rv32/iss, rv32/asm], description: "你的 iss.py 跑:(1) 你自己的三支 .s(配上我們的測試框架,答案要對、呼叫約定要守);(2) 5 支隱藏程式(C 編成的排序、CRC-32、遞迴、字串處理、MMIO 印字)。最後的暫存器、記憶體摘要、console 輸出、結束狀態碼與執行指令數都要和參考 ISS 相同。", perf: {statement: "合計約 3×10^6 條指令,20 秒內", seconds: 20, n: 3000000}}
+    - {id: boss.listing, name: 反組譯清單, consumes: [rv32/iss], description: "python3 rv32/iss.py dis 反組譯 2 支隱藏程式的整段程式碼(gcc -O0 與 -O2 各一支,含資料夾在中間的字),每一行都要和參考相同;不認得的字印 .word。資安路線(pwn)讀組合語言的題目用的就是這個工具。"}
+    - {id: boss.cache-trace, name: 快取重播, consumes: [rv32/iss, rv32/cachesim], description: "你的 ISS 跑 3 支隱藏的矩陣走訪程式(逐列、逐欄、分塊轉置),用 on_mem 產生資料存取紀錄;你的快取模擬器在 3 組設定(直接對映寫回、2 路 LRU 寫回、4 路 FIFO 寫穿)下重播,命中、失誤、淘汰、讀寫記憶體的次數都要和參考相同。", perf: {statement: "3 支程式合計約 1.5×10^6 條指令,紀錄重播 3 組設定,15 秒內", seconds: 15, n: 1500000}}
+    - {id: boss.perf-challenge, name: 效能挑戰, consumes: [rv32/perf, rv32/cachesim], description: "交 rv32/perf/ 的兩支 .s:(1) reorder.s 把給的程式重排來消除 load-use 與分支 stall,在參考 ISS 上 a0 與記憶體不變,在五級管線、沒有 forwarding 的時序模型(同 Ripes RV32_5S_NO_FW)上 cycles 不超過 N;(2) matmul.s 把 32×32 整數矩陣乘法改成分塊版,在固定的快取設定(例:16 組、2 路、16 位元組區塊、LRU、寫回)下 D-cache 命中率至少 X%,而且你的 cachesim 對同一份紀錄報出和參考相同的數字。N、X 與時序模型(Ripes CLI 或 9Jang 自寫)等 G33 再定。"}
   tasks:
-    - {id: rv32/asm, order: 1, name: RV32I 組合語言, files: [rv32/asm/fact.s, rv32/asm/array.s, rv32/asm/string.s], language: asm, chapter: "135-riscv-assembly:本章 Lab:RV32I 組合語言 rv32/asm/*.s", evidenceFor: [hw-riscv-asm], consumes: [], groups: [], lab_no: L1, anchor: lab-rv32-asm, used_by: [rv32/iss]}
-    - {id: rv32/iss, order: 2, name: 指令集模擬器, files: [rv32/iss.py], language: python, chapter: "135-riscv-assembly:本章 Lab:指令集模擬器 rv32/iss.py", evidenceFor: [hw-riscv-asm], consumes: [], groups: [], lab_no: L2, anchor: lab-rv32-iss, also_chapters: [21-cpu-machine-language], used_by: [rtl/alu, rtl/decode, rtl/cpu]}
-    - {id: rv32/cachesim, order: 3, name: 快取模擬器, files: [rv32/cachesim.c], language: c, chapter: "48-computer-architecture:本章 Lab:快取模擬器 rv32/cachesim.c", evidenceFor: [hw-arch-perf], consumes: [], groups: [], lab_no: L3, anchor: lab-rv32-cachesim, used_by: [rv32/perf, soc/cache]}
-    - {id: rv32/perf, order: 4, name: 管線與分塊, files: [rv32/perf/matmul.s], language: asm, chapter: "48-computer-architecture:本章 Lab:管線與分塊 rv32/perf/*.s", evidenceFor: [hw-arch-perf], consumes: [], groups: [], lab_no: L4, anchor: lab-rv32-perf, gap: G33, gap_title: RISC-V 管線時序圖, used_by: [boss.perf-challenge]}
+    - id: rv32/asm
+      order: 1
+      name: RV32I 組合語言
+      files: [rv32/asm/fact.s, rv32/asm/array.s, rv32/asm/string.s]
+      language: asm
+      chapter: "135-riscv-assembly:本章 Lab:RV32I 組合語言 rv32/asm/*.s"
+      evidenceFor: [hw-riscv-asm]
+      consumes: []
+      lab_no: L1
+      anchor: lab-rv32-asm
+      used_by: [boss.self-host, rv32/perf]
+      interface:
+        - "fact.s:mul32(a0, a1) -> a0             # a0×a1 取低 32 位元(有號、無號結果相同);RV32I 沒有 mul,用移位加法;葉函式"
+        - "fact.s:fact(a0=n) -> a0                # n! 取低 32 位元,n 是 0..20 的無號數;必須遞迴(每層一個呼叫框,ra 存在框裡),乘法呼叫你的 mul32"
+        - "array.s:array_sum(a0=p, a1=n) -> a0    # n 個 32 位元整數的和,溢位照二補數繞回;n=0 → 0"
+        - "array.s:array_max(a0=p, a1=n) -> (a0, a1)   # a0=最大值(有號比較)、a1=第一個最大值的索引;n=0 → (0x80000000, -1)"
+        - "string.s:str_len(a0=s) -> a0           # NUL 之前的位元組數"
+        - "string.s:str_rev(a0=s) -> a0           # 原地把 NUL 之前的位元組倒過來(以位元組為單位,不管 UTF-8),回傳長度;NUL 與後面的記憶體不能動"
+        - "每個函式用 .globl 匯出;遵守 RISC-V 呼叫約定:s0–s11、sp、gp、tp 呼叫前後不變,用 ra 回去,回傳值在 a0(array_max 還有 a1)"
+        - "組譯:riscv64-unknown-elf-as -march=rv32i -mabi=ilp32(只准 RV32I 基本指令;mul 這類 M 擴充的指令會組譯失敗);可以用 li、la、mv、j、call、ret、beqz 這些假指令"
+        - "判題:我們的測試框架把參數放進 a0、a1,sp=0x00100000、ra=框架的返回位址,呼叫你的函式,在參考 ISS 上跑到它回來"
+      note: "和書上(135 章)範例不同:書上的遞迴例子不改(9Jang 拿它當突變版);任務要的 fact 必須自己寫 mul32(書上若用 mul,那是 RV32M,在我們的 RV32I 模擬器上是非法指令)、array_max 要多回傳索引(a1)、str_rev 要原地倒轉並回傳長度。函式名稱刻意避開 C 標準函式庫(str_len 不是 strlen)。"
+      groups:
+        - {id: asm.public, name: 公開輸入, kind: function, visibility: public, requiredBy: [boss.self-host], description: "test 用參考 ISS 跑公開輸入:fact(0..6)、mul32 的小數字、array_sum 與 array_max 的小陣列、str_len 與 str_rev(\"hello\");比對 a0、a1 與緩衝區內容。"}
+        - {id: asm.edge, name: 邊界, kind: edge, visibility: hidden, requiredBy: [boss.self-host], description: "fact(0)、fact(1)、fact(13..20) 取低 32 位元;mul32 碰到 0、0xFFFFFFFF、負數;陣列長度 0 與 1、全部是負數、全部是 −2^31、最大值在最後、最大值重複(回傳第一個);空字串、1 個位元組、0x80 以上的位元組(lb 與 lbu 的差別)。"}
+        - {id: asm.abi, name: 呼叫約定, kind: spec, visibility: hidden, requiredBy: [boss.self-host], description: "框架先在 s0–s11、gp、tp 放檢查值,呼叫之後要不變、sp 要回到原處、用 ra 回去、執行中 sp 一直 16 位元組對齊;t0–t6 與沒用到的 a 暫存器一開始是亂數,不能假設是 0;除了自己的呼叫框與給的緩衝區,不能寫任何記憶體(array 的兩個函式完全不能寫)。"}
+        - {id: asm.recursive, name: 真的遞迴, kind: spec, visibility: hidden, requiredBy: [boss.self-host], description: "fact(n)(n ≥ 2)要用 jal／call 呼叫自己至少 n−1 次、呼叫 mul32 至少 n−1 次,堆疊最深處比進入時低至少 8(n−1) 個位元組(每層一個框)。"}
+        - id: asm.steps
+          name: 指令數
+          kind: perf
+          visibility: hidden
+          description: "用參考 ISS 數執行的指令數(instret):不能是 O(n²)(例:str_rev 每一步都重算長度),mul32 不能用重複加法。"
+          perf: {statement: "mul32 每次 300 條內、fact(20) 6,000 條內;n=10^4 的 array_sum、array_max 各 1.5×10^5 條內;長 10^4 的 str_len 1.2×10^5 條內、str_rev 2.5×10^5 條內;每支在參考 ISS 上 2 秒內", seconds: 2, n: 10000}
+          perf_ref: "參考解(移位加法、一次掃過):mul32 最多 228 條、fact(20) 825 條、array_sum／array_max 60,004／60,023 條、str_len／str_rev 40,005／80,018 條;參考 ISS 跑 2.5×10^5 條約 0.35 秒"
+          requiredBy: [boss.self-host]
+
+    - id: rv32/iss
+      order: 2
+      name: 指令集模擬器
+      files: [rv32/iss.py]
+      language: python
+      chapter: "135-riscv-assembly:本章 Lab:指令集模擬器 rv32/iss.py"
+      evidenceFor: [hw-riscv-asm]
+      consumes: []
+      lab_no: L2
+      anchor: lab-rv32-iss
+      also_chapters: [21-cpu-machine-language]
+      used_by: [boss.self-host, boss.listing, boss.cache-trace, rtl/decode, rtl/cpu, pwn/boss.uni-ctf]
+      interface:
+        - "class Trap(Exception): def __init__(self, cause, pc=None)   # .cause:'illegal'|'misaligned'|'access'|'ebreak'|'ecall'|'step-limit';.pc:出錯那條指令的位址;decode 丟的 Trap 由 step() 補上 .pc;直接呼叫 decode 時不檢查 .pc"
+        - "Instr = namedtuple('Instr', 'name fmt rd rs1 rs2 imm')   # fmt 是 R/I/S/B/U/J;沒用到的欄位是 0;imm 是符號延伸後的 int(U 型＝imm[31:12]<<12 當 32 位元有號數;移位指令的 imm＝shamt)"
+        - "decode(word) -> Instr                    # 37 條 RV32I 指令＋fence、ecall、ebreak;其他(含 M 擴充、CSR 指令、全 0)→ Trap('illegal');decode 丟的 Trap 由 step() 補上 .pc;直接呼叫 decode 時不檢查 .pc"
+        - "disasm(word, pc=0) -> str                # 'add a0, a1, a2'、'addi a0, sp, -16'、'slli a0, a0, 3'、'lw a0, 8(sp)'、'jalr ra, 0(t0)'、'sw a0, -4(s0)'、'beq a0, zero, 0x1c'(目標＝pc+imm)、'jal ra, 0x40'、'lui a0, 0x12345'、'ecall';ABI 名稱(x8 寫 s0);不用假指令;不認得 → '.word 0x%08x'"
+        - "alu(op, a, b) -> int                     # op ∈ add sub sll slt sltu xor srl sra or and;a、b、結果都是 0..2^32−1;移位只看 b 的低 5 位元"
+        - "class Machine(mem_size=1 << 20)          # RAM 在 [0, mem_size),小端序;一開始 pc=0、sp=mem_size、其他暫存器 0"
+        - "屬性:regs(32 個 0..2^32−1 的值,x0 永遠是 0)、pc、output(bytearray,console 輸出)、exit_code(結束前是 None)、instret(已執行的指令數)"
+        - "load_hex(text, base=0) -> None           # $readmemh 格式:每個 32 位元字一個十六進位數,依序放進記憶體(小端序);// 是註解;@<十六進位字位址> 換位置"
+        - "load(addr, size) -> int;store(addr, size, value) -> None   # size 1/2/4;規則和程式的存取一樣(對齊、範圍、MMIO)"
+        - "step() -> (pc, rd, value)                # 執行一條;沒寫暫存器(store、分支、rd=x0、ecall)時 rd 與 value 是 None;出錯 → Trap,暫存器、記憶體與 pc 都不變"
+        - "run(max_steps=10**7) -> int              # 跑到程式結束,回傳 exit_code;執行超過 max_steps 條 → Trap('step-limit')"
+        - "on_mem:callable(kind, addr, size) | None   # 每次資料存取(不含取指令、不含 MMIO)在存取成功後呼叫一次,kind 是 'R' 或 'W';快取模擬器的紀錄從這裡來"
+        - "對齊與範圍:lh/lhu/sh 要 2 對齊、lw/sw 要 4 對齊,否則 Trap('misaligned');跳到不是 4 對齊的位址(分支成立、jal、jalr 清掉最低位之後)→ Trap('misaligned');RAM 與 MMIO 以外 → Trap('access')"
+        - "MMIO:sb/sh/sw 寫到 0x10000000(CONSOLE)把低 8 位元附加到 output;sw 寫到 0x10000004(EXIT)結束程式,exit_code＝寫入值(有號);讀這兩個位址得到 0"
+        - "ecall(看 a7,編號同 Ripes):93 結束(exit_code=a0)、10 結束(0)、11 印字元 a0、1 印 a0 的有號十進位、4 印 a0 指到的 NUL 結尾字串;其他 → Trap('ecall');ebreak → Trap('ebreak');fence 什麼都不做"
+        - "命令列:python3 rv32/iss.py run prog.hex [--max-steps N] [--mem-trace FILE] → console 輸出寫到 stdout,exit_code & 0xFF 當結束狀態碼;--mem-trace 每次資料存取寫一行 'R 00001f40 4'"
+        - "命令列:python3 rv32/iss.py dis prog.hex → 每個字一行 '00000010: 00a2a023  sw a0, 0(t0)'(位址 8 位、字 8 位、兩個空白、disasm 的結果)"
+      forbid: [subprocess, ctypes]
+      note: "和書上範例不同:135 章的 MiniRV(只認 13 條指令、ecall 只有 1/11/93、錯誤一律 ValueError、run(limit) 回傳步數、out 是 str、step() 不回傳東西)不改,9Jang 拿它當突變版;任務要全部 40 條(37 條＋fence、ecall、ebreak)、Trap 的種類、MMIO、ecall、固定的反組譯格式、step() 的 commit 紀錄、on_mem 存取紀錄與效能門檻。rtl 任務線的 cocotb 測試用 from rv32.iss import decode, Machine 當參考模型(decode 的 imm 給 rtl/decode、step() 的 (pc, rd, value) 給 rtl/cpu 逐條比對;rtl/alu 用 rtl 自己的模型);MMIO 位址與 $readmemh 格式也和 rtl/cpu 共用。"
+      groups:
+        - {id: iss.decode, name: 解碼, kind: function, visibility: public, requiredBy: [boss.listing, rtl/cp2.riscv-tests], description: "decode 對公開的字(六種格式各幾個):name、fmt、rd、rs1、rs2、imm 都要對。"}
+        - {id: iss.disasm, name: 反組譯, kind: function, visibility: public, requiredBy: [boss.listing, pwn/boss.uni-ctf], description: "disasm 對公開的字逐字相同(ABI 名稱、逗號後一個空白、分支與 jal 印目標位址、lui／auipc 印高 20 位元);不認得的字印 .word。"}
+        - {id: iss.run, name: 跑程式, kind: function, visibility: public, requiredBy: [boss.self-host], description: "公開的 .hex 程式(MMIO 印 Hello、ecall 印數字、遞迴階乘):output、exit_code、最後的暫存器對參考;命令列 run 的 stdout 與結束狀態碼。"}
+        - {id: iss.alu, name: 運算, kind: edge, visibility: hidden, requiredBy: [boss.self-host], description: "alu() 與對應的指令:slt 對 sltu(負數)、sra 對 srl、移位量只看低 5 位元(移 33 等於移 1)、加減溢位繞回、寫 x0 沒有作用、lui 加 addi 組出負數。"}
+        - {id: iss.imm, name: 立即值, kind: edge, visibility: hidden, requiredBy: [boss.listing, boss.self-host, rtl/cp2.riscv-tests], description: "每種格式立即值的極端值:I／S 型 −2048 與 2047、B 型 ±4 KiB、J 型 ±1 MiB、U 型 0xFFFFF、shamt 31;jalr 清掉最低位;auipc 加負數;往回跳的分支。"}
+        - {id: iss.memory, name: 記憶體與 MMIO, kind: edge, visibility: hidden, requiredBy: [boss.self-host, boss.cache-trace], description: "lb／lh 符號延伸、lbu／lhu 補 0、小端序;sb／sh 只改到該改的位元組;記憶體最後一個字;CONSOLE 與 EXIT;ecall 1、4、10、11、93。"}
+        - {id: iss.errors, name: 錯誤處理, kind: error, visibility: hidden, requiredBy: [boss.self-host, pwn/boss.uni-ctf], description: "全 0 的字、0xFFFFFFFF、funct7 不對(例 mul)、CSR 指令要 Trap('illegal');沒對齊的 lw／sw／lh 與跳到沒對齊的位址要 Trap('misaligned');RAM 以外要 Trap('access');ebreak、不認得的 ecall、超過 max_steps 也要丟對的 cause,而且 pc 停在出錯的那條、狀態不變。"}
+        - {id: iss.programs, name: 隱藏程式, kind: spec, visibility: hidden, requiredBy: [boss.self-host, rtl/cp2.riscv-tests], description: "自己寫的隱藏 .hex(每條指令一支的自我檢查程式＋gcc -O0／-O2 編的 C 程式):最後的暫存器、記憶體摘要、output、exit_code 與 instret 對參考 ISS。"}
+        - {id: iss.commit, name: 逐條紀錄, kind: spec, visibility: hidden, requiredBy: [boss.self-host, rtl/cp2.riscv-tests], description: "step() 每一步回傳的 (pc, rd, value) 和參考逐條相同(rd=x0 與沒有寫暫存器的指令回傳 None);rtl 的 CPU 用這份紀錄逐條比對。"}
+        - {id: iss.memtrace, name: 存取紀錄, kind: spec, visibility: hidden, requiredBy: [boss.cache-trace], description: "on_mem 的呼叫順序、種類、位址與大小和參考相同:取指令與 MMIO 不算、出錯的存取不算;--mem-trace 檔案逐行相同。"}
+        - id: iss.perf
+          name: 效能
+          kind: perf
+          visibility: hidden
+          description: "主迴圈不能每一步都做很貴的事(例:每次 store 複製整塊記憶體、每一步把字轉成字串再解碼)。"
+          perf: {statement: "10^6 條指令(排序＋CRC 的混合程式),5 秒內", seconds: 5, n: 1000000}
+          perf_ref: "1.40 秒(直覺式參考解:每一步呼叫 decode、用 if/elif 分派;約 0.71×10^6 條／秒)"
+          requiredBy: [boss.self-host, boss.cache-trace]
+
+    - id: rv32/cachesim
+      order: 3
+      name: 快取模擬器
+      files: [rv32/cachesim.c, rv32/cachesim.h]
+      language: c
+      chapter: "48-computer-architecture:本章 Lab:快取模擬器 rv32/cachesim.c"
+      evidenceFor: [hw-arch-perf]
+      consumes: []
+      lab_no: L3
+      anchor: lab-rv32-cachesim
+      used_by: [boss.cache-trace, boss.perf-challenge, soc/cache]
+      interface:
+        - "#include \"rv32/cachesim.h\"                 // 標頭是起始碼給的介面,判題用任務套件裡的版本(改了也不算);你寫 rv32/cachesim.c(C17,不要寫 main)"
+        - "typedef enum { CS_LRU, CS_FIFO } cs_policy;  typedef enum { CS_WRITE_BACK, CS_WRITE_THROUGH } cs_write;"
+        - "typedef struct { uint32_t sets, ways, block; cs_policy policy; cs_write write; } cs_config;   // block 是位元組數"
+        - "typedef struct { uint64_t hits, misses, evictions, mem_reads, mem_writes; } cs_stats;"
+        - "cache *cs_new(const cs_config *cfg)          // sets、block 要是 2 的冪、block ≥ 4、ways ≥ 1、policy 與 write 是列舉裡的值,否則回傳 NULL"
+        - "int cs_access(cache *c, char op, uint32_t addr)   // op 'R' 或 'W';回傳 1 命中、0 失誤;op 不對 → -1,不算進統計;位址已對齊、不會跨區塊"
+        - "void cs_flush(cache *c)                      // 把髒的行寫回(每個髒行 mem_writes+1),再清空整個快取;清空不算 evictions"
+        - "cs_stats cs_get_stats(const cache *c);  void cs_free(cache *c);"
+        - "位址拆法:offset＝低 log2(block) 位元、index＝接著 log2(sets) 位元、tag＝其餘;32 位元位址全部有效"
+        - "替換:同一組有空的路先用索引最小的空路;LRU 在命中與載入時都更新,FIFO 只在載入時記時間"
+        - "寫入:CS_WRITE_BACK＝寫回＋寫入配置(寫失誤也載入、標成髒;踢掉髒的行 mem_writes+1);CS_WRITE_THROUGH＝寫穿＋不配置(每次寫都 mem_writes+1,寫失誤不載入);寫失誤也算一次 misses"
+        - "統計:mem_reads＝載入的區塊數;evictions＝存取時踢掉有效行的次數(不管髒不髒,cs_flush 不算);mem_writes＝寫記憶體的次數(寫回一個髒行算 1 次、寫穿一次寫入算 1 次,不管寫了幾個位元組)"
+        - "存取紀錄檔(和 iss.py --mem-trace 同格式):每行 'R 00001f40 4'(種類、十六進位位址、大小);Lab 方框附一個不判分的 cachesim_main.c 讀這種檔案"
+      note: "和書上範例不同:48 章的互動模擬器(JS,用總大小／區塊／路數算組數、只有 LRU、只有讀)不改;任務是 C 的函式庫介面,直接給 sets／ways／block,要做 LRU 與 FIFO、寫回與寫穿兩種寫入策略、記憶體流量(mem_reads／mem_writes)、cs_flush、設定錯誤回傳 NULL,效能門檻 10^7 次存取。書上的模擬器是 JS,不能直接當突變版:9Jang 用它的 C 改寫(只有 LRU、沒有寫入策略)當 book-* 突變版。之後 soc/cache 的 cocotb 測試用它當快取控制器的參考模型(怎麼從 Python 呼叫由 soc 任務線決定)。"
+      groups:
+        - {id: cachesim.basic, name: 命中與失誤, kind: function, visibility: public, requiredBy: [boss.cache-trace, boss.perf-challenge], description: "公開的紀錄:書上的逐列／逐欄走訪(命中 12／0 次)與衝突示範(直接對映 0 次、2 路 4 次),以及幾組寫回的讀寫混合;比對 5 個統計數字。"}
+        - {id: cachesim.fifo, name: LRU 與 FIFO, kind: function, visibility: public, requiredBy: [boss.cache-trace], description: "同一份紀錄在 LRU 與 FIFO 下的結果不同:命中不會讓 FIFO 的行變新。"}
+        - {id: cachesim.write, name: 寫入策略, kind: spec, visibility: hidden, requiredBy: [boss.cache-trace, boss.perf-challenge], description: "寫回:寫失誤也載入、踢掉髒的行與 cs_flush 才算 mem_writes、同一行寫很多次只寫回一次;寫穿:每次寫都算 mem_writes、寫失誤不載入、之後讀同一個位址還是失誤。"}
+        - {id: cachesim.edge, name: 邊界, kind: edge, visibility: hidden, requiredBy: [boss.cache-trace], description: "全相聯(sets=1)、直接對映(ways=1)、block=4 與 block=4096、0xFFFFFFFC 附近的位址、同一區塊不同 offset、路數比用到的區塊多、空的紀錄、cs_flush 之後再存取。"}
+        - {id: cachesim.errors, name: 錯誤處理, kind: error, visibility: hidden, requiredBy: [boss.cache-trace], description: "sets 或 block 不是 2 的冪、block < 4、ways=0、policy 或 write 不在列舉裡,cs_new 都要回傳 NULL;op 不是 R／W 回傳 -1 而且統計不變。"}
+        - {id: cachesim.random, name: 隨機紀錄, kind: spec, visibility: hidden, requiredBy: [boss.cache-trace], description: "每人 seed 決定的隨機設定與隨機讀寫紀錄,5 個統計數字對參考。"}
+        - id: cachesim.perf
+          name: 效能
+          kind: perf
+          visibility: hidden
+          description: "每次存取只能看自己那一組(O(ways)),不能掃整個快取。"
+          perf: {statement: "sets=1024、ways=8、block=64:驅動程式產生 10^7 次隨機＋循序混合的讀寫,1 秒內", seconds: 1, n: 10000000}
+          perf_ref: "0.20 秒(gcc -O2;每組線性掃 ways、用時間戳記做 LRU／FIFO)"
+          requiredBy: [boss.cache-trace, boss.perf-challenge]
+
+    - {id: rv32/perf, order: 4, name: 管線與分塊, files: [rv32/perf/reorder.s, rv32/perf/matmul.s], language: asm, chapter: "48-computer-architecture:本章 Lab:管線與分塊 rv32/perf/*.s", evidenceFor: [hw-arch-perf], consumes: [rv32/asm], groups: [], lab_no: L4, anchor: lab-rv32-perf, gap: G33, gap_title: RISC-V 管線時序圖, status: outline, used_by: [boss.perf-challenge], note: "等 G33(管線時序圖)與時序模型。matmul.s 的乘法用你 rv32/asm 的 mul32(RV32I 沒有 mul),或改成 RV32IM,G33 決定。"}
 
 - id: minidb
   code: B2
@@ -1818,7 +1949,7 @@ mainlines:
     - {id: cp2.riscv-tests, name: RV32I 測試, checkpoint: proj-ic-riscv, consumes: [rtl/cpu], description: "rv32ui 測試＋一支 C 程式(排序＋CRC)經 MMIO 印字,對 rv32 指令集模擬器的輸出。"}
   tasks:
     - {id: rtl/gates, order: 1, name: Verilog 閘, files: [rtl/mux.v, rtl/add16.v], language: verilog, chapter: "136-verilog:本章 Lab:Verilog 閘 rtl/mux.v", evidenceFor: [ic-verilog-basics], consumes: [hack/gates], groups: [], lab_no: L1, anchor: lab-rtl-gates, used_by: [rtl/alu]}
-    - {id: rtl/alu, order: 2, name: RV32I ALU, files: [rtl/alu.v], language: verilog, chapter: "20-combinational-sequential:本章 Lab:RV32I ALU rtl/alu.v", evidenceFor: [ic-comb], consumes: [hack/alu, rv32/iss], groups: [], lab_no: L2, anchor: lab-rtl-alu, gap: G37, gap_title: 算術電路, used_by: [rtl/tb, rtl/cpu]}
+    - {id: rtl/alu, order: 2, name: RV32I ALU, files: [rtl/alu.v], language: verilog, chapter: "20-combinational-sequential:本章 Lab:RV32I ALU rtl/alu.v", evidenceFor: [ic-comb], consumes: [rtl/gates], groups: [], lab_no: L2, anchor: lab-rtl-alu, gap: G37, gap_title: 算術電路, used_by: [rtl/tb, rtl/cpu]}
     - {id: rtl/tb, order: 3, name: cocotb 測試, files: [rtl/tests/test_alu.py], language: python, chapter: "137-verification-cocotb:本章 Lab:cocotb 測試 rtl/tests/test_alu.py", evidenceFor: [ic-testbench], consumes: [rtl/alu], groups: [], lab_no: L3, anchor: lab-rtl-tb, used_by: [boss.alu-mutants]}
     - {id: rtl/regfile, order: 4, name: 暫存器檔與 PC, files: [rtl/regfile.v, rtl/pc.v], language: verilog, chapter: "47-digital-circuits:本章 Lab:暫存器檔與 PC rtl/regfile.v", evidenceFor: [ic-cpu], consumes: [], groups: [], lab_no: L4, anchor: lab-rtl-regfile, also_chapters: [136-verilog], used_by: [rtl/cpu]}
     - {id: rtl/decode, order: 5, name: 解碼與立即值, files: [rtl/decode.v, rtl/immgen.v], language: verilog, chapter: "G36:本章 Lab:解碼與立即值 rtl/decode.v", evidenceFor: [ic-cpu], consumes: [rv32/iss], groups: [], lab_no: L5, anchor: lab-rtl-decode, gap: G36, gap_title: 設計 RV32I CPU, also_chapters: [135-riscv-assembly], used_by: [rtl/cpu]}
