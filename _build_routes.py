@@ -633,6 +633,14 @@ def prereq_closure(nodes_by_id):
     return {nid: go(nid) for nid in nodes_by_id}
 
 
+PUNCT_FULL = str.maketrans('（）：；，！？', '():;,!?')
+
+
+def punct_norm(s):
+    """方框和 yaml 比對時,全形與半形標點視為相同(有些章的習慣用全形)。"""
+    return s.translate(PUNCT_FULL)
+
+
 def scan_lab_boxes():
     """chapters/src 裡的 Lab 方框:[(章 id, 任務 id, [data-group…], {組 id: (名稱, 可見性, 說明)})]
     與 <!-- LAB: … --> 標記 [(章 id, 任務 id)]。"""
@@ -1021,10 +1029,10 @@ def validate_mainlines(ml, book, tree_nodes, tree_projects):
                 err(f'{cid}: Lab 方框 {tid} 的 {gid} 名稱是「{name}」,yaml 是「{g.get("name")}」')
             if vis != VIS_LABEL.get(g.get('visibility'), ''):
                 err(f'{cid}: Lab 方框 {tid} 的 {gid} 寫〔{vis}〕,yaml 是 {g.get("visibility")}')
-            if not desc.startswith(html_text(g.get('description', ''))):
+            if not punct_norm(desc).startswith(punct_norm(html_text(g.get('description', '')))):
                 infos.append(f'{cid}: Lab 方框 {tid} 的 {gid} 說明和 yaml 不同')
             stmt = (g.get('perf') or {}).get('statement')
-            if stmt and not any(f'{w}{c}{html_text(stmt)}' in desc for w in ('門檻', '效能') for c in (':', '：')):
+            if stmt and not any(f'{w}:{punct_norm(html_text(stmt))}' in punct_norm(desc) for w in ('門檻', '效能')):
                 err(f'{cid}: Lab 方框 {tid} 的 {gid} 沒有照抄 yaml 的效能門檻「門檻:{stmt}」')
     for cid, tid in markers:
         in_chapter.setdefault(tid, set()).add(cid)

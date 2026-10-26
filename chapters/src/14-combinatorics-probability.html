@@ -545,6 +545,305 @@ print(f"理論機率 = {1/6:.4f}")                     # 理論機率 = 0.1667</
         </div>
       </div>
 
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">為什麼要學</span>
+          <p>這一節的兩個工具,頻率表與蒙地卡羅,是任務線「hzip 壓縮器」的第一個任務「頻率與估計」(本章 Lab)。
+          頻率表 <code>FreqTable</code> 數出每個位元組出現幾次,<a href="108-information-theory.html">{{ch:108-information-theory}}</a>的 Huffman 用它決定碼長(任務線「ctf」破譯古典密碼時,也是先數字母頻率再評分)。
+          蒙地卡羅 <code>mc_estimate</code> 先給點估計;它的 95% 信賴區間要用到中央極限定理,等<a href="57-probability.html">{{ch:57-probability}}</a>的任務「信賴區間」再加。
+          Boss 戰「機率期末:理論對實測」用這兩個零件估出 CRC-8 漏抓壞訊框的機率:跑 2×10<sup>5</sup> 次試驗,95% 信賴區間要罩住理論值 $\approx 1/256$(手算 14.3)。</p>
+        </div>
+      </div>
+
+      <h3>手算:頻率表與經驗機率</h3>
+      <p>
+        手上只有資料、沒有「公正骰子」這種模型時,就用<strong>經驗機率(empirical probability)</strong>:每個符號出現的次數 ÷ 總次數。
+        把字串 <code>"MISSISSIPPI"</code> 的字母數一遍(11 個字母):
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>符號(依符號排序)</th><th>次數</th><th>經驗機率 = 次數 / 11</th><th>小數</th><th>$-p\log_2 p$</th></tr></thead>
+        <tbody>
+          <tr><td>I</td><td>4</td><td>4/11</td><td>0.3636</td><td>0.5307</td></tr>
+          <tr><td>M</td><td>1</td><td>1/11</td><td>0.0909</td><td>0.3145</td></tr>
+          <tr><td>P</td><td>2</td><td>2/11</td><td>0.1818</td><td>0.4472</td></tr>
+          <tr><td>S</td><td>4</td><td>4/11</td><td>0.3636</td><td>0.5307</td></tr>
+          <tr><td><strong>合計</strong></td><td><strong>11</strong></td><td><strong>1</strong></td><td></td><td><strong>1.8231</strong></td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        從這張表讀出頻率表會被問的每一件事:總次數 11;不同的符號有 4 種;「依次數由多到少、同次數依符號」排是 I:4、S:4、P:2、M:1
+        (I 和 S 一樣多,I 排前面);沒出現過的符號(例如 Z)次數是 0、機率是 0。
+        最後一欄加起來就是<strong>熵(entropy)</strong> $H = -\sum p \log_2 p \approx 1.8231$ 位元/符號,{{ch:108-information-theory}}會說明它是「平均每個符號最少要幾個位元」。
+        如果資料是位元組 <code>b"MISSISSIPPI"</code>,符號就是 0..255 的整數:I、M、P、S 分別是 73、77、80、83,表的形狀完全一樣。
+      </p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 14.1 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>對 <code>"BOOKKEEPER"</code> 做同樣的表:每個字母的次數與經驗機率、總次數、不同符號的個數、「由多到少、同次數依符號」的順序、熵(四位小數)。</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <div class="table-wrap"><table>
+              <thead><tr><th>符號</th><th>次數</th><th>經驗機率</th><th>$-p\log_2 p$</th></tr></thead>
+              <tbody>
+                <tr><td>B</td><td>1</td><td>1/10</td><td>0.3322</td></tr>
+                <tr><td>E</td><td>3</td><td>3/10</td><td>0.5211</td></tr>
+                <tr><td>K</td><td>2</td><td>1/5</td><td>0.4644</td></tr>
+                <tr><td>O</td><td>2</td><td>1/5</td><td>0.4644</td></tr>
+                <tr><td>P</td><td>1</td><td>1/10</td><td>0.3322</td></tr>
+                <tr><td>R</td><td>1</td><td>1/10</td><td>0.3322</td></tr>
+              </tbody>
+            </table></div>
+            <p>總次數 10,不同符號 6 種,順序 E:3、K:2、O:2、B:1、P:1、R:1,熵 $H \approx 2.4464$ 位元/符號。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <h3>手算:固定 seed 的蒙地卡羅,對公式算的答案</h3>
+      <p>
+        模擬的答案一定有誤差,問題是「差多少才算正常」。先推一個程式會直接用到的式子。
+        <strong>證明(參考):</strong>第 $i$ 次試驗成功記 $X_i = 1$、失敗記 0,成功機率 $p$。$E[X_i] = p$,$E[X_i^2] = p$,所以 $\mathrm{Var}(X_i) = p - p^2 = p(1-p)$。
+        估計值 $\hat{p} = (X_1 + \cdots + X_n)/n$;試驗彼此獨立,而獨立時 $\mathrm{Var}(X+Y) = \mathrm{Var}(X) + \mathrm{Var}(Y)$(此處直接使用;這條規則列在<a href="57-probability.html">{{ch:57-probability}}</a>的「變異數與標準差」小節,它需要獨立),所以
+        $\mathrm{Var}(X_1+\cdots+X_n) = n\,p(1-p)$,除以 $n^2$:
+      </p>
+      <p>$$\mathrm{Var}(\hat{p}) = \frac{p(1-p)}{n}, \qquad \text{標準誤(standard error)}\ \ SE = \sqrt{\frac{p(1-p)}{n}}$$</p>
+      <p>
+        答案已知的問題,就看 $\hat{p}$ 離 $p$ 幾個標準誤:$z = (\hat{p} - p)/SE$。差 2 個以上不常見,差 4 個以上幾乎不會發生;
+        任務「頻率與估計」的隱藏檢定就用「$|\hat{p} - p| \le 4\,SE$」判斷你的估計器有沒有問題。
+      </p>
+      <p>
+        下表是 <code>rng = random.Random(10)</code> 擲兩顆骰子的前 12 次(每次先擲骰子 1 再擲骰子 2),問「和是 7 嗎?」:
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>第幾次</th><th>骰子 1</th><th>骰子 2</th><th>和</th><th>是 7?</th><th>累計成功</th><th>目前的 $\hat{p}$</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td>5</td><td>1</td><td>6</td><td></td><td>0</td><td>0</td></tr>
+          <tr><td>2</td><td>4</td><td>4</td><td>8</td><td></td><td>0</td><td>0</td></tr>
+          <tr><td>3</td><td>5</td><td>1</td><td>6</td><td></td><td>0</td><td>0</td></tr>
+          <tr><td>4</td><td>2</td><td>4</td><td>6</td><td></td><td>0</td><td>0</td></tr>
+          <tr><td>5</td><td>4</td><td>3</td><td>7</td><td>✔</td><td>1</td><td>1/5</td></tr>
+          <tr><td>6</td><td>6</td><td>2</td><td>8</td><td></td><td>1</td><td>1/6</td></tr>
+          <tr><td>7</td><td>1</td><td>5</td><td>6</td><td></td><td>1</td><td>1/7</td></tr>
+          <tr><td>8</td><td>4</td><td>3</td><td>7</td><td>✔</td><td>2</td><td>2/8</td></tr>
+          <tr><td>9</td><td>1</td><td>2</td><td>3</td><td></td><td>2</td><td>2/9</td></tr>
+          <tr><td>10</td><td>6</td><td>3</td><td>9</td><td></td><td>2</td><td>2/10</td></tr>
+          <tr><td>11</td><td>1</td><td>4</td><td>5</td><td></td><td>2</td><td>2/11</td></tr>
+          <tr><td>12</td><td>2</td><td>5</td><td>7</td><td>✔</td><td>3</td><td>3/12</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        12 次裡成功 3 次,$\hat{p} = 0.25$;公式的答案是 $p = 1/6 \approx 0.1667$。
+        $SE = \sqrt{\frac{1}{6}\cdot\frac{5}{6} / 12} \approx 0.1076$,差 $0.25 - 0.1667 = 0.0833$,也就是 $z \approx +0.77$ 個標準誤:完全正常。
+        只是 12 次太少,標準誤(0.11)比答案本身(0.17)還大。要讓 $SE$ 縮小 10 倍,$n$ 要大 100 倍。
+      </p>
+      <p>
+        同樣的實驗交給程式。和本章前面的 <code>simulate_sum_seven</code> 不同,這裡每次都建立<strong>自己的</strong>亂數產生器 <code>random.Random(10)</code>,
+        而不是用全域的 <code>random</code>:別的程式碼呼叫 <code>random.seed(…)</code> 也影響不到你的結果。
+      </p>
+      <pre><code class="language-python">import math
+import random
+
+def two_dice_sum7(rng):          # 一次試驗:擲兩顆骰子,和是 7 嗎?
+    return rng.randint(1, 6) + rng.randint(1, 6) == 7
+
+p = 1 / 6                         # 公式算出的答案
+for n in [12, 1_000, 100_000]:
+    rng = random.Random(10)       # 自己的亂數產生器,固定 seed
+    hits = sum(two_dice_sum7(rng) for _ in range(n))
+    p_hat = hits / n
+    se = math.sqrt(p * (1 - p) / n)          # 標準誤(用公式的 p)
+    z = (p_hat - p) / se
+    print(f"n={n:&gt;7}  p_hat={p_hat:.4f}  標準誤={se:.5f}  差了 {z:+.2f} 個標準誤")
+
+# 全域 random 被別人重設,不影響你自己的 rng
+rng = random.Random(10)
+first = [rng.randint(1, 6) for _ in range(5)]
+random.seed(999)                  # 別的程式碼動了全域 random
+rng = random.Random(10)
+again = [rng.randint(1, 6) for _ in range(5)]
+print(first, again, first == again)
+# n=     12  p_hat=0.2500  標準誤=0.10758  差了 +0.77 個標準誤
+# n=   1000  p_hat=0.1530  標準誤=0.01179  差了 -1.16 個標準誤
+# n= 100000  p_hat=0.1676  標準誤=0.00118  差了 +0.77 個標準誤
+# [5, 1, 4, 4, 5] [5, 1, 4, 4, 5] True</code></pre>
+      <p>
+        $n$ 從 12 到 10<sup>5</sup>,誤差從 0.08 縮到 0.001,但用「幾個標準誤」量,三次都在 ±2 以內。
+        這就是「估計落在誤差內」的意思:誤差要和 $\sqrt{p(1-p)/n}$ 比,不是和一個固定的數字比。
+      </p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 14.2 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>換成 <code>random.Random(3)</code>,前 12 次的兩顆骰子是:(2,5) (5,2) (3,5) (4,6) (5,1) (5,1) (4,3) (5,2) (2,6) (4,5) (5,4) (4,6)。
+          寫出累計成功與 $\hat{p}$ 的表,算 $SE$ 和 $z$。有沒有超過 4 個標準誤?</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <div class="table-wrap"><table>
+              <thead><tr><th>第幾次</th><th>和</th><th>是 7?</th><th>累計成功</th><th>$\hat{p}$</th></tr></thead>
+              <tbody>
+                <tr><td>1</td><td>7</td><td>✔</td><td>1</td><td>1/1</td></tr>
+                <tr><td>2</td><td>7</td><td>✔</td><td>2</td><td>2/2</td></tr>
+                <tr><td>3</td><td>8</td><td></td><td>2</td><td>2/3</td></tr>
+                <tr><td>4</td><td>10</td><td></td><td>2</td><td>2/4</td></tr>
+                <tr><td>5</td><td>6</td><td></td><td>2</td><td>2/5</td></tr>
+                <tr><td>6</td><td>6</td><td></td><td>2</td><td>2/6</td></tr>
+                <tr><td>7</td><td>7</td><td>✔</td><td>3</td><td>3/7</td></tr>
+                <tr><td>8</td><td>7</td><td>✔</td><td>4</td><td>4/8</td></tr>
+                <tr><td>9</td><td>8</td><td></td><td>4</td><td>4/9</td></tr>
+                <tr><td>10</td><td>9</td><td></td><td>4</td><td>4/10</td></tr>
+                <tr><td>11</td><td>9</td><td></td><td>4</td><td>4/11</td></tr>
+                <tr><td>12</td><td>10</td><td></td><td>4</td><td>4/12</td></tr>
+              </tbody>
+            </table></div>
+            <p>$\hat{p} = 4/12 \approx 0.3333$,$SE \approx 0.1076$(和 $\hat{p}$ 無關,只看 $p$ 與 $n$),差 $0.1667$,$z \approx +1.55$。沒有超過 4 個標準誤,算正常。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 14.3 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>Boss 戰「機率期末」的訊框是 16 個位元組的資料加 1 個位元組的 CRC-8,共 136 位元。「隨機改壞」是指換成另外任何一個 136 位元的字串,每一個都一樣可能。
+          (a) CRC 對得上(漏抓)的機率是多少?(提示:CRC 在這裡先當黑盒:16 個位元組的資料各自恰好配一個正確的 CRC-8 位元組,所以 136 位元的字串裡有 $2^{128}$ 個 CRC 正確。CRC 怎麼算,見<a href="15-number-theory-graphs.html#crc-polynomial-division">{{ch:15-number-theory-graphs}}的 CRC 小節</a>。)
+          (b) 跑 $n = 2\times10^5$ 次,預期漏抓幾次?標準誤和 95% 區間的半寬($1.96\,SE$)各是多少?(1.96 是常態分布「中間 95%」的 $z$ 值;為什麼可以這樣用,{{ch:57-probability}}的中央極限定理會說明。)
+          (c) 要讓半寬不超過 $p$ 的 10%,$n$ 至少多少?</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <p>(a) 改壞後的字串有 $2^{136} - 1$ 種(不能等於原本的);其中 CRC 正確、又不是原本那個的有 $2^{128} - 1$ 種。
+            $p = \frac{2^{128}-1}{2^{136}-1} \approx 2^{-8} = \frac{1}{256} = 0.00390625$。</p>
+            <p>(b) $np = 781.25$ 次。$SE = \sqrt{p(1-p)/n} \approx 0.000139$,半寬 $\approx 0.000273$,區間約 $[0.003633,\ 0.004180]$:半寬大約是 $p$ 的 7%。</p>
+            <p>(c) $1.96\sqrt{p(1-p)/n} \le 0.1p$ ⇔ $n \ge \left(\frac{1.96}{0.1}\right)^2 \frac{1-p}{p} = 384.16 \times 255 \approx 97\,960.8$,所以 $n \ge 97\,961$。
+            Boss 戰用 $2\times10^5$,有兩倍的餘裕。一般式:要相對誤差 $r$,$n \approx (z/r)^2 (1-p)/p$;$p$ 越小,要的試驗越多。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <div class="callout note">
+        <div class="ico">🧭</div>
+        <div class="body">
+          <span class="c-title">任務線總覽:hzip 壓縮器</span>
+          <p>六個 Lab 分散在{{ch:14-combinatorics-probability}}、<a href="15-number-theory-graphs.html">{{ch:15-number-theory-graphs}}</a>、<a href="57-probability.html">{{ch:57-probability}}</a>與<a href="108-information-theory.html">{{ch:108-information-theory}}</a>,串成程式地下城的一條<strong>任務線</strong>「hzip」(建議順序:L1 → L4 → L6 → L2 → L3 → L5;L5 用到 L1–L4,放最後):
+          每個 Lab 是一個<strong>任務</strong>(有自己的資料夾),每組測試是一個<strong>任務目標</strong>(打勾的格子),最後的整合測試是 <strong>Boss 戰</strong>。
+          這是一條<strong>理論任務線</strong>:每個 Lab 都在「讓理論跑起來」——蒙地卡羅對公式、信賴區間真的罩得住、Huffman 對熵、CRC 對突發錯誤定理;
+          Boss 戰則是這些理論零件被一個真正的工程專題(會偵測壞檔的壓縮器)拿去用。
+          先看 Boss 戰要什麼,每個任務的門檻都是從它推回來的。〔公開〕的目標用 <code>test</code>(或 F5)自己跑;〔隱藏檢定〕在 <code>submit</code> 時跑,只看得到名稱和一行說明。</p>
+<p>下面的樹是摘要,完整的任務目標清單見各章 Lab。</p>
+<pre><code class="language-text">hzip 壓縮器(任務線)
+├─ Boss 戰
+│  ├─ 二進位檔往返〔隱藏檢定〕隱藏的檔(最大 1 MiB)壓縮再解壓要一模一樣;
+│  │     256 KiB 的檔壓縮＋解壓合計 12 秒內
+│  ├─ 壞檔偵測〔隱藏檢定〕翻位元、改壞一段、截斷、CRC 對但內容壞:一律回報壞檔
+│  ├─ 壓縮率〔隱藏檢定〕≤ 參考 hzip 的 1.10 倍＋32 位元組;不可壓縮的資料最多多 18 個位元組
+│  ├─ 格式相容〔隱藏檢定〕你的 hzip 和參考 hzip 互相解得開
+│  ├─ 機率期末:理論對實測〔隱藏檢定〕CRC-8 漏抓率的 95% 區間罩住 ≈ 1/256;
+│  │     Huffman 的平均碼長夾在 H 和 H+1 之間
+│  └─ 機率統計考卷〔老師核可〕英文參數化考卷(手算卡的考場出題)
+├─ L1 頻率與估計      hzip/stats.py    ← {{ch:14-combinatorics-probability}} Lab
+│     頻率表 · 熵 · 蒙地卡羅 · 估計落在誤差內 · 只用傳進來的 rng · 效能
+├─ L2 Huffman 編碼    hzip/huffman.py  ← {{ch:108-information-theory}} Lab
+│     總位元數最少 · Kraft 等式 · canonical 碼 · 往返一致 · 對得上熵 · 效能
+├─ L3 LZ77            hzip/lz77.py     ← {{ch:108-information-theory}} Lab
+│     往返一致 · 重疊複製 · 打包 · 壓縮率 · 效能
+├─ L4 CRC             hzip/crc.py      ← {{ch:15-number-theory-graphs}} Lab
+│     和 zlib 一樣 · 可設定的 CRC · GF(2) 多項式 · CRC 目錄 · 理論性質 · 效能
+├─ L5 檔案格式與命令列 hzip/cli.py      ← {{ch:15-number-theory-graphs}} Lab
+│     往返一致 · 標頭與 CRC · 命令列 · 改壞的檔 · 和參考 hzip 互解 · 效能
+└─ L6 信賴區間        hzip/ci.py       ← {{ch:57-probability}} Lab
+      Wilson 區間 · 蒙地卡羅的區間 · 區間真的罩得住 · 邊界</code></pre>
+          <p>每個 Boss 戰用到哪些任務:往返用 L1–L5;壞檔偵測用 L4、L5;壓縮率用 L2、L3、L5;格式相容用 L5(和它裡面的 L2、L3、L4);
+          機率期末用 L1、L2、L4、L6。考卷不判零件,v1 由老師核可。</p>
+        </div>
+      </div>
+
+      <h3 id="lab-hzip-stats">本章 Lab:頻率與估計 hzip/stats.py</h3>
+      <div class="callout lab" data-task="hzip/stats">
+        <div class="ico">🧪</div>
+        <div class="body">
+          <span class="c-title">本章 Lab · 任務線「hzip」· 任務「頻率與估計」</span>
+          <p><strong>對應地下城任務:</strong>任務「頻率與估計」(任務線:hzip 壓縮器,第 1／6 個任務)。零件檔:<code>~/零件庫/hzip/stats.py</code>;任務資料夾:<code>~/任務線/hzip/01-stats/</code>。</p>
+          <p><strong>要做的零件:</strong>讓這一節的理論跑起來。頻率表 <code>FreqTable</code> 把「經驗機率」與「熵」變成可以一直加資料的物件;<code>mc_estimate</code> 把「固定 seed 的蒙地卡羅」變成可以插入任何試驗的估計器;<code>mc_mean</code> 估計平均值。這裡只做點估計;信賴區間要用到中央極限定理,留給<a href="57-probability.html#lab-hzip-ci">{{ch:57-probability}}的任務「信賴區間」</a>。</p>
+          <p><strong>內部表示法(規格規定):</strong><code>self.counts</code> 是 dict:符號 → 次數(每個 ≥ 1);<code>self.total</code> 是次數總和。隱藏檢定會故意弄壞這兩個屬性(見下面的不變式)。</p>
+          <p><strong>介面:</strong></p>
+<pre><code class="language-python"># ~/零件庫/hzip/stats.py
+class FreqTable:
+    def __init__(self, data=()):
+        """data:可迭代的符號(bytes → 0..255 的整數、str → 字元)。"""
+    def add(self, sym, k=1) -&gt; None:
+        """sym 多出現 k 次;k &lt; 0 → ValueError;k = 0 什麼都不改。"""
+    def update(self, data) -&gt; None:
+        """data 裡的每個符號各加 1 次。"""
+    def count(self, sym) -&gt; int:
+        """sym 出現幾次;沒出現過 → 0。"""
+    def prob(self, sym) -&gt; float:
+        """count(sym) / total;空表 → ValueError。"""
+    def items(self) -&gt; list:
+        """[(sym, count), …],依符號排序。"""
+    def most_common(self, k=None) -&gt; list:
+        """次數多到少、同次數依符號;k=None 回傳全部。"""
+    def entropy(self) -&gt; float:
+        """−Σ p·log2(p),位元/符號;空表或只有一種符號 → 0.0。"""
+    def __len__(self) -&gt; int:
+        """不同符號的個數。"""
+    def __contains__(self, sym) -&gt; bool:
+        """sym 有沒有出現過。"""
+    def check(self) -&gt; bool:
+        """不變式:total ＝ 次數和、每個次數都是 ≥ 1 的整數。"""
+    # 屬性:self.counts(dict 符號 → 次數)、self.total(次數總和)
+
+def mc_estimate(trial, n, rng) -&gt; float:
+    """呼叫 trial(rng) 恰好 n 次(每次回傳 True/False),回傳 成功數 / n。
+    只用傳進來的 rng(random.Random);n &lt; 1 → ValueError。"""
+
+def mc_mean(sample, n, rng) -&gt; float:
+    """呼叫 sample(rng) 恰好 n 次(每次回傳一個數),回傳平均。
+    只用傳進來的 rng;n &lt; 1 → ValueError。"""</code></pre>
+          <p><strong>公開範例</strong>(<code>MISSISSIPPI</code> 和本節的手算表一樣;骰子用的是上面那段程式的 <code>random.Random(10)</code>):</p>
+<pre><code class="language-python">&gt;&gt;&gt; import random
+&gt;&gt;&gt; from hzip.stats import FreqTable, mc_estimate, mc_mean
+&gt;&gt;&gt; t = FreqTable(b"MISSISSIPPI")
+&gt;&gt;&gt; t.total, len(t), t.count(ord("I")), t.count(ord("Z"))
+(11, 4, 4, 0)
+&gt;&gt;&gt; t.items()
+[(73, 4), (77, 1), (80, 2), (83, 4)]
+&gt;&gt;&gt; t.most_common(2)
+[(73, 4), (83, 4)]
+&gt;&gt;&gt; round(t.entropy(), 4)
+1.8231
+&gt;&gt;&gt; s = FreqTable("BOOKKEEPER")
+&gt;&gt;&gt; s.add("E", 2); s.update("OK")
+&gt;&gt;&gt; s.most_common(3), round(s.prob("E"), 4), s.check()
+([('E', 5), ('K', 3), ('O', 3)], 0.3571, True)
+&gt;&gt;&gt; FreqTable("aaaa").entropy(), FreqTable().entropy()
+(0.0, 0.0)
+&gt;&gt;&gt; def two_dice_sum7(rng):
+...     return rng.randint(1, 6) + rng.randint(1, 6) == 7
+&gt;&gt;&gt; mc_estimate(two_dice_sum7, 100_000, random.Random(10))
+0.16757
+&gt;&gt;&gt; round(mc_mean(lambda rng: rng.randint(1, 6), 10_000, random.Random(1)), 4)
+3.505</code></pre>
+          <p><strong>和本章範例不同的地方:</strong></p>
+          <ul>
+            <li>本章的 <code>simulate_sum_seven(trials)</code> 用全域的 <code>random</code>、把試驗寫死在函式裡。Lab 的 <code>mc_estimate</code> 把試驗當參數傳進來,只用傳進來的 <code>rng</code>。</li>
+            <li>本章的手算表是手寫的計數;Lab 要一個能一直 <code>add</code>／<code>update</code> 的 <code>FreqTable</code> 類別,<code>most_common</code> 的排序是固定的(同次數依符號),還有 <code>entropy()</code> 與 <code>check()</code>。</li>
+            <li><code>mc_mean</code>(估計平均值)本章沒有。</li>
+          </ul>
+          <p>可以參考本章的範例,但介面和要求不同,要自己改寫。</p>
+          <p><strong>任務目標</strong>(公開的用 <code>test</code> 自己跑;隱藏檢定在 <code>submit</code> 時跑,只看得到名稱和一行說明):</p>
+          <ul class="lab-goals">
+            <li data-group="stats.freq">☐ <strong>頻率表</strong>〔公開〕FreqTable 的 count、total、len、prob、items、most_common 對公開範例(bytes 與 str 都要)。</li>
+            <li data-group="stats.entropy">☐ <strong>熵</strong>〔公開〕entropy() 對公式 −Σ p·log₂p,誤差 1e-9 內;只有一種符號或空表是 0.0。</li>
+            <li data-group="stats.mc">☐ <strong>蒙地卡羅</strong>〔公開〕mc_estimate 恰好呼叫 trial n 次、回傳 成功數 / n;mc_mean 恰好呼叫 sample n 次、回傳平均;對公開範例。</li>
+            <li data-group="stats.tolerance">☐ <strong>估計落在誤差內</strong>〔隱藏檢定〕已知答案的問題(兩顆骰子和為 7、四分之一圓估 π/4、生日問題、幾何分布的平均)用固定 seed 估計:|估計 − 理論| ≤ 4 個標準誤。</li>
+            <li data-group="stats.rng">☐ <strong>只用傳進來的 rng</strong>〔隱藏檢定〕同一個 seed 跑兩次結果一樣;兩次之間把全域 random 重設成別的 seed,結果也不變。</li>
+            <li data-group="stats.edge">☐ <strong>邊界</strong>〔隱藏檢定〕空表、add k=0、n=1;錯誤:add 的 k &lt; 0、空表的 prob、mc_estimate 與 mc_mean 的 n &lt; 1,都要 ValueError。</li>
+            <li data-group="stats.invariant">☐ <strong>頻率表的不變式一直成立</strong>〔隱藏檢定〕隨機 add／update 的每一步之後 check() 都成立;故意把 total 改錯、塞進次數 0 或負數的符號時,check() 要抓得到。</li>
+            <li data-group="stats.perf">☐ <strong>效能</strong>〔隱藏檢定〕FreqTable 每個符號 O(1);mc_estimate 本身不能比試驗慢很多。門檻:FreqTable(4 MiB 的 bytes)1 秒內;mc_estimate 跑 10<sup>6</sup> 次(試驗本身很快)1 秒內。這個門檻來自任務「檔案格式與命令列」的任務目標「效能」(256 KiB 的檔 compress＋decompress 合計 11 秒內)與 Boss 戰「機率期末:理論對實測」(2×10<sup>5</sup> 次試驗)。換算:壓縮 256 KiB 的檔要數原檔一次,方法 2 再數一次 LZ77 打包後的位元組(沒有重複的資料每個位元組都變成 4 位元組的三元組,最多 1 MiB),合計約 1.25 MiB,是這個門檻 4 MiB 的 0.32 倍;頻率表剛好卡在 1 秒時,在命令列裡約佔 0.32 秒,是「效能」預算分給它的份。mc_estimate 的 10<sup>6</sup> 次是 Boss 戰 2×10<sup>5</sup> 次的 5 倍,參考解約 0.05 秒。</li>
+          </ul>
+          <p><strong>不變式:</strong><code>check()</code> 要確認兩件事一直成立:① <code>self.total</code> 等於 <code>self.counts</code> 所有次數的和;② 每個次數都是 ≥ 1 的整數(出現 0 次的符號不能留在表裡)。成立回傳 <code>True</code>,不成立回傳 <code>False</code> 或丟 <code>AssertionError</code>。隱藏檢定會用隨機操作檢查不變量一直成立,也會故意弄壞內部狀態看 <code>check()</code> 抓不抓得到。方法裡的 <code>assert</code> 只放 O(1) 的檢查,整體性質放在 <code>check()</code>(效能測試不會呼叫 <code>check()</code>)。</p>
+          <p><strong>規則:</strong>不能 <code>import</code> <code>zlib</code>、<code>gzip</code>、<code>bz2</code>、<code>lzma</code>、<code>zipfile</code>、<code>binascii</code>(整條任務線都一樣);可以用 <code>math</code>、<code>random</code>。</p>
+          <p><strong>之後會用在:</strong><a href="57-probability.html#lab-hzip-ci">{{ch:57-probability}}的任務「信賴區間」</a>:<code>mc_interval</code> 用你的 <code>mc_estimate</code> 算點估計;<a href="108-information-theory.html#lab-hzip-huffman">{{ch:108-information-theory}}的任務「Huffman 編碼」</a>:<code>code_lengths</code> 吃你的 <code>FreqTable</code>,「對得上熵」用你的 <code>entropy()</code>;<a href="15-number-theory-graphs.html#lab-hzip-cli">{{ch:15-number-theory-graphs}}的任務「檔案格式與命令列」</a>用它數位元組;Boss 戰「機率期末:理論對實測」用你的 <code>mc_estimate</code>(經過任務「信賴區間」)估出 CRC-8 漏抓壞訊框的機率(手算 14.3)。</p>
+          <p class="lab-rule">這個零件過關之後,後面的專題一律用你自己的版本。規則見<a href="00-about.html#lab-rules">零件庫規則</a>。</p>
+        </div>
+      </div>
+
       <h2>條件機率與獨立</h2>
       <p>
         很多時候,我們會在「已知某事發生」的前提下,問另一件事的機率。這叫<strong>條件機率(conditional probability)</strong>,
@@ -590,6 +889,29 @@ print(f"理論機率 = {1/6:.4f}")                     # 理論機率 = 0.1667</
           <strong>獨立</strong>是「一個發生與否不影響另一個」($P(A\cap B)=P(A)P(B)$)。
           兩者其實幾乎相反!如果 $A$、$B$ 都有正機率<em>又</em>互斥,那它們<strong>反而高度相依</strong>——
           因為「$A$ 發生」直接讓「$B$ 發生」的機率歸零。看到「獨立」就想「相乘」,看到「互斥」才想「相加」。</p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 14.4 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p><strong>看起來對但其實錯。</strong>(蒙提霍爾問題)三扇門,一扇後面是車、兩扇是羊。你先選一扇;主持人<strong>知道</strong>車在哪,從另外兩扇裡打開一扇羊門(兩扇都是羊時隨便開一扇),再問你要不要換到剩下那扇。「主持人打開一扇羊門之後只剩兩扇,所以換不換都是 1/2。」
+          用上面的條件機率算:你固定先選門 1。把「車在哪」和「主持人開哪扇」的所有情況列成表,算出不換與換的中獎率。
+          再算另一個版本:主持人<strong>不知道</strong>車在哪,從門 2、3 隨便開一扇,開到車就作廢重來;在「開出來是羊」的條件下,換的中獎率是多少?</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <div class="table-wrap"><table>
+              <thead><tr><th>車在</th><th>主持人開</th><th>機率</th><th>不換</th><th>換</th></tr></thead>
+              <tbody>
+                <tr><td>1</td><td>2</td><td>1/3 × 1/2 = 1/6</td><td>中</td><td></td></tr>
+                <tr><td>1</td><td>3</td><td>1/6</td><td>中</td><td></td></tr>
+                <tr><td>2</td><td>3(只能開 3)</td><td>1/3</td><td></td><td>中</td></tr>
+                <tr><td>3</td><td>2(只能開 2)</td><td>1/3</td><td></td><td>中</td></tr>
+              </tbody>
+            </table></div>
+            <p>不換 $= 1/6 + 1/6 = 1/3$,換 $= 1/3 + 1/3 = 2/3$。「只剩兩扇」不代表兩扇一樣可能:主持人知道答案,他開哪扇門帶有資訊。</p>
+            <p>不知道答案的主持人:6 種情況各 1/6,其中「車在 2 開 2」「車在 3 開 3」開到車、作廢。剩下 4 種(共 4/6)裡,不換會中的有 2 種(車在 1),換會中的有 2 種,
+            所以條件機率都是 $\frac{2/6}{4/6} = \frac12$。同一句「開出一扇羊門」,規則不同,答案就不同。例子都對 ≠ 敘述為真:「1/2」只在其中一種規則下成立。</p>
+          </div></details>
         </div>
       </div>
 
@@ -828,6 +1150,21 @@ print(f"23 人模擬撞期機率 ≈ {simulate_birthday():.1%}")   # ≈ 50.6%</
           $n$ 個人能配出 $\binom{n}{2} = \frac{n(n-1)}{2}$ 對。$n=23$ 時,有 $\binom{23}{2}=253$ 對之多——
           253 次「撞期機會」,難怪過半。看吧,連這個結論的核心,都是一個組合數 $\binom{n}{2}$。
           <strong>會數數,你才看得懂機率為什麼這樣。</strong></p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 14.5 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p><strong>看起來對但其實錯。</strong>「23 個人就有過半的機率撞期,所以我和 22 位同學在一起時,有人和<strong>我</strong>同一天生日的機率也過半。」
+          算出真正的機率。除了我以外,要有幾個人,「有人和我同一天」的機率才會過半?</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <p>每個人和我不同天的機率是 $\frac{364}{365}$,22 人都不同天是 $\left(\frac{364}{365}\right)^{22}$,
+            所以 $P(\text{有人和我同天}) = 1 - \left(\frac{364}{365}\right)^{22} \approx 5.86\%$,遠低於一半。</p>
+            <p>要 $1 - \left(\frac{364}{365}\right)^{k} \ge 0.5$,解得 $k \ge \frac{\ln 0.5}{\ln(364/365)} \approx 252.7$,也就是 $k = 253$ 個人(連我共 254 人)。
+            巧合的是 253 正好等於 $\binom{23}{2}$:23 個人有 253 對「任兩人」,我卻只和其他人組成 22 對。
+            這也是生日攻擊的分界:找「任意一對」撞在一起(約 $2^{n/2}$ 次)比找「撞上某一個指定的值」(約 $2^{n}$ 次)容易得多。</p>
+          </div></details>
         </div>
       </div>
 

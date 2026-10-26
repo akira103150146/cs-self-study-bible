@@ -185,6 +185,30 @@ print(f"不均勻四符號熵= {entropy(probs):.4f} bits")         # 1.7500</cod
         但因為分佈不均，實際熵只有 1.75 位元——這 0.25 位元的差距就是「可以壓縮的空間」。
       </p>
 
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">為什麼要學</span>
+          <p>熵是任務線「hzip 壓縮器」的量尺。任務「頻率與估計」（<a href="14-combinatorics-probability.html">第 14 章</a>的 Lab）要你寫 <code>FreqTable.entropy()</code>；
+          本章的任務「Huffman 編碼」用它檢查你的碼長：平均碼長 $L$ 一定要落在 $H \le L &lt; H+1$。Boss 戰「機率期末：理論對實測」也用同一條不等式判分。
+          熵告訴你「這份資料最少要幾個位元」，你的壓縮器離它多遠，測試會量給你看。</p>
+        </div>
+      </div>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">看起來對但其實錯：「單一字母的熵就是壓縮的極限」</span>
+          <p>把 <code>"ab"</code> 重複 500 次（1000 個字元）。a、b 各佔一半，單一字母的熵是 1 位元／字母，
+          所以「一個字母配一個碼」的方法（Huffman）最少要 1000 位元＝125 個位元組。
+          但這份資料完全可以預測。用本章 Lab 的 LZ77 規則（視窗 4096、預視 255，每個三元組存成 4 個位元組），只要 6 個三元組
+          <code>(0,0,a) (0,0,b) (2,255,b) (2,255,b) (2,255,b) (2,229,b)</code>，共 24 個位元組。</p>
+          <p>錯在哪裡：$-\sum p_i \log_2 p_i$ 是「每個符號<strong>彼此獨立</strong>」時的下限。真實資料前後相關（英文的 q 後面幾乎都是 u），
+          把前文算進去，Shannon 在 1951 年估計英文每個字母只要約 0.6 到 1.3 位元。前面的「4.1 位元／字母」只對「字母互相獨立」的模型成立。
+          例子都對 ≠ 敘述為真：一定要先問「這個下限是對哪一種模型說的」。</p>
+        </div>
+      </div>
+
       <!-- ==================== §3 ==================== -->
       <h2>源編碼定理：壓縮的理論下限</h2>
 
@@ -263,6 +287,66 @@ print(f"不均勻四符號熵= {entropy(probs):.4f} bits")         # 1.7500</cod
         恰好等於熵 1.75 位元——這正是 Huffman 演算法對此分佈產生的最佳碼。
       </p>
 
+      <h3>證明(參考):Kraft 不等式與前綴碼的檢查</h3>
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">為什麼要學</span>
+          <p>任務「Huffman 編碼」的 <code>kraft_sum</code> 要用分數精確算出 $\sum 2^{-\ell_i}$；<code>canonical_codes</code> 碰到和大於 1 的碼長表要丟 <code>ValueError</code>。
+          任務「檔案格式與命令列」解壓時，碼長表是從檔案讀進來的，可能被改壞（隱藏檢定「CRC 對但內容壞」會故意塞一張超額的碼長表）。
+          Kraft 不等式就是那一行檢查：和大於 1，這張表配不出前綴碼，檔案一定是壞的。</p>
+        </div>
+      </div>
+      <p>
+        <strong>證明(參考)。</strong>（前綴碼 ⇒ 不等式）設最長的碼長是 $\ell_{\max}$。看所有長度剛好 $\ell_{\max}$ 的位元串，一共 $2^{\ell_{\max}}$ 個。
+        長度 $\ell_i$ 的碼字是其中 $2^{\ell_{\max}-\ell_i}$ 個位元串的開頭（後面的 $\ell_{\max}-\ell_i$ 位隨便填）。
+        前綴碼裡沒有一個碼字是另一個的開頭，所以不同碼字「蓋住」的位元串互不重疊，加起來不超過全部：
+        $\sum_i 2^{\ell_{\max}-\ell_i} \le 2^{\ell_{\max}}$。兩邊除以 $2^{\ell_{\max}}$ 就是 Kraft 不等式。
+      </p>
+      <p>
+        （不等式 ⇒ 前綴碼）反過來，碼長滿足 Kraft 不等式時，一定配得出前綴碼：把碼長由短到長排好，一個接一個連續配碼。
+        這正是本章後面「手算:canonical 碼」的做法，每配一個長度 $\ell$ 的碼字就用掉 $2^{-\ell}$ 的份額，和不超過 1 就不會用完。
+      </p>
+      <p>
+        證明的程式版本有兩個檢查：碼長的 Kraft 和（用 <code>Fraction</code>，不會有浮點誤差），和「一組碼字是不是前綴碼」。
+        後者有個省時的寫法：把碼字照字典順序排好，以 <code>a</code> 開頭的字串一定緊接在 <code>a</code> 後面，所以只要比相鄰的兩個。
+      </p>
+      <pre><code class="language-python">from fractions import Fraction
+
+def kraft(lengths):
+    """Σ 2^-ℓ,用分數精確計算(浮點數加很多個 2^-40 會有誤差)。"""
+    return sum(Fraction(1, 2 ** l) for l in lengths)
+
+def is_prefix_free(words):
+    """排序後只比相鄰的兩個:以 a 開頭的字串,排序後一定緊接在 a 後面。"""
+    words = sorted(words)
+    return all(not b.startswith(a) for a, b in zip(words, words[1:]))
+
+print(kraft([1, 2, 3, 3]), is_prefix_free(['0', '10', '110', '111']))   # 1 True
+print(kraft([1, 2, 2]), is_prefix_free(['0', '01', '11']))              # 1 False
+print(kraft([1, 2, 2, 3]))                                              # 9/8</code></pre>
+      <p>
+        第二行很重要：碼長 1、2、2 的 Kraft 和剛好是 1，但 <code>{0, 01, 11}</code> 不是前綴碼。
+        Kraft 不等式說的是「<strong>存在</strong>一組這種碼長的前綴碼」，不是「每一組這種碼長的碼都是前綴碼」。
+        第三行的和是 9/8，大於 1，任何人都配不出碼長 1、2、2、3 的前綴碼。
+      </p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 108.1 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p><strong>看起來對但其實錯。</strong>「碼字的 Kraft 和 ≤ 1，這組碼就是前綴碼。」用碼字 <code>{0, 01, 11}</code> 回答：
+          (a) 它的 Kraft 和是多少？是前綴碼嗎？(b) 從頭一個位元一個位元讀 <code>01</code>，讀到第一個 <code>0</code> 時可以馬上輸出符號嗎？
+          (c) 寫出一組碼長也是 1、2、2 的前綴碼。(d) 碼長 1、2、2、3 為什麼一定配不出前綴碼？</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <p>(a) $2^{-1}+2^{-2}+2^{-2} = 1$，但 <code>0</code> 是 <code>01</code> 的開頭，不是前綴碼（<code>is_prefix_free</code> 回傳 False）。</p>
+            <p>(b) 不行。<code>0</code> 本身是碼字，可是後面如果接著 <code>1</code>，那其實是 <code>01</code>。解碼器必須「等下一個位元」，這就不是即時碼。</p>
+            <p>(c) <code>{0, 10, 11}</code>：照碼長由短到長連續配碼就得到它。</p>
+            <p>(d) Kraft 和 $\frac12+\frac14+\frac14+\frac18 = \frac98 &gt; 1$。由上面的證明，前綴碼的和一定 ≤ 1，所以不存在。
+            例子都對 ≠ 敘述為真：Kraft 和 ≤ 1 只保證「存在」，不保證「這一組」。</p>
+          </div></details>
+        </div>
+      </div>
+
       <!-- ==================== §5 ==================== -->
       <h2>熵編碼：從 Huffman 到算術編碼</h2>
 
@@ -281,6 +365,294 @@ print(f"不均勻四符號熵= {entropy(probs):.4f} bits")         # 1.7500</cod
         對 $k$ 個符號組成的「區塊」一次編碼，差距縮小到 $1/k$ 位元/符號；
         但 $k$ 變大時需要 $n^k$ 個碼字，實用上代價極高——於是有了算術編碼。
       </p>
+
+      <h3>手算:Huffman 建樹與優先佇列的狀態</h3>
+      <p>
+        用 <code>"ABRACADABRA"</code> 的次數 A:5、B:2、C:1、D:1、R:2 建樹。每一步從優先佇列取出最小的兩個節點，合併後放回。
+        同次數時要有固定的規則，這裡用「(次數, 建立順序)」排：葉子照符號順序 A、B、C、D、R 建立（編號 0–4），合併出來的新節點接著編號 5、6、7……。
+        「累計」欄是到目前為止所有合併的次數和：每合併一次，子樹裡每個符號的碼都多 1 位元，所以最後的累計就是編碼後的總位元數。
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>步驟</th><th>取出的兩個</th><th>合併成</th><th>放回後的佇列（依 (次數, 建立順序)）</th><th>累計位元數</th></tr></thead>
+        <tbody>
+          <tr><td>0</td><td>—</td><td>—</td><td>C:1　D:1　B:2　R:2　A:5</td><td>0</td></tr>
+          <tr><td>1</td><td>C:1、D:1</td><td>(CD):2</td><td>B:2　R:2　(CD):2　A:5</td><td>2</td></tr>
+          <tr><td>2</td><td>B:2、R:2</td><td>(BR):4</td><td>(CD):2　(BR):4　A:5</td><td>2 + 4 = 6</td></tr>
+          <tr><td>3</td><td>(CD):2、(BR):4</td><td>(CDBR):6</td><td>A:5　(CDBR):6</td><td>6 + 6 = 12</td></tr>
+          <tr><td>4</td><td>A:5、(CDBR):6</td><td>根:11</td><td>根:11</td><td>12 + 11 = 23</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        碼長＝葉子在樹裡的深度：A 是 1，B、C、D、R 都是 3。驗算：$5\times1 + 2\times3 + 1\times3 + 1\times3 + 2\times3 = 23$ 位元，和累計一樣。
+        定長碼（5 種符號要 3 位元）需要 $11 \times 3 = 33$ 位元。
+      </p>
+      <p>
+        同次數的取法會改變碼長，但不會改變總位元數。如果第 2 步改成取 B:2 和 (CD):2（例如新節點排在同次數的葉子前面），
+        碼長變成 A:1、R:2、B:3、C:4、D:4，總位元數 $5 + 4 + 6 + 4 + 4 = 23$，還是 23。兩組碼長的 Kraft 和都剛好是 1。
+        所以任務「Huffman 編碼」的公開測試「總位元數最少」只比 $\sum$ 次數 × 碼長，不比每個符號的碼長。
+      </p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 108.2 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p><code>"BOOKKEEPER"</code> 的次數是 B:1、E:3、K:2、O:2、P:1、R:1。用同樣的規則（葉子照符號順序 B、E、K、O、P、R 建立）寫出每一步的佇列與累計，
+          再寫出每個符號的碼長和總位元數。定長碼要幾位元？</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <div class="table-wrap"><table>
+              <thead><tr><th>步驟</th><th>取出的兩個</th><th>合併成</th><th>放回後的佇列</th><th>累計</th></tr></thead>
+              <tbody>
+                <tr><td>0</td><td>—</td><td>—</td><td>B:1　P:1　R:1　K:2　O:2　E:3</td><td>0</td></tr>
+                <tr><td>1</td><td>B:1、P:1</td><td>(BP):2</td><td>R:1　K:2　O:2　(BP):2　E:3</td><td>2</td></tr>
+                <tr><td>2</td><td>R:1、K:2</td><td>(RK):3</td><td>O:2　(BP):2　E:3　(RK):3</td><td>5</td></tr>
+                <tr><td>3</td><td>O:2、(BP):2</td><td>(OBP):4</td><td>E:3　(RK):3　(OBP):4</td><td>9</td></tr>
+                <tr><td>4</td><td>E:3、(RK):3</td><td>(ERK):6</td><td>(OBP):4　(ERK):6</td><td>15</td></tr>
+                <tr><td>5</td><td>(OBP):4、(ERK):6</td><td>根:10</td><td>根:10</td><td>25</td></tr>
+              </tbody>
+            </table></div>
+            <p>碼長：E:2、O:2、B:3、K:3、P:3、R:3。總位元數 $3\times2 + 2\times2 + 1\times3 + 2\times3 + 1\times3 + 1\times3 = 25$，和累計一樣。
+            定長碼（6 種符號要 3 位元）是 $10 \times 3 = 30$ 位元。注意第 1 步：B、P、R 都是 1 次，照建立順序先取 B（0 號）和 P（4 號）。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 108.3 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p><strong>看起來對但其實錯。</strong>「出現最多次的符號，一定拿到 1 位元的碼。」次數 a:30、b:25、c:25、d:20（葉子照 a、b、c、d 建立）。
+          寫出建樹的過程，看 a 拿到幾位元。</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <div class="table-wrap"><table>
+              <thead><tr><th>步驟</th><th>取出的兩個</th><th>合併成</th><th>放回後的佇列</th><th>累計</th></tr></thead>
+              <tbody>
+                <tr><td>0</td><td>—</td><td>—</td><td>d:20　b:25　c:25　a:30</td><td>0</td></tr>
+                <tr><td>1</td><td>d:20、b:25</td><td>(db):45</td><td>c:25　a:30　(db):45</td><td>45</td></tr>
+                <tr><td>2</td><td>c:25、a:30</td><td>(ca):55</td><td>(db):45　(ca):55</td><td>100</td></tr>
+                <tr><td>3</td><td>(db):45、(ca):55</td><td>根:100</td><td>根:100</td><td>200</td></tr>
+              </tbody>
+            </table></div>
+            <p>四個符號全是 2 位元，a 也是。1 位元的碼會用掉一半的碼空間（Kraft 份額 $\frac12$），
+            可是 a 只佔 30%：把它和 c 合併，比讓它單獨佔一半更省。前面 ABRACADABRA 的 A 佔 5/11，夠重，才拿到 1 位元。
+            例子都對 ≠ 敘述為真：只看幾個「最常見的字母拿到最短的碼」的例子，會以為「最短」就是「1 位元」。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <h3>手算:canonical 碼，只靠碼長配出碼字</h3>
+      <p>
+        建樹得到的是<strong>碼長</strong>。如果解壓的一方也要知道每個碼字，最省的做法是只存碼長，兩邊用同一條規則把碼字配出來，
+        這叫 <strong>canonical Huffman 碼</strong>（DEFLATE 就是這樣做，見 RFC 1951 §3.2.2）。規則：
+      </p>
+      <ol>
+        <li>依 (碼長, 符號) 排序。</li>
+        <li>第一個符號的碼是 0（寫成它的碼長那麼多位）。</li>
+        <li>之後每一個：先把碼加 1；如果碼長比上一個長，再左移「長了幾位」位。</li>
+      </ol>
+      <p>用手算 Huffman 得到的碼長 A:1、B:3、C:3、D:3、R:3：</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>順序</th><th>符號</th><th>碼長</th><th>這一步</th><th>碼(十進位)</th><th>碼字</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td>A</td><td>1</td><td>從 0 開始</td><td>0</td><td><code>0</code></td></tr>
+          <tr><td>2</td><td>B</td><td>3</td><td>0 + 1 = 1；碼長 1 → 3，左移 2 位</td><td>4</td><td><code>100</code></td></tr>
+          <tr><td>3</td><td>C</td><td>3</td><td>加 1</td><td>5</td><td><code>101</code></td></tr>
+          <tr><td>4</td><td>D</td><td>3</td><td>加 1</td><td>6</td><td><code>110</code></td></tr>
+          <tr><td>5</td><td>R</td><td>3</td><td>加 1</td><td>7</td><td><code>111</code></td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        把 <code>ABRACADABRA</code> 逐字換成碼字：<code>0 100 111 0 101 0 110 0 100 111 0</code>，共 23 位元。
+        從高位往低位填進位元組，最後一個位元組不滿 8 位就補 0：
+        <code>01001110 10101100 10011100</code>（最後一個 0 是補的）→ <code>4E AC 9C</code>（3 個位元組）。
+      </p>
+      <p>
+        補上的那個 0 本身就是 A 的碼字。如果解碼器把 24 個位元全讀完，會多解出一個 A。所以檔案裡除了碼長表，還要存位元數 <code>nbits</code>（這裡是 23）。
+        hzip 的格式就是「碼長表＋nbits＋位元流」。
+      </p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 108.4 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>另一組最佳碼長 A:1、R:2、B:3、C:4、D:4（上面「同次數的取法」那一段）。(a) 寫出 canonical 碼。
+          (b) 把 <code>ABRA</code> 編碼，寫出位元、nbits 和補 0 之後的位元組（十六進位）。</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <div class="table-wrap"><table>
+              <thead><tr><th>順序</th><th>符號</th><th>碼長</th><th>這一步</th><th>碼</th><th>碼字</th></tr></thead>
+              <tbody>
+                <tr><td>1</td><td>A</td><td>1</td><td>從 0 開始</td><td>0</td><td><code>0</code></td></tr>
+                <tr><td>2</td><td>R</td><td>2</td><td>加 1 得 1，左移 1 位</td><td>2</td><td><code>10</code></td></tr>
+                <tr><td>3</td><td>B</td><td>3</td><td>加 1 得 3，左移 1 位</td><td>6</td><td><code>110</code></td></tr>
+                <tr><td>4</td><td>C</td><td>4</td><td>加 1 得 7，左移 1 位</td><td>14</td><td><code>1110</code></td></tr>
+                <tr><td>5</td><td>D</td><td>4</td><td>加 1</td><td>15</td><td><code>1111</code></td></tr>
+              </tbody>
+            </table></div>
+            <p>(b) A B R A → <code>0 110 10 0</code> ＝ <code>0110100</code>，nbits ＝ 7；補一個 0 成 <code>01101000</code> ＝ <code>68</code>。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <h3>證明(參考):平均碼長夾在 H 和 H+1 之間</h3>
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">為什麼要學</span>
+          <p>任務「Huffman 編碼」的隱藏檢定「對得上熵」，和 Boss 戰「機率期末：理論對實測」，都拿隱藏的隨機分布檢查 $H \le L &lt; H+1$，
+          其中 $H$ 用你自己的 <code>FreqTable.entropy()</code> 算。這兩條不等式是源編碼定理落到整數碼長時的樣子；下面的程式版本就是測試在做的事。</p>
+        </div>
+      </div>
+      <p>
+        記號：符號 $i$ 的機率 $p_i$、碼長 $\ell_i$，平均碼長 $L = \sum_i p_i \ell_i$，熵 $H = -\sum_i p_i \log_2 p_i$。
+      </p>
+      <p>
+        <strong>證明(參考)：$L &lt; H+1$。</strong>取 Shannon 碼長 $\ell_i = \lceil -\log_2 p_i \rceil$。因為 $\ell_i \ge -\log_2 p_i$，
+        $2^{-\ell_i} \le p_i$，所以 $\sum_i 2^{-\ell_i} \le \sum_i p_i = 1$：這組碼長滿足 Kraft 不等式，配得出前綴碼。
+        它的平均碼長 $\sum_i p_i \lceil -\log_2 p_i \rceil &lt; \sum_i p_i (-\log_2 p_i + 1) = H + 1$。
+        Huffman 碼是最佳的，平均碼長不會比這組長，所以 $L_{\text{Huffman}} &lt; H + 1$。
+      </p>
+      <p>
+        以 ABRACADABRA 為例：Shannon 碼長是 A:2、B:3、C:4、D:4、R:3，Kraft 和 $\frac58$，平均 $\frac{30}{11} \approx 2.727$；
+        $H \approx 2.0404$，$H+1 \approx 3.0404$。Huffman 的 $L = \frac{23}{11} \approx 2.0909$，夾在 $H$ 和 $H+1$ 中間。
+      </p>
+      <p>
+        <strong>★深入(選讀)：$H \le L$。</strong>
+        $L - H = \sum_i p_i\left(\ell_i + \log_2 p_i\right) = -\sum_i p_i \log_2 \frac{2^{-\ell_i}}{p_i}$。
+        $\log_2$ 是凹函數，由 Jensen 不等式，$\sum_i p_i \log_2 \frac{2^{-\ell_i}}{p_i} \le \log_2 \sum_i 2^{-\ell_i} \le \log_2 1 = 0$（最後一步用 Kraft）。
+        所以 $L - H \ge 0$，等號成立剛好在每個 $p_i = 2^{-\ell_i}$ 時（例如前面的 $\{0.5, 0.25, 0.125, 0.125\}$）。
+        延伸閱讀：Cover &amp; Thomas《Elements of Information Theory》講 Data Compression 的那一章。
+      </p>
+      <p>
+        程式版本：不需要知道證明，只檢查結論。前半段用上面手算 Huffman 的兩組碼長；後半段用證明裡的 Shannon 碼長在 1000 個隨機分布上試
+        （不是證明，是建立直覺，也是任務的隱藏檢定在做的事）。
+      </p>
+      <pre><code class="language-python">import math
+import random
+from fractions import Fraction
+
+def entropy_of_counts(counts):
+    n = sum(counts.values())
+    return -sum(c / n * math.log2(c / n) for c in counts.values())
+
+def avg_length(counts, lengths):
+    n = sum(counts.values())
+    return sum(counts[s] * lengths[s] for s in counts) / n
+
+def kraft(lengths):
+    return sum(Fraction(1, 2 ** l) for l in lengths.values())
+
+# 手算 Huffman 的兩組碼長(同次數的取法不同),都是最佳的
+counts = {'A': 5, 'B': 2, 'C': 1, 'D': 1, 'R': 2}
+for lengths in [{'A': 1, 'B': 3, 'C': 3, 'D': 3, 'R': 3},
+                {'A': 1, 'R': 2, 'B': 3, 'C': 4, 'D': 4}]:
+    H, L = entropy_of_counts(counts), avg_length(counts, lengths)
+    assert kraft(lengths) == 1          # Huffman 樹是滿二元樹 → Kraft 等式
+    assert H &lt;= L &lt; H + 1               # 源編碼的上下界
+    print(f"H = {H:.4f}  L = {L:.4f}  Kraft = {kraft(lengths)}")
+
+# 證明裡的 Shannon 碼長 ⌈-log2 p⌉:Kraft ≤ 1,而且 H ≤ L &lt; H+1
+rng = random.Random(108)
+for _ in range(1000):
+    k = rng.randint(2, 20)
+    counts = {s: rng.randint(1, 1000) for s in range(k)}
+    n = sum(counts.values())
+    lengths = {s: math.ceil(-math.log2(c / n)) for s, c in counts.items()}
+    H, L = entropy_of_counts(counts), avg_length(counts, lengths)
+    assert kraft(lengths) &lt;= 1
+    assert H &lt;= L &lt; H + 1
+print("1000 個隨機分布:Shannon 碼長都滿足 Kraft ≤ 1 與 H ≤ L &lt; H+1")
+# H = 2.0404  L = 2.0909  Kraft = 1
+# H = 2.0404  L = 2.0909  Kraft = 1
+# 1000 個隨機分布:Shannon 碼長都滿足 Kraft ≤ 1 與 H ≤ L &lt; H+1</code></pre>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 108.5 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p><strong>看起來對但其實錯。</strong>「Huffman 是最佳的，所以它的平均碼長一定很接近熵。」
+          二元來源：0 出現的機率 0.95、1 出現的機率 0.05。算熵 $H$ 和 Huffman 的平均碼長 $L$。</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <p>$H = -0.05\log_2 0.05 - 0.95\log_2 0.95 \approx 0.2864$ 位元。只有兩個符號，Huffman 一定是一個 1 位元、一個 1 位元，$L = 1$。</p>
+            <p>$L$ 是 $H$ 的 3.5 倍，但仍然滿足 $H \le L &lt; H+1$。「最佳」是指「每個符號整數位元的碼裡最好」，不是「接近熵」。
+            上界 $H+1$ 的那個「+1」，在 $H$ 很小時就是主要的代價。解法是把幾個符號綁成一塊再編碼（實戰題庫 練習 108.13），或改用算術編碼。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <h3 id="lab-hzip-huffman">本章 Lab:Huffman 編碼 hzip/huffman.py</h3>
+      <div class="callout lab" data-task="hzip/huffman">
+        <div class="ico">🧪</div>
+        <div class="body">
+          <span class="c-title">本章 Lab · 任務線「hzip」· 任務「Huffman 編碼」</span>
+          <p><strong>對應地下城任務：</strong>任務「Huffman 編碼」（任務線：hzip 壓縮器，第 2／6 個任務）。零件檔：<code>~/零件庫/hzip/huffman.py</code>；任務資料夾：<code>~/任務線/hzip/02-huffman/</code>。</p>
+          <p><strong>要做的零件：</strong>讓本節的理論跑起來：Huffman 給出總位元數最少的碼長，Kraft 等式保證碼長配得出前綴碼，canonical 規則只靠碼長就配出碼字（本節的「手算:canonical 碼，只靠碼長配出碼字」），平均碼長一定夾在 $H$ 和 $H+1$ 之間。這個零件把四件事都變成可以測的程式，再真的把位元打包成位元組。</p>
+          <p><strong>介面：</strong></p>
+<pre><code class="language-python"># ~/零件庫/hzip/huffman.py
+def code_lengths(freq) -&gt; dict:
+    """freq:hzip.stats 的 FreqTable(或 items() 回傳 (符號, 次數) 的物件)。
+    回傳 {符號: 碼長},總位元數 Σ 次數 × 碼長 最少;次數 0 的符號不給碼;
+    只有一種符號 → {s: 1};沒有符號 → {}。"""
+
+def kraft_sum(lengths) -&gt; Fraction:
+    """Σ 2^-L,用 fractions.Fraction 精確計算。"""
+
+def canonical_codes(lengths) -&gt; dict:
+    """{符號: (code, length)}:依 (長度, 符號) 排序後連續配碼(DEFLATE 的規則)。
+    有長度 &lt; 1,或 kraft_sum(lengths) &gt; 1 → ValueError。"""
+
+def encode(symbols, lengths) -&gt; tuple:
+    """用 canonical_codes 的碼,回傳 (payload, nbits):位元由高到低填進位元組,
+    最後一個位元組補 0;符號不在 lengths → KeyError。"""
+
+def decode(payload, nbits, lengths) -&gt; list:
+    """只靠 lengths 重建碼,解出符號的列表;nbits 超過 payload、
+    碰到不存在的碼、最後剩半個碼 → ValueError。"""</code></pre>
+          <p><strong>公開範例</strong>（<code>ABRACADABRA</code> 的碼長有好幾種最佳解，所以範例只比總位元數與 Kraft 和）：</p>
+<pre><code class="language-python">&gt;&gt;&gt; from hzip.stats import FreqTable
+&gt;&gt;&gt; from hzip.huffman import code_lengths, kraft_sum, canonical_codes, encode, decode
+&gt;&gt;&gt; t = FreqTable("ABRACADABRA")
+&gt;&gt;&gt; L = code_lengths(t)
+&gt;&gt;&gt; sum(c * L[s] for s, c in t.items())
+23
+&gt;&gt;&gt; kraft_sum(L)
+Fraction(1, 1)
+&gt;&gt;&gt; lengths = {"A": 1, "B": 3, "C": 3, "D": 3, "R": 3}
+&gt;&gt;&gt; canonical_codes(lengths)
+{'A': (0, 1), 'B': (4, 3), 'C': (5, 3), 'D': (6, 3), 'R': (7, 3)}
+&gt;&gt;&gt; payload, nbits = encode("ABRA", lengths)
+&gt;&gt;&gt; payload, nbits
+(b'N', 8)
+&gt;&gt;&gt; decode(payload, nbits, lengths)
+['A', 'B', 'R', 'A']
+&gt;&gt;&gt; code_lengths(FreqTable("zzz")), kraft_sum({"z": 1}), code_lengths(FreqTable())
+({'z': 1}, Fraction(1, 2), {})
+&gt;&gt;&gt; try:
+...     canonical_codes({"a": 1, "b": 1, "c": 1})   # Kraft 和 3/2 &gt; 1
+... except ValueError:
+...     print("ValueError")
+ValueError</code></pre>
+          <p><strong>和本章範例不同的地方：</strong></p>
+          <ul>
+            <li><a href="31-greedy.html">第 30 章</a>的 <code>build_huffman(freqs)</code> 建出整棵樹，回傳 <code>'0'</code>／<code>'1'</code> 的字串。Lab 的 <code>code_lengths</code> 只回傳碼長，碼字一律由 <code>canonical_codes</code> 照規則配；同次數時怎麼合併不規定，只比總位元數。</li>
+            <li>本章的 <code>kraft</code> 只算 Kraft 和；Lab 的 <code>kraft_sum</code> 一樣用 <code>Fraction</code>，但吃的是 {符號: 碼長} 的 dict，而且兩種以上的符號時要剛好等於 1。</li>
+            <li>本章沒有真的把位元打包；Lab 的 <code>encode</code> 回傳 <code>(bytes, nbits)</code>，<code>decode</code> 只拿得到碼長表，還要拒絕不合法的位元流。</li>
+            <li>只有一種符號時，本章的 <code>build_huffman</code> 給 <code>"0"</code>；Lab 給碼長 1（碼字 0，Kraft 和 1/2）。</li>
+            <li>本章的 <code>entropy(probs)</code> 吃一個機率的列表；Lab 的熵是 <code>FreqTable.entropy()</code>，直接從次數算，「對得上熵」用它當 H。</li>
+            <li>頻率一律用你在<a href="14-combinatorics-probability.html#lab-hzip-stats">第 14 章</a>寫的 <code>FreqTable</code>。</li>
+          </ul>
+          <p>可以參考本章的範例，但介面和要求不同，要自己改寫。</p>
+          <p><strong>任務目標</strong>（公開的用 <code>test</code> 自己跑；隱藏檢定在 <code>submit</code> 時跑，只看得到名稱和一行說明）：</p>
+          <ul class="lab-goals">
+            <li data-group="huffman.optimal">☐ <strong>總位元數最少</strong>〔公開〕Σ 次數 × 碼長 等於最佳值（同次數時的取法不規定，只比總和）。</li>
+            <li data-group="huffman.kraft">☐ <strong>Kraft 等式</strong>〔公開〕兩種以上的符號時 kraft_sum(code_lengths(…)) 剛好是 1（Huffman 樹是滿二元樹）；只有一種符號時是 1/2。</li>
+            <li data-group="huffman.canonical">☐ <strong>canonical 碼</strong>〔公開〕canonical_codes 對公開範例逐一相同：依 (長度, 符號) 排序，同長度連續加 1，換長度時左移。（Boss 戰「格式相容」需要它：檔案裡只存碼長。）</li>
+            <li data-group="huffman.roundtrip">☐ <strong>往返一致</strong>〔公開〕decode(*encode(x, L), L) == x；nbits 等於每個符號碼長的和。</li>
+            <li data-group="huffman.prefix">☐ <strong>前綴碼</strong>〔隱藏檢定〕隨機的碼長表（合法的）配出來的碼沒有一個是另一個的前綴；位元的順序是由高到低。</li>
+            <li data-group="huffman.entropy-bound">☐ <strong>對得上熵</strong>〔隱藏檢定〕隱藏的隨機分布（至少兩種符號）：平均碼長 L 滿足 H ≤ L &lt; H+1，H 是你的 FreqTable.entropy()。（Boss 戰「機率期末:理論對實測」需要它。）</li>
+            <li data-group="huffman.edge">☐ <strong>邊界</strong>〔隱藏檢定〕空輸入、只有一種符號、兩種符號、256 種一樣多（全部 8 位元）、費氏數列的次數（碼長到 255）、次數很大的整數。</li>
+            <li data-group="huffman.errors">☐ <strong>錯誤處理</strong>〔隱藏檢定〕Kraft 和 &gt; 1 或長度 &lt; 1 的碼長表要 ValueError；decode 的位元不夠、碰到不存在的碼、最後剩半個碼要 ValueError；encode 不認得的符號要 KeyError。</li>
+            <li data-group="huffman.perf">☐ <strong>效能</strong>〔隱藏檢定〕建碼 O(k log k)、編碼與解碼每個位元 O(1)（不能每個位元都掃一遍碼表）。門檻：256 KiB 的資料 code_lengths＋encode＋decode 合計 1 秒內。這個門檻來自任務「檔案格式與命令列」的任務目標「效能」（256 KiB 的檔 compress＋decompress 合計 11 秒內）。換算：壓縮時 Huffman 對原檔編一次、對 LZ77 打包後的三元組（最多 4 倍大）再編一次，解壓再解一次，約 1.5×10<sup>6</sup> 個符號，是這個門檻（編＋解 256 KiB）的 3 倍；Huffman 剛好卡在 1 秒時，在命令列裡約佔 3 秒，是「效能」預算分給它的份。</li>
+          </ul>
+          <p><strong>規則：</strong>不能 <code>import</code> <code>zlib</code>、<code>gzip</code>、<code>bz2</code>、<code>lzma</code>、<code>zipfile</code>、<code>binascii</code>；可以用 <code>heapq</code> 與 <code>fractions</code>。</p>
+          <p><strong>之後會用在：</strong><a href="15-number-theory-graphs.html#lab-hzip-cli">第 15 章的任務「檔案格式與命令列」</a>：方法 1 與方法 2 的本體都是你的 canonical Huffman；Boss 戰「格式相容」要求參考 hzip 解得開你的檔，因為檔案裡只存碼長，兩邊重建出來的碼一定一樣。</p>
+          <p class="lab-rule">這個零件過關之後，後面的專題一律用你自己的版本。規則見<a href="00-about.html#lab-rules">零件庫規則</a>。</p>
+        </div>
+      </div>
 
       <h3>算術編碼(Arithmetic Coding)</h3>
       <p>
@@ -442,6 +814,207 @@ for tok in tokens:
 # (3, 1, 'c')  →「往回 3 位找到 'a'，複製 1 字元，接 c」
 # (5, 1, 'd')  →「往回 5 位(到 data[0])找到 'a'，複製 1 字元，接 d」
 # (7, 4, '')   →「往回 7 位找到 'abra'，複製 4 字元」</code></pre>
+
+
+      <h3>手算:LZ77 編碼，視窗、預視與最後一個字元</h3>
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">為什麼要學</span>
+          <p>任務線「hzip 壓縮器」的任務「LZ77」要你寫 <code>encode</code>、<code>decode</code>（含重疊複製）與 4 個位元組一組的 <code>pack</code>；
+          任務「檔案格式與命令列」的方法 2 就是「LZ77 的三元組打包之後，再用 Huffman 壓一次」（上面 DEFLATE 的做法）。
+          Boss 戰「壓縮率」比的就是你找匹配找得好不好，「壞檔偵測」則要解碼器擋下指到不存在位置的 offset。</p>
+        </div>
+      </div>
+      <p>
+        上面的 <code>lz77_encode</code> 是最簡單的版本。手算時用下面這組規則（和任務「LZ77」的規格一樣），每一條都會影響輸出：
+      </p>
+      <ol>
+        <li>在位置 $i$，匹配的起點最多往回 $W$ 個（offset 是 1 到 $W$）。匹配可以延伸過 $i$：一邊複製、一邊用剛複製出來的字元（<strong>重疊</strong>）。</li>
+        <li>取最長的匹配；一樣長時取最近的（offset 最小）。</li>
+        <li>長度最多是預視大小 $L$，而且一定要留一個字元當 next：長度 ≤ min($L$, 剩下的字元數 − 1)。</li>
+        <li>找不到匹配時輸出 (0, 0, 字元)。輸出一個三元組後，$i$ 往前跳「長度 + 1」。</li>
+      </ol>
+      <p>
+        和上面的 <code>lz77_encode</code> 不同的地方有兩個：它在一樣長時取最遠的（從視窗左邊掃起，<code>&gt;</code> 只換更長的），
+        而且最後一個三元組的 next 可以是空字串 <code>''</code>。任務的版本處理位元組，next 一定是一個位元組（0..255 的整數），所以有規則 3。
+      </p>
+      <p>對 <code>"abcabcabcabc"</code>（12 個字元）用 $W = 8$、$L = 4$：</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>位置 i</th><th>視窗（i 前面最多 8 個）</th><th>預視（i 起最多 4 個）</th><th>最長匹配</th><th>三元組</th><th>下一個 i</th></tr></thead>
+        <tbody>
+          <tr><td>0</td><td>（空）</td><td><code>abca</code></td><td>沒有</td><td>(0, 0, a)</td><td>1</td></tr>
+          <tr><td>1</td><td><code>a</code></td><td><code>bcab</code></td><td>沒有</td><td>(0, 0, b)</td><td>2</td></tr>
+          <tr><td>2</td><td><code>ab</code></td><td><code>cabc</code></td><td>沒有</td><td>(0, 0, c)</td><td>3</td></tr>
+          <tr><td>3</td><td><code>abc</code></td><td><code>abca</code></td><td>offset 3，長度 4（第 4 個 a 是剛複製出來的：重疊）</td><td>(3, 4, b)</td><td>8</td></tr>
+          <tr><td>8</td><td><code>abcabcab</code></td><td><code>cabc</code></td><td>offset 3 和 6 都配得到 4 個，取近的 3；只剩 4 個字元，要留 1 個當 next → 長度 3</td><td>(3, 3, c)</td><td>12（結束）</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        位置 3 那一列的 offset（3）比長度（4）小，這就是<strong>重疊複製</strong>：要複製的東西有一部分還沒寫出來，要一邊寫一邊讀。
+        最後一列如果照上面的 <code>lz77_encode</code>，會輸出 (6, 4, '')：offset 3 和 6 一樣長，最近的是 3，本章版本取最遠的 6（規則 2 的差別）；而且它的 next 可以是空的。任務的規格要取最近的、不允許空的 next，所以是 offset 3、少配一個，把最後的 c 留給 next。
+      </p>
+
+      <h3>手算:LZ77 解碼與重疊複製</h3>
+      <p>
+        解碼器只拿到三元組。規則：對每個三元組，從「目前輸出的長度 − offset」那個位置開始，<strong>一次複製一個字元</strong>，複製 length 次，最後接上 next。
+        一次一個字元很重要：如果寫成一次切一段 <code>out[-offset:-offset+length]</code>，offset &lt; length 時會切不到還沒寫出來的部分。
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>步驟</th><th>三元組</th><th>動作</th><th>來源位置（輸出長度 − offset）</th><th>寫出的字元</th><th>輸出</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td>(0, 0, a)</td><td>只有 next</td><td>—</td><td>a</td><td><code>a</code></td></tr>
+          <tr><td>2</td><td>(0, 0, b)</td><td>只有 next</td><td>—</td><td>b</td><td><code>ab</code></td></tr>
+          <tr><td>3</td><td>(0, 0, c)</td><td>只有 next</td><td>—</td><td>c</td><td><code>abc</code></td></tr>
+          <tr><td>4</td><td>(3, 4, b)</td><td>複製第 1 個</td><td>3 − 3 = 0</td><td>a</td><td><code>abca</code></td></tr>
+          <tr><td>5</td><td></td><td>複製第 2 個</td><td>4 − 3 = 1</td><td>b</td><td><code>abcab</code></td></tr>
+          <tr><td>6</td><td></td><td>複製第 3 個</td><td>5 − 3 = 2</td><td>c</td><td><code>abcabc</code></td></tr>
+          <tr><td>7</td><td></td><td>複製第 4 個</td><td>6 − 3 = 3（步驟 4 才寫出來的 a）</td><td>a</td><td><code>abcabca</code></td></tr>
+          <tr><td>8</td><td></td><td>接 next</td><td>—</td><td>b</td><td><code>abcabcab</code></td></tr>
+          <tr><td>9</td><td>(3, 3, c)</td><td>複製第 1 個</td><td>8 − 3 = 5</td><td>c</td><td><code>abcabcabc</code></td></tr>
+          <tr><td>10</td><td></td><td>複製第 2 個</td><td>9 − 3 = 6</td><td>a</td><td><code>abcabcabca</code></td></tr>
+          <tr><td>11</td><td></td><td>複製第 3 個</td><td>10 − 3 = 7</td><td>b</td><td><code>abcabcabcab</code></td></tr>
+          <tr><td>12</td><td></td><td>接 next</td><td>—</td><td>c</td><td><code>abcabcabcabc</code></td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        解碼器要一直成立的條件：複製之前 $1 \le \text{offset} \le$ 目前輸出的長度（否則來源位置是負的，指到不存在的資料），
+        而且 length = 0 時 offset 一定是 0。壞掉的檔案最常在這裡露餡，任務「LZ77」的隱藏檢定「錯誤處理」會檢查你有沒有丟 <code>ValueError</code>。
+      </p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 108.6 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>用上面的四條規則，對 <code>"abracadabra"</code> 以 $W = 8$、$L = 4$ 編碼，畫出追蹤表。和本章 <code>lz77_encode</code> 的輸出比，哪兩個三元組不一樣？為什麼？</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <div class="table-wrap"><table>
+              <thead><tr><th>i</th><th>視窗</th><th>預視</th><th>最長匹配</th><th>三元組</th><th>下一個 i</th></tr></thead>
+              <tbody>
+                <tr><td>0</td><td>（空）</td><td><code>abra</code></td><td>沒有</td><td>(0, 0, a)</td><td>1</td></tr>
+                <tr><td>1</td><td><code>a</code></td><td><code>brac</code></td><td>沒有</td><td>(0, 0, b)</td><td>2</td></tr>
+                <tr><td>2</td><td><code>ab</code></td><td><code>raca</code></td><td>沒有</td><td>(0, 0, r)</td><td>3</td></tr>
+                <tr><td>3</td><td><code>abr</code></td><td><code>acad</code></td><td>offset 3，長度 1</td><td>(3, 1, c)</td><td>5</td></tr>
+                <tr><td>5</td><td><code>abrac</code></td><td><code>adab</code></td><td>offset 2 和 5 都只配 1 個，取近的 2</td><td>(2, 1, d)</td><td>7</td></tr>
+                <tr><td>7</td><td><code>abracad</code></td><td><code>abra</code></td><td>offset 7 配得到 4 個，但只剩 4 個字元，要留 1 個 → 長度 3</td><td>(7, 3, a)</td><td>11</td></tr>
+              </tbody>
+            </table></div>
+            <p>本章的 <code>lz77_encode</code> 輸出 (5, 1, 'd') 和 (7, 4, '')。第一個差在平手時取遠的還是近的（兩個都對，解碼結果一樣）；
+            第二個差在最後一個三元組要不要留 next。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 108.7 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>解碼 <code>(0,0,b) (0,0,a) (0,0,n) (2,2,a) (1,3,!)</code>，每複製一個字元寫一列。哪一個三元組用到重疊複製？
+          另外，如果第一個三元組是 <code>(5, 1, x)</code>，解碼器該怎麼辦？</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <div class="table-wrap"><table>
+              <thead><tr><th>步驟</th><th>三元組</th><th>動作</th><th>來源位置</th><th>寫出</th><th>輸出</th></tr></thead>
+              <tbody>
+                <tr><td>1</td><td>(0, 0, b)</td><td>只有 next</td><td>—</td><td>b</td><td><code>b</code></td></tr>
+                <tr><td>2</td><td>(0, 0, a)</td><td>只有 next</td><td>—</td><td>a</td><td><code>ba</code></td></tr>
+                <tr><td>3</td><td>(0, 0, n)</td><td>只有 next</td><td>—</td><td>n</td><td><code>ban</code></td></tr>
+                <tr><td>4</td><td>(2, 2, a)</td><td>複製第 1 個</td><td>3 − 2 = 1</td><td>a</td><td><code>bana</code></td></tr>
+                <tr><td>5</td><td></td><td>複製第 2 個</td><td>4 − 2 = 2</td><td>n</td><td><code>banan</code></td></tr>
+                <tr><td>6</td><td></td><td>接 next</td><td>—</td><td>a</td><td><code>banana</code></td></tr>
+                <tr><td>7</td><td>(1, 3, !)</td><td>複製第 1 個</td><td>6 − 1 = 5</td><td>a</td><td><code>bananaa</code></td></tr>
+                <tr><td>8</td><td></td><td>複製第 2 個</td><td>7 − 1 = 6</td><td>a</td><td><code>bananaaa</code></td></tr>
+                <tr><td>9</td><td></td><td>複製第 3 個</td><td>8 − 1 = 7</td><td>a</td><td><code>bananaaaa</code></td></tr>
+                <tr><td>10</td><td></td><td>接 next</td><td>—</td><td>!</td><td><code>bananaaaa!</code></td></tr>
+              </tbody>
+            </table></div>
+            <p>(1, 3, !) 的 offset 1 &lt; 長度 3，是重疊複製（同一個字元重複）；(2, 2, a) 的 offset 等於長度，不算重疊。
+            用上面的規則重新編碼 <code>bananaaaa!</code>，會得到 <code>(0,0,b) (0,0,a) (0,0,n) (2,3,a) (1,2,!)</code>：三元組不一樣，解出來一樣。解碼器要接受任何合規格的三元組，不能假設它們是你的編碼器產生的。</p>
+            <p><code>(5, 1, x)</code>：輸出還是空的，來源位置 0 − 5 是負的。這是壞檔，要丟 <code>ValueError</code>，不能把 Python 的負索引當成「從後面數」。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 108.8 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p><strong>看起來對但其實錯。</strong>「LZ77 一定會讓資料變小。」每個三元組存成 4 個位元組（offset 2 個、length 1 個、next 1 個）。
+          (a) <code>"abcdefgh"</code>（8 個位元組）編碼後幾個位元組？(b) 上面的 <code>"abcabcabcabc"</code> 呢？(c) 一般來說，長度 $n$、沒有任何重複的資料，會變成幾個位元組？</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <p>(a) 沒有一個字元重複，每個字元都是 (0, 0, 字元)：8 個三元組 × 4 ＝ 32 個位元組，變成 4 倍。</p>
+            <p>(b) 5 個三元組 × 4 ＝ 20 個位元組，比原本的 12 個還大。一個三元組要花 4 個位元組，長度 4 以上的匹配才開始賺。</p>
+            <p>(c) $4n$ 個位元組。這就是任務「檔案格式與命令列」有方法 0（原樣存放）的原因：自動選擇時取最小的，
+            不可壓縮的資料最多只多 18 個位元組（標頭與 CRC），這是 Boss 戰「壓縮率」的一條規定。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <h3 id="lab-hzip-lz77">本章 Lab:LZ77 hzip/lz77.py</h3>
+      <div class="callout lab" data-task="hzip/lz77">
+        <div class="ico">🧪</div>
+        <div class="body">
+          <span class="c-title">本章 Lab · 任務線「hzip」· 任務「LZ77」</span>
+          <p><strong>對應地下城任務：</strong>任務「LZ77」（任務線：hzip 壓縮器，第 3／6 個任務）。零件檔：<code>~/零件庫/hzip/lz77.py</code>；任務資料夾：<code>~/任務線/hzip/03-lz77/</code>。</p>
+          <p><strong>要做的零件：</strong>把本節的滑動視窗跑在真的檔案上：位元組進、三元組出，再解回一模一樣的位元組（含重疊複製），並把三元組打包成固定的 4 個位元組。三元組本來就帶一個字元，長度 1、2 的匹配一次吃掉 2、3 個字元，比逐字輸出 (0, 0, 字元) 划算（三元組個數更少）。這和手算 108.8 的「長度 4 以上的匹配才開始賺」比的東西不同：那裡比的是和原始資料比的位元組數，這裡比的是三元組個數。「壓縮率」任務目標拿「每次在視窗裡取最長的匹配」當標準。</p>
+          <p><strong>介面：</strong></p>
+<pre><code class="language-python"># ~/零件庫/hzip/lz77.py
+def encode(data, window=4096, lookahead=255) -&gt; list:
+    """data:bytes。回傳 [(offset, length, next), …]:
+    next 一定是 0..255 的整數(最後一段匹配要留一個位元組當 next);
+    length = 0 時 offset = 0;否則 1 ≤ offset ≤ window、length ≤ lookahead。
+    1 ≤ window ≤ 65535、1 ≤ lookahead ≤ 255,否則 ValueError。"""
+
+def decode(tokens) -&gt; bytes:
+    """支援 offset &lt; length 的重疊複製。offset 超過已輸出的長度、
+    length &gt; 0 但 offset = 0、length = 0 但 offset ≠ 0 → ValueError。"""
+
+def pack(tokens) -&gt; bytes:
+    """每個三元組 4 個位元組:offset(2 個,大端)、length、next。"""
+
+def unpack(blob) -&gt; list:
+    """pack 的反向;長度不是 4 的倍數 → ValueError。"""</code></pre>
+          <p><strong>公開範例</strong>（同一段資料可能有好幾種合法的三元組，例如最長的匹配出現在兩個位置時取哪一個；所以範例比往返與個數，不比每一個三元組）：</p>
+<pre><code class="language-python">&gt;&gt;&gt; from hzip.lz77 import encode, decode, pack, unpack
+&gt;&gt;&gt; data = b"abracadabra abracadabra"
+&gt;&gt;&gt; toks = encode(data)
+&gt;&gt;&gt; decode(toks) == data, len(toks)
+(True, 7)
+&gt;&gt;&gt; all(isinstance(nxt, int) for _, _, nxt in toks)
+True
+&gt;&gt;&gt; decode([(0, 0, 97), (1, 5, 98)])
+b'aaaaaab'
+&gt;&gt;&gt; pack([(0, 0, 97), (1, 5, 98)])
+b'\x00\x00\x00a\x00\x01\x05b'
+&gt;&gt;&gt; unpack(b"\x00\x00\x00a\x00\x01\x05b")
+[(0, 0, 97), (1, 5, 98)]
+&gt;&gt;&gt; for bad in ([(0, 2, 97)], [(1, 0, 97)], [(5, 1, 120)]):
+...     try:
+...         decode(bad)
+...     except ValueError:
+...         print("ValueError")
+ValueError
+ValueError
+ValueError</code></pre>
+          <p><strong>和本章範例不同的地方：</strong></p>
+          <ul>
+            <li>本章的 <code>lz77_encode(data, window=8, lookahead=4)</code> 處理 str，最後一個三元組的 next 可能是 <code>''</code>；Lab 處理 bytes，預設視窗 4096、預視 255，每個三元組的 next 都是一個位元組（最後一段匹配要短一個）。</li>
+            <li>本章沒有解碼器；Lab 要 <code>decode</code>，而且要拒絕壞的三元組（本節手算 108.7 的 <code>(5, 1, x)</code>）。</li>
+            <li>本章每個位置掃整個視窗；視窗 4096 時這樣太慢，效能門檻逼你用雜湊表（例如前 3 個位元組 → 出現過的位置）找候選；3 位元組的鏈找不到時，再找最近出現的 2、1 個位元組，公開範例的三元組個數才對得上。</li>
+            <li><code>pack</code>／<code>unpack</code> 的 4 位元組格式是檔案格式的一部分，本章只在手算 108.8 裡算過大小。</li>
+          </ul>
+          <p>可以參考本章的範例，但介面和要求不同，要自己改寫。</p>
+          <p><strong>任務目標</strong>（公開的用 <code>test</code> 自己跑；隱藏檢定在 <code>submit</code> 時跑，只看得到名稱和一行說明）：</p>
+          <ul class="lab-goals">
+            <li data-group="lz77.roundtrip">☐ <strong>往返一致</strong>〔公開〕decode(encode(x)) == x；三元組都合規格（offset、length 的範圍，next 一定是位元組）。</li>
+            <li data-group="lz77.decode">☐ <strong>解碼與重疊複製</strong>〔公開〕decode 對公開的三元組逐一相同，包括 offset &lt; length 的重疊複製（例如 (1, 5, …) 把同一個位元組重複）。</li>
+            <li data-group="lz77.pack">☐ <strong>打包</strong>〔公開〕pack／unpack 對公開範例的位元組逐一相同（offset 2 個位元組大端、length、next）。</li>
+            <li data-group="lz77.edge">☐ <strong>邊界</strong>〔隱藏檢定〕空資料、1 個位元組、同一個位元組重複 10<sup>5</sup> 次、window = 1、lookahead = 1、長度剛好 lookahead+1、匹配剛好在視窗最遠的位置；offset 不超過 window、length 不超過 lookahead。</li>
+            <li data-group="lz77.errors">☐ <strong>錯誤處理</strong>〔隱藏檢定〕window、lookahead 超出範圍要 ValueError；decode 的 offset 超過已輸出的長度、length &gt; 0 但 offset = 0、length = 0 但 offset ≠ 0 要 ValueError；unpack 的長度不是 4 的倍數要 ValueError。</li>
+            <li data-group="lz77.ratio">☐ <strong>壓縮率</strong>〔隱藏檢定〕隱藏語料（英文、程式碼、中文、執行檔）的三元組個數 ≤「在視窗裡每次取最長匹配（長度 1、2 也算）」的 1.10 倍。（Boss 戰「壓縮率」需要它。）</li>
+            <li data-group="lz77.perf">☐ <strong>效能</strong>〔隱藏檢定〕用雜湊表（例如前 3 個位元組 → 位置鏈）找候選，不能每個位置掃整個 4096 的視窗；3 位元組的鏈找不到時，再找最近出現的 2、1 個位元組（公開範例的三元組個數要這樣才對得上）。門檻：256 KiB 的資料 encode＋decode 合計 1.5 秒內（window=4096、lookahead=255）。這個門檻來自任務「檔案格式與命令列」的任務目標「效能」（256 KiB 的檔 compress＋decompress 合計 11 秒內）。換算：命令列裡 LZ77 編一次、最多解一次，和這個門檻的工作量一樣（1 倍）；剛好卡在 1.5 秒時，就佔「效能」預算的 1.5 秒。</li>
+          </ul>
+          <p><strong>規則：</strong>不能 <code>import</code> <code>zlib</code>、<code>gzip</code>、<code>bz2</code>、<code>lzma</code>、<code>zipfile</code>、<code>binascii</code>。</p>
+          <p><strong>之後會用在：</strong><a href="15-number-theory-graphs.html#lab-hzip-cli">第 15 章的任務「檔案格式與命令列」</a>：方法 2 先用你的 <code>encode</code> 和 <code>pack</code>，再交給你的 Huffman；Boss 戰「壓縮率」的英文與程式碼主要靠它。</p>
+          <p class="lab-rule">這個零件過關之後，後面的專題一律用你自己的版本。規則見<a href="00-about.html#lab-rules">零件庫規則</a>。</p>
+        </div>
+      </div>
 
       <!-- ==================== §7 ==================== -->
       <h2>兩個世界的結合：DEFLATE 與現代壓縮</h2>
@@ -665,6 +1238,36 @@ print(f"出錯碼字: {cw_err}")
 recovered = hamming74_decode(cw_err)
 print(f"還原資料: {recovered}")       # [1, 0, 1, 1] ✓</code></pre>
 
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">為什麼要學</span>
+          <p>「重新算一次檢查值，和收到的比」這個想法，在任務線「hzip 壓縮器」裡變成任務「CRC」（<a href="15-number-theory-graphs.html">第 15 章</a>的 Lab）：
+          hzip 的檔案最後 4 個位元組是 CRC-32，Boss 戰「壞檔偵測」會翻任何一個位元、隨機改壞連續 4 個位元組以內的一段，你的解壓器都要抓到。
+          hzip 只<strong>偵測</strong>不<strong>糾正</strong>；下面這題說明為什麼「看到錯就修」很危險。</p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 108.9 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p><strong>看起來對但其實錯。</strong>「Hamming(7,4) 的症候碼不是 0，就把它指的那一位翻回來，資料一定修好了。」
+          資料 $[1, 0, 1, 1]$ 編成碼字後，位置 1 和位置 2 <strong>同時</strong>翻轉。算出症候碼，照規則「修正」，看還原的資料對不對。</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <p>碼字（位置 1–7）是 $[0, 1, 1, 0, 0, 1, 1]$（本章程式的範例）。翻轉位置 1、2 後收到 $[1, 0, 1, 0, 0, 1, 1]$。</p>
+            <p>
+              $s_1 = b_1 \oplus b_3 \oplus b_5 \oplus b_7 = 1\oplus1\oplus0\oplus1 = 1$<br>
+              $s_2 = b_2 \oplus b_3 \oplus b_6 \oplus b_7 = 0\oplus1\oplus1\oplus1 = 1$<br>
+              $s_4 = b_4 \oplus b_5 \oplus b_6 \oplus b_7 = 0\oplus0\oplus1\oplus1 = 0$<br>
+              症候碼 $(s_4 s_2 s_1)_2 = (011)_2 = 3$。
+            </p>
+            <p>解碼器翻轉位置 3，得到 $[1, 0, 0, 0, 0, 1, 1]$，取出資料 $[0, 0, 1, 1]$，<strong>錯了</strong>（應該是 $[1, 0, 1, 1]$）。
+            現在有 3 個位元和原本的碼字不同，比修之前還糟。原因：最小碼距 $d = 3$ 只能「糾正 1 個」或「偵測 2 個」，不能兩件事同時做；
+            兩個錯誤會讓收到的字落在<em>另一個</em>碼字旁邊。實務上會加一個總同位位元變成 (8,4) 碼（$d = 4$，糾正 1 個、同時偵測 2 個）。</p>
+          </div></details>
+        </div>
+      </div>
+
       <h3>Reed-Solomon 碼與 CRC</h3>
       <p>
         <strong>Reed-Solomon 碼（1960 年）</strong>在有限域上操作，能糾正<em>多個連續錯誤(burst error)</em>，
@@ -848,6 +1451,226 @@ recovered = hamming74_decode(cw_err)
 print(f"還原: {recovered}")       # [1, 1, 0, 1] ✓</code></pre>
             </div>
           </details>
+        </div>
+      </div>
+
+      <!-- ==================== 實戰題庫 ==================== -->
+      <h2>實戰題庫:熵、Kraft、Huffman、LZ77 與 Hamming 碼</h2>
+      <p>
+        以下 16 題的編號接在上面三題練習之後（從練習 108.4 起），每題都是「換一組數字就能再練一次」的計算題：解答先寫一般的式子或步驟，再代入這一題的數字。
+        Huffman 的同次數規則都照「手算:Huffman 建樹」：佇列依 (次數, 建立順序)，葉子照符號順序建立；LZ77 都照「手算:LZ77 編碼」的四條規則。
+        先自己算，再展開解答；也可以用本章的程式對答案。
+      </p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 108.4 <span class="badge">計算</span></div>
+        <div class="ex-body">
+          <p>來源有 5 個符號，機率 $\frac12, \frac14, \frac18, \frac1{16}, \frac1{16}$。算熵 $H$。Huffman 的平均碼長 $L$ 是多少？</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <p>每個機率都是 $2^{-k}$ 的形式時，$-\log_2 p_i$ 是整數 $k_i$，$H = \sum_i p_i k_i$：
+            $H = \frac12\cdot1 + \frac14\cdot2 + \frac18\cdot3 + \frac1{16}\cdot4 + \frac1{16}\cdot4 = 1.875$ 位元。</p>
+            <p>碼長 $\ell_i = k_i$（1、2、3、4、4）的 Kraft 和剛好是 1，Huffman 就會得到它，$L = H = 1.875$。這是 $H \le L$ 取等號的情形：每個 $p_i = 2^{-\ell_i}$。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 108.5 <span class="badge">計算</span></div>
+        <div class="ex-body">
+          <p>字串 <code>"BANANA"</code>。(a) 用出現次數當機率，算每個字母的驚奇度和熵。(b) 用熵估計整個字串最少要幾位元，再算 Huffman 實際用幾位元。</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <p>(a) A:3、N:2、B:1，總數 6。驚奇度 $-\log_2\frac36 = 1$、$-\log_2\frac26 \approx 1.585$、$-\log_2\frac16 \approx 2.585$ 位元。
+            $H = \frac36\cdot1 + \frac26\cdot1.585 + \frac16\cdot2.585 \approx 1.4591$ 位元／字母。</p>
+            <p>(b) 下限 $6 \times 1.4591 \approx 8.75$ 位元。Huffman：B:1＋N:2＝3，再和 A:3 合併，碼長 A:1、B:2、N:2，總位元數 $3 + 2 + 4 = 9 \ge 8.75$。
+            一般式：長度 $n$ 的字串用單一字母的模型最少要 $n \cdot H$ 位元。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 108.6 <span class="badge">計算</span></div>
+        <div class="ex-body">
+          <p>一枚偏硬幣出現正面的機率 $p = 0.1$。擲 1000 次的結果，理論上最少要幾位元才能無損記錄？用一般式 $n \cdot H(p)$ 回答，再換 $p = 0.5$ 看看。</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <p>$H(0.1) = -0.1\log_2 0.1 - 0.9\log_2 0.9 \approx 0.4690$，所以約 $1000 \times 0.4690 \approx 469$ 位元（約 59 個位元組）。
+            $p = 0.5$ 時 $H = 1$，要 1000 位元，壓不下去。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 108.7 <span class="badge">計算</span></div>
+        <div class="ex-body">
+          <p>下面三組碼長，各算 Kraft 和，判斷「配得出前綴碼嗎？是完整碼嗎？」：(a) 1, 2, 3, 3　(b) 1, 2, 2, 3　(c) 2, 2, 3, 3, 3。
+          (c) 如果不是完整碼，把哪一個碼長縮短 1 就變成完整碼？</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <p>(a) $\frac12+\frac14+\frac18+\frac18 = 1$：配得出，完整碼。(b) $\frac98 &gt; 1$：配不出。
+            (c) $\frac14+\frac14+\frac18\cdot3 = \frac78 &lt; 1$：配得出，但浪費了 $\frac18$ 的碼空間。把一個 3 縮成 2：$\frac14\cdot3+\frac18\cdot2 = 1$。
+            Huffman 樹每個內部節點都有兩個孩子，所以 Huffman 碼（兩種以上符號時）的 Kraft 和一定剛好是 1。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 108.8 <span class="badge">計算</span></div>
+        <div class="ex-body">
+          <p>次數 A:45、B:13、C:12、D:16、E:9、F:5（題型參考：CLRS《Introduction to Algorithms》Huffman 碼的範例）。寫出建樹的佇列狀態、每個符號的碼長、總位元數，和定長碼比。</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <div class="table-wrap"><table>
+              <thead><tr><th>步驟</th><th>取出的兩個</th><th>合併成</th><th>放回後的佇列</th><th>累計</th></tr></thead>
+              <tbody>
+                <tr><td>0</td><td>—</td><td>—</td><td>F:5　E:9　C:12　B:13　D:16　A:45</td><td>0</td></tr>
+                <tr><td>1</td><td>F:5、E:9</td><td>(FE):14</td><td>C:12　B:13　(FE):14　D:16　A:45</td><td>14</td></tr>
+                <tr><td>2</td><td>C:12、B:13</td><td>(CB):25</td><td>(FE):14　D:16　(CB):25　A:45</td><td>39</td></tr>
+                <tr><td>3</td><td>(FE):14、D:16</td><td>(FED):30</td><td>(CB):25　(FED):30　A:45</td><td>69</td></tr>
+                <tr><td>4</td><td>(CB):25、(FED):30</td><td>(CBFED):55</td><td>A:45　(CBFED):55</td><td>124</td></tr>
+                <tr><td>5</td><td>A:45、(CBFED):55</td><td>根:100</td><td>根:100</td><td>224</td></tr>
+              </tbody>
+            </table></div>
+            <p>碼長 A:1、B:3、C:3、D:3、E:4、F:4，總位元數 224；定長碼（6 種要 3 位元）是 $100\times3 = 300$。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 108.9 <span class="badge">計算</span></div>
+        <div class="ex-body">
+          <p>次數是費氏數列 a:1、b:1、c:2、d:3、e:5、f:8。最長的碼有幾位元？如果有 $k$ 個符號、次數是費氏數列的前 $k$ 項，最長的碼是幾位元？</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <p>每一步都是「新合併的節點」和「下一個葉子」合併：1+1＝2、2+2＝4、3+4＝7、5+7＝12、8+12＝20。樹長成一條斜線，
+            碼長 a:5、b:5、c:4、d:3、e:2、f:1，最長 5 位元。一般是 $k-1$ 位元（我們用程式對 $k = 3$ 到 20 都驗過）。
+            256 種位元組時最長可以到 255 位元，所以任務「Huffman 編碼」的隱藏檢定有「費氏數列的次數」這一類：程式不能假設碼都很短（例如用 8 位元或 32 位元的格子存碼字）。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 108.10 <span class="badge">計算</span></div>
+        <div class="ex-body">
+          <p>（RFC 1951 §3.2.2 的例子）符號 A–H 的碼長是 (3, 3, 3, 3, 3, 2, 4, 4)。寫出 canonical 碼。</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <p>依 (碼長, 符號) 排：F(2)、A、B、C、D、E(3)、G、H(4)。
+            F＝<code>00</code>；加 1 左移 1 → A＝<code>010</code>，B＝<code>011</code>，C＝<code>100</code>，D＝<code>101</code>，E＝<code>110</code>；
+            加 1 得 7，左移 1 → G＝<code>1110</code>，H＝<code>1111</code>。和 RFC 1951 列出的結果一樣。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 108.11 <span class="badge">計算</span></div>
+        <div class="ex-body">
+          <p>碼長 E:2、O:2、B:3、K:3、P:3、R:3（手算 108.2 的結果）。收到位元組 <code>8B 68 63 80</code>、nbits ＝ 25。(a) 配出 canonical 碼並解碼。
+          (b) 如果 nbits 被改成 32，會發生什麼事？</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <p>(a) E＝<code>00</code>、O＝<code>01</code>、B＝<code>100</code>、K＝<code>101</code>、P＝<code>110</code>、R＝<code>111</code>。
+            位元 <code>10001011 01101000 01100011 1</code>（只讀前 25 個）切成 <code>100 01 01 101 101 00 00 110 00 111</code> → <strong>BOOKKEEPER</strong>。</p>
+            <p>(b) 多讀補上的 7 個 0：<code>00 00 00 0</code> 會多解出 E、E、E，最後剩一個 <code>0</code> 不是完整的碼。
+            任務「Huffman 編碼」規定這種「最後剩半個碼」要丟 <code>ValueError</code>；就算剛好切得完，多出來的 E 也會讓 hzip 的原始長度檢查失敗。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 108.12 <span class="badge">計算</span></div>
+        <div class="ex-body">
+          <p>機率 a:0.40、b:0.25、c:0.20、d:0.10、e:0.05。求 Huffman 碼長、平均碼長 $L$、熵 $H$，驗證 $H \le L &lt; H+1$，並算編碼效率 $H/L$。</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <p>合併：e+d＝0.15、0.15+c＝0.35、b+0.35＝0.60、a+0.60＝1。碼長 a:1、b:2、c:3、d:4、e:4。</p>
+            <p>$L = 0.4 + 0.5 + 0.6 + 0.4 + 0.2 = 2.1$；$H \approx 2.0414$；$2.0414 \le 2.1 &lt; 3.0414$ ✓；效率 $H/L \approx 97.2\%$。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 108.13 <span class="badge">計算</span></div>
+        <div class="ex-body">
+          <p>接手算 108.5：二元來源 $P(\text{b}) = p = 0.05$、$P(\text{a}) = 0.95$。把兩個符號綁成一塊（aa、ab、ba、bb）做 Huffman，平均每個<strong>原始符號</strong>幾位元？三個一塊呢？</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <p>兩個一塊：機率 aa $0.9025$、ab $0.0475$、ba $0.0475$、bb $0.0025$（一般式：$(1-p)^2$、$p(1-p)$、$p(1-p)$、$p^2$）。
+            Huffman 碼長 aa:1、ba:2、ab:3、bb:3（ab、ba 對調也一樣），每塊平均 $0.9025 + 2(0.0475) + 3(0.0475) + 3(0.0025) = 1.1475$ 位元，每個符號 $0.57375$ 位元。</p>
+            <p>三個一塊：每塊平均 $1.29975$ 位元，每個符號約 $0.4333$ 位元。熵是 $0.2864$：一塊 $k$ 個符號時，每個符號的平均碼長 $&lt; H + \frac1k$，越綁越接近，但碼表大小是 $2^k$。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 108.14 <span class="badge">計算</span></div>
+        <div class="ex-body">
+          <p>用 $W = 8$、$L = 4$ 對 <code>"xyxyxyxyz"</code> 做 LZ77 編碼，寫出追蹤表。</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <div class="table-wrap"><table>
+              <thead><tr><th>i</th><th>視窗</th><th>預視</th><th>最長匹配</th><th>三元組</th><th>下一個 i</th></tr></thead>
+              <tbody>
+                <tr><td>0</td><td>（空）</td><td><code>xyxy</code></td><td>沒有</td><td>(0, 0, x)</td><td>1</td></tr>
+                <tr><td>1</td><td><code>x</code></td><td><code>yxyx</code></td><td>沒有</td><td>(0, 0, y)</td><td>2</td></tr>
+                <tr><td>2</td><td><code>xy</code></td><td><code>xyxy</code></td><td>offset 2，長度 4（重疊）</td><td>(2, 4, x)</td><td>7</td></tr>
+                <tr><td>7</td><td><code>xyxyxyx</code></td><td><code>yz</code></td><td>剩 2 個，最多配 1 個；offset 2</td><td>(2, 1, z)</td><td>9</td></tr>
+              </tbody>
+            </table></div>
+          </div></details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 108.15 <span class="badge">計算</span></div>
+        <div class="ex-body">
+          <p><code>"abcdefghabc"</code>（11 個字元），$L = 4$。分別用 $W = 4$ 和 $W = 8$ 編碼，各有幾個三元組？</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <p>$W = 4$：位置 8 的 <code>abc</code> 在 8 個位置以前，視窗看不到，11 個字元全是 (0, 0, 字元)，11 個三元組。</p>
+            <p>$W = 8$：前 8 個是 (0, 0, 字元)；位置 8 往回 8 個找到 <code>abc</code>，但只剩 3 個字元，要留 1 個 → (8, 2, c)。共 9 個三元組。
+            這就是視窗大小的取捨：視窗越大，找得到越遠的重複，但每個位置要找的候選越多（任務「LZ77」的效能門檻逼你用雜湊表找候選）。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 108.16 <span class="badge">計算</span></div>
+        <div class="ex-body">
+          <p>(a) 解碼 <code>(0,0,a) (0,0,b) (2,3,c) (1,4,d)</code>。(b) 把 <code>(2, 3, c)</code> 打包成 4 個位元組（offset 2 個位元組大端、length、next），寫成十六進位。</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <p>(a) <code>ab</code> → (2,3,c)：來源位置 0、1、2，寫出 a、b、a（第 3 個是剛寫出的），接 c → <code>ababac</code>；
+            (1,4,d)：來源位置 5、6、7、8，寫出 4 個 c，接 d → <code>ababacccccd</code>。</p>
+            <p>(b) offset 2 → <code>00 02</code>，length 3 → <code>03</code>，c 的 ASCII 是 99 → <code>63</code>：<code>00 02 03 63</code>。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 108.17 <span class="badge">計算</span></div>
+        <div class="ex-body">
+          <p>(a) 用 Hamming(7,4) 編碼資料 $[0, 1, 1, 0]$。(b) 收到 $[1, 0, 1, 1, 0, 1, 1]$，算症候碼、修正，取出資料。</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <p>(a) $p_1 = 0\oplus1\oplus0 = 1$，$p_2 = 0\oplus1\oplus0 = 1$，$p_4 = 1\oplus1\oplus0 = 0$ → $[1, 1, 0, 0, 1, 1, 0]$。</p>
+            <p>(b) $s_1 = 1\oplus1\oplus0\oplus1 = 1$，$s_2 = 0\oplus1\oplus1\oplus1 = 1$，$s_4 = 1\oplus0\oplus1\oplus1 = 1$，症候碼 $(111)_2 = 7$。
+            翻轉位置 7 → $[1, 0, 1, 1, 0, 1, 0]$，資料（位置 3、5、6、7）是 $[1, 0, 1, 0]$。驗算：重新編碼 $[1, 0, 1, 0]$ 正好得到 $[1, 0, 1, 1, 0, 1, 0]$。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 108.18 <span class="badge">計算</span></div>
+        <div class="ex-body">
+          <p>重複碼：把 1 個位元重複 $r$ 次（$r = 5$：0 → <code>00000</code>、1 → <code>11111</code>）。(a) 最小碼距、能偵測幾個錯、能糾正幾個錯？
+          (b) 收到 <code>11010</code>，用「離哪個碼字最近」解碼。(c) 一般的 $r$ 呢？</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <p>(a) $d = 5$：偵測 $d - 1 = 4$ 個，糾正 $\lfloor (d-1)/2 \rfloor = 2$ 個。
+            (b) 和 <code>11111</code> 差 2 位、和 <code>00000</code> 差 3 位，解成 1。(c) $d = r$，糾正 $\lfloor (r-1)/2 \rfloor$ 個；代價是傳輸率只有 $1/r$。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 108.19 <span class="badge">計算</span></div>
+        <div class="ex-body">
+          <p>hzip 的格式：標頭 14 個位元組（magic 4、版本 1、方法 1、原始長度 4、原始 CRC-32 4）＋本體＋最後的 CRC-32 4 個位元組。
+          方法 0 的本體是原始資料；方法 1 的本體是 256 個位元組的碼長表＋nbits（4 個位元組）＋位元流（$\lceil \text{nbits}/8 \rceil$ 個位元組）。
+          (a) <code>"ABRACADABRA"</code>（nbits ＝ 23）用兩種方法各幾個位元組？自動選擇會選哪個？
+          (b) 假設 Huffman 平均每個位元組 4 位元，原始資料至少要多長，方法 1 才會比方法 0 小？</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <p>(a) 方法 0：$14 + 11 + 4 = 29$（一般是 $n + 18$）。方法 1：$14 + 256 + 4 + \lceil 23/8 \rceil + 4 = 281$（一般是 $278 + \lceil \text{nbits}/8 \rceil$）。選方法 0。</p>
+            <p>(b) 要 $278 + \lceil 4n/8 \rceil &lt; n + 18$，也就是 $\lceil n/2 \rceil &lt; n - 260$。$n = 521$ 時兩邊都是 261（一樣大時選編號小的，還是方法 0），$n = 522$ 才贏：至少 522 個位元組。
+            短檔案的碼長表是固定成本，這也是為什麼真正的 DEFLATE 會再壓縮碼長表。</p>
+          </div></details>
         </div>
       </div>
 
