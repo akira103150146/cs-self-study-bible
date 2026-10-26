@@ -59,7 +59,8 @@ mainlines:
 | mainline | `future_acceptance` | 之後才加的整合題(不是 v1 的 Boss 戰):`{id, name, description, consumes, perf?{statement, seconds, budget?, usage?}}`;`requiredBy` 可以指到它(9Jang 的 sync 要認得,見待決 5) |
 | mainline | `steps` | 不產生零件的關卡或答題(例:CTF 的終端機尋寶) |
 | acceptance | `visibility` | `public`/`hidden`(預設)/`teacher`(老師核可) |
-| acceptance | `perf`、`checkpoint` | 驗收檢查的效能需求;屬於哪個檢查點 |
+| acceptance | `perf`、`perf_ref`、`checkpoint` | 驗收檢查的效能需求與參考解實測值;屬於哪個檢查點 |
+| acceptance、task、future_acceptance | `requires_layer` | 判題映像要多裝的「層」(目前只有 `numpy`,見待決事項 12);沒寫＝一般沙盒就能判 |
 | task | `lab_no`、`anchor`、`gap`、`gap_title`、`also_chapters`、`optional`、`status`、`used_by`、`note` | Lab 編號、h3 的 id、缺口、參考章、選修、覆寫狀態、誰接著用 |
 | task | `interface`、`internal` | **書端定的介面**(章的 Lab 方框照抄;9Jang 的 `task.yaml` `interface` 應一致)、規格規定的內部表示法 |
 | task | `forbid`、`forbid_calls`、`forbidAttrTypes`、`require` | import 規則與限制(對應 9Jang `task.yaml` 的 `imports`) |
@@ -92,6 +93,8 @@ mainlines:
 10. 任務 id 的前綴是**零件庫資料夾**:`<零件庫資料夾>/<名>`,也就是 `~/零件庫/<資料夾>/`;不一定等於任務線的 `lib`(例 bookapi 線的 `srv/http`、`srv/pool`)。
 11. 已知的順序例外:`srv/pool`(Lab 在 `24-operating-system`)用到 `srv/http`(Lab 在書裡比較後面的 `25-networking`)。算數的是任務線內的 `order`(http 是 1、pool 是 2),不是書的章序。
 12. **已定:(b)**(老師 2026-10-26):`puzzle/astar`(節點 `ai-classical`)用 `libds/heap`,而 tree.yaml v3 的 `ai-classical` 沒有 `t-adv-ds` 先修。做法:`libds/heap` 的 `evidenceFor` 加 `t-graph`(`t-graph` 的 Lab `libds/graph` 本來就要先有 heap),`puzzle/astar` 的 `evidenceFor` 只留 `ai-classical`。`ai-classical` 的先修是 `t-graph`,跨任務線先修閉包檢查因此通過;A* 不會變成主幹節點的 Lab。另外考慮過的:(a) astar 多列 `t-graph-adv`(副作用是主幹學生要做 A* 才能完成 `t-graph-adv`);(c) A* 改回 heapq、不用 `libds/heap`。
+13. **AI 層(未定,A1 nn 線)**:判題沙盒與學生容器都沒有 numpy(9Jang 設計 §5「不加 pytest、numpy」)。書端的處理:要 numpy 的任務與驗收檢查寫 `requires_layer: numpy`(目前是 `nn/arrays` 與驗收 `boss.knn`,以及 future_acceptance 的 `mnist-28`);A1 的其他任務(`nn/value`、`nn/linear`、`nn/optim`、`nn/mlp`)與 Boss `boss.mnist`、`boss.gradcheck`、`boss.report`、`boss.baseline` 都是純 Python,現在的沙盒就能判。**但解鎖會卡住(要老師決定)**:`nn/linear` 的節點 `ai-ml-basics` 與 `nn/value`、`nn/mlp` 的節點 `ai-mlp` 都在 `ai-numpy` 下游(`ai-ml-basics` 的先修有 `ai-numpy`),而 `ai-numpy` 唯一的 Lab 是要 numpy 的 `nn/arrays`;照「先修節點到 ◕ 才解鎖」的規則,AI 層定案以前 nn 線只有 `nn/optim`(節點 `ai-optim`)開得出來,專題的應考資格也拿不到。建議:AI 層定案前,`ai-numpy` 的 Lab 步驟先豁免(或改成不要 numpy 的形狀題卡片),定案後再補做 `nn/arrays`。另外 2026-10-26 拆掉了 `nn/optim` → `nn/value` 的依賴:原本 `nn/optim` consumes `nn/value`,而 `nn/value` 的節點 `ai-mlp` 要等 `ai-optim`(它的 Lab 就是 `nn/optim`)到 ◕ 才解鎖,是死結;現在 `nn/optim` 的測試用只有 `.data`、`.grad` 的 Param,整條 nn 線(arrays → ai-numpy;linear → ai-ml-basics;optim → ai-optim;value、mlp → ai-mlp,mlp 用到的 value／linear／optim 都在 ai-mlp 的先修閉包或同一個節點)沒有環。要 9Jang／老師決定:(a) 判題映像加不加 numpy 層(版本鎖定、套件鏡像、`OMP_NUM_THREADS=1`,否則 BLAS 多執行緒會讓 cgroup 的 CPU 時間變大);(b) 沒有這一層之前,`requires_layer` 的任務在 9Jang 顯示為 🚧(ai-numpy 節點暫時沒有 Lab 證據),還是先不算進任務線;(c) 有了之後,`mnist-28`(numpy 版 MLP、MNIST 子集)要不要取代 8×8 版當 Boss。建議 9Jang 的 schema 把 `requires_layer` 收成 `z.enum(['numpy']).optional()`。
+14. **A1 的資料與判題時間**:v1 用 UCI 8×8 手寫數字(CC BY 4.0,出處寫在 yaml 的 nn `note`;書與任務 README 都要附出處)。公開 4,000 張放任務資料夾,隱藏 1,620 張只在 9Jang 的任務套件,切法的 seed 不寫進書。限制:這份資料整份在網路上公開,有心的人可以拿全部資料扣掉公開的 4,000 張、把答案寫死在程式裡;隱藏測試集只擋「不小心看到答案」,擋不住刻意查表。可以考慮:AST 檢查大型常數表、老師抽查,或改用老師班上收集的手寫數字(同樣的 8×8 前處理)當隱藏集。另外 `boss.mnist` 一個案例要在沙盒裡訓練(時限 180 秒 CPU,參考解 15 個 epoch 約 20 秒;時限照「每個 epoch 卡在 mlp.perf 的 6 秒 × 15 個 epoch ≤ 時限的一半」推出來),比一般案例長很多,請 9Jang 確認單一案例的時限上限(§5.4 的牆鐘是 2×tl+1)。tree.yaml 的專題名稱「只用 NumPy 手刻神經網路辨識手寫數字」與 verify「隱藏測試集準確率 ≥ 97%」:v1 不用 NumPy,門檻改成 96.5%(理由見 yaml nn 的 `note`:固定切法上參考 MLP 100 個 seed 最低 97.16%,原本的 97% 在隨機切法上有 8–21% 的組合過不了),**tree.yaml 的 verify 要同步改成 ≥ 96.5%(9Jang 的檔,要老師／9Jang 改)**;9Jang 的 `lab:verify` 請在實際的隱藏切法上用參考解跑多個 seed,確認最差的 seed 也比 96.5% 高 0.3 個百分點以上;建議 9Jang 改名「不用框架手刻神經網路辨識手寫數字」,或等 AI 層定案後用 `mnist-28`。
 
 ## 檢查
 
