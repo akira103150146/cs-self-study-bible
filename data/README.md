@@ -41,7 +41,7 @@ mainlines:
 - `chapter`:冒號前是章的檔名 id(`book.js` 的 id 或 `planned_chapters` 裡的新章);書裡還沒有章時寫缺口編號(例 `G17`)。冒號後是 Lab 的 h3 全文,一律是 `本章 Lab:<任務名> <檔案>`,章作者照抄。h3 的 id 是 `anchor`。
 - `requiredBy` 與 `used_by` 的參照:同一條任務線直接寫 id;跨任務線寫 `<任務線 id>/<id>`(例 `puzzle/boss.solve-15`、`bookapi/cp3.cache-latency`)。任務 id(含 `/`)全書唯一,直接寫。
 - `requiredBy` 可以指到:驗收檢查、測試組,或同一條(或別條)任務線的 `future_acceptance` 整合題(書端欄位,見下表)。
-- **效能門檻由下游的數字推導**:效能組的 `requiredBy` 至少要有一個**寫了時限**的需求(有 `perf` 的驗收檢查、別的效能組,或有 `perf` 的整合題);只指到「重跑全套檢定」的 `boss.*`(沒有時限)不算推導。`seconds` 不能比它 `requiredBy` 的任何一個時限寬。指到別的效能組只算轉手:那一組自己的 `requiredBy` 鏈最後要走到有 `perf` 的驗收檢查或整合題。`requiredBy` 不能寫自己。整合題的 `perf.budget: {<效能組 id>: 秒}` 把總時限拆給各零件:key 只能是**同一條任務線**的效能組,而且那一組的 `requiredBy` 要寫這個整合題;零件的 `seconds` 改比它分到的秒數,分到的加起來不能超過總時限(例:路網導航 3.5 秒＝dijkstra 3 秒＋查詢 0.5 秒)。選修任務(`optional: true`)與 outline 任務沒有時限來源時只列資訊。
+- **效能門檻由下游的數字推導**:效能組的 `requiredBy` 至少要有一個**寫了時限**的需求(有 `perf` 的驗收檢查、別的效能組,或有 `perf` 的整合題);只指到「重跑全套檢定」的 `boss.*`(沒有時限)不算推導。`seconds` 不能比它 `requiredBy` 的任何一個時限寬。指到別的效能組只算轉手:那一組自己的 `requiredBy` 鏈最後要走到有 `perf` 的驗收檢查或整合題。`requiredBy` 不能寫自己。需求(整合題、驗收檢查或下游效能組)的 `perf.budget: {<效能組 id>: 秒}` 把總時限拆給各零件:key 是效能組 id,跨任務線寫 `<任務線 id>/<組 id>`(例 `libds/heap.perf`),那一組的 `requiredBy` 要寫這個需求;零件的 `seconds` 改比它分到的秒數,分到的加起來不能超過總時限(例:路網導航 3.5 秒＝dijkstra 3 秒＋查詢 0.5 秒)。下游用到的工作量比零件測試大時,寫 `perf.usage: {<效能組 id>: 倍數}`(實測的操作數比),檢查改成「零件 `seconds` × 倍數 ≤ 分到的秒數」:每個零件都剛好卡在自己的門檻時,下游照樣在時限內。選修任務(`optional: true`)與 outline 任務沒有時限來源時只列資訊。
 - `used_by`(書上的「之後會用在」)和對方的 `consumes` 要對稱:任務 X 的 `consumes` 有 C,C 的 `used_by` 就要列 X(同一條任務線的 Boss 不必列);C 的 `used_by` 列了 X,X 的 `consumes` 就要有 C。只要有一邊是 `detailed` 就報錯,兩邊都是 outline 只列資訊。整合題(`future_acceptance`)不寫進 `used_by`;章的 Lab 方框在「之後會用在」最後一句另外列出用到這個零件的整合題。
 
 ## 書端多加的欄位(9Jang 不讀;schema 若是 strict,sync 時請略過)
@@ -56,7 +56,7 @@ mainlines:
 | mainline | `also_tracks` | 其他也要列出它的路線頁 |
 | mainline | `checkpoints` | 依序的全部 tree.yaml 專題(第一個＝`project`) |
 | mainline | `level`、`status`、`summary`、`note` | 程度;`detailed`(任務目標已設計)或 `outline`;說明 |
-| mainline | `future_acceptance` | 之後才加的整合題(不是 v1 的 Boss 戰):`{id, name, description, consumes, perf?{statement, seconds, budget?}}`;`requiredBy` 可以指到它(9Jang 的 sync 要認得,見待決 5) |
+| mainline | `future_acceptance` | 之後才加的整合題(不是 v1 的 Boss 戰):`{id, name, description, consumes, perf?{statement, seconds, budget?, usage?}}`;`requiredBy` 可以指到它(9Jang 的 sync 要認得,見待決 5) |
 | mainline | `steps` | 不產生零件的關卡或答題(例:CTF 的終端機尋寶) |
 | acceptance | `visibility` | `public`/`hidden`(預設)/`teacher`(老師核可) |
 | acceptance | `perf`、`checkpoint` | 驗收檢查的效能需求;屬於哪個檢查點 |

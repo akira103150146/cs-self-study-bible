@@ -690,17 +690,24 @@ def validate_mainlines(ml, book, tree_nodes, tree_projects):
     seen_m, seen_t, seen_anchor, lang_note = set(), set(), {}, set()
     pointed = set()                                    # 被 requiredBy 指到的 (任務線 id, 驗收 id)
     perf_of = {}                                       # (任務線 id, id) → seconds
-    budget_of = {}                                     # (任務線 id, 整合題 id) → {測試組 id: 秒}
+    budget_of = {}                                     # (任務線 id, 需求 id) → (任務線, 需求, perf):perf 有 budget 的需求
     for m in ml.mainlines:
-        for a in (m.get('acceptance') or []) + (m.get('future_acceptance') or []):
-            if isinstance(a, dict) and isinstance(a.get('perf'), dict):
-                perf_of[(m.get('id'), a.get('id'))] = a['perf'].get('seconds')
-                if isinstance(a['perf'].get('budget'), dict):
-                    budget_of[(m.get('id'), a.get('id'))] = a['perf']['budget']
+        reqs_with_perf = [a for a in (m.get('acceptance') or []) + (m.get('future_acceptance') or []) if isinstance(a, dict)]
         for t in m.get('tasks') or []:
-            for g in (t.get('groups') or []) if isinstance(t, dict) else []:
-                if isinstance(g, dict) and isinstance(g.get('perf'), dict):
-                    perf_of[(m.get('id'), g.get('id'))] = g['perf'].get('seconds')
+            reqs_with_perf += [g for g in ((t.get('groups') or []) if isinstance(t, dict) else []) if isinstance(g, dict)]
+        for a in reqs_with_perf:
+            if isinstance(a.get('perf'), dict):
+                perf_of[(m.get('id'), a.get('id'))] = a['perf'].get('seconds')
+                if a['perf'].get('budget') is not None:
+                    budget_of[(m.get('id'), a.get('id'))] = (m, a, a['perf'])
+
+    def budget_share(bm, perf, grp):
+        """需求的 perf.budget 分給效能組 grp 的 (秒數, 用量倍數);沒分到回傳 None。"""
+        for key, share in (perf.get('budget') or {}).items():
+            hit = ml.resolve(bm, key, ('group',))
+            if hit and hit[2] is grp:
+                return share, (perf.get('usage') or {}).get(key, 1)
+        return None
 
     timed_memo = {}
 
@@ -796,19 +803,6 @@ def validate_mainlines(ml, book, tree_nodes, tree_projects):
                 if not isinstance(fp, dict) or not fp.get('statement') or not isinstance(fp.get('seconds'), (int, float)):
                     err(f'{fw}: perf 要有 statement 與 seconds')
                     continue
-                bud = fp.get('budget')
-                if bud is not None:
-                    if not isinstance(bud, dict) or not all(isinstance(v, (int, float)) for v in bud.values()):
-                        err(f'{fw}: perf.budget 要是「測試組 id: 秒」')
-                        continue
-                    if sum(bud.values()) > fp['seconds']:
-                        err(f'{fw}: perf.budget 加起來 {sum(bud.values())} 秒,超過總時限 {fp["seconds"]} 秒')
-                    for gid in bud:
-                        hit = ml.resolve(m, gid, ('group',))
-                        if not hit or hit[2].get('kind') != 'perf':
-                            err(f'{fw}: perf.budget 的「{gid}」不是效能組')
-                        elif not any(ml.resolve(hit[0], r, REQ_KINDS) == (m, 'future', f, None) for r in hit[2].get('requiredBy') or []):
-                            err(f'{fw}: perf.budget 的「{gid}」沒有在 requiredBy 寫這個整合題')
         orders, gids = {}, {}
         for t in tasks:
             tid = t.get('id')
@@ -922,15 +916,19 @@ def validate_mainlines(ml, book, tree_nodes, tree_projects):
                     if isinstance(perf, dict):
                         key = (rm.get('id'), obj.get('id'))
                         lim, what = perf_of.get(key), f'需求「{r}」'
-                        bud = budget_of.get(key)
-                        if bud is not None:
-                            lim, what = (bud[gid], f'需求「{r}」分給它') if gid in bud else (None, None)
-                            if what is None:
+                        ratio = 1
+                        if key in budget_of:
+                            got = budget_share(budget_of[key][0], budget_of[key][2], g)
+                            if got is None:
+                                lim = what = None
                                 err(f'{gw}: 需求「{r}」有 perf.budget,但沒有分秒數給這一組')
+                            else:
+                                lim, ratio = got
+                                what = f'需求「{r}」分給它' + (f'(用量是這一組的 {ratio} 倍)' if ratio != 1 else '')
                         if isinstance(lim, (int, float)) and (kind != 'group' or timed(rm, obj)):
                             numeric += 1
-                            if isinstance(perf.get('seconds'), (int, float)) and perf['seconds'] > lim:
-                                err(f'{gw}: 時限 {perf["seconds"]} 秒比{what}的 {lim} 秒寬')
+                            if isinstance(perf.get('seconds'), (int, float)) and isinstance(ratio, (int, float)) and perf['seconds'] * ratio > lim:
+                                err(f'{gw}: 時限 {perf["seconds"]} 秒' + (f' × {ratio}' if ratio != 1 else '') + f'比{what}的 {lim} 秒寬')
                 if isinstance(perf, dict) and reqs and not numeric:
                     (err if st == 'detailed' and not t.get('optional') else infos.append)(
                         f'{gw}: requiredBy 裡沒有一個寫了時限(門檻要由下游的數字推導;可以指到有 perf 的 Boss、future_acceptance 整合題,或本身有時限來源的效能組)')
@@ -950,6 +948,24 @@ def validate_mainlines(ml, book, tree_nodes, tree_projects):
         for a in m.get('acceptance') or []:
             if a.get('visibility') != 'teacher' and (m.get('id'), a.get('id')) not in pointed:
                 err(f'任務線 {m.get("id")} 驗收 {a.get("id")}: 沒有任何測試組的 requiredBy 指到它(由上往下拆的證據)')
+    # perf.budget:把需求的總時限拆給各零件的效能組(可以跨任務線,寫「<任務線 id>/<組 id>」);perf.usage 是下游用量對零件測試工作量的倍數
+    for (bmid, bid), (bm, req, bp) in budget_of.items():
+        bw = f'任務線 {bmid} 需求 {bid}'
+        bud, usage = bp.get('budget'), bp.get('usage') or {}
+        if not isinstance(bud, dict) or not all(isinstance(v, (int, float)) for v in bud.values()):
+            err(f'{bw}: perf.budget 要是「效能組 id: 秒」')
+            continue
+        if not isinstance(usage, dict) or not all(isinstance(v, (int, float)) and v > 0 for v in usage.values()) or set(usage) - set(bud):
+            err(f'{bw}: perf.usage 要是「效能組 id: 倍數」,而且 key 要在 budget 裡')
+        if isinstance(bp.get('seconds'), (int, float)) and sum(bud.values()) > bp['seconds']:
+            err(f'{bw}: perf.budget 加起來 {sum(bud.values())} 秒,超過總時限 {bp["seconds"]} 秒')
+        for key in bud:
+            hit = ml.resolve(bm, key, ('group',))
+            if not hit or hit[2].get('kind') != 'perf':
+                err(f'{bw}: perf.budget 的「{key}」不是效能組')
+            elif not any((ml.resolve(hit[0], r, REQ_KINDS) or (None,) * 3)[2] is req for r in hit[2].get('requiredBy') or []):
+                err(f'{bw}: perf.budget 的「{key}」沒有在 requiredBy 寫這個需求')
+
     # used_by(書上的「之後會用在」)和對方的 consumes 要對稱;同一條任務線的 Boss 不必寫進 used_by
     for m in ml.mainlines:
         consumers = [('task', x, ml.task_status(m, x)) for x in m.get('tasks') or [] if isinstance(x, dict)]
