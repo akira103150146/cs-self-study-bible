@@ -97,4 +97,4 @@ mainlines:
 ```bash
 python3 _build_routes.py --tree <9Jang>/docs/superpowers/specs/career-skill-tree/tree.yaml --check
 ```
-結構錯誤(id 重複、參照對不到、詳細任務缺公開或隱藏組、效能組沒有 requiredBy 或 requiredBy 裡沒有時限、時限比需求或 budget 寬、order 顛倒、`used_by` 與 `consumes` 不對稱、章 Lab 方框的 `data-task`／`data-group` 不在 yaml、方框少列任務目標、方框的任務目標名稱／〔公開／隱藏檢定〕／效能門檻和 yaml 不同)會讓結束碼非 0;方框的說明和 yaml 不同只列資訊;Lab 方框還沒寫、outline 線的待決只列為「資訊」。
+結構錯誤(id 重複、參照對不到、詳細任務缺公開或隱藏組、效能組沒有 requiredBy 或 requiredBy 裡沒有時限、時限比需求或 budget 寬、order 顛倒、`used_by` 與 `consumes` 不對稱、章 Lab 方框的 `data-task`／`data-group` 不在 yaml、方框少列任務目標、方框的任務目標名稱／〔公開／隱藏檢定〕／效能門檻和 yaml 不同)會讓結束狀態碼非 0;方框的說明和 yaml 不同只列資訊;Lab 方框還沒寫、outline 線的待決只列為「資訊」。
