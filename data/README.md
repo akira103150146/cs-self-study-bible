@@ -91,10 +91,7 @@ mainlines:
 9. 和 9Jang spec 的命名:`invariants[].sabotage.attr` 照 spec §3.3b 的名稱,但我們允許寫成列表(例 `attr: [a, pos]`,spec 的例子是單一 `attr: a`);hashmap「不能用 dict 當底層儲存」的欄位照 plan Task 12 的驅動程式設定取名 `forbidAttrTypes`(spec 的 `task.yaml` 寫成 `imports.forbid` 的一條規則)。
 10. 任務 id 的前綴是**零件庫資料夾**:`<零件庫資料夾>/<名>`,也就是 `~/零件庫/<資料夾>/`;不一定等於任務線的 `lib`(例 bookapi 線的 `srv/http`、`srv/pool`)。
 11. 已知的順序例外:`srv/pool`(Lab 在 `24-operating-system`)用到 `srv/http`(Lab 在書裡比較後面的 `25-networking`)。算數的是任務線內的 `order`(http 是 1、pool 是 2),不是書的章序。
-12. **要老師確認(merge 前)**:`puzzle/astar`(節點 `ai-classical`,核心)必須用 `libds/heap`(節點 `t-adv-ds`,職業級),但 tree.yaml v3 把 `ai-classical` 的 `t-adv-ds` 先修拿掉了,跨任務線先修閉包檢查會擋。三個選項:
-    - (a)**現在的暫時做法**:`puzzle/astar` 的 `evidenceFor` 多列 `t-graph-adv`(它的連結列了 A*;同 `libds/graph` 列 `[t-graph, t-graph-adv]` 的先例)。副作用:9Jang 若從 `evidenceFor` 產生 `t-graph-adv` 的 Lab 任務清單,主幹的學生要做 AI 線的 A* 才能完成 `t-graph-adv`(設計 §9.1 明寫 `t-graph-adv` 的 Lab 只有 graph、dsu);走 AI 路線的高中生要先到職業級的 `t-adv-ds` 做完 heap,A* 才會出現。
-    - (b)`libds/heap` 的 `evidenceFor` 加 `t-graph`,`puzzle/astar` 拿掉 `t-graph-adv`(審查者傾向這個:`t-graph` 的 Lab `libds/graph` 本來就要先有 heap,語意最一致,A* 也不會變成主幹節點的 Lab)。
-    - (c)A* 不必用 `libds/heap`(改回 heapq),`consumes` 拿掉 `libds/heap`。
+12. **已定:(b)**(老師 2026-10-26):`puzzle/astar`(節點 `ai-classical`)用 `libds/heap`,而 tree.yaml v3 的 `ai-classical` 沒有 `t-adv-ds` 先修。做法:`libds/heap` 的 `evidenceFor` 加 `t-graph`(`t-graph` 的 Lab `libds/graph` 本來就要先有 heap),`puzzle/astar` 的 `evidenceFor` 只留 `ai-classical`。`ai-classical` 的先修是 `t-graph`,跨任務線先修閉包檢查因此通過;A* 不會變成主幹節點的 Lab。另外考慮過的:(a) astar 多列 `t-graph-adv`(副作用是主幹學生要做 A* 才能完成 `t-graph-adv`);(c) A* 改回 heapq、不用 `libds/heap`。
 
 ## 檢查
 
