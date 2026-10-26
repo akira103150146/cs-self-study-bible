@@ -58,7 +58,7 @@
         </div>
       </div>
       <p>
-        本章每一段程式都可以直接編譯:<code>gcc -std=c17 -Wall -Wextra 檔名.c -o 檔名</code>。
+        本章每一段完整的程式都可以直接編譯:<code>gcc -std=c17 -Wall -Wextra 檔名.c -o 檔名</code>;只有片段、沒有 <code>main</code> 的(例如 struct 的宣告與看組語的示範),用 <code>-c</code> 或 <code>-S</code> 編譯。
         除了特別標明「錯誤示範」、要讓你看警告的那幾段,都不會有任何警告。
         書上的輸出都是在 x86-64 Linux、gcc 13.3 上實際跑出來的;和機器有關的結果(例如位元組順序、<code>long</code> 的大小),會特別註明。
       </p>
@@ -738,7 +738,7 @@ after = 0x0000A331</code></pre>
           <span class="c-title">看起來對但其實錯:LOW_ONES(32)</span>
           <p><code>LOW_ONES(w)</code> 對 w = 1 到 31 都對,測了一堆都過。但 w = 32 時,<code>1u &lt;&lt; 32</code> 的移位量等於型別寬度,是未定義行為(下一小節)。
           而 32 位元的欄位偏偏很常見(例如整個暫存器)。上面的 <code>FIELD_GET</code>、<code>FIELD_PUT</code> 只在 w ≤ 31、lo + w ≤ 32 時能用;
-          本章 Lab 要你寫的版本必須連寬度 0 和 32 都沒有未定義行為。巨集還有另一個問題:參數會被展開好幾次,<code>FIELD_PUT(x, lo++, 4, v)</code> 會把 <code>lo</code> 加兩次(練習 133.5)。</p>
+          本章 Lab 要你寫的版本必須連寬度 0 和 32 都沒有未定義行為。巨集還有另一個問題:參數會被展開好幾次:<code>FIELD_PUT(x, lo++, 4, v)</code> 展開後有兩個 <code>lo++</code>,中間沒有序列點,是未定義行為(練習 133.5)。</p>
         </div>
       </div>
 
@@ -1316,7 +1316,7 @@ wait_volatile:
 #ifdef NO_VOLATILE
 static sig_atomic_t ready = 0;            // 錯誤示範
 #else
-static volatile sig_atomic_t ready = 0;   // C 標準唯一保證和訊號處理函式共用時可靠的寫法
+static volatile sig_atomic_t ready = 0;   // 最傳統、可攜的寫法:處理函式只「指定一個值」
 #endif
 
 static void on_alarm(int sig) {
@@ -1339,14 +1339,15 @@ int main(void) {
 gcc -std=c17 -Wall -Wextra -O2 -DNO_VOLATILE fake_hw.c -o hw_bad
 timeout 3 ./hw_bad; echo $?   # 印出 124:被 timeout 在 3 秒時強制結束,迴圈從沒停過</code></pre>
       <p>
-        有 <code>volatile</code> 的版本 1 秒後結束;沒有 <code>volatile</code> 的版本,即使處理函式已經把 <code>ready</code> 設成 1,主迴圈也看不到,只能被 <code>timeout</code> 砍掉(結束碼 124)。
+        有 <code>volatile</code> 的版本 1 秒後結束;沒有 <code>volatile</code> 的版本,即使處理函式已經把 <code>ready</code> 設成 1,主迴圈也看不到,只能被 <code>timeout</code> 砍掉(結束狀態碼 124)。
         <code>-O0</code> 編譯的話,兩個版本都會正常結束,所以這種錯常常在「改成發行版編譯」那天才出現。
       </p>
       <div class="callout note">
         <div class="ico">ℹ️</div>
         <div class="body">
           <span class="c-title">為什麼是 volatile sig_atomic_t</span>
-          <p>C 標準只保證一種和訊號處理函式共用變數的寫法:<code>volatile sig_atomic_t</code>。<code>sig_atomic_t</code> 是一個「讀寫一次就完成、不會被訊號切成兩半」的整數型別。
+          <p>C99 以前,C 標準只保證一種和訊號處理函式共用變數的寫法:<code>volatile sig_atomic_t</code>,而且處理函式裡對它只保證「指定一個值」(像 <code>ready = 1</code>)是安全的,<code>ready++</code> 這種讀了再寫的就不保證。
+          <code>sig_atomic_t</code> 是一個「讀寫一次就完成、不會被訊號切成兩半」的整數型別。C11 起,lock-free 的 <code>_Atomic</code> 物件(可以用 <code>atomic_is_lock_free</code> 檢查)也可以在處理函式裡用;本章用最傳統、到處都能編的 <code>volatile sig_atomic_t</code>。
           微控制器上的中斷服務程式(ISR)和主程式共用旗標,道理一樣。</p>
         </div>
       </div>
@@ -1442,7 +1443,7 @@ pc 4:op 1 arg 4 -&gt; acc 19</code></pre>
         <li><code>int (*f)(int, int)</code>:f 是一個指標,指向「吃兩個 <code>int</code>、回傳 <code>int</code> 的函式」。括號不能省,<code>int *f(int, int)</code> 是「回傳 <code>int *</code> 的函式」。宣告很難讀,所以通常先 <code>typedef</code>。</li>
         <li>函式名稱會自動轉成函式指標,所以 <code>add</code> 和 <code>&amp;add</code> 一樣;呼叫時 <code>g(2, 3)</code> 和 <code>(*g)(2, 3)</code> 也一樣。</li>
         <li><strong>分派表(dispatch table)</strong>:<code>table[op](acc, arg)</code> 用 opcode 當索引直接找到函式,取代一長串 <code>switch</code>。<code>[OP_ADD] = add</code> 是 C99 的<strong>指定初始化(designated initializer)</strong>,沒列出的元素(<code>[OP_LOAD]</code>)是 <code>NULL</code>。</li>
-        <li>指令 <code>0x32</code> 的高 4 位是 opcode 3(MUL)、低 4 位是運算元 2:這正是上一節的 <code>FIELD_GET</code>。</li>
+        <li>指令 <code>0x32</code> 的高 4 位是 opcode 3(MUL)、低 4 位是運算元 2:這正是前面「遮罩與移位」一節的 <code>FIELD_GET</code>。</li>
       </ul>
       <div class="callout warn">
         <div class="ico">⚠️</div>
@@ -1763,7 +1764,7 @@ sq = 4294836225</code></pre>
 <pre><code class="language-text">shift_ub.c:6:21: runtime error: shift exponent 32 is too large for 32-bit type 'unsigned int'
 n = 32, 1u &lt;&lt; n = 1</code></pre>
       <p>
-        UBSan 預設只印出錯誤、讓程式繼續跑(所以後面還有一行正常的輸出)。加上 <code>-fno-sanitize-recover=all</code>,第一個錯誤就讓程式以非 0 的結束碼停下來,適合自動測試:本章 Lab 的隱藏檢定就是這樣編譯的。
+        UBSan 預設只印出錯誤、讓程式繼續跑(所以後面還有一行正常的輸出)。加上 <code>-fno-sanitize-recover=all</code>,第一個錯誤就讓程式以非 0 的結束狀態碼停下來,適合自動測試:本章 Lab 的隱藏檢定就是這樣編譯的。
       </p>
 <pre><code class="language-bash">gcc -std=c17 -Wall -Wextra -g -fsanitize=address,undefined -fno-sanitize-recover=all 你的程式.c</code></pre>
       <div class="callout key">
@@ -2024,7 +2025,7 @@ bad size: NULL</code></pre>
           <p><strong>和本章範例不同的地方:</strong>可以參考本章的範例,但介面和要求不同,要自己改寫。</p>
           <ul>
             <li>本章的 <code>BIT</code>、<code>LOW_ONES</code>、<code>FIELD_GET</code>、<code>FIELD_PUT</code> 是巨集,參數會展開好幾次,寬度 32 是未定義行為;Lab 要 <code>static inline</code> 函式,每個參數只求值一次,寬度 0 和 32 都要對。</li>
-            <li>本章的 <code>get_le16</code> 這類函式只有 16 位元;Lab 另外要 32 位元的 LE/BE、<code>sign_extend</code> 的任意寬度(本章的 <code>sext12</code> 只有 12 位元)與 <code>rotr32</code>。</li>
+            <li>本章的 <code>get_le16</code> 這類函式只有 16 位元;Lab 另外要 32 位元的 LE/BE、<code>sign_extend</code> 的任意寬度(本章的 <code>sext12</code> 只有 12 位元)。本章已經示範過完整的 <code>rot_right</code>;Lab 的 <code>rotr32</code> 要照介面的名稱寫成 <code>static inline</code>,並通過旋轉 0 位與 32 位以上的隱藏邊界。</li>
             <li>本章「從分派表到記憶體映射」的表是寫死的、位址只有 8 位元、處理函式拿到完整位址、讀不到的位址回 0、只處理單一位元組;Lab 的 <code>bus_map</code> 在執行時登錄、拒絕重疊、處理函式拿到 <code>ctx</code> 和 <code>offset</code>,超出範圍讀回 <code>0xFF</code> 並記進 <code>bus_faults</code>,16、32 位元存取依位址由小到大拆開。</li>
             <li>本章的範例用全域陣列當 RAM;Lab 的 <code>Bus</code> 是不透明型別,可以同時有好幾個,大小在 <code>bus_new</code> 決定。</li>
           </ul>
@@ -2292,7 +2293,7 @@ pc 3:不認得的 opcode 7,停止</code></pre>
       <div class="exercise">
         <div class="ex-head">✏️ 練習 133.11 <span class="badge">實作</span></div>
         <div class="ex-body">
-          <p>這段程式「能跑」,印出 <code>chip8</code>。用 ASan 找出它的錯誤,並修好。</p>
+          <p>這段程式「能跑」,印出 <code>chip8</code>。用 ASan 找出它的錯誤,並修好。(提示:加 <code>-O2</code> 的話,gcc 編譯時就會發出 <code>-Wstringop-overflow</code> 警告;ASan 則是在執行時抓到。)</p>
 <pre><code class="language-c">#include &lt;stdio.h&gt;
 #include &lt;stdlib.h&gt;
 #include &lt;string.h&gt;

@@ -60,9 +60,9 @@ mainlines:
 | mainline | `steps` | 不產生零件的關卡或答題(例:CTF 的終端機尋寶) |
 | acceptance | `visibility` | `public`/`hidden`(預設)/`teacher`(老師核可) |
 | acceptance | `perf`、`perf_ref`、`checkpoint` | 驗收檢查的效能需求與參考解實測值;屬於哪個檢查點 |
-| acceptance、task、future_acceptance | `requires_layer` | 判題映像要多裝的「層」(目前只有 `numpy`,見待決事項 12);沒寫＝一般沙盒就能判 |
+| acceptance、task、future_acceptance | `requires_layer` | 判題映像要多裝的「層」(目前只有 `numpy`,見待決事項 13);沒寫＝一般沙盒就能判 |
 | task | `lab_no`、`anchor`、`gap`、`gap_title`、`also_chapters`、`optional`、`status`、`used_by`、`note` | Lab 編號、h3 的 id、缺口、參考章、選修、覆寫狀態、誰接著用 |
-| task | `interface`、`internal`、`provided` | **書端定的介面**(章的 Lab 方框照抄;9Jang 的 `task.yaml` `interface` 應一致)、規格規定的內部表示法、C 任務的規格標頭(起始碼給,判題用規格版;見待決事項 12) |
+| task | `interface`、`internal`、`provided` | **書端定的介面**(章的 Lab 方框照抄;9Jang 的 `task.yaml` `interface` 應一致)、規格規定的內部表示法、C 任務的規格標頭(起始碼給,判題用規格版;見待決事項 17) |
 | task | `forbid`、`forbid_calls`、`forbidAttrTypes`、`require` | import 規則與限制(對應 9Jang `task.yaml` 的 `imports`) |
 | task | `invariants` | 不變式(9Jang 設計 §3.3b):`{name, kind, symbol, sabotage?{attr, breaks}}`;`name` 也是一個 `kind: invariant` 的測試組 |
 | group | `perf_ref`、`perf_basis`、`runner` | 參考解實測值;`estimate`＝還沒量;`py-io`/`service`(借書 API 一個任務有兩種 runner) |
