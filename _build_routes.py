@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""從職業技能樹 tree.yaml 產生「依路線」的資料與 8 份路線導讀頁。
+"""從職業技能樹 tree.yaml 與 data/mainline-projects.yaml 產生「依路線」的資料與 8 份路線導讀頁。
 
 產出(都要 commit;建置書本時不需要 tree.yaml):
   assets/routes.js                 側欄「依路線」檢視的資料(window.BOOK_ROUTES)
@@ -7,7 +7,22 @@
 
 用法:
   python _build_routes.py --tree <tree.yaml 路徑>   產生上述檔案,接著請跑 python build.py
-  python _build_routes.py --tree <路徑> --check     只檢查(對不上的小節、缺的章),不寫檔
+  python _build_routes.py --tree <路徑> --check     只檢查(對不上的小節、缺的章、主線專題 yaml 的結構),不寫檔
+  --projects <路徑>                                 主線專題的測試樹(預設 data/mainline-projects.yaml)
+
+主線專題(data/mainline-projects.yaml;形狀照 9Jang 的 Zod schema,說明見 data/README.md):
+  - 每份導讀在「把這條路線串起來」前面加 h2「本路線的主線專題」(id="mainline"):track 是本路線的任務線先列,
+    also_tracks 含本路線的接著列(只列摘要與任務線總覽,詳細內容連回主路線頁);exam_lines(T1)最前面。
+    每條任務線一個 h3(id="mainline-<任務線 id>")。
+  - 任務線總覽是一棵 <pre> 測試樹;status: detailed 的任務線另列 Boss 戰(驗收檢查)與每個任務的任務目標,
+    清單項目帶 data-task／data-group／data-acceptance 屬性。
+  - task.chapter「<章檔名>:<h3>」:章已在 book.js 就連過去(#anchor 只在該章 src 真的有這個 id 時才加);
+    planned_chapters 裡、還沒進 book.js 的新章寫「新章 Gxx,撰寫中」;冒號前是缺口編號(G17 等)寫「🚧 Gxx 尚未撰寫」。
+  - node_extra 的章進了 book.js 才加進節點的閱讀清單(和 BOOK_EXTRA 一樣,也會進閱讀順序與 routes.js);還沒有的略過。
+  - --check 另外檢查 yaml(id 不重複、參照對得到、order 先後、跨任務線的先修閉包、詳細任務至少各一組公開與隱藏、
+    效能組的時限不比需求寬、不變式對到測試組…),以及章裡的 Lab 方框:data-task 要在 yaml、方框裡的
+    data-group 要是那個任務的測試組、<!-- LAB: 任務 id --> 標記要在 yaml。Lab 方框還沒寫、outline 任務線的待決
+    只列為「資訊」;只有結構錯誤會讓結束碼非 0。
 
 規則:
   - tree.yaml 的 chNN 是「檔名號」(chapters/NN-*.html),頁面上一律顯示 book.js 的「顯示章號」。
@@ -25,6 +40,7 @@ import json
 import os
 import re
 import sys
+import unicodedata
 
 try:
     import yaml
@@ -283,7 +299,7 @@ def chapter_link(cid, book, anchor=None, label=None):
     return f'<a href="{href}">{esc(text)}</a>'
 
 
-def render_guide(track, meta, nodes, all_nodes, book, refs, track_names):
+def render_guide(track, meta, nodes, all_nodes, book, refs, track_names, mainline=None, mp_meta=None):
     t = TRACKS[track]
     lines = []
     add = lines.append
@@ -409,10 +425,15 @@ def render_guide(track, meta, nodes, all_nodes, book, refs, track_names):
                 add('      </details>')
         add('')
 
+    if mainline:
+        lines.extend(mainline)
+        add('')
+
     add('      <h2>把這條路線串起來</h2>')
     add(f'      <p>{esc(t["short"])}路線共有 {len(nodes)} 個節點,書內要讀{esc(reading_count(reading, book))[2:]}'
         + (f',另有 {n_missing} 個節點書裡還沒有素材' if n_missing else '') + '。'
-        '讀完一個節點的章節,就去技能樹上做它的手算與 Lab;先修沒走完的節點,先回頭補先修。</p>')
+        '讀完一個節點的章節,就去技能樹上做它的手算與 Lab;先修沒走完的節點,先回頭補先修。'
+        + ('節點的 Lab 串成哪幾條主線專題,見<a href="#mainline">本路線的主線專題</a>。' if mainline else '') + '</p>')
     others = [x for x in TRACK_ORDER if x != track]
     add('      <p>其他路線:' + '、'.join(f'<a href="route-{x}.html">{TRACKS[x]["icon"]} {esc(TRACKS[x]["short"])}</a>' for x in others) + '。</p>')
     add('      <div class="callout note">')
@@ -420,7 +441,9 @@ def render_guide(track, meta, nodes, all_nodes, book, refs, track_names):
     add('        <div class="body">')
     add('          <span class="c-title">這一頁怎麼來的</span>')
     add(f'          <p>由 <code>_build_routes.py</code> 從職業技能樹 <code>tree.yaml</code>(v{esc(str(meta.get("version", "?")))},'
-        f'{esc(str(meta.get("date", "")))})產生。節點、先修與引用的章來自技能樹;「讀之前」提醒與路線開場由書端維護。</p>')
+        f'{esc(str(meta.get("date", "")))})產生。節點、先修與引用的章來自技能樹;「讀之前」提醒與路線開場由書端維護。'
+        + (f'主線專題與任務目標來自 <code>data/mainline-projects.yaml</code>(v{esc(str(mp_meta.get("version", "?")))},'
+           f'{esc(str(mp_meta.get("date", "")))})。' if mp_meta else '') + '</p>')
     add('        </div>')
     add('      </div>')
     return CRLF.join(lines) + CRLF, reading
@@ -474,14 +497,805 @@ def render_link(text):
     return f'<a href="{esc(url)}" target="_blank" rel="noopener">{esc(label)}</a>'
 
 
+# ───────────────────────── 主線專題(data/mainline-projects.yaml,9Jang 任務線的形狀) ─────────────────────────
+DEFAULT_PROJECTS = os.path.join(ROOT, 'data', 'mainline-projects.yaml')
+VIS_LABEL = {'public': '公開', 'hidden': '隱藏檢定', 'teacher': '老師核可'}
+GROUP_VIS = ('public', 'hidden')
+GROUP_KINDS = ('function', 'edge', 'perf', 'invariant', 'error', 'spec')
+LANGS = ('python', 'c', 'cpp', 'hdl')            # 9Jang Zod 列舉
+LANGS_PROPOSED = ('asm', 'verilog', 'spice')     # 書端提議加進列舉的值(資訊,不擋)
+STATUSES = ('detailed', 'outline')
+REQ_KINDS = ('acc', 'group', 'future')           # requiredBy 可以指的:驗收檢查、測試組、之後的整合題(future_acceptance)
+LAB_PREFIX = '本章 Lab:'
+GAP_RE = re.compile(r'^G\d+(?:-\d+)?$')
+TASK_ID_RE = re.compile(r'^[a-z0-9]+/[a-z0-9-]+$')
+BOX_RE = re.compile(r'<(div|section)\b[^>]*\bdata-task="([^"]+)"[^>]*>', re.S)
+GROUP_ATTR_RE = re.compile(r'\bdata-group="([^"]+)"')
+GOAL_RE = re.compile(r'<li\b[^>]*\bdata-group="([^"]+)"[^>]*>\s*☐\s*<strong>(.*?)</strong>〔(.*?)〕(.*?)</li>', re.S)
+MARKER_RE = re.compile(r'<!--\s*LAB:\s*(\S+)\s*-->')
+_src_cache = {}
+
+
+def chapter_src(cid):
+    if cid not in _src_cache:
+        path = os.path.join(SRC, cid + '.html')
+        _src_cache[cid] = open(path, encoding='utf-8-sig').read() if os.path.exists(path) else ''
+    return _src_cache[cid]
+
+
+def anchor_exists(cid, anchor):
+    return bool(anchor) and f'id="{anchor}"' in chapter_src(cid)
+
+
+def split_chapter(value):
+    """task.chapter「<章檔名或缺口>:<h3>」→ (章 id 或 None, 缺口或 None, h3)。"""
+    head, _, title = str(value or '').partition(':')
+    if GAP_RE.match(head):
+        return None, head, title
+    return head, None, title
+
+
+def lab_file_label(task):
+    """h3 最後一段是檔案(例 hack/*.hdl);多個同類檔案寫成 Not…DMux8Way.hdl(15)。"""
+    title = split_chapter(task.get('chapter'))[2]
+    shown = title.rsplit(' ', 1)[-1] if ' ' in title else (task.get('files') or ['—'])[0]
+    base = os.path.basename(shown.rstrip('/')) + ('/' if shown.endswith('/') else '')
+    files = task.get('files') or []
+    if '*' in base and len(files) > 1:
+        stem = lambda x: os.path.splitext(os.path.basename(x))[0]
+        base = f'{stem(files[0])}…{stem(files[-1])}{os.path.splitext(base)[1]}({len(files)})'
+    return base
+
+
+def task_short(task_id):
+    return task_id.split('/', 1)[-1]
+
+
+class Mainlines:
+    """任務線 yaml 的索引:任務線、任務、驗收檢查、測試組的查找與參照解析。"""
+
+    def __init__(self, data):
+        self.data = data or {}
+        self.mainlines = [m for m in (self.data.get('mainlines') or []) if isinstance(m, dict)]
+        self.exam_lines = [e for e in (self.data.get('exam_lines') or []) if isinstance(e, dict)]
+        self.by_id = {m.get('id'): m for m in self.mainlines}
+        self.planned = self.data.get('planned_chapters') or {}
+        self.node_extra = self.data.get('node_extra') or {}
+        self.tasks = {}                      # 任務 id → (任務線, 任務)
+        for m in self.mainlines:
+            for t in m.get('tasks') or []:
+                if isinstance(t, dict) and t.get('id') not in self.tasks:
+                    self.tasks[t.get('id')] = (m, t)
+
+    def accs(self, m):
+        return {a.get('id'): a for a in (m.get('acceptance') or []) if isinstance(a, dict)}
+
+    def futures(self, m):
+        return {f.get('id'): f for f in (m.get('future_acceptance') or []) if isinstance(f, dict)}
+
+    def groups(self, m):
+        out = {}
+        for t in m.get('tasks') or []:
+            for g in (t.get('groups') or []) if isinstance(t, dict) else []:
+                if isinstance(g, dict):
+                    out.setdefault(g.get('id'), (t, g))
+        return out
+
+    def task_status(self, m, t):
+        return t.get('status') or m.get('status')
+
+    def resolve(self, m, ref, kinds):
+        """kinds ⊂ {'task','acc','group','future'};回傳 (任務線, 種類, 物件, 所屬任務或 None) 或 None。"""
+        if not isinstance(ref, str):
+            return None
+        if 'task' in kinds and ref in self.tasks:
+            tm, t = self.tasks[ref]
+            return tm, 'task', t, None
+        target, rid = m, ref
+        if '/' in ref:
+            head, rest = ref.split('/', 1)
+            if head in self.by_id:
+                target, rid = self.by_id[head], rest
+            else:
+                return None
+        if 'acc' in kinds and rid in self.accs(target):
+            return target, 'acc', self.accs(target)[rid], None
+        if 'group' in kinds and rid in self.groups(target):
+            t, g = self.groups(target)[rid]
+            return target, 'group', g, t
+        if 'future' in kinds and rid in self.futures(target):
+            return target, 'future', self.futures(target)[rid], None
+        return None
+
+    def for_track(self, track):
+        own = [m for m in self.mainlines if m.get('track') == track]
+        also = [m for m in self.mainlines if m.get('track') != track and track in (m.get('also_tracks') or [])]
+        exams = [e for e in self.exam_lines if e.get('track') == track]
+        return exams, own, also
+
+
+def prereq_closure(nodes_by_id):
+    """每個節點的嚴格先修閉包(prereqs ∪ prereqs_any,遞移)。"""
+    memo = {}
+
+    def go(nid, stack=()):
+        if nid in memo:
+            return memo[nid]
+        n = nodes_by_id.get(nid) or {}
+        out = set()
+        for p in (n.get('prereqs') or []) + (n.get('prereqs_any') or []):
+            if p in stack:
+                continue
+            out.add(p)
+            out |= go(p, stack + (nid,))
+        memo[nid] = out
+        return out
+    return {nid: go(nid) for nid in nodes_by_id}
+
+
+def scan_lab_boxes():
+    """chapters/src 裡的 Lab 方框:[(章 id, 任務 id, [data-group…], {組 id: (名稱, 可見性, 說明)})]
+    與 <!-- LAB: … --> 標記 [(章 id, 任務 id)]。"""
+    boxes, markers = [], []
+    for name in sorted(os.listdir(SRC)):
+        if not name.endswith('.html') or name.startswith('route-'):
+            continue
+        cid, text = name[:-5], chapter_src(name[:-5])
+        for m in MARKER_RE.finditer(text):
+            markers.append((cid, m.group(1)))
+        for m in BOX_RE.finditer(text):
+            tag, depth, i = m.group(1), 1, m.end()
+            tag_re = re.compile(rf'<(/?){tag}\b[^>]*>')
+            end = len(text)
+            for t in tag_re.finditer(text, i):
+                depth += -1 if t.group(1) else 1
+                if depth == 0:
+                    end = t.start()
+                    break
+            body = text[m.end():end]
+            goals = {g.group(1): (g.group(2), g.group(3), g.group(4)) for g in GOAL_RE.finditer(body)}
+            boxes.append((cid, m.group(2), GROUP_ATTR_RE.findall(body), goals))
+    return boxes, markers
+
+
+def validate_mainlines(ml, book, tree_nodes, tree_projects):
+    """回傳 (errors, infos)。errors 是結構錯誤(結束碼非 0);infos 是提醒(Lab 方框還沒寫、outline 的跨線先修等)。"""
+    errors, infos = [], []
+    err = errors.append
+    d = ml.data
+    if not d:
+        return errors, ['沒有主線專題 yaml,略過主線專題區塊']
+    if d.get('version') != 1:
+        err('mainlines: version 要是 1')
+    if not isinstance(d.get('mainlines'), list):
+        return errors + ['mainlines: 缺 mainlines 列表'], infos
+    for cid, pc in ml.planned.items():
+        if not isinstance(pc, dict) or not pc.get('gap') or not pc.get('title'):
+            err(f'planned_chapters.{cid}: 要有 gap 與 title')
+        if cid in book:
+            infos.append(f'planned_chapters.{cid} 已經在 book.js(可以從 planned_chapters 移除)')
+    chapter_ok = lambda c: c in book or c in ml.planned
+    for nid, cids in ml.node_extra.items():
+        if nid not in tree_nodes:
+            err(f'node_extra: tree.yaml 沒有節點 {nid}')
+        for c in cids or []:
+            if not chapter_ok(c):
+                err(f'node_extra.{nid}: 章 {c} 不在 book.js,也不在 planned_chapters')
+    for e in ml.exam_lines:
+        for cp in e.get('checkpoints') or []:
+            if cp not in tree_projects:
+                err(f'exam_lines {e.get("code")}: tree.yaml 沒有專題 {cp}')
+
+    closure = prereq_closure(tree_nodes)
+    seen_m, seen_t, seen_anchor, lang_note = set(), set(), {}, set()
+    pointed = set()                                    # 被 requiredBy 指到的 (任務線 id, 驗收 id)
+    perf_of = {}                                       # (任務線 id, id) → seconds
+    budget_of = {}                                     # (任務線 id, 需求 id) → (任務線, 需求, perf):perf 有 budget 的需求
+    for m in ml.mainlines:
+        reqs_with_perf = [a for a in (m.get('acceptance') or []) + (m.get('future_acceptance') or []) if isinstance(a, dict)]
+        for t in m.get('tasks') or []:
+            reqs_with_perf += [g for g in ((t.get('groups') or []) if isinstance(t, dict) else []) if isinstance(g, dict)]
+        for a in reqs_with_perf:
+            if isinstance(a.get('perf'), dict):
+                perf_of[(m.get('id'), a.get('id'))] = a['perf'].get('seconds')
+                if a['perf'].get('budget') is not None:
+                    budget_of[(m.get('id'), a.get('id'))] = (m, a, a['perf'])
+
+    def budget_share(bm, perf, grp):
+        """需求的 perf.budget 分給效能組 grp 的 (秒數, 用量倍數);沒分到回傳 None。"""
+        for key, share in (perf.get('budget') or {}).items():
+            hit = ml.resolve(bm, key, ('group',))
+            if hit and hit[2] is grp:
+                return share, (perf.get('usage') or {}).get(key, 1)
+        return None
+
+    timed_memo = {}
+
+    def timed(gm, grp, seen=()):
+        """效能組 grp 的時限有沒有來源:requiredBy 鏈最後要走到有 perf 的驗收檢查或整合題(組指組只算轉手)。"""
+        key = id(grp)
+        if key in timed_memo:
+            return timed_memo[key]
+        ok = False
+        for r in grp.get('requiredBy') or []:
+            hit = ml.resolve(gm, r, REQ_KINDS)
+            if not hit or hit[2] is grp or id(hit[2]) in seen:
+                continue
+            hm, hk, ho, _ = hit
+            if hk == 'group':
+                ok = isinstance(ho.get('perf'), dict) and timed(hm, ho, seen + (key,))
+            else:
+                ok = isinstance((ho.get('perf') or {}).get('seconds'), (int, float))
+            if ok:
+                break
+        timed_memo[key] = ok
+        return ok
+
+    for m in ml.mainlines:
+        mid = m.get('id')
+        where = f'任務線 {mid}'
+        detailed = m.get('status') == 'detailed'
+        if mid in seen_m:
+            err(f'{where}: id 重複')
+        seen_m.add(mid)
+        for k in ('id', 'code', 'name', 'track', 'lib', 'project', 'level', 'status', 'summary'):
+            if not m.get(k):
+                err(f'{where}: 缺欄位 {k}')
+        if not re.fullmatch(r'[a-z0-9]+', str(mid or '')):
+            err(f'{where}: id 要是小寫英數字')
+        if m.get('track') not in TRACK_ORDER:
+            err(f'{where}: track「{m.get("track")}」不是路線 id')
+        for r in m.get('also_tracks') or []:
+            if r not in TRACK_ORDER or r == m.get('track'):
+                err(f'{where}: also_tracks 的「{r}」不對')
+        if m.get('status') not in STATUSES:
+            err(f'{where}: status 要是 {"/".join(STATUSES)}')
+        cps = m.get('checkpoints') or [m.get('project')]
+        if m.get('project') not in cps:
+            err(f'{where}: project 要列在 checkpoints 裡')
+        for cp in cps:
+            if cp not in tree_projects:
+                (err if detailed else infos.append)(f'{where}: tree.yaml 沒有專題 {cp}')
+        accs, tasks = m.get('acceptance'), m.get('tasks')
+        if not isinstance(accs, list) or not isinstance(tasks, list):
+            err(f'{where}: acceptance 與 tasks 都要是列表')
+            continue
+        if not accs:
+            err(f'{where}: 至少要有一個驗收檢查(Boss 戰)')
+        acc_ids = set()
+        for a in accs:
+            aw = f'{where} 驗收 {a.get("id")}'
+            if a.get('id') in acc_ids:
+                err(f'{aw}: id 重複')
+            acc_ids.add(a.get('id'))
+            for k in ('id', 'name', 'description'):
+                if not a.get(k):
+                    err(f'{aw}: 缺欄位 {k}')
+            if not isinstance(a.get('consumes'), list):
+                err(f'{aw}: consumes 要是列表')
+            if a.get('visibility', 'hidden') not in VIS_LABEL:
+                err(f'{aw}: visibility 要是 {"/".join(VIS_LABEL)}')
+            if a.get('checkpoint') and a['checkpoint'] not in cps:
+                err(f'{aw}: checkpoint {a["checkpoint"]} 不在 checkpoints')
+            covers = set((tree_projects.get(a.get('checkpoint') or m.get('project')) or {}).get('covers') or [])
+            for c in a.get('consumes') or []:
+                hit = ml.resolve(m, c, ('task',))
+                if not hit:
+                    err(f'{aw}: consumes 的「{c}」不是任何任務')
+                    continue
+                pm, _, pt, _ = hit
+                if pm is not m and covers and not any(
+                        e in covers or any(e in closure.get(n, set()) for n in covers) for e in pt.get('evidenceFor') or []):
+                    (err if detailed else infos.append)(f'{aw}: 用到 {c},但它的節點不在專題涵蓋的先修閉包裡')
+        for f in m.get('future_acceptance') or []:
+            fw = f'{where} 整合題 {f.get("id")}'
+            if f.get('id') in acc_ids:
+                err(f'{fw}: id 和驗收檢查或別的整合題重複')
+            acc_ids.add(f.get('id'))
+            for k in ('id', 'name', 'description'):
+                if not f.get(k):
+                    err(f'{fw}: 缺欄位 {k}')
+            for c in f.get('consumes') or []:
+                if not ml.resolve(m, c, ('task',)):
+                    err(f'{fw}: consumes 的「{c}」不是任何任務')
+            fp = f.get('perf')
+            if fp is not None:
+                if not isinstance(fp, dict) or not fp.get('statement') or not isinstance(fp.get('seconds'), (int, float)):
+                    err(f'{fw}: perf 要有 statement 與 seconds')
+                    continue
+        orders, gids = {}, {}
+        for t in tasks:
+            tid = t.get('id')
+            tw = f'{where} 任務 {tid}'
+            if tid in seen_t:
+                err(f'{tw}: 任務 id 重複(每個元件只能由一個任務產出)')
+            seen_t.add(tid)
+            if not TASK_ID_RE.match(str(tid or '')):
+                err(f'{tw}: id 要是「<lib>/<名>」')
+            for k in ('order', 'name', 'files', 'language', 'chapter', 'anchor'):
+                if not t.get(k) and t.get(k) != 0:
+                    err(f'{tw}: 缺欄位 {k}')
+            for k in ('evidenceFor', 'consumes', 'groups'):
+                if not isinstance(t.get(k), list):
+                    err(f'{tw}: {k} 要是列表')
+            o = t.get('order')
+            if not isinstance(o, int):
+                err(f'{tw}: order 要是整數')
+            elif o in orders:
+                err(f'{tw}: order {o} 和 {orders[o]} 重複')
+            else:
+                orders[o] = tid
+            lang = t.get('language')
+            if lang in LANGS_PROPOSED:
+                lang_note.add(lang)
+            elif lang not in LANGS:
+                err(f'{tw}: language「{lang}」不認得')
+            anchor = t.get('anchor')
+            if anchor:
+                if not re.fullmatch(r'lab-[a-z0-9]+-[a-z0-9-]+', anchor):
+                    err(f'{tw}: anchor「{anchor}」不符合 lab-<lib>-<零件>')
+                if anchor in seen_anchor:
+                    err(f'{tw}: anchor「{anchor}」和 {seen_anchor[anchor]} 重複')
+                seen_anchor[anchor] = tw
+            cid, gap, title = split_chapter(t.get('chapter'))
+            if not title.startswith(LAB_PREFIX):
+                err(f'{tw}: chapter 的小節要以「{LAB_PREFIX}」開頭')
+            if gap:
+                if t.get('gap') != gap or not t.get('gap_title'):
+                    err(f'{tw}: 還沒有章(chapter 寫 {gap})時要有 gap: {gap} 與 gap_title')
+            elif not chapter_ok(cid):
+                err(f'{tw}: 章 {cid} 不在 book.js,也不在 planned_chapters')
+            elif section_gap(t, ml) and not t.get('gap_title'):
+                err(f'{tw}: 既有章的缺口 {t.get("gap")} 要寫 gap_title')
+            for a in t.get('also_chapters') or []:
+                if not chapter_ok(a):
+                    err(f'{tw}: also_chapters 的 {a} 不在 book.js,也不在 planned_chapters')
+            for n in t.get('evidenceFor') or []:
+                if n not in tree_nodes:
+                    err(f'{tw}: evidenceFor 的節點 {n} 不在 tree.yaml')
+            st = ml.task_status(m, t)
+            if st not in STATUSES:
+                err(f'{tw}: status 要是 {"/".join(STATUSES)}')
+            for c in t.get('consumes') or []:
+                hit = ml.resolve(m, c, ('task',))
+                if not hit:
+                    err(f'{tw}: consumes 的「{c}」不是任何任務')
+                    continue
+                pm, _, pt, _ = hit
+                if pt is t:
+                    err(f'{tw}: 不能 consumes 自己')
+                elif pm is m:
+                    if isinstance(pt.get('order'), int) and isinstance(o, int) and pt['order'] >= o:
+                        err(f'{tw}: 用到 {c},但它的 order 不比較早')
+                else:
+                    ev = t.get('evidenceFor') or []
+                    if not any(e in closure.get(n, set()) for e in pt.get('evidenceFor') or [] for n in ev):
+                        (err if st == 'detailed' else infos.append)(
+                            f'{tw}: 跨任務線用到 {c},但它的節點({"、".join(pt.get("evidenceFor") or [])})不在 {"、".join(ev)} 的先修閉包裡')
+            for u in t.get('used_by') or []:
+                if not ml.resolve(m, u, ('task', 'acc')):
+                    err(f'{tw}: used_by 的「{u}」對不到任務或驗收檢查')
+            groups = t.get('groups') if isinstance(t.get('groups'), list) else []
+            prefix = task_short(str(tid)) + '.'
+            for g in groups:
+                gw = f'{tw} 任務目標 {g.get("id")}'
+                gid = g.get('id')
+                if gid in gids:
+                    err(f'{gw}: id 和 {gids[gid]} 重複(同一條任務線內不能重複)')
+                gids[gid] = tw
+                if not str(gid).startswith(prefix):
+                    err(f'{gw}: id 要以「{prefix}」開頭')
+                for k in ('id', 'name', 'description'):
+                    if not g.get(k):
+                        err(f'{gw}: 缺欄位 {k}')
+                if g.get('visibility') not in GROUP_VIS:
+                    err(f'{gw}: visibility 要是 {"/".join(GROUP_VIS)}')
+                if g.get('kind') not in GROUP_KINDS:
+                    err(f'{gw}: kind 要是 {"/".join(GROUP_KINDS)}')
+                perf = g.get('perf')
+                if g.get('kind') == 'perf':
+                    if not isinstance(perf, dict) or not perf.get('statement') or not isinstance(perf.get('seconds'), (int, float)):
+                        err(f'{gw}: 效能組要有 perf.statement 與 perf.seconds')
+                elif perf is not None:
+                    err(f'{gw}: 只有 kind: perf 的組可以寫 perf')
+                reqs = g.get('requiredBy')
+                if not isinstance(reqs, list) or not reqs:
+                    err(f'{gw}: requiredBy 要寫(哪個 Boss 或下游測試組需要它)')
+                    reqs = []
+                numeric = 0                                # requiredBy 裡寫了時限的需求數
+                for r in reqs:
+                    hit = ml.resolve(m, r, REQ_KINDS)
+                    if not hit:
+                        err(f'{gw}: requiredBy 的「{r}」對不到驗收檢查、測試組或整合題')
+                        continue
+                    rm, kind, obj, _ = hit
+                    if kind == 'acc':
+                        pointed.add((rm.get('id'), obj.get('id')))
+                    if obj is g:
+                        err(f'{gw}: requiredBy 不能寫自己')
+                    if isinstance(perf, dict):
+                        key = (rm.get('id'), obj.get('id'))
+                        lim, what = perf_of.get(key), f'需求「{r}」'
+                        ratio = 1
+                        if key in budget_of:
+                            got = budget_share(budget_of[key][0], budget_of[key][2], g)
+                            if got is None:
+                                lim = what = None
+                                err(f'{gw}: 需求「{r}」有 perf.budget,但沒有分秒數給這一組')
+                            else:
+                                lim, ratio = got
+                                what = f'需求「{r}」分給它' + (f'(用量是這一組的 {ratio} 倍)' if ratio != 1 else '')
+                        if isinstance(lim, (int, float)) and (kind != 'group' or timed(rm, obj)):
+                            numeric += 1
+                            if isinstance(perf.get('seconds'), (int, float)) and isinstance(ratio, (int, float)) and perf['seconds'] * ratio > lim:
+                                err(f'{gw}: 時限 {perf["seconds"]} 秒' + (f' × {ratio}' if ratio != 1 else '') + f'比{what}的 {lim} 秒寬')
+                if isinstance(perf, dict) and reqs and not numeric:
+                    (err if st == 'detailed' and not t.get('optional') else infos.append)(
+                        f'{gw}: requiredBy 裡沒有一個寫了時限(門檻要由下游的數字推導;可以指到有 perf 的 Boss、future_acceptance 整合題,或本身有時限來源的效能組)')
+            names = {g.get('id') for g in groups if g.get('kind') == 'invariant'}
+            for inv in t.get('invariants') or []:
+                if inv.get('name') not in names:
+                    err(f'{tw}: invariants 的 {inv.get("name")} 要是這個任務 kind: invariant 的測試組')
+                if inv.get('kind') not in ('function', 'asserts') or not inv.get('symbol') and inv.get('kind') == 'function':
+                    err(f'{tw}: invariants 的 {inv.get("name")} 要有 kind(function/asserts)與 symbol')
+            if st == 'detailed':
+                vis = {g.get('visibility') for g in groups}
+                if 'public' not in vis or 'hidden' not in vis:
+                    err(f'{tw}: 詳細任務至少要有一組公開與一組隱藏的任務目標')
+    for m in ml.mainlines:
+        if m.get('status') != 'detailed':
+            continue
+        for a in m.get('acceptance') or []:
+            if a.get('visibility') != 'teacher' and (m.get('id'), a.get('id')) not in pointed:
+                err(f'任務線 {m.get("id")} 驗收 {a.get("id")}: 沒有任何測試組的 requiredBy 指到它(由上往下拆的證據)')
+    # perf.budget:把需求的總時限拆給各零件的效能組(可以跨任務線,寫「<任務線 id>/<組 id>」);perf.usage 是下游用量對零件測試工作量的倍數
+    for (bmid, bid), (bm, req, bp) in budget_of.items():
+        bw = f'任務線 {bmid} 需求 {bid}'
+        bud, usage = bp.get('budget'), bp.get('usage') or {}
+        if not isinstance(bud, dict) or not all(isinstance(v, (int, float)) for v in bud.values()):
+            err(f'{bw}: perf.budget 要是「效能組 id: 秒」')
+            continue
+        if not isinstance(usage, dict) or not all(isinstance(v, (int, float)) and v > 0 for v in usage.values()) or set(usage) - set(bud):
+            err(f'{bw}: perf.usage 要是「效能組 id: 倍數」,而且 key 要在 budget 裡')
+        if isinstance(bp.get('seconds'), (int, float)) and sum(bud.values()) > bp['seconds']:
+            err(f'{bw}: perf.budget 加起來 {sum(bud.values())} 秒,超過總時限 {bp["seconds"]} 秒')
+        for key in bud:
+            hit = ml.resolve(bm, key, ('group',))
+            if not hit or hit[2].get('kind') != 'perf':
+                err(f'{bw}: perf.budget 的「{key}」不是效能組')
+            elif not any((ml.resolve(hit[0], r, REQ_KINDS) or (None,) * 3)[2] is req for r in hit[2].get('requiredBy') or []):
+                err(f'{bw}: perf.budget 的「{key}」沒有在 requiredBy 寫這個需求')
+
+    # used_by(書上的「之後會用在」)和對方的 consumes 要對稱;同一條任務線的 Boss 不必寫進 used_by
+    for m in ml.mainlines:
+        consumers = [('task', x, ml.task_status(m, x)) for x in m.get('tasks') or [] if isinstance(x, dict)]
+        consumers += [('acc', a, m.get('status')) for a in m.get('acceptance') or [] if isinstance(a, dict)]
+        for kind, x, xst in consumers:
+            for c in x.get('consumes') or []:
+                hit = ml.resolve(m, c, ('task',))
+                if not hit or (kind == 'acc' and hit[0] is m):
+                    continue
+                pm, _, pt, _ = hit
+                if not any((ml.resolve(pm, u, ('task', 'acc')) or (None,) * 3)[2] is x for u in pt.get('used_by') or []):
+                    strict = 'detailed' in (ml.task_status(pm, pt), xst)
+                    who = x.get('id') if kind == 'task' or pm is m else f'{m.get("id")}/{x.get("id")}'
+                    (err if strict else infos.append)(f'任務 {pt.get("id")}: {who} 的 consumes 有它,used_by 卻沒有列 {who}')
+    for m in ml.mainlines:
+        for t in m.get('tasks') or []:
+            for u in t.get('used_by') or []:
+                hit = ml.resolve(m, u, ('task', 'acc'))
+                if not hit:
+                    continue
+                um, kind, x, _ = hit
+                if t.get('id') not in (x.get('consumes') or []):
+                    xst = ml.task_status(um, x) if kind == 'task' else um.get('status')
+                    strict = 'detailed' in (ml.task_status(m, t), xst)
+                    (err if strict else infos.append)(
+                        f'任務 {t.get("id")}: used_by 列了 {u},但 {u} 的 consumes 沒有 {t.get("id")}(書上的「之後會用在」要是真的)')
+    if lang_note:
+        infos.append(f'language 用到 9Jang 列舉以外的值({"、".join(sorted(lang_note))}),請 9Jang 的 schema 加進列舉')
+
+    # 書裡的 Lab 方框與 yaml 對得起來嗎
+    boxes, markers = scan_lab_boxes()
+    in_chapter = {}
+    for cid, tid, groups, goals in boxes:
+        in_chapter.setdefault(tid, set()).add(cid)
+        if tid not in ml.tasks:
+            err(f'{cid}: Lab 方框 data-task="{tid}" 不在 yaml')
+            continue
+        _, t = ml.tasks[tid]
+        by_id = {g.get('id'): g for g in t.get('groups') or [] if isinstance(g, dict)}
+        for g in groups:
+            if g not in by_id:
+                err(f'{cid}: Lab 方框 {tid} 裡的 data-group="{g}" 不是這個任務的測試組')
+        if not groups:
+            continue                                   # 只有標題的方框(任務目標還沒設計)
+        for gid in by_id:
+            if gid not in groups:
+                err(f'{cid}: Lab 方框 {tid} 沒有列任務目標 data-group="{gid}"(書上和 quest 面板要是同一份)')
+        for gid, (name, vis, desc) in goals.items():   # 書上和 quest 面板是同一份文字
+            g = by_id.get(gid)
+            if not g:
+                continue
+            if name != esc(g.get('name', '')):
+                err(f'{cid}: Lab 方框 {tid} 的 {gid} 名稱是「{name}」,yaml 是「{g.get("name")}」')
+            if vis != VIS_LABEL.get(g.get('visibility'), ''):
+                err(f'{cid}: Lab 方框 {tid} 的 {gid} 寫〔{vis}〕,yaml 是 {g.get("visibility")}')
+            if not desc.startswith(html_text(g.get('description', ''))):
+                infos.append(f'{cid}: Lab 方框 {tid} 的 {gid} 說明和 yaml 不同')
+            stmt = (g.get('perf') or {}).get('statement')
+            if stmt and not any(f'{w}{c}{html_text(stmt)}' in desc for w in ('門檻', '效能') for c in (':', '：')):
+                err(f'{cid}: Lab 方框 {tid} 的 {gid} 沒有照抄 yaml 的效能門檻「門檻:{stmt}」')
+    for cid, tid in markers:
+        in_chapter.setdefault(tid, set()).add(cid)
+        if tid not in ml.tasks:
+            err(f'{cid}: 標記 <!-- LAB: {tid} --> 不在 yaml')
+    for m in ml.mainlines:
+        pending = []
+        for t in m.get('tasks') or []:
+            cid, gap, _ = split_chapter(t.get('chapter'))
+            if gap or cid not in book:
+                continue
+            if cid not in in_chapter.get(t.get('id'), set()):
+                pending.append(f'{cid} 還沒有 Lab 方框 {t.get("id")}')
+            elif not anchor_exists(cid, t.get('anchor')):
+                pending.append(f'{cid} 有 {t.get("id")} 的標記但還沒有 #{t.get("anchor")}')
+        if pending and m.get('status') == 'detailed':
+            infos.extend(f'任務線 {m.get("id")}: {x}' for x in pending)
+        elif pending:
+            infos.append(f'任務線 {m.get("id")}(outline):{len(pending)} 個 Lab 方框還沒寫進書')
+    return errors, infos
+
+
+def disp_width(s):
+    return sum(2 if unicodedata.east_asian_width(ch) in ('W', 'F') else 1 for ch in s)
+
+
+def pad(s, width):
+    return s + ' ' * max(0, width - disp_width(s))
+
+
+def html_text(s):
+    """yaml 的說明文字 → HTML:跳脫,再把 10^5 這種次方寫成上標。"""
+    return re.sub(r'(\d+)\^(\d+)', r'\1<sup>\2</sup>', esc(str(s)))
+
+
+def section_gap(t, ml):
+    """任務的 gap 是「既有章裡缺的小節」時回傳 True;gap 就是新章本身(planned_chapters 的 gap)時不算。"""
+    gap = t.get('gap')
+    cid, chapter_gap, _ = split_chapter(t.get('chapter'))
+    return bool(gap) and not chapter_gap and gap != (ml.planned.get(cid) or {}).get('gap')
+
+
+def where_text(t, book, ml):
+    """任務線總覽(<pre>)裡「← 在哪裡做」的文字。"""
+    cid, gap, _ = split_chapter(t.get('chapter'))
+    if gap:
+        return f'🚧 {gap} 尚未撰寫'
+    if cid not in book:
+        return f'新章 {ml.planned[cid]["gap"]},撰寫中'
+    s = f'{num_label(book[cid]["num"], cid)} Lab'
+    if section_gap(t, ml):
+        s += f'(待補 {t["gap"]})'
+    return s
+
+
+def where_html(t, book, ml):
+    """零件清單裡「在哪一章做」的 HTML(整句)。"""
+    cid, gap, _ = split_chapter(t.get('chapter'))
+    if gap:
+        return f'🚧 書裡還沒有這一章({esc(gap)}「{esc(t.get("gap_title", ""))}」)'
+    if cid not in book:
+        pc = ml.planned[cid]
+        kind = '新附錄' if pc.get('appendix') else '新章'
+        return f'在{kind} {esc(pc["gap"])}「{esc(pc["title"])}」做,這一章撰寫中'
+    s = '在' + chapter_link(cid, book, t.get('anchor') if anchor_exists(cid, t.get('anchor')) else None) + '的 Lab'
+    if section_gap(t, ml):
+        s += f'<span class="route-note">(這一章待補 {esc(t["gap"])}:{esc(t.get("gap_title", ""))})</span>'
+    return s
+
+
+def quest_tree(m, book, ml):
+    """任務線總覽的測試樹(純文字,放進 <pre>)。"""
+    rows = []
+    for t in m.get('tasks') or []:
+        name = t['name'] + ('(選修)' if t.get('optional') and '選修' not in t['name'] else '')
+        rows.append((lab_file_label(t), name, where_text(t, book, ml)))
+    w1 = max((disp_width(r[0]) for r in rows), default=0)
+    w2 = max((disp_width(r[1]) for r in rows), default=0)
+    out = [f'{m["id"]}(任務線)']
+    out.append(('└─ ' if not rows else '├─ ') + 'Boss 戰:' + '、'.join(a['name'] for a in m.get('acceptance') or []))
+    for i, (f, q, w) in enumerate(rows):
+        out.append(('└─ ' if i == len(rows) - 1 else '├─ ') + f'{pad(f, w1)} {pad(q, w2)} ← {w}')
+    return out
+
+
+def ref_html(ml, m, ref, kinds, page_ids):
+    hit = ml.resolve(m, ref, kinds)
+    if not hit:
+        return esc(str(ref))
+    rm, kind, obj, owner = hit
+    if kind == 'task':
+        text = f'任務「{esc(obj["name"])}」'
+    elif kind == 'acc':
+        text = f'Boss「{esc(obj["name"])}」'
+    elif kind == 'future':
+        text = f'之後的整合題「{esc(obj["name"])}」'
+    else:
+        text = f'任務「{esc(owner["name"])}」的任務目標「{esc(obj["name"])}」'
+    if rm is m:
+        return text
+    href = f'#mainline-{rm["id"]}' if rm['id'] in page_ids else f'route-{rm["track"]}.html#mainline-{rm["id"]}'
+    return f'<a href="{href}">{esc(rm["id"])}「{esc(rm["name"])}」</a>的' + (' ' if kind == 'acc' else '') + text
+
+
+def tree_project_name(tp, tree_projects):
+    t = (tree_projects or {}).get(tp)
+    name = soft(t['name']) if t and t.get('name') else tp
+    return name.lstrip('🏆').strip()
+
+
+def perf_text(perf):
+    return html_text(perf['statement']) if isinstance(perf, dict) and perf.get('statement') else ''
+
+
+def render_boss_item(ml, m, a, page_ids, cp_no=None):
+    vis = VIS_LABEL[a.get('visibility', 'hidden')]
+    s = f'⚔️ <strong>{esc(a["name"])}</strong>〔{vis}〕{html_text(a["description"])}'
+    if cp_no:
+        s = f'檢查點 {cp_no} · ' + s
+    if a.get('perf'):
+        s += f'(效能:{perf_text(a["perf"])})'
+    uses = [ref_html(ml, m, u, ('task',), page_ids) for u in a.get('consumes') or []]
+    if uses:
+        s += f'<span class="route-note">用到:{"、".join(uses)}</span>'
+    return f'<li data-acceptance="{esc(a["id"])}">{s}</li>'
+
+
+def render_group_item(ml, m, g, page_ids):
+    s = f'☐ <strong>{esc(g["name"])}</strong>〔{VIS_LABEL[g["visibility"]]}〕{html_text(g["description"])}'
+    req = '、'.join(ref_html(ml, m, r, REQ_KINDS, page_ids) for r in g.get('requiredBy') or [])
+    if g.get('perf'):
+        s += f'(效能:{perf_text(g["perf"])}' + (f' ← 來自 {req}' if req else '') + ')'
+    elif req:
+        s += f'(← {req})'
+    return f'<li data-group="{esc(g["id"])}">{s}</li>'
+
+
+def render_tree_callout(add, title, lines):
+    add('      <div class="callout note">')
+    add('        <div class="ico">🧭</div>')
+    add('        <div class="body">')
+    add(f'          <span class="c-title">任務線總覽:{esc(title)}</span>')
+    tree = [esc(x) for x in lines]   # 章號記號裡沒有要跳脫的字元
+    add('<pre><code class="language-text">' + tree[0])
+    for x in tree[1:-1]:
+        add(x)
+    add(tree[-1] + '</code></pre>')
+    add('        </div>')
+    add('      </div>')
+
+
+def render_mainline(track, ml, book, tree_projects):
+    """路線導讀頁的「本路線的主線專題」區塊(HTML 行的列表);本路線沒有主線專題時回傳 []。"""
+    exams, own, also = ml.for_track(track)
+    if not exams and not own and not also:
+        return []
+    page_ids = {m['id'] for m in own + also}
+    lines = []
+    add = lines.append
+    add('      <h2 id="mainline">本路線的主線專題</h2>')
+    add(f'      <p>這條路線的 Lab 串成 {len(own)} 條主線專題' + (f'(另外 {len(also)} 條主線在別的路線,這裡也會用到)' if also else '')
+        + '。一條主線是一份會長大的程式碼:前面 Lab 做好的零件,後面的 Lab 和專題直接拿來用。'
+        '每條主線先定下最後的 Boss 戰,再拆成零件;每個零件的任務目標(含效能門檻)都說得出是哪一個 Boss 需要它。</p>')
+    add('      <div class="callout note">')
+    add('        <div class="ico">🗺️</div>')
+    add('        <div class="body">')
+    add('          <span class="c-title">主線專題和地下城的對照</span>')
+    add('          <p>主線專題＝<strong>任務線</strong>;每個零件＝一個<strong>任務</strong>(有自己的資料夾);'
+        '每組測試＝一個<strong>任務目標</strong>(打勾的格子);最後的整合測試＝<strong>Boss 戰</strong>。</p>')
+    add('          <p>〔公開〕的任務目標用 <code>test</code>(或 F5)自己跑;〔隱藏檢定〕在 <code>submit</code> 時才跑,'
+        '只看得到名稱和一行說明;〔老師核可〕由老師人工看。零件過關之後,後面的專題一律用你自己的版本,'
+        '規則見<a href="00-about.html#lab-rules">零件庫規則</a>。</p>')
+    add('        </div>')
+    add('      </div>')
+    for e in exams:   # 考試型(T1):沒有零件
+        add(f'      <h3 id="mainline-{esc(e["code"].lower())}">{esc(e["code"])} {esc(e["name"])}</h3>')
+        cps = e.get('checkpoints') or []
+        names = '、'.join(f'🏆 {esc(tree_project_name(tp, tree_projects))}' for tp in cps)
+        add(f'      <p class="route-prereq">程度:{esc(e.get("level", ""))}<br>技能樹專題(依序是檢查點):{names}</p>')
+        add(f'      <p>{html_text(e["summary"])}</p>')
+        add('      <ul>')
+        for b in e.get('boss') or []:
+            no = cps.index(b['checkpoint']) + 1 if b.get('checkpoint') in cps else None
+            add(f'        <li>{"檢查點 %d · " % no if no else ""}⚔️ <strong>{esc(b["name"])}</strong>〔隱藏檢定〕{html_text(b["description"])}</li>')
+        add('      </ul>')
+    for m in own + also:
+        is_own = m in own
+        add(f'      <h3 id="mainline-{esc(m["id"])}">{esc(m["code"])} {esc(m["name"])}</h3>')
+        meta = [f'任務線 <code>{esc(m["id"])}</code> · 程度:{esc(m["level"])}']
+        cps = m.get('checkpoints') or [m['project']]
+        names = '、'.join(f'🏆 {esc(tree_project_name(tp, tree_projects))}' for tp in cps)
+        meta.append(('技能樹專題(依序是檢查點):' if len(cps) > 1 else '技能樹專題:') + names)
+        if not is_own:
+            meta.append(f'主線在<a href="route-{m["track"]}.html#mainline-{esc(m["id"])}">'
+                        f'{TRACKS[m["track"]]["icon"]} {esc(TRACKS[m["track"]]["short"])}</a>路線,完整的任務目標在那一頁')
+        add(f'      <p class="route-prereq">{"<br>".join(meta)}</p>')
+        add(f'      <p>{html_text(m["summary"])}</p>')
+        if m.get('note') and is_own:
+            add(f'      <p class="route-note">{html_text(m["note"])}</p>')
+        render_tree_callout(add, m['id'], quest_tree(m, book, ml))
+        if not is_own:
+            continue
+        accs = m.get('acceptance') or []
+        add('      <p><strong>Boss 戰</strong>(最後專題的驗收):</p>')
+        per_cp = {cp: [a for a in accs if (a.get('checkpoint') or m['project']) == cp] for cp in cps}
+        if len(cps) > 1 and any(len(v) > 1 for v in per_cp.values()):
+            groups = list(per_cp.items())          # 有檢查點掛了好幾個 Boss(例:bookapi):依檢查點分組
+        else:
+            groups = [(None, accs)]
+        for cp, items in groups:
+            if not items:
+                continue
+            if cp:
+                add(f'      <p class="route-note">檢查點 {cps.index(cp) + 1}:🏆 {esc(tree_project_name(cp, tree_projects))}</p>')
+            add('      <ul>')
+            for a in items:
+                acp = a.get('checkpoint') or m['project']
+                no = cps.index(acp) + 1 if not cp and len(cps) > 1 and acp in cps else None
+                add('        ' + render_boss_item(ml, m, a, page_ids, no))
+            add('      </ul>')
+        future = m.get('future_acceptance') or []
+        if future:
+            add('      <p class="route-note">之後的整合題(還不是 Boss 戰):' + '、'.join(
+                esc(f['name']) + (f'(效能:{perf_text(f["perf"])})' if f.get('perf') else '') for f in future) + '。</p>')
+        steps = m.get('steps') or []
+        if steps:
+            add('      <p class="route-note">不產生零件的關卡:' + '、'.join(esc(s['name']) for s in steps) + '。</p>')
+        tasks = m.get('tasks') or []
+        if not tasks:
+            continue
+        add('      <p><strong>零件(任務)</strong>,照 Lab 順序:</p>')
+        add('      <ol>')
+        for t in tasks:
+            opt = t.get('optional') and '選修' not in t['name']
+            head = f'<strong>任務「{esc(t["name"])}」</strong>({esc(t.get("lab_no", ""))}' + (',選修' if opt else '') + ')'
+            head += f' <code>{esc(t["id"])}</code>'
+            files = t.get('files') or []
+            head += ' · <code>~/零件庫/' + esc(files[0] if len(files) == 1 else lab_file_label(t) if '*' in split_chapter(t['chapter'])[2] else '、'.join(files)) + '</code>' if files else ''
+            parts = [head, where_html(t, book, ml)]
+            deps = [ref_html(ml, m, x, ('task',), page_ids) for x in t.get('consumes') or []]
+            if deps:
+                parts.append('先做:' + '、'.join(deps))
+            used = [ref_html(ml, m, x, ('task', 'acc'), page_ids) for x in t.get('used_by') or []]
+            if used:
+                parts.append('之後會用在:' + '、'.join(used))
+            groups = t.get('groups') or []
+            if ml.task_status(m, t) == 'detailed' and groups:
+                add(f'        <li data-task="{esc(t["id"])}">{"<br>".join(parts)}')
+                add('          <ul class="lab-goals">')
+                for g in groups:
+                    add('            ' + render_group_item(ml, m, g, page_ids))
+                add('          </ul>')
+                add('        </li>')
+            else:
+                add(f'        <li data-task="{esc(t["id"])}">{"<br>".join(parts)}<br><span class="route-note">任務目標設計中。</span></li>')
+        add('      </ol>')
+        if m.get('status') == 'outline':
+            add('      <p class="route-note">這條主線的任務目標(測試組)還在設計;零件、章與誰接著用已經定了。</p>')
+    return lines
+
+
 def main(argv):
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     ap.add_argument('--tree', required=True, help='職業技能樹 tree.yaml 的路徑')
+    ap.add_argument('--projects', default=DEFAULT_PROJECTS, help='主線專題的測試樹(預設 data/mainline-projects.yaml)')
     ap.add_argument('--check', action='store_true', help='只檢查,不寫檔')
     args = ap.parse_args(argv)
 
     data = yaml.safe_load(open(args.tree, encoding='utf-8'))
     meta = data.get('meta', {})
+    ml = Mainlines(yaml.safe_load(open(args.projects, encoding='utf-8')) if os.path.exists(args.projects) else {})
     book, _ = load_book()
     file_ids = {}
     for cid in book:
@@ -511,12 +1325,25 @@ def main(argv):
                 if not hit:
                     warnings.append(f'{n["id"]}: BOOK_EXTRA {cid} 找不到小節「{s}」')
             rs.insert(0, {'kind': 'chapter', 'id': cid, 'note': '', 'sections': sections})
+        for cid in ml.node_extra.get(n['id']) or []:   # 主線 yaml 規劃的新章:進了 book.js 才列
+            if cid in book and not any(r['kind'] == 'chapter' and r['id'] == cid for r in rs):
+                rs.append({'kind': 'chapter', 'id': cid, 'note': '', 'sections': []})
         refs[n['id']] = rs
+
+    tree_projects = {p['id']: p for p in data.get('projects') or []}
+    ml_errors, ml_infos = validate_mainlines(ml, book, all_nodes, tree_projects)
+    if ml_errors:
+        for e in ml_errors:
+            print('錯誤:', e)
+        shown = os.path.relpath(args.projects, ROOT) if os.path.abspath(args.projects).startswith(ROOT + os.sep) else args.projects
+        print(f'主線專題 yaml 有 {len(ml_errors)} 個結構錯誤({shown}),未寫檔。')
+        return 1
 
     routes, outputs = [], {}
     for t in TRACK_ORDER:
         nodes = topo_order([n for n in data['nodes'] if n['track'] == t])
-        text, reading = render_guide(t, meta, nodes, all_nodes, book, refs, track_names)
+        mainline = render_mainline(t, ml, book, tree_projects)
+        text, reading = render_guide(t, meta, nodes, all_nodes, book, refs, track_names, mainline, ml.data)
         outputs[os.path.join(SRC, f'route-{t}.html')] = text
         routes.append({'id': t, 'title': TRACKS[t]['short'], 'icon': TRACKS[t]['icon'],
                        'blurb': TRACKS[t]['subtitle'], 'guide': f'route-{t}',
@@ -531,6 +1358,12 @@ def main(argv):
     for w in warnings:
         print('警告:', w)
     if args.check:
+        for i in ml_infos:
+            print('資訊:', i)
+        n_detail = sum(1 for m in ml.mainlines if m.get('status') == 'detailed')
+        n_tasks = sum(len(m.get('tasks') or []) for m in ml.mainlines)
+        print(f'主線專題:{len(ml.mainlines)} 條任務線({n_detail} 條詳細)、{n_tasks} 個任務,結構檢查通過;'
+              f'{len(ml_infos)} 則資訊(Lab 方框或新章還沒寫、outline 的待決)。')
         print(f'檢查完成:{len(TRACK_ORDER)} 條路線,{len(warnings)} 個警告(未寫檔)。')
         return 0
     for path, text in outputs.items():

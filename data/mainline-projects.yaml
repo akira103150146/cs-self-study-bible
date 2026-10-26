@@ -1,0 +1,1177 @@
+# 主線專題(任務線)的測試樹 — 書端的唯一來源;9Jang 用 sync:mainlines 匯入
+#
+# 形狀照 9Jang 的 Zod schema(shared/src/schemas/mainline.schema.ts,以它為準;說明見 data/README.md):
+#   version: 1
+#   mainlines[]: {id, name, track, lib, project, acceptance[], tasks[]}
+#     acceptance[]: {id, name, description, consumes[]}                       ← Boss 戰(驗收檢查)
+#     tasks[]: {id, order, name, files[], language, chapter, evidenceFor[], consumes[], groups[]}   ← 任務(元件)
+#       groups[]: {id, name, description, visibility, kind, perf?{statement, seconds, n?}, requiredBy[], book?}   ← 任務目標
+# 書端多加的欄位(9Jang 不讀,data/README.md 有完整清單):頂層 date、planned_chapters、node_extra、exam_lines;
+#   mainline 的 code、also_tracks、checkpoints、level、status、summary、note、future_acceptance(perf.budget)、steps;
+#   acceptance 的 visibility、perf、checkpoint;task 的 lab_no、anchor、gap、gap_title、also_chapters、optional、status、
+#   used_by、note、interface、internal、forbid、forbid_calls、forbidAttrTypes、require、invariants;group 的 perf_ref、perf_basis、runner。
+#
+# 對照(老師 2026-10-25):主線專題＝任務線;零件＝任務;測試組＝任務目標;公開＝test／F5;隱藏檢定＝submit;
+#   整合測試＝Boss 戰。由上而下:先定 Boss 戰,再拆零件;每組測試寫 requiredBy(是哪個 Boss 或下游測試組需要它)。
+#
+# 規則:
+#   - 任務 id＝元件 id「<零件庫資料夾>/<名>」(資料夾不一定等於 lib,例 bookapi 線的 srv/http);測試組 id「<名>.<組>」,在同一條任務線內不重複。
+#   - chapter＝「<章檔名>:<Lab 的 h3 全文>」;h3 一律寫成「本章 Lab:<任務名> <檔案>」,章作者照抄。
+#     書裡還沒有章的寫「<缺口編號>:<h3>」(例 G17:…),前半是 G 開頭就代表「還沒有章」。
+#   - requiredBy:同任務線的驗收檢查 id、測試組 id 或 future_acceptance 整合題 id;跨任務線寫「<任務線 id>/<id>」(例 puzzle/boss.solve-15)。
+#     效能組的 requiredBy 至少要有一個寫了時限的需求(門檻由下游的數字推導),seconds 不能比它寬;
+#     整合題的 perf.budget 把總時限拆給各零件的效能組,零件改比它分到的秒數。
+#   - used_by 和對方的 consumes 要對稱(書上的「之後會用在」要是真的)。
+#   - 效能數字:直覺式純 Python 參考解在 i7-12700KF／Python 3.12 實測(perf_ref,CPU 秒),時限照 9Jang lab:verify 的規則
+#     「參考解 CPU ≤ 時限的 1/3」。perf_basis: estimate＝還沒有參考實作可量(H1,等第 10 棒批改器)。
+#
+# 待決事項的決定(書端先定,9Jang 可推翻):
+#   1. 一條任務線對到多個 tree.yaml 專題時(bookapi、各 outline 線),project＝第一個(9Jang 先做的那個檢查點),
+#      全部依序列在 checkpoints;後面檢查點的驗收檢查用 checkpoint 欄標記、id 用 cp2.／cp3. 開頭。
+#   2. status: outline 的任務線只列任務與 Boss,任務目標(groups)還沒設計;建議 9Jang 的 validateMainlines 對 outline
+#      任務線的「project 存在」「驗收檢查有人 requiredBy」「跨線先修閉包」只警告不擋(minidb 的專題 tree.yaml 還沒有)。
+#   3. language 用到 Zod 列舉以外的值:asm(Hack、RISC-V 組合語言)、verilog、spice;請 9Jang 的 schema 加進列舉。
+#      hack 的晶片寫 hdl(Hack HDL)。
+#   4. T1 APCS 只有考試、沒有元件,不算任務線,放在 exam_lines(只給書的路線頁)。
+version: 1
+date: 2026-10-25
+
+planned_chapters:
+  129-http-rest-api: {gap: G15, title: HTTP 與 REST API}
+  130-hack-hdl-reference: {gap: G29, title: Hack HDL 與測試腳本速查, appendix: 附G}
+  131-security-law-ethics: {gap: G55, title: 動手之前:資安的法律與倫理}
+  132-numpy-pandas: {gap: G21, title: NumPy 與 pandas}
+  133-c-deep-dive: {gap: G43, title: C 深入}
+  134-chip8-emulator: {gap: G49-1, title: CHIP-8 模擬器}
+  135-riscv-assembly: {gap: G32, title: RV32I 組合語言}
+  136-verilog: {gap: G34, title: Verilog}
+  137-verification-cocotb: {gap: G35, title: cocotb 驗證}
+
+node_extra:
+  be-web-basics: [129-http-rest-api]
+  be-api: [129-http-rest-api]
+  hw-gates: [130-hack-hdl-reference]
+  hw-alu: [130-hack-hdl-reference]
+  hw-memory: [130-hack-hdl-reference]
+  hw-computer: [130-hack-hdl-reference]
+  sec-ethics: [131-security-law-ethics]
+  ai-numpy: [132-numpy-pandas]
+  em-c-pointers: [133-c-deep-dive]
+  em-bits-regs: [133-c-deep-dive]
+  em-emu-chip8: [134-chip8-emulator]
+  hw-riscv-asm: [135-riscv-assembly]
+  ic-verilog-basics: [136-verilog]
+  ic-comb: [136-verilog]
+  ic-testbench: [137-verification-cocotb]
+  ic-verification: [137-verification-cocotb]
+
+exam_lines:
+  - code: T1
+    name: APCS 試煉之路
+    track: trunk
+    checkpoints: [proj-apcs-trial-p1, proj-apcs-trial-p2, proj-apcs-trial-p3, proj-apcs-trial-p4, proj-apcs-mock-impl, proj-apcs-mock-concept]
+    level: 高中
+    summary: "考試型專題:每個檢查點是題庫題與考場,不產生零件。照第 8b 棒做完即可。"
+    boss:
+      - {name: p1 試煉, description: "考場容器抽 4 題過 3 題(條件迴圈、模擬枚舉、位元與進位)。", checkpoint: proj-apcs-trial-p1}
+      - {name: p2 試煉, description: "抽 4 過 3(陣列、字串、函式遞迴、排序)。", checkpoint: proj-apcs-trial-p2}
+      - {name: p3 試煉, description: "抽 3 過 2(二分搜、前綴和、堆疊佇列、樹、貪心)。", checkpoint: proj-apcs-trial-p3}
+      - {name: p4 試煉, description: "抽 2 過 1(圖、動態規劃)。", checkpoint: proj-apcs-trial-p4}
+      - {name: 實作模擬考, description: "4 題限時,預估實作級分。", checkpoint: proj-apcs-mock-impl}
+      - {name: 觀念模擬考, description: "約 30 題限時,預估觀念級分。", checkpoint: proj-apcs-mock-concept}
+
+mainlines:
+
+# ═════════════════════════════ T2 libds(詳細;9Jang 第一個切片) ═════════════════════════════
+- id: libds
+  code: T2
+  name: libds:自己的資料結構庫
+  track: trunk
+  also_tracks: [backend, ai]
+  lib: libds
+  project: proj-trunk-interview
+  checkpoints: [proj-trunk-interview]
+  level: 高中→大學
+  status: detailed
+  summary: "一個會長大的 Python 資料結構庫(樹狀陣列與線段樹用 C++)。介面刻意和書上的範例不同:可以參考書,但要自己改寫。後面的圖演算法、解謎 AI、搜尋引擎與借書 API 的快取,都直接 import 你自己的版本。"
+  note: "面試 Boss 第一版＝用你現在的 9 個零件重跑每個任務的全部檢定(老師 2026-10-25);整合題列在 future_acceptance,之後再加。"
+  acceptance:
+    - {id: boss.sort, name: "全套檢定:穩定排序", description: "用你現在的 libds/sort.py 重跑穩定排序任務的全部檢定。", consumes: [libds/sort]}
+    - {id: boss.heap, name: "全套檢定:優先佇列", description: "用你現在的 libds/heap.py 重跑優先佇列任務的全部檢定。", consumes: [libds/heap]}
+    - {id: boss.lru, name: "全套檢定:LRU 快取", description: "用你現在的 libds/lru.py 重跑 LRU 快取任務的全部檢定。", consumes: [libds/lru]}
+    - {id: boss.hashmap, name: "全套檢定:雜湊表", description: "用你現在的 libds/hashmap.py 重跑雜湊表任務的全部檢定。", consumes: [libds/hashmap]}
+    - {id: boss.trie, name: "全套檢定:字典樹", description: "用你現在的 libds/trie.py 重跑字典樹任務的全部檢定。", consumes: [libds/trie]}
+    - {id: boss.graph, name: "全套檢定:圖與最短路徑", description: "用你現在的 libds/graph.py(與它用到的 heap.py)重跑圖任務的全部檢定。", consumes: [libds/graph, libds/heap]}
+    - {id: boss.dsu, name: "全套檢定:並查集", description: "用你現在的 libds/dsu.py(與它用到的 sort.py)重跑並查集任務的全部檢定。", consumes: [libds/dsu, libds/sort]}
+    - {id: boss.fenwick, name: "全套檢定:區間加值 BIT", description: "用你現在的 libds/fenwick.hpp 重跑樹狀陣列任務的全部檢定。", consumes: [libds/fenwick]}
+    - {id: boss.segtree, name: "全套檢定:區間最小值線段樹", description: "用你現在的 libds/segtree.hpp 重跑線段樹任務的全部檢定。", consumes: [libds/segtree]}
+  future_acceptance:   # 之後的整合題(還不是 v1 的 Boss 戰)。perf.budget＝總時限拆給各零件效能組的秒數,零件的門檻由它推導(data/README.md)
+    - {id: leaderboard, name: 排行榜, description: "依成績由高到低、同分照報名順序排名,並回答「x 分以上有幾人」。", consumes: [libds/sort]}
+    - {id: route-planner, name: 路網導航, description: "n=10^5 個路口、m=3×10^5 條路:一次最短路徑＋10^4 筆路線查詢(用 prev 回溯)。", consumes: [libds/heap, libds/graph], perf: {statement: "dijkstra 一次 3 秒內＋10^4 筆路線查詢 0.5 秒內,合計 3.5 秒", seconds: 3.5, budget: {graph.perf: 3}}}
+    - {id: course-scheduler, name: 選課排程, description: "10^5 門課、2×10^5 條先修排出修課順序,有環回報無解,2 秒內。", consumes: [libds/graph, libds/heap]}
+    - {id: network-build, name: 佈線預算, description: "10^5 個機房、2×10^5 條線路的最小生成樹。", consumes: [libds/sort, libds/dsu], perf: {statement: "kruskal 2 秒內＋讀入 2×10^5 條線路 0.5 秒內,合計 2.5 秒", seconds: 2.5, budget: {dsu.kruskal-perf: 2}}}
+    - {id: search-suggest, name: 搜尋建議, description: "詞頻＋字典樹:10^4 筆前綴查詢各回最常見的 5 個字。", consumes: [libds/hashmap, libds/trie], perf: {statement: "雜湊表數詞頻 2 秒內＋字典樹建樹與 10^4 筆前綴查詢 2.5 秒內＋讀入 0.5 秒內,合計 5 秒", seconds: 5, budget: {hashmap.perf: 2, trie.perf: 2.5}}}
+    - {id: cache-replay, name: 快取重播, description: "重播 10^6 筆存取紀錄,回報命中數與淘汰順序。", consumes: [libds/lru], perf: {statement: "10^6 次 get／put 1.5 秒內＋讀紀錄與統計 0.5 秒內,合計 2 秒", seconds: 2, budget: {lru.perf: 1.5}}}
+    - {id: range-stats, name: 區間統計, description: "C++:n=q=2×10^5 的區間加值、區間和、區間最小值。", consumes: [libds/fenwick, libds/segtree], perf: {statement: "樹狀陣列 2×10^5 筆操作 1 秒內＋線段樹 2×10^5 筆操作 1 秒內＋讀寫 0.5 秒內,合計 2.5 秒", seconds: 2.5, budget: {fenwick.perf: 1, segtree.perf: 1}}, note: "刻意放寬:原本寫 1 秒,但 9Jang 的效能時限下限是 1 秒(spec §3.3),兩個零件各 1 秒,整合題只好放寬成 2.5 秒。零件的 perf_ref 0.06 秒已含讀寫,這裡的 0.5 秒是整合題自己的輸入與輸出。"}
+    - {id: interview-exam, name: 面試考試, description: "考場限時 2 題 TOI 等級實作題(等 BIT／線段樹題庫有了再加)。", consumes: []}
+  tasks:
+    - id: libds/sort
+      order: 1
+      name: 穩定排序
+      files: [libds/sort.py]
+      language: python
+      chapter: "28-sorting-searching:本章 Lab:穩定排序 libds/sort.py"
+      evidenceFor: [t-sort]
+      consumes: []
+      lab_no: L1
+      anchor: lab-libds-sort
+      used_by: [libds/dsu, minidb/btree]
+      interface:
+        - "stable_sort(a, key=None, reverse=False) -> list   # 穩定;回傳新列表,不改 a;reverse=True 時同 key 仍照原順序"
+        - "count_inversions(a) -> int                          # i < j 且 a[i] > a[j] 的對數;用合併排序順便數;不改 a"
+        - "bisect_left(a, x, key=None) -> int                  # a 已排序;第一個 key(a[i]) >= x 的位置,沒有就回傳 len(a);key 只套在元素上、不套在 x 上(同 Python 3.10 的 bisect)"
+      forbid: [bisect]
+      forbid_calls: [sorted, list.sort]
+      groups:
+        - {id: sort.basic, name: 基本排序, kind: function, visibility: public, requiredBy: [boss.sort], description: "stable_sort 的結果對 sorted();key 與 reverse 的用法同 sorted();回傳新列表、不改原列表。"}
+        - {id: sort.inversions, name: 逆序對, kind: function, visibility: public, requiredBy: [boss.sort], description: "count_inversions 對公開範例。"}
+        - {id: sort.bisect, name: 二分搜, kind: function, visibility: public, requiredBy: [boss.sort], description: "bisect_left 對公開範例;給了 key 時只套在元素上,x 本身已經是 key 值(同 Python 3.10 的 bisect)。"}
+        - {id: sort.edge, name: 邊界, kind: edge, visibility: hidden, requiredBy: [boss.sort], description: "空列表、一個元素、全部相同、已排序、反序;bisect_left 的 x 比全部小或比全部大。"}
+        - {id: sort.stable, name: 穩定性, kind: spec, visibility: hidden, requiredBy: [boss.sort, dsu.kruskal], description: "帶標籤的值:同 key 保持原來的順序;reverse=True 時也一樣。"}
+        - id: sort.perf
+          name: 效能
+          kind: perf
+          visibility: hidden
+          description: "大輸入不能退化成 O(n²);已排序與全部相同的輸入也一樣。"
+          perf: {statement: "2×10^5 個整數的 stable_sort 與 count_inversions 各 1.5 秒內;2×10^5 次 bisect_left 1.5 秒內", seconds: 1.5, n: 200000}
+          perf_ref: "0.38/0.22/0.24 秒(由下往上的合併排序;計畫原寫 1 秒,參考解超過 1/3,改 1.5 秒)"
+          requiredBy: [boss.sort, dsu.kruskal-perf]
+
+    - id: libds/heap
+      order: 2
+      name: 優先佇列
+      files: [libds/heap.py]
+      language: python
+      chapter: "29-data-structures:本章 Lab:優先佇列 libds/heap.py"
+      evidenceFor: [t-adv-ds, t-graph]
+      consumes: []
+      lab_no: L2
+      anchor: lab-libds-heap
+      used_by: [libds/graph, puzzle/astar, search/rank]
+      interface:
+        - "class PriorityQueue(key=None)          # key:比較 priority 時用的函式(預設比 priority 本身);例 key=lambda p: -p 變成最大優先"
+        - "push(item, priority) -> None           # item 已經在佇列裡 → ValueError(改用 decrease_key)"
+        - "pop_min() -> (item, priority)          # 空的時候 IndexError"
+        - "peek_min() -> (item, priority)         # 空的時候 IndexError;不移除"
+        - "decrease_key(item, priority) -> None   # O(log n);item 不在 → KeyError;新 priority 比原來大(用 key 比)→ ValueError"
+        - "__contains__(item) -> bool;__len__() -> int"
+        - "check() -> bool                        # 不變式:堆積性質成立、pos 和 a 一致"
+      internal: "self.a:list[(priority, item)],依堆積順序;self.pos:dict item → 在 self.a 的索引(規格規定,隱藏檢定會故意弄壞它們)"
+      forbid: [heapq]
+      invariants:
+        - name: heap.invariant
+          kind: function
+          symbol: PriorityQueue.check
+          sabotage: {attr: [a, pos], breaks: [swap-root-with-leaf, append-smaller-than-parent, corrupt-pos]}
+      groups:
+        - {id: heap.order, name: 取出順序, kind: function, visibility: public, requiredBy: [boss.heap, graph.topo], description: "push 之後 pop_min／peek_min 依 priority 由小到大;key 參數。"}
+        - {id: heap.empty, name: 空的佇列, kind: error, visibility: public, requiredBy: [boss.heap], description: "空的時候 pop_min 與 peek_min 要丟 IndexError。"}
+        - {id: heap.ties, name: 相同的 priority, kind: edge, visibility: public, requiredBy: [boss.heap], description: "很多 item 有相同的 priority 時,每個都會被取出一次(同 priority 之間的順序不規定)。"}
+        - {id: heap.decrease, name: 降低 priority, kind: function, visibility: public, requiredBy: [boss.heap, graph.dijkstra], description: "decrease_key 之後取出順序正確(用 key(priority) 比);in 與 len 跟著變。"}
+        - {id: heap.errors, name: 錯誤處理, kind: error, visibility: hidden, requiredBy: [boss.heap], description: "decrease_key 的 item 不在要丟 KeyError、新 priority 比較大(用 key(priority) 比)要丟 ValueError;push 已經在佇列裡的 item 要丟 ValueError。"}
+        - {id: heap.invariant, name: 堆積性質一直成立, kind: invariant, visibility: hidden, requiredBy: [boss.heap], description: "隨機操作的每一步之後 check() 都成立;故意把 self.a 或 self.pos 弄壞時,check() 要抓得到。"}
+        - {id: heap.hidden, name: 隨機混合, kind: edge, visibility: hidden, requiredBy: [boss.heap], description: "push、pop_min、decrease_key 隨機交錯,結果對參考模型;一直 push 同一個 priority。"}
+        - id: heap.perf
+          name: 效能
+          kind: perf
+          visibility: hidden
+          description: "push、pop_min、decrease_key 都要 O(log n)(decrease_key 不能掃整個列表)。"
+          perf: {statement: "10^5 次 push＋10^5 次 decrease_key＋10^5 次 pop_min,3 秒內", seconds: 3, n: 100000}
+          perf_ref: "0.90 秒(計畫原寫 1 秒;CPython 參考解做不到 1/3,改 3 秒)。graph.perf 的 dijkstra 約做 5×10^5 次堆積操作,用參考堆積 0.71 秒;剛好卡 3 秒的堆積(比參考解慢 3.3 倍)跑同一份 dijkstra 最多約 2.4 秒,仍在 graph.perf 的 3 秒內"
+          requiredBy: [boss.heap, graph.perf, puzzle/boss.solve-15]
+
+    - id: libds/lru
+      order: 3
+      name: LRU 快取
+      files: [libds/lru.py]
+      language: python
+      chapter: "29-data-structures:本章 Lab:LRU 快取 libds/lru.py"
+      evidenceFor: [t-adv-ds]
+      consumes: []
+      lab_no: L2
+      anchor: lab-libds-lru
+      used_by: [bookapi/cache]
+      interface:
+        - "class LRUCache(capacity, on_evict=None)   # capacity < 1 → ValueError;on_evict(key, value) 依淘汰的順序,每淘汰一個呼叫一次"
+        - "get(key, default=None)                     # 命中會變成最近使用;沒命中不改順序"
+        - "put(key, value) -> key | None              # 回傳被淘汰的 key,沒有淘汰回傳 None;更新既有的 key 不淘汰,但變成最近使用"
+        - "resize(capacity) -> None                   # 變小時從最久沒用的開始淘汰(每個都依序呼叫 on_evict);capacity < 1 → ValueError"
+        - "keys_by_recency() -> list                  # 由最近使用到最久沒用"
+        - "__len__() -> int"
+      forbid: [functools, collections.OrderedDict]
+      note: "第一版沒有 delete;bookapi/cache(檢查點 3)要讓快取失效時,再決定在 libds/lru 加 pop(key) 或在 bookapi/cache 自己處理。"
+      groups:
+        - {id: lru.evict, name: 淘汰順序, kind: function, visibility: public, requiredBy: [boss.lru], description: "put 的回傳值與淘汰順序對公開範例;on_evict(key, value) 依淘汰的順序被呼叫。"}
+        - {id: lru.update, name: 更新與命中, kind: function, visibility: public, requiredBy: [boss.lru], description: "更新既有的 key 不淘汰但變成最近使用;get 命中也變成最近使用。"}
+        - {id: lru.capacity, name: 容量, kind: edge, visibility: hidden, requiredBy: [boss.lru], description: "容量 1;capacity < 1 要 ValueError;resize 變小時從最久沒用的開始淘汰,每個都依序呼叫 on_evict,resize 回傳 None;resize 變大之後不淘汰。"}
+        - {id: lru.recency, name: 使用順序, kind: spec, visibility: hidden, requiredBy: [boss.lru, bookapi/cp3.cache-latency], description: "keys_by_recency() 由最近使用到最久沒用;get 沒命中不改順序;put 更新既有的 key 也算使用。"}
+        - id: lru.perf
+          name: 效能
+          kind: perf
+          visibility: hidden
+          description: "get、put 都要 O(1)(不能每次掃過全部的 key)。"
+          perf: {statement: "容量 10^3、10^6 次 get／put,1.5 秒內", seconds: 1.5, n: 1000000}
+          perf_ref: "0.21 秒(10^6 次;原本 10^5 次 1 秒比「快取重播」寬,收緊成 10^6 次 1.5 秒)"
+          requiredBy: [boss.lru, cache-replay, bookapi/cp3.cache-latency]
+
+    - id: libds/hashmap
+      order: 4
+      name: 雜湊表
+      files: [libds/hashmap.py]
+      language: python
+      chapter: "29-data-structures:本章 Lab:雜湊表 libds/hashmap.py"
+      evidenceFor: [t-adv-ds]
+      consumes: []
+      lab_no: L3
+      anchor: lab-libds-hashmap
+      used_by: [search/index]
+      interface:
+        - "class HashMap()                   # 開放定址(線性探測)＋墓碑"
+        - "put(key, value) -> None           # 更新既有的 key 不改它的順序"
+        - "get(key, default=None)"
+        - "pop(key)                          # 回傳 value;找不到 → KeyError;pop 之後再 put 算新的插入(排到最後)"
+        - "__len__() -> int;__iter__()       # 依插入順序產生 key"
+        - "check() -> bool                   # 不變式:size 和實際筆數一致、(live＋墓碑)/m ≤ 0.7、每個 key 都找得到"
+      internal: "self.index:list[int](-1 空、-2 墓碑、≥ 0 是 self.entries 的位置);self.entries:list[(key, value) | None](依插入順序);self.size:筆數(live)。m＝len(self.index),最小 8。(live＋墓碑)/m > 0.7 就擴成兩倍;pop 後 live/m < 0.2 而且 m > 8 就縮成一半;擴縮時清掉墓碑、壓緊 entries。"
+      forbidAttrTypes: [dict, set]
+      invariants:
+        - name: hashmap.invariant
+          kind: function
+          symbol: HashMap.check
+          sabotage: {attr: [index, entries, size], breaks: [set-size-wrong, drop-bucket-entry]}
+      groups:
+        - {id: hashmap.basic, name: 基本操作, kind: function, visibility: public, requiredBy: [boss.hashmap], description: "put、get、pop、len 對 dict 參考模型。"}
+        - {id: hashmap.order, name: 插入順序, kind: spec, visibility: public, requiredBy: [boss.hashmap], description: "for 迴圈依插入順序;更新不改順序;pop 之後再 put 排到最後。"}
+        - {id: hashmap.tombstone, name: 墓碑, kind: edge, visibility: hidden, requiredBy: [boss.hashmap], description: "刪除之後再找、刪除之後再放;很多 key 的雜湊值相同(自訂 __hash__);負數、字串、tuple 當 key。"}
+        - {id: hashmap.resize, name: 擴容與縮容, kind: edge, visibility: hidden, requiredBy: [boss.hashmap], description: "(live＋墓碑)/m > 0.7 時擴容,擴完全部找得到;live/m < 0.2 而且 m > 8 時縮容(最小 8),縮完照樣找得到、順序不變。"}
+        - {id: hashmap.errors, name: 錯誤處理, kind: error, visibility: hidden, requiredBy: [boss.hashmap], description: "pop 不存在的 key 要丟 KeyError;get 不存在的 key 回傳 default。"}
+        - {id: hashmap.invariant, name: 表的不變式一直成立, kind: invariant, visibility: hidden, requiredBy: [boss.hashmap], description: "隨機操作的每一步之後 check() 都成立;故意把 size 改錯或弄丟一格時,check() 要抓得到。"}
+        - id: hashmap.perf
+          name: 效能
+          kind: perf
+          visibility: hidden
+          description: "平均 O(1) 的 put、get、pop。"
+          perf: {statement: "2×10^5 次 put＋10^5 次 pop＋2×10^5 次 get,2 秒內", seconds: 2, n: 200000}
+          perf_ref: "0.48 秒"
+          requiredBy: [boss.hashmap, search-suggest, agent/boss.search-quality]
+
+    - id: libds/trie
+      order: 5
+      name: 字典樹
+      files: [libds/trie.py]
+      language: python
+      chapter: "29-data-structures:本章 Lab:字典樹 libds/trie.py"
+      evidenceFor: [t-adv-ds]
+      consumes: []
+      lab_no: L3
+      anchor: lab-libds-trie
+      used_by: [search/index]
+      interface:
+        - "class Trie()"
+        - "insert(word) -> None               # 可以重複插入,記次數"
+        - "contains(word) -> bool"
+        - "remove(word) -> None               # 整個字刪掉(不管插入過幾次),並清掉變空的分支;字不在 → KeyError"
+        - "count_prefix(prefix) -> int        # 經過 prefix 的插入次數(算次數,不是算不同的字)"
+        - "top_words(prefix, k) -> list       # 以 prefix 開頭的字,依次數由多到少、同次數依字典序,最多 k 個"
+        - "check() -> bool                    # 不變式:沒有空的分支(每個非根節點的經過數 ≥ 1;經過數＝結尾數＋子節點經過數的和)"
+      invariants:
+        - {name: trie.invariant, kind: function, symbol: Trie.check}
+      groups:
+        - {id: trie.basic, name: 基本操作, kind: function, visibility: public, requiredBy: [boss.trie], description: "insert、contains、count_prefix 對公開範例;重複插入要算次數,count_prefix 算的是經過這個前綴的插入次數。"}
+        - {id: trie.top, name: 最常見的字, kind: function, visibility: public, requiredBy: [boss.trie], description: "top_words(prefix, k) 回傳字的列表:次數多的在前,次數相同依字典序;最多 k 個。"}
+        - {id: trie.edge, name: 邊界, kind: edge, visibility: hidden, requiredBy: [boss.trie], description: "空字串、共同前綴、前綴本身就是一個字、k=0、k 比結果多、中文字元。"}
+        - {id: trie.remove, name: 刪除, kind: spec, visibility: hidden, requiredBy: [boss.trie], description: "remove 把整個字刪掉(不管插入過幾次):之後 contains 是 False、count_prefix 減掉它全部的次數;字不在要丟 KeyError。"}
+        - {id: trie.invariant, name: 沒有空的分支, kind: invariant, visibility: hidden, requiredBy: [boss.trie], description: "隨機 insert／remove 的每一步之後 check() 都成立。"}
+        - id: trie.perf
+          name: 效能
+          kind: perf
+          visibility: hidden
+          description: "top_words 只走前綴下面的子樹,不能掃全部的字。"
+          perf: {statement: "插入 10^5 個字(長 3–10)＋10^4 次 top_words(3 個字母的前綴, k=10),2.5 秒內", seconds: 2.5, n: 100000}
+          perf_ref: "0.75 秒"
+          requiredBy: [boss.trie, search-suggest, agent/boss.search-quality]
+
+    - id: libds/graph
+      order: 6
+      name: 圖與最短路徑
+      files: [libds/graph.py]
+      language: python
+      chapter: "30-graph-algorithms:本章 Lab:圖與最短路徑 libds/graph.py"
+      evidenceFor: [t-graph, t-graph-adv]
+      consumes: [libds/heap]
+      lab_no: L4
+      anchor: lab-libds-graph
+      used_by: [puzzle/bfs, search/pagerank]
+      interface:
+        - "class Graph(directed=True)"
+        - "add_edge(u, v, w=1) -> None        # 兩端點自動加入;無向圖兩個方向都加;鄰居依加入順序"
+        - "bfs(s) -> dict                     # 每個走得到的點 → 最少邊數;s 不在圖上 → KeyError"
+        - "dfs_order(s) -> list               # 前序,鄰居依加入順序;不能用遞迴(深度可到 10^5)"
+        - "topo_sort() -> list | None         # 同時有好幾個入度 0 的點時先取最小的(用你的 PriorityQueue);有環(自迴圈也算)回傳 None;無向圖 → ValueError"
+        - "dijkstra(s) -> (dist, prev)        # dict;dist、prev 只含走得到的點;prev[s] = None;圖上有負權邊 → ValueError;必須用 libds.heap 的 PriorityQueue 與 decrease_key"
+        - "shortest_path(s, t) -> (dist, path)   # path 含 s 與 t(任何一條最短的都算);走不到回傳 (None, None)"
+      require: [libds.heap]
+      forbid: [heapq]
+      groups:
+        - {id: graph.traverse, name: 走訪, kind: function, visibility: public, requiredBy: [boss.graph], description: "bfs 與 dfs_order 對公開小圖(鄰居依加入順序)。"}
+        - {id: graph.topo, name: 拓樸排序, kind: function, visibility: public, requiredBy: [boss.graph], description: "topo_sort 每次取「已經可以排、而且最小」的點(用 libds.heap 的 PriorityQueue);有環回傳 None。"}
+        - {id: graph.dijkstra, name: 最短路徑, kind: function, visibility: public, requiredBy: [boss.graph], description: "dijkstra 的距離與 shortest_path 的路徑對公開小圖(任何一條最短路徑都算)。"}
+        - {id: graph.edge, name: 邊界, kind: edge, visibility: hidden, requiredBy: [boss.graph], description: "走不到的點、自迴圈(topo_sort 把自迴圈當成環,回傳 None)、重邊、起點等於終點、孤立點、無向圖。"}
+        - {id: graph.errors, name: 錯誤處理, kind: error, visibility: hidden, requiredBy: [boss.graph], description: "負權邊要 ValueError;起點不在圖上要 KeyError;無向圖做 topo_sort 要 ValueError。"}
+        - {id: graph.deep, name: 很深的圖, kind: edge, visibility: hidden, requiredBy: [boss.graph], description: "10^5 個點連成一條鏈:dfs_order 不能 RecursionError。"}
+        - {id: graph.uses-heap, name: 用自己的優先佇列, kind: spec, visibility: hidden, requiredBy: [boss.graph], description: "dijkstra 與 topo_sort 必須用 libds.heap 的 PriorityQueue;dijkstra 要用 decrease_key 更新距離(檢定會檢查呼叫的順序)。"}
+        - id: graph.perf
+          name: 效能
+          kind: perf
+          visibility: hidden
+          description: "走訪 O(n+m)、Dijkstra O(m log n)。"
+          perf: {statement: "n=10^5、m=3×10^5:dijkstra 3 秒內;bfs、dfs_order、topo_sort 各 1 秒內", seconds: 3, n: 100000}
+          perf_ref: "dijkstra 0.71 秒(用參考的 libds/heap);bfs／dfs 0.12／0.17 秒"
+          requiredBy: [boss.graph, route-planner, puzzle/boss.solve-15]
+
+    - id: libds/dsu
+      order: 7
+      name: 並查集
+      files: [libds/dsu.py]
+      language: python
+      chapter: "31-greedy:本章 Lab:並查集 libds/dsu.py"
+      evidenceFor: [t-graph-adv]
+      consumes: [libds/sort]
+      lab_no: L4
+      anchor: lab-libds-dsu
+      used_by: []
+      interface:
+        - "class DSU(n)                        # 元素 0..n-1;超出範圍 → IndexError"
+        - "find(x) -> int                      # 完整的路徑壓縮(整條路都直接指到根);用迴圈,不能用遞迴"
+        - "union(a, b) -> bool                 # 依大小合併:小的根接到大的根下;一樣大時,第二個(b 的根)接到第一個(a 的根)下;本來就同一組回傳 False"
+        - "same(a, b) -> bool;size_of(x) -> int"
+        - "components() -> list[list[int]]     # 每組由小到大排,組之間依最小元素排"
+        - "check() -> bool                     # 不變式:每條 parent 鏈都走得到根、各組 size 加起來＝n"
+        - "kruskal(n, edges) -> (total, chosen)   # edges=[(w, u, v), …];chosen 依加入順序;同權重依輸入順序;不連通 → ValueError;必須用 libds.sort.stable_sort 排邊(書端決定)"
+      require: [libds.sort]
+      invariants:
+        - {name: dsu.invariant, kind: function, symbol: DSU.check}
+      groups:
+        - {id: dsu.basic, name: 基本操作, kind: function, visibility: public, requiredBy: [boss.dsu], description: "find、union、same、size_of、components 對公開範例;union 依大小合併,一樣大時 b 的根接到 a 的根下。"}
+        - {id: dsu.kruskal, name: 最小生成樹, kind: function, visibility: public, requiredBy: [boss.dsu], description: "kruskal 的總權重與依加入順序的邊;只依權重做穩定排序,同權重依輸入順序(不是依 (w, u, v) 整組排)。"}
+        - {id: dsu.edge, name: 邊界, kind: edge, visibility: hidden, requiredBy: [boss.dsu], description: "同一組再 union 回傳 False;n=1;自迴圈的邊;重邊。"}
+        - {id: dsu.errors, name: 錯誤處理, kind: error, visibility: hidden, requiredBy: [boss.dsu], description: "元素超出範圍要 IndexError;kruskal 不連通要 ValueError。"}
+        - {id: dsu.deep, name: 很長的鏈, kind: edge, visibility: hidden, requiredBy: [boss.dsu], description: "10^5 個元素串成一條鏈之後 find 不能 RecursionError。"}
+        - {id: dsu.invariant, name: 森林的不變式一直成立, kind: invariant, visibility: hidden, requiredBy: [boss.dsu], description: "隨機 union／find 的每一步之後 check() 都成立。"}
+        - id: dsu.perf
+          name: 效能
+          kind: perf
+          visibility: hidden
+          description: "路徑壓縮＋依大小合併,幾乎是常數時間。"
+          perf: {statement: "n=10^5:2×10^5 次 union／same,1 秒內", seconds: 1, n: 200000}
+          perf_ref: "0.12 秒"
+          requiredBy: [boss.dsu, dsu.kruskal-perf]
+        - id: dsu.kruskal-perf
+          name: Kruskal 效能
+          kind: perf
+          visibility: hidden
+          description: "排邊 O(m log m)＋並查集。"
+          perf: {statement: "n=10^5、m=2×10^5 的 kruskal,2 秒內", seconds: 2, n: 200000}
+          perf_ref: "0.59 秒"
+          requiredBy: [boss.dsu, network-build]
+
+    - id: libds/fenwick
+      order: 8
+      name: 區間加值 BIT
+      files: [libds/fenwick.hpp]
+      language: cpp
+      chapter: "61-competitive-ds:本章 Lab:區間加值 BIT libds/fenwick.hpp"
+      evidenceFor: [t-adv-ds]
+      consumes: []
+      lab_no: L5
+      anchor: lab-libds-fenwick
+      used_by: []
+      interface:
+        - "namespace libds { class Fenwick; }     // header-only,C++17;索引 1 起算,區間 [l, r] 含兩端,保證 1 ≤ l ≤ r ≤ n"
+        - "explicit Fenwick(int n)                // a[1..n] 全部是 0"
+        - "void range_add(int l, int r, long long v)"
+        - "long long range_sum(int l, int r) const   // 用兩棵 BIT"
+      groups:
+        - {id: fenwick.basic, name: 區間加值與區間和, kind: function, visibility: public, requiredBy: [boss.fenwick], description: "公開範例:range_add 之後 range_sum(索引 1 起算,區間含兩端)。"}
+        - {id: fenwick.edge, name: 邊界, kind: edge, visibility: hidden, requiredBy: [boss.fenwick], description: "n=1、l=r、整段區間 [1, n]、負數的加值。"}
+        - {id: fenwick.overflow, name: 大數, kind: spec, visibility: hidden, requiredBy: [boss.fenwick], description: "總和超過 32 位元(要 long long)。"}
+        - id: fenwick.perf
+          name: 效能
+          kind: perf
+          visibility: hidden
+          description: "每筆操作 O(log n)。"
+          perf: {statement: "n=2×10^5、2×10^5 筆操作,1 秒內", seconds: 1, n: 200000}
+          perf_ref: "0.06 秒(含讀寫)"
+          requiredBy: [boss.fenwick, range-stats]
+
+    - id: libds/segtree
+      order: 9
+      name: 區間最小值線段樹
+      files: [libds/segtree.hpp]
+      language: cpp
+      chapter: "61-competitive-ds:本章 Lab:區間最小值線段樹 libds/segtree.hpp"
+      evidenceFor: [t-adv-ds]
+      consumes: []
+      lab_no: L5
+      anchor: lab-libds-segtree
+      used_by: []
+      interface:
+        - "namespace libds { class SegTree; }     // header-only,C++17;索引 0 起算,保證 0 ≤ l ≤ r < n"
+        - "explicit SegTree(const std::vector<long long>& a)"
+        - "void update(int i, long long v)        // 單點設值"
+        - "long long range_min(int l, int r) const"
+        - "int argmin(int l, int r) const         // 最小值的位置;同值取最左邊"
+      groups:
+        - {id: segtree.basic, name: 區間最小值, kind: function, visibility: public, requiredBy: [boss.segtree], description: "公開範例:建構、update、range_min(索引 0 起算,區間含兩端)。"}
+        - {id: segtree.argmin, name: 最小值在哪裡, kind: function, visibility: public, requiredBy: [boss.segtree], description: "argmin 對公開範例。"}
+        - {id: segtree.edge, name: 邊界, kind: edge, visibility: hidden, requiredBy: [boss.segtree], description: "n=1、l=r、整段區間、全部是負數、設值之後馬上查。"}
+        - {id: segtree.ties, name: 同值取最左, kind: spec, visibility: hidden, requiredBy: [boss.segtree], description: "區間裡有好幾個最小值時,argmin 回傳最左邊的位置。"}
+        - id: segtree.perf
+          name: 效能
+          kind: perf
+          visibility: hidden
+          description: "每筆操作 O(log n)。"
+          perf: {statement: "n=2×10^5、2×10^5 筆操作,1 秒內", seconds: 1, n: 200000}
+          perf_ref: "0.06 秒(含讀寫)"
+          requiredBy: [boss.segtree, range-stats]
+
+# ═════════════════════════════ H1 hack(詳細;第 10 棒暫停中) ═════════════════════════════
+- id: hack
+  code: H1
+  name: 從 NAND 到自己的電腦
+  track: hw-core
+  also_tracks: [embedded, ic-design]
+  lib: hack
+  project: proj-hw-computer
+  checkpoints: [proj-hw-computer]
+  level: 高中可
+  status: detailed
+  summary: "從一顆 NAND 閘出發,用 Hack HDL 一層一層蓋出 ALU、記憶體、CPU 與整台電腦,再寫自己的組譯器,把小遊戲「方塊雨」組譯出來玩。每一層都用你自己前一層的晶片。"
+  note: "效能門檻是估計值(perf_basis: estimate),第 10 棒的 HDL 批改器做好後實測再調。只有窮舉驗證過和內建版本等價的晶片,上層測試才可以換成內建版本加速(老師 2026-10-25)。"
+  acceptance:
+    - {id: boss.structure, name: 全學生版結構檢查, visibility: hidden, consumes: [hack/gates, hack/alu, hack/memory, hack/cpu], description: "31 個晶片檔都在、都能解析並建出;每一層往下都用你自己的 HDL(只准內建 Nand、DFF、ROM32K、Screen、Keyboard)。", perf: {statement: "整台 Computer 全學生版在 10 秒、384 MB 內建出(建不起來就改成逐晶片檢查)", seconds: 10}}
+    - {id: boss.hidden-programs, name: 三支隱藏程式, visibility: hidden, consumes: [hack/alu, hack/memory, hack/cpu], description: "你的 Computer 和參考 CPU 同時跑三支沒公開過的程式,逐拍對照 PC、A、D 與記憶體寫入。", perf: {statement: "每支 2,000 拍,批改 10 秒內", seconds: 10, n: 2000}}
+    - {id: boss.rain, name: 組譯方塊雨, visibility: hidden, consumes: [hack/assembler], description: "用你的組譯器組譯小遊戲「方塊雨」,輸出要和參考組譯器逐行相同;遊戲在快速模擬器上跑,畫面串流到側邊面板。", perf: {statement: "組譯方塊雨＋逐行對照,批改 2 秒內(估計值)", seconds: 2}}
+    - {id: boss.own-program, name: 自己的互動程式, visibility: teacher, consumes: [hack/asm, hack/assembler], description: "寫一支用鍵盤與螢幕的小程式(例:方向鍵畫線),用 hack-play 跑給老師看。"}
+  tasks:
+    - id: hack/gates
+      order: 1
+      name: 基本邏輯閘
+      files: [hack/Not.hdl, hack/And.hdl, hack/Or.hdl, hack/Xor.hdl, hack/Mux.hdl, hack/DMux.hdl, hack/Not16.hdl, hack/And16.hdl, hack/Or16.hdl, hack/Mux16.hdl, hack/Or8Way.hdl, hack/Mux4Way16.hdl, hack/Mux8Way16.hdl, hack/DMux4Way.hdl, hack/DMux8Way.hdl]
+      language: hdl
+      chapter: "19-boolean-logic:本章 Lab:基本邏輯閘 hack/*.hdl"
+      evidenceFor: [hw-gates]
+      consumes: []
+      lab_no: L1
+      anchor: lab-hack-gates
+      also_chapters: [47-digital-circuits, 130-hack-hdl-reference]
+      used_by: [hack/alu, hack/memory, rtl/gates]
+      groups:
+        - {id: gates.public, name: 公開向量, kind: function, visibility: public, requiredBy: [boss.structure], description: "hdl-test 跑每個晶片真值表的前 16 列,顯示第一個不一致的列。"}
+        - {id: gates.full, name: 完整真值表, kind: edge, visibility: hidden, requiredBy: [boss.structure, boss.hidden-programs], description: "輸入不超過 8 位元的晶片窮舉;16 位元晶片用邊界值(0、1、-1、0x7FFF、0x8000、交替位元)＋每人 seed 決定的 200 組隨機向量。"}
+        - {id: gates.nand-only, name: 只用 Nand, kind: spec, visibility: hidden, requiredBy: [boss.structure], description: "只准用內建 Nand 與你自己前面的晶片;不能有組合迴路。"}
+        - id: gates.perf
+          name: 晶片規模
+          kind: perf
+          visibility: hidden
+          description: "晶片不能大到讓整台電腦建不起來(每個晶片的 Nand 總數不超過參考解的 3 倍)。"
+          perf: {statement: "Mux8Way16 全學生版(往下都用你的晶片)跑 1,000 組向量,3 秒內", seconds: 3, n: 1000}
+          perf_basis: estimate
+          requiredBy: [boss.structure]
+    - id: hack/alu
+      order: 2
+      name: 加法器與 ALU
+      files: [hack/HalfAdder.hdl, hack/FullAdder.hdl, hack/Add16.hdl, hack/Inc16.hdl, hack/ALU.hdl]
+      language: hdl
+      chapter: "20-combinational-sequential:本章 Lab:加法器與 ALU hack/*.hdl"
+      evidenceFor: [hw-alu]
+      consumes: [hack/gates]
+      lab_no: L2
+      anchor: lab-hack-alu
+      used_by: [hack/cpu, rtl/alu]
+      groups:
+        - {id: alu.public, name: 公開向量, kind: function, visibility: public, requiredBy: [boss.hidden-programs], description: "hdl-test 跑 HalfAdder、FullAdder、Add16、Inc16、ALU 的前 16 列。"}
+        - {id: alu.flags, name: 控制位元與旗標, kind: edge, visibility: hidden, requiredBy: [boss.hidden-programs], description: "ALU 的 18 種控制位元組合 × 邊界值(0、1、-1、0x7FFF、0x8000)的 out、zr、ng;加法溢位要照二補數繞回。"}
+        - {id: alu.random, name: 隨機向量, kind: spec, visibility: hidden, requiredBy: [boss.structure], description: "每人 seed 決定的 200 組隨機向量(Add16、Inc16、ALU)。"}
+        - id: alu.perf
+          name: 晶片規模
+          kind: perf
+          visibility: hidden
+          description: "ALU 往下都用你自己的晶片時還跑得動。"
+          perf: {statement: "ALU 全學生版 1,000 組向量,3 秒內", seconds: 3, n: 1000}
+          perf_basis: estimate
+          requiredBy: [boss.hidden-programs, boss.structure]
+    - id: hack/memory
+      order: 3
+      name: 暫存器與記憶體
+      files: [hack/Bit.hdl, hack/Register.hdl, hack/PC.hdl, hack/RAM8.hdl, hack/RAM64.hdl, hack/RAM512.hdl, hack/RAM4K.hdl, hack/RAM16K.hdl]
+      language: hdl
+      chapter: "20-combinational-sequential:本章 Lab:暫存器與記憶體 hack/*.hdl"
+      evidenceFor: [hw-memory]
+      consumes: [hack/gates]
+      lab_no: L3
+      anchor: lab-hack-memory
+      also_chapters: [47-digital-circuits]
+      used_by: [hack/cpu]
+      groups:
+        - {id: memory.public, name: 公開時脈序列, kind: function, visibility: public, requiredBy: [boss.hidden-programs], description: "hdl-test 跑公開的時脈序列,逐拍對照輸出。"}
+        - {id: memory.priority, name: 控制優先序, kind: spec, visibility: hidden, requiredBy: [boss.hidden-programs], description: "PC 的 reset > load > inc;load=0 時保持;寫入的值下一拍才看得到。"}
+        - {id: memory.address, name: 位址解碼, kind: edge, visibility: hidden, requiredBy: [boss.hidden-programs], description: "RAM8 到 RAM16K 的位址邊界(0、最後一格、子晶片交界),寫一格不能改到別格;每人 seed 決定的讀寫序列。"}
+        - id: memory.perf
+          name: 記憶體規模
+          kind: perf
+          visibility: hidden
+          description: "RAM16K 全部用你自己的晶片也建得起來。"
+          perf: {statement: "RAM16K 全學生版(只准內建 DFF)建出並跑 100 拍讀寫,10 秒、384 MB 內", seconds: 10, n: 100}
+          perf_basis: estimate
+          requiredBy: [boss.structure]
+    - id: hack/asm
+      order: 4
+      name: 三支 Hack 程式
+      files: [hack/asm/Max3.asm, hack/asm/Sum.asm, hack/asm/Fill.asm]
+      language: asm
+      chapter: "21-cpu-machine-language:本章 Lab:三支 Hack 程式 hack/asm/*.asm"
+      evidenceFor: [hw-machine-lang]
+      consumes: []
+      lab_no: L4
+      anchor: lab-hack-asm
+      used_by: [boss.own-program]
+      groups:
+        - {id: asm.public, name: 公開 RAM, kind: function, visibility: public, requiredBy: [boss.own-program], description: "三數取最大(RAM[0..2] → RAM[3])與陣列加總(RAM[16]=起點、RAM[17]=長度 → RAM[18])的公開初始 RAM,用 hack-run 看結果。"}
+        - {id: asm.seed-ram, name: 隱藏初始 RAM, kind: edge, visibility: hidden, requiredBy: [boss.own-program], description: "每人 seed 決定的初始 RAM:負數、三數相同、長度 0 的陣列、放在高位址的陣列。"}
+        - {id: asm.keyboard, name: 按鍵腳本, kind: function, visibility: hidden, requiredBy: [boss.own-program], description: "按鍵塗滿:腳本化的按鍵序列(按、放、連按),每次都要整個螢幕變黑或變白。"}
+        - {id: asm.steps, name: 指令數, kind: spec, visibility: hidden, requiredBy: [boss.own-program], perf_basis: estimate, description: "三數取最大 60 條指令內;陣列加總(長度 100)1,500 條指令內;按鍵塗滿每次整個螢幕(8,192 個字)切換 2×10^5 條指令內。"}
+    - id: hack/emulator
+      order: 5
+      name: Hack 模擬器(選修)
+      files: [hack/emulator.py]
+      language: python
+      chapter: "21-cpu-machine-language:本章 Lab:Hack 模擬器(選修) hack/emulator.py"
+      evidenceFor: [hw-machine-lang]
+      consumes: []
+      lab_no: L4′
+      anchor: lab-hack-emulator
+      optional: true
+      used_by: []
+      groups:
+        - {id: emulator.public, name: 公開程式, kind: function, visibility: public, requiredBy: [emu/boss.chip8-rom], description: "跑公開的 .hack 程式,最後的 RAM 對參考模擬器。"}
+        - {id: emulator.full, name: 指令全集, kind: edge, visibility: hidden, requiredBy: [emu/boss.chip8-rom], description: "所有 28 種 comp、8 種跳躍、螢幕與鍵盤的記憶體映射;隱藏程式最後的 RAM 與執行步數對參考模擬器。"}
+        - id: emulator.perf
+          name: 效能
+          kind: perf
+          visibility: hidden
+          description: "主迴圈要夠快,之後才能當 CHIP-8 模擬器的骨架。"
+          perf: {statement: "10^6 條指令,2 秒內", seconds: 2, n: 1000000}
+          perf_ref: "0.2 秒(簡單參考解)"
+          requiredBy: [emu/boss.chip8-rom]
+    - id: hack/cpu
+      order: 6
+      name: CPU 與電腦
+      files: [hack/Memory.hdl, hack/CPU.hdl, hack/Computer.hdl]
+      language: hdl
+      chapter: "21-cpu-machine-language:本章 Lab:CPU 與電腦 hack/*.hdl"
+      evidenceFor: [hw-computer]
+      consumes: [hack/alu, hack/memory]
+      lab_no: L5
+      anchor: lab-hack-cpu
+      gap: G30
+      gap_title: CPU 接線、位址解碼
+      used_by: [boss.hidden-programs, boss.structure]
+      groups:
+        - {id: cpu.public, name: 公開程式逐拍對照, kind: function, visibility: public, requiredBy: [boss.hidden-programs], description: "你的 Computer 跑公開的測試程式(加總、找最大值、畫矩形),和參考 CPU 逐拍對照 PC、A、D 與記憶體寫入,顯示第一個不同的拍。"}
+        - {id: cpu.memory-map, name: 記憶體映射, kind: edge, visibility: hidden, requiredBy: [boss.hidden-programs], description: "Memory 的位址邊界:0x3FFF、0x4000(螢幕開頭)、0x5FFF、0x6000(鍵盤)。"}
+        - {id: cpu.instructions, name: 指令全集, kind: spec, visibility: hidden, requiredBy: [boss.hidden-programs], description: "所有 comp、dest、jump 組合;A 指令;跳躍條件(負、零、正);writeM 與 addressM 的時序;reset。"}
+        - id: cpu.perf
+          name: 整台電腦的規模
+          kind: perf
+          visibility: hidden
+          description: "全部用你自己的晶片也跑得完。"
+          perf: {statement: "全學生版 Computer 跑 2,000 拍,10 秒、384 MB 內", seconds: 10, n: 2000}
+          perf_basis: estimate
+          requiredBy: [boss.hidden-programs, boss.structure]
+    - id: hack/assembler
+      order: 7
+      name: Hack 組譯器
+      files: [hack/assembler.py]
+      language: python
+      chapter: "22-assembler:本章 Lab:Hack 組譯器 hack/assembler.py"
+      evidenceFor: [hw-assembler]
+      consumes: []
+      lab_no: L6
+      anchor: lab-hack-assembler
+      used_by: [boss.rain, boss.own-program]
+      interface:
+        - "python3 hack/assembler.py Prog.asm   # 產生同目錄的 Prog.hack;符號表可以用 libds/hashmap(選用)"
+      groups:
+        - {id: assembler.public, name: 公開程式, kind: function, visibility: public, requiredBy: [boss.rain], description: "公開的 .asm(沒有符號、有符號)組出來的 .hack 逐行對參考組譯器。"}
+        - {id: assembler.symbols, name: 符號與格式, kind: edge, visibility: hidden, requiredBy: [boss.rain], description: "標籤先用後定義、變數從 RAM[16] 依第一次出現的順序配置、預先定義的符號(SP、R0–R15、SCREEN、KBD)、行尾註解、空白與空行、@32767。"}
+        - {id: assembler.runs, name: 組出來的程式會動, kind: spec, visibility: hidden, requiredBy: [boss.rain], description: "5 支隱藏 .asm 組完再丟給 CPU 模擬器跑,結果要對。"}
+        - id: assembler.perf
+          name: 效能
+          kind: perf
+          visibility: hidden
+          description: "兩趟掃描,符號表查詢 O(1)。"
+          perf: {statement: "3×10^4 行的 .asm,2 秒內組完", seconds: 2, n: 30000}
+          perf_ref: "0.02 秒(簡單參考解)"
+          requiredBy: [boss.rain]
+
+# ═════════════════════════════ B1 bookapi(檢查點 1–2 詳細,檢查點 3 outline) ═════════════════════════════
+- id: bookapi
+  code: B1
+  name: 借書 API:從 socket 到上線
+  track: backend
+  also_tracks: [security]
+  lib: bookapi
+  project: proj-be-http-server
+  checkpoints: [proj-be-http-server, proj-be-todo-api, proj-be-secure-deploy]
+  level: 高中後段/大學
+  status: detailed
+  summary: "只用 Python 標準函式庫,從 socket 寫起 HTTP 伺服器,加上執行緒池、SQLite 資料層、JSON API 與自己的測試,最後加認證與快取上線。三個技能樹專題是同一份程式碼的三個檢查點;第二個檢查點和組隊副本 R1「圖書館借書 API」同題(另一組隱藏測試)。"
+  note: "服務模式:判題時我們的啟動檔以 python3 -I main.py --port 8080 --db /tmp/app.db 呼叫你的服務;測試客戶端用另一個使用者從外面連 8080。檢查點 3(認證、快取)的零件還在 outline,它們的書(G17、G19)還沒寫。"
+  acceptance:
+    - {id: boss.static-file, name: 靜態檔, visibility: public, checkpoint: proj-be-http-server, consumes: [srv/http, srv/pool], description: "你的伺服器回傳一個靜態檔,狀態碼、Content-Type 與內容都對。"}
+    - {id: boss.json, name: JSON 回應, visibility: public, checkpoint: proj-be-http-server, consumes: [srv/http, srv/pool], description: "GET 一個 JSON 端點,回傳的 JSON 與 Content-Type 都對。"}
+    - {id: boss.not-found, name: 找不到, visibility: public, checkpoint: proj-be-http-server, consumes: [srv/http], description: "不存在的路徑回 404,伺服器繼續服務。"}
+    - {id: boss.bad-request, name: 畸形請求, visibility: public, checkpoint: proj-be-http-server, consumes: [srv/http], description: "畸形的請求回 400,伺服器不能當掉。"}
+    - {id: boss.concurrency, name: 100 個併發連線, visibility: hidden, checkpoint: proj-be-http-server, consumes: [srv/http, srv/pool], description: "很多客戶端同時連線也不出錯。", perf: {statement: "100 個連線同時各送 10 個請求(每個請求處理 10 ms),零錯誤,5 秒內", seconds: 5, n: 1000}}
+    - {id: boss.slow-client, name: 慢客戶端, visibility: hidden, checkpoint: proj-be-http-server, consumes: [srv/http, srv/pool], description: "只連線不送資料的客戶端不能擋住別人,逾時後被關掉。"}
+    - {id: cp2.public, name: 公開 API 測試, visibility: public, checkpoint: proj-be-todo-api, consumes: [bookapi/repo, bookapi/api], description: "約 12 條公開測試:書目 CRUD、會員、借書、還書、逾期查詢的正常流程。"}
+    - {id: cp2.edge, name: 邊界, visibility: hidden, checkpoint: proj-be-todo-api, consumes: [bookapi/repo, bookapi/api], description: "隱藏測試類別「邊界」:分頁的極端值、空字串、本數 0 的書、Unicode 書名。"}
+    - {id: cp2.errors, name: 錯誤處理, visibility: hidden, checkpoint: proj-be-todo-api, consumes: [bookapi/repo, bookapi/api], description: "隱藏測試類別「錯誤處理」:壞 JSON、型別錯、找不到、不能借時的狀態碼與錯誤格式。"}
+    - {id: cp2.consistency, name: 資料一致, visibility: hidden, checkpoint: proj-be-todo-api, consumes: [bookapi/repo, bookapi/api, srv/pool], description: "隱藏測試類別「資料一致」:借還之後的可借本數、重複還書、刪除有人借的書;同時借最後一本只能成功一次。"}
+    - {id: cp2.spec, name: 規格細節, visibility: hidden, checkpoint: proj-be-todo-api, consumes: [bookapi/api], description: "隱藏測試類別「規格細節」:201／204 的用法、Content-Type、列表排序與分頁、PATCH 只改給的欄位。"}
+    - {id: cp2.load, name: 借還負載, visibility: hidden, checkpoint: proj-be-todo-api, consumes: [srv/pool, bookapi/repo, bookapi/api], description: "借書 API 掛在自己的多執行緒伺服器上,很多人同時借還也不會超借。", perf: {statement: "100 個客戶端同時各借還 10 次:零錯誤、沒有超借,10 秒內", seconds: 10, n: 1000}}
+    - {id: cp2.mutation, name: 突變測試, visibility: hidden, checkpoint: proj-be-todo-api, consumes: [bookapi/tests], description: "你的 tests/ 在參考解上全過,而且 8 個隱藏突變版每個都至少有一條測試失敗。", perf: {statement: "參考解＋8 個突變版各跑一次整套測試,合計 5 分鐘內(估計值)", seconds: 300}}
+    - {id: cp3.attack-suite, name: 攻擊套件, visibility: hidden, checkpoint: proj-be-secure-deploy, consumes: [bookapi/auth, bookapi/api, bookapi/repo], description: "SQLi、XSS、越權的攻擊腳本全部擋下,功能測試照樣全過(和資安 webfix 共用同一份攻擊套件)。"}
+    - {id: cp3.cache-latency, name: 快取延遲, visibility: hidden, checkpoint: proj-be-secure-deploy, consumes: [bookapi/cache, bookapi/api], description: "熱門書目走快取;書目更新後快取要失效,不能讀到舊資料。", perf: {statement: "200 個客戶端同時讀熱門書目 10 秒:p95 延遲 50 ms 內(估計值)", seconds: 10}}
+    - {id: cp3.deploy, name: 上線, visibility: teacher, checkpoint: proj-be-secure-deploy, consumes: [], description: "Dockerfile／Compose 把服務跑起來(沙盒做不了,老師核可)。"}
+  tasks:
+    - id: srv/http
+      order: 1
+      name: HTTP 伺服器
+      files: [srv/http.py]
+      language: python
+      chapter: "25-networking:本章 Lab:HTTP 伺服器 srv/http.py"
+      evidenceFor: [be-networking]
+      consumes: []
+      lab_no: L1
+      anchor: lab-srv-http
+      used_by: [srv/pool, bookapi/api]
+      interface:
+        - "class BadRequest(Exception)"
+        - "class Request: method, path, query: dict[str, str], headers: dict[str, str](小寫鍵), body: bytes"
+        - "parse_request(data: bytes) -> Request                      # 畸形 → BadRequest;支援 Content-Length 的 body;query 做 %XX 與 + 解碼"
+        - "make_response(status: int, headers: dict, body: bytes) -> bytes   # 自動補 Content-Length 與狀態列"
+        - "serve(port, handler, host='127.0.0.1') -> None              # handler(Request) -> (status, headers, body);單執行緒;判題時 port=8080"
+      groups:
+        - {id: http.parse, name: 解析請求, kind: function, visibility: public, runner: py-io, requiredBy: [boss.bad-request], description: "parse_request 拆開公開範例的請求:方法、路徑、query、小寫的 header、body。"}
+        - {id: http.response, name: 組回應, kind: function, visibility: public, runner: py-io, requiredBy: [boss.static-file, boss.json], description: "make_response 的狀態列、header 與自動補的 Content-Length。"}
+        - {id: http.serve, name: 真的連線, kind: function, visibility: public, runner: service, requiredBy: [boss.static-file, boss.json, boss.not-found], description: "從 8080 埠連進來:GET 回 200、handler 回 404 時照樣送出;每個連線處理完就關。"}
+        - {id: http.malformed, name: 畸形請求, kind: error, visibility: hidden, runner: py-io, requiredBy: [boss.bad-request], description: "請求列少欄位、header 少冒號、Content-Length 不是數字或是負數、body 比 Content-Length 短,都要 raise BadRequest。"}
+        - {id: http.details, name: 規格細節, kind: spec, visibility: hidden, runner: py-io, requiredBy: [boss.bad-request], description: "header 名稱不分大小寫、query 的 %XX 與 + 解碼、沒有 body 的 POST。"}
+        - {id: http.half-open, name: 半開與分段, kind: edge, visibility: hidden, runner: service, requiredBy: [boss.bad-request, boss.slow-client], description: "同一個請求分好幾次送到、送一半就斷線、畸形請求回 400 之後,伺服器都要繼續服務。"}
+        - id: http.perf
+          name: 循序吞吐
+          kind: perf
+          visibility: hidden
+          runner: service
+          description: "每個連線處理完就關,不能漏關或卡住。"
+          perf: {statement: "單執行緒 serve 連續處理 1,000 個請求(每個一條新連線),2 秒內", seconds: 2, n: 1000}
+          perf_ref: "0.47 秒"
+          requiredBy: [pool.perf]
+    - id: srv/pool
+      order: 2
+      name: 執行緒池
+      files: [srv/pool.py]
+      language: python
+      chapter: "24-operating-system:本章 Lab:執行緒池 srv/pool.py"
+      evidenceFor: [be-os]
+      consumes: [srv/http]
+      lab_no: L2
+      anchor: lab-srv-pool
+      also_chapters: [43-parallel]
+      used_by: [bookapi/api]
+      interface:
+        - "class ThreadPool(n)                          # n 個工作執行緒;n < 1 → ValueError"
+        - "submit(fn, *args) -> None                    # shutdown 之後 → RuntimeError;工作丟例外時工作執行緒不能死"
+        - "shutdown(wait=True) -> None                  # wait=False 立刻回來"
+        - "serve_threaded(port, handler, workers=8, timeout=5.0, host='127.0.0.1') -> None   # 用 srv.http 的解析與回應;閒置超過 timeout 秒的連線關掉"
+      groups:
+        - {id: pool.basic, name: 基本操作, kind: function, visibility: public, runner: py-io, requiredBy: [boss.concurrency], description: "submit 的工作全部跑完;shutdown(wait=True) 等工作做完才回來。"}
+        - {id: pool.concurrency, name: 同時服務, kind: function, visibility: public, runner: service, requiredBy: [boss.concurrency], description: "serve_threaded 能同時服務兩個連線(一個慢的不擋住另一個)。"}
+        - {id: pool.errors, name: 錯誤處理, kind: error, visibility: hidden, runner: py-io, requiredBy: [boss.concurrency], description: "工作丟例外時工作執行緒不能死;shutdown 之後再 submit 要 RuntimeError;n < 1 要 ValueError;shutdown(wait=False) 立刻回來。"}
+        - {id: pool.slow-client, name: 慢客戶端, kind: edge, visibility: hidden, runner: service, requiredBy: [boss.slow-client], description: "只連線不送資料的客戶端不能擋住別人,timeout 秒後被關掉。"}
+        - id: pool.perf
+          name: 併發
+          kind: perf
+          visibility: hidden
+          runner: service
+          description: "工作真的同時進行(一個一個處理要 10 秒)。"
+          perf: {statement: "100 個連線同時各送 10 個請求、每個請求處理 10 ms;8 個工作執行緒,零錯誤,5 秒內", seconds: 5, n: 1000}
+          perf_ref: "1.28 秒"
+          requiredBy: [boss.concurrency, cp2.load]
+    - id: bookapi/repo
+      order: 3
+      name: 借書資料庫
+      files: [bookapi/schema.sql, bookapi/repo.py]
+      language: python
+      chapter: "37-databases:本章 Lab:借書資料庫 bookapi/repo.py"
+      evidenceFor: [be-sql, be-db-design]
+      consumes: []
+      lab_no: L3
+      anchor: lab-bookapi-repo
+      used_by: [bookapi/api]
+      interface:
+        - "資料表:books(id, title, author, isbn UNIQUE, copies >= 0)、members(id, name, email UNIQUE)、loans(id, book_id → books, member_id → members, loaned_at, due_at, returned_at NULL)"
+        - "class NotFound(Exception);class Conflict(Exception)   # Conflict:沒有可借本數、重複 isbn、已經還過、刪除有人借的書"
+        - "class LibraryRepo(db_path=':memory:')"
+        - "add_book(title, author, isbn, copies=1) -> int;get_book(book_id) -> dict(含 available);list_books(q=None, limit=20, offset=0) -> list[dict]"
+        - "update_book(book_id, **fields) -> dict;delete_book(book_id) -> None;add_member(name, email) -> int"
+        - "borrow(book_id, member_id, days=14, now=None) -> int;return_loan(loan_id, now=None) -> None;overdue(now=None) -> list[dict]   # now 是 ISO 8601 字串"
+      groups:
+        - {id: repo.crud, name: 基本操作, kind: function, visibility: public, requiredBy: [cp2.public], description: "書與會員的新增、查詢、更新、刪除,借書、還書、逾期查詢的公開範例(now 固定)。"}
+        - {id: repo.constraints, name: 約束, kind: error, visibility: hidden, requiredBy: [cp2.errors, cp2.consistency], description: "重複的 isbn、本數小於 0、找不到的 id、沒有可借本數、還過的再還、刪除有人借的書,都要丟對的例外(NotFound 或 Conflict)。"}
+        - {id: repo.time, name: 時間邊界, kind: edge, visibility: hidden, requiredBy: [cp2.edge], description: "剛好到期不算逾期、已還的不算、days 參數、跨月跨年的日期。"}
+        - {id: repo.search, name: 搜尋與分頁, kind: spec, visibility: hidden, requiredBy: [cp2.spec, cp3.attack-suite], description: "q 用部分符合找書名與作者、offset 超過結尾回傳空列表、q 裡有引號或 % 要照字面找(參數化查詢)。"}
+        - id: repo.perf
+          name: 效能
+          kind: perf
+          visibility: hidden
+          description: "想想哪些欄位要建索引。"
+          perf: {statement: "1 萬本書、10 萬筆借閱的資料庫上:連續 1,000 次 get_book 1 秒內、overdue() 0.5 秒內", seconds: 1, n: 1000}
+          perf_ref: "沒有索引 1.9 秒;有索引 0.01 秒"
+          requiredBy: [cp2.load]
+    - id: bookapi/api
+      order: 4
+      name: 借書 REST API
+      files: [bookapi/api.py]
+      language: python
+      chapter: "129-http-rest-api:本章 Lab:借書 REST API bookapi/api.py"
+      evidenceFor: [be-api, be-web-basics]
+      consumes: [srv/http, srv/pool, bookapi/repo]
+      lab_no: L4
+      anchor: lab-bookapi-api
+      gap: G15
+      also_chapters: [07-design-recipe, 08-oop, 11-software-architecture]
+      used_by: [bookapi/tests, bookapi/auth, bookapi/cache, webfix/boss.regression-attacks]
+      interface:
+        - "make_app(repo) -> handler   # 掛在 srv.http.serve 或 srv.pool.serve_threaded 上"
+        - "端點:GET/POST /books、GET/PATCH/DELETE /books/{id}、POST /members、POST /loans、POST /loans/{id}/return、GET /loans/overdue;分頁 ?limit=&offset="
+        - "錯誤格式 {\"error\": {\"code\": \"...\", \"message\": \"...\"}};狀態碼 200／201／204／400／404／409／422"
+      groups:
+        - {id: api.public, name: 公開 API 測試, kind: function, visibility: public, requiredBy: [cp2.public], description: "約 12 條:每個端點的正常流程與狀態碼。"}
+        - {id: api.edge, name: 邊界, kind: edge, visibility: hidden, requiredBy: [cp2.edge], description: "limit=0、limit 很大或是負數、offset 超過結尾、空書名、本數 0 的書、Unicode 書名。"}
+        - {id: api.errors, name: 錯誤處理, kind: error, visibility: hidden, requiredBy: [cp2.errors], description: '壞 JSON 回 400、型別或欄位錯回 422、找不到回 404、不能借回 409;錯誤一律是 {"error": {"code", "message"}}。'}
+        - {id: api.consistency, name: 資料一致, kind: spec, visibility: hidden, requiredBy: [cp2.consistency], description: "借還之後 available 正確、重複還書回 409、刪除有人借的書回 409、PATCH 只改給的欄位。"}
+        - {id: api.spec, name: 規格細節, kind: spec, visibility: hidden, requiredBy: [cp2.spec], description: "201 回傳新資源、204 沒有 body、Content-Type 是 application/json、列表照 id 排序、未知欄位回 422。"}
+        - id: api.perf
+          name: 併發借還
+          kind: perf
+          visibility: hidden
+          runner: service
+          description: "借書要在同一個交易裡檢查並扣本數。"
+          perf: {statement: "掛在 serve_threaded 上,100 個客戶端同時各借還 10 次:零錯誤、沒有超借,10 秒內", seconds: 10, n: 1000}
+          perf_basis: estimate
+          requiredBy: [cp2.load, cp2.consistency]
+    - id: bookapi/tests
+      order: 5
+      name: 測試借書 API
+      files: [bookapi/tests/test_api.py]
+      language: python
+      chapter: "46-debugging-testing:本章 Lab:測試借書 API bookapi/tests/"
+      evidenceFor: [be-testing]
+      consumes: [bookapi/api]
+      lab_no: L5
+      anchor: lab-bookapi-tests
+      gap: G16
+      gap_title: unittest、測一個 HTTP 服務
+      used_by: [cp2.mutation]
+      note: "學生自寫測試的突變模式(9Jang 設計 §5.3)不在第一個切片。"
+      groups:
+        - {id: tests.green, name: 參考解全過, kind: function, visibility: public, requiredBy: [cp2.mutation], description: "你的測試在參考解上全部通過(python3 -m unittest)。"}
+        - {id: tests.mutants, name: 抓突變, kind: spec, visibility: hidden, requiredBy: [cp2.mutation], description: "8 個隱藏突變版(例:逾期少算一天、還書沒有加回本數),每個都至少一條測試失敗。"}
+        - id: tests.perf
+          name: 跑得夠快
+          kind: perf
+          visibility: hidden
+          description: "每個突變版都要把整套測試重跑一次。"
+          perf: {statement: "整套測試 30 秒內跑完", seconds: 30}
+          perf_basis: estimate
+          requiredBy: [cp2.mutation]
+    - {id: bookapi/auth, order: 6, name: 認證與授權, files: [bookapi/auth.py], language: python, chapter: "G17:本章 Lab:認證與授權 bookapi/auth.py", evidenceFor: [be-auth-security], consumes: [bookapi/api, webfix/passwords], groups: [], lab_no: L6, anchor: lab-bookapi-auth, gap: G17, gap_title: 認證與授權, also_chapters: [35-cryptography, 52-web-security], status: outline, used_by: [cp3.attack-suite]}
+    - {id: bookapi/cache, order: 7, name: 快取層, files: [bookapi/cache.py], language: python, chapter: "G19:本章 Lab:快取層 bookapi/cache.py", evidenceFor: [be-cache-queue], consumes: [bookapi/api, libds/lru], groups: [], lab_no: L7, anchor: lab-bookapi-cache, gap: G19, gap_title: 快取, also_chapters: [29-data-structures], status: outline, used_by: [cp3.cache-latency]}
+
+# ═════════════════════════════ 以下是 outline(只有任務與 Boss;任務目標設計中) ═════════════════════════════
+- id: numkit
+  code: F1
+  name: numkit 數值工具箱
+  track: foundation
+  also_tracks: [ai, embedded]
+  lib: numkit
+  project: proj-f-linalg
+  checkpoints: [proj-f-linalg, proj-f-numopt, proj-f-eng]
+  level: 大學
+  status: outline
+  summary: "純 Python 的數值工具箱:求根、線性方程組、特徵值、ODE 與最佳化。AI 的最佳化器與 PageRank、嵌入式的電路分析與 PID 受控體都用它。"
+  acceptance:
+    - {id: boss.pca, name: 手寫數字 PCA, checkpoint: proj-f-linalg, consumes: [numkit/linalg, numkit/eig], description: "純 Python 的 PCA 把手寫數字降維再重建,誤差在門檻內。"}
+    - {id: cp2.numopt, name: 數值方法與最佳化期末, checkpoint: proj-f-numopt, consumes: [numkit/roots, numkit/optim], description: "隱藏題組的目標值與迭代次數。"}
+    - {id: cp3.rlc, name: RLC 電路模擬, checkpoint: proj-f-eng, consumes: [numkit/linalg, numkit/ode], description: "用自己的 linalg 與 ode 模擬 RLC 電路,對解析解。"}
+  tasks:
+    - {id: numkit/roots, order: 1, name: 求根, files: [numkit/roots.py], language: python, chapter: "55-numerical-methods:本章 Lab:求根 numkit/roots.py", evidenceFor: [f-numerical], consumes: [], groups: [], lab_no: L1, anchor: lab-numkit-roots, also_chapters: [107-floating-point], used_by: [cp2.numopt]}
+    - {id: numkit/linalg, order: 2, name: 線性方程組, files: [numkit/linalg.py], language: python, chapter: "54-linear-algebra:本章 Lab:線性方程組 numkit/linalg.py", evidenceFor: [f-linalg], consumes: [], groups: [], lab_no: L2, anchor: lab-numkit-linalg, used_by: [numkit/eig, cp3.rlc, fw/circuit]}
+    - {id: numkit/eig, order: 3, name: 特徵值與 PCA, files: [numkit/eig.py, numkit/pca.py], language: python, chapter: "G8:本章 Lab:特徵值與 PCA numkit/eig.py", evidenceFor: [f-linalg], consumes: [numkit/linalg], groups: [], lab_no: L3, anchor: lab-numkit-eig, gap: G8, gap_title: 線性代數後半(特徵值、SVD), also_chapters: [54-linear-algebra], used_by: [boss.pca, search/pagerank]}
+    - {id: numkit/ode, order: 4, name: 常微分方程, files: [numkit/ode.py], language: python, chapter: "55-numerical-methods:本章 Lab:常微分方程 numkit/ode.py", evidenceFor: [f-diffeq], consumes: [], groups: [], lab_no: L4, anchor: lab-numkit-ode, used_by: [cp3.rlc, fw/pid]}
+    - {id: numkit/optim, order: 5, name: 最佳化, files: [numkit/optim.py], language: python, chapter: "109-optimization:本章 Lab:最佳化 numkit/optim.py", evidenceFor: [f-optim], consumes: [], groups: [], lab_no: L5, anchor: lab-numkit-optim, used_by: [cp2.numopt, nn/optim]}
+
+- id: hzip
+  code: F2
+  name: hzip 壓縮器
+  track: foundation
+  also_tracks: [security]
+  lib: hzip
+  project: proj-f-prob
+  checkpoints: [proj-f-prob]
+  level: 高中(L1–L3)/大學
+  status: outline
+  summary: "從字母頻率到 Huffman、LZ77 與 CRC,做出一個會偵測壞檔的壓縮工具。字母頻率給 CTF 破譯用,CRC 給序列埠訊框與 RISC-V 測試程式用。"
+  acceptance:
+    - {id: boss.roundtrip, name: 二進位檔往返, consumes: [hzip/cli], description: "隱藏的二進位檔壓縮再解壓要一模一樣;被改壞的檔案要被偵測出來。"}
+    - {id: boss.prob-final, name: 機率統計期末, consumes: [hzip/stats, hzip/huffman], description: "蒙地卡羅估計與 Huffman 壓縮的期末。"}
+  tasks:
+    - {id: hzip/stats, order: 1, name: 頻率與估計, files: [hzip/stats.py], language: python, chapter: "14-combinatorics-probability:本章 Lab:頻率與估計 hzip/stats.py", evidenceFor: [f-prob], consumes: [], groups: [], lab_no: L1, anchor: lab-hzip-stats, also_chapters: [57-probability], used_by: [hzip/huffman, ctf/crack]}
+    - {id: hzip/huffman, order: 2, name: Huffman 編碼, files: [hzip/huffman.py], language: python, chapter: "108-information-theory:本章 Lab:Huffman 編碼 hzip/huffman.py", evidenceFor: [f-info-theory], consumes: [hzip/stats], groups: [], lab_no: L2, anchor: lab-hzip-huffman, used_by: [hzip/cli]}
+    - {id: hzip/lz77, order: 3, name: LZ77, files: [hzip/lz77.py], language: python, chapter: "108-information-theory:本章 Lab:LZ77 hzip/lz77.py", evidenceFor: [f-info-theory], consumes: [], groups: [], lab_no: L3, anchor: lab-hzip-lz77, used_by: [hzip/cli]}
+    - {id: hzip/crc, order: 4, name: CRC, files: [hzip/crc.py], language: python, chapter: "15-number-theory-graphs:本章 Lab:CRC hzip/crc.py", evidenceFor: [f-discrete], consumes: [], groups: [], lab_no: L4, anchor: lab-hzip-crc, gap: G13, gap_title: GF(2) 與 CRC, used_by: [hzip/cli, fw/uart, rtl/cpu]}
+    - {id: hzip/cli, order: 5, name: 檔案格式與命令列, files: [hzip/hzip.py], language: python, chapter: "15-number-theory-graphs:本章 Lab:檔案格式與命令列 hzip/hzip.py", evidenceFor: [f-info-theory], consumes: [hzip/huffman, hzip/lz77, hzip/crc], groups: [], lab_no: L5, anchor: lab-hzip-cli, gap: G13, gap_title: GF(2) 與 CRC, used_by: [boss.roundtrip]}
+
+- id: logic
+  code: F3
+  name: 邏輯引擎:SAT 與自動機
+  track: foundation
+  lib: logic
+  project: proj-f-logic-toc
+  checkpoints: [proj-f-logic-toc]
+  level: 大學
+  status: outline
+  summary: "命題邏輯、DPLL 解 SAT、DFA／NFA、正規表示式與 Turing 機,一個一個寫成可以測試的引擎。"
+  acceptance:
+    - {id: boss.logic-final, name: 邏輯與計算理論期末, consumes: [logic/dpll, logic/automata, logic/tm], description: "從 SAT 到停機問題:隱藏的 CNF、自動機與 Turing 機。"}
+  tasks:
+    - {id: logic/prop, order: 1, name: 命題邏輯, files: [logic/prop.py], language: python, chapter: "56-formal-logic:本章 Lab:命題邏輯 logic/prop.py", evidenceFor: [f-logic], consumes: [], groups: [], lab_no: L1, anchor: lab-logic-prop, also_chapters: [19-boolean-logic], used_by: [logic/dpll]}
+    - {id: logic/dpll, order: 2, name: SAT 求解器, files: [logic/dpll.py], language: python, chapter: "33-np-completeness:本章 Lab:SAT 求解器 logic/dpll.py", evidenceFor: [f-logic, f-complexity], consumes: [logic/prop], groups: [], lab_no: L2, anchor: lab-logic-dpll, also_chapters: [56-formal-logic], used_by: [puzzle/csp]}
+    - {id: logic/automata, order: 3, name: 有限自動機, files: [logic/automata.py], language: python, chapter: "49-theory-of-computation:本章 Lab:有限自動機 logic/automata.py", evidenceFor: [f-complexity], consumes: [], groups: [], lab_no: L3, anchor: lab-logic-automata, used_by: [logic/regex]}
+    - {id: logic/regex, order: 4, name: 正規表示式引擎, files: [logic/regex.py], language: python, chapter: "49-theory-of-computation:本章 Lab:正規表示式引擎 logic/regex.py", evidenceFor: [f-complexity], consumes: [logic/automata], groups: [], lab_no: L4, anchor: lab-logic-regex, also_chapters: [42-compilers], used_by: [blue/timeline]}
+    - {id: logic/tm, order: 5, name: Turing 機, files: [logic/tm.py], language: python, chapter: "49-theory-of-computation:本章 Lab:Turing 機 logic/tm.py", evidenceFor: [f-complexity], consumes: [], groups: [], lab_no: L5, anchor: lab-logic-tm}
+
+- id: rv32
+  code: H2
+  name: RISC-V:自己的指令集模擬器＋效能挑戰
+  track: hw-core
+  also_tracks: [ic-design]
+  lib: rv32
+  project: proj-hw-riscv-perf
+  checkpoints: [proj-hw-riscv-perf]
+  level: 大學
+  status: outline
+  summary: "寫 RV32I 組合語言、自己的指令集模擬器與快取模擬器,再把程式重排到更少的 stall、更高的命中率。模擬器之後當 IC 路線 CPU 的參考模型。"
+  acceptance:
+    - {id: boss.perf-challenge, name: 效能挑戰, consumes: [rv32/perf], description: "在 Ripes CLI 上:答案對、cycles 不超過 N、D-cache 命中率至少 X%。"}
+  tasks:
+    - {id: rv32/asm, order: 1, name: RV32I 組合語言, files: [rv32/asm/fact.s, rv32/asm/array.s, rv32/asm/string.s], language: asm, chapter: "135-riscv-assembly:本章 Lab:RV32I 組合語言 rv32/asm/*.s", evidenceFor: [hw-riscv-asm], consumes: [], groups: [], lab_no: L1, anchor: lab-rv32-asm, used_by: [rv32/iss]}
+    - {id: rv32/iss, order: 2, name: 指令集模擬器, files: [rv32/iss.py], language: python, chapter: "135-riscv-assembly:本章 Lab:指令集模擬器 rv32/iss.py", evidenceFor: [hw-riscv-asm], consumes: [], groups: [], lab_no: L2, anchor: lab-rv32-iss, also_chapters: [21-cpu-machine-language], used_by: [rtl/alu, rtl/decode, rtl/cpu]}
+    - {id: rv32/cachesim, order: 3, name: 快取模擬器, files: [rv32/cachesim.c], language: c, chapter: "48-computer-architecture:本章 Lab:快取模擬器 rv32/cachesim.c", evidenceFor: [hw-arch-perf], consumes: [], groups: [], lab_no: L3, anchor: lab-rv32-cachesim, used_by: [rv32/perf, soc/cache]}
+    - {id: rv32/perf, order: 4, name: 管線與分塊, files: [rv32/perf/matmul.s], language: asm, chapter: "48-computer-architecture:本章 Lab:管線與分塊 rv32/perf/*.s", evidenceFor: [hw-arch-perf], consumes: [], groups: [], lab_no: L4, anchor: lab-rv32-perf, gap: G33, gap_title: RISC-V 管線時序圖, used_by: [boss.perf-challenge]}
+
+- id: minidb
+  code: B2
+  name: 自製關聯式資料庫
+  track: backend
+  lib: minidb
+  project: proj-be-minidb
+  checkpoints: [proj-be-minidb]
+  level: 大學
+  status: outline
+  summary: "照實戰章「自製關聯式資料庫」的七個里程碑,寫出有 parser、pager、B-tree、執行器與 WAL 的小資料庫。"
+  note: "proj-be-minidb 是建議新增的專題(tree.yaml 還沒有;be-db-design 可以從借書 API 移過來)。"
+  acceptance:
+    - {id: boss.crash-recovery, name: 崩潰復原, consumes: [minidb/exec, minidb/wal], description: "隨機時間點 kill -9 後重開,資料仍然一致;隱藏查詢的結果正確。"}
+  tasks:
+    - {id: minidb/parser, order: 1, name: SQL 剖析器, files: [minidb/parser.py], language: python, chapter: "122-capstone-database:本章 Lab:SQL 剖析器 minidb/parser.py", evidenceFor: [be-db-design], consumes: [], groups: [], lab_no: L1, anchor: lab-minidb-parser, used_by: [minidb/exec]}
+    - {id: minidb/pager, order: 2, name: 頁與 pager, files: [minidb/pager.py], language: python, chapter: "122-capstone-database:本章 Lab:頁與 pager minidb/pager.py", evidenceFor: [be-db-design], consumes: [], groups: [], lab_no: L2, anchor: lab-minidb-pager, used_by: [minidb/btree]}
+    - {id: minidb/btree, order: 3, name: B-tree, files: [minidb/btree.py], language: python, chapter: "122-capstone-database:本章 Lab:B-tree minidb/btree.py", evidenceFor: [be-db-design], consumes: [minidb/pager, libds/sort], groups: [], lab_no: L3, anchor: lab-minidb-btree, used_by: [minidb/exec]}
+    - {id: minidb/exec, order: 4, name: 查詢執行, files: [minidb/exec.py], language: python, chapter: "122-capstone-database:本章 Lab:查詢執行 minidb/exec.py", evidenceFor: [be-db-design], consumes: [minidb/parser, minidb/btree], groups: [], lab_no: L4, anchor: lab-minidb-exec, used_by: [boss.crash-recovery]}
+    - {id: minidb/wal, order: 5, name: WAL 與復原, files: [minidb/wal.py], language: python, chapter: "122-capstone-database:本章 Lab:WAL 與復原 minidb/wal.py", evidenceFor: [be-db-design], consumes: [minidb/pager], groups: [], lab_no: L5, anchor: lab-minidb-wal, used_by: [boss.crash-recovery]}
+
+- id: raft
+  code: B3
+  name: Raft KV
+  track: backend
+  lib: raft
+  project: proj-be-raft-kv
+  checkpoints: [proj-be-raft-kv]
+  level: 大學
+  status: outline
+  summary: "在可重現的模擬網路上(延遲、丟包、分割、當機都由 seed 決定)寫 Raft:選舉、日誌複寫、持久化,最後是線性化的 KV。實戰章「分散式 KV 與 Raft」的 Go 版改寫成 Python。"
+  acceptance:
+    - {id: boss.fault-injection, name: 故障注入, consumes: [raft/election, raft/log, raft/persist, raft/kv], description: "前 5 個任務的故障注入測試全過。"}
+    - {id: boss.linearizable, name: 線性化檢查, consumes: [raft/kv], description: "隨機 seed 的客戶端歷史通過自寫的線性化檢查器。"}
+    - {id: boss.k8s-design, name: 部署與設計文件, visibility: teacher, consumes: [], description: "k8s 部署與系統設計文件,老師核可。"}
+  tasks:
+    - {id: raft/sim, order: 1, name: 模擬網路, files: [raft/sim_client.py], language: python, chapter: "98-distributed-systems:本章 Lab:模擬網路 raft/sim_client.py", evidenceFor: [be-distributed], consumes: [], groups: [], lab_no: L1, anchor: lab-raft-sim, used_by: [raft/election], note: "模擬網路本身由我們提供,這個任務是學會用它。"}
+    - {id: raft/election, order: 2, name: 選舉, files: [raft/election.py], language: python, chapter: "128-capstone-raft-kv:本章 Lab:選舉 raft/election.py", evidenceFor: [be-distributed], consumes: [raft/sim], groups: [], lab_no: L2, anchor: lab-raft-election, used_by: [raft/log]}
+    - {id: raft/log, order: 3, name: 日誌複寫, files: [raft/log.py], language: python, chapter: "128-capstone-raft-kv:本章 Lab:日誌複寫 raft/log.py", evidenceFor: [be-distributed], consumes: [raft/election], groups: [], lab_no: L3, anchor: lab-raft-log, used_by: [raft/persist]}
+    - {id: raft/persist, order: 4, name: 持久化, files: [raft/persist.py], language: python, chapter: "128-capstone-raft-kv:本章 Lab:持久化 raft/persist.py", evidenceFor: [be-distributed], consumes: [raft/log], groups: [], lab_no: L4, anchor: lab-raft-persist, used_by: [raft/kv]}
+    - {id: raft/kv, order: 5, name: 線性化 KV, files: [raft/kv.py], language: python, chapter: "128-capstone-raft-kv:本章 Lab:線性化 KV raft/kv.py", evidenceFor: [be-distributed, be-system-design], consumes: [raft/persist], groups: [], lab_no: L5, anchor: lab-raft-kv, used_by: [boss.linearizable]}
+
+- id: nn
+  code: A1
+  name: 從 micrograd 到 MNIST
+  track: ai
+  lib: nn
+  project: proj-ai-mnist
+  checkpoints: [proj-ai-mnist]
+  level: 大學(高中進階可)
+  status: outline
+  summary: "自己寫自動微分引擎、邏輯迴歸、最佳化器與多層感知機,不用框架辨識手寫數字。"
+  acceptance:
+    - {id: boss.mnist, name: 手寫數字辨識, consumes: [nn/mlp], description: "禁用框架;隱藏測試集準確率至少 97%;梯度檢查通過。"}
+  tasks:
+    - {id: nn/arrays, order: 1, name: 陣列運算, files: [nn/arrays.py], language: python, chapter: "132-numpy-pandas:本章 Lab:陣列運算 nn/arrays.py", evidenceFor: [ai-numpy], consumes: [], groups: [], lab_no: L1, anchor: lab-nn-arrays, used_by: [nn/linear, nn/mlp]}
+    - {id: nn/value, order: 2, name: 自動微分, files: [nn/value.py], language: python, chapter: "111-deep-learning-math:本章 Lab:自動微分 nn/value.py", evidenceFor: [ai-mlp], consumes: [], groups: [], lab_no: L2, anchor: lab-nn-value, gap: G22, gap_title: micrograd 實驗室, also_chapters: [12-calculus], used_by: [nn/optim, nn/mlp]}
+    - {id: nn/linear, order: 3, name: 邏輯迴歸與指標, files: [nn/linear.py, nn/metrics.py], language: python, chapter: "38-machine-learning:本章 Lab:邏輯迴歸與指標 nn/linear.py", evidenceFor: [ai-ml-basics], consumes: [nn/arrays], groups: [], lab_no: L3, anchor: lab-nn-linear, used_by: [nn/mlp]}
+    - {id: nn/optim, order: 4, name: 最佳化器, files: [nn/optim.py], language: python, chapter: "109-optimization:本章 Lab:最佳化器 nn/optim.py", evidenceFor: [ai-optim], consumes: [nn/value, numkit/optim], groups: [], lab_no: L4, anchor: lab-nn-optim, used_by: [nn/mlp]}
+    - {id: nn/mlp, order: 5, name: 多層感知機, files: [nn/mlp.py], language: python, chapter: "111-deep-learning-math:本章 Lab:多層感知機 nn/mlp.py", evidenceFor: [ai-mlp], consumes: [nn/value, nn/linear, nn/optim], groups: [], lab_no: L5, anchor: lab-nn-mlp, also_chapters: [38-machine-learning], used_by: [boss.mnist]}
+
+- id: agent
+  code: A2
+  name: 搜尋引擎 → RAG → Agent
+  track: ai
+  lib: agent
+  project: proj-ai-agent
+  checkpoints: [proj-ai-agent]
+  level: 大學
+  status: outline
+  summary: "先做離線的搜尋引擎(倒排索引、BM25、PageRank、向量檢索),再接上假 LLM 做 RAG 與 ReAct Agent,最後是評估與護欄。語意向量用預先算好的向量檔,LLM 用可重現的假 LLM。"
+  acceptance:
+    - {id: boss.search-quality, name: 搜尋品質, consumes: [search/index, search/rank], description: "隱藏 qrels 的 MAP／nDCG 達到門檻。"}
+    - {id: boss.rag-citations, name: 引用正確, consumes: [agent/rag], description: "隱藏評估集:回答引用的文件 id 正確。"}
+    - {id: boss.injection-guard, name: 提示注入防護, consumes: [agent/guard], description: "注入測試集全部擋下;評估指標計算正確。"}
+  tasks:
+    - {id: search/index, order: 1, name: 倒排索引, files: [search/index.py], language: python, chapter: "126-capstone-search-engine:本章 Lab:倒排索引 search/index.py", evidenceFor: [ai-nlp], consumes: [libds/hashmap, libds/trie], groups: [], lab_no: L1, anchor: lab-search-index, used_by: [search/rank]}
+    - {id: search/rank, order: 2, name: 排序與 BM25, files: [search/rank.py], language: python, chapter: "126-capstone-search-engine:本章 Lab:排序與 BM25 search/rank.py", evidenceFor: [ai-nlp], consumes: [search/index, libds/heap], groups: [], lab_no: L2, anchor: lab-search-rank, used_by: [agent/rag, boss.search-quality]}
+    - {id: search/pagerank, order: 3, name: PageRank, files: [search/pagerank.py], language: python, chapter: "126-capstone-search-engine:本章 Lab:PageRank search/pagerank.py", evidenceFor: [ai-nlp], consumes: [numkit/eig, libds/graph], groups: [], lab_no: L3, anchor: lab-search-pagerank}
+    - {id: search/vector, order: 4, name: 向量檢索, files: [search/vector.py], language: python, chapter: "126-capstone-search-engine:本章 Lab:向量檢索 search/vector.py", evidenceFor: [ai-llm-app], consumes: [], groups: [], lab_no: L4, anchor: lab-search-vector, also_chapters: [102-rag-from-scratch], used_by: [agent/rag]}
+    - {id: agent/react, order: 5, name: 工具與 ReAct, files: [agent/llm.py, agent/tools.py, agent/react.py], language: python, chapter: "101-tool-react:本章 Lab:工具與 ReAct agent/react.py", evidenceFor: [ai-agent], consumes: [], groups: [], lab_no: L5, anchor: lab-agent-react, also_chapters: [100-llm-client], used_by: [agent/rag]}
+    - {id: agent/rag, order: 6, name: RAG, files: [agent/rag.py], language: python, chapter: "102-rag-from-scratch:本章 Lab:RAG agent/rag.py", evidenceFor: [ai-llm-app], consumes: [search/rank, search/vector, agent/react], groups: [], lab_no: L6, anchor: lab-agent-rag, also_chapters: [125-capstone-llm-agent], used_by: [agent/guard, boss.rag-citations]}
+    - {id: agent/guard, order: 7, name: 評估與護欄, files: [agent/eval.py, agent/guard.py], language: python, chapter: "106-agent-production:本章 Lab:評估與護欄 agent/guard.py", evidenceFor: [ai-agent, ai-efficient], consumes: [agent/rag], groups: [], lab_no: L7, anchor: lab-agent-guard, also_chapters: [125-capstone-llm-agent, 113-ai-security], used_by: [boss.injection-guard]}
+
+- id: puzzle
+  code: A3
+  name: 解謎 AI
+  track: ai
+  lib: puzzle
+  project: proj-ai-search
+  checkpoints: [proj-ai-search]
+  level: 高中
+  status: outline
+  summary: "狀態空間搜尋、A*、CSP 回溯與 minimax,解十五數碼、數獨與小棋類。搜尋直接用 libds 的圖與優先佇列。"
+  acceptance:
+    - {id: boss.solve-15, name: 十五數碼, consumes: [puzzle/astar], description: "A* 找出最短解,展開的節點數在門檻內(harness 計數)。"}
+    - {id: boss.sudoku, name: 數獨, consumes: [puzzle/csp], description: "隱藏數獨限時解完。"}
+    - {id: boss.no-lose, name: 不敗棋手, consumes: [puzzle/minimax], description: "對參考程式下棋不輸。"}
+  tasks:
+    - {id: puzzle/bfs, order: 1, name: 狀態空間 BFS, files: [puzzle/bfs.py], language: python, chapter: "30-graph-algorithms:本章 Lab:狀態空間 BFS puzzle/bfs.py", evidenceFor: [ai-classical], consumes: [libds/graph], groups: [], lab_no: L1, anchor: lab-puzzle-bfs, used_by: [puzzle/astar]}
+    - {id: puzzle/astar, order: 2, name: A* 搜尋, files: [puzzle/astar.py], language: python, chapter: "110-classical-ai:本章 Lab:A* 搜尋 puzzle/astar.py", evidenceFor: [ai-classical], consumes: [puzzle/bfs, libds/heap], groups: [], lab_no: L2, anchor: lab-puzzle-astar, used_by: [boss.solve-15]}
+    - {id: puzzle/csp, order: 3, name: CSP 回溯, files: [puzzle/csp.py], language: python, chapter: "110-classical-ai:本章 Lab:CSP 回溯 puzzle/csp.py", evidenceFor: [ai-classical], consumes: [], groups: [], lab_no: L3, anchor: lab-puzzle-csp, used_by: [boss.sudoku]}
+    - {id: puzzle/minimax, order: 4, name: minimax, files: [puzzle/minimax.py], language: python, chapter: "51-game-theory:本章 Lab:minimax puzzle/minimax.py", evidenceFor: [ai-classical], consumes: [], groups: [], lab_no: L4, anchor: lab-puzzle-minimax, used_by: [boss.no-lose]}
+
+- id: emu
+  code: E1
+  name: 模擬器三部曲
+  track: embedded
+  lib: emu
+  project: proj-em-chip8
+  checkpoints: [proj-em-chip8, proj-em-gameboy, proj-em-gba]
+  level: CHIP-8 高中可,其餘大學
+  status: outline
+  summary: "用 C 寫 CHIP-8、Game Boy、GBA 三個模擬器,共用同一套記憶體匯流排。純軟體,不用板子。"
+  note: "chip8/cpu、gb/cpu、gba/cpu 的測試組 id 之後要用不同的前綴(例 chip8cpu.*),同一條任務線內不能重複。"
+  acceptance:
+    - {id: boss.chip8-rom, name: CHIP-8 隱藏 ROM, checkpoint: proj-em-chip8, consumes: [chip8/cpu, chip8/display], description: "無頭介面跑自寫的隱藏 ROM N 個週期,對照暫存器、記憶體與畫面 hash;面板上能玩。"}
+    - {id: cp2.gb-rom, name: Game Boy 測試 ROM, checkpoint: proj-em-gameboy, consumes: [gb/cpu, gb/system], description: "CPU、計時器、中斷測試 ROM 印出 Passed;畫面 hash 正確。"}
+    - {id: cp3.gba-tests, name: GBA 測試, checkpoint: proj-em-gba, consumes: [gba/cpu], description: "ARM、Thumb、記憶體測試全過(solo 版;完整版是組隊副本)。"}
+  tasks:
+    - {id: emu/bus, order: 1, name: 位元與記憶體匯流排, files: [emu/bits.h, emu/bus.c], language: c, chapter: "133-c-deep-dive:本章 Lab:位元與記憶體匯流排 emu/bus.c", evidenceFor: [em-c-pointers], consumes: [], groups: [], lab_no: L1, anchor: lab-emu-bus, also_chapters: [bridge-read-c], used_by: [chip8/cpu, gb/cpu]}
+    - {id: chip8/cpu, order: 2, name: CHIP-8 CPU, files: [chip8/cpu.c], language: c, chapter: "134-chip8-emulator:本章 Lab:CHIP-8 CPU chip8/cpu.c", evidenceFor: [em-emu-chip8], consumes: [emu/bus], groups: [], lab_no: L2, anchor: lab-chip8-cpu, used_by: [chip8/display]}
+    - {id: chip8/display, order: 3, name: CHIP-8 畫面與按鍵, files: [chip8/display.c], language: c, chapter: "134-chip8-emulator:本章 Lab:CHIP-8 畫面與按鍵 chip8/display.c", evidenceFor: [em-emu-chip8], consumes: [chip8/cpu], groups: [], lab_no: L3, anchor: lab-chip8-display, used_by: [boss.chip8-rom]}
+    - {id: gb/cpu, order: 4, name: SM83 CPU, files: [gb/cpu.c], language: c, chapter: "G49-2:本章 Lab:SM83 CPU gb/cpu.c", evidenceFor: [em-emu-gb-cpu], consumes: [emu/bus], groups: [], lab_no: L4, anchor: lab-gb-cpu, gap: G49-2, gap_title: SM83 CPU, used_by: [gb/system]}
+    - {id: gb/system, order: 5, name: Game Boy 系統, files: [gb/mmu.c, gb/ppu.c], language: c, chapter: "G49-3:本章 Lab:Game Boy 系統 gb/mmu.c", evidenceFor: [em-emu-gb-system], consumes: [gb/cpu], groups: [], lab_no: L5, anchor: lab-gb-system, gap: G49-3, gap_title: Game Boy 系統(MMU、計時器、中斷、PPU), used_by: [cp2.gb-rom]}
+    - {id: gba/cpu, order: 6, name: ARM7TDMI, files: [gba/cpu.c], language: c, chapter: "G49-4:本章 Lab:ARM7TDMI gba/cpu.c", evidenceFor: [em-emu-gba], consumes: [emu/bus], groups: [], lab_no: L6, anchor: lab-gba-cpu, gap: G49-4, gap_title: ARM7TDMI, used_by: [cp3.gba-tests]}
+
+- id: fw
+  code: E2
+  name: Arduino 韌體三部曲
+  track: embedded
+  lib: fw
+  project: proj-em-analog
+  checkpoints: [proj-em-analog, proj-em-blinky, proj-em-uart-console, proj-em-rtos-node]
+  level: 大學
+  status: outline
+  summary: "學生用自己的 Arduino／ESP32 開發,系統只驗收:純函式邏輯先在主機上用 ctest 驗,再用 simavr／Espressif QEMU 驗時序;實體結果老師核可。"
+  acceptance:
+    - {id: boss.analog, name: 電路設計, checkpoint: proj-em-analog, consumes: [fw/circuit], description: "ngspice 量電流與截止頻率,誤差 ±5% 內。"}
+    - {id: cp2.blinky, name: 裸機跑馬燈, checkpoint: proj-em-blinky, consumes: [fw/blinky], description: "simavr 跑 N ms,腳位紀錄的切換次數與週期正確;實體影片老師核可。"}
+    - {id: cp3.uart-console, name: 序列埠指令列, checkpoint: proj-em-uart-console, consumes: [fw/debounce, fw/uart], description: "simavr 注入按鈕波形與 UART 指令,回應與 PWM 正確。"}
+    - {id: cp4.rtos-node, name: RTOS 感測節點, checkpoint: proj-em-rtos-node, consumes: [fw/pid], description: "Espressif QEMU 的任務時序;PID 接受控體模擬,量超越量與安定時間。"}
+  tasks:
+    - {id: fw/circuit, order: 1, name: 電路學, files: [fw/analog/led.cir], language: spice, chapter: "G42:本章 Lab:電路學 fw/analog/*.cir", evidenceFor: [em-circuits], consumes: [], groups: [], lab_no: L0, anchor: lab-fw-circuit, gap: G42, gap_title: 電路學, used_by: [boss.analog]}
+    - {id: fw/bitops, order: 2, name: 暫存器位元操作, files: [fw/bitops.h], language: c, chapter: "133-c-deep-dive:本章 Lab:暫存器位元操作 fw/bitops.h", evidenceFor: [em-bits-regs], consumes: [], groups: [], lab_no: L1, anchor: lab-fw-bitops, also_chapters: [19-boolean-logic], used_by: [fw/blinky, fw/debounce]}
+    - {id: fw/blinky, order: 3, name: 裸機跑馬燈, files: [fw/blinky/blinky.c], language: c, chapter: "G44:本章 Lab:裸機跑馬燈 fw/blinky/", evidenceFor: [em-gpio, em-mcu-arch, em-toolchain], consumes: [fw/bitops], groups: [], lab_no: L2, anchor: lab-fw-blinky, gap: G44, gap_title: 微控制器入門(含 G47 工具鏈), used_by: [cp2.blinky]}
+    - {id: fw/debounce, order: 4, name: 去彈跳與 PWM, files: [fw/debounce.c], language: c, chapter: "G45:本章 Lab:去彈跳與 PWM fw/debounce.c", evidenceFor: [em-interrupt, em-timer-pwm], consumes: [fw/bitops], groups: [], lab_no: L3, anchor: lab-fw-debounce, gap: G45, gap_title: 周邊與中斷, used_by: [fw/uart]}
+    - {id: fw/uart, order: 5, name: 序列埠指令列, files: [fw/ringbuf.c, fw/cli.c], language: c, chapter: "G46:本章 Lab:序列埠指令列 fw/cli.c", evidenceFor: [em-serial, em-adc-signals], consumes: [hzip/crc], groups: [], lab_no: L4, anchor: lab-fw-uart, gap: G46, gap_title: 序列通訊, used_by: [cp3.uart-console, rtl/uart-tx]}
+    - {id: fw/pid, order: 6, name: PID 與 RTOS 任務, files: [fw/pid.c], language: c, chapter: "G48:本章 Lab:PID 與 RTOS 任務 fw/pid.c", evidenceFor: [em-rtos, em-control], consumes: [numkit/ode], groups: [], lab_no: L5, anchor: lab-fw-pid, gap: G48, gap_title: ESP32 與 FreeRTOS(含 G52 PID), used_by: [cp4.rtos-node]}
+
+- id: rtl
+  code: I1
+  name: 自己的 RV32I CPU
+  track: ic-design
+  lib: rtl
+  project: proj-ic-alu
+  checkpoints: [proj-ic-alu, proj-ic-riscv]
+  level: 大學
+  status: outline
+  summary: "用 Verilog 把 Hack 的閘與 ALU 重寫成 RV32I 版,學 cocotb 驗證,最後做出單週期 RV32I CPU;參考模型是 rv32 任務線的指令集模擬器。"
+  acceptance:
+    - {id: boss.alu-mutants, name: ALU 與突變, checkpoint: proj-ic-alu, consumes: [rtl/alu, rtl/tb], description: "正確的 ALU 全過;3 個突變版各至少一項失敗(讀 results.xml)。"}
+    - {id: cp2.riscv-tests, name: RV32I 測試, checkpoint: proj-ic-riscv, consumes: [rtl/cpu], description: "rv32ui 測試＋一支 C 程式(排序＋CRC)經 MMIO 印字,對 rv32 指令集模擬器的輸出。"}
+  tasks:
+    - {id: rtl/gates, order: 1, name: Verilog 閘, files: [rtl/mux.v, rtl/add16.v], language: verilog, chapter: "136-verilog:本章 Lab:Verilog 閘 rtl/mux.v", evidenceFor: [ic-verilog-basics], consumes: [hack/gates], groups: [], lab_no: L1, anchor: lab-rtl-gates, used_by: [rtl/alu]}
+    - {id: rtl/alu, order: 2, name: RV32I ALU, files: [rtl/alu.v], language: verilog, chapter: "20-combinational-sequential:本章 Lab:RV32I ALU rtl/alu.v", evidenceFor: [ic-comb], consumes: [hack/alu, rv32/iss], groups: [], lab_no: L2, anchor: lab-rtl-alu, gap: G37, gap_title: 算術電路, used_by: [rtl/tb, rtl/cpu]}
+    - {id: rtl/tb, order: 3, name: cocotb 測試, files: [rtl/tests/test_alu.py], language: python, chapter: "137-verification-cocotb:本章 Lab:cocotb 測試 rtl/tests/test_alu.py", evidenceFor: [ic-testbench], consumes: [rtl/alu], groups: [], lab_no: L3, anchor: lab-rtl-tb, used_by: [boss.alu-mutants]}
+    - {id: rtl/regfile, order: 4, name: 暫存器檔與 PC, files: [rtl/regfile.v, rtl/pc.v], language: verilog, chapter: "47-digital-circuits:本章 Lab:暫存器檔與 PC rtl/regfile.v", evidenceFor: [ic-cpu], consumes: [], groups: [], lab_no: L4, anchor: lab-rtl-regfile, also_chapters: [136-verilog], used_by: [rtl/cpu]}
+    - {id: rtl/decode, order: 5, name: 解碼與立即值, files: [rtl/decode.v, rtl/immgen.v], language: verilog, chapter: "G36:本章 Lab:解碼與立即值 rtl/decode.v", evidenceFor: [ic-cpu], consumes: [rv32/iss], groups: [], lab_no: L5, anchor: lab-rtl-decode, gap: G36, gap_title: 設計 RV32I CPU, also_chapters: [135-riscv-assembly], used_by: [rtl/cpu]}
+    - {id: rtl/cpu, order: 6, name: 單週期 CPU, files: [rtl/cpu.v], language: verilog, chapter: "G36:本章 Lab:單週期 CPU rtl/cpu.v", evidenceFor: [ic-cpu], consumes: [rtl/alu, rtl/regfile, rtl/decode, rv32/iss, hzip/crc], groups: [], lab_no: L6, anchor: lab-rtl-cpu, gap: G36, gap_title: 設計 RV32I CPU, also_chapters: [48-computer-architecture], used_by: [cp2.riscv-tests, soc/top]}
+
+- id: uart
+  code: I2
+  name: UART 收發器
+  track: ic-design
+  lib: rtl
+  project: proj-ic-uart-fsm
+  checkpoints: [proj-ic-uart-fsm]
+  level: 大學
+  status: outline
+  summary: "有限狀態機、鮑率計數器、UART TX／RX,再做合成與時序分析。協定規格與測試向量和嵌入式的序列埠指令列共用。"
+  acceptance:
+    - {id: boss.uart-signoff, name: 合成與時序簽核, consumes: [rtl/uart-tx, rtl/uart-rx, rtl/synth], description: "TX→RX 回環隨機位元組全對;Yosys 沒有 latch、資源在預算內;OpenSTA slack ≥ 0。"}
+  tasks:
+    - {id: rtl/seqdet, order: 1, name: 序列偵測器, files: [rtl/seqdet.v], language: verilog, chapter: "47-digital-circuits:本章 Lab:序列偵測器 rtl/seqdet.v", evidenceFor: [ic-seq-fsm], consumes: [], groups: [], lab_no: L1, anchor: lab-rtl-seqdet}
+    - {id: rtl/baud, order: 2, name: 鮑率產生器, files: [rtl/baud.v], language: verilog, chapter: "136-verilog:本章 Lab:鮑率產生器 rtl/baud.v", evidenceFor: [ic-seq-fsm], consumes: [], groups: [], lab_no: L2, anchor: lab-rtl-baud, used_by: [rtl/uart-tx, rtl/uart-rx]}
+    - {id: rtl/uart-tx, order: 3, name: UART 發送, files: [rtl/uart_tx.v], language: verilog, chapter: "G38:本章 Lab:UART 發送 rtl/uart_tx.v", evidenceFor: [ic-datapath], consumes: [rtl/baud, fw/uart], groups: [], lab_no: L3, anchor: lab-rtl-uart-tx, gap: G38, gap_title: UART 實例, used_by: [rtl/uart-rx, soc/top]}
+    - {id: rtl/uart-rx, order: 4, name: UART 接收, files: [rtl/uart_rx.v], language: verilog, chapter: "G38:本章 Lab:UART 接收 rtl/uart_rx.v", evidenceFor: [ic-datapath], consumes: [rtl/baud], groups: [], lab_no: L4, anchor: lab-rtl-uart-rx, gap: G38, gap_title: UART 實例, used_by: [boss.uart-signoff, soc/top]}
+    - {id: rtl/synth, order: 5, name: 合成與時序, files: [rtl/synth.ys], language: verilog, chapter: "G39:本章 Lab:合成與時序 rtl/synth.ys", evidenceFor: [ic-synthesis, ic-timing], consumes: [rtl/uart-tx, rtl/uart-rx], groups: [], lab_no: L5, anchor: lab-rtl-synth, gap: G39, gap_title: 合成與時序, used_by: [boss.uart-signoff]}
+
+- id: soc
+  code: I3
+  name: 迷你 SoC
+  track: ic-design
+  lib: soc
+  project: proj-ic-mini-soc
+  checkpoints: [proj-ic-mini-soc]
+  level: 大學(職業級)
+  status: outline
+  summary: "rtl 任務線的 CPU 與 UART＋快取控制器(參考模型是 rv32 的快取模擬器)＋匯流排。cocotb 覆蓋率與韌體印 Hello 可以自動驗;OpenLane GDS 要專用主機。"
+  acceptance:
+    - {id: boss.hello-uart, name: 韌體印 Hello, consumes: [soc/top], description: "韌體經 UART 印出 Hello;cocotb 覆蓋率達標。"}
+    - {id: boss.gds, name: GDS 簽核, visibility: teacher, consumes: [soc/top], description: "OpenLane 的 DRC／LVS(專用主機,部分老師核可)。"}
+  tasks:
+    - {id: soc/cache, order: 1, name: 快取控制器, files: [soc/cache.v], language: verilog, chapter: "G40:本章 Lab:快取控制器 soc/cache.v", evidenceFor: [ic-memory-cache], consumes: [rv32/cachesim], groups: [], lab_no: L1, anchor: lab-soc-cache, gap: G40, gap_title: SoC 與匯流排, used_by: [soc/top]}
+    - {id: soc/bus, order: 2, name: 匯流排, files: [soc/bus.v], language: verilog, chapter: "G40:本章 Lab:匯流排 soc/bus.v", evidenceFor: [ic-soc-bus], consumes: [], groups: [], lab_no: L2, anchor: lab-soc-bus, gap: G40, gap_title: SoC 與匯流排, used_by: [soc/top]}
+    - {id: soc/top, order: 3, name: SoC 整合, files: [soc/top.v], language: verilog, chapter: "G40:本章 Lab:SoC 整合 soc/top.v", evidenceFor: [ic-soc-bus, ic-verification, ic-physical], consumes: [soc/cache, soc/bus, rtl/cpu, rtl/uart-tx, rtl/uart-rx], groups: [], lab_no: L3, anchor: lab-soc-top, gap: G40, gap_title: SoC 與匯流排, used_by: [boss.hello-uart]}
+
+- id: ctf
+  code: S1
+  name: CTF 工具箱 → 入門 CTF 綜合賽
+  track: security
+  lib: ctf
+  project: proj-sec-intro-ctf
+  checkpoints: [proj-sec-intro-ctf]
+  level: 高中
+  status: outline
+  summary: "自己寫編碼瑞士刀、古典密碼破譯器與玩具 RSA,再用它們打一場限時的入門 CTF。全部是檔案謎題,不需要 CTF 網路。動手前先讀資安的法律與倫理(新章 G55)。"
+  acceptance:
+    - {id: boss.intro-ctf, name: 入門 CTF 綜合賽, consumes: [ctf/codec, ctf/crack, ctf/rsa], description: "限時 8–10 題檔案謎題;flag＝HMAC(密鑰, 學生＋關卡)自動驗收。"}
+  steps:   # 不產生零件的關卡與答題(不是任務)
+    - {name: 終端機尋寶, chapter: 16-shell, evidenceFor: [sec-linux-net], description: "檔案系統尋寶、權限、子網路(關卡檢查＋flag)。"}
+    - {name: 威脅模型, chapter: 34-security-fundamentals, evidenceFor: [sec-threat-model], description: "CIA、STRIDE、資產與威脅(考卷卡)。"}
+  tasks:
+    - {id: ctf/codec, order: 1, name: 編碼瑞士刀, files: [ctf/codec.py], language: python, chapter: "69-ctf-foundations:本章 Lab:編碼瑞士刀 ctf/codec.py", evidenceFor: [sec-encoding], consumes: [], groups: [], lab_no: L1, anchor: lab-ctf-codec, used_by: [boss.intro-ctf]}
+    - {id: ctf/crack, order: 2, name: 古典密碼破譯, files: [ctf/crack.py], language: python, chapter: "70-ctf-crypto:本章 Lab:古典密碼破譯 ctf/crack.py", evidenceFor: [sec-classical-crypto], consumes: [hzip/stats], groups: [], lab_no: L2, anchor: lab-ctf-crack, also_chapters: [35-cryptography], used_by: [boss.intro-ctf]}
+    - {id: ctf/rsa, order: 3, name: 玩具 RSA, files: [ctf/rsa_toy.py], language: python, chapter: "35-cryptography:本章 Lab:玩具 RSA ctf/rsa_toy.py", evidenceFor: [sec-classical-crypto], consumes: [], groups: [], lab_no: L3, anchor: lab-ctf-rsa, also_chapters: [15-number-theory-graphs], used_by: [boss.intro-ctf]}
+
+- id: forensics
+  code: S2
+  name: 鑑識與藍隊:證據工具鏈
+  track: security
+  lib: forensics
+  project: proj-sec-forensics-report
+  checkpoints: [proj-sec-forensics-report, proj-sec-blue-team]
+  level: 高中後段/大學
+  status: outline
+  summary: "檔案 carving、封包解析、監管鏈,再到日誌時間線與偵測規則。每人一份不同的證據包與入侵劇本。"
+  acceptance:
+    - {id: boss.forensics-report, name: 鑑識調查報告, visibility: teacher, checkpoint: proj-sec-forensics-report, consumes: [forensics/carve, forensics/pcap, forensics/custody], description: "證據包解出 flag、監管鏈清單自動驗;報告老師核可。"}
+    - {id: cp2.blue-team, name: 藍隊演練, visibility: teacher, checkpoint: proj-sec-blue-team, consumes: [blue/timeline, blue/rules], description: "所有攻擊事件命中、正常日誌的誤報低於門檻;事件報告老師核可。"}
+  tasks:
+    - {id: forensics/carve, order: 1, name: 檔案 carving, files: [forensics/carve.py], language: python, chapter: "71-ctf-web-network-forensics:本章 Lab:檔案 carving forensics/carve.py", evidenceFor: [sec-forensics-file], consumes: [], groups: [], lab_no: L1, anchor: lab-forensics-carve, used_by: [forensics/custody]}
+    - {id: forensics/pcap, order: 2, name: 封包解析, files: [forensics/pcap.py], language: python, chapter: "71-ctf-web-network-forensics:本章 Lab:封包解析 forensics/pcap.py", evidenceFor: [sec-packet-analysis], consumes: [], groups: [], lab_no: L2, anchor: lab-forensics-pcap, also_chapters: [25-networking], used_by: [blue/timeline]}
+    - {id: forensics/custody, order: 3, name: 監管鏈, files: [forensics/custody.py], language: python, chapter: "53-forensics-governance:本章 Lab:監管鏈 forensics/custody.py", evidenceFor: [sec-forensics-file], consumes: [forensics/carve], groups: [], lab_no: L3, anchor: lab-forensics-custody, used_by: [boss.forensics-report]}
+    - {id: blue/timeline, order: 4, name: 日誌時間線, files: [blue/timeline.py], language: python, chapter: "G57:本章 Lab:日誌時間線 blue/timeline.py", evidenceFor: [sec-incident-response], consumes: [logic/regex], groups: [], lab_no: L4, anchor: lab-blue-timeline, gap: G57, gap_title: 藍隊, also_chapters: [16-shell], used_by: [blue/rules]}
+    - {id: blue/rules, order: 5, name: 偵測規則, files: [blue/rules.py], language: python, chapter: "G57:本章 Lab:偵測規則 blue/rules.py", evidenceFor: [sec-defense], consumes: [blue/timeline], groups: [], lab_no: L5, anchor: lab-blue-rules, gap: G57, gap_title: 藍隊, also_chapters: [53-forensics-governance], used_by: [cp2.blue-team]}
+
+- id: webfix
+  code: S3
+  name: Web 修補:攻防自己的借書 API
+  track: security
+  lib: webfix
+  project: proj-sec-web-fix
+  checkpoints: [proj-sec-web-fix]
+  level: 大學
+  status: outline
+  summary: "靶子是自己的借書 API:先做安全的密碼儲存,再在每人一份植入弱點的變體裡找洞,最後修好並通過回歸測試。攻擊套件和 bookapi 的檢查點 3 共用。"
+  acceptance:
+    - {id: boss.regression-attacks, name: 回歸攻擊, consumes: [webfix/passwords, bookapi/api], description: "隱藏回歸測試全關、功能測試全過。"}
+    - {id: boss.vuln-report, name: 弱點報告, visibility: teacher, consumes: [], description: "找洞與修補的報告,老師核可。"}
+  steps:
+    - {name: 找洞, chapter: 52-web-security, evidenceFor: [sec-web], description: "每人一份植入 5–6 個弱點的借書 API 變體(在學生容器的 loopback 跑),每找到一個弱點拿一面 flag。"}
+    - {name: 修洞與回歸, chapter: G56, evidenceFor: [sec-secure-coding], description: "修好自己的 bookapi/api.py,隱藏回歸測試全關(G56「找洞再修洞範例」還沒寫)。"}
+  tasks:
+    - {id: webfix/passwords, order: 1, name: 密碼儲存, files: [webfix/passwords.py], language: python, chapter: "35-cryptography:本章 Lab:密碼儲存 webfix/passwords.py", evidenceFor: [sec-hash-password], consumes: [], groups: [], lab_no: L1, anchor: lab-webfix-passwords, also_chapters: [34-security-fundamentals], used_by: [bookapi/auth, boss.regression-attacks]}
+
+- id: pwn
+  code: S4
+  name: 大學段 CTF
+  track: security
+  lib: pwn
+  project: proj-sec-uni-ctf
+  checkpoints: [proj-sec-uni-ctf]
+  level: 大學
+  status: outline
+  summary: "密碼誤用、逆向與記憶體安全。用 emu 任務線的 C 記憶體零件與 rv32 的指令集模擬器;本機 pwn 是「學生交輸入檔,沙盒跑帶 flag 的漏洞程式」,不需要 CTF 網路。"
+  acceptance:
+    - {id: boss.uni-ctf, name: 大學段綜合 CTF, consumes: [rv32/iss, emu/bus], description: "密碼誤用、逆向、記憶體安全各類題目的 flag 自動驗收。"}
+  steps:
+    - {name: 讀組合語言與逆向, chapter: G58, evidenceFor: [sec-reverse], description: "用 rv32 的指令集模擬器與反組譯讀懂程式(G58 還沒寫)。"}
+    - {name: 記憶體安全, chapter: 72-ctf-pwn-reverse, evidenceFor: [sec-mem-safety], description: "交一個輸入檔,讓帶 flag 的漏洞程式印出 flag(G59 還沒寫)。"}
+  tasks: []
