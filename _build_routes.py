@@ -505,11 +505,13 @@ GROUP_KINDS = ('function', 'edge', 'perf', 'invariant', 'error', 'spec')
 LANGS = ('python', 'c', 'cpp', 'hdl')            # 9Jang Zod 列舉
 LANGS_PROPOSED = ('asm', 'verilog', 'spice')     # 書端提議加進列舉的值(資訊,不擋)
 STATUSES = ('detailed', 'outline')
+REQ_KINDS = ('acc', 'group', 'future')           # requiredBy 可以指的:驗收檢查、測試組、之後的整合題(future_acceptance)
 LAB_PREFIX = '本章 Lab:'
 GAP_RE = re.compile(r'^G\d+(?:-\d+)?$')
 TASK_ID_RE = re.compile(r'^[a-z0-9]+/[a-z0-9-]+$')
 BOX_RE = re.compile(r'<(div|section)\b[^>]*\bdata-task="([^"]+)"[^>]*>', re.S)
 GROUP_ATTR_RE = re.compile(r'\bdata-group="([^"]+)"')
+GOAL_RE = re.compile(r'<li\b[^>]*\bdata-group="([^"]+)"[^>]*>\s*☐\s*<strong>(.*?)</strong>〔(.*?)〕(.*?)</li>', re.S)
 MARKER_RE = re.compile(r'<!--\s*LAB:\s*(\S+)\s*-->')
 _src_cache = {}
 
@@ -568,6 +570,9 @@ class Mainlines:
     def accs(self, m):
         return {a.get('id'): a for a in (m.get('acceptance') or []) if isinstance(a, dict)}
 
+    def futures(self, m):
+        return {f.get('id'): f for f in (m.get('future_acceptance') or []) if isinstance(f, dict)}
+
     def groups(self, m):
         out = {}
         for t in m.get('tasks') or []:
@@ -580,7 +585,7 @@ class Mainlines:
         return t.get('status') or m.get('status')
 
     def resolve(self, m, ref, kinds):
-        """kinds ⊂ {'task','acc','group'};回傳 (任務線, 種類, 物件, 所屬任務或 None) 或 None。"""
+        """kinds ⊂ {'task','acc','group','future'};回傳 (任務線, 種類, 物件, 所屬任務或 None) 或 None。"""
         if not isinstance(ref, str):
             return None
         if 'task' in kinds and ref in self.tasks:
@@ -598,6 +603,8 @@ class Mainlines:
         if 'group' in kinds and rid in self.groups(target):
             t, g = self.groups(target)[rid]
             return target, 'group', g, t
+        if 'future' in kinds and rid in self.futures(target):
+            return target, 'future', self.futures(target)[rid], None
         return None
 
     def for_track(self, track):
@@ -627,7 +634,8 @@ def prereq_closure(nodes_by_id):
 
 
 def scan_lab_boxes():
-    """chapters/src 裡的 Lab 方框:[(章 id, 任務 id, [data-group…])] 與 <!-- LAB: … --> 標記 [(章 id, 任務 id)]。"""
+    """chapters/src 裡的 Lab 方框:[(章 id, 任務 id, [data-group…], {組 id: (名稱, 可見性, 說明)})]
+    與 <!-- LAB: … --> 標記 [(章 id, 任務 id)]。"""
     boxes, markers = [], []
     for name in sorted(os.listdir(SRC)):
         if not name.endswith('.html') or name.startswith('route-'):
@@ -644,7 +652,9 @@ def scan_lab_boxes():
                 if depth == 0:
                     end = t.start()
                     break
-            boxes.append((cid, m.group(2), GROUP_ATTR_RE.findall(text[m.end():end])))
+            body = text[m.end():end]
+            goals = {g.group(1): (g.group(2), g.group(3), g.group(4)) for g in GOAL_RE.finditer(body)}
+            boxes.append((cid, m.group(2), GROUP_ATTR_RE.findall(body), goals))
     return boxes, markers
 
 
@@ -680,14 +690,39 @@ def validate_mainlines(ml, book, tree_nodes, tree_projects):
     seen_m, seen_t, seen_anchor, lang_note = set(), set(), {}, set()
     pointed = set()                                    # 被 requiredBy 指到的 (任務線 id, 驗收 id)
     perf_of = {}                                       # (任務線 id, id) → seconds
+    budget_of = {}                                     # (任務線 id, 整合題 id) → {測試組 id: 秒}
     for m in ml.mainlines:
-        for a in m.get('acceptance') or []:
+        for a in (m.get('acceptance') or []) + (m.get('future_acceptance') or []):
             if isinstance(a, dict) and isinstance(a.get('perf'), dict):
                 perf_of[(m.get('id'), a.get('id'))] = a['perf'].get('seconds')
+                if isinstance(a['perf'].get('budget'), dict):
+                    budget_of[(m.get('id'), a.get('id'))] = a['perf']['budget']
         for t in m.get('tasks') or []:
             for g in (t.get('groups') or []) if isinstance(t, dict) else []:
                 if isinstance(g, dict) and isinstance(g.get('perf'), dict):
                     perf_of[(m.get('id'), g.get('id'))] = g['perf'].get('seconds')
+
+    timed_memo = {}
+
+    def timed(gm, grp, seen=()):
+        """效能組 grp 的時限有沒有來源:requiredBy 鏈最後要走到有 perf 的驗收檢查或整合題(組指組只算轉手)。"""
+        key = id(grp)
+        if key in timed_memo:
+            return timed_memo[key]
+        ok = False
+        for r in grp.get('requiredBy') or []:
+            hit = ml.resolve(gm, r, REQ_KINDS)
+            if not hit or hit[2] is grp or id(hit[2]) in seen:
+                continue
+            hm, hk, ho, _ = hit
+            if hk == 'group':
+                ok = isinstance(ho.get('perf'), dict) and timed(hm, ho, seen + (key,))
+            else:
+                ok = isinstance((ho.get('perf') or {}).get('seconds'), (int, float))
+            if ok:
+                break
+        timed_memo[key] = ok
+        return ok
 
     for m in ml.mainlines:
         mid = m.get('id')
@@ -745,6 +780,35 @@ def validate_mainlines(ml, book, tree_nodes, tree_projects):
                 if pm is not m and covers and not any(
                         e in covers or any(e in closure.get(n, set()) for n in covers) for e in pt.get('evidenceFor') or []):
                     (err if detailed else infos.append)(f'{aw}: 用到 {c},但它的節點不在專題涵蓋的先修閉包裡')
+        for f in m.get('future_acceptance') or []:
+            fw = f'{where} 整合題 {f.get("id")}'
+            if f.get('id') in acc_ids:
+                err(f'{fw}: id 和驗收檢查或別的整合題重複')
+            acc_ids.add(f.get('id'))
+            for k in ('id', 'name', 'description'):
+                if not f.get(k):
+                    err(f'{fw}: 缺欄位 {k}')
+            for c in f.get('consumes') or []:
+                if not ml.resolve(m, c, ('task',)):
+                    err(f'{fw}: consumes 的「{c}」不是任何任務')
+            fp = f.get('perf')
+            if fp is not None:
+                if not isinstance(fp, dict) or not fp.get('statement') or not isinstance(fp.get('seconds'), (int, float)):
+                    err(f'{fw}: perf 要有 statement 與 seconds')
+                    continue
+                bud = fp.get('budget')
+                if bud is not None:
+                    if not isinstance(bud, dict) or not all(isinstance(v, (int, float)) for v in bud.values()):
+                        err(f'{fw}: perf.budget 要是「測試組 id: 秒」')
+                        continue
+                    if sum(bud.values()) > fp['seconds']:
+                        err(f'{fw}: perf.budget 加起來 {sum(bud.values())} 秒,超過總時限 {fp["seconds"]} 秒')
+                    for gid in bud:
+                        hit = ml.resolve(m, gid, ('group',))
+                        if not hit or hit[2].get('kind') != 'perf':
+                            err(f'{fw}: perf.budget 的「{gid}」不是效能組')
+                        elif not any(ml.resolve(hit[0], r, REQ_KINDS) == (m, 'future', f, None) for r in hit[2].get('requiredBy') or []):
+                            err(f'{fw}: perf.budget 的「{gid}」沒有在 requiredBy 寫這個整合題')
         orders, gids = {}, {}
         for t in tasks:
             tid = t.get('id')
@@ -844,18 +908,32 @@ def validate_mainlines(ml, book, tree_nodes, tree_projects):
                 if not isinstance(reqs, list) or not reqs:
                     err(f'{gw}: requiredBy 要寫(哪個 Boss 或下游測試組需要它)')
                     reqs = []
+                numeric = 0                                # requiredBy 裡寫了時限的需求數
                 for r in reqs:
-                    hit = ml.resolve(m, r, ('acc', 'group'))
+                    hit = ml.resolve(m, r, REQ_KINDS)
                     if not hit:
-                        err(f'{gw}: requiredBy 的「{r}」對不到驗收檢查或測試組')
+                        err(f'{gw}: requiredBy 的「{r}」對不到驗收檢查、測試組或整合題')
                         continue
                     rm, kind, obj, _ = hit
                     if kind == 'acc':
                         pointed.add((rm.get('id'), obj.get('id')))
+                    if obj is g:
+                        err(f'{gw}: requiredBy 不能寫自己')
                     if isinstance(perf, dict):
-                        lim = perf_of.get((rm.get('id'), obj.get('id')))
-                        if isinstance(lim, (int, float)) and isinstance(perf.get('seconds'), (int, float)) and perf['seconds'] > lim:
-                            err(f'{gw}: 時限 {perf["seconds"]} 秒比需求「{r}」的 {lim} 秒寬')
+                        key = (rm.get('id'), obj.get('id'))
+                        lim, what = perf_of.get(key), f'需求「{r}」'
+                        bud = budget_of.get(key)
+                        if bud is not None:
+                            lim, what = (bud[gid], f'需求「{r}」分給它') if gid in bud else (None, None)
+                            if what is None:
+                                err(f'{gw}: 需求「{r}」有 perf.budget,但沒有分秒數給這一組')
+                        if isinstance(lim, (int, float)) and (kind != 'group' or timed(rm, obj)):
+                            numeric += 1
+                            if isinstance(perf.get('seconds'), (int, float)) and perf['seconds'] > lim:
+                                err(f'{gw}: 時限 {perf["seconds"]} 秒比{what}的 {lim} 秒寬')
+                if isinstance(perf, dict) and reqs and not numeric:
+                    (err if st == 'detailed' and not t.get('optional') else infos.append)(
+                        f'{gw}: requiredBy 裡沒有一個寫了時限(門檻要由下游的數字推導;可以指到有 perf 的 Boss、future_acceptance 整合題,或本身有時限來源的效能組)')
             names = {g.get('id') for g in groups if g.get('kind') == 'invariant'}
             for inv in t.get('invariants') or []:
                 if inv.get('name') not in names:
@@ -872,22 +950,66 @@ def validate_mainlines(ml, book, tree_nodes, tree_projects):
         for a in m.get('acceptance') or []:
             if a.get('visibility') != 'teacher' and (m.get('id'), a.get('id')) not in pointed:
                 err(f'任務線 {m.get("id")} 驗收 {a.get("id")}: 沒有任何測試組的 requiredBy 指到它(由上往下拆的證據)')
+    # used_by(書上的「之後會用在」)和對方的 consumes 要對稱;同一條任務線的 Boss 不必寫進 used_by
+    for m in ml.mainlines:
+        consumers = [('task', x, ml.task_status(m, x)) for x in m.get('tasks') or [] if isinstance(x, dict)]
+        consumers += [('acc', a, m.get('status')) for a in m.get('acceptance') or [] if isinstance(a, dict)]
+        for kind, x, xst in consumers:
+            for c in x.get('consumes') or []:
+                hit = ml.resolve(m, c, ('task',))
+                if not hit or (kind == 'acc' and hit[0] is m):
+                    continue
+                pm, _, pt, _ = hit
+                if not any((ml.resolve(pm, u, ('task', 'acc')) or (None,) * 3)[2] is x for u in pt.get('used_by') or []):
+                    strict = 'detailed' in (ml.task_status(pm, pt), xst)
+                    who = x.get('id') if kind == 'task' or pm is m else f'{m.get("id")}/{x.get("id")}'
+                    (err if strict else infos.append)(f'任務 {pt.get("id")}: {who} 的 consumes 有它,used_by 卻沒有列 {who}')
+    for m in ml.mainlines:
+        for t in m.get('tasks') or []:
+            for u in t.get('used_by') or []:
+                hit = ml.resolve(m, u, ('task', 'acc'))
+                if not hit:
+                    continue
+                um, kind, x, _ = hit
+                if t.get('id') not in (x.get('consumes') or []):
+                    xst = ml.task_status(um, x) if kind == 'task' else um.get('status')
+                    strict = 'detailed' in (ml.task_status(m, t), xst)
+                    (err if strict else infos.append)(
+                        f'任務 {t.get("id")}: used_by 列了 {u},但 {u} 的 consumes 沒有 {t.get("id")}(書上的「之後會用在」要是真的)')
     if lang_note:
         infos.append(f'language 用到 9Jang 列舉以外的值({"、".join(sorted(lang_note))}),請 9Jang 的 schema 加進列舉')
 
     # 書裡的 Lab 方框與 yaml 對得起來嗎
     boxes, markers = scan_lab_boxes()
     in_chapter = {}
-    for cid, tid, groups in boxes:
+    for cid, tid, groups, goals in boxes:
         in_chapter.setdefault(tid, set()).add(cid)
         if tid not in ml.tasks:
             err(f'{cid}: Lab 方框 data-task="{tid}" 不在 yaml')
             continue
         _, t = ml.tasks[tid]
-        valid = {g.get('id') for g in t.get('groups') or []}
+        by_id = {g.get('id'): g for g in t.get('groups') or [] if isinstance(g, dict)}
         for g in groups:
-            if g not in valid:
+            if g not in by_id:
                 err(f'{cid}: Lab 方框 {tid} 裡的 data-group="{g}" 不是這個任務的測試組')
+        if not groups:
+            continue                                   # 只有標題的方框(任務目標還沒設計)
+        for gid in by_id:
+            if gid not in groups:
+                err(f'{cid}: Lab 方框 {tid} 沒有列任務目標 data-group="{gid}"(書上和 quest 面板要是同一份)')
+        for gid, (name, vis, desc) in goals.items():   # 書上和 quest 面板是同一份文字
+            g = by_id.get(gid)
+            if not g:
+                continue
+            if name != esc(g.get('name', '')):
+                err(f'{cid}: Lab 方框 {tid} 的 {gid} 名稱是「{name}」,yaml 是「{g.get("name")}」')
+            if vis != VIS_LABEL.get(g.get('visibility'), ''):
+                err(f'{cid}: Lab 方框 {tid} 的 {gid} 寫〔{vis}〕,yaml 是 {g.get("visibility")}')
+            if not desc.startswith(html_text(g.get('description', ''))):
+                infos.append(f'{cid}: Lab 方框 {tid} 的 {gid} 說明和 yaml 不同')
+            stmt = (g.get('perf') or {}).get('statement')
+            if stmt and f'門檻:{html_text(stmt)}' not in desc:
+                err(f'{cid}: Lab 方框 {tid} 的 {gid} 沒有照抄 yaml 的效能門檻「門檻:{stmt}」')
     for cid, tid in markers:
         in_chapter.setdefault(tid, set()).add(cid)
         if tid not in ml.tasks:
@@ -981,6 +1103,8 @@ def ref_html(ml, m, ref, kinds, page_ids):
         text = f'任務「{esc(obj["name"])}」'
     elif kind == 'acc':
         text = f'Boss「{esc(obj["name"])}」'
+    elif kind == 'future':
+        text = f'之後的整合題「{esc(obj["name"])}」'
     else:
         text = f'任務「{esc(owner["name"])}」的任務目標「{esc(obj["name"])}」'
     if rm is m:
@@ -1014,7 +1138,7 @@ def render_boss_item(ml, m, a, page_ids, cp_no=None):
 
 def render_group_item(ml, m, g, page_ids):
     s = f'☐ <strong>{esc(g["name"])}</strong>〔{VIS_LABEL[g["visibility"]]}〕{html_text(g["description"])}'
-    req = '、'.join(ref_html(ml, m, r, ('acc', 'group'), page_ids) for r in g.get('requiredBy') or [])
+    req = '、'.join(ref_html(ml, m, r, REQ_KINDS, page_ids) for r in g.get('requiredBy') or [])
     if g.get('perf'):
         s += f'(效能:{perf_text(g["perf"])}' + (f' ← 來自 {req}' if req else '') + ')'
     elif req:
@@ -1107,7 +1231,8 @@ def render_mainline(track, ml, book, tree_projects):
             add('      </ul>')
         future = m.get('future_acceptance') or []
         if future:
-            add('      <p class="route-note">之後的整合題(還不是 Boss 戰):' + '、'.join(esc(f['name']) for f in future) + '。</p>')
+            add('      <p class="route-note">之後的整合題(還不是 Boss 戰):' + '、'.join(
+                esc(f['name']) + (f'(效能:{perf_text(f["perf"])})' if f.get('perf') else '') for f in future) + '。</p>')
         steps = m.get('steps') or []
         if steps:
             add('      <p class="route-note">不產生零件的關卡:' + '、'.join(esc(s['name']) for s in steps) + '。</p>')

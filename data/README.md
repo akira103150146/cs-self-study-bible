@@ -40,7 +40,9 @@ mainlines:
 
 - `chapter`:冒號前是章的檔名 id(`book.js` 的 id 或 `planned_chapters` 裡的新章);書裡還沒有章時寫缺口編號(例 `G17`)。冒號後是 Lab 的 h3 全文,一律是 `本章 Lab:<任務名> <檔案>`,章作者照抄。h3 的 id 是 `anchor`。
 - `requiredBy` 與 `used_by` 的參照:同一條任務線直接寫 id;跨任務線寫 `<任務線 id>/<id>`(例 `puzzle/boss.solve-15`、`bookapi/cp3.cache-latency`)。任務 id(含 `/`)全書唯一,直接寫。
-- 效能組的 `seconds` 不能比它 `requiredBy` 的效能需求寬(書端的 `--check` 會檢查)。
+- `requiredBy` 可以指到:驗收檢查、測試組,或同一條(或別條)任務線的 `future_acceptance` 整合題(書端欄位,見下表)。
+- **效能門檻由下游的數字推導**:效能組的 `requiredBy` 至少要有一個**寫了時限**的需求(有 `perf` 的驗收檢查、別的效能組,或有 `perf` 的整合題);只指到「重跑全套檢定」的 `boss.*`(沒有時限)不算推導。`seconds` 不能比它 `requiredBy` 的任何一個時限寬。指到別的效能組只算轉手:那一組自己的 `requiredBy` 鏈最後要走到有 `perf` 的驗收檢查或整合題。`requiredBy` 不能寫自己。整合題的 `perf.budget: {<效能組 id>: 秒}` 把總時限拆給各零件:key 只能是**同一條任務線**的效能組,而且那一組的 `requiredBy` 要寫這個整合題;零件的 `seconds` 改比它分到的秒數,分到的加起來不能超過總時限(例:路網導航 3.5 秒＝dijkstra 3 秒＋查詢 0.5 秒)。選修任務(`optional: true`)與 outline 任務沒有時限來源時只列資訊。
+- `used_by`(書上的「之後會用在」)和對方的 `consumes` 要對稱:任務 X 的 `consumes` 有 C,C 的 `used_by` 就要列 X(同一條任務線的 Boss 不必列);C 的 `used_by` 列了 X,X 的 `consumes` 就要有 C。只要有一邊是 `detailed` 就報錯,兩邊都是 outline 只列資訊。整合題(`future_acceptance`)不寫進 `used_by`;章的 Lab 方框在「之後會用在」最後一句另外列出用到這個零件的整合題。
 
 ## 書端多加的欄位(9Jang 不讀;schema 若是 strict,sync 時請略過)
 
@@ -54,7 +56,7 @@ mainlines:
 | mainline | `also_tracks` | 其他也要列出它的路線頁 |
 | mainline | `checkpoints` | 依序的全部 tree.yaml 專題(第一個＝`project`) |
 | mainline | `level`、`status`、`summary`、`note` | 程度;`detailed`(任務目標已設計)或 `outline`;說明 |
-| mainline | `future_acceptance` | 之後才加的整合題(不是 v1 的 Boss 戰) |
+| mainline | `future_acceptance` | 之後才加的整合題(不是 v1 的 Boss 戰):`{id, name, description, consumes, perf?{statement, seconds, budget?}}`;`requiredBy` 可以指到它(9Jang 的 sync 要認得,見待決 5) |
 | mainline | `steps` | 不產生零件的關卡或答題(例:CTF 的終端機尋寶) |
 | acceptance | `visibility` | `public`/`hidden`(預設)/`teacher`(老師核可) |
 | acceptance | `perf`、`checkpoint` | 驗收檢查的效能需求;屬於哪個檢查點 |
@@ -70,7 +72,7 @@ mainlines:
 - `libds/heap`:`PriorityQueue(key=None)`(key 套在 priority 上,所有比較都用 `key(priority)`);`push(item, priority)`(item 已在 → `ValueError`)、`pop_min()`/`peek_min()` 回傳 `(item, priority)`、`decrease_key(item, priority)`(不在 → `KeyError`、變大 → `ValueError`)、`in`、`len`、`check()`;內部 `self.a=[(priority, item)]`、`self.pos`。
 - `libds/lru`:`LRUCache(capacity, on_evict=None)`、`get(key, default=None)`、`put` 回傳被淘汰的 key 或 `None`、`resize(capacity)` 回傳 `None`、`keys_by_recency()`(最近的在前)、`len`;`on_evict(key, value)` 依淘汰順序呼叫。第一版沒有 `delete`。
 - `libds/hashmap`:`HashMap()`、`put`、`get(key, default=None)`、`pop`(不在 → `KeyError`)、`len`、`iter`(插入順序)、`check()`;內部 `self.index`/`self.entries`/`self.size`;(live＋墓碑)/m > 0.7 擴容、live/m < 0.2 且 m > 8 縮容、最小 8。
-- `libds/trie`:`insert` 記次數、`contains`、`remove(word) -> None`(整個字刪掉;字不在 → `KeyError`,什麼都不改)、`count_prefix`(經過前綴的插入次數)、`top_words(prefix, k)`(次數多到少、同次數依字典序)、`check()`(沒有空的分支)。
+- `libds/trie`:`insert` 記次數、`contains`、`remove(word) -> None`(整個字刪掉;字不在 → `KeyError`,什麼都不改)、`count_prefix`(經過前綴的插入次數)、`top_words(prefix, k)`(次數多到少、同次數依字典序)、`check()`(每個非根節點的經過數 ≥ 1、經過數＝結尾數＋子節點經過數的和;空的 Trie 也成立)。
 - `libds/graph`:`Graph(directed=True)`、`add_edge(u, v, w=1)`、`bfs(s) -> dict`、`dfs_order(s) -> list`(迴圈版)、`topo_sort() -> list | None`(最小的先,用 `PriorityQueue`;自迴圈也算環)、`dijkstra(s) -> (dist, prev)`(用 `decrease_key`;dist、prev 只含走得到的點,`prev[s] = None`)、`shortest_path(s, t) -> (dist, path)`(走不到 `(None, None)`)。
 - `libds/dsu`:`DSU(n)`、`find`(迴圈版、完整路徑壓縮)、`union -> bool`(依大小;一樣大時 b 的根接到 a 的根下)、`same`、`size_of`、`components()`、`check()`;`kruskal(n, edges)` 只依權重穩定排序(同權重依輸入順序),必須用 `libds.sort.stable_sort`。
 - `libds/fenwick.hpp`:`libds::Fenwick(n)`,索引 1 起算,`range_add(l, r, v)`、`range_sum(l, r)`(兩棵 BIT)。
@@ -82,7 +84,7 @@ mainlines:
 2. `status: outline` 的任務線只列任務與 Boss,`groups: []`。建議 9Jang 的 `validateMainlines` 對 outline 線的「project 存在」(minidb 的 `proj-be-minidb` tree.yaml 還沒有)、「驗收檢查有人 requiredBy」、「跨線先修閉包」只警告不擋。
 3. `language` 提議加 `asm`(Hack、RISC-V 組合語言)、`verilog`、`spice`。
 4. 計畫寫的效能門檻有兩個在 CPython 參考解下做不到「參考解 ≤ 時限的 1/3」:heap(10^5 次 push＋decrease_key＋pop,計畫 1 秒,參考解 0.90 秒 → 改 3 秒)、sort(2×10^5,計畫 1 秒,參考解 0.38 秒 → 改 1.5 秒)。
-5. 效能門檻一律照「參考解 ≤ 時限的 1/3」定;`perf_ref` 記參考解的實測值。
+5. 效能門檻一律照「參考解 ≤ 時限的 1/3」定;`perf_ref` 記參考解的實測值。另外,效能門檻要由下游的數字推導(老師規則「門檻由 requiredBy 決定」):v1 的面試 Boss 只是「重跑全套檢定」、沒有時限,所以 libds 的效能組改成也 `requiredBy` 有 `perf` 的 `future_acceptance` 整合題(路網導航、佈線預算、搜尋建議、快取重播、區間統計),整合題用 `perf.budget` 把總時限拆給零件。**請 9Jang**:`validateMainlines` 第 5 條把 `future_acceptance` 當成 `required_by` 的合法目標(sync 時帶進 `mainlines.generated.json`,只用來解析參照與比時限,不當 Boss 戰顯示、也不算進「每個驗收檢查至少被指到」);效能組的時限比 `budget` 分到的秒數(有 budget 時)或需求的 `seconds`。
 6. `visibility: teacher`(老師核可)的驗收檢查不受「要有測試組 `requiredBy` 指到它」的檢查(例 `bookapi/cp3.deploy`)。
 7. 任務層的 `status: outline` 即使在 `detailed` 任務線裡,也不擋「跨任務線先修閉包」的檢查,只列為資訊(例 `bookapi/auth` 用到 `webfix/passwords`)。
 8. 書端多加的欄位(上面的表):建議 9Jang 的 Zod schema 用 `.passthrough()`,不要用 `.strict()`,sync 時略過不讀的欄位。
@@ -95,4 +97,4 @@ mainlines:
 ```bash
 python3 _build_routes.py --tree <9Jang>/docs/superpowers/specs/career-skill-tree/tree.yaml --check
 ```
-結構錯誤(id 重複、參照對不到、詳細任務缺公開或隱藏組、效能組沒有 requiredBy、時限比需求寬、order 顛倒、章 Lab 方框的 `data-task`／`data-group` 不在 yaml)會讓結束碼非 0;Lab 方框還沒寫、outline 線的待決只列為「資訊」。
+結構錯誤(id 重複、參照對不到、詳細任務缺公開或隱藏組、效能組沒有 requiredBy 或 requiredBy 裡沒有時限、時限比需求或 budget 寬、order 顛倒、`used_by` 與 `consumes` 不對稱、章 Lab 方框的 `data-task`／`data-group` 不在 yaml、方框少列任務目標、方框的任務目標名稱／〔公開／隱藏檢定〕／效能門檻和 yaml 不同)會讓結束碼非 0;方框的說明和 yaml 不同只列資訊;Lab 方框還沒寫、outline 線的待決只列為「資訊」。
