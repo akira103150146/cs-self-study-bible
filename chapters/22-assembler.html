@@ -630,6 +630,310 @@ print(assemble(program))</code></pre>
         </div>
       </div>
 
+      <h3>手算:兩遍組譯的符號表與機器碼</h3>
+      <p>
+        組譯器寫好了,換你當一次組譯器,把兩遍各做了什麼一格一格寫出來。這段程式有註解、空行、預定義符號(<code>R0</code>)、
+        向前參照的標籤(<code>FINISH</code> 先用後定義)和兩個變數。右邊的數字是第一遍數出來的 ROM 位址:
+      </p>
+      <pre><code class="language-text">// 倒數:把 R0, R0-1, ..., 1 依序寫進 400 起的格子,count 記下寫了幾格
+
+    @400           // 0
+    D=A            // 1
+    @buf           // 2
+    M=D            // 3   buf = 400(buf 是指標)
+    @count         // 4
+    M=0            // 5   count = 0
+(TOP)              //     TOP = 6
+    @R0            // 6
+    D=M            // 7
+    @FINISH        // 8   向前參照:FINISH 在下面才定義
+    D;JLE          // 9   R0 &lt;= 0 就結束
+    @buf           // 10
+    A=M            // 11
+    M=D            // 12  RAM[buf] = R0
+    @buf           // 13
+    M=M+1          // 14  buf = buf + 1
+    @count         // 15
+    M=M+1          // 16  count = count + 1
+    @R0            // 17
+    M=M-1          // 18  R0 = R0 - 1
+    @TOP           // 19
+    0;JMP          // 20
+(FINISH)           //     FINISH = 21
+    @FINISH        // 21
+    0;JMP          // 22</code></pre>
+      <p><strong>第一遍</strong>只做一件事:數指令、記標籤。位址計數器從 0 開始,遇到真指令就 +1,遇到 <code>(XXX)</code> 就把「目前的計數」記成 XXX 的值。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>遇到</th><th>那時的位址計數器</th><th>符號表新增</th><th>說明</th></tr></thead>
+        <tbody>
+          <tr><td>註解、空行</td><td>0</td><td>—</td><td>Parser 已經丟掉,第一遍根本看不到</td></tr>
+          <tr><td><code>@400</code> … <code>M=0</code>(6 條)</td><td>0 → 6</td><td>—</td><td><code>@buf</code>、<code>@count</code> 在第一遍<strong>不處理</strong></td></tr>
+          <tr><td><code>(TOP)</code></td><td>6</td><td><code>TOP → 6</code></td><td>標籤行不讓計數器 +1</td></tr>
+          <tr><td><code>@R0</code> … <code>0;JMP</code>(15 條)</td><td>6 → 21</td><td>—</td><td><code>@FINISH</code> 這時還不知道是什麼,先跳過</td></tr>
+          <tr><td><code>(FINISH)</code></td><td>21</td><td><code>FINISH → 21</code></td><td></td></tr>
+          <tr><td><code>@FINISH</code>、<code>0;JMP</code></td><td>21 → 23</td><td>—</td><td>全部 23 條指令,ROM 0..22</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        <strong>第二遍</strong>從頭再掃,逐條翻譯。C 指令只查三張表;A 指令要先解析符號。下表列出全部 11 條 A 指令,
+        「表裡有嗎」指的是<strong>翻到這一行那一刻</strong>的符號表:
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>ROM</th><th>指令</th><th>表裡有嗎</th><th>動作</th><th>值</th><th>機器碼</th></tr></thead>
+        <tbody>
+          <tr><td>0</td><td><code>@400</code></td><td>(數字)</td><td>直接用</td><td>400</td><td><code>0000000110010000</code></td></tr>
+          <tr><td>2</td><td><code>@buf</code></td><td>沒有</td><td>新變數,配 16</td><td>16</td><td><code>0000000000010000</code></td></tr>
+          <tr><td>4</td><td><code>@count</code></td><td>沒有</td><td>新變數,配 17</td><td>17</td><td><code>0000000000010001</code></td></tr>
+          <tr><td>6</td><td><code>@R0</code></td><td>有(預定義)</td><td>查表</td><td>0</td><td><code>0000000000000000</code></td></tr>
+          <tr><td>8</td><td><code>@FINISH</code></td><td>有(第一遍記的標籤)</td><td>查表</td><td>21</td><td><code>0000000000010101</code></td></tr>
+          <tr><td>10</td><td><code>@buf</code></td><td>有(ROM 2 那行配的)</td><td>查表</td><td>16</td><td><code>0000000000010000</code></td></tr>
+          <tr><td>13</td><td><code>@buf</code></td><td>有</td><td>查表</td><td>16</td><td><code>0000000000010000</code></td></tr>
+          <tr><td>15</td><td><code>@count</code></td><td>有</td><td>查表</td><td>17</td><td><code>0000000000010001</code></td></tr>
+          <tr><td>17</td><td><code>@R0</code></td><td>有</td><td>查表</td><td>0</td><td><code>0000000000000000</code></td></tr>
+          <tr><td>19</td><td><code>@TOP</code></td><td>有(標籤)</td><td>查表</td><td>6</td><td><code>0000000000000110</code></td></tr>
+          <tr><td>21</td><td><code>@FINISH</code></td><td>有</td><td>查表</td><td>21</td><td><code>0000000000010101</code></td></tr>
+        </tbody>
+      </table></div>
+      <p>再挑幾條 C 指令,把三段各自查表的結果寫出來:</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>ROM</th><th>指令</th><th>comp(a + c1..c6)</th><th>dest</th><th>jump</th><th>機器碼</th></tr></thead>
+        <tbody>
+          <tr><td>9</td><td><code>D;JLE</code></td><td><code>D</code> → <code>0001100</code></td><td>省略 → <code>000</code></td><td><code>JLE</code> → <code>110</code></td><td><code>1110001100000110</code></td></tr>
+          <tr><td>11</td><td><code>A=M</code></td><td><code>M</code> → <code>1110000</code></td><td><code>A</code> → <code>100</code></td><td>省略 → <code>000</code></td><td><code>1111110000100000</code></td></tr>
+          <tr><td>14</td><td><code>M=M+1</code></td><td><code>M+1</code> → <code>1110111</code></td><td><code>M</code> → <code>001</code></td><td>省略 → <code>000</code></td><td><code>1111110111001000</code></td></tr>
+          <tr><td>18</td><td><code>M=M-1</code></td><td><code>M-1</code> → <code>1110010</code></td><td><code>M</code> → <code>001</code></td><td>省略 → <code>000</code></td><td><code>1111110010001000</code></td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        最後的符號表,在預定義符號之外多了 <code>TOP = 6</code>、<code>FINISH = 21</code>(第一遍)與 <code>buf = 16</code>、<code>count = 17</code>(第二遍)。
+        每一格都可以用本章的 <code>assemble()</code> 對答案。組出來的程式丟進模擬器、從 <code>R0 = 3</code> 開始跑,
+        結束時 <code>RAM[400..402] = 3, 2, 1</code>、<code>count</code>(RAM[17])= 3、<code>buf</code>(RAM[16])= 403。
+      </p>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">看起來對但其實錯:「變數也可以在第一遍就配好,第二遍只要查表」</span>
+          <p>聽起來更整齊:第一遍看到沒見過的 <code>@符號</code> 就配一格 RAM,第二遍完全不用改符號表。拿本節上面的程式試,結果完全正確——
+          因為它剛好在所有向前參照(<code>@FINISH</code>)之前,就已經用過全部的變數。換一段「標籤先用、變數在後」的程式就露餡了:</p>
+<pre><code class="language-python">def first_pass_eager(lines, table):
+    """錯誤示範:第一遍就順便配變數(看到沒見過的 @符號 就當變數)。"""
+    address, next_var = 0, 16
+    for line in lines:
+        if line.startswith("("):
+            table[line[1:-1]] = address          # 標籤:記下指令位址
+        else:
+            sym = line[1:]
+            if line.startswith("@") and not sym.isdigit() and sym not in table:
+                table[sym] = next_var            # 還沒見過 → 當成變數,配一格 RAM
+                next_var += 1
+            address += 1
+
+src = """
+    @SKIP
+    D;JEQ
+    @x
+    M=1
+(SKIP)
+    @y
+    M=D
+"""
+lines = clean(src.splitlines())
+good = initial_symbols(); first_pass(lines, good)
+good_code = second_pass(lines, good)
+bad = initial_symbols(); first_pass_eager(lines, bad)
+bad_code = second_pass(lines, bad)
+real = [l for l in lines if not l.startswith("(")]
+for line, g, b in zip(real, good_code, bad_code):
+    mark = "" if g == b else "  ← 不一樣"
+    print(f"{line:6} {g} {b}{mark}")
+print("兩遍:", {k: good[k] for k in ("SKIP", "x", "y")})
+print("提早配:", {k: bad[k] for k in ("SKIP", "x", "y")})</code></pre>
+<pre><code class="language-text">@SKIP  0000000000000100 0000000000000100
+D;JEQ  1110001100000010 1110001100000010
+@x     0000000000010000 0000000000010001  ← 不一樣
+M=1    1110111111001000 1110111111001000
+@y     0000000000010001 0000000000010010  ← 不一樣
+M=D    1110001100001000 1110001100001000
+兩遍: {'SKIP': 4, 'x': 16, 'y': 17}
+提早配: {'SKIP': 4, 'x': 17, 'y': 18}</code></pre>
+          <p>第一遍讀到 <code>@SKIP</code> 時,<code>(SKIP)</code> 還在後面,這個「提早配」的版本只能把它當成變數,配走了 16。
+          雖然之後 <code>(SKIP)</code> 把值蓋回 4,但 16 已經被佔掉,<code>x</code>、<code>y</code> 全部往後挪一格,機器碼和標準不同。
+          如果標籤那一行寫成「表裡沒有才記」,<code>SKIP</code> 還會留在 16,程式直接跳錯地方。
+          這正是向前參照:第一遍讀到 <code>@符號</code> 時,<strong>還不能分辨它是標籤還是變數</strong>,只有等第一遍掃完才知道。
+          <strong>例子都對 ≠ 做法正確。</strong></p>
+        </div>
+      </div>
+      <p>
+        上面那句「變數依第一次出現的順序,從 16 起連號」,本身就是一個可以寫成程式的性質。組譯完跑一次 <code>check_symbols()</code>,
+        標籤的值和變數的編號只要有一個不對,就會停在 <code>assert</code>(接在上面那段程式後面執行):
+      </p>
+      <pre><code class="language-python">def check_symbols(lines, table):
+    """組譯完,檢查符號表該有的性質。過不了,就是兩遍流程哪裡寫錯了。"""
+    real = [l for l in lines if not l.startswith("(")]
+    labels = [l[1:-1] for l in lines if l.startswith("(")]
+    predefined = initial_symbols()
+    for name in labels:
+        # 標籤 = 它前面有幾條真指令
+        k = lines.index("(" + name + ")")
+        assert table[name] == sum(1 for l in lines[:k] if not l.startswith("(")), name
+    variables = []                          # 依「第一次出現」的順序
+    for l in real:
+        s = l[1:]
+        if (l.startswith("@") and not s.isdigit() and s not in labels
+                and s not in predefined and s not in variables):
+            variables.append(s)
+    assert [table[v] for v in variables] == list(range(16, 16 + len(variables))), variables
+    return labels, variables
+
+lines = clean(src.splitlines())
+table = initial_symbols(); first_pass(lines, table); second_pass(lines, table)
+print(check_symbols(lines, table))
+bad = initial_symbols(); first_pass_eager(lines, bad); second_pass(lines, bad)
+try:
+    check_symbols(lines, bad)
+except AssertionError as e:
+    print("抓到了:", e)</code></pre>
+      <pre><code class="language-text">(['SKIP'], ['x', 'y'])
+抓到了: ['x', 'y']</code></pre>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 22.1 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>對下面這段程式:(1)寫出第一遍結束時新增的標籤與值;(2)寫出第二遍依序配出的變數;
+          (3)寫出 ROM 位址 2、3、6、16、18、19 那幾行的機器碼;(4)如果改用上面那個「提早配」的錯誤做法,哪幾個 ROM 位址的機器碼會不同?變成多少?</p>
+          <pre><code class="language-text">// 交換 R1、R2;但如果 R0 是負數,就不交換,改把 flag 設成 -1
+    @R0
+    D=M
+    @NEG
+    D;JLT
+    @R1
+    D=M
+    @tmp
+    M=D
+    @R2
+    D=M
+    @R1
+    M=D
+    @tmp
+    D=M
+    @R2
+    M=D
+    @DONE
+    0;JMP
+(NEG)
+    @flag
+    M=-1
+(DONE)
+    @DONE
+    0;JMP</code></pre>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <p>(1)數到 <code>(NEG)</code> 時前面有 18 條指令,到 <code>(DONE)</code> 時有 20 條:<code>NEG = 18</code>、<code>DONE = 20</code>。</p>
+            <p>(2)第二遍依第一次出現的順序:<code>tmp</code>(ROM 6)→ 16,<code>flag</code>(ROM 18)→ 17。
+            <code>@NEG</code>、<code>@DONE</code> 是標籤,<code>@R0</code>、<code>@R1</code>、<code>@R2</code> 是預定義,都不配。</p>
+            <div class="table-wrap"><table>
+              <thead><tr><th>ROM</th><th>指令</th><th>怎麼來的</th><th>機器碼</th></tr></thead>
+              <tbody>
+                <tr><td>2</td><td><code>@NEG</code></td><td>標籤 18</td><td><code>0000000000010010</code></td></tr>
+                <tr><td>3</td><td><code>D;JLT</code></td><td><code>0001100</code> · <code>000</code> · <code>100</code></td><td><code>1110001100000100</code></td></tr>
+                <tr><td>6</td><td><code>@tmp</code></td><td>變數 16</td><td><code>0000000000010000</code></td></tr>
+                <tr><td>16</td><td><code>@DONE</code></td><td>標籤 20</td><td><code>0000000000010100</code></td></tr>
+                <tr><td>18</td><td><code>@flag</code></td><td>變數 17</td><td><code>0000000000010001</code></td></tr>
+                <tr><td>19</td><td><code>M=-1</code></td><td><code>0111010</code> · <code>001</code> · <code>000</code></td><td><code>1110111010001000</code></td></tr>
+              </tbody>
+            </table></div>
+            <p>(4)提早配的第一遍會依序把 <code>NEG → 16</code>、<code>tmp → 17</code>、<code>DONE → 18</code>,再被 <code>(NEG)</code>、<code>(DONE)</code> 蓋回 18、20,
+            之後的 <code>flag → 19</code>。所以標籤沒錯,錯的是變數:ROM 6 與 12 的 <code>@tmp</code> 變成 <code>0000000000010001</code>(17),
+            ROM 18 的 <code>@flag</code> 變成 <code>0000000000010011</code>(19)。程式也許還是能跑,但和參考組譯器逐行比對時,這三行會不一樣。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <h3 id="lab-hack-assembler">本章 Lab:Hack 組譯器 hack/assembler.py</h3>
+      <div class="callout lab" data-task="hack/assembler">
+        <div class="ico">🧪</div>
+        <div class="body">
+          <span class="c-title">本章 Lab · 任務線「hack」· 任務「Hack 組譯器」</span>
+          <p><strong>對應地下城任務:</strong>任務「Hack 組譯器」(任務線:hack 從 NAND 到自己的電腦,第 7 個任務,也是最後一個)。零件檔:<code>~/零件庫/hack/assembler.py</code>。</p>
+          <p><strong>要做的零件:</strong>一個命令列的 Hack 組譯器:讀一個 .asm 檔,用兩遍掃描處理標籤與變數,寫出同名的 .hack 檔;要的話另外寫出符號表檔;原始碼有錯時指出是第幾行。</p>
+          <p><strong>介面:</strong></p>
+<pre><code class="language-text">python3 hack/assembler.py Prog.asm             # 產生同目錄的 Prog.hack;符號表可以用 libds/hashmap(選用)
+python3 hack/assembler.py Prog.asm --symbols   # 另外寫出 Prog.sym(符號表)</code></pre>
+          <ul>
+            <li>Prog.hack 每行一條指令,是 16 個 <code>0</code>/<code>1</code> 字元;標籤、註解和空行不產生輸出。</li>
+            <li>Prog.sym 先列標籤(依原始碼順序),每行 <code>label 名稱 ROM位址</code>;再列變數(依配置的順序),每行 <code>var 名稱 RAM位址</code>。預先定義的符號不列。沒給 <code>--symbols</code> 就不寫。</li>
+            <li>錯誤:只回報<strong>行號最小</strong>的那個錯誤,把一行 <code>檔名:行號: 原因</code> 印到 stderr(檔名照命令列參數原樣印;行號是<strong>原始檔</strong>的行號,從 1 起算;原因的文字不規定),結束狀態碼是 1,不寫出 .hack,也不寫出 .sym(已經有的舊檔不動)。要擋的錯誤:不認得的 comp、dest、jump;<code>@</code> 後面的數字超過 32767,或不是合法的符號;標籤和前面的標籤或預先定義的符號同名(報後面那一行);括號沒有關。合法的符號由英文字母、數字、<code>_</code>、<code>.</code>、<code>$</code>、<code>:</code> 組成,不能以數字開頭;<code>@</code> 後面全是數字才是常數。</li>
+          </ul>
+          <p><strong>公開範例:</strong>本書自己寫的程式(不是任務的公開程式本身)。<code>Abs.asm</code> 把 <code>|RAM[0]|</code> 存進 <code>RAM[1]</code>,用到預先定義的符號、一個變數和兩個標籤:</p>
+<pre><code class="language-text">// Abs.asm:RAM[1] = |RAM[0]|
+@R0
+D=M
+@x          // 變數:配到 RAM[16]
+M=D
+@POS
+D;JGE       // 已經 &gt;= 0 就跳過取負
+@x
+M=-M
+(POS)
+@x
+D=M
+@R1
+M=D
+(END)
+@END
+0;JMP</code></pre>
+<pre><code class="language-text">$ python3 hack/assembler.py Abs.asm
+$ cat Abs.hack
+0000000000000000
+1111110000010000
+0000000000010000
+1110001100001000
+0000000000001000
+1110001100000011
+0000000000010000
+1111110011001000
+0000000000010000
+1111110000010000
+0000000000000001
+1110001100001000
+0000000000001100
+1110101010000111</code></pre>
+          <p>把 Abs.hack 丟進 CPU 模擬器跑:<code>RAM[0] = -9</code> 時,跑完 <code>RAM[1] = 9</code>。加上 <code>--symbols</code>:</p>
+<pre><code class="language-text">$ python3 hack/assembler.py Abs.asm --symbols
+$ cat Abs.sym
+label POS 8
+label END 12
+var x 16</code></pre>
+          <p>有錯的原始碼(第 1 行是註解,第 3 行的 <code>M+2</code> 不是 Hack 的 comp):</p>
+<pre><code class="language-text">$ cat Bad.asm
+// Bad.asm
+@R0
+D=M+2
+$ python3 hack/assembler.py Bad.asm
+Bad.asm:3: 不認得的 comp「M+2」
+$ echo $?
+1</code></pre>
+          <p><strong>和本章範例不同的地方:</strong>可以參考本章的範例,但介面和要求不同,要自己改寫。</p>
+          <ul>
+            <li>本章的 <code>assemble(source_text)</code> 吃字串、回傳字串;練習 22.6 的版本讀標準輸入、寫標準輸出。任務是命令列程式:從參數拿檔名,把結果寫進同一個目錄、同名的 <code>.hack</code> 檔,還要有 <code>--symbols</code>。</li>
+            <li>本章的 <code>clean()</code> 一開始就把行號丟掉了,碰到不合法的指令只會丟出 <code>KeyError</code>;任務要指出原始檔的第幾行、結束狀態碼 1,而且不能寫出半個 .hack。</li>
+            <li>本章的符號表是 Python 的 <code>dict</code>;任務可以改用你自己的 <code>libds/hashmap</code>(選用,不強制)。</li>
+          </ul>
+          <p><strong>任務目標</strong>(公開的用 <code>test</code> 自己跑;隱藏檢定在 <code>submit</code> 時跑,只看得到名稱和一行說明):</p>
+          <ul class="lab-goals">
+            <li data-group="assembler.public">☐ <strong>公開程式</strong>〔公開〕公開的 .asm(沒有符號、有符號)組出來的 .hack 逐行對參考組譯器。</li>
+            <li data-group="assembler.symbols">☐ <strong>符號與格式</strong>〔隱藏檢定〕標籤先用後定義、變數從 RAM[16] 依第一次出現的順序配置、預先定義的符號(SP、LCL、ARG、THIS、THAT、R0–R15、SCREEN、KBD)、行尾註解、空白與空行、@32767。</li>
+            <li data-group="assembler.symfile">☐ <strong>符號表檔</strong>〔公開〕--symbols 寫出 Prog.sym:先列標籤「label 名稱 ROM 位址」(依原始碼順序),再列變數「var 名稱 RAM 位址」(依配置順序),不列預先定義的符號;沒給 --symbols 就不寫。</li>
+            <li data-group="assembler.errors">☐ <strong>錯誤回報</strong>〔隱藏檢定〕不認得的 comp、dest、jump,@ 後面的數字超過 32767 或不是合法的符號,標籤和前面的標籤或預先定義的符號同名,括號沒有關:只報行號最小的那個錯誤,stderr 印「檔名:行號:」開頭的一行(原始檔的行號),結束狀態碼 1,不寫出 .hack 與 .sym。</li>
+            <li data-group="assembler.runs">☐ <strong>組出來的程式會動</strong>〔隱藏檢定〕5 支隱藏 .asm 組完再丟給 CPU 模擬器跑,結果要對。</li>
+            <li data-group="assembler.perf">☐ <strong>效能</strong>〔隱藏檢定〕兩趟掃描,符號表查詢 O(1)。效能:3×10<sup>4</sup> 行的 .asm,2 秒內組完。
+            這個門檻來自 Boss 戰「組譯方塊雨」:要用你的組譯器把整支遊戲組出來,輸出逐行和參考組譯器相同。</li>
+          </ul>
+          <p><strong>之後會用在:</strong>Boss 戰「組譯方塊雨」(組出小遊戲「方塊雨」,在側邊面板上玩)與「自己的互動程式」(你寫的鍵盤螢幕程式,也用它組譯)。</p>
+          <p class="lab-rule">這個零件過關之後,後面的專題一律用你自己的版本。規則見<a href="00-about.html#lab-rules">零件庫規則</a>。</p>
+        </div>
+      </div>
+
       <h2>把它放進大圖:翻譯鏈的第一環</h2>
       <p>
         退一步看。第 21 章圖 21-6 那座「抽象高塔」,從 Python 一路降到 0 與 1,中間每一層之間的箭頭,
@@ -905,35 +1209,24 @@ print("全部一致！")</code></pre>
       <div class="exercise">
         <div class="ex-head">✏️ 練習 22.6 <span class="badge">挑戰</span></div>
         <div class="ex-body">
-          <p>把本章的組譯器補成一支真正能用的<strong>命令列工具</strong>:讀進一個 <code>.asm</code> 檔(例如 <code>Sum.asm</code>),
-          產生同名的 <code>.hack</code> 檔(<code>Sum.hack</code>),每行一條 16 位元機器碼。
-          (這正是 Nand2Tetris Project 6 要交的東西。)</p>
+          <p>把本章的組譯器包成一支<strong>過濾器(filter)</strong>:從標準輸入讀進組合語言,把機器碼寫到標準輸出,
+          用法是 <code>python3 asm.py &lt; Sum.asm &gt; Sum.hack</code>。每行一條 16 位元機器碼。</p>
           <details class="solution">
             <summary>看解答</summary>
             <div class="sol-body">
-              <p>我們已經有了 <code>assemble(source_text)</code> 這個核心,剩下的只是「讀檔、改副檔名、寫檔」的外殼:</p>
+              <p>我們已經有了 <code>assemble(source_text)</code> 這個核心,剩下的只是「讀標準輸入、寫標準輸出」的外殼:</p>
               <pre><code class="language-python">import sys
 
 def main():
-    in_path = sys.argv[1]                       # 例如 Sum.asm
-    with open(in_path, encoding="utf-8") as f:
-        source = f.read()
-
-    machine = assemble(source)                  # 重用本章的核心組譯器
-
-    out_path = in_path.rsplit(".", 1)[0] + ".hack"   # Sum.asm → Sum.hack
-    with open(out_path, "w", encoding="utf-8") as f:
-        f.write(machine + "\n")
-
-    print("已輸出:", out_path)
+    source = sys.stdin.read()                   # 整個 .asm 從標準輸入進來
+    sys.stdout.write(assemble(source) + "\n")   # 重用本章的核心組譯器
 
 if __name__ == "__main__":
     main()</code></pre>
-              <p>用 <code>python assembler.py Sum.asm</code> 執行,就會生出 <code>Sum.hack</code>。
-              想確認對不對?把你的 <code>.hack</code> 丟進 Nand2Tetris 官方的 <strong>CPU Emulator</strong> 載入執行,
-              或拿官方組譯器產生的標準答案逐行 <code>diff</code> 比對。
-              真正交作業時還會加上一些防呆:檢查指令是否合法、A 指令數值是否超過 32767、給出清楚的錯誤行號——
-              這些「健壯性(robustness)」處理,正是教學玩具和工業工具之間的差距所在。</p>
+              <p>用 <code>python3 asm.py &lt; Sum.asm &gt; Sum.hack</code> 執行,就會生出 <code>Sum.hack</code>。過濾器的好處是能和別的工具接成管線,
+              例如 <code>python3 asm.py &lt; Sum.asm | diff - 標準答案.hack</code>,一行指令就逐行對照完。
+              真正給人用的組譯器還會加上一些防呆:檢查指令是否合法、A 指令數值是否超過 32767、給出清楚的錯誤行號——
+              這些「健壯性(robustness)」處理,正是教學玩具和工業工具之間的差距所在。本章 Lab 的組譯器就要做其中兩件:回報原始檔的行號、寫出符號表檔。</p>
             </div>
           </details>
         </div>
@@ -944,7 +1237,7 @@ if __name__ == "__main__":
       <ul>
         <li><strong>組譯器</strong>是人類第一個、也最簡單的<strong>語言翻譯器</strong>:把組合語言(給人看)變成機器碼(給 CPU 看)。它存在的前提,正是第 21 章那句「指令也只是數字」。</li>
         <li>組譯的本質,大半只是<strong>查表替換</strong>:A 指令轉二進位;C 指令切成 comp/dest/jump,各自查表,接上 <code>111</code>。三張表直接接回第 21 章的 ALU 控制位元。</li>
-        <li>真正的精華在<strong>符號</strong>。三種:<strong>預定義</strong>(R0~R15、SP、SCREEN、KBD…)、<strong>標籤</strong>(代表指令位址,給 jump 用)、<strong>變數</strong>(代表 RAM 位址,從 16 起自動配置)。</li>
+        <li>真正的精華在<strong>符號</strong>。三種:<strong>預定義</strong>(SP、LCL、ARG、THIS、THAT、R0~R15、SCREEN、KBD)、<strong>標籤</strong>(代表指令位址,給 jump 用)、<strong>變數</strong>(代表 RAM 位址,從 16 起自動配置)。</li>
         <li>因為有<strong>向前參照</strong>,組譯器要掃<strong>兩遍</strong>:第一遍只建標籤位址,第二遍才翻譯、順便配變數。符號表是兩遍之間的橋。</li>
         <li>我們用不到 70 行 Python,寫出一個<strong>完整可運作</strong>的 Hack 組譯器,親眼看 <code>@i</code>、<code>@LOOP</code> 變成正確的位址數字。</li>
         <li>組譯器是<strong>翻譯鏈的第一環</strong>。往上,編譯器與 VM 翻譯器用的是同一套思維(剖析、符號表、生成),只是層級更高。</li>

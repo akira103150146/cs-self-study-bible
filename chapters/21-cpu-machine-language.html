@@ -483,6 +483,48 @@
         jump 是 <code>JMP</code>(無條件跳)。效果就是「不管三七二十一,跳到 A 指的地方」——這就是 <code>goto</code>。
       </p>
 
+      <h3>手算:指令編碼與解碼</h3>
+      <p>
+        把上面三張表合起來,任何一條 Hack 指令都能用手來回翻譯。<strong>編碼</strong>(組合語言 → 16 位元):先判斷是 A 指令還是 C 指令,
+        C 指令再切成 comp、dest、jump 三段,各自查表,接在 <code>111</code> 後面。<strong>解碼</strong>反過來:先看最左邊那一位,
+        是 1 就從左到右切成 <code>111</code>、<code>a</code>、6 個 c、3 個 d、3 個 j。表裡每一列是一條指令。
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>方向</th><th>指令</th><th>拆開</th><th>結果</th></tr></thead>
+        <tbody>
+          <tr><td>編碼</td><td><code>@300</code></td><td>A 指令:<code>0</code> + 300 的 15 位元(300 = 256 + 32 + 8 + 4)</td><td><code>0000000100101100</code></td></tr>
+          <tr><td>編碼</td><td><code>AM=M-1</code></td><td><code>111</code> · comp <code>M-1</code> = a 1、c <code>110010</code> · dest <code>AM</code> = <code>101</code> · jump 省略 = <code>000</code></td><td><code>1111110010101000</code></td></tr>
+          <tr><td>編碼</td><td><code>D;JGE</code></td><td><code>111</code> · comp <code>D</code> = a 0、c <code>001100</code> · dest 省略 = <code>000</code> · jump <code>JGE</code> = <code>011</code></td><td><code>1110001100000011</code></td></tr>
+          <tr><td>解碼</td><td><code>0100000000000000</code></td><td>最左位 0 → A 指令;後 15 位只有第 14 位是 1,值 = 2<sup>14</sup> = 16384</td><td><code>@16384</code>(就是 <code>@SCREEN</code>)</td></tr>
+          <tr><td>解碼</td><td><code>1111000111001000</code></td><td><code>111</code> · a <code>1</code> · c <code>000111</code> → comp <code>M-D</code> · d <code>001</code> → <code>M</code> · j <code>000</code></td><td><code>M=M-D</code></td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        易錯點有兩個。第一,comp 要連 a 位一起查:<code>110000</code> 在 a=0 時是 <code>A</code>,在 a=1 時是 <code>M</code>。
+        第二,A 指令只有 15 位可以放數值,所以 <code>@</code> 後面最大是 32767;要載入負數,得先載入正數再用 C 指令算(例如 <code>@5</code> 之後 <code>D=-A</code>)。
+      </p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 21.1 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>編碼成 16 位元:(a) <code>@24576</code> (b) <code>MD=D+1</code> (c) <code>A=M</code>。
+          解碼成組合語言:(d) <code>1110010011010101</code> (e) <code>1110110000010000</code>。</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <div class="table-wrap"><table>
+              <thead><tr><th>題</th><th>拆開</th><th>答案</th></tr></thead>
+              <tbody>
+                <tr><td>(a)</td><td>24576 = 16384 + 8192 = 2<sup>14</sup> + 2<sup>13</sup>,A 指令</td><td><code>0110000000000000</code>(就是 <code>@KBD</code>)</td></tr>
+                <tr><td>(b)</td><td><code>111</code> · <code>D+1</code> = a 0、c <code>011111</code> · <code>MD</code> = <code>011</code> · <code>000</code></td><td><code>1110011111011000</code></td></tr>
+                <tr><td>(c)</td><td><code>111</code> · <code>M</code> = a 1、c <code>110000</code> · <code>A</code> = <code>100</code> · <code>000</code></td><td><code>1111110000100000</code></td></tr>
+                <tr><td>(d)</td><td><code>111</code> · a 0 · c <code>010011</code> → <code>D-A</code> · d <code>010</code> → <code>D</code> · j <code>101</code> → <code>JNE</code></td><td><code>D=D-A;JNE</code></td></tr>
+                <tr><td>(e)</td><td><code>111</code> · a 0 · c <code>110000</code> → <code>A</code> · d <code>010</code> → <code>D</code> · j <code>000</code></td><td><code>D=A</code></td></tr>
+              </tbody>
+            </table></div>
+            <p>驗算方法:把 (a)(b)(c) 丟進第 22 章的 <code>assemble()</code>,輸出要一模一樣。</p>
+          </div></details>
+        </div>
+      </div>
+
       <h2>用組合語言寫程式:if 與迴圈的底層真相</h2>
       <p>
         理論夠了,來真的。組合語言(assembly)就是機器碼的「人類可讀版」:把 <code>1110000010010000</code> 寫成
@@ -616,6 +658,772 @@ M=1         // RAM[16384] = 1 → 左上角第一個像素亮起</code></pre>
         這個設計的威力在於:CPU <strong>完全不需要</strong>為每種裝置設計專屬指令。要支援新硬體?分一段位址給它就好。
         程式設計師也只要會 <code>M=...</code> 和 <code>D=M</code>,就能操控全世界的周邊。這就是輸入輸出的底層真相。
       </p>
+
+      <h3>手算:用指標走過一段記憶體(逐拍追 A、D、PC、RAM)</h3>
+      <p>
+        要處理「一整段」記憶體(把一排數加總、把整個螢幕塗黑),程式不能把每個位址都寫死,得用一個<strong>指標(pointer)</strong>:
+        一格記憶體裡存著「另一格的位址」。Hack 的寫法是 <code>@指標</code> 之後 <code>A=M</code>:A 換成指標裡存的位址,
+        下一條指令的 <code>M</code> 就是指標指到的那一格。這叫<strong>間接定址(indirect addressing)</strong>,本章後面「定址模式」一節還會再看到它。
+      </p>
+      <p>
+        下面這段程式把 <code>RAM[R1]</code> 起的 <code>R0</code> 格,每一格都變成兩倍。它只用數字位址,可以直接貼進本章後面 21.L2 的
+        <code>hack_sim.py</code> 驗算。右邊的數字是 ROM 位址(標籤不佔位址):
+      </p>
+      <pre><code class="language-text">// 把 RAM[R1] 起的 R0 格,每一格都變成兩倍
+// 輸入:RAM[0] = 格數 n、RAM[1] = 起點位址(指標)
+(LOOP)           // LOOP = 0
+    @0           // 0
+    D=M          // 1   D = 剩下的格數
+    @END         // 2
+    D;JEQ        // 3   剩下 0 格就結束
+    @1           // 4
+    A=M          // 5   A = RAM[1]   ← 間接定址:A 換成指標裡存的位址
+    D=M          // 6   D = RAM[指標]
+    M=D+M        // 7   RAM[指標] = RAM[指標] + RAM[指標]
+    @1           // 8
+    M=M+1        // 9   指標 + 1
+    @0           // 10
+    M=M-1        // 11  剩下的格數 - 1
+    @LOOP        // 12
+    0;JMP        // 13
+(END)            // END = 14
+    @END         // 14
+    0;JMP        // 15</code></pre>
+      <p>
+        初始狀態:<code>RAM[0] = 2</code>、<code>RAM[1] = 200</code>、<code>RAM[200] = 5</code>、<code>RAM[201] = -3</code>,A、D、PC 都是 0。
+        每一列是一拍(一條指令),A、D、PC 與 RAM 都是<strong>這一拍做完之後</strong>的值;有變的格子用粗體。
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>拍</th><th>PC</th><th>指令</th><th>A</th><th>D</th><th>下一個 PC</th><th>RAM[0]</th><th>RAM[1]</th><th>RAM[200]</th><th>RAM[201]</th><th>說明</th></tr></thead>
+        <tbody>
+          <tr><td>開始</td><td>—</td><td>—</td><td>0</td><td>0</td><td>0</td><td>2</td><td>200</td><td>5</td><td>-3</td><td></td></tr>
+          <tr><td>1</td><td>0</td><td><code>@0</code></td><td><strong>0</strong></td><td>0</td><td>1</td><td>2</td><td>200</td><td>5</td><td>-3</td><td>A = 0</td></tr>
+          <tr><td>2</td><td>1</td><td><code>D=M</code></td><td>0</td><td><strong>2</strong></td><td>2</td><td>2</td><td>200</td><td>5</td><td>-3</td><td>D = RAM[0] = 2</td></tr>
+          <tr><td>3</td><td>2</td><td><code>@END</code></td><td><strong>14</strong></td><td>2</td><td>3</td><td>2</td><td>200</td><td>5</td><td>-3</td><td>A = END = 14</td></tr>
+          <tr><td>4</td><td>3</td><td><code>D;JEQ</code></td><td>14</td><td>2</td><td>4</td><td>2</td><td>200</td><td>5</td><td>-3</td><td>D = 2 ≠ 0,不跳</td></tr>
+          <tr><td>5</td><td>4</td><td><code>@1</code></td><td><strong>1</strong></td><td>2</td><td>5</td><td>2</td><td>200</td><td>5</td><td>-3</td><td>A = 1(指標住的那格)</td></tr>
+          <tr><td>6</td><td>5</td><td><code>A=M</code></td><td><strong>200</strong></td><td>2</td><td>6</td><td>2</td><td>200</td><td>5</td><td>-3</td><td>A = RAM[1] = 200</td></tr>
+          <tr><td>7</td><td>6</td><td><code>D=M</code></td><td>200</td><td><strong>5</strong></td><td>7</td><td>2</td><td>200</td><td>5</td><td>-3</td><td>D = RAM[200] = 5</td></tr>
+          <tr><td>8</td><td>7</td><td><code>M=D+M</code></td><td>200</td><td>5</td><td>8</td><td>2</td><td>200</td><td><strong>10</strong></td><td>-3</td><td>RAM[200] = 5 + 5</td></tr>
+          <tr><td>9</td><td>8</td><td><code>@1</code></td><td><strong>1</strong></td><td>5</td><td>9</td><td>2</td><td>200</td><td>10</td><td>-3</td><td></td></tr>
+          <tr><td>10</td><td>9</td><td><code>M=M+1</code></td><td>1</td><td>5</td><td>10</td><td>2</td><td><strong>201</strong></td><td>10</td><td>-3</td><td>指標往下一格</td></tr>
+          <tr><td>11</td><td>10</td><td><code>@0</code></td><td><strong>0</strong></td><td>5</td><td>11</td><td>2</td><td>201</td><td>10</td><td>-3</td><td></td></tr>
+          <tr><td>12</td><td>11</td><td><code>M=M-1</code></td><td>0</td><td>5</td><td>12</td><td><strong>1</strong></td><td>201</td><td>10</td><td>-3</td><td>還剩 1 格</td></tr>
+          <tr><td>13</td><td>12</td><td><code>@LOOP</code></td><td><strong>0</strong></td><td>5</td><td>13</td><td>1</td><td>201</td><td>10</td><td>-3</td><td>A = LOOP = 0</td></tr>
+          <tr><td>14</td><td>13</td><td><code>0;JMP</code></td><td>0</td><td>5</td><td><strong>0</strong></td><td>1</td><td>201</td><td>10</td><td>-3</td><td>無條件跳回 0</td></tr>
+          <tr><td>15–28</td><td>0–13</td><td>第二輪</td><td>0</td><td>-3</td><td>0</td><td>0</td><td>202</td><td>10</td><td>-6</td><td>同樣 14 拍;第 21 拍 D = RAM[201] = -3,第 22 拍 RAM[201] = -6</td></tr>
+          <tr><td>29</td><td>0</td><td><code>@0</code></td><td>0</td><td>-3</td><td>1</td><td>0</td><td>202</td><td>10</td><td>-6</td><td></td></tr>
+          <tr><td>30</td><td>1</td><td><code>D=M</code></td><td>0</td><td><strong>0</strong></td><td>2</td><td>0</td><td>202</td><td>10</td><td>-6</td><td>D = RAM[0] = 0</td></tr>
+          <tr><td>31</td><td>2</td><td><code>@END</code></td><td><strong>14</strong></td><td>0</td><td>3</td><td>0</td><td>202</td><td>10</td><td>-6</td><td></td></tr>
+          <tr><td>32</td><td>3</td><td><code>D;JEQ</code></td><td>14</td><td>0</td><td><strong>14</strong></td><td>0</td><td>202</td><td>10</td><td>-6</td><td>D = 0,跳到 END</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        看三件事。(1) 第 5、6 拍:先 <code>@1</code> 讓 M 是指標本身,<code>A=M</code> 之後 M 才變成「指標指到的那格」。
+        (2) 第 7、8 拍:<code>D=M</code> 和 <code>M=D+M</code> 用的都是同一個 A(200),中間沒有 <code>@</code>,所以讀和寫是同一格。
+        (3) 每一輪固定 14 拍,最後一次檢查 4 拍,所以 n 格要 14n + 4 拍才走到 END(n = 2 時是 32)。
+        用模擬器驗算:把 <code>hack_sim.py</code> 的 <code>PROG</code> 換成這段程式,執行 <code>run(PROG, ram_init={0: 2, 1: 200, 200: 5, 201: -3}, max_cycles=32)</code>,回傳的 RAM 裡
+        <code>RAM[200] = 10</code>、<code>RAM[201] = -6</code>、<code>RAM[1] = 202</code>、<code>RAM[0] = 0</code>。
+      </p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 21.2 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>同一段程式,改成 <code>RAM[0] = 3</code>、<code>RAM[1] = 300</code>、<code>RAM[300] = 4</code>、<code>RAM[301] = 0</code>、<code>RAM[302] = -7</code>。回答:</p>
+          <ol>
+            <li>第 6 拍做完,A 是多少?</li>
+            <li>第 8 拍寫進哪一格、寫了什麼?</li>
+            <li>第 10 拍、第 12 拍做完,<code>RAM[1]</code>、<code>RAM[0]</code> 各是多少?</li>
+            <li>PC 第一次變成 14(END)是第幾拍?</li>
+            <li>停下來時 <code>RAM[0]</code>、<code>RAM[1]</code>、<code>RAM[300..302]</code> 是多少?</li>
+            <li>如果一開始 <code>RAM[0] = 0</code>,幾拍就到 END?哪些 RAM 會被改到?</li>
+          </ol>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <div class="table-wrap"><table>
+              <thead><tr><th>拍</th><th>指令</th><th>A</th><th>D</th><th>RAM[0]</th><th>RAM[1]</th><th>RAM[300]</th><th>說明</th></tr></thead>
+              <tbody>
+                <tr><td>5</td><td><code>@1</code></td><td>1</td><td>3</td><td>3</td><td>300</td><td>4</td><td>D 還是第 2 拍讀到的 3</td></tr>
+                <tr><td>6</td><td><code>A=M</code></td><td><strong>300</strong></td><td>3</td><td>3</td><td>300</td><td>4</td><td>A = RAM[1]</td></tr>
+                <tr><td>7</td><td><code>D=M</code></td><td>300</td><td><strong>4</strong></td><td>3</td><td>300</td><td>4</td><td></td></tr>
+                <tr><td>8</td><td><code>M=D+M</code></td><td>300</td><td>4</td><td>3</td><td>300</td><td><strong>8</strong></td><td>RAM[300] = 4 + 4</td></tr>
+                <tr><td>10</td><td><code>M=M+1</code></td><td>1</td><td>4</td><td>3</td><td><strong>301</strong></td><td>8</td><td></td></tr>
+                <tr><td>12</td><td><code>M=M-1</code></td><td>0</td><td>4</td><td><strong>2</strong></td><td>301</td><td>8</td><td></td></tr>
+              </tbody>
+            </table></div>
+            <ol>
+              <li>A = 300。</li>
+              <li>寫進 <code>RAM[300]</code>,值是 8。</li>
+              <li>第 10 拍後 <code>RAM[1] = 301</code>;第 12 拍後 <code>RAM[0] = 2</code>。</li>
+              <li>14 × 3 + 4 = 第 46 拍。</li>
+              <li><code>RAM[0] = 0</code>、<code>RAM[1] = 303</code>、<code>RAM[300..302] = 8, 0, -14</code>(0 的兩倍還是 0)。</li>
+              <li>4 拍(<code>@0</code>、<code>D=M</code>、<code>@END</code>、<code>D;JEQ</code>),沒有任何 RAM 被改到。</li>
+            </ol>
+          </div></details>
+        </div>
+      </div>
+
+      <h3 id="lab-hack-asm">本章 Lab:三支 Hack 程式 hack/asm/*.asm</h3>
+      <div class="callout lab" data-task="hack/asm">
+        <div class="ico">🧪</div>
+        <div class="body">
+          <span class="c-title">本章 Lab · 任務線「hack」· 任務「三支 Hack 程式」</span>
+          <p><strong>對應地下城任務:</strong>任務「三支 Hack 程式」(任務線:hack 從 NAND 到自己的電腦,第 4 個任務)。
+          零件檔:<code>~/零件庫/hack/asm/Max3.asm</code>、<code>Sum.asm</code>、<code>Fill.asm</code>。</p>
+          <p><strong>要做的零件:</strong>用 Hack 組合語言寫三支程式:三數取最大、陣列加總、按鍵塗滿。這個任務不用先做晶片,可以和前面的任務同時做。</p>
+          <p><strong>介面:</strong>每支程式讀哪幾格、寫哪幾格:</p>
+<pre><code class="language-text">Max3.asm  三數取最大:RAM[3] = max(RAM[0], RAM[1], RAM[2])
+Sum.asm   陣列加總:RAM[18] = RAM[p] + RAM[p+1] + … + RAM[p+n−1]
+          其中 p = RAM[16](起點位址)、n = RAM[17](長度,可以是 0)
+Fill.asm  按鍵塗滿:有鍵按著(RAM[24576] ≠ 0)時,整個螢幕
+          RAM[16384..24575] 全黑(每格 16 個 1,也就是 -1);放開時全白(每格 0)。
+          一直重複,不會停。</code></pre>
+          <p>數值都是 16 位元二補數有號數;加總超過 16 位元就照二補數繞回,和 Hack 的加法一樣。
+          Max3 和 Sum 做完要停在 Hack 慣例的結尾迴圈 <code>(END)</code>、<code>@END</code>、<code>0;JMP</code>。
+          判題用參考組譯器把你的 .asm 組成機器碼,在快速 CPU 模擬器上跑,每個測試有指令數上限。</p>
+          <p><strong>公開範例:</strong>本書自己挑的初始 RAM(不是任務的公開 RAM 本身)和跑完之後該有的結果:</p>
+<pre><code class="language-text">Max3:RAM[0..2] = 5, -3, 12                       → RAM[3] = 12
+Sum: RAM[16] = 100、RAM[17] = 4、
+     RAM[100..103] = 3, -1, 10, 7                  → RAM[18] = 19
+Fill:RAM[24576] = 0(沒按)                        → RAM[16384..24575] 每格都是 0
+     RAM[24576] = 75(按著 K)                     → RAM[16384..24575] 每格都是 -1</code></pre>
+          <p><strong>和本章範例不同的地方:</strong>可以參考本章的範例,但介面和要求不同,要自己改寫。</p>
+          <ul>
+            <li>本章例二(累加 1 到 n)的輸入輸出是 <code>R0</code>、<code>R1</code>,而且用了 <code>@i</code>、<code>@sum</code> 兩個變數。組譯器從 <code>RAM[16]</code> 開始配變數,
+            在 <code>Sum.asm</code> 裡會蓋掉輸入 <code>RAM[16]</code>、<code>RAM[17]</code> 和答案 <code>RAM[18]</code>。<code>Sum.asm</code> 的暫存值請放在 <code>R5</code>–<code>R15</code>(例如 <code>R13</code>、<code>R14</code>)。</li>
+            <li>手算 21.2 的指標迴圈一圈是 14 條指令。陣列加總長度 100 要在 2,000 條指令內做完:一般寫法一圈 15 條左右就夠,不必硬擠;但一圈超過 19 條就會超過。</li>
+            <li>本章的程式只動到一般 RAM。<code>Fill.asm</code> 要讀 <code>KBD</code>、寫 <code>SCREEN</code> 起的 8,192 格,而且要一直跑,每次按下或放開都要重新塗滿整個螢幕。</li>
+          </ul>
+          <p><strong>任務目標</strong>(公開的用 <code>test</code> 自己跑;隱藏檢定在 <code>submit</code> 時跑,只看得到名稱和一行說明):</p>
+          <ul class="lab-goals">
+            <li data-group="asm.public">☐ <strong>公開 RAM</strong>〔公開〕三數取最大(RAM[0..2] → RAM[3])與陣列加總(RAM[16]=起點、RAM[17]=長度 → RAM[18])的公開初始 RAM,用 <code>test</code> 跑,看最後的 RAM。</li>
+            <li data-group="asm.seed-ram">☐ <strong>隱藏初始 RAM</strong>〔隱藏檢定〕每人 seed 決定的初始 RAM:負數、三數相同、長度 0 的陣列、放在高位址的陣列。數值都在 −16384..16383 之間(兩數相減不會溢位)。</li>
+            <li data-group="asm.keyboard">☐ <strong>按鍵腳本</strong>〔隱藏檢定〕按鍵塗滿:腳本化的按鍵序列(按、放、連按),每次都要整個螢幕變黑或變白。</li>
+            <li data-group="asm.steps">☐ <strong>指令數</strong>〔隱藏檢定〕三數取最大 60 條指令內;陣列加總(長度 100)2,000 條指令內;按鍵塗滿每次整個螢幕(8,192 個字)切換 2×10<sup>5</sup> 條指令內(估計值,批改器做好後實測再調)。這個門檻來自 Boss 戰「自己的互動程式」(一支用鍵盤與螢幕的小程式)。</li>
+          </ul>
+          <p><strong>之後會用在:</strong>Boss 戰「自己的互動程式」:用鍵盤與螢幕寫一支小程式(例:方向鍵畫線),讀 <code>KBD</code>、寫 <code>SCREEN</code> 的技巧和 <code>Fill.asm</code> 一樣;
+          到時候用<a href="22-assembler.html#lab-hack-assembler">第 22 章你自己的組譯器</a>組譯。</p>
+          <p class="lab-rule">這個零件過關之後,後面的專題一律用你自己的版本。規則見<a href="00-about.html#lab-rules">零件庫規則</a>。</p>
+        </div>
+      </div>
+
+      <h2>Memory 晶片與 I/O 的位址解碼</h2>
+      <p>
+        上一節說螢幕和鍵盤「只是一段記憶體」。但在硬體上,RAM、螢幕、鍵盤是三個不同的零件。CPU 只送出一組位址,
+        <strong>誰來決定這個位址該交給哪個零件?</strong>答案是 Memory 晶片裡的一小塊<strong>位址解碼(address decoding)</strong>電路。
+        Memory 晶片的介面很簡單:輸入 <code>in[16]</code>、<code>load</code>、<code>address[15]</code>,輸出 <code>out[16]</code>。
+        從 CPU 看過去,它就是一塊 32K 格的記憶體;裡面其實住著三個零件:
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>位址(十進位)</th><th>十六進位</th><th>二進位的開頭(第 14、13 位)</th><th>交給誰</th><th>零件內的位址用哪幾位</th><th>格數</th></tr></thead>
+        <tbody>
+          <tr><td>0 – 16383</td><td>0x0000 – 0x3FFF</td><td><code>0?</code>(第 14 位是 0,第 13 位不管)</td><td>RAM16K</td><td>第 13..0 位</td><td>16384 = 2<sup>14</sup></td></tr>
+          <tr><td>16384 – 24575</td><td>0x4000 – 0x5FFF</td><td><code>10</code></td><td>Screen</td><td>第 12..0 位</td><td>8192 = 2<sup>13</sup></td></tr>
+          <tr><td>24576</td><td>0x6000</td><td><code>11</code>,而且其餘 13 位全是 0</td><td>Keyboard</td><td>(只有一格)</td><td>1</td></tr>
+          <tr><td>24577 – 32767</td><td>0x6001 – 0x7FFF</td><td><code>11</code>,其餘位不全是 0</td><td>無效</td><td>—</td><td>8191</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        為什麼剛好看第 14、13 位?因為 RAM 有 2<sup>14</sup> 格,第一個不屬於 RAM 的位址是 16384 = 2<sup>14</sup>,也就是第 14 位第一次變成 1 的地方;
+        螢幕有 2<sup>13</sup> 格,所以在第 14 位是 1 的那一半裡,再用第 13 位切成「螢幕」和「鍵盤以後」兩塊。
+        這種「大小都是 2 的次方、從整齊的邊界開始」的配置,讓解碼只要看最上面幾條位址線,不用做任何比較大小的運算。
+      </p>
+      <p>電路分成寫入和讀出兩半:</p>
+      <ul>
+        <li><strong>寫入</strong>:<code>load</code> 只能送給被選中的那一個零件。RAM16K 的 load = <code>load ∧ ¬a14</code>,
+        Screen 的 load = <code>load ∧ a14 ∧ ¬a13</code>(a14、a13 是位址的第 14、13 位)。鍵盤是唯讀的,沒有 load,也沒有 in。
+        用第 20 章的零件說,這就是一個 DMux(或 DMux4Way)。</li>
+        <li><strong>讀出</strong>:三個零件的輸出同時都在,最後用一個 Mux4Way16 依 <code>(a14, a13)</code> 選一個:
+        <code>00</code>、<code>01</code> 選 RAM16K,<code>10</code> 選 Screen,<code>11</code> 選 Keyboard。</li>
+        <li><strong>位址線</strong>:RAM16K 吃位址的第 13..0 位,Screen 吃第 12..0 位,同一組線直接接過去,不用減掉起點——
+        因為起點 16384 的低 14 位本來就是 0。</li>
+      </ul>
+
+      <div class="diagram">
+<svg viewBox="0 0 720 320" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <rect x="100" y="16" width="540" height="270" rx="14" fill="none" stroke="#b4541f" stroke-width="2" stroke-dasharray="6 4"/>
+  <text x="116" y="36" font-size="13" font-weight="800" fill="#b4541f">Memory</text>
+
+  <!-- inputs -->
+  <text x="8" y="66" font-size="11" font-weight="700" fill="#1f2328">address</text>
+  <text x="8" y="80" font-size="10" fill="#8a929b">[14..0]</text>
+  <line x1="60" y1="86" x2="128" y2="86" stroke="#8a929b" stroke-width="2" marker-end="url(#mdA)"/>
+  <text x="8" y="276" font-size="11" font-weight="700" fill="#1f2328">in</text>
+  <text x="8" y="206" font-size="11" font-weight="700" fill="#1f2328">load</text>
+  <path d="M40 272 L330 272" fill="none" stroke="#8a929b" stroke-width="1.5"/>
+  <path d="M330 272 L330 62 L358 62" fill="none" stroke="#8a929b" stroke-width="1.5" marker-end="url(#mdA)"/>
+  <path d="M330 272 L330 150 L358 150" fill="none" stroke="#8a929b" stroke-width="1.5" marker-end="url(#mdA)"/>
+  <circle cx="330" cy="150" r="2.5" fill="#8a929b"/>
+  <text x="300" y="266" text-anchor="middle" font-size="10" fill="#8a929b">in</text>
+  <line x1="40" y1="202" x2="128" y2="202" stroke="#8a929b" stroke-width="2" marker-end="url(#mdA)"/>
+
+  <!-- decoder -->
+  <rect x="130" y="60" width="150" height="180" rx="8" fill="#f6e7dd" stroke="#b4541f" stroke-width="2"/>
+  <text x="205" y="86" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">位址解碼</text>
+  <text x="205" y="104" text-anchor="middle" font-size="10" fill="#4a5159">只看第 14、13 位</text>
+  <text x="140" y="140" font-size="10" fill="#1f2328" font-family="ui-monospace, Menlo, Consolas, monospace">a14=0       → RAM</text>
+  <text x="140" y="158" font-size="10" fill="#1f2328" font-family="ui-monospace, Menlo, Consolas, monospace">a14=1,a13=0 → Screen</text>
+  <text x="140" y="176" font-size="10" fill="#1f2328" font-family="ui-monospace, Menlo, Consolas, monospace">a14=1,a13=1 → Keyboard</text>
+  <text x="205" y="210" text-anchor="middle" font-size="10" fill="#4a5159">load 只送給被選中</text>
+  <text x="205" y="224" text-anchor="middle" font-size="10" fill="#4a5159">的那一塊</text>
+
+  <!-- parts -->
+  <rect x="360" y="40" width="160" height="62" rx="8" fill="#fff" stroke="#b4541f" stroke-width="2"/>
+  <text x="440" y="60" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">RAM16K</text>
+  <text x="440" y="76" text-anchor="middle" font-size="10" fill="#4a5159">address[13..0]</text>
+  <text x="440" y="92" text-anchor="middle" font-size="10" fill="#b4541f">load = load ∧ ¬a14</text>
+
+  <rect x="360" y="128" width="160" height="62" rx="8" fill="#fff" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="440" y="148" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">Screen</text>
+  <text x="440" y="164" text-anchor="middle" font-size="10" fill="#4a5159">address[12..0]</text>
+  <text x="440" y="180" text-anchor="middle" font-size="10" fill="#2f6f6a">load = load ∧ a14 ∧ ¬a13</text>
+
+  <rect x="360" y="214" width="160" height="56" rx="8" fill="#fff" stroke="#8b5cf6" stroke-width="2"/>
+  <text x="440" y="236" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">Keyboard</text>
+  <text x="440" y="254" text-anchor="middle" font-size="10" fill="#8b5cf6">唯讀:沒有 in、沒有 load</text>
+
+  <line x1="280" y1="80" x2="358" y2="80" stroke="#b4541f" stroke-width="1.5" marker-end="url(#mdB)"/>
+  <line x1="280" y1="168" x2="358" y2="168" stroke="#2f6f6a" stroke-width="1.5" marker-end="url(#mdT)"/>
+
+  <!-- output mux -->
+  <path d="M560 70 L600 84 L600 226 L560 240 Z" fill="#fff" stroke="#1f2328" stroke-width="1.5"/>
+  <text x="580" y="150" text-anchor="middle" font-size="10" font-weight="700" fill="#1f2328">選</text>
+  <text x="580" y="164" text-anchor="middle" font-size="10" font-weight="700" fill="#1f2328">輸出</text>
+  <text x="580" y="262" text-anchor="middle" font-size="10" fill="#b4541f">sel = a14、a13</text>
+  <line x1="520" y1="71" x2="558" y2="92" stroke="#8a929b" stroke-width="1.5" marker-end="url(#mdA)"/>
+  <line x1="520" y1="159" x2="558" y2="155" stroke="#8a929b" stroke-width="1.5" marker-end="url(#mdA)"/>
+  <line x1="520" y1="242" x2="558" y2="218" stroke="#8a929b" stroke-width="1.5" marker-end="url(#mdA)"/>
+  <line x1="600" y1="155" x2="700" y2="155" stroke="#1f2328" stroke-width="2" marker-end="url(#mdK)"/>
+  <text x="704" y="148" text-anchor="end" font-size="11" font-weight="700" fill="#1f2328">out</text>
+  <text x="704" y="172" text-anchor="end" font-size="10" fill="#8a929b">→ CPU 的 inM</text>
+
+  <text x="370" y="306" text-anchor="middle" font-size="11" fill="#4a5159">0x0000–0x3FFF RAM16K · 0x4000–0x5FFF Screen · 0x6000 Keyboard · 0x6001–0x7FFF 無效</text>
+
+  <defs>
+    <marker id="mdA" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/></marker>
+    <marker id="mdB" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#b4541f"/></marker>
+    <marker id="mdT" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#2f6f6a"/></marker>
+    <marker id="mdK" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#1f2328"/></marker>
+  </defs>
+</svg>
+        <figcaption>圖 21-5a:Memory 晶片裡面。位址解碼只看第 14、13 位,把 load 送給被選中的零件(寫入),再用一個多工器選出要回給 CPU 的值(讀出)。文字版就是上面那張位址表。</figcaption>
+      </div>
+
+      <p>
+        <strong>螢幕那 8192 格怎麼對應到像素?</strong>螢幕是 256 列 × 512 行的黑白點,每一列用 32 格(32 × 16 位元 = 512 點)。
+        第 r 列、第 c 行的點,住在位址 <code>16384 + 32·r + c ÷ 16</code>(整數除法)那一格的第 <code>c mod 16</code> 位,
+        第 0 位(最右邊那一位)是這 16 個點裡最左邊的一點。例如位址 16675:16675 − 16384 = 291 = 32 × 9 + 3,
+        所以它是第 9 列、這一列的第 3 格,管 c = 48 到 63 這 16 個點。
+      </p>
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">0x6000 以後的位址:規格說無效,不要依賴它</span>
+          <p>Hack 的規格只定義到 0x6000(鍵盤)。最省的接法只看第 14、13 位,於是讀 0x6001–0x7FFF 會讀到鍵盤的值——
+          這是接法的副作用,不是規格保證的行為,程式不可以依賴它。另外注意,A 暫存器有 16 位,但 addressM 只有 15 條線:
+          A = −1(16 位全 1)時,送到 Memory 的位址是 0x7FFF,落在無效區。</p>
+        </div>
+      </div>
+      <p>把解碼規則寫成 Python,順便檢查一個整體性質:15 位元的 32768 個位址,剛好分給四個去處,一格不多、一格不少。</p>
+      <pre><code class="language-python">def memory_route(address):
+    """Memory 晶片的位址解碼:回傳 (哪個零件, 零件內的位址)。"""
+    address &amp;= 0x7FFF                     # addressM 只有 15 條線(第 14..0 位)
+    if (address &gt;&gt; 14) &amp; 1 == 0:          # 第 14 位 = 0 → RAM16K,用第 13..0 位
+        return "RAM16K", address &amp; 0x3FFF
+    if (address &gt;&gt; 13) &amp; 1 == 0:          # 第 14 位 = 1、第 13 位 = 0 → Screen,用第 12..0 位
+        return "Screen", address &amp; 0x1FFF
+    if address == 0x6000:                 # 只有 0x6000 這一格是鍵盤
+        return "Keyboard", 0
+    return "無效", None                   # 0x6001–0x7FFF:規格說無效
+
+for a in [0, 100, 16383, 16384, 16675, 24575, 24576, 24577]:
+    print(f"{a:5}  {a:#06x}  {a:015b}  {memory_route(a)}")
+
+# 不變式:15 位元的 32768 個位址,剛好分成 16384 + 8192 + 1 + 8191
+count = {}
+for a in range(1 &lt;&lt; 15):
+    part = memory_route(a)[0]
+    count[part] = count.get(part, 0) + 1
+assert count == {"RAM16K": 16384, "Screen": 8192, "Keyboard": 1, "無效": 8191}, count
+print(count)</code></pre>
+      <pre><code class="language-text">    0  0x0000  000000000000000  ('RAM16K', 0)
+  100  0x0064  000000001100100  ('RAM16K', 100)
+16383  0x3fff  011111111111111  ('RAM16K', 16383)
+16384  0x4000  100000000000000  ('Screen', 0)
+16675  0x4123  100000100100011  ('Screen', 291)
+24575  0x5fff  101111111111111  ('Screen', 8191)
+24576  0x6000  110000000000000  ('Keyboard', 0)
+24577  0x6001  110000000000001  ('無效', None)
+{'RAM16K': 16384, 'Screen': 8192, 'Keyboard': 1, '無效': 8191}</code></pre>
+
+      <h3>手算:位址解碼</h3>
+      <p>拿到一個位址,先寫成 15 位元二進位,看第 14、13 位決定去處,再取剩下的位當零件內的位址。每一列是一個位址:</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>位址</th><th>十六進位</th><th>第 14 位</th><th>第 13 位</th><th>交給誰</th><th>零件內位址</th><th>說明</th></tr></thead>
+        <tbody>
+          <tr><td>100</td><td>0x0064</td><td>0</td><td>0</td><td>RAM16K</td><td>100</td><td></td></tr>
+          <tr><td>16383</td><td>0x3FFF</td><td>0</td><td>1</td><td>RAM16K</td><td>16383</td><td>第 13 位是 1,但第 14 位是 0 就夠了:還在 RAM</td></tr>
+          <tr><td>16384</td><td>0x4000</td><td>1</td><td>0</td><td>Screen</td><td>0</td><td>第 0 列最左邊 16 點</td></tr>
+          <tr><td>16675</td><td>0x4123</td><td>1</td><td>0</td><td>Screen</td><td>291</td><td>第 9 列第 3 格,c = 48..63</td></tr>
+          <tr><td>24575</td><td>0x5FFF</td><td>1</td><td>0</td><td>Screen</td><td>8191</td><td>第 255 列第 31 格(右下角)</td></tr>
+          <tr><td>24576</td><td>0x6000</td><td>1</td><td>1</td><td>Keyboard</td><td>—</td><td>其餘位全 0</td></tr>
+          <tr><td>24577</td><td>0x6001</td><td>1</td><td>1</td><td>無效</td><td>—</td><td>第 0 位是 1</td></tr>
+        </tbody>
+      </table></div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 21.3 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>下面每個位址交給哪個零件?零件內的位址是多少?如果是螢幕,是第幾列、管哪 16 個點?
+          (a) 1000 (b) 16416 (c) 20000 (d) 24576 (e) 30000 (f) A 暫存器是 −1 時的 <code>M</code></p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <div class="table-wrap"><table>
+              <thead><tr><th>題</th><th>15 位元</th><th>第 14、13 位</th><th>答案</th></tr></thead>
+              <tbody>
+                <tr><td>(a) 1000</td><td><code>000001111101000</code></td><td>0、0</td><td>RAM16K,位址 1000</td></tr>
+                <tr><td>(b) 16416</td><td><code>100000000100000</code></td><td>1、0</td><td>Screen,位址 32 = 32 × 1 + 0:第 1 列第 0 格,c = 0..15</td></tr>
+                <tr><td>(c) 20000</td><td><code>100111000100000</code></td><td>1、0</td><td>Screen,位址 3616 = 32 × 113 + 0:第 113 列第 0 格,c = 0..15</td></tr>
+                <tr><td>(d) 24576</td><td><code>110000000000000</code></td><td>1、1</td><td>Keyboard(其餘位全 0)</td></tr>
+                <tr><td>(e) 30000</td><td><code>111010100110000</code></td><td>1、1</td><td>無效(0x7530,大於 0x6000)</td></tr>
+                <tr><td>(f) A = −1</td><td><code>111111111111111</code></td><td>1、1</td><td>addressM 只取 15 位 = 32767 = 0x7FFF,無效</td></tr>
+              </tbody>
+            </table></div>
+            <p>用上面的 <code>memory_route()</code> 一個一個驗算。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <h2>把 CPU 接起來:從指令位元到控制線</h2>
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">為什麼要學</span>
+          <p>前面的「控制單元其實不太聰明」說:解碼只是一張接線圖。這一節把那張圖真的畫出來,一條線一條線地接。
+          之後會用到它的地方:本章 Lab 的 CPU 與 Computer 晶片(用逐拍對照驗收)、硬體任務線的期末專題(你的 Computer 要先通過逐拍對照,才能跑「方塊雨」)、
+          主線 E1「CHIP-8 模擬器」的主迴圈(同樣是取指 → 解碼成控制訊號 → 執行),以及第 48 章的管線
+          (管線只是把這張圖切成好幾段)。IC 路線之後設計 RV32I CPU 時,控制單元也是同一個想法。</p>
+        </div>
+      </div>
+      <p>
+        Hack 的 CPU 晶片對外只有幾組線。<strong>輸入</strong>:<code>instruction[16]</code>(這一拍要執行的指令)、
+        <code>inM[16]</code>(<code>RAM[A]</code> 現在的值)、<code>reset</code>。<strong>輸出</strong>:<code>outM[16]</code>(要寫進記憶體的值)、
+        <code>writeM</code>(這一拍要不要寫)、<code>addressM[15]</code>(寫到哪,也決定這一拍的 inM 讀哪一格)、<code>pc[15]</code>(下一條指令的位址)。
+        裡面的零件全是第 20 章造過的:A 暫存器、D 暫存器、PC、ALU、兩個 16 位元多工器,加上幾個 And、Or、Not。
+      </p>
+      <p>
+        指令的 16 個位元從左到右編號 15 到 0。C 指令的格式 <code>1 1 1 a c1 c2 c3 c4 c5 c6 d1 d2 d3 j1 j2 j3</code> 對應到:
+        <code>i</code> = 第 15 位、<code>a</code> = 第 12 位、<code>c1..c6</code> = 第 11..6 位(就是 zx nx zy ny f no)、
+        <code>d1 d2 d3</code> = 第 5..3 位(存 A、存 D、存 M)、<code>j1 j2 j3</code> = 第 2..0 位(結果 &lt; 0、= 0、&gt; 0 時跳)。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 760 420" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <rect x="80" y="20" width="580" height="370" rx="14" fill="none" stroke="#2f6f6a" stroke-width="2" stroke-dasharray="6 4"/>
+  <text x="96" y="40" font-size="13" font-weight="800" fill="#2f6f6a">CPU</text>
+
+  <!-- inputs -->
+  <text x="8" y="70" font-size="11" font-weight="700" fill="#1f2328">instruction</text>
+  <text x="8" y="84" font-size="10" fill="#8a929b">(16 位元)</text>
+  <line x1="62" y1="90" x2="128" y2="90" stroke="#8a929b" stroke-width="2" marker-end="url(#cwA)"/>
+  <text x="8" y="262" font-size="11" font-weight="700" fill="#1f2328">inM</text>
+  <text x="8" y="276" font-size="10" fill="#8a929b">= RAM[A]</text>
+  <path d="M40 250 L40 236 L360 236 L360 222 L372 222" fill="none" stroke="#8a929b" stroke-width="2" marker-end="url(#cwA)"/>
+  <text x="8" y="372" font-size="11" font-weight="700" fill="#1f2328">reset</text>
+  <path d="M44 368 L560 368 L560 352 L572 352" fill="none" stroke="#8a929b" stroke-width="1.5" marker-end="url(#cwA)"/>
+
+  <!-- A mux -->
+  <path d="M130 70 L160 80 L160 130 L130 140 Z" fill="#fff" stroke="#2f6f6a" stroke-width="1.5"/>
+  <text x="145" y="110" text-anchor="middle" font-size="10" font-weight="700" fill="#1f2328">Mux</text>
+  <text x="145" y="64" text-anchor="middle" font-size="10" fill="#b4541f">sel = i</text>
+  <line x1="160" y1="105" x2="188" y2="105" stroke="#8a929b" stroke-width="2" marker-end="url(#cwA)"/>
+
+  <!-- A register -->
+  <rect x="190" y="80" width="100" height="50" rx="6" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="240" y="103" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">A 暫存器</text>
+  <text x="240" y="120" text-anchor="middle" font-size="10" fill="#4a5159">load = ¬i ∨ d1</text>
+
+  <!-- A bus -->
+  <line x1="290" y1="105" x2="742" y2="105" stroke="#2f6f6a" stroke-width="2" marker-end="url(#cwT)"/>
+  <text x="746" y="100" text-anchor="end" font-size="11" font-weight="700" fill="#2f6f6a">addressM</text>
+  <text x="746" y="122" text-anchor="end" font-size="10" fill="#8a929b">(A 的低 15 位)</text>
+  <path d="M330 105 L330 192 L372 192" fill="none" stroke="#2f6f6a" stroke-width="2" marker-end="url(#cwT)"/>
+  <circle cx="330" cy="105" r="3" fill="#2f6f6a"/>
+  <path d="M600 105 L600 302" fill="none" stroke="#2f6f6a" stroke-width="2" marker-end="url(#cwT)"/>
+  <circle cx="600" cy="105" r="3" fill="#2f6f6a"/>
+  <text x="606" y="290" font-size="10" fill="#2f6f6a">in = A</text>
+
+  <!-- A/M mux -->
+  <path d="M374 172 L404 182 L404 232 L374 242 Z" fill="#fff" stroke="#2f6f6a" stroke-width="1.5"/>
+  <text x="389" y="212" text-anchor="middle" font-size="10" font-weight="700" fill="#1f2328">Mux</text>
+  <text x="389" y="258" text-anchor="middle" font-size="10" fill="#b4541f">sel = i ∧ a</text>
+  <text x="352" y="186" text-anchor="end" font-size="10" fill="#4a5159">A</text>
+  <text x="352" y="231" text-anchor="end" font-size="10" fill="#4a5159">M</text>
+  <line x1="404" y1="207" x2="438" y2="207" stroke="#8a929b" stroke-width="2" marker-end="url(#cwA)"/>
+  <text x="420" y="200" text-anchor="middle" font-size="10" fill="#4a5159">y</text>
+
+  <!-- D register -->
+  <rect x="190" y="280" width="100" height="50" rx="6" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="240" y="303" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">D 暫存器</text>
+  <text x="240" y="320" text-anchor="middle" font-size="10" fill="#4a5159">load = i ∧ d2</text>
+  <path d="M290 305 L420 305 L420 270 L438 270" fill="none" stroke="#8a929b" stroke-width="2" marker-end="url(#cwA)"/>
+  <text x="430" y="265" text-anchor="middle" font-size="10" fill="#4a5159">x</text>
+
+  <!-- ALU -->
+  <rect x="440" y="160" width="110" height="120" rx="8" fill="#2f6f6a"/>
+  <text x="495" y="208" text-anchor="middle" font-size="15" font-weight="800" fill="#fff">ALU</text>
+  <text x="495" y="228" text-anchor="middle" font-size="10" fill="#cfe6e2">c1..c6 =</text>
+  <text x="495" y="242" text-anchor="middle" font-size="10" fill="#cfe6e2">instr[11..6]</text>
+
+  <!-- ALU out -->
+  <line x1="550" y1="185" x2="742" y2="185" stroke="#b4541f" stroke-width="2" marker-end="url(#cwB)"/>
+  <text x="746" y="178" text-anchor="end" font-size="11" font-weight="700" fill="#b4541f">outM</text>
+  <path d="M575 185 L575 145 L110 145 L110 120 L128 120" fill="none" stroke="#b4541f" stroke-width="2" marker-end="url(#cwB)"/>
+  <circle cx="575" cy="185" r="3" fill="#b4541f"/>
+  <path d="M175 145 L175 295 L188 295" fill="none" stroke="#b4541f" stroke-width="2" marker-end="url(#cwB)"/>
+  <circle cx="175" cy="145" r="3" fill="#b4541f"/>
+  <text x="460" y="140" text-anchor="middle" font-size="10" fill="#b4541f">ALU 輸出送回 A 與 D</text>
+
+  <!-- writeM -->
+  <line x1="660" y1="232" x2="742" y2="232" stroke="#8b5cf6" stroke-width="2" marker-end="url(#cwP)"/>
+  <text x="746" y="225" text-anchor="end" font-size="11" font-weight="700" fill="#8b5cf6">writeM</text>
+  <text x="746" y="248" text-anchor="end" font-size="10" fill="#8b5cf6">= i ∧ d3</text>
+
+  <!-- jump logic -->
+  <rect x="440" y="300" width="110" height="50" rx="6" fill="#ede9fe" stroke="#8b5cf6" stroke-width="2"/>
+  <text x="495" y="320" text-anchor="middle" font-size="12" font-weight="800" fill="#1f2328">跳躍判斷</text>
+  <text x="495" y="337" text-anchor="middle" font-size="10" fill="#4a5159">j1j2j3 + zr、ng</text>
+  <line x1="495" y1="280" x2="495" y2="298" stroke="#8b5cf6" stroke-width="2" marker-end="url(#cwP)"/>
+  <text x="502" y="292" font-size="10" fill="#8b5cf6">zr、ng</text>
+  <line x1="550" y1="327" x2="572" y2="327" stroke="#8b5cf6" stroke-width="2" marker-end="url(#cwP)"/>
+  <text x="560" y="320" text-anchor="middle" font-size="9" fill="#8b5cf6">load</text>
+
+  <!-- PC -->
+  <rect x="574" y="304" width="76" height="56" rx="6" fill="#e3efed" stroke="#2f6f6a" stroke-width="2"/>
+  <text x="612" y="326" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">PC</text>
+  <text x="612" y="343" text-anchor="middle" font-size="10" fill="#4a5159">inc = 1</text>
+  <line x1="650" y1="332" x2="742" y2="332" stroke="#2f6f6a" stroke-width="2" marker-end="url(#cwT)"/>
+  <text x="746" y="325" text-anchor="end" font-size="11" font-weight="700" fill="#2f6f6a">pc</text>
+  <text x="746" y="348" text-anchor="end" font-size="10" fill="#8a929b">→ ROM 位址</text>
+
+  <text x="380" y="410" text-anchor="middle" font-size="11" fill="#4a5159">i = instr[15]、a = instr[12]、d1d2d3 = instr[5..3]、j1j2j3 = instr[2..0]</text>
+
+  <defs>
+    <marker id="cwA" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8a929b"/></marker>
+    <marker id="cwB" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#b4541f"/></marker>
+    <marker id="cwT" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#2f6f6a"/></marker>
+    <marker id="cwP" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#8b5cf6"/></marker>
+  </defs>
+</svg>
+        <figcaption>圖 21-5b:Hack CPU 的接線。指令的各個位元直接變成控制線:i 選 A 前面的多工器、d1 d2 d3 決定 A、D、M 要不要載入、a 選 ALU 的 y、c1..c6 接到 ALU、j1 j2 j3 加上 ALU 的 zr、ng 決定 PC 要不要載入 A。文字版見下表。</figcaption>
+      </div>
+
+      <p>同一張圖的文字版:每一列是一條控制線,說明它接到哪、由哪幾個位元決定。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>控制線</th><th>接到哪</th><th>公式</th><th>白話</th></tr></thead>
+        <tbody>
+          <tr><td>A 前的多工器 sel</td><td>A 暫存器的輸入</td><td><code>i</code></td><td>A 指令(i = 0)載入指令本身(最高位是 0,剩下 15 位就是數值);C 指令載入 ALU 輸出</td></tr>
+          <tr><td>A 的 load</td><td>A 暫存器</td><td><code>¬i ∨ d1</code></td><td>A 指令一定載入;C 指令看 d1(dest 有沒有 A)</td></tr>
+          <tr><td>D 的 load</td><td>D 暫存器</td><td><code>i ∧ d2</code></td><td>只有 C 指令、而且 dest 有 D</td></tr>
+          <tr><td>writeM</td><td>CPU 輸出 → Memory 的 load</td><td><code>i ∧ d3</code></td><td>只有 C 指令、而且 dest 有 M</td></tr>
+          <tr><td>ALU 的 y 選擇</td><td>A/M 多工器的 sel</td><td><code>i ∧ a</code></td><td>a = 1 用 inM(M),a = 0 用 A。A 指令時 ALU 的結果沒人用,選哪個都沒差</td></tr>
+          <tr><td>ALU 控制</td><td>ALU 的 zx nx zy ny f no</td><td><code>c1..c6</code> = 第 11..6 位</td><td>原封不動接過去</td></tr>
+          <tr><td>ALU 的 x、y</td><td>ALU</td><td>x = D,y = A 或 inM</td><td>Hack 的 comp 永遠是「D 和 A/M 之間」的運算</td></tr>
+          <tr><td>outM、addressM</td><td>CPU 輸出</td><td>outM = ALU 輸出,addressM = A 的第 14..0 位</td><td>writeM = 0 時 outM 是多少都不重要</td></tr>
+          <tr><td>跳不跳(PC 的 load)</td><td>PC</td><td><code>i ∧ ((j1 ∧ ng) ∨ (j2 ∧ zr) ∨ (j3 ∧ ¬zr ∧ ¬ng))</code></td><td>結果的正負號和 jump 位元「對得上」就跳</td></tr>
+          <tr><td>PC 的 in、inc、reset</td><td>PC</td><td>in = A,inc = 1,reset = reset</td><td>PC 晶片的優先序是 reset &gt; load &gt; inc,所以 inc 可以一直接 1</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        <strong>跳躍判斷</strong>值得單獨看。ALU 只給兩個旗標:<code>zr</code>(結果是 0)和 <code>ng</code>(結果是負的,也就是最高位是 1),
+        兩個不會同時是 1。「結果 &gt; 0」沒有自己的旗標,要用 <code>¬zr ∧ ¬ng</code> 拼出來。三個 j 位元各管一種情況,哪個成立就跳:
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>j1 j2 j3</th><th>助記符</th><th>結果 &lt; 0(ng = 1)</th><th>結果 = 0(zr = 1)</th><th>結果 &gt; 0(兩個都是 0)</th></tr></thead>
+        <tbody>
+          <tr><td>000</td><td>(省略)</td><td>不跳</td><td>不跳</td><td>不跳</td></tr>
+          <tr><td>001</td><td><code>JGT</code></td><td>不跳</td><td>不跳</td><td><strong>跳</strong></td></tr>
+          <tr><td>010</td><td><code>JEQ</code></td><td>不跳</td><td><strong>跳</strong></td><td>不跳</td></tr>
+          <tr><td>011</td><td><code>JGE</code></td><td>不跳</td><td><strong>跳</strong></td><td><strong>跳</strong></td></tr>
+          <tr><td>100</td><td><code>JLT</code></td><td><strong>跳</strong></td><td>不跳</td><td>不跳</td></tr>
+          <tr><td>101</td><td><code>JNE</code></td><td><strong>跳</strong></td><td>不跳</td><td><strong>跳</strong></td></tr>
+          <tr><td>110</td><td><code>JLE</code></td><td><strong>跳</strong></td><td><strong>跳</strong></td><td>不跳</td></tr>
+          <tr><td>111</td><td><code>JMP</code></td><td><strong>跳</strong></td><td><strong>跳</strong></td><td><strong>跳</strong></td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        <strong>一拍裡的先後順序。</strong>上面的線分成兩種。ALU、多工器、跳躍判斷是組合邏輯:指令一出現,它們馬上算好,
+        outM、writeM、addressM、「跳不跳」在這一拍裡就定了。A、D、PC 和 RAM 是序向元件:它們等到<strong>時脈邊緣</strong>才一起更新。
+        所以這一拍裡,addressM 是 A 的<strong>舊值</strong>,PC 要跳時載入的也是 A 的<strong>舊值</strong>;新的 A 要到下一拍才看得到。
+        後面的手算會用到這一點。
+      </p>
+      <p>
+        <strong>Computer = ROM32K + CPU + Memory。</strong>三個零件的接法只有幾條線:
+      </p>
+      <pre><code class="language-text">ROM32K[pc] ──instruction──▶ CPU ──outM、writeM、addressM──▶ Memory
+    ▲                        │  ◀──────────── inM ─────────────┘
+    └────────── pc ──────────┘
+reset ──▶ CPU(按住 reset 時,下一拍 PC = 0,程式從頭跑)</code></pre>
+      <p>
+        把接線規則寫成 Python。<code>control_lines()</code> 只看指令位元和 ALU 的 zr、ng,算出每一條控制線;
+        下面的迴圈把 jump 表的 8 × 3 = 24 種情況全部跑一遍,確認接線和表的意思一樣。
+        跳躍判斷只看 j1 j2 j3 和 zr、ng,情況有限而且全跑過了,所以這裡的窮舉就是完整的驗證。
+      </p>
+      <pre><code class="language-python">def bit(word, k):
+    """取出第 k 位(第 0 位是最右邊那一位)。"""
+    return (word &gt;&gt; k) &amp; 1
+
+def control_lines(instr, zr, ng):
+    """給一條 16 位元指令,和 ALU 這一拍算出的 zr、ng,算出 CPU 的每一條控制線。"""
+    i = bit(instr, 15)                          # 1 = C 指令,0 = A 指令
+    a = bit(instr, 12)
+    d1, d2, d3 = bit(instr, 5), bit(instr, 4), bit(instr, 3)
+    j1, j2, j3 = bit(instr, 2), bit(instr, 1), bit(instr, 0)
+    pos = int(zr == 0 and ng == 0)              # ALU 輸出 &gt; 0
+    jump = i &amp; ((j1 &amp; ng) | (j2 &amp; zr) | (j3 &amp; pos))
+    return {
+        "A 前的多工器選 ALU 輸出": i,           # 0 就選指令本身(A 指令)
+        "A 載入": int(i == 0 or d1 == 1),
+        "D 載入": i &amp; d2,
+        "writeM": i &amp; d3,
+        "ALU 的 y 選 inM": i &amp; a,             # 0 就選 A
+        "ALU 控制 zx nx zy ny f no": format((instr &gt;&gt; 6) &amp; 0b111111, "06b"),
+        "PC 載入(跳)": jump,                   # 1:下一個 PC = A;0:PC + 1
+    }
+
+# 不變式:對每一種 jump 位元、每一種 ALU 結果,接線算出的「跳不跳」都和 jump 表的意思一樣
+MEANING = {0b000: lambda v: False,  0b001: lambda v: v &gt; 0,  0b010: lambda v: v == 0,
+           0b011: lambda v: v &gt;= 0, 0b100: lambda v: v &lt; 0,  0b101: lambda v: v != 0,
+           0b110: lambda v: v &lt;= 0, 0b111: lambda v: True}
+for jjj, want in MEANING.items():
+    for v in (-5, 0, 7):                        # 小於 0、等於 0、大於 0 各一個代表
+        zr, ng = int(v == 0), int(v &lt; 0)
+        instr = 0b1110001100000000 | jjj       # comp=D、不存,只換 jump 位元
+        assert control_lines(instr, zr, ng)["PC 載入(跳)"] == int(want(v)), (jjj, v)
+    assert control_lines(jjj, 0, 0)["PC 載入(跳)"] == 0   # A 指令(i=0)永遠不跳
+
+print("instr    Amux  Aload Dload writeM yinM  zx..no jump")
+for name, instr, zr, ng in [("D=D+A", 0b1110000010010000, 0, 0),    # 假設 D=2、A=3 → 5
+                            ("AM=M-1", 0b1111110010101000, 0, 0),   # 假設 M=258 → 257
+                            ("D;JGT", 0b1110001100000001, 0, 0),    # 假設 D=42 → 42
+                            ("@21", 0b0000000000010101, 0, 0)]:
+    v = list(control_lines(instr, zr, ng).values())
+    print(f"{name:8} {v[0]:^5} {v[1]:^5} {v[2]:^5} {v[3]:^6} {v[4]:^5} {v[5]} {v[6]:^4}".rstrip())</code></pre>
+      <pre><code class="language-text">instr    Amux  Aload Dload writeM yinM  zx..no jump
+D=D+A      1     0     1     0      0   000010  0
+AM=M-1     1     1     0     1      1   110010  0
+D;JGT      1     0     0     0      0   001100  1
+@21        0     1     0     0      0   000000  0</code></pre>
+      <p>
+        對照輸出:<code>Amux</code> 是 A 前多工器的 sel、<code>Aload</code>/<code>Dload</code> 是兩個暫存器的 load、<code>yinM</code> 是 ALU 的 y 選 inM、
+        <code>zx..no</code> 是送進 ALU 的 6 個控制位元、<code>jump</code> 是 PC 的 load。
+      </p>
+
+      <h3>手算:一條指令的每一條控制線</h3>
+      <p>
+        給一條指令和執行前的狀態,把每一條控制線的值寫出來,再推出這一拍做完之後 A、D、PC、RAM 變成什麼。
+        每一欄是一條指令,每一列是一條線。四條指令的執行前狀態:
+        <code>D=D+A</code>:D = 2、A = 3、PC = 5;<code>AM=M-1</code>:A = 0、RAM[0] = 258、PC = 1;
+        <code>D;JGT</code>:D = 42、A = 10、PC = 4;<code>@21</code>:D = 7、A = 99、PC = 0。
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>線</th><th><code>D=D+A</code></th><th><code>AM=M-1</code></th><th><code>D;JGT</code></th><th><code>@21</code></th></tr></thead>
+        <tbody>
+          <tr><td>16 位元</td><td><code>1110000010010000</code></td><td><code>1111110010101000</code></td><td><code>1110001100000001</code></td><td><code>0000000000010101</code></td></tr>
+          <tr><td>i</td><td>1</td><td>1</td><td>1</td><td>0</td></tr>
+          <tr><td>a → ALU 的 y</td><td>0 → A = 3</td><td>1 → inM = 258</td><td>0 → A(用不到)</td><td>(i = 0,不用)</td></tr>
+          <tr><td>c1..c6</td><td><code>000010</code>(x + y)</td><td><code>110010</code>(y − 1)</td><td><code>001100</code>(x)</td><td>(數值的一部分)</td></tr>
+          <tr><td>d1 d2 d3</td><td>0 1 0</td><td>1 0 1</td><td>0 0 0</td><td>位元是 0 1 0,但被 i = 0 關掉</td></tr>
+          <tr><td>j1 j2 j3</td><td>0 0 0</td><td>0 0 0</td><td>0 0 1</td><td>位元是 1 0 1,但被 i = 0 關掉</td></tr>
+          <tr><td>A 前多工器選</td><td>ALU 輸出</td><td>ALU 輸出</td><td>ALU 輸出</td><td>指令本身</td></tr>
+          <tr><td>A 的 load</td><td>0</td><td>1</td><td>0</td><td>1</td></tr>
+          <tr><td>D 的 load</td><td>1</td><td>0</td><td>0</td><td>0</td></tr>
+          <tr><td>writeM</td><td>0</td><td>1</td><td>0</td><td>0</td></tr>
+          <tr><td>ALU 輸出(zr、ng)</td><td>5(0、0)</td><td>257(0、0)</td><td>42(0、0)</td><td>(不用)</td></tr>
+          <tr><td>addressM</td><td>3</td><td>0</td><td>10</td><td>99</td></tr>
+          <tr><td>跳(PC 的 load)</td><td>0</td><td>0</td><td>1(42 &gt; 0)</td><td>0</td></tr>
+          <tr><td>這一拍做完</td><td>D = 5,PC = 6</td><td>RAM[0] = 257,A = 257,PC = 2</td><td>PC = 10</td><td>A = 21,PC = 1</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        <code>AM=M-1</code> 那一欄要小心:writeM 寫的是 addressM,也就是<strong>舊的</strong> A(0),所以改到的是 RAM[0];
+        A 同時被載入 257,但那是時脈邊緣之後的事。
+      </p>
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">看起來對但其實錯:「D 的 load 直接接 d2 就好,省一個 And」</span>
+          <p>拿 <code>D=D+A</code>、<code>D=M</code>、<code>MD=M+1</code> 這些 C 指令去試,省掉 And 的版本全部正確,因為 C 指令的 i 本來就是 1。
+          但看上表最右欄:<code>@21</code> 的低位元剛好是 <code>…010101</code>,在 d2、j1、j3 的位置上都是 1。
+          如果 D 的 load 只接 d2、跳躍判斷沒有和 i 做 And,執行前 D = 7、A = 99 時,這條 A 指令會讓 ALU 用 c = <code>000000</code> 算 D &amp; A = 7 &amp; 99 = 3,
+          D 被改成 3;3 &gt; 0 而 j3 = 1,PC 還會跳到 99。<strong>只拿 C 指令測試,例子都對,不代表接線是對的。</strong>
+          所有寫入與跳躍的線,都要先和 i 做 And。</p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 21.4 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>照上表的格式,寫出下面三條指令的每一條控制線,以及這一拍做完後的 A、D、PC 和被寫到的 RAM:</p>
+          <ol>
+            <li><code>MD=D+1</code>,執行前 D = 7、A = 200、RAM[200] = 99、PC = 10。</li>
+            <li><code>D;JGE</code>,執行前 D = 0、A = 33、PC = 4。</li>
+            <li><code>A=M</code>,執行前 D = −1、A = 5、RAM[5] = 900、PC = 8。</li>
+          </ol>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <div class="table-wrap"><table>
+              <thead><tr><th>線</th><th><code>MD=D+1</code></th><th><code>D;JGE</code></th><th><code>A=M</code></th></tr></thead>
+              <tbody>
+                <tr><td>16 位元</td><td><code>1110011111011000</code></td><td><code>1110001100000011</code></td><td><code>1111110000100000</code></td></tr>
+                <tr><td>i、a</td><td>1、0</td><td>1、0</td><td>1、1</td></tr>
+                <tr><td>c1..c6</td><td><code>011111</code>(x + 1)</td><td><code>001100</code>(x)</td><td><code>110000</code>(y)</td></tr>
+                <tr><td>d1 d2 d3</td><td>0 1 1</td><td>0 0 0</td><td>1 0 0</td></tr>
+                <tr><td>j1 j2 j3</td><td>0 0 0</td><td>0 1 1</td><td>0 0 0</td></tr>
+                <tr><td>A load、D load、writeM</td><td>0、1、1</td><td>0、0、0</td><td>1、0、0</td></tr>
+                <tr><td>ALU 的 y</td><td>A(被 zy 歸零,用不到)</td><td>A(被 zy 歸零,用不到)</td><td>inM = 900</td></tr>
+                <tr><td>ALU 輸出(zr、ng)</td><td>8(0、0)</td><td>0(1、0)</td><td>900(0、0)</td></tr>
+                <tr><td>addressM</td><td>200</td><td>33</td><td>5</td></tr>
+                <tr><td>跳</td><td>0</td><td>1(j2 ∧ zr)</td><td>0</td></tr>
+                <tr><td>這一拍做完</td><td>RAM[200] = 8,D = 8,A = 200,PC = 11</td><td>PC = 33,A、D 不變</td><td>A = 900,D = −1,PC = 9</td></tr>
+              </tbody>
+            </table></div>
+            <p>第 3 題做完後 A = 900,下一拍的 inM 就是 RAM[900]。這就是「先 <code>A=M</code>、再用 <code>M</code>」能走指標的原因。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <h3>手算:逐拍追 CPU(writeM 寫到哪、跳到哪)</h3>
+      <p>
+        現在把 CPU 接上 ROM 和 Memory,連跑 5 拍。這段程式是第 23 章的堆疊機會一直用到的「彈出」:
+        <code>RAM[0]</code>(<code>SP</code>)是堆疊指標,指向堆疊頂端的下一格;彈出 = SP 減 1,再把那一格讀進 D。最後兩行是「彈出來的值 &gt; 0 就跳到 10」。
+        執行前:<code>RAM[0] = 258</code>、<code>RAM[257] = 42</code>,A、D、PC 都是 0。
+      </p>
+      <pre><code class="language-text">0  @SP        // A = 0
+1  AM=M-1     // SP = SP - 1,同時 A = 新的 SP
+2  D=M        // D = 堆疊頂端的值
+3  @10
+4  D;JGT      // D &gt; 0 就跳到 10</code></pre>
+      <p>每一列是一拍。「拍前」是時脈邊緣之前的值,「拍後」是之後的值;inM 是 RAM[拍前的 A]。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>拍</th><th>PC</th><th>指令</th><th>拍前 A</th><th>拍前 D</th><th>inM</th><th>outM</th><th>writeM → 寫到</th><th>跳?</th><th>拍後 A</th><th>拍後 D</th><th>下一個 PC</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td>0</td><td><code>@SP</code></td><td>0</td><td>0</td><td>258</td><td>—</td><td>0</td><td>否</td><td>0</td><td>0</td><td>1</td></tr>
+          <tr><td>2</td><td>1</td><td><code>AM=M-1</code></td><td>0</td><td>0</td><td>258</td><td>257</td><td>1 → RAM[0] = 257</td><td>否</td><td><strong>257</strong></td><td>0</td><td>2</td></tr>
+          <tr><td>3</td><td>2</td><td><code>D=M</code></td><td>257</td><td>0</td><td>42</td><td>42</td><td>0</td><td>否</td><td>257</td><td><strong>42</strong></td><td>3</td></tr>
+          <tr><td>4</td><td>3</td><td><code>@10</code></td><td>257</td><td>42</td><td>42</td><td>—</td><td>0</td><td>否</td><td>10</td><td>42</td><td>4</td></tr>
+          <tr><td>5</td><td>4</td><td><code>D;JGT</code></td><td>10</td><td>42</td><td>RAM[10]</td><td>42</td><td>0</td><td><strong>是</strong></td><td>10</td><td>42</td><td><strong>10</strong></td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        結束時 <code>RAM[0] = 257</code>(SP 少了 1)、<code>RAM[257]</code> 還是 42(彈出只是讀,不清空)、D = 42、PC = 10。
+        A 指令那兩拍的 outM 寫成「—」:ALU 還是會算出某個值,但 writeM = 0,沒人用。
+      </p>
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">看起來對但其實錯:「<code>AM=M-1</code> 先算出新的 A,再把結果寫進 RAM[新的 A]」</span>
+          <p>這樣讀很順:左邊寫著 A,也寫著 M,而 M 就是 RAM[A]。照這個讀法,第 2 拍會寫進 RAM[257],RAM[0] 不變,SP 永遠減不下去。
+          實際上 writeM 用的是 addressM,而 addressM 接的是 A 暫存器<strong>現在的輸出</strong>;A 要等時脈邊緣才換成 257,
+          RAM 也在同一個邊緣寫入,所以寫進去的是 RAM[0]。同理,<code>AM=M-1;JMP</code> 這種指令會跳到舊的 A。
+          規則只有一條:<strong>一拍裡用到的 A,都是這一拍開始時的 A。</strong></p>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 21.5 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>同一段程式,改成執行前 <code>RAM[0] = 300</code>、<code>RAM[299] = -5</code>。填出 5 拍的表,並回答:最後 PC 是多少?哪一格 RAM 被改了?</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <div class="table-wrap"><table>
+              <thead><tr><th>拍</th><th>PC</th><th>指令</th><th>拍前 A</th><th>拍前 D</th><th>inM</th><th>outM</th><th>writeM → 寫到</th><th>跳?</th><th>拍後 A</th><th>拍後 D</th><th>下一個 PC</th></tr></thead>
+              <tbody>
+                <tr><td>1</td><td>0</td><td><code>@SP</code></td><td>0</td><td>0</td><td>300</td><td>—</td><td>0</td><td>否</td><td>0</td><td>0</td><td>1</td></tr>
+                <tr><td>2</td><td>1</td><td><code>AM=M-1</code></td><td>0</td><td>0</td><td>300</td><td>299</td><td>1 → RAM[0] = 299</td><td>否</td><td>299</td><td>0</td><td>2</td></tr>
+                <tr><td>3</td><td>2</td><td><code>D=M</code></td><td>299</td><td>0</td><td>-5</td><td>-5</td><td>0</td><td>否</td><td>299</td><td>-5</td><td>3</td></tr>
+                <tr><td>4</td><td>3</td><td><code>@10</code></td><td>299</td><td>-5</td><td>-5</td><td>—</td><td>0</td><td>否</td><td>10</td><td>-5</td><td>4</td></tr>
+                <tr><td>5</td><td>4</td><td><code>D;JGT</code></td><td>10</td><td>-5</td><td>RAM[10]</td><td>-5</td><td>0</td><td>否(ng = 1)</td><td>10</td><td>-5</td><td>5</td></tr>
+              </tbody>
+            </table></div>
+            <p>最後 PC = 5(−5 不大於 0,不跳)。只有 <code>RAM[0]</code> 被改成 299;<code>RAM[299]</code> 還是 −5。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <h3 id="spec-hack-computer">本章晶片規格表:Memory、CPU 與 Computer</h3>
+      <p>
+        本章 Lab「CPU 與電腦」要你用 HDL 做出下面 3 個晶片(本書自己寫的規格,晶片名與腳位照 Hack 平台)。
+        可以用的零件:內建的 <code>Nand</code>、<code>DFF</code>、<code>ROM32K</code>、<code>Screen</code>、<code>Keyboard</code>,
+        第 19 章與第 20 章你做好的晶片,和表中排在前面的晶片。前三列是內建晶片,只列腳位,不用做。
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>晶片</th><th>輸入腳(寬度)</th><th>輸出腳(寬度)</th><th>行為</th><th>一種接法:用哪些零件</th></tr></thead>
+        <tbody>
+          <tr><td><code>ROM32K</code>(內建)</td><td><code>address[15]</code></td><td><code>out[16]</code></td><td>out = 程式的第 address 條指令(唯讀,內容是載入的 .hack)</td><td>—</td></tr>
+          <tr><td><code>Screen</code>(內建)</td><td><code>in[16]</code>、<code>load</code>(1)、<code>address[13]</code></td><td><code>out[16]</code></td><td>8192 格的 RAM;每格的 16 個位元就是螢幕上的 16 個點(第 0 位是最左邊那一點)</td><td>—</td></tr>
+          <tr><td><code>Keyboard</code>(內建)</td><td>(沒有)</td><td><code>out[16]</code></td><td>目前按著的鍵碼,沒按是 0</td><td>—</td></tr>
+          <tr><td><code>Memory</code></td><td><code>in[16]</code>、<code>load</code>(1)、<code>address[15]</code></td><td><code>out[16]</code></td><td>0x0000–0x3FFF 交給 RAM16K;0x4000–0x5FFF 交給 Screen;0x6000 是 Keyboard(唯讀)。讀是組合的,寫要等下一拍。0x6001 以後規格沒有定義</td><td>RAM16K、Screen、Keyboard、DMux4Way、Mux4Way16</td></tr>
+          <tr><td><code>CPU</code></td><td><code>inM[16]</code>、<code>instruction[16]</code>、<code>reset</code>(1)</td><td><code>outM[16]</code>、<code>writeM</code>(1)、<code>addressM[15]</code>、<code>pc[15]</code></td><td>A 指令:A = 指令值。C 指令:ALU 算 D 和 A(a = 0)或 inM(a = 1);dest 決定存進 A、D、M(存 M＝outM 加上 writeM = 1);跳躍條件成立時 PC = A,否則 PC + 1。一拍裡用到的 A 都是這一拍開始時的 A。reset = 1:下一拍 PC = 0。addressM、pc 是 A、PC 的第 14..0 位</td><td>Mux16 ×2、ALU、Register ×2(A、D)、PC、And／Or／Not</td></tr>
+          <tr><td><code>Computer</code></td><td><code>reset</code>(1)</td><td>(沒有)</td><td>ROM32K 依 pc 送出指令給 CPU,CPU 透過 Memory 讀寫資料;reset = 1 從第 0 條重新執行</td><td>ROM32K、CPU、Memory</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        Memory 的位址怎麼拆,見本章「Memory 晶片與 I/O 的位址解碼」;CPU 每一條控制線的公式,見「把 CPU 接起來」的文字版表格。
+        CPU 裡的 A、D 暫存器請用你自己的 <code>Register</code>(web IDE 的 <code>ARegister</code>、<code>DRegister</code> 不在 9Jang 的內建清單裡)。
+        完整的規格表在<a href="130-hack-hdl-reference.html">附錄 G</a>。
+      </p>
+
+      <h3 id="lab-hack-cpu">本章 Lab:CPU 與電腦 hack/*.hdl</h3>
+      <div class="callout lab" data-task="hack/cpu">
+        <div class="ico">🧪</div>
+        <div class="body">
+          <span class="c-title">本章 Lab · 任務線「hack」· 任務「CPU 與電腦」</span>
+          <p><strong>對應地下城任務:</strong>任務「CPU 與電腦」(任務線:hack 從 NAND 到自己的電腦,第 6 個任務;先做完第 19 章的任務「基本邏輯閘」、第 20 章的任務「加法器與 ALU」和「暫存器與記憶體」;CPU 直接用到你的 Mux16、And、Or、Not 等閘)。
+          零件檔:<code>~/零件庫/hack/Memory.hdl</code>、<code>CPU.hdl</code>、<code>Computer.hdl</code>。</p>
+          <p><strong>要做的零件:</strong>把前面做好的晶片接成 Memory(含螢幕與鍵盤的位址解碼)、Hack CPU,最後接成整台 Computer。</p>
+          <p><strong>介面:</strong>腳位照上面的「本章晶片規格表:Memory、CPU 與 Computer」:</p>
+<pre><code class="language-text">Memory    IN in[16], load, address[15];          OUT out[16];
+CPU       IN inM[16], instruction[16], reset;    OUT outM[16], writeM, addressM[15], pc[15];
+Computer  IN reset;                              (沒有輸出腳)
+
+可以用的內建晶片:
+ROM32K    IN address[15];                        OUT out[16];
+Screen    IN in[16], load, address[13];          OUT out[16];
+Keyboard                                         OUT out[16];</code></pre>
+          <p><strong>公開範例:</strong><code>test</code> 讓你的 Computer 和參考 CPU 跑同一支程式,每一拍比 PC、A、D 與記憶體寫入,報第一個不同的拍
+          (例:「第 37 拍:PC 應該是 12,你的是 13(檢查跳躍條件)」)。下面是本書自己寫的小程式(不是任務的公開程式本身)該有的逐拍結果:
+          <code>@0</code>、<code>D=M</code>、<code>@1</code>、<code>D=D+M</code>、<code>@2</code>、<code>M=D</code>、<code>(END)</code>、<code>@END</code>、<code>0;JMP</code>
+          把 <code>RAM[0] + RAM[1]</code> 存進 <code>RAM[2]</code>(END 是第 6 條)。初始 <code>RAM[0] = 7</code>、<code>RAM[1] = -2</code>,A、D、PC 都是 0。</p>
+<pre><code class="language-text">拍  PC  指令    拍後A  拍後D  下一個PC  寫入
+1   0   @0          0      0        1  —
+2   1   D=M         0      7        2  —
+3   2   @1          1      7        3  —
+4   3   D=D+M       1      5        4  —
+5   4   @2          2      5        5  —
+6   5   M=D         2      5        6  RAM[2] = 5
+7   6   @END        6      5        7  —
+8   7   0;JMP       6      5        6  —
+9   6   @END        6      5        7  —</code></pre>
+          <p><strong>和本章範例不同的地方:</strong>可以參考本章的範例,但介面和要求不同,要自己改寫。</p>
+          <ul>
+            <li>本章的 <code>control_lines()</code> 回傳一個字典,zr、ng 是傳進去的參數;CPU 晶片要把同樣的公式接成線,zr、ng 是你的 ALU 這一拍算出來的,A、D、PC 用你自己的 <code>Register</code> 和 <code>PC</code>。</li>
+            <li>本章的 <code>memory_route()</code> 對 0x6001 以後回傳「無效」;Memory 晶片沒有「無效」這個輸出,規格只定義到 0x6000,程式不可以依賴 0x6001 以後讀到什麼。</li>
+            <li>本章的手算一次追一條指令;任務是整台 Computer 和參考 CPU 逐拍對照,每一拍的 A、D、PC 和寫入都要對。</li>
+          </ul>
+          <p><strong>任務目標</strong>(公開的用 <code>test</code> 自己跑;隱藏檢定在 <code>submit</code> 時跑,只看得到名稱和一行說明):</p>
+          <ul class="lab-goals">
+            <li data-group="cpu.public">☐ <strong>公開程式逐拍對照</strong>〔公開〕你的 Computer 跑公開的測試程式(加總、找最大值、畫矩形),和參考 CPU 逐拍對照 PC、A、D 與記憶體寫入,顯示第一個不同的拍。</li>
+            <li data-group="cpu.memory-map">☐ <strong>記憶體映射</strong>〔隱藏檢定〕Memory 的位址邊界:0x3FFF、0x4000(螢幕開頭)、0x5FFF、0x6000(鍵盤)。</li>
+            <li data-group="cpu.instructions">☐ <strong>指令全集</strong>〔隱藏檢定〕所有 comp、dest、jump 組合;A 指令;跳躍條件(負、零、正);writeM 與 addressM 的時序;reset。</li>
+            <li data-group="cpu.perf">☐ <strong>整台電腦的規模</strong>〔隱藏檢定〕全部用你自己的晶片也跑得完。效能:全學生版 Computer 跑 2,000 拍,10 秒、384 MB 內(估計值,批改器做好後實測再調)。
+            這個門檻來自 Boss 戰「三支隱藏程式」(每支 2,000 拍,批改 10 秒內)和「全學生版結構檢查」(整台 Computer 10 秒、384 MB 內建出)。</li>
+          </ul>
+          <p><strong>結構規則:</strong>只能用內建的 <code>Nand</code>、<code>DFF</code>、<code>ROM32K</code>、<code>Screen</code>、<code>Keyboard</code>,和你自己前面做好的晶片。
+          判題時,只有輸入不超過 8 位元、你目前的版本已經通過窮舉的組合晶片(例如 <code>Mux</code>、<code>DMux4Way</code>、<code>FullAdder</code>)會換成內建版本加速;
+          <code>ALU</code>、<code>Add16</code>、<code>Register</code>、<code>PC</code>、各級 RAM 一律模擬你自己的設計。整台全學生版太慢時,改成逐晶片各自檢查
+          (規則見<a href="130-hack-hdl-reference.html">附錄 G</a>的替身政策)。</p>
+          <p><strong>之後會用在:</strong>Boss 戰「三支隱藏程式」(你的 Computer 和參考 CPU 逐拍對照三支沒公開過的程式)與「全學生版結構檢查」。
+          通過逐拍對照之後,Boss 戰「組譯方塊雨」的遊戲在和它等價的快速模擬器上跑。</p>
+          <p class="lab-rule">這個零件過關之後,後面的專題一律用你自己的版本。規則見<a href="00-about.html#lab-rules">零件庫規則</a>。</p>
+        </div>
+      </div>
 
       <h2>放眼真實世界:定址、ISA、RISC 與 CISC</h2>
       <p>
@@ -1367,6 +2175,114 @@ M=D       // 指令 5</code></pre>
               </p>
             </div>
           </details>
+        </div>
+      </div>
+
+      <h3>模擬器的一拍,要照硬體的順序</h3>
+      <p>
+        21.L2 的 <code>hack_sim.py</code> 是為了看懂組合語言而寫的:它直接吃組語字串,而且在一般程式上,逐拍結果和真的 Hack CPU 一樣。
+        但有一種指令它和硬體不同:<strong>dest 裡有 A、又帶著 jump</strong> 的 C 指令。前面「把 CPU 接起來」說過,
+        一拍裡用到的 A 都是這一拍開始時的 A;<code>hack_sim.py</code> 卻是先更新 A、再做 <code>PC = A</code>。
+      </p>
+      <pre><code class="language-python"># 接在 hack_sim.py 後面執行
+DEMO = """\
+@4
+A=A+1;JMP
+@0
+0;JMP
+@111
+@222
+"""
+history, RAM = run(DEMO, max_cycles=3)
+for row in history:
+    print(row['cycle'], row['instr'], 'A =', row['A'], 'PC =', row['PC'])</code></pre>
+      <pre><code class="language-text">1 @4 A = 4 PC = 1
+2 A=A+1;JMP A = 5 PC = 5
+3 @222 A = 222 PC = 6</code></pre>
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">看起來對但其實錯:「跳躍目標是這條指令算完的新 A」</span>
+          <p>第 2 拍的 <code>A=A+1;JMP</code>:<code>hack_sim.py</code> 跳到 5,印出第 3 拍執行的是 <code>@222</code>。
+          照硬體的接法,PC 在時脈邊緣載入的是 A 的舊值 4,第 3 拍應該執行 <code>@111</code>;A 雖然也在同一個邊緣變成 5,但 PC 已經拿到 4 了。
+          正常的程式很少這樣寫,所以跑本章所有的範例都看不出差別。<strong>範例都對,不代表模擬器和硬體一致。</strong>
+          要寫一個能和硬體逐拍對照的模擬器,一拍裡要先用舊的 A 算出 addressM 和跳躍目標,寫完 RAM、決定好下一個 PC,最後才更新 A 和 D。</p>
+        </div>
+      </div>
+
+      <h3 id="lab-hack-emulator">本章 Lab:Hack 模擬器(選修) hack/emulator.py</h3>
+      <div class="callout lab" data-task="hack/emulator">
+        <div class="ico">🧪</div>
+        <div class="body">
+          <span class="c-title">本章 Lab · 任務線「hack」· 任務「Hack 模擬器(選修)」</span>
+          <p><strong>對應地下城任務:</strong>任務「Hack 模擬器(選修)」(任務線:hack 從 NAND 到自己的電腦,第 5 個任務)。零件檔:<code>~/零件庫/hack/emulator.py</code>。
+          選修:不做也能打 hack 的四個 Boss 戰;做了,可以拿它流暢地跑、除錯自己的互動程式,之後寫 CHIP-8 模擬器時也可以參考同一種主迴圈。</p>
+          <p><strong>要做的零件:</strong>用 Python 寫一個指令層級的 Hack CPU 模擬器:吃 .hack 機器碼,一條一條執行,行為和第 21 章接好的硬體逐拍相同。</p>
+          <p><strong>介面:</strong></p>
+<pre><code class="language-python"># ~/零件庫/hack/emulator.py   用法:from hack.emulator import HackEmulator, load_hack
+
+def load_hack(path: str) -&gt; list[int]:
+    """讀 .hack 檔(每行 16 個 0/1,空行略過),回傳指令字的串列(每個 0..65535)。"""
+
+class HackEmulator:
+    def __init__(self, rom: list[int]):
+        """A、D、PC 從 0 開始;self.ram 是 32768 格的串列。
+        self.A、self.D 和 self.ram 的每一格都存 16 位元樣式 0..65535(-1 存成 65535)。"""
+
+    def step(self) -&gt; None:
+        """執行 ROM[PC] 這一條指令。寫入位址和跳躍目標都用這一拍開始時的 A;
+        程式寫到 24576(KBD)沒有效果。"""
+
+    def run(self, max_steps: int) -&gt; int:
+        """一直 step,直到停住或做滿 max_steps 條;回傳做了幾條。
+        停住:PC 超出程式,或 PC 走到 Hack 慣例的結尾迴圈(ROM[PC] 是 @PC、下一條是 0;JMP)。"""
+
+    def set_key(self, code: int) -&gt; None:
+        """設定目前按著的鍵碼(0 = 沒按);程式讀 RAM[24576] 會讀到它。"""</code></pre>
+          <p><strong>公開範例:</strong>本書自己寫的例子(不是任務的公開程式本身)。<code>Add46.hack</code> 是 <code>@4</code>、<code>D=A</code>、<code>@6</code>、<code>D=D+A</code>、<code>@1</code>、<code>M=D</code>、<code>(END)</code>、<code>@END</code>、<code>0;JMP</code> 組出來的 8 行:</p>
+<pre><code class="language-text">0000000000000100
+1110110000010000
+0000000000000110
+1110000010010000
+0000000000000001
+1110001100001000
+0000000000000110
+1110101010000111</code></pre>
+<pre><code class="language-python">&gt;&gt;&gt; from hack.emulator import HackEmulator, load_hack
+&gt;&gt;&gt; emu = HackEmulator(load_hack("Add46.hack"))
+&gt;&gt;&gt; emu.run(1000)          # 做了 6 條,PC 走到結尾迴圈就停
+6
+&gt;&gt;&gt; emu.ram[1], emu.D, emu.PC
+(10, 10, 6)
+&gt;&gt;&gt; rom = [0b0000000000000100,    # 0  @4
+...        0b1110110111100111,    # 1  A=A+1;JMP
+...        0b0000000000000000,    # 2  @0
+...        0b1110101010000111,    # 3  0;JMP
+...        0b0000000001101111,    # 4  @111
+...        0b0000000011011110]    # 5  @222
+&gt;&gt;&gt; emu = HackEmulator(rom)
+&gt;&gt;&gt; for _ in range(3):
+...     emu.step()
+...
+&gt;&gt;&gt; emu.A, emu.PC                 # 第 2 條跳到舊的 A(4),第 3 條執行的是 @111
+(111, 5)</code></pre>
+          <p><strong>和本章範例不同的地方:</strong>可以參考本章的範例,但介面和要求不同,要自己改寫。</p>
+          <ul>
+            <li>21.L2 的 <code>hack_sim.py</code> 吃組合語言字串,自己先組譯,再用助記符查 <code>COMP_TABLE</code>;任務吃 .hack 機器碼,要自己從位元解出 a、c1..c6、dest、jump。</li>
+            <li>dest 有 A、又帶 jump 的指令,<code>hack_sim.py</code> 跳到<strong>新的</strong> A(上一節的 <code>DEMO</code> 跳到 5);任務照硬體,跳到這一拍開始時的 A(上面第二段跳到 4)。</li>
+            <li><code>hack_sim.py</code> 的 RAM 存有號整數;任務的 <code>ram</code>、<code>A</code>、<code>D</code> 一律存 0..65535 的 16 位元樣式。</li>
+            <li><code>hack_sim.py</code> 的 <code>run(src, ram_init, max_cycles)</code> 回傳每一拍的歷史;任務的 <code>run(max_steps)</code> 回傳做了幾條,走到結尾迴圈就停。</li>
+            <li>鍵盤:任務用 <code>set_key()</code> 設定 <code>RAM[24576]</code>,程式寫那一格沒有效果。</li>
+          </ul>
+          <p><strong>任務目標</strong>(公開的用 <code>test</code> 自己跑;隱藏檢定在 <code>submit</code> 時跑,只看得到名稱和一行說明):</p>
+          <ul class="lab-goals">
+            <li data-group="emulator.public">☐ <strong>公開程式</strong>〔公開〕跑公開的 .hack 程式,最後的 RAM 對參考模擬器。</li>
+            <li data-group="emulator.full">☐ <strong>指令全集</strong>〔隱藏檢定〕所有 28 種 comp、8 種跳躍、螢幕與鍵盤的記憶體映射;隱藏程式最後的 RAM 與執行步數對參考模擬器。</li>
+            <li data-group="emulator.perf">☐ <strong>效能</strong>〔隱藏檢定〕主迴圈要夠快,才能拿來流暢地跑、除錯自己的互動程式(之後寫 CHIP-8 模擬器時也可以參考同一種主迴圈)。效能:10<sup>6</sup> 條指令,2 秒內。
+            選修時的門檻:用自己的模擬器跑自己的互動程式要跟得上按鍵(老師核可;按鍵塗滿整個螢幕一次最多 2×10<sup>5</sup> 條指令)。</li>
+          </ul>
+          <p><strong>之後會用在:</strong>這是選修任務,沒有別的任務會 import 它。任務線 emu 的 CHIP-8 模擬器(之後的章,用 C 寫)可以參考同樣的「取指 → 解碼 → 執行」主迴圈,換一套指令集而已。</p>
+          <p class="lab-rule">這個零件過關之後,後面的專題一律用你自己的版本。規則見<a href="00-about.html#lab-rules">零件庫規則</a>。</p>
         </div>
       </div>
 

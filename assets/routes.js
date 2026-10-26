@@ -74,6 +74,7 @@ window.BOOK_ROUTES = [
     "chapters": [
       "19-boolean-logic",
       "47-digital-circuits",
+      "130-hack-hdl-reference",
       "20-combinational-sequential",
       "21-cpu-machine-language",
       "22-assembler",

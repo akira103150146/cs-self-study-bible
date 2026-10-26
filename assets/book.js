@@ -329,9 +329,9 @@ const BOOK = {
       ],
     },
     {
-      part: "附錄 · 完整題庫",
+      part: "附錄 · 題庫與速查",
       icon: "📚",
-      blurb: "依章節收錄 AP325、APCS、TOI 全部題目與解答,當你的刷題地圖。",
+      blurb: "依章節收錄 AP325、APCS、TOI 全部題目與解答,當你的刷題地圖;附G 是 Hack 晶片語言與測試腳本的速查。",
       chapters: [
         { id: "74-bank-ap325", num: "附A", title: "AP325 完整題單(依章)", en: "AP325 Problem List", done: true },
         { id: "75-bank-apcs-concept", num: "附B", title: "APCS 觀念題題庫(125 題)", en: "APCS Concept Questions", done: true },
@@ -339,6 +339,7 @@ const BOOK = {
         { id: "77-bank-apcs-impl-2", num: "附D", title: "APCS 實作題題庫(下)第 7–11 章", en: "APCS Implementation II", done: true },
         { id: "78-bank-apcs-mock", num: "附E", title: "APCS 模擬考卷(3 卷)", en: "APCS Mock Exams", done: true },
         { id: "79-bank-toi", num: "附F", title: "TOI 題庫(337 題,全文)", en: "TOI Problem Bank", done: true },
+        { id: "130-hack-hdl-reference", num: "附G", title: "Hack HDL 與測試腳本速查", en: "Hack HDL & Test Script Reference", done: true },
       ],
     },
   ],
