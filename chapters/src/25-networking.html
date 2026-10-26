@@ -672,6 +672,125 @@ Content-Length: 1256
         </div>
       </div>
 
+      <h3>手算:三向交握、傳資料、關閉連線的序號與確認號</h3>
+      <p>
+        圖 25-5 用 x、y 代表序號。這一節代入真的數字,把一條 TCP 連線從頭追到尾:交握、送一個 HTTP 請求、收一個回應、關閉。
+        每一列是一個區段(segment)。只要三條規則:
+      </p>
+      <ul>
+        <li><strong>seq</strong> = 這個區段第一個位元組的編號。</li>
+        <li><strong>SYN 和 FIN 各佔 1 個序號</strong>(它們不帶資料,但也要被確認);純 ACK 不佔序號。</li>
+        <li><strong>ack</strong> = 「我下一個想收到的位元組編號」。ack = N 表示「N 以前的全部收到了」,這叫<strong>累積確認(cumulative ACK)</strong>。</li>
+      </ul>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">為什麼要學</span>
+          <p>你的程式看不到區段,只看得到 <code>recv()</code> 交給你的位元組。可是「一個請求分好幾次到」「對方送一半就斷線,<code>recv()</code> 回傳 <code>b''</code>」這些事,
+          都是區段層的事:下面這張表的第 8、9 列是對方關閉時 <code>recv()</code> 回傳 <code>b''</code>,資料分成好幾段、中間掉一段的情形在手算 25.1(b)。本章 Lab 的 <code>srv/http</code> 有一組隱藏檢定叫「半開與分段」,考的就是這個。</p>
+        </div>
+      </div>
+
+      <p>
+        情境:客戶端挑的初始序號(ISN)是 1000,伺服器是 5000。客戶端送 100 位元組的 HTTP 請求,伺服器回 300 位元組的回應。
+        回應帶了 <code>Connection: close</code>,所以<strong>伺服器先關</strong>(和本章後面實驗室的伺服器一樣)。
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>步</th><th>方向</th><th>旗標</th><th>seq</th><th>ack</th><th>資料長度</th><th>說明</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td>C→S</td><td>SYN</td><td>1000</td><td>—</td><td>0</td><td>客戶端挑 ISN = 1000</td></tr>
+          <tr><td>2</td><td>S→C</td><td>SYN+ACK</td><td>5000</td><td>1001</td><td>0</td><td>SYN 佔了 1000 這個號,所以下一個想要 1001</td></tr>
+          <tr><td>3</td><td>C→S</td><td>ACK</td><td>1001</td><td>5001</td><td>0</td><td>交握完成。純 ACK 不佔序號</td></tr>
+          <tr><td>4</td><td>C→S</td><td>PSH+ACK</td><td>1001</td><td>5001</td><td>100</td><td>HTTP 請求佔 1001–1100</td></tr>
+          <tr><td>5</td><td>S→C</td><td>ACK</td><td>5001</td><td>1101</td><td>0</td><td>1100 以前都收到,下一個要 1101</td></tr>
+          <tr><td>6</td><td>S→C</td><td>PSH+ACK</td><td>5001</td><td>1101</td><td>300</td><td>HTTP 回應佔 5001–5300</td></tr>
+          <tr><td>7</td><td>C→S</td><td>ACK</td><td>1101</td><td>5301</td><td>0</td><td>回應全部收到</td></tr>
+          <tr><td>8</td><td>S→C</td><td>FIN+ACK</td><td>5301</td><td>1101</td><td>0</td><td>伺服器 <code>close()</code>;FIN 佔 5301</td></tr>
+          <tr><td>9</td><td>C→S</td><td>ACK</td><td>1101</td><td>5302</td><td>0</td><td>客戶端的 <code>recv()</code> 這時回傳 <code>b''</code></td></tr>
+          <tr><td>10</td><td>C→S</td><td>FIN+ACK</td><td>1101</td><td>5302</td><td>0</td><td>客戶端也 <code>close()</code>;FIN 佔 1101</td></tr>
+          <tr><td>11</td><td>S→C</td><td>ACK</td><td>5302</td><td>1102</td><td>0</td><td>雙方都關了</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        幾個要注意的地方。第 3、4 列的 seq 都是 1001:第 3 列是純 ACK,不佔號,所以資料從 1001 開始。
+        第 8–11 列是關閉:每一邊各送一個 FIN、各收一個 ACK,共四個區段(常叫「四次揮手」)。
+        第 8、9 列之後,伺服器→客戶端這個方向已經關了,但客戶端→伺服器還可以送資料,這叫<strong>半關閉(half-close)</strong>。
+        不過這裡的伺服器用的是 <code>close()</code>,兩個方向都不收了:客戶端這時再送資料,伺服器的作業系統會回 RST,客戶端下一次 <code>send()</code> 就出錯(作者實測是 <code>BrokenPipeError</code>)。真的只關自己這一邊、還要繼續收,要用 <code>shutdown(socket.SHUT_WR)</code>。
+        真實的 ISN 是隨機挑的(讓攻擊者猜不到序號);Wireshark 預設顯示「相對序號」,從 0 開始算,方便閱讀。
+      </p>
+      <p>下面的程式把三條規則寫成程式,印出同一張表:</p>
+<pre><code class="language-python"># tcp_seq.py —— 照三條規則算出每個 TCP 區段的 seq 與 ack
+def tcp_trace(isn_c, isn_s, events):
+    nxt = {"C": isn_c, "S": isn_s}     # 雙方「下一個要用的序號」
+    want = {"C": None, "S": None}      # 雙方「下一個想收到的序號」(交握前還不知道)
+    for i, (who, flags, length, note) in enumerate(events, 1):
+        other = "S" if who == "C" else "C"
+        seq = nxt[who]
+        ack = want[who] if "ACK" in flags else None
+        used = length + ("SYN" in flags) + ("FIN" in flags)   # SYN、FIN 各佔 1 號
+        nxt[who] += used
+        want[other] = nxt[who]         # 對方收到後,下一個想要的就是這裡
+        arrow = "C→S" if who == "C" else "S→C"
+        print(f"{i:2} {arrow} {'+'.join(flags):8} seq={seq:&lt;5} "
+              f"ack={'—' if ack is None else ack:&lt;5} len={length:&lt;3} {note}")
+
+tcp_trace(1000, 5000, [
+    ("C", ["SYN"], 0, "交握 1"),
+    ("S", ["SYN", "ACK"], 0, "交握 2"),
+    ("C", ["ACK"], 0, "交握 3"),
+    ("C", ["PSH", "ACK"], 100, "HTTP 請求"),
+    ("S", ["ACK"], 0, "收到請求"),
+    ("S", ["PSH", "ACK"], 300, "HTTP 回應"),
+    ("C", ["ACK"], 0, "收到回應"),
+    ("S", ["FIN", "ACK"], 0, "伺服器 close()"),
+    ("C", ["ACK"], 0, ""),
+    ("C", ["FIN", "ACK"], 0, "客戶端 close()"),
+    ("S", ["ACK"], 0, ""),
+])</code></pre>
+<pre><code class="language-text"> 1 C→S SYN      seq=1000  ack=—     len=0   交握 1
+ 2 S→C SYN+ACK  seq=5000  ack=1001  len=0   交握 2
+ 3 C→S ACK      seq=1001  ack=5001  len=0   交握 3
+ 4 C→S PSH+ACK  seq=1001  ack=5001  len=100 HTTP 請求
+ 5 S→C ACK      seq=5001  ack=1101  len=0   收到請求
+ 6 S→C PSH+ACK  seq=5001  ack=1101  len=300 HTTP 回應
+ 7 C→S ACK      seq=1101  ack=5301  len=0   收到回應
+ 8 S→C FIN+ACK  seq=5301  ack=1101  len=0   伺服器 close()
+ 9 C→S ACK      seq=1101  ack=5302  len=0
+10 C→S FIN+ACK  seq=1101  ack=5302  len=0   客戶端 close()
+11 S→C ACK      seq=5302  ack=1102  len=0</code></pre>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 25.1 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>客戶端 ISN = 3000,伺服器 ISN = 9000。客戶端送 120 位元組的請求;伺服器的回應有 2000 位元組,分成 1460 和 540 兩個區段送出;
+          客戶端收完後<strong>先關</strong>。(a) 填出 11 個區段的 seq 與 ack(順序:交握 3 個、請求、回應第 1 段、回應第 2 段、客戶端的 ACK、客戶端 FIN、伺服器 ACK、伺服器 FIN、客戶端 ACK)。
+          (b) 如果回應的第 1 段(1460 位元組)在路上掉了,第 2 段先到,客戶端回的 ack 是多少?</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <div class="table-wrap"><table>
+              <thead><tr><th>步</th><th>方向</th><th>旗標</th><th>seq</th><th>ack</th><th>資料長度</th></tr></thead>
+              <tbody>
+                <tr><td>1</td><td>C→S</td><td>SYN</td><td>3000</td><td>—</td><td>0</td></tr>
+                <tr><td>2</td><td>S→C</td><td>SYN+ACK</td><td>9000</td><td>3001</td><td>0</td></tr>
+                <tr><td>3</td><td>C→S</td><td>ACK</td><td>3001</td><td>9001</td><td>0</td></tr>
+                <tr><td>4</td><td>C→S</td><td>PSH+ACK</td><td>3001</td><td>9001</td><td>120</td></tr>
+                <tr><td>5</td><td>S→C</td><td>ACK</td><td>9001</td><td>3121</td><td>1460</td></tr>
+                <tr><td>6</td><td>S→C</td><td>PSH+ACK</td><td>10461</td><td>3121</td><td>540</td></tr>
+                <tr><td>7</td><td>C→S</td><td>ACK</td><td>3121</td><td>11001</td><td>0</td></tr>
+                <tr><td>8</td><td>C→S</td><td>FIN+ACK</td><td>3121</td><td>11001</td><td>0</td></tr>
+                <tr><td>9</td><td>S→C</td><td>ACK</td><td>11001</td><td>3122</td><td>0</td></tr>
+                <tr><td>10</td><td>S→C</td><td>FIN+ACK</td><td>11001</td><td>3122</td><td>0</td></tr>
+                <tr><td>11</td><td>C→S</td><td>ACK</td><td>3122</td><td>11002</td><td>0</td></tr>
+              </tbody>
+            </table></div>
+            <p>第 6 列:9001 + 1460 = 10461。第 7 列:一個 ack = 11001 就同時確認了兩個區段(累積確認),不用每段各回一次。</p>
+            <p>(b) ack = <strong>9001</strong>。客戶端收到的是 10461–11000,可是 9001–10460 還沒到。累積確認不能跳過缺口,
+            所以它只能一直回「我還要 9001」。傳送端收到好幾個相同的 ack(重複 ACK),或是等到逾時,就會重傳 9001 開始的那一段。
+            這段時間裡,伺服器端的程式什麼都看不到;客戶端的 <code>recv()</code> 也拿不到 10461 之後的資料,因為 TCP 只把「排好、沒有缺口」的位元組交給程式。</p>
+          </div></details>
+        </div>
+      </div>
+
       <h2>網路層:讓封包穿越地球</h2>
       <p>
         傳輸層把資料切成一段段,交給網路層。網路層只有一個任務,但這任務無比艱鉅:
@@ -849,6 +968,100 @@ Content-Length: 1256
               <code>32 − 28 = 4</code> 位元,可用主機數 = $2^4 - 2 = \mathbf{14}$ 台。</p>
             </div>
           </details>
+        </div>
+      </div>
+
+      <h3>手算:CIDR 的網路位址、廣播位址與主機數</h3>
+      <p>
+        上一題只算了「切出幾個子網路、每個幾台主機」。實際設定網路時,你還要知道一個位址<strong>落在哪一段</strong>:
+        這一段的<strong>網路位址(network address)</strong>、<strong>廣播位址(broadcast address)</strong>,以及中間可以分給主機的範圍。
+        四個步驟,前綴長度記成 $p$:
+      </p>
+      <ol>
+        <li><strong>遮罩</strong>:前 $p$ 個位元是 1,其餘是 0。</li>
+        <li><strong>網路位址</strong> = 位址 AND 遮罩(主機位元全部清成 0)。</li>
+        <li><strong>廣播位址</strong> = 網路位址 OR 遮罩的反相(主機位元全部設成 1)。</li>
+        <li><strong>可用主機</strong>:網路位址 + 1 到廣播位址 − 1,共 $2^{32-p} - 2$ 台。</li>
+      </ol>
+      <p>
+        只有「被前綴切開的那一段」要換成二進位,其他段直接照抄(全 1 的段照抄,全 0 的段網路位址寫 0、廣播位址寫 255)。
+        以 <code>192.168.10.77/26</code> 為例:前 24 位元是前三段,照抄 <code>192.168.10</code>;第四段要再拿 2 個位元,遮罩是 <code>11000000</code> = 192。
+        77 = <code>01|001101</code>,直線左邊是網路位元。網路位址把右邊清成 0:<code>01|000000</code> = 64;廣播位址把右邊設成 1:<code>01|111111</code> = 127。
+      </p>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">為什麼要學</span>
+          <p>設定防火牆規則、Docker 的網段、雲端的子網路,寫的都是 CIDR。<code>127.0.0.0/8</code> 是本機迴路(loopback)整段:
+          本章 Lab 的伺服器預設只綁 <code>127.0.0.1</code>,就是「只讓這台機器自己連」。</p>
+        </div>
+      </div>
+
+      <div class="table-wrap"><table>
+        <thead><tr><th>CIDR</th><th>遮罩</th><th>被切開的那一段(| 左邊是網路位元)</th><th>網路位址</th><th>廣播位址</th><th>可用主機範圍</th><th>主機數</th></tr></thead>
+        <tbody>
+          <tr><td><code>192.168.10.77/26</code></td><td>255.255.255.192</td><td>第 4 段 77 = <code>01|001101</code></td><td>192.168.10.64</td><td>192.168.10.127</td><td>.65 – .126</td><td>$2^6-2=62$</td></tr>
+          <tr><td><code>192.168.10.77/28</code></td><td>255.255.255.240</td><td>第 4 段 77 = <code>0100|1101</code></td><td>192.168.10.64</td><td>192.168.10.79</td><td>.65 – .78</td><td>$2^4-2=14$</td></tr>
+          <tr><td><code>10.1.2.3/20</code></td><td>255.255.240.0</td><td>第 3 段 2 = <code>0000|0010</code>,第 4 段全是主機位元</td><td>10.1.0.0</td><td>10.1.15.255</td><td>10.1.0.1 – 10.1.15.254</td><td>$2^{12}-2=4094$</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        第 3 列要小心:<code>/20</code> 切在第 3 段中間。第 3 段 2 AND 240 = 0,2 OR 15 = 15;第 4 段整段是主機位元,網路位址寫 0、廣播位址寫 255。
+        同一個 77,<code>/26</code> 和 <code>/28</code> 的網路位址都是 .64,但前綴越長,這一段越小,廣播位址就越早到。
+      </p>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">看起來對但其實錯:「網路位址就是把最後一段改成 0」</span>
+          <p>對 <code>192.168.1.0/24</code> 這種前綴剛好是 8 的倍數的例子,這招每次都對;常見的家用網段幾乎都是 <code>/24</code>,所以很容易以為它是規則。
+          換成 <code>10.1.2.3/20</code>,這招會說 <code>10.1.2.0</code>,正確答案是 <code>10.1.0.0</code>;<code>10.1.2.0</code> 只是這一段裡一台普通的主機。
+          <strong>例子都對 ≠ 敘述為真。</strong>規則只有一條:位址 AND 遮罩。</p>
+        </div>
+      </div>
+
+      <p>用標準函式庫 <code>ipaddress</code> 對答案(手算步驟寫成位元運算,再和 <code>ip_network</code> 比):</p>
+<pre><code class="language-python"># cidr.py —— 照手算步驟算網路位址與廣播位址,再和標準函式庫 ipaddress 對答案
+import ipaddress
+
+def by_hand(cidr):
+    addr, p = cidr.split("/")
+    p = int(p)
+    a = int(ipaddress.IPv4Address(addr))           # 32 位元整數
+    mask = (0xFFFFFFFF &lt;&lt; (32 - p)) &amp; 0xFFFFFFFF    # 前 p 個 1
+    net = a &amp; mask                                  # 主機位元全部清成 0
+    bcast = net | (~mask &amp; 0xFFFFFFFF)              # 主機位元全部設成 1
+    ip = lambda x: str(ipaddress.IPv4Address(x))
+    return ip(mask), ip(net), ip(bcast), 2 ** (32 - p) - 2
+
+for cidr in ["192.168.10.77/26", "192.168.10.77/28", "10.1.2.3/20"]:
+    mask, net, bcast, hosts = by_hand(cidr)
+    n = ipaddress.ip_network(cidr, strict=False)    # 標準答案
+    assert (mask, net, bcast) == (str(n.netmask), str(n.network_address), str(n.broadcast_address))
+    assert hosts == n.num_addresses - 2
+    print(f"{cidr:17} 遮罩 {mask:15} 網路 {net:13} 廣播 {bcast:15} 可用主機 {hosts}")</code></pre>
+<pre><code class="language-text">192.168.10.77/26  遮罩 255.255.255.192 網路 192.168.10.64 廣播 192.168.10.127  可用主機 62
+192.168.10.77/28  遮罩 255.255.255.240 網路 192.168.10.64 廣播 192.168.10.79   可用主機 14
+10.1.2.3/20       遮罩 255.255.240.0   網路 10.1.0.0      廣播 10.1.15.255     可用主機 4094</code></pre>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 25.2 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>算出下面兩個位址所在網段的遮罩、網路位址、廣播位址、可用主機範圍與主機數:(a) <code>172.16.45.200/21</code>;(b) <code>192.168.7.130/29</code>。</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <div class="table-wrap"><table>
+              <thead><tr><th>CIDR</th><th>遮罩</th><th>被切開的那一段</th><th>網路位址</th><th>廣播位址</th><th>可用主機範圍</th><th>主機數</th></tr></thead>
+              <tbody>
+                <tr><td><code>172.16.45.200/21</code></td><td>255.255.248.0</td><td>第 3 段 45 = <code>00101|101</code></td><td>172.16.40.0</td><td>172.16.47.255</td><td>172.16.40.1 – 172.16.47.254</td><td>$2^{11}-2=2046$</td></tr>
+                <tr><td><code>192.168.7.130/29</code></td><td>255.255.255.248</td><td>第 4 段 130 = <code>10000|010</code></td><td>192.168.7.128</td><td>192.168.7.135</td><td>.129 – .134</td><td>$2^3-2=6$</td></tr>
+              </tbody>
+            </table></div>
+            <p>(a) <code>/21</code> 切在第 3 段:21 − 16 = 5 個網路位元,遮罩這一段是 <code>11111000</code> = 248。
+            <code>00101|000</code> = 40,<code>00101|111</code> = 47;第 4 段全是主機位元(0 和 255)。注意第 4 段的 200 完全不影響答案。</p>
+            <p>(b) <code>/29</code>:第 4 段 5 個網路位元,遮罩 248。<code>10000|000</code> = 128,<code>10000|111</code> = 135。</p>
+            <p>把 <code>cidr.py</code> 的列表換成這兩個位址,輸出應該和上表相同。</p>
+          </div></details>
         </div>
       </div>
 
@@ -1770,6 +1983,370 @@ curl "http://localhost:8080/greet"
               這就是「各層只依賴下一層提供的服務、不關心下層的內部細節」的直接體現。</p>
             </div>
           </details>
+        </div>
+      </div>
+
+      <h3>手算:一個位元組一個位元組拆開 HTTP 請求</h3>
+      <p>
+        上面的伺服器只看請求的第一行,其他全部丟掉;收到亂七八糟的資料,它也照樣回 200
+        (送 <code>hello\r\n\r\n</code> 給 <code>handle_connection</code>,它會把方法當成 <code>hello</code>、路徑當成 <code>/</code>,回 <code>HTTP/1.1 200 OK</code>)。
+        真正的伺服器要讀標頭、讀 body,看到畸形的請求要回 <strong>400 Bad Request</strong>。這一節手算一個帶 body 的請求,每一列是一行,標出它佔哪些位元組。
+      </p>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">為什麼要學</span>
+          <p>本章 Lab 要寫 <code>parse_request(data)</code>:把位元組拆成方法、路徑、query、header、body,畸形就丟 <code>BadRequest</code>。
+          這一節的三張表,就是它的公開檢定「解析請求」和隱藏檢定「畸形請求」「半開與分段」的手算版。之後的借書 API({{ch:129-http-rest-api}})每一個端點都靠它。</p>
+        </div>
+      </div>
+
+      <p>客戶端送來的 139 個位元組(<code>\r\n</code> 是 2 個位元組:CR 和 LF):</p>
+<pre><code class="language-text">POST /books?q=c%2B%2B+primer&amp;limit=2 HTTP/1.1\r\n
+Host: localhost:8080\r\n
+Content-Type: application/json\r\n
+Content-Length: 16\r\n
+\r\n
+{"title":"SICP"}</code></pre>
+      <div class="table-wrap"><table>
+        <thead><tr><th>位元組範圍</th><th>內容</th><th>伺服器從這裡知道什麼</th></tr></thead>
+        <tbody>
+          <tr><td>[0, 45)</td><td><code>POST /books?q=c%2B%2B+primer&amp;limit=2 HTTP/1.1</code></td><td>請求列,用空白切成 3 欄:方法 <code>POST</code>、目標 <code>/books?q=…</code>、版本 <code>HTTP/1.1</code>。
+            目標在第一個 <code>?</code> 切開:路徑 <code>/books</code>,query 用 <code>&amp;</code> 再切:<code>q</code> = <code>c++ primer</code>(<code>%2B</code> 是 <code>+</code>,<code>+</code> 是空白)、<code>limit</code> = <code>2</code>(還是字串)</td></tr>
+          <tr><td>[45, 47)</td><td><code>\r\n</code></td><td>行尾。下面每一行後面也各有 2 個位元組的 <code>\r\n</code>,所以 67–69、99–101 沒有列出來</td></tr>
+          <tr><td>[47, 67)</td><td><code>Host: localhost:8080</code></td><td>在第一個冒號切開,名稱轉小寫:<code>host</code> → <code>localhost:8080</code>(值的第二個冒號不能切)</td></tr>
+          <tr><td>[69, 99)</td><td><code>Content-Type: application/json</code></td><td><code>content-type</code> → <code>application/json</code></td></tr>
+          <tr><td>[101, 119)</td><td><code>Content-Length: 16</code></td><td><code>content-length</code> → 16:空行後面還有 16 個位元組屬於這個請求</td></tr>
+          <tr><td>[119, 123)</td><td><code>\r\n\r\n</code></td><td>第一個 <code>\r\n\r\n</code>:標頭在這裡結束,body 從 123 開始</td></tr>
+          <tr><td>[123, 139)</td><td><code>{"title":"SICP"}</code></td><td>body,剛好 16 個位元組;這個請求一共用掉 123 + 16 = 139 個位元組</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        <code>Content-Length</code> 寫的數字和實際收到的不一樣時,結果完全不同。同一份資料,只改那個數字:
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Content-Length</th><th>空行後面收到</th><th>body</th><th>判斷</th></tr></thead>
+        <tbody>
+          <tr><td>16</td><td>16 bytes</td><td><code>{"title":"SICP"}</code></td><td>剛好,請求完整</td></tr>
+          <tr><td>20</td><td>16 bytes</td><td>還差 4 bytes</td><td>在 <code>serve</code> 裡:再 <code>recv()</code>,等剩下的 4 個位元組;對方就此斷線,就是畸形 → 400。<code>parse_request</code> 拿到的是「已經收完的全部」,所以直接丟 <code>BadRequest</code></td></tr>
+          <tr><td>10</td><td>16 bytes</td><td><code>{"title":"</code></td><td>body 只取 10 個位元組(JSON 被切斷);多出來的 <code>SICP"}</code> 6 個位元組被當成<strong>下一個請求</strong>的開頭,它沒有合法的請求列 → 400</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        不變式:<strong>一個請求用掉的位元組數 = 標頭結束的位置 + 4 + Content-Length</strong>;剩下的屬於下一個請求。
+        下面的追蹤程式照這條規則切,印出和上面兩張表一樣的數字(它只負責追蹤,不是 Lab 要寫的 <code>parse_request</code>):
+      </p>
+<pre><code class="language-python"># http_trace.py —— 印出請求每一行的位元組範圍,再照 Content-Length 切出 body
+# (只是追蹤工具,不是 Lab 要寫的 parse_request)
+import re
+from urllib.parse import unquote_plus
+
+def trace_request(data: bytes, show_lines=True):
+    end = data.find(b"\r\n\r\n")                  # 第一個空行 = 標頭結束
+    if end == -1:
+        print("還沒看到空行:標頭還沒收完")
+        return
+    pos = 0
+    for line in data[:end].split(b"\r\n"):
+        if show_lines:
+            print(f"[{pos:3}, {pos + len(line):3}) {line!r}")
+        pos += len(line) + 2                      # +2 是行尾的 \r\n
+    if show_lines:
+        print(f"[{end:3}, {end + 4:3}) 空行,body 從 {end + 4} 開始")
+    m = re.search(rb"\r\ncontent-length:[ \t]*(\d+)", data[:end], re.IGNORECASE)
+    n = int(m.group(1)) if m else 0
+    got = len(data) - (end + 4)
+    body = data[end + 4:end + 4 + n]
+    rest = data[end + 4 + n:]
+    print(f"Content-Length={n},收到 {got} bytes:",
+          "剛好" if got == n else (f"還差 {n - got}" if got &lt; n else f"多出 {got - n}"))
+    print("body =", body, "| 多出來的 =", rest)
+
+raw = (b"POST /books?q=c%2B%2B+primer&amp;limit=2 HTTP/1.1\r\n"
+       b"Host: localhost:8080\r\n"
+       b"Content-Type: application/json\r\n"
+       b"Content-Length: 16\r\n"
+       b"\r\n"
+       b'{"title":"SICP"}')
+print(len(raw), "bytes")
+trace_request(raw)
+print(unquote_plus("c%2B%2B+primer"))             # query 的值:%2B 是 +,+ 是空白
+for n in (b"20", b"10"):                          # Content-Length 寫錯的兩種情況
+    print("--- Content-Length:", n.decode())
+    trace_request(raw.replace(b"Content-Length: 16", b"Content-Length: " + n), show_lines=False)</code></pre>
+<pre><code class="language-text">139 bytes
+[  0,  45) b'POST /books?q=c%2B%2B+primer&amp;limit=2 HTTP/1.1'
+[ 47,  67) b'Host: localhost:8080'
+[ 69,  99) b'Content-Type: application/json'
+[101, 119) b'Content-Length: 16'
+[119, 123) 空行,body 從 123 開始
+Content-Length=16,收到 16 bytes: 剛好
+body = b'{"title":"SICP"}' | 多出來的 = b''
+c++ primer
+--- Content-Length: 20
+Content-Length=20,收到 16 bytes: 還差 4
+body = b'{"title":"SICP"}' | 多出來的 = b''
+--- Content-Length: 10
+Content-Length=10,收到 16 bytes: 多出 6
+body = b'{"title":"' | 多出來的 = b'SICP"}'</code></pre>
+      <p>最後,哪些請求一定要回 400(其中幾種上面的伺服器都會當成正常請求):</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>收到的資料</th><th>結果</th><th>原因</th></tr></thead>
+        <tbody>
+          <tr><td><code>GET /books\r\n\r\n</code></td><td>400</td><td>請求列只有 2 欄(少了版本)</td></tr>
+          <tr><td><code>…\r\nHost localhost\r\n\r\n</code></td><td>400</td><td>header 沒有冒號</td></tr>
+          <tr><td><code>…\r\nContent-Length: abc\r\n\r\n</code></td><td>400</td><td>Content-Length 不是數字</td></tr>
+          <tr><td><code>…\r\nContent-Length: -5\r\n\r\n</code></td><td>400</td><td>Content-Length 是負數</td></tr>
+          <tr><td><code>…Content-Length: 20…</code>,body 只有 16 bytes,連線已經關了</td><td>400</td><td>body 比 Content-Length 短</td></tr>
+          <tr><td><code>GET /books HTTP/1.1\r\nHost: localhost\r\n</code>,連線已經關了</td><td>400</td><td>收完了還沒看到空行,標頭沒有結束</td></tr>
+          <tr><td><code>POST /members HTTP/1.1\r\nhOsT: localhost\r\n\r\n</code></td><td>正常</td><td>header 名稱不分大小寫(存成 <code>host</code>);沒有 Content-Length 就當成 0,body 是 <code>b''</code></td></tr>
+        </tbody>
+      </table></div>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">看起來對但其實錯:「呼叫一次 recv(),就收到一整個 HTTP 請求」</span>
+          <p>在自己的電腦上用 curl 或瀏覽器送小請求,一次 <code>recv(4096)</code> 幾乎每次都剛好拿到整個請求,所以很容易以為它就是這樣。
+          可是 TCP 是<strong>位元組串流(byte stream)</strong>,沒有「訊息」的邊界:<code>recv()</code> 只回傳「目前已經到了的位元組」,
+          可能是半個請求,也可能是一個半(同一條連線上連送兩個請求時)。<strong>例子都對 ≠ 敘述為真。</strong>
+          下面的程式讓客戶端先送標頭、隔 0.2 秒再送 body,伺服器的第一次 <code>recv()</code> 就只拿到標頭。</p>
+        </div>
+      </div>
+<pre><code class="language-python"># one_recv.py —— 驗證「一次 recv() 不一定是一整個請求」(伺服器和客戶端在同一支程式,用兩條執行緒)
+import socket, threading, time
+
+srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+srv.bind(("127.0.0.1", 0))          # 0 = 讓作業系統挑一個空的埠
+srv.listen()
+port = srv.getsockname()[1]
+
+def client():
+    with socket.create_connection(("127.0.0.1", port)) as c:
+        head = (b"POST /books HTTP/1.1\r\nHost: localhost\r\n"
+                b"Content-Length: 16\r\n\r\n")
+        c.sendall(head)                  # 先送標頭
+        time.sleep(0.2)                  # 網路慢一點、或客戶端分兩次寫
+        c.sendall(b'{"title":"SICP"}')   # 再送 body
+        time.sleep(0.2)
+
+t = threading.Thread(target=client)
+t.start()
+conn, _ = srv.accept()
+first = conn.recv(4096)                  # 「一次 recv 就是一整個請求」的寫法
+print("第一次 recv:", len(first), "bytes,結尾是", first[-8:])
+second = conn.recv(4096)
+print("第二次 recv:", len(second), "bytes:", second)
+conn.close(); t.join(); srv.close()</code></pre>
+<pre><code class="language-text">第一次 recv: 61 bytes,結尾是 b': 16\r\n\r\n'
+第二次 recv: 16 bytes: b'{"title":"SICP"}'</code></pre>
+      <p>
+        所以正確的讀法是兩段:先一直 <code>recv()</code>,直到看見 <code>\r\n\r\n</code>;再照 Content-Length 算出還差幾個位元組,繼續收到夠為止。
+        上面實驗室的伺服器做了第一段,沒有做第二段。
+      </p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 25.3 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>下面每一個都是「連線關閉前收到的全部資料」。哪些要回 400?正常的請寫出方法、路徑、query 與 body。</p>
+          <ol type="a">
+            <li><code>GET /search?q=data+structures&amp;page=2 HTTP/1.1\r\nHost: x\r\n\r\n</code></li>
+            <li><code>DELETE /books/3 HTTP/1.1\r\nContent-Length: 0\r\n\r\n</code></li>
+            <li><code>POST /members HTTP/1.1\r\nContent-Length: 5\r\n\r\nhi</code></li>
+            <li><code>POST /books HTTP/1.1\r\nContent-Length: 3x\r\n\r\nabc</code></li>
+            <li><code>GET /books HTTP/1.1\r\nX-Note no-colon-here\r\n\r\n</code></li>
+          </ol>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <ol type="a">
+              <li>正常。<code>GET</code>、路徑 <code>/search</code>、query <code>{'q': 'data structures', 'page': '2'}</code>(<code>+</code> 解成空白)、body <code>b''</code>。</li>
+              <li>正常。<code>DELETE</code>、路徑 <code>/books/3</code>、query <code>{}</code>、body <code>b''</code>(Content-Length 0 是合法的)。</li>
+              <li>400。宣告 5 個位元組,空行後面只有 <code>hi</code> 2 個,連線又已經關了。</li>
+              <li>400。<code>3x</code> 不是數字。</li>
+              <li>400。<code>X-Note no-colon-here</code> 沒有冒號。</li>
+            </ol>
+          </div></details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 25.4 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>客戶端要送 <code>PATCH /books/7 HTTP/1.1</code>,標頭只有 <code>Host: localhost</code> 和 <code>Content-Length</code>,body 是 UTF-8 的 <code>{"title":"演算法"}</code>。
+          (a) Content-Length 應該寫多少?(b) 標出每一行的位元組範圍,body 從第幾個位元組開始?整個請求幾個位元組?
+          (c) 客戶端如果寫成 <code>len(body_str)</code>(字元數)會怎樣?</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <p>(a) 15 個字元,但每個中文字在 UTF-8 裡佔 3 個位元組:12 + 3 × 3 = <strong>21</strong>。Content-Length 數的是位元組,不是字元。</p>
+            <div class="table-wrap"><table>
+              <thead><tr><th>位元組範圍</th><th>內容</th></tr></thead>
+              <tbody>
+                <tr><td>[0, 23)</td><td><code>PATCH /books/7 HTTP/1.1</code></td></tr>
+                <tr><td>[25, 40)</td><td><code>Host: localhost</code></td></tr>
+                <tr><td>[42, 60)</td><td><code>Content-Length: 21</code></td></tr>
+                <tr><td>[60, 64)</td><td><code>\r\n\r\n</code></td></tr>
+                <tr><td>[64, 85)</td><td>body,21 個位元組</td></tr>
+              </tbody>
+            </table></div>
+            <p>(b) body 從 64 開始,整個請求 85 個位元組。</p>
+            <p>(c) 寫成 15 的話,伺服器只拿 15 個位元組當 body:<code>b'{"title":"\xe6\xbc\x94\xe7\xae'</code>,
+            最後一個字被切在中間,<code>decode()</code> 會失敗(<code>unexpected end of data</code>);剩下的 6 個位元組 <code>b'\x97\xe6\xb3\x95"}'</code> 被當成下一個請求的開頭 → 400。
+            在 Python 裡要用 <code>len(body.encode())</code>。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <div class="callout note">
+        <div class="ico">🧭</div>
+        <div class="body">
+          <span class="c-title">任務線總覽:bookapi 借書 API</span>
+          <p>本章的 Lab 是任務線 bookapi 的第 1 個任務。這條任務線由上而下設計:先定每個檢查點的 Boss 戰(最後的驗收),再拆成零件;每個任務的任務目標都是某一場 Boss 戰需要的。〔公開〕的用 <code>test</code> 自己跑,其他的是 <code>submit</code> 時的隱藏檢定。</p>
+<pre><code class="language-text">bookapi(任務線):借書 API:從 socket 到上線
+├─ 檢查點 1 🏆 手寫多執行緒 HTTP 伺服器
+│  ├─ Boss 戰:靜態檔〔公開〕、JSON 回應〔公開〕、找不到〔公開〕、畸形請求〔公開〕、
+│  │          100 個併發連線(5 秒內)、慢客戶端
+│  ├─ 任務 1 HTTP 伺服器    srv/http.py      ← {{ch:25-networking}} Lab(本章)
+│  │    公開:解析請求、組回應、真的連線
+│  │    隱藏:畸形請求、規格細節、半開與分段、循序吞吐(1,000 個請求 2 秒內)
+│  └─ 任務 2 執行緒池       srv/pool.py      ← {{ch:24-operating-system}} Lab
+│       公開:基本操作、同時服務
+│       隱藏:錯誤處理、慢客戶端、併發(1,000 個請求 5 秒內)
+├─ 檢查點 2 🏆 待辦清單 REST API(含資料庫與測試)  ← 技能樹上的名稱;要交的是借書 API,待辦服務只是書上的範例
+│  ├─ Boss 戰:公開 API 測試〔公開〕、邊界、錯誤處理、資料一致、規格細節、
+│  │          借還負載(10 秒內)、突變測試
+│  ├─ 任務 3 借書資料庫     bookapi/repo.py  ← {{ch:37-databases}} Lab
+│  │    公開:基本操作
+│  │    隱藏:約束、時間邊界、搜尋與分頁、多執行緒借還、效能(1,000 次 get_book 1 秒內)
+│  ├─ 任務 4 借書 REST API  bookapi/api.py   ← {{ch:129-http-rest-api}} Lab
+│  │    公開:公開 API 測試
+│  │    隱藏:邊界、錯誤處理、資料一致、規格細節、併發借還(10 秒內)
+│  └─ 任務 5 測試借書 API   bookapi/tests/   ← {{ch:46-debugging-testing}} Lab
+│       公開:參考解全過
+│       隱藏:抓突變、跑得夠快(30 秒內)
+└─ 之後:檢查點 3 🏆 上線一個安全的服務(JWT＋Redis 快取＋Docker Compose)
+   ├─ Boss 戰:攻擊套件、快取延遲、上線(老師核可)
+   ├─ 任務 6 認證與授權     bookapi/auth.py  ← 書還沒寫(G17)
+   └─ 任務 7 快取層         bookapi/cache.py ← 書還沒寫(G19)</code></pre>
+          <p><strong>照任務線的順序做,不是照章號</strong>:任務 2 在{{ch:24-operating-system}},章號比本章小,但要等任務 1 做完才做;整條線的順序是{{ch:25-networking}} → {{ch:24-operating-system}} → {{ch:37-databases}} → {{ch:129-http-rest-api}} → {{ch:46-debugging-testing}}。檢查點 2 和組隊副本 R1「圖書館借書 API」是同一個題目(另一組隱藏測試)。每個任務目標的一行說明,在<a href="route-backend.html#mainline-bookapi">後端路線導讀</a>。</p>
+        </div>
+      </div>
+
+      <h3 id="lab-srv-http">本章 Lab:HTTP 伺服器 srv/http.py</h3>
+      <div class="callout lab" data-task="srv/http">
+        <div class="ico">🧪</div>
+        <div class="body">
+          <span class="c-title">本章 Lab · 任務線「bookapi」· 任務「HTTP 伺服器」</span>
+          <p><strong>對應地下城任務:</strong>任務「HTTP 伺服器」(任務線:bookapi 借書 API:從 socket 到上線,第 1 個任務)。零件檔:<code>~/零件庫/srv/http.py</code>。</p>
+          <p><strong>要做的零件:</strong>用 socket 從頭寫一個 HTTP/1.1 伺服器,拆成三件事:<code>parse_request</code> 把收完的位元組拆成一個 <code>Request</code>,<code>make_response</code> 把 <code>(狀態碼, headers, body)</code> 組成位元組,<code>serve</code> 收連線、把請求交給你給它的 <code>handler</code>。前面「手算:一個位元組一個位元組拆開 HTTP 請求」的三張表就是這個零件的規格。</p>
+          <p><strong>介面:</strong></p>
+<pre><code class="language-python"># ~/零件庫/srv/http.py
+class BadRequest(Exception):
+    """請求是畸形的(serve 收到它就回 400)。"""
+
+
+class Request:
+    """一個解析好的請求,有五個屬性:
+    method: str              例如 "POST"
+    path: str                「?」前面的部分,不解碼,例如 "/books"
+    query: dict[str, str]    「?」後面的部分,%XX 與 + 都要解碼;值一律是字串
+    headers: dict[str, str]  名稱轉成小寫,值去掉頭尾空白
+    body: bytes              照 Content-Length 取;沒有 Content-Length 就是 b""
+    """
+
+
+def parse_request(data: bytes) -&gt; Request:
+    """data 是一個請求「已經收完的全部」位元組。畸形就 raise BadRequest。"""
+
+
+def make_response(status: int, headers: dict, body: bytes) -&gt; bytes:
+    """組出狀態列 "HTTP/1.1 &lt;status&gt; &lt;原因片語&gt;"、headers、空行、body。
+    headers 裡沒有 Content-Length 就自動補上(數的是 body 的位元組數)。"""
+
+
+def serve(port, handler, host="127.0.0.1") -&gt; None:
+    """單執行緒伺服器,一直跑下去。每條連線收一個完整的請求
+    (先收到空行,再照 Content-Length 收 body),交給
+    handler(Request) -&gt; (status, headers, body),送出回應後關掉連線。
+    畸形的請求回 400,伺服器繼續服務。判題時 port=8080。"""</code></pre>
+          <p><strong>公開範例:</strong></p>
+          <p>不用開網路,直接在 Python 的互動模式試(在 <code>~/零件庫</code> 裡執行 <code>python3</code>):</p>
+<pre><code class="language-python">&gt;&gt;&gt; from srv.http import BadRequest, parse_request, make_response
+&gt;&gt;&gt; raw = (b"POST /books?q=c%2B%2B+primer&amp;limit=2 HTTP/1.1\r\n"
+...        b"Host: localhost:8080\r\n"
+...        b"Content-Length: 16\r\n"
+...        b"\r\n"
+...        b'{"title":"SICP"}')
+&gt;&gt;&gt; req = parse_request(raw)
+&gt;&gt;&gt; req.method, req.path, req.query
+('POST', '/books', {'q': 'c++ primer', 'limit': '2'})
+&gt;&gt;&gt; req.headers
+{'host': 'localhost:8080', 'content-length': '16'}
+&gt;&gt;&gt; req.body
+b'{"title":"SICP"}'
+&gt;&gt;&gt; try:
+...     parse_request(b"GET /books\r\n\r\n")
+... except BadRequest:
+...     print("畸形:少了版本")
+...
+畸形:少了版本
+&gt;&gt;&gt; resp = make_response(404, {"Content-Type": "text/plain; charset=utf-8"}, "找不到".encode())
+&gt;&gt;&gt; resp.split(b"\r\n")[0]
+b'HTTP/1.1 404 Not Found'
+&gt;&gt;&gt; b"\r\nContent-Length: 9\r\n" in resp, resp.endswith("\r\n\r\n找不到".encode())
+(True, True)</code></pre>
+          <p>再真的開一台伺服器,從外面連進去(<code>PYTHONPATH=~/零件庫 python3 http_demo.py</code>):</p>
+<pre><code class="language-python"># http_demo.py —— 公開範例:在背景開你的 serve,用 socket 從外面連進去
+import socket, threading, time
+
+from srv.http import serve
+
+def handler(req):
+    if req.path == "/hello":
+        return 200, {"Content-Type": "text/plain; charset=utf-8"}, "你好".encode()
+    return 404, {"Content-Type": "text/plain; charset=utf-8"}, b"not found"
+
+threading.Thread(target=serve, args=(8080, handler), daemon=True).start()
+time.sleep(0.3)                                   # 等伺服器開始 listen
+
+def send(raw):
+    """送出 raw,收到伺服器關掉連線為止;回傳 (狀態列, body)。"""
+    with socket.create_connection(("127.0.0.1", 8080), timeout=5) as c:
+        c.sendall(raw)
+        data = b""
+        while chunk := c.recv(4096):              # 伺服器處理完就關,recv 回 b"" 就是收完了
+            data += chunk
+    head, _, body = data.partition(b"\r\n\r\n")
+    return head.split(b"\r\n")[0].decode(), body
+
+print(send(b"GET /hello HTTP/1.1\r\nHost: localhost\r\n\r\n"))
+print(send(b"GET /nope HTTP/1.1\r\nHost: localhost\r\n\r\n"))
+print(send(b"GET /hello\r\n\r\n")[0])                          # 畸形:少了版本
+print(send(b"GET /hello HTTP/1.1\r\nHost: localhost\r\n\r\n")[0])   # 回過 400 之後照樣服務</code></pre>
+<pre><code class="language-text">('HTTP/1.1 200 OK', b'\xe4\xbd\xa0\xe5\xa5\xbd')
+('HTTP/1.1 404 Not Found', b'not found')
+HTTP/1.1 400 Bad Request
+HTTP/1.1 200 OK</code></pre>
+          <p><strong>和本章範例不同的地方:</strong>可以參考本章的範例,但介面和要求不同,要自己改寫。</p>
+          <ul>
+            <li>範例的 <code>make_response(status: str, body_html: str)</code> 收字串、Content-Type 寫死成 HTML;Lab 的 <code>make_response(status: int, headers: dict, body: bytes)</code> 收數字和位元組,header 由呼叫的人給,狀態列的原因片語和 Content-Length 由它補上。</li>
+            <li>範例的 <code>handle_connection</code> 只讀到空行、只看請求列,其他全部丟掉;Lab 要把解析拆成可以單獨測試的 <code>parse_request</code>,讀 header,再照 Content-Length 收完 body(一次 <code>recv()</code> 不一定是一整個請求)。</li>
+            <li>範例收到畸形的資料照樣回 200;Lab 要 <code>raise BadRequest</code>,<code>serve</code> 回 400 之後繼續服務。</li>
+            <li>範例把要回的 HTML 寫死在伺服器裡;Lab 的 <code>serve</code> 收一個 <code>handler</code>,任何服務都能掛上去(借書 API 就是這樣掛)。</li>
+            <li>範例的模組一被執行就開始 listen;Lab 的 <code>srv/http.py</code> 被 import 時不能開伺服器,判題和後面的任務都要 import 它。</li>
+          </ul>
+          <p><strong>任務目標</strong>(公開的用 <code>test</code> 自己跑;隱藏檢定在 <code>submit</code> 時跑,只看得到名稱和一行說明):</p>
+          <ul class="lab-goals">
+            <li data-group="http.parse">☐ <strong>解析請求</strong>〔公開〕parse_request 拆開公開範例的請求:方法、路徑、query、小寫的 header、body。</li>
+            <li data-group="http.response">☐ <strong>組回應</strong>〔公開〕make_response 的狀態列、header 與自動補的 Content-Length。</li>
+            <li data-group="http.serve">☐ <strong>真的連線</strong>〔公開〕(服務模式)從 8080 埠連進來:GET 回 200、handler 回 404 時照樣送出;每個連線處理完就關。</li>
+            <li data-group="http.malformed">☐ <strong>畸形請求</strong>〔隱藏檢定〕請求列少欄位、header 少冒號、Content-Length 不是數字或是負數、body 比 Content-Length 短,都要 raise BadRequest。</li>
+            <li data-group="http.details">☐ <strong>規格細節</strong>〔隱藏檢定〕header 名稱不分大小寫、query 的 %XX 與 + 解碼、沒有 body 的 POST。</li>
+            <li data-group="http.half-open">☐ <strong>半開與分段</strong>〔隱藏檢定〕(服務模式)同一個請求分好幾次送到、送一半就斷線、畸形請求回 400 之後,伺服器都要繼續服務。</li>
+            <li data-group="http.perf">☐ <strong>循序吞吐</strong>〔隱藏檢定〕(服務模式)每個連線處理完就關,不能漏關或卡住。效能:單執行緒 serve 連續處理 1,000 個請求(每個一條新連線),2 秒內。這個門檻來自任務「執行緒池」的任務目標「併發」:100 個客戶端同時開始、各依序連 10 次,1,000 個請求要在 5 秒內做完,每個請求都要經過你的解析和回應。</li>
+          </ul>
+          <p>標「服務模式」的任務目標:判題時你的服務在沙盒裡的 8080 埠跑(以學生的身分),我們的測試客戶端用另一個使用者從外面連進來,你的程式碰不到它。</p>
+          <p><strong>之後會用在:</strong><a href="24-operating-system.html#lab-srv-pool">{{ch:24-operating-system}}的執行緒池 <code>srv/pool</code></a>(用你的 <code>parse_request</code> 和 <code>make_response</code>)、<a href="129-http-rest-api.html#lab-bookapi-api">{{ch:129-http-rest-api}}的借書 REST API</a>(它的 handler 直接掛在你的 <code>serve</code> 上);檢查點 1 的 Boss 戰「靜態檔」「JSON 回應」「找不到」「畸形請求」。</p>
+          <p class="lab-rule">這個零件過關之後,後面的專題一律用你自己的版本。規則見<a href="00-about.html#lab-rules">零件庫規則</a>。</p>
         </div>
       </div>
 

@@ -33,7 +33,7 @@ sys.path.insert(0, ROOT)   # python -I 也找得到共用模組
 from _book_headings import SRC, Headings, load_book  # noqa: E402
 from _book_headings import norm as head_norm  # noqa: E402
 from _chapter_tokens import (allowed, bad_tokens, bare_refs, book_context, load_allowlist,  # noqa: E402
-                             resolve)
+                             resolve, TOKEN_RE)
 
 LINK_RE = re.compile(r'<a\s[^>]*href="([^"#:]+?)\.html(?:#([^"]*))?"[^>]*>(.*?)</a>', re.S)
 CHNUM_RE = re.compile(r'第\s*(\d+)\s*章')
@@ -145,10 +145,12 @@ def main(argv):
                 problems.append((name, line_of(text, m.start()), 'eyebrow',
                                  f'eyebrow 寫「{m.group(1).strip()}」,book.js 是「{part_head}」'))
 
-        for m in TITLED_RE.finditer(text):
+        # 記號代入的章號一定對;下面兩個「疑似寫錯章號」的猜測只看裸寫的數字,記號先換成不會被比對到的佔位字
+        heur = TOKEN_RE.sub('〔章〕', raw)
+        for m in TITLED_RE.finditer(heur):
             n, label = m.group(1), norm(m.group(2))
             cid = by_num.get(n)
-            if not cid or EXTERNAL_RE.search(text[max(0, m.start() - 80):m.start()]):
+            if not cid or EXTERNAL_RE.search(heur[max(0, m.start() - 80):m.start()]):
                 continue
             if similarity(label, book[cid]['title']) >= 0.2:
                 continue
@@ -156,10 +158,10 @@ def main(argv):
                             key=lambda c: -similarity(label, book[c]['title']))
             if others:
                 hint = ', '.join(f'{c}(第 {book[c]["num"]} 章)' for c in others[:3])
-                problems.append((name, line_of(text, m.start()), 'titled-num',
+                problems.append((name, line_of(heur, m.start()), 'titled-num',
                                  f'「第 {n} 章〈{m.group(2)}〉」:第 {n} 章是〈{book[cid]["title"]}〉,疑似指 {hint}'))
 
-        plain = re.sub(r'<[^>]+>', lambda t: '\n' * t.group(0).count('\n'), text)
+        plain = re.sub(r'<[^>]+>', lambda t: '\n' * t.group(0).count('\n'), heur)
         for m in CHNUM_RE.finditer(plain):
             n = m.group(1)
             fid, did = by_file.get(n), by_num.get(n)

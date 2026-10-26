@@ -817,6 +817,404 @@ CREATE TABLE order_items (
         </div>
       </div>
 
+      <h3>手算:把借書紀錄拆到 3NF</h3>
+      <p>
+        換一個你在本書後面會一直用到的例子:圖書館借書。某位館員一開始用一張「借書卡」記錄,一位讀者一列,借過的書全寫在同一格:
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>email</th><th>name</th><th>借過的書</th></tr></thead>
+        <tbody>
+          <tr><td>ming@example.com</td><td>王小明</td><td>SICP(3/1 借)、CLRS(2/20 借,3/4 還)</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        「借過的書」一格塞了好幾筆,違反 1NF。拆成一筆借閱一列,就得到下面這張 1NF 的肥表(5 筆借閱;時間都是 2026 年):
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>email</th><th>name</th><th>isbn</th><th>title</th><th>publisher</th><th>city</th><th>copies</th><th>loaned_at</th><th>due_at</th><th>returned_at</th></tr></thead>
+        <tbody>
+          <tr><td>ming@…</td><td>王小明</td><td>9780262510875</td><td>SICP</td><td>MIT Press</td><td>Cambridge</td><td>2</td><td>03-01T10:00</td><td>03-15T10:00</td><td>NULL</td></tr>
+          <tr><td>mei@…</td><td>林小美</td><td>9780262510875</td><td>SICP</td><td>MIT Press</td><td>Cambridge</td><td>2</td><td>03-05T09:30</td><td>03-19T09:30</td><td>NULL</td></tr>
+          <tr><td>ming@…</td><td>王小明</td><td>9780262046305</td><td>CLRS</td><td>MIT Press</td><td>Cambridge</td><td>1</td><td>02-20T14:00</td><td>03-06T14:00</td><td>03-04T16:00</td></tr>
+          <tr><td>wen@…</td><td>陳大文</td><td>9780262046305</td><td>CLRS</td><td>MIT Press</td><td>Cambridge</td><td>1</td><td>03-04T10:00</td><td>03-18T10:00</td><td>NULL</td></tr>
+          <tr><td>mei@…</td><td>林小美</td><td>9780321486813</td><td>龍書</td><td>Addison-Wesley</td><td>Boston</td><td>1</td><td>02-10T11:00</td><td>02-24T11:00</td><td>03-02T15:00</td></tr>
+        </tbody>
+      </table></div>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">為什麼要學</span>
+          <p>本章 Lab 要你寫借書 API 的資料層:<code>bookapi/schema.sql</code> 和 <code>bookapi/repo.py</code>。
+          schema 拆得對,「重複的 isbn」「借不存在的書」這些錯誤資料由資料庫自己擋;拆錯了,改一本書的書名要改好幾列,漏改就自相矛盾。
+          隱藏檢定「約束」考的就是這一節最後那張表。</p>
+        </div>
+      </div>
+
+      <p>
+        <strong>第一步:找主鍵。</strong>一列是「某人在某個時間借了某本書」,所以候選的主鍵是 <code>(email, isbn, loaned_at)</code>。
+        <strong>第二步:列出函數相依</strong>(這些來自圖書館的規則,不是從資料看出來的):
+      </p>
+<pre><code class="language-text">email                  → name                      (一個 email 只屬於一位讀者)
+isbn                   → title, publisher, copies  (ISBN 決定一本書;館藏本數記在書上)
+publisher              → city                      (出版社決定它在哪個城市)
+(email, isbn, loaned_at) → due_at, returned_at     (這一次借閱的到期與歸還時間)</code></pre>
+      <div class="table-wrap"><table>
+        <thead><tr><th>階段</th><th>找到的問題</th><th>怎麼拆</th><th>拆完的表(底線是主鍵)</th></tr></thead>
+        <tbody>
+          <tr><td>1NF</td><td>一格塞了好幾本書</td><td>一筆借閱一列</td><td>上面那張肥表</td></tr>
+          <tr><td>2NF</td><td><code>name</code> 只靠 <code>email</code>;<code>title, publisher, city, copies</code> 只靠 <code>isbn</code>:都只靠主鍵的一部分(部分相依)</td><td>把讀者、書各自搬出去</td><td>members(<u>email</u>, name)<br>books(<u>isbn</u>, title, publisher, city, copies)<br>loans(<u>email, isbn, loaned_at</u>, due_at, returned_at)</td></tr>
+          <tr><td>3NF</td><td>books 裡 <code>isbn → publisher → city</code>:<code>city</code> 靠的是非鍵欄位 <code>publisher</code>(遞移相依)</td><td>把出版社搬出去</td><td>publishers(<u>publisher</u>, city)<br>books(<u>isbn</u>, title, publisher, copies)<br>members、loans 同 2NF</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        拆完之後,MIT Press 搬家只要改 publishers 一列;新進一本還沒人借過的書,也有地方放了(插入異常消失)。
+        最後一步是工程上的選擇:用整數 <code>id</code> 當主鍵,原本的 <code>isbn</code>、<code>email</code> 改成 <code>UNIQUE</code>;
+        loans 用 <code>book_id</code>、<code>member_id</code> 兩個外鍵指回去。這樣讀者換 email 時,不用去改每一筆借閱。
+        Lab 的 schema 沒有出版社欄位,下面也先拿掉。<strong>可借本數(available)不存成一欄</strong>:它等於 copies 減掉還沒還的借閱數,每次用查詢算出來;
+        存成一欄就是反正規化,每次借還都要記得一起改。
+      </p>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">看起來對但其實錯:「樣本資料裡 A 一樣時 B 都一樣,所以 A → B」</span>
+          <p>在上面 5 列裡,<code>title → isbn</code> 從來沒被推翻,<code>name → email</code> 也沒有。可是兩本不同版本的書可以同名,兩位讀者也可以同名同姓。
+          函數相依是<strong>規則</strong>,不是資料的巧合。資料只能<strong>推翻</strong>一條相依(找到兩列 A 一樣、B 不一樣),永遠不能證明它。
+          <strong>例子都對 ≠ 敘述為真。</strong></p>
+        </div>
+      </div>
+<pre><code class="language-python"># fd_check.py —— 在樣本資料上檢查「A → B」有沒有被推翻
+rows = [  # 借閱肥表(已經是 1NF:一格一個值)
+    dict(email="ming@example.com", name="王小明", isbn="9780262510875", title="SICP",
+         publisher="MIT Press", city="Cambridge", copies=2,
+         loaned_at="2026-03-01T10:00:00", due_at="2026-03-15T10:00:00", returned_at=None),
+    dict(email="mei@example.com", name="林小美", isbn="9780262510875", title="SICP",
+         publisher="MIT Press", city="Cambridge", copies=2,
+         loaned_at="2026-03-05T09:30:00", due_at="2026-03-19T09:30:00", returned_at=None),
+    dict(email="ming@example.com", name="王小明", isbn="9780262046305", title="CLRS",
+         publisher="MIT Press", city="Cambridge", copies=1,
+         loaned_at="2026-02-20T14:00:00", due_at="2026-03-06T14:00:00", returned_at="2026-03-04T16:00:00"),
+    dict(email="wen@example.com", name="陳大文", isbn="9780262046305", title="CLRS",
+         publisher="MIT Press", city="Cambridge", copies=1,
+         loaned_at="2026-03-04T10:00:00", due_at="2026-03-18T10:00:00", returned_at=None),
+    dict(email="mei@example.com", name="林小美", isbn="9780321486813", title="龍書",
+         publisher="Addison-Wesley", city="Boston", copies=1,
+         loaned_at="2026-02-10T11:00:00", due_at="2026-02-24T11:00:00", returned_at="2026-03-02T15:00:00"),
+]
+
+def holds(lhs, rhs):
+    """樣本裡有沒有兩列「lhs 一樣、rhs 不一樣」?有 → 這條相依一定不成立。"""
+    seen = {}
+    for r in rows:
+        k = tuple(r[c] for c in lhs)
+        v = tuple(r[c] for c in rhs)
+        if seen.setdefault(k, v) != v:
+            return False
+    return True
+
+for lhs, rhs in [(["email"], ["name"]),
+                 (["isbn"], ["title", "publisher", "copies"]),
+                 (["publisher"], ["city"]),
+                 (["email", "isbn", "loaned_at"], ["due_at", "returned_at"]),
+                 (["isbn"], ["returned_at"]),
+                 (["title"], ["isbn"]),
+                 (["name"], ["email"])]:
+    print(f"{','.join(lhs):22} → {','.join(rhs):24}", "樣本沒推翻" if holds(lhs, rhs) else "被推翻")</code></pre>
+<pre><code class="language-text">email                  → name                     樣本沒推翻
+isbn                   → title,publisher,copies   樣本沒推翻
+publisher              → city                     樣本沒推翻
+email,isbn,loaned_at   → due_at,returned_at       樣本沒推翻
+isbn                   → returned_at              被推翻
+title                  → isbn                     樣本沒推翻
+name                   → email                    樣本沒推翻</code></pre>
+      <p>拆完的 schema 加上約束,再放進同一批資料(後面的手算都用它):</p>
+<pre><code class="language-sql">-- library.sql —— 拆到 3NF 之後的借書資料庫(Lab 的 schema 沒有出版社,這裡也先拿掉)
+CREATE TABLE books (
+    id      INTEGER PRIMARY KEY,
+    title   TEXT NOT NULL,
+    author  TEXT NOT NULL,
+    isbn    TEXT NOT NULL UNIQUE,
+    copies  INTEGER NOT NULL CHECK (copies &gt;= 0)
+);
+CREATE TABLE members (
+    id     INTEGER PRIMARY KEY,
+    name   TEXT NOT NULL,
+    email  TEXT NOT NULL UNIQUE
+);
+CREATE TABLE loans (
+    id           INTEGER PRIMARY KEY,
+    book_id      INTEGER NOT NULL REFERENCES books(id),
+    member_id    INTEGER NOT NULL REFERENCES members(id),
+    loaned_at    TEXT NOT NULL,
+    due_at       TEXT NOT NULL,
+    returned_at  TEXT              -- NULL = 還沒還
+);
+INSERT INTO books (id, title, author, isbn, copies) VALUES
+  (1, 'SICP',  'Abelson', '9780262510875', 2),
+  (2, 'CLRS',  'Cormen',  '9780262046305', 1),
+  (3, '龍書',  'Aho',     '9780321486813', 1),
+  (4, 'TAOCP', 'Knuth',   '9780201896831', 1);
+INSERT INTO members (id, name, email) VALUES
+  (1, '王小明', 'ming@example.com'),
+  (2, '林小美', 'mei@example.com'),
+  (3, '陳大文', 'wen@example.com');
+INSERT INTO loans (id, book_id, member_id, loaned_at, due_at, returned_at) VALUES
+  (1, 1, 1, '2026-03-01T10:00:00', '2026-03-15T10:00:00', NULL),
+  (2, 1, 2, '2026-03-05T09:30:00', '2026-03-19T09:30:00', NULL),
+  (3, 2, 1, '2026-02-20T14:00:00', '2026-03-06T14:00:00', '2026-03-04T16:00:00'),
+  (4, 2, 3, '2026-03-04T10:00:00', '2026-03-18T10:00:00', NULL),
+  (5, 3, 2, '2026-02-10T11:00:00', '2026-02-24T11:00:00', '2026-03-02T15:00:00');</code></pre>
+      <p>哪幾筆壞資料會被約束擋下?注意 SQLite 的外鍵檢查預設是<strong>關的</strong>:</p>
+<pre><code class="language-python"># constraints.py —— 哪幾筆會被約束擋下?外鍵檢查開與不開差在哪?
+import sqlite3
+
+tries = [
+    ("重複的 isbn",   "INSERT INTO books (title, author, isbn, copies) VALUES ('SICP 2e', 'Abelson', '9780262510875', 1)"),
+    ("本數是 -1",     "INSERT INTO books (title, author, isbn, copies) VALUES ('新書', '某人', '9789860000000', -1)"),
+    ("重複的 email",  "INSERT INTO members (name, email) VALUES ('王大明', 'ming@example.com')"),
+    ("借不存在的書",  "INSERT INTO loans (book_id, member_id, loaned_at, due_at) VALUES (99, 1, '2026-03-20T10:00:00', '2026-04-03T10:00:00')"),
+    ("同名的另一本書", "INSERT INTO books (title, author, isbn, copies) VALUES ('SICP', 'Abelson', '9780262510876', 0)"),
+]
+for fk in ("ON", "OFF"):
+    print(f"PRAGMA foreign_keys = {fk}")
+    conn = sqlite3.connect(":memory:")
+    conn.execute(f"PRAGMA foreign_keys = {fk}")
+    conn.executescript(open("library.sql", encoding="utf-8").read())
+    for what, sql in tries:
+        try:
+            conn.execute(sql)
+            print(f"  {what}:成功")
+        except sqlite3.IntegrityError as e:
+            print(f"  {what}:擋下({e})")</code></pre>
+<pre><code class="language-text">PRAGMA foreign_keys = ON
+  重複的 isbn:擋下(UNIQUE constraint failed: books.isbn)
+  本數是 -1:擋下(CHECK constraint failed: copies &gt;= 0)
+  重複的 email:擋下(UNIQUE constraint failed: members.email)
+  借不存在的書:擋下(FOREIGN KEY constraint failed)
+  同名的另一本書:成功
+PRAGMA foreign_keys = OFF
+  重複的 isbn:擋下(UNIQUE constraint failed: books.isbn)
+  本數是 -1:擋下(CHECK constraint failed: copies &gt;= 0)
+  重複的 email:擋下(UNIQUE constraint failed: members.email)
+  借不存在的書:成功
+  同名的另一本書:成功</code></pre>
+      <div class="table-wrap"><table>
+        <thead><tr><th>嘗試</th><th>結果</th><th>擋下它的約束</th></tr></thead>
+        <tbody>
+          <tr><td>重複的 isbn</td><td>擋下</td><td><code>isbn ... UNIQUE</code></td></tr>
+          <tr><td>本數是 -1</td><td>擋下</td><td><code>CHECK (copies &gt;= 0)</code></td></tr>
+          <tr><td>重複的 email</td><td>擋下</td><td><code>email ... UNIQUE</code></td></tr>
+          <tr><td>借不存在的書</td><td>外鍵開著才擋下</td><td><code>REFERENCES books(id)</code>,但只有 <code>PRAGMA foreign_keys = ON</code> 時才檢查;每條連線都要開一次</td></tr>
+          <tr><td>同名的另一本書</td><td>成功</td><td>沒有,也不該擋(書名不是 UNIQUE)</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        Lab 的 <code>LibraryRepo</code> 要把這些資料庫錯誤(<code>sqlite3.IntegrityError</code>)換成自己的 <code>NotFound</code> 或 <code>Conflict</code>,呼叫的人才不用知道底下是 SQLite。
+      </p>
+      <p>
+        還有一個資料庫擋不了的:「可借本數不能小於 0」。它不是任何一欄,<code>CHECK</code> 寫不出來;這要在借書的那一刻檢查,而且要小心並發(本章後面「手算:兩個人同時借最後一本」)。
+      </p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 37.1 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>圖書館加了「預約」功能,館員又開了一張肥表 <code>holds(email, name, isbn, title, branch, branch_phone, placed_at)</code>:
+          某人在某個時間預約某本書,指定到哪一個分館(branch)取書;每個分館有一支電話。
+          (a) 主鍵是什麼?(b) 列出函數相依。(c) 拆到 3NF,每一步說出是哪一種相依造成的。</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <p>(a) <code>(email, isbn, placed_at)</code>。</p>
+<pre><code class="language-text">email                    → name
+isbn                     → title
+branch                   → branch_phone
+(email, isbn, placed_at) → branch</code></pre>
+            <p>(c) <strong>2NF</strong>:<code>name</code> 只靠 <code>email</code>、<code>title</code> 只靠 <code>isbn</code>,是部分相依,搬出去:
+            members(<u>email</u>, name)、books(<u>isbn</u>, title)、holds(<u>email, isbn, placed_at</u>, branch, branch_phone)。
+            <strong>3NF</strong>:holds 裡 <code>(email, isbn, placed_at) → branch → branch_phone</code> 是遞移相依,把分館搬出去:
+            branches(<u>branch</u>, branch_phone)、holds(<u>email, isbn, placed_at</u>, branch)。
+            members 和 books 可以和借書用的那兩張表共用。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <h3>手算:books 與 loans 的 JOIN、可借本數、逾期清單</h3>
+      <p>
+        拆開之後,要把資訊接回來。下面每一張表都先用手算,再用程式對答案(程式在這一節最後)。
+        第一張:<code>books LEFT JOIN loans ON loans.book_id = books.id</code>。每一本書和它的每一筆借閱配成一列;
+        TAOCP 一筆借閱都沒有,LEFT JOIN 還是留下它,借閱的欄位填 NULL。INNER JOIN 的結果就是前 5 列(TAOCP 那列消失)。
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>books.title</th><th>loans.id</th><th>loans.member_id</th><th>loans.returned_at</th></tr></thead>
+        <tbody>
+          <tr><td>SICP</td><td>1</td><td>1</td><td>NULL</td></tr>
+          <tr><td>SICP</td><td>2</td><td>2</td><td>NULL</td></tr>
+          <tr><td>CLRS</td><td>3</td><td>1</td><td>2026-03-04T16:00:00</td></tr>
+          <tr><td>CLRS</td><td>4</td><td>3</td><td>NULL</td></tr>
+          <tr><td>龍書</td><td>5</td><td>2</td><td>2026-03-02T15:00:00</td></tr>
+          <tr><td>TAOCP</td><td>NULL</td><td>NULL</td><td>NULL</td></tr>
+        </tbody>
+      </table></div>
+      <p>「從來沒被借過的書」:在 LEFT JOIN 的結果裡找 <code>loans.id IS NULL</code> 的列,只有 <strong>TAOCP</strong>。</p>
+      <p>
+        <strong>可借本數</strong>:把「還沒還」的條件寫在 <code>ON</code> 裡,只讓沒還的借閱配上去;再依書分組,數配上了幾筆(<code>COUNT(l.id)</code> 不數 NULL):
+      </p>
+<pre><code class="language-sql">SELECT b.id, b.title, b.copies, COUNT(l.id) AS on_loan,
+       b.copies - COUNT(l.id) AS available
+FROM books b
+LEFT JOIN loans l ON l.book_id = b.id AND l.returned_at IS NULL
+GROUP BY b.id ORDER BY b.id;</code></pre>
+      <div class="table-wrap"><table>
+        <thead><tr><th>id</th><th>title</th><th>配上的借閱(沒還的)</th><th>copies</th><th>on_loan</th><th>available</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td>SICP</td><td>1、2</td><td>2</td><td>2</td><td>0</td></tr>
+          <tr><td>2</td><td>CLRS</td><td>4(3 已經還了,配不上)</td><td>1</td><td>1</td><td>0</td></tr>
+          <tr><td>3</td><td>龍書</td><td>沒有(5 已經還了),一列 NULL</td><td>1</td><td>0</td><td>1</td></tr>
+          <tr><td>4</td><td>TAOCP</td><td>沒有,一列 NULL</td><td>1</td><td>0</td><td>1</td></tr>
+        </tbody>
+      </table></div>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">看起來對但其實錯:兩個只差一點點的寫法</span>
+          <p><strong>錯一:</strong>把 <code>COUNT(l.id)</code> 寫成 <code>COUNT(*)</code>。龍書和 TAOCP 那一列 NULL 也被數成 1,available 變成 0。
+          只拿「每本書都有人借著」的資料測,兩種寫法一模一樣。</p>
+          <p><strong>錯二:</strong>把 <code>l.returned_at IS NULL</code> 從 <code>ON</code> 搬到 <code>WHERE</code>。這時 LEFT JOIN 先把所有借閱都配上,龍書配上的是「已經還了」的第 5 筆,
+          接著 <code>WHERE</code> 把這一列丟掉,<strong>龍書整本書從結果裡消失</strong>。TAOCP 沒事,因為它那一列的 <code>returned_at</code> 本來就是 NULL。</p>
+        </div>
+      </div>
+      <p>
+        <strong>逾期清單</strong>:還沒還,而且到期時間<strong>在現在之前</strong>(<code>due_at &lt; now</code>;剛好到期不算逾期)。
+        時間都存成同一種格式的 ISO 8601 字串(<code>YYYY-MM-DDTHH:MM:SS</code>),字串比大小就等於時間比先後。now = <code>2026-03-18T12:00:00</code>:
+      </p>
+<pre><code class="language-sql">SELECT l.id, b.title, m.name, l.due_at
+FROM loans l JOIN books b ON b.id = l.book_id JOIN members m ON m.id = l.member_id
+WHERE l.returned_at IS NULL AND l.due_at &lt; ?
+ORDER BY l.due_at;</code></pre>
+      <div class="table-wrap"><table>
+        <thead><tr><th>loan</th><th>書</th><th>due_at</th><th>returned_at</th><th>還沒還?</th><th>due_at &lt; now?</th><th>逾期?</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td>SICP(王小明)</td><td>2026-03-15T10:00:00</td><td>NULL</td><td>是</td><td>是</td><td><strong>逾期</strong></td></tr>
+          <tr><td>2</td><td>SICP(林小美)</td><td>2026-03-19T09:30:00</td><td>NULL</td><td>是</td><td>否</td><td>沒有</td></tr>
+          <tr><td>3</td><td>CLRS(王小明)</td><td>2026-03-06T14:00:00</td><td>2026-03-04T16:00:00</td><td>否</td><td>是</td><td>沒有(已經還了)</td></tr>
+          <tr><td>4</td><td>CLRS(陳大文)</td><td>2026-03-18T10:00:00</td><td>NULL</td><td>是</td><td>是(只差 2 小時)</td><td><strong>逾期</strong></td></tr>
+          <tr><td>5</td><td>龍書(林小美)</td><td>2026-02-24T11:00:00</td><td>2026-03-02T15:00:00</td><td>否</td><td>是</td><td>沒有(晚還,但已經還了)</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        結果依到期時間排:第 1 筆、第 4 筆。字串比大小有一個陷阱:兩邊的格式一定要一樣。
+        <code>'2026-03-18T10:00:00' &lt; '2026-03-18 12:00:00'</code> 是<strong>假</strong>,因為第 11 個字元 <code>T</code> 比空白大;
+        如果 now 用空白分隔,第 4 筆就會被漏掉。Lab 的「時間邊界」檢定會檢查剛好到期、已經還了、跨月跨年的情況。
+      </p>
+      <p>對答案的程式(和上面那份 <code>library.sql</code> 放在同一個資料夾):</p>
+<pre><code class="language-python"># lib_run.py —— 載入 library.sql,跑本節的查詢
+import sqlite3
+
+conn = sqlite3.connect(":memory:")
+conn.execute("PRAGMA foreign_keys = ON")
+conn.executescript(open("library.sql", encoding="utf-8").read())
+
+def show(title, sql, params=()):
+    print("--", title)
+    for row in conn.execute(sql, params):
+        print(row)
+
+show("LEFT JOIN", """
+    SELECT b.title, l.id, l.member_id, l.returned_at
+    FROM books b LEFT JOIN loans l ON l.book_id = b.id
+    ORDER BY b.id, l.id""")
+show("從來沒被借過", """
+    SELECT b.title FROM books b LEFT JOIN loans l ON l.book_id = b.id
+    WHERE l.id IS NULL""")
+show("可借本數", """
+    SELECT b.id, b.title, b.copies, COUNT(l.id) AS on_loan,
+           b.copies - COUNT(l.id) AS available
+    FROM books b
+    LEFT JOIN loans l ON l.book_id = b.id AND l.returned_at IS NULL
+    GROUP BY b.id ORDER BY b.id""")
+show("逾期(now = 2026-03-18T12:00:00)", """
+    SELECT l.id, b.title, m.name, l.due_at
+    FROM loans l JOIN books b ON b.id = l.book_id JOIN members m ON m.id = l.member_id
+    WHERE l.returned_at IS NULL AND l.due_at &lt; ?
+    ORDER BY l.due_at""", ("2026-03-18T12:00:00",))</code></pre>
+<pre><code class="language-text">-- LEFT JOIN
+('SICP', 1, 1, None)
+('SICP', 2, 2, None)
+('CLRS', 3, 1, '2026-03-04T16:00:00')
+('CLRS', 4, 3, None)
+('龍書', 5, 2, '2026-03-02T15:00:00')
+('TAOCP', None, None, None)
+-- 從來沒被借過
+('TAOCP',)
+-- 可借本數
+(1, 'SICP', 2, 2, 0)
+(2, 'CLRS', 1, 1, 0)
+(3, '龍書', 1, 0, 1)
+(4, 'TAOCP', 1, 0, 1)
+-- 逾期(now = 2026-03-18T12:00:00)
+(1, 'SICP', '王小明', '2026-03-15T10:00:00')
+(4, 'CLRS', '陳大文', '2026-03-18T10:00:00')</code></pre>
+      <p>把兩個錯的寫法加在 <code>lib_run.py</code> 的最後面再跑一次,多出來的輸出是:</p>
+<pre><code class="language-python">show("錯一:COUNT(*)", """
+    SELECT b.id, b.title, b.copies - COUNT(*) AS available
+    FROM books b
+    LEFT JOIN loans l ON l.book_id = b.id AND l.returned_at IS NULL
+    GROUP BY b.id ORDER BY b.id""")
+show("錯二:還沒還的條件放到 WHERE", """
+    SELECT b.id, b.title, b.copies - COUNT(l.id) AS available
+    FROM books b
+    LEFT JOIN loans l ON l.book_id = b.id
+    WHERE l.returned_at IS NULL
+    GROUP BY b.id ORDER BY b.id""")
+show("格式不一樣的時間字串", "SELECT '2026-03-18T10:00:00' &lt; '2026-03-18 12:00:00'")</code></pre>
+<pre><code class="language-text">-- 錯一:COUNT(*)
+(1, 'SICP', 0)
+(2, 'CLRS', 0)
+(3, '龍書', 0)
+(4, 'TAOCP', 0)
+-- 錯二:還沒還的條件放到 WHERE
+(1, 'SICP', 0)
+(2, 'CLRS', 0)
+(4, 'TAOCP', 1)
+-- 格式不一樣的時間字串
+(0,)</code></pre>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 37.2 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>接著上面的資料發生三件事:2026-03-16T09:00:00 陳大文把 CLRS 還了(第 4 筆的 returned_at 填上);
+          10:00 陳大文借 TAOCP,14 天(第 6 筆,到期 2026-03-30T10:00:00);11:00 林小美借 CLRS,7 天(第 7 筆,到期 2026-03-23T11:00:00)。
+          (a) <code>books LEFT JOIN loans</code> 有幾列?(b) 每本書的 available?(c) 從來沒被借過的書?(d) now = <code>2026-03-24T00:00:00</code> 的逾期清單?</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <p>(a) 7 列:7 筆借閱各配一列,TAOCP 現在有借閱了,不再有 NULL 列。</p>
+            <div class="table-wrap"><table>
+              <thead><tr><th>書</th><th>沒還的借閱</th><th>copies</th><th>available</th></tr></thead>
+              <tbody>
+                <tr><td>SICP</td><td>1、2</td><td>2</td><td>0</td></tr>
+                <tr><td>CLRS</td><td>7(4 已經還了)</td><td>1</td><td>0</td></tr>
+                <tr><td>龍書</td><td>沒有</td><td>1</td><td>1</td></tr>
+                <tr><td>TAOCP</td><td>6</td><td>1</td><td>0</td></tr>
+              </tbody>
+            </table></div>
+            <p>(c) 沒有,結果是空的。(d) 第 1 筆(SICP,03-15)、第 2 筆(SICP,03-19)、第 7 筆(CLRS,03-23 11:00)。第 6 筆 03-30 才到期。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 37.3 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>用原本的 5 筆借閱。(a) now = <code>2026-03-19T09:30:00</code> 時哪些逾期?(b) now 被寫成 <code>2026-03-18 12:00:00</code>(中間是空白)時,查詢會回傳什麼?
+          (c) 借書時 <code>due_at = loaned_at + days</code>。算出 <code>2026-12-25T09:00:00</code> 借 14 天、<code>2028-02-20T09:00:00</code> 借 14 天、<code>2027-02-20T09:00:00</code> 借 14 天的到期時間。</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <p>(a) 第 1 筆和第 4 筆。第 2 筆的 due_at 剛好等於 now,<code>&lt;</code> 不成立,不算逾期。</p>
+            <p>(b) 只回傳第 1 筆。第 4 筆的 <code>'2026-03-18T10:00:00' &lt; '2026-03-18 12:00:00'</code> 在第 11 個字元比較 <code>T</code> 和空白,結果是假,被漏掉了。</p>
+            <p>(c) <code>2027-01-08T09:00:00</code>(跨年);<code>2028-03-05T09:00:00</code>(2028 是閏年,2 月有 29 天);<code>2027-03-06T09:00:00</code>(2027 的 2 月只有 28 天)。
+            自己算日期很容易錯,程式裡用 <code>datetime.fromisoformat(loaned_at) + timedelta(days=days)</code>,再 <code>.isoformat()</code> 存回字串。</p>
+          </div></details>
+        </div>
+      </div>
+
       <h2>索引:為什麼有時快、有時慢</h2>
       <p>
         回到開頭那本書店的「查詢慢」之痛。當你下 <code>SELECT * FROM students WHERE name = '王小明'</code>,
@@ -983,7 +1381,7 @@ COMMIT;     -- 兩步都成功,才一起「定案」生效
         (SQLite 比較單純,以整個資料庫層級的鎖來保證序列化,代價是並發寫入受限。)
       </p>
 
-      <div class="exercise">
+      <div class="exercise" id="ex-37-4">
         <div class="ex-head">✏️ 練習 37.4 <span class="badge">思考</span></div>
         <div class="ex-body">
           <p>演唱會搶票:某場次<strong>只剩最後 1 張</strong>票,卻有 5000 人在同一秒按下「購買」。
@@ -1157,6 +1555,339 @@ conn.close()
               很適合拿來練習與寫測試。</p>
             </div>
           </details>
+        </div>
+      </div>
+
+      <h3>手算:兩個人同時借最後一本</h3>
+      <p>
+        回到<a href="#ex-37-4">練習 37.4</a>(前面的思考題,不是後面的手算 37.4)的搶票,換成借書。CLRS 只有 1 本,王小明和林小美同時按下「借書」。伺服器用執行緒池({{ch:24-operating-system}})同時處理兩個請求,
+        每個請求用自己的資料庫連線。最直覺的寫法是:先 <code>SELECT</code> 算出可借本數,大於 0 才 <code>INSERT</code> 一筆借閱。
+        每一列是一個請求做的一步:
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>步</th><th>王小明的連線</th><th>林小美的連線</th><th>CLRS 沒還的借閱</th><th>available</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td><code>SELECT</code> 可借本數 → 1</td><td></td><td>0</td><td>1</td></tr>
+          <tr><td>2</td><td></td><td><code>SELECT</code> 可借本數 → 1</td><td>0</td><td>1</td></tr>
+          <tr><td>3</td><td>1 &gt; 0,<code>INSERT</code> 借閱</td><td></td><td>1</td><td>0</td></tr>
+          <tr><td>4</td><td></td><td>它手上的 1 &gt; 0,<code>INSERT</code> 借閱</td><td>2</td><td><strong>−1,超借</strong></td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        和{{ch:24-operating-system}}的 <code>count += 1</code> 一模一樣:「讀」和「寫」是分開的兩步,中間被別人插隊。
+        修法是讓「查」和「寫」變成不可分割。在 SQLite 裡,用 <code>BEGIN IMMEDIATE</code> 開交易:它一開始就拿到整個資料庫的寫入鎖,第二個人會卡在自己的 <code>BEGIN IMMEDIATE</code>,
+        等第一個人 <code>COMMIT</code> 才進來,這時他查到的已經是新的數字:
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>步</th><th>王小明的連線</th><th>林小美的連線</th><th>CLRS 沒還的借閱</th><th>available</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td><code>BEGIN IMMEDIATE</code>,拿到寫入鎖</td><td></td><td>0</td><td>1</td></tr>
+          <tr><td>2</td><td></td><td><code>BEGIN IMMEDIATE</code> → 等鎖</td><td>0</td><td>1</td></tr>
+          <tr><td>3</td><td><code>SELECT</code> → 1,<code>INSERT</code> 借閱</td><td>等鎖</td><td>1</td><td>0</td></tr>
+          <tr><td>4</td><td><code>COMMIT</code>,放開鎖</td><td>等鎖</td><td>1</td><td>0</td></tr>
+          <tr><td>5</td><td></td><td>拿到鎖;<code>SELECT</code> → 0,<code>ROLLBACK</code>,回「沒書了」</td><td>1</td><td>0</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        不變式:<strong>任何時刻,每一本書的 available ≥ 0</strong>。前面說過 <code>CHECK</code> 寫不出這一條,所以要靠「查和寫在同一個拿著寫入鎖的交易裡」來維持。
+        誰先拿到鎖每次不一定,但一定只有一個人借到。
+      </p>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">看起來對但其實錯:「用 Python 先 SELECT 查可借本數、再 INSERT,我測了很多次都沒有超借」</span>
+          <p>一個測試一次只借一本,第二次查詢一定發生在第一次寫入之後,所以永遠看不到超借。只有兩個請求<strong>真的同時</strong>進來,才會走到上面第一張表的交錯。
+          <strong>例子都對 ≠ 敘述為真。</strong>Lab 的隱藏檢定「資料一致」會讓很多人同時借最後一本,只能有一個人成功。
+          下面用 <code>threading.Barrier</code> 讓兩個人「剛好同時」,每次都重現得出來。</p>
+        </div>
+      </div>
+<pre><code class="language-python"># borrow_race.py —— 兩個人同時借 CLRS 的最後一本(兩條執行緒、兩條各自的資料庫連線)
+import os, sqlite3, tempfile, threading, time
+
+SCHEMA = """
+CREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT NOT NULL, author TEXT NOT NULL,
+                    isbn TEXT NOT NULL UNIQUE, copies INTEGER NOT NULL CHECK (copies &gt;= 0));
+CREATE TABLE members (id INTEGER PRIMARY KEY, name TEXT NOT NULL, email TEXT NOT NULL UNIQUE);
+CREATE TABLE loans (id INTEGER PRIMARY KEY,
+                    book_id INTEGER NOT NULL REFERENCES books(id),
+                    member_id INTEGER NOT NULL REFERENCES members(id),
+                    loaned_at TEXT NOT NULL, due_at TEXT NOT NULL, returned_at TEXT);
+INSERT INTO books VALUES (2, 'CLRS', 'Cormen', '9780262046305', 1);
+INSERT INTO members VALUES (1, '王小明', 'ming@example.com'), (2, '林小美', 'mei@example.com');
+"""
+AVAILABLE = """SELECT copies - (SELECT COUNT(*) FROM loans
+                                WHERE book_id = books.id AND returned_at IS NULL)
+               FROM books WHERE id = ?"""
+NOW, DUE = "2026-03-20T10:00:00", "2026-04-03T10:00:00"
+
+def borrow_select_then_insert(conn, book_id, member_id, gate):
+    """看起來對的寫法:先查還有沒有,有才新增借閱。"""
+    (avail,) = conn.execute(AVAILABLE, (book_id,)).fetchone()
+    gate.wait()                          # 兩個人都查完了才往下(把「剛好同時」固定下來)
+    if avail &lt;= 0:
+        return "沒書了"
+    conn.execute("INSERT INTO loans (book_id, member_id, loaned_at, due_at) VALUES (?, ?, ?, ?)",
+                 (book_id, member_id, NOW, DUE))
+    return f"借到了(查到 available={avail})"
+
+def borrow_immediate(conn, book_id, member_id, gate):
+    """修好的寫法:先用 BEGIN IMMEDIATE 拿到寫入鎖,再查、再新增,最後 COMMIT。"""
+    gate.wait()                          # 兩個人同時開始
+    conn.execute("BEGIN IMMEDIATE")      # 第二個人會在這一行排隊,等第一個人 COMMIT
+    (avail,) = conn.execute(AVAILABLE, (book_id,)).fetchone()
+    time.sleep(0.1)                      # 故意在查和寫之間拖一下:有鎖就不怕
+    if avail &lt;= 0:
+        conn.execute("ROLLBACK")
+        return "沒書了"
+    conn.execute("INSERT INTO loans (book_id, member_id, loaned_at, due_at) VALUES (?, ?, ?, ?)",
+                 (book_id, member_id, NOW, DUE))
+    conn.execute("COMMIT")
+    return f"借到了(查到 available={avail})"
+
+for borrow in (borrow_select_then_insert, borrow_immediate):
+    path = os.path.join(tempfile.mkdtemp(), "lib.db")
+    setup = sqlite3.connect(path)
+    setup.executescript(SCHEMA)
+    setup.close()
+    gate = threading.Barrier(2)
+    results = {}
+    def person(member_id):
+        conn = sqlite3.connect(path, timeout=5, isolation_level=None)   # 自己管交易
+        results[member_id] = borrow(conn, 2, member_id, gate)
+        conn.close()
+    ts = [threading.Thread(target=person, args=(m,)) for m in (1, 2)]
+    for t in ts: t.start()
+    for t in ts: t.join()
+    check = sqlite3.connect(path)
+    (avail,) = check.execute(AVAILABLE, (2,)).fetchone()
+    print(borrow.__name__)
+    print("  王小明:", results[1], "| 林小美:", results[2])
+    print("  CLRS 現在 available =", avail, "| 不變式 available &gt;= 0:", avail &gt;= 0)</code></pre>
+<pre><code class="language-text">borrow_select_then_insert
+  王小明: 借到了(查到 available=1) | 林小美: 借到了(查到 available=1)
+  CLRS 現在 available = -1 | 不變式 available &gt;= 0: False
+borrow_immediate
+  王小明: 沒書了 | 林小美: 借到了(查到 available=1)
+  CLRS 現在 available = 0 | 不變式 available &gt;= 0: True
+# 第二組誰借到每次可能不同,但一定只有一個人借到</code></pre>
+      <p>
+        幾個細節:<code>isolation_level=None</code> 讓 Python 的 <code>sqlite3</code> 不要自動幫你開交易,<code>BEGIN</code>/<code>COMMIT</code> 完全由你自己寫;
+        <code>timeout=5</code> 是「等鎖最多等 5 秒」,等不到才丟 <code>database is locked</code>。
+        也可以把條件寫進同一句 SQL:<code>INSERT INTO loans (...) SELECT ?, ?, ?, ? WHERE (可借本數) &gt; 0</code>,再看 <code>cursor.rowcount</code> 是 1 還是 0。
+        這一句本身不會超借;不過很多人同時寫的時候,沒有先 <code>BEGIN IMMEDIATE</code> 的交易可能收到 <code>database is locked</code> 錯誤,所以在 SQLite 裡還是包在 <code>BEGIN IMMEDIATE</code> 裡比較穩。
+      </p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 37.4 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>CLRS 有 2 本,王小明、林小美、陳大文三個人同時借。(a) 用「先 SELECT 再 INSERT」、三個人都先查完才寫,各自查到多少?最後 available 是多少?
+          (b) 用 <code>BEGIN IMMEDIATE</code>,三個人依序拿到鎖,各自查到多少?幾個人借到?
+          (c) 「先 SELECT 再 INSERT」有沒有可能剛好不出錯?寫出那種交錯。</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <p>(a) 三個人都查到 2,都 INSERT,沒還的借閱變成 3 筆,available = 2 − 3 = <strong>−1</strong>。</p>
+            <p>(b) 第一個拿到鎖的查到 2,借到;第二個查到 1,借到;第三個查到 0,「沒書了」。<strong>2 個人</strong>借到,available = 0。</p>
+            <p>(c) 有:每個人的 SELECT 都發生在前一個人的 INSERT 之後,例如「王小明 SELECT、INSERT;林小美 SELECT、INSERT;陳大文 SELECT → 0」。
+            這就是「一個一個測都對」的那種交錯;程式對不對,要看最壞的交錯。</p>
+            <p>把 <code>borrow_race.py</code> 的本數改成 2、加上第三位讀者、<code>Barrier(3)</code>,跑出來是:先查再寫三個人都借到(available = −1);<code>BEGIN IMMEDIATE</code> 兩個人借到,查到的數字依拿到鎖的順序是 2、1,第三個人「沒書了」。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <h3 id="sqlite-shared-connection">一條連線給好幾條執行緒用:check_same_thread 與鎖</h3>
+      <p>
+        <code>borrow_race.py</code> 是「每個人一條連線、連到同一個檔案」。下面的 Lab 不一樣:API 掛在多執行緒的伺服器上,
+        <strong>同一個</strong> <code>LibraryRepo</code> 物件會被好幾條執行緒同時呼叫,而公開範例用的是 <code>":memory:"</code>。
+        這時有三件事要知道:
+      </p>
+      <ul>
+        <li><strong><code>":memory:"</code> 不能每條執行緒各開一條連線。</strong>每開一條 <code>":memory:"</code> 連線,就是一個全新的、空的資料庫;別的連線看不到你建的表。</li>
+        <li><strong>預設的 <code>check_same_thread=True</code></strong>:連線只准建立它的那條執行緒用,別的執行緒拿來用會丟 <code>sqlite3.ProgrammingError</code>。要共用,就在 <code>connect</code> 時寫 <code>check_same_thread=False</code>。</li>
+        <li><strong>共用一條連線,交易也是共用的。</strong>A 執行緒 <code>BEGIN</code> 還沒 <code>COMMIT</code>,B 執行緒又 <code>BEGIN</code>,會得到
+        <code>OperationalError: cannot start a transaction within a transaction</code>;就算沒出錯,B 的 SQL 也會混進 A 的交易裡。
+        所以要用一把 <code>threading.Lock</code> 包住<strong>整個交易</strong>(從 <code>BEGIN</code> 到 <code>COMMIT</code> 或 <code>ROLLBACK</code>),不是只包住某一行 SQL。</li>
+      </ul>
+<pre><code class="language-python"># shared_conn.py —— 好幾條執行緒共用「一條」SQLite 連線
+import sqlite3, threading
+
+# 1) :memory: 每開一條連線,就是一個全新的、空的資料庫
+a = sqlite3.connect(":memory:")
+a.execute("CREATE TABLE books (id INTEGER PRIMARY KEY, copies INTEGER)")
+b = sqlite3.connect(":memory:")
+print("另一條連線看得到 books 嗎?",
+      b.execute("SELECT COUNT(*) FROM sqlite_master WHERE name = 'books'").fetchone()[0] == 1)
+
+# 2) 預設 check_same_thread=True:別的執行緒拿這條連線來用會被擋
+def use_from_worker():
+    try:
+        a.execute("SELECT 1")
+    except sqlite3.ProgrammingError:
+        print("工作執行緒用主執行緒的連線:ProgrammingError")
+t = threading.Thread(target=use_from_worker); t.start(); t.join()
+
+# 3) 修好的寫法:一條連線(check_same_thread=False)+ 一把鎖包住「整個交易」
+class Shelf:
+    def __init__(self, copies):
+        self.conn = sqlite3.connect(":memory:", check_same_thread=False, isolation_level=None)
+        self.lock = threading.Lock()
+        self.conn.execute("CREATE TABLE books (id INTEGER PRIMARY KEY, copies INTEGER)")
+        self.conn.execute("CREATE TABLE loans (id INTEGER PRIMARY KEY, book_id INTEGER)")
+        self.conn.execute("INSERT INTO books VALUES (1, ?)", (copies,))
+
+    def borrow(self, gate):
+        gate.wait()                          # 大家同時開始
+        with self.lock:                      # BEGIN 到 COMMIT 之間只有一條執行緒
+            self.conn.execute("BEGIN")
+            try:
+                (avail,) = self.conn.execute(
+                    "SELECT copies - (SELECT COUNT(*) FROM loans WHERE book_id = 1) "
+                    "FROM books WHERE id = 1").fetchone()
+                if avail &lt;= 0:
+                    self.conn.execute("ROLLBACK")
+                    return False
+                self.conn.execute("INSERT INTO loans (book_id) VALUES (1)")
+                self.conn.execute("COMMIT")
+                return True
+            except BaseException:
+                self.conn.execute("ROLLBACK")
+                raise
+
+shelf = Shelf(copies=2)
+gate = threading.Barrier(5)
+ok = []
+ts = [threading.Thread(target=lambda: ok.append(shelf.borrow(gate))) for _ in range(5)]
+for t in ts: t.start()
+for t in ts: t.join()
+print("5 個人同時借 2 本:借到", ok.count(True), "人,沒借到", ok.count(False), "人")</code></pre>
+<pre><code class="language-text">另一條連線看得到 books 嗎? False
+工作執行緒用主執行緒的連線:ProgrammingError
+5 個人同時借 2 本:借到 2 人,沒借到 3 人</code></pre>
+      <p>
+        鎖讓「查本數、新增借閱」整段一次只有一條執行緒在做,效果和 <code>BEGIN IMMEDIATE</code> 一樣是把交錯排除掉;差別是
+        <code>BEGIN IMMEDIATE</code> 擋的是<strong>不同連線</strong>,鎖擋的是<strong>同一條連線上的不同執行緒</strong>。
+        連到檔案、每條執行緒各開一條連線也可以(那時就回到 <code>borrow_race.py</code> 的寫法);Lab 用一條連線加一把鎖,是因為 <code>":memory:"</code> 只能這樣。
+      </p>
+
+      <h3 id="lab-bookapi-repo">本章 Lab:借書資料庫 bookapi/repo.py</h3>
+      <div class="callout lab" data-task="bookapi/repo">
+        <div class="ico">🧪</div>
+        <div class="body">
+          <span class="c-title">本章 Lab · 任務線「bookapi」· 任務「借書資料庫」</span>
+          <p><strong>對應地下城任務:</strong>任務「借書資料庫」(任務線:bookapi 借書 API:從 socket 到上線,第 3 個任務)。零件檔:<code>~/零件庫/bookapi/schema.sql</code> 與 <code>~/零件庫/bookapi/repo.py</code>。</p>
+          <p><strong>要做的零件:</strong>借書 API 的資料層:<code>schema.sql</code> 建三張表,<code>LibraryRepo</code> 把所有 SQL 包起來,呼叫的人只看得到 Python 的方法、<code>dict</code> 和兩種例外 <code>NotFound</code>、<code>Conflict</code>。本章「手算:把借書紀錄拆到 3NF」「手算:books 與 loans 的 JOIN、可借本數、逾期清單」「手算:兩個人同時借最後一本」就是它的規格。</p>
+          <p><strong>介面:</strong></p>
+<pre><code class="language-python"># ~/零件庫/bookapi/schema.sql:三張表,用 CREATE TABLE IF NOT EXISTS(可以重複執行)
+#   books(id, title, author, isbn UNIQUE, copies &gt;= 0)
+#   members(id, name, email UNIQUE)
+#   loans(id, book_id → books, member_id → members, loaned_at, due_at, returned_at NULL)
+# ~/零件庫/bookapi/repo.py
+# now 參數:ISO 8601 字串,到秒、不帶時區,例如 "2026-10-01T09:00:00";None = 現在的時間。
+# 找不到的 id 一律丟 NotFound。
+
+class NotFound(Exception):
+    """找不到書、會員或借閱。"""
+
+
+class Conflict(Exception):
+    """沒有可借本數、重複 isbn 或 email、本數小於 0、copies 改得比借出中的本數少、
+    已經還過、刪除有人借的書。"""
+
+
+class LibraryRepo:
+    def __init__(self, db_path=":memory:"):
+        """連上 SQLite、打開外鍵檢查、執行同一個資料夾的 schema.sql。
+        同一個物件會被好幾條執行緒同時呼叫(API 掛在 serve_threaded 上)。"""
+
+    def add_book(self, title, author, isbn, copies=1) -&gt; int:
+        """新增一本書,回傳 id。"""
+
+    def get_book(self, book_id) -&gt; dict:
+        """{"id", "title", "author", "isbn", "copies", "available"};
+        available = copies - 還沒還的借閱數,每次算出來。"""
+
+    def list_books(self, q=None, limit=20, offset=0) -&gt; list[dict]:
+        """照 id 由小到大;q:書名或作者包含 q(英文不分大小寫,只限 ASCII;%、_、引號照字面)。"""
+
+    def update_book(self, book_id, **fields) -&gt; dict:
+        """只收 title、author、isbn、copies;沒給欄位就什麼都不改。回傳改完的書。"""
+
+    def delete_book(self, book_id) -&gt; None:
+        """還有沒還的借閱 → Conflict;只剩已經還了的借閱時,連那些借閱一起刪。"""
+
+    def add_member(self, name, email) -&gt; int:
+        """新增一位會員,回傳 id。"""
+
+    def get_member(self, member_id) -&gt; dict:
+        """{"id", "name", "email"}"""
+
+    def borrow(self, book_id, member_id, days=14, now=None) -&gt; int:
+        """先查書(NotFound)、再查會員(NotFound),都在才查本數(Conflict);
+        檢查和新增借閱在同一個交易裡。loaned_at = now,due_at = now + days 天。回傳借閱 id。"""
+
+    def get_loan(self, loan_id) -&gt; dict:
+        """{"id", "book_id", "member_id", "loaned_at", "due_at", "returned_at"}"""
+
+    def return_loan(self, loan_id, now=None) -&gt; None:
+        """returned_at = now;已經還過 → Conflict。"""
+
+    def overdue(self, now=None) -&gt; list[dict]:
+        """還沒還、而且 due_at 早於 now 的借閱,照 id 排序;剛好等於 now 不算。"""</code></pre>
+          <p><strong>公開範例:</strong></p>
+          <p>在 <code>~/零件庫</code> 裡執行 <code>python3</code>(<code>now</code> 都固定,所以結果每次一樣):</p>
+<pre><code class="language-python">&gt;&gt;&gt; from bookapi.repo import Conflict, LibraryRepo, NotFound
+&gt;&gt;&gt; repo = LibraryRepo(":memory:")
+&gt;&gt;&gt; b = repo.add_book("小王子", "聖修伯里", "9789570000001", copies=1)
+&gt;&gt;&gt; m1 = repo.add_member("小明", "ming@example.com")
+&gt;&gt;&gt; m2 = repo.add_member("小華", "hua@example.com")
+&gt;&gt;&gt; loan = repo.borrow(b, m1, now="2026-10-01T09:00:00")
+&gt;&gt;&gt; book = repo.get_book(b)
+&gt;&gt;&gt; book["copies"], book["available"]
+(1, 0)
+&gt;&gt;&gt; repo.get_loan(loan)["due_at"]
+'2026-10-15T09:00:00'
+&gt;&gt;&gt; try:
+...     repo.borrow(b, m2, now="2026-10-02T09:00:00")
+... except Conflict:
+...     print("沒有可借的本數")
+...
+沒有可借的本數
+&gt;&gt;&gt; try:
+...     repo.borrow(99, m2)
+... except NotFound:
+...     print("沒有這本書")
+...
+沒有這本書
+&gt;&gt;&gt; [x["id"] for x in repo.overdue(now="2026-10-15T09:00:00")]    # 剛好到期不算逾期
+[]
+&gt;&gt;&gt; [x["id"] for x in repo.overdue(now="2026-10-15T09:00:01")]
+[1]
+&gt;&gt;&gt; repo.return_loan(loan, now="2026-10-16T10:00:00")
+&gt;&gt;&gt; repo.get_book(b)["available"], repo.get_loan(loan)["returned_at"]
+(1, '2026-10-16T10:00:00')
+&gt;&gt;&gt; [x["title"] for x in repo.list_books(q="王子")]
+['小王子']
+&gt;&gt;&gt; repo.update_book(b, copies=3)["available"]
+3</code></pre>
+          <p><strong>和本章範例不同的地方:</strong>可以參考本章的範例,但介面和要求不同,要自己改寫。</p>
+          <ul>
+            <li>本章的 <code>library.sql</code> 是一份建表加塞資料的腳本;Lab 的 <code>schema.sql</code> 只建表(和你決定要建的索引),由 <code>LibraryRepo</code> 建立時執行,要能重複執行;資料一律經過方法新增。</li>
+            <li>本章直接下 SQL,錯誤是 <code>sqlite3.IntegrityError</code>;Lab 要把它換成 <code>NotFound</code> 或 <code>Conflict</code>,呼叫的人看不到 SQLite。</li>
+            <li>本章的 <code>constraints.py</code> 示範了外鍵檢查預設是關的;Lab 的每一條連線都要打開它。</li>
+            <li>本章的 <code>borrow_race.py</code> 每個人一條連線、時間寫死;Lab 的 <code>borrow</code> 要自己算 <code>due_at</code>,在同一個交易裡檢查本數,而且同一個 <code>LibraryRepo</code> 會被好幾條執行緒同時呼叫:照<a href="#sqlite-shared-connection">「一條連線給好幾條執行緒用」</a>的寫法,只開一條連線(<code>check_same_thread=False</code>),每個方法用 <code>threading.Lock</code> 包住整個交易;<code>":memory:"</code> 不能每條執行緒各開一條。</li>
+            <li>本章的 schema 沒有索引;Lab 有效能門檻,要你想想哪些欄位要建索引。</li>
+            <li>Lab 多了本章沒有的操作:搜尋與分頁(<code>list_books</code>)、只改給的欄位(<code>update_book</code>)、刪書時檢查有沒有人借。</li>
+          </ul>
+          <p><strong>任務目標</strong>(公開的用 <code>test</code> 自己跑;隱藏檢定在 <code>submit</code> 時跑,只看得到名稱和一行說明):</p>
+          <ul class="lab-goals">
+            <li data-group="repo.crud">☐ <strong>基本操作</strong>〔公開〕書與會員的新增、查詢、更新、刪除,借書、還書、逾期查詢的公開範例(now 固定)。</li>
+            <li data-group="repo.constraints">☐ <strong>約束</strong>〔隱藏檢定〕重複的 isbn 或 email、本數小於 0、copies 改得比借出中的本數少、找不到的 id、沒有可借本數、還過的再還、刪除有人借的書,都要丟對的例外(NotFound 或 Conflict);書和會員都不存在時,丟的是書的 NotFound。</li>
+            <li data-group="repo.time">☐ <strong>時間邊界</strong>〔隱藏檢定〕剛好到期不算逾期、已還的不算、days 參數、跨月跨年的日期。</li>
+            <li data-group="repo.search">☐ <strong>搜尋與分頁</strong>〔隱藏檢定〕q 用子字串找書名與作者(英文不分大小寫,只限 ASCII)、列表照 id 排序、offset 超過結尾回傳空列表、q 裡有引號、% 或 _ 要照字面找(參數化查詢)。</li>
+            <li data-group="repo.threads">☐ <strong>多執行緒借還</strong>〔隱藏檢定〕同一個 LibraryRepo(:memory:)給 8 條執行緒同時借還同一本書:不能丟 ProgrammingError 或 OperationalError,借出中的本數不超過 copies,最後的 available 對參考模型。</li>
+            <li data-group="repo.perf">☐ <strong>效能</strong>〔隱藏檢定〕想想哪些欄位要建索引。效能:1 萬本書、10 萬筆借閱的資料庫上:連續 1,000 次 get_book 1 秒內、overdue() 0.5 秒內。這個門檻來自檢查點 2 的 Boss 戰「借還負載」:100 個客戶端同時各借還 10 次要在 10 秒內做完,每一次借還都要查好幾次資料層。</li>
+          </ul>
+          <p><strong>之後會用在:</strong><a href="129-http-rest-api.html#lab-bookapi-api">{{ch:129-http-rest-api}}的借書 REST API</a>(<code>NotFound</code> 變成 404、<code>Conflict</code> 變成 409);檢查點 2 的 Boss 戰「公開 API 測試」「邊界」「錯誤處理」「資料一致」「規格細節」「借還負載」;組隊副本 R1「圖書館借書 API」;檢查點 3 的「攻擊套件」(SQL injection 擋不擋得住,就看這裡的參數化查詢;那一章還沒寫)。</p>
+          <p class="lab-rule">這個零件過關之後,後面的專題一律用你自己的版本。規則見<a href="00-about.html#lab-rules">零件庫規則</a>。</p>
         </div>
       </div>
 

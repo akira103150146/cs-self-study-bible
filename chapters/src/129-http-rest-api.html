@@ -1,0 +1,2100 @@
+<!--meta
+title: HTTP 與 REST API:用標準函式庫寫一個 JSON 服務
+description: 接續計算機網路與資料庫:用資源設計 URL、HTTP 方法的安全與冪等、狀態碼 200 201 204 400 404 405 409 415 422 500 的用法、Content-Type Location ETag 等標頭、一致的 JSON 錯誤格式、分頁與版本、兩個人同時借最後一本書的併發問題,以及只用 Python 標準函式庫 http.server、json、sqlite3 寫一個可以測試的 JSON 服務。
+-->
+      <div class="eyebrow">{{part:129-http-rest-api}}</div>
+      <h1>HTTP 與 REST API:用標準函式庫寫一個 JSON 服務</h1>
+      <p class="subtitle">瀏覽器、手機 App、別人寫的程式,都用同一種方式和你的伺服器說話。這一章先教你把這段對話設計清楚,再只用 Python 標準函式庫把它寫出來。</p>
+      <div class="byline">
+        <span class="tag">{{ch:129-http-rest-api}}</span>
+        <span>閱讀時間 ≈ 100 分鐘</span>
+        <span>難度:★★★☆☆</span>
+      </div>
+
+      <div class="objectives">
+        <div class="o-title">📌 讀完這一章,你會知道</div>
+        <ul>
+          <li>用「資源」設計 URL:集合、單筆,以及「借書」這種動作怎麼變成名詞</li>
+          <li>每個 HTTP 方法的語意,以及「安全」與「冪等」為什麼決定了一個請求能不能重送</li>
+          <li>什麼時候回 200、201、204、400、404、405、409、415、422、500,以及 400 和 422 怎麼分</li>
+          <li><code>Content-Type</code>、<code>Content-Length</code>、<code>Location</code>、<code>Cache-Control</code>、<code>ETag</code> 這幾個標頭各管什麼</li>
+          <li>一致的 JSON 錯誤格式、<code>limit</code>/<code>offset</code> 分頁和它的陷阱、API 版本</li>
+          <li>用 <code>curl -v</code> 讀一段真實的 HTTP 對話</li>
+          <li>只用 <code>http.server</code>、<code>json</code>、<code>sqlite3</code> 寫一個可以測試的 JSON 服務,並讓同一份程式跑在你在{{ch:25-networking}}寫的伺服器上</li>
+          <li>兩個人同時借最後一本書時,怎麼用原子 UPDATE 或交易防止超借,並回 409</li>
+        </ul>
+      </div>
+
+      <h2>一個請求的一生</h2>
+      <p>
+        你寫了一個待辦清單 App。在手機上按一下「完成」,畫面就打勾了。背後發生的事是:手機送出一段文字給伺服器,
+        大意是「把第 1 筆待辦的 <code>done</code> 改成 <code>true</code>」;伺服器改好資料庫,再回一段文字:「好了,這是改完的樣子」。
+      </p>
+      <p>
+        接著問題就來了。網路剛好斷了,App 沒收到回應,<strong>可以再送一次嗎</strong>?會不會改兩次?
+        使用者在標題欄位什麼都沒填,伺服器該回什麼,App 才知道要顯示「標題不能空白」?
+        另一個人剛好在同一秒刪掉了這筆待辦,又該怎麼回?這一章就是在回答這種問題。
+      </p>
+      <p>
+        你已經有兩塊拼圖:在<a href="25-networking.html">{{ch:25-networking}}</a>,你用 socket 寫了一個最小的 HTTP/1.1 伺服器,它回傳一頁 HTML;
+        在<a href="37-databases.html">{{ch:37-databases}}</a>,你用 <code>sqlite3</code> 存取資料庫。
+        這一章把兩塊接起來:伺服器不再回 HTML 給人看,而是回 <strong>JSON(JavaScript Object Notation)</strong> 給程式讀。
+        這種「給程式用的介面」叫 <strong>API(Application Programming Interface,應用程式介面)</strong>;
+        照著 HTTP 原本的設計來用它,就是本章要學的 <strong>REST</strong> 風格。
+      </p>
+
+      <div class="diagram">
+<svg viewBox="0 0 780 360" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <defs>
+    <marker id="rq-r" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#b4541f"/></marker>
+    <marker id="rq-l" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#2f6f6a"/></marker>
+  </defs>
+  <text x="12" y="30" font-size="12" font-weight="700" fill="#b4541f">請求 →(上排箭頭)</text>
+  <text x="768" y="30" text-anchor="end" font-size="12" font-weight="700" fill="#2f6f6a">←回應(下排箭頭)</text>
+
+  <rect x="12" y="45" width="100" height="80" rx="8" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="62" y="72" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">客戶端</text>
+  <text x="62" y="92" text-anchor="middle" font-size="10.5" fill="#4a5159">curl、urllib</text>
+  <text x="62" y="108" text-anchor="middle" font-size="10.5" fill="#4a5159">瀏覽器、App</text>
+
+  <rect x="140" y="45" width="100" height="80" rx="8" fill="#f6e7dd" stroke="#b4541f"/>
+  <text x="190" y="66" text-anchor="middle" font-size="11" font-weight="800" fill="#1f2328">Threading</text>
+  <text x="190" y="80" text-anchor="middle" font-size="11" font-weight="800" fill="#1f2328">HTTPServer</text>
+  <text x="190" y="98" text-anchor="middle" font-size="10.5" fill="#4a5159">accept 連線</text>
+  <text x="190" y="113" text-anchor="middle" font-size="10.5" fill="#4a5159">一條連線一個執行緒</text>
+
+  <rect x="268" y="45" width="100" height="80" rx="8" fill="#f6e7dd" stroke="#b4541f"/>
+  <text x="318" y="72" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">Handler</text>
+  <text x="318" y="92" text-anchor="middle" font-size="10.5" fill="#4a5159">轉接層:拆出</text>
+  <text x="318" y="108" text-anchor="middle" font-size="10.5" fill="#4a5159">路徑、query、本體</text>
+
+  <rect x="396" y="45" width="100" height="80" rx="8" fill="#ede7fb" stroke="#8b5cf6"/>
+  <text x="446" y="72" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">app 路由表</text>
+  <text x="446" y="92" text-anchor="middle" font-size="10.5" fill="#4a5159">找(方法, 路徑)</text>
+  <text x="446" y="108" text-anchor="middle" font-size="10.5" fill="#8b5cf6">404、405</text>
+
+  <rect x="524" y="45" width="100" height="80" rx="8" fill="#ede7fb" stroke="#8b5cf6"/>
+  <text x="574" y="72" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">處理函式</text>
+  <text x="574" y="92" text-anchor="middle" font-size="10.5" fill="#4a5159">讀 JSON、驗證</text>
+  <text x="574" y="108" text-anchor="middle" font-size="10.5" fill="#8b5cf6">415、400、422</text>
+
+  <rect x="652" y="45" width="100" height="80" rx="8" fill="#e3efed" stroke="#2f6f6a"/>
+  <text x="702" y="72" text-anchor="middle" font-size="13" font-weight="800" fill="#1f2328">TodoStore</text>
+  <text x="702" y="92" text-anchor="middle" font-size="10.5" fill="#4a5159">sqlite3 交易</text>
+  <text x="702" y="108" text-anchor="middle" font-size="10.5" fill="#8b5cf6">404、409</text>
+
+  <line x1="114" y1="68" x2="136" y2="68" stroke="#b4541f" stroke-width="2.5" marker-end="url(#rq-r)"/>
+  <line x1="242" y1="68" x2="264" y2="68" stroke="#b4541f" stroke-width="2.5" marker-end="url(#rq-r)"/>
+  <line x1="370" y1="68" x2="392" y2="68" stroke="#b4541f" stroke-width="2.5" marker-end="url(#rq-r)"/>
+  <line x1="498" y1="68" x2="520" y2="68" stroke="#b4541f" stroke-width="2.5" marker-end="url(#rq-r)"/>
+  <line x1="626" y1="68" x2="648" y2="68" stroke="#b4541f" stroke-width="2.5" marker-end="url(#rq-r)"/>
+  <line x1="648" y1="104" x2="628" y2="104" stroke="#2f6f6a" stroke-width="2.5" marker-end="url(#rq-l)"/>
+  <line x1="520" y1="104" x2="500" y2="104" stroke="#2f6f6a" stroke-width="2.5" marker-end="url(#rq-l)"/>
+  <line x1="392" y1="104" x2="372" y2="104" stroke="#2f6f6a" stroke-width="2.5" marker-end="url(#rq-l)"/>
+  <line x1="264" y1="104" x2="244" y2="104" stroke="#2f6f6a" stroke-width="2.5" marker-end="url(#rq-l)"/>
+  <line x1="136" y1="104" x2="116" y2="104" stroke="#2f6f6a" stroke-width="2.5" marker-end="url(#rq-l)"/>
+
+  <text x="12" y="158" font-size="11.5" fill="#b4541f">請求:PATCH /todos/1 HTTP/1.1 · Content-Type: application/json · 本體 {"done": true}</text>
+  <text x="12" y="180" font-size="11.5" fill="#2f6f6a">回應:HTTP/1.1 200 OK · Content-Type: application/json; charset=utf-8 · 本體 {"id": 1, "title": "…", "done": true}</text>
+  <text x="12" y="202" font-size="11" fill="#8a929b">app 只回傳(狀態碼, 標頭, 本體);Handler 補上 Content-Length,再寫回同一條 TCP 連線。</text>
+
+  <rect x="12" y="222" width="740" height="122" rx="10" fill="#ffffff" stroke="#8a929b" stroke-dasharray="4 3"/>
+  <text x="28" y="246" font-size="12.5" font-weight="800" fill="#1f2328">錯誤在「最早發現它的那一層」變成狀態碼</text>
+  <text x="28" y="270" font-size="11.5" fill="#4a5159">路由表:路徑不存在 → 404;路徑存在、方法不支援 → 405(加 Allow 標頭)</text>
+  <text x="28" y="292" font-size="11.5" fill="#4a5159">處理函式:Content-Type 不是 JSON → 415;本體不是合法 JSON → 400;欄位不合規則 → 422</text>
+  <text x="28" y="314" font-size="11.5" fill="#4a5159">資料層:那一筆不存在 → 404;和目前的狀態衝突(最後一本被借走)→ 409</text>
+  <text x="28" y="336" font-size="11.5" fill="#4a5159">任何一層沒預料到的例外 → app 最外層接住,回 500,細節只寫進伺服器日誌</text>
+</svg>
+        <figcaption>圖 {{num:129-http-rest-api}}-1:一個 JSON API 請求的一生。上排是請求往右走,下排是回應往左回來;紫色的兩層是本章要寫的 app,和伺服器無關。</figcaption>
+      </div>
+      <p>圖 {{num:129-http-rest-api}}-1 的文字版(一步一行):</p>
+      <ol>
+        <li><strong>客戶端</strong>(curl、Python 的 <code>urllib</code>、瀏覽器、手機 App)和伺服器建立 TCP 連線,送出請求:請求列、標頭、空行、本體。</li>
+        <li><strong>ThreadingHTTPServer</strong> 在 <code>accept()</code> 收到連線,替這條連線開一條執行緒。</li>
+        <li><strong>Handler</strong>(轉接層)把請求拆成五樣東西:方法、路徑、query、標頭(鍵改小寫)、本體位元組,交給 app。</li>
+        <li><strong>app 的路由表</strong>找出「哪個處理函式負責這個(方法, 路徑)」。找不到路徑回 404;路徑對但方法不對回 405。</li>
+        <li><strong>處理函式</strong>讀 JSON、檢查欄位。格式錯回 415、400 或 422。</li>
+        <li><strong>TodoStore</strong> 在 SQLite 裡讀寫資料。資料不存在回 404,和目前狀態衝突回 409。</li>
+        <li>回應(狀態碼, 標頭, 本體)沿原路回去:處理函式 → app → Handler 補上 <code>Content-Length</code> → 寫回連線 → 客戶端。</li>
+      </ol>
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">核心觀念</span>
+          <p>一個 HTTP 服務,說穿了就是一個函式:<strong>(方法, 路徑, 標頭, 本體) → (狀態碼, 標頭, 本體)</strong>。
+          連線、執行緒、資料庫都是為了讓這個函式跑起來。先把這個函式設計清楚、寫成可以單獨測試的樣子,伺服器之後隨時可以換。</p>
+        </div>
+      </div>
+      <p>這一章也是後端主線「借書 API」的一站。這條任務線的零件依序是:</p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>順序</th><th>任務(零件檔)</th><th>在哪一章</th><th>做什麼</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td><code>srv/http.py</code></td><td><a href="25-networking.html#lab-srv-http">{{ch:25-networking}}</a></td><td>從 socket 寫起的 HTTP 伺服器</td></tr>
+          <tr><td>2</td><td><code>srv/pool.py</code></td><td><a href="24-operating-system.html#lab-srv-pool">{{ch:24-operating-system}}</a></td><td>執行緒池,讓伺服器同時服務很多連線</td></tr>
+          <tr><td>3</td><td><code>bookapi/repo.py</code></td><td><a href="37-databases.html#lab-bookapi-repo">{{ch:37-databases}}</a></td><td>借書的 SQLite 資料層</td></tr>
+          <tr><td>4</td><td><code>bookapi/api.py</code></td><td>本章</td><td>借書的 JSON REST API</td></tr>
+          <tr><td>5</td><td><code>bookapi/tests/</code></td><td><a href="46-debugging-testing.html#lab-bookapi-tests">{{ch:46-debugging-testing}}</a></td><td>自己寫測試,抓出有 bug 的版本</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>
+        書裡的範例是一個比較小的「待辦事項」服務。借書 API 的規格放在本章後段,由你自己寫:
+        範例教你做法,Lab 要你把做法用在另一組資源上。
+      </p>
+
+      <h2>資源建模:先想名詞,再想動詞</h2>
+      <p>
+        <a href="40-software-engineering.html">{{ch:40-software-engineering}}</a>已經提過 REST 的核心想法:
+        <strong>把系統裡的東西看成資源(resource),用 URL 指出它,再用 HTTP 方法說要對它做什麼。</strong>
+        資源是名詞;方法是動詞。伺服器送回來的 JSON 是資源的一種<strong>表示法(representation)</strong>:
+        同一筆待辦,可以用 JSON 表示,也可以用 HTML 表示。
+      </p>
+      <div class="callout history">
+        <div class="ico">📜</div>
+        <div class="body">
+          <span class="c-title">REST 這個名字從哪裡來</span>
+          <p>REST 是 Representational State Transfer(表示法狀態轉移)的縮寫,出自 Roy Fielding 2000 年在加州大學爾灣分校的博士論文。
+          Fielding 也是 HTTP/1.1 規格的主要作者之一。他描述的是「Web 為什麼能長到這麼大」的架構限制;
+          今天大家說的「REST API」,通常只用到其中一部分:資源、統一的方法、無狀態的請求。</p>
+        </div>
+      </div>
+      <p>設計 URL 時,照這幾條規則走,大部分情況都不會錯:</p>
+      <ul>
+        <li><strong>集合用複數名詞</strong>:<code>/todos</code> 是所有待辦;<strong>單筆</strong>在後面接 id:<code>/todos/42</code>。</li>
+        <li><strong>篩選、排序、分頁放在 query string</strong>:<code>/todos?done=false&amp;limit=20&amp;offset=40</code>。它們不是新的資源,只是「看集合的方式」。</li>
+        <li><strong>URL 裡不放動詞</strong>:不要 <code>/createTodo</code>、<code>/deleteTodo?id=42</code>。動作交給方法。</li>
+        <li><strong>不是增刪改查的動作,把它變成名詞。</strong>「借書」不是 <code>/borrow</code>,而是「建立一筆借閱紀錄」:<code>POST /loans</code>。
+          「還書」改變的是那筆借閱的狀態,可以寫成它的子資源:<code>POST /loans/7/return</code>。</li>
+        <li><strong>常用的查詢可以是一個「檢視」</strong>:「所有逾期的借閱」寫成 <code>GET /loans/overdue</code>,它是 <code>/loans</code> 集合篩選後的樣子。</li>
+      </ul>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>服務</th><th>資源</th><th>URL</th><th>說明</th></tr></thead>
+        <tbody>
+          <tr><td>待辦(本章範例)</td><td>待辦</td><td><code>/todos</code>、<code>/todos/{id}</code></td><td>欄位:<code>title</code>(字串)、<code>done</code>(布林)</td></tr>
+          <tr><td rowspan="4">借書(本章 Lab)</td><td>書</td><td><code>/books</code>、<code>/books/{id}</code></td><td>同一本書可以有好幾本(<code>copies</code>)</td></tr>
+          <tr><td>會員</td><td><code>/members</code></td><td>誰可以借書</td></tr>
+          <tr><td>借閱</td><td><code>/loans</code>、<code>/loans/{id}/return</code></td><td>「借」是建立一筆借閱,「還」是改它的狀態</td></tr>
+          <tr><td>逾期</td><td><code>/loans/overdue</code></td><td>還沒還、而且已經過了到期時間的借閱</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">小技巧:把動詞改寫成「建立一筆紀錄」</span>
+          <p>遇到「付款」「報名」「借書」這種動詞,先問:「這個動作做完,世界上多了什麼紀錄?」多了一筆付款、一筆報名、一筆借閱。
+          那筆紀錄就是資源,動作就是 <code>POST</code> 到它的集合。這樣做還有一個好處:紀錄有自己的 id,之後可以查、可以還、可以列出逾期的。</p>
+        </div>
+      </div>
+
+      <h2>方法的語意:安全與冪等</h2>
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">為什麼要學</span>
+          <p>網路一定會斷線、逾時、被使用者連點兩下。這時客戶端只能猜:「剛剛那個請求,伺服器到底做了沒?」
+          方法的「安全」與「冪等」就是 HTTP 給的答案:冪等的請求可以放心重送。
+          本章 Lab <code>bookapi/api</code> 的隱藏檢定「資料一致」會重複呼叫刪除與還書;
+          <a href="98-distributed-systems.html">{{ch:98-distributed-systems}}</a>的重試與至少一次送達,也是建立在同一個觀念上。</p>
+        </div>
+      </div>
+      <p>HTTP 規格(RFC 9110)替每個方法定了兩個性質:</p>
+      <ul>
+        <li><strong>安全(safe)</strong>:客戶端沒有要求、也不預期伺服器的狀態改變。也就是「只讀」。</li>
+        <li><strong>冪等(idempotent)</strong>:同一個請求做一次和連做 N 次,<strong>伺服器狀態</strong>的預期效果一樣。</li>
+      </ul>
+      <p>安全的方法一定冪等(什麼都不改,做幾次都一樣);反過來不成立。</p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>方法</th><th>用途</th><th>安全</th><th>冪等</th><th>待辦服務的例子</th><th>成功時常見的狀態碼</th></tr></thead>
+        <tbody>
+          <tr><td><code>GET</code></td><td>讀取</td><td>是</td><td>是</td><td><code>GET /todos/1</code></td><td>200(或 304)</td></tr>
+          <tr><td><code>HEAD</code></td><td>和 GET 一樣,但只要標頭</td><td>是</td><td>是</td><td><code>HEAD /todos/1</code></td><td>200</td></tr>
+          <tr><td><code>OPTIONS</code></td><td>問這個 URL 支援什麼</td><td>是</td><td>是</td><td><code>OPTIONS /todos</code></td><td>200 或 204</td></tr>
+          <tr><td><code>POST</code></td><td>建立新資源,或請伺服器「處理」</td><td>否</td><td>否</td><td><code>POST /todos</code></td><td>201(建立)、200</td></tr>
+          <tr><td><code>PUT</code></td><td>用請求的內容<strong>整筆取代</strong></td><td>否</td><td>是</td><td><code>PUT /todos/1</code></td><td>200、204</td></tr>
+          <tr><td><code>PATCH</code></td><td><strong>部分修改</strong></td><td>否</td><td>不一定</td><td><code>PATCH /todos/1</code></td><td>200</td></tr>
+          <tr><td><code>DELETE</code></td><td>刪除</td><td>否</td><td>是</td><td><code>DELETE /todos/1</code></td><td>204、200</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>
+        <code>PUT</code> 和 <code>PATCH</code> 最容易搞混。<code>PUT /todos/1</code> 的本體要是「這筆待辦完整的新樣子」:
+        <code>{"title": "買豆漿", "done": false}</code>,少給一個欄位就是錯(本章的服務回 422)。
+        <code>PATCH /todos/1</code> 只給要改的欄位:<code>{"done": true}</code>,其他欄位不動。
+        <code>PATCH</code> 是不是冪等,要看本體寫的是什麼:「把 <code>done</code> 設成 <code>true</code>」做幾次都一樣;
+        「把計數器加 1」做兩次就加了 2。所以表格寫「不一定」。
+      </p>
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">核心觀念</span>
+          <p>冪等說的是<strong>伺服器的狀態</strong>,不是<strong>回應</strong>。第一次 <code>DELETE /todos/2</code> 回 204,第二次回 404;
+          兩次之後,伺服器裡一樣「沒有第 2 筆」。狀態一樣,所以 <code>DELETE</code> 是冪等的,回應不同也沒關係。</p>
+        </div>
+      </div>
+
+      <h3>看起來對但其實錯:關於方法的四個誤會</h3>
+      <p>下面四句話,每一句都能舉出「看起來支持它」的例子,但每一句都是錯的。<strong>例子都對 ≠ 敘述為真</strong>:一個反例就夠推翻它。</p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>看起來對的說法</th><th>為什麼看起來對</th><th>反例</th></tr></thead>
+        <tbody>
+          <tr><td>「PUT 和 POST 可以互換,反正都會寫入資料。」</td><td>第一次送的時候,兩個都會寫入,也都成功。</td>
+            <td>網路逾時,客戶端重送。<code>POST /todos {"title": "讀 RFC"}</code> 送兩次,伺服器多了兩筆(id 1 和 2,見下面手算的第 2、3 列);
+            <code>PUT /todos/1</code> 送兩次,第 1 筆還是同一個樣子。能不能安全重送,差在這裡。</td></tr>
+          <tr><td>「DELETE 是冪等的,所以第二次 DELETE 也必須回 200(或 204)。」</td><td>「冪等」聽起來像「每次結果都一樣」。</td>
+            <td>本章的服務第一次 <code>DELETE /todos/2</code> 回 204,第二次回 404,而它完全符合冪等:狀態都是「沒有第 2 筆」。
+            第二次回 204 或 404 都可以,重點是<strong>寫進規格、每個端點都一樣</strong>。本章和借書 Lab 都選 404。</td></tr>
+          <tr><td>「GET 是安全的,所以處理 GET 時伺服器什麼都不能寫。」</td><td>安全就是「只讀」。</td>
+            <td>寫存取日誌、累加瀏覽次數都可以;「安全」說的是<strong>客戶端沒有要求改變</strong>。真正的錯誤是反過來:
+            用 <code>GET /todos/1/delete</code> 這種連結刪資料。搜尋引擎的爬蟲、瀏覽器的預先載入都會自動跟著 GET 連結走,資料就被刪光了。</td></tr>
+          <tr><td>「PATCH 一定不冪等。」(或「一定冪等」)</td><td>表格寫 PATCH 的冪等是「不一定」。</td>
+            <td><code>PATCH /todos/1 {"done": true}</code> 連做兩次,狀態一樣,是冪等的;
+            <code>PATCH /counters/1 {"op": "add", "value": 1}</code> 連做兩次加了 2,不是冪等的。要看本體的內容,不能只看方法。</td></tr>
+        </tbody>
+      </table>
+      </div>
+
+      <h2>狀態碼:用一個數字說清楚發生什麼事</h2>
+      <p>
+        <a href="25-networking.html">{{ch:25-networking}}</a>介紹過狀態碼的五個家族:1xx 資訊、2xx 成功、3xx 重新導向、4xx 客戶端的錯、5xx 伺服器的錯。
+        設計 API 時,要更精確:每一種情況固定回同一個狀態碼,客戶端才能寫 <code>if status == 409:</code> 這種程式。
+        本書的 API 用到下面這些:
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>狀態碼</th><th>名稱</th><th>什麼時候用</th><th>本體</th></tr></thead>
+        <tbody>
+          <tr><td><strong>200</strong></td><td>OK</td><td>成功,而且有東西要回:GET、PUT、PATCH、還書</td><td>資源或列表</td></tr>
+          <tr><td><strong>201</strong></td><td>Created</td><td>建立了新資源(<code>POST /todos</code>);要加 <code>Location</code> 標頭指出新資源在哪</td><td>新建的資源</td></tr>
+          <tr><td><strong>204</strong></td><td>No Content</td><td>成功,沒有東西要回:DELETE</td><td>不能有本體</td></tr>
+          <tr><td>304</td><td>Not Modified</td><td>條件式 GET:客戶端手上那份還是最新的(見「標頭」一節的 ETag)</td><td>不能有本體</td></tr>
+          <tr><td><strong>400</strong></td><td>Bad Request</td><td>伺服器<strong>讀不懂</strong>這個請求:本體不是合法的 JSON、<code>Content-Length</code> 不是數字</td><td>錯誤格式</td></tr>
+          <tr><td><strong>404</strong></td><td>Not Found</td><td>沒有這個路徑,或那一筆資源不存在</td><td>錯誤格式</td></tr>
+          <tr><td>405</td><td>Method Not Allowed</td><td>路徑存在,但不支援這個方法(<code>DELETE /todos</code>);要加 <code>Allow</code> 標頭</td><td>錯誤格式</td></tr>
+          <tr><td><strong>409</strong></td><td>Conflict</td><td>請求本身沒錯,但和<strong>目前的狀態</strong>衝突:最後一本被借走了、isbn 重複、已經還過了</td><td>錯誤格式</td></tr>
+          <tr><td>415</td><td>Unsupported Media Type</td><td>本體的 <code>Content-Type</code> 不是 <code>application/json</code></td><td>錯誤格式</td></tr>
+          <tr><td><strong>422</strong></td><td>Unprocessable Content</td><td>讀得懂,但內容<strong>不合規則</strong>:缺欄位、型別錯、超出範圍、不認得的欄位</td><td>錯誤格式</td></tr>
+          <tr><td><strong>500</strong></td><td>Internal Server Error</td><td>伺服器自己的 bug(沒預料到的例外)</td><td>錯誤格式,不含程式細節</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">422 的名字</span>
+          <p>422 原本是 WebDAV 擴充(RFC 4918)定的,叫 Unprocessable Entity;RFC 9110 把它收進 HTTP 本體,改叫 Unprocessable Content。
+          Python 3.12 的 <code>http.server</code> 送出的狀態列還是舊名字 <code>422 Unprocessable Entity</code>。沒關係:客戶端只看數字,不看後面的文字。</p>
+        </div>
+      </div>
+
+      <h3>判斷順序:由外往內</h3>
+      <p>一個請求可能同時有好幾個毛病(例如路徑不存在、而且 JSON 也壞了)。規格要說清楚先檢查哪一個,否則兩個人寫出來的服務會回不同的狀態碼。本書的順序是由外往內:</p>
+      <ol>
+        <li>路徑存在嗎?不存在 → <strong>404</strong>。</li>
+        <li>這個路徑支援這個方法嗎?不支援 → <strong>405</strong>,加 <code>Allow</code>。</li>
+        <li>要讀本體的請求(POST、PUT、PATCH),<code>Content-Type</code> 是 <code>application/json</code> 嗎?不是 → <strong>415</strong>。</li>
+        <li>本體是合法的 JSON 嗎?不是 → <strong>400</strong>。</li>
+        <li>內容合規則嗎?(是物件、欄位齊、型別對、範圍對、沒有多的欄位)不合 → <strong>422</strong>。</li>
+        <li>要動的那一筆存在嗎?不存在 → <strong>404</strong>。</li>
+        <li>和目前的狀態衝突嗎?衝突 → <strong>409</strong>。</li>
+        <li>都沒問題 → <strong>200</strong>、<strong>201</strong> 或 <strong>204</strong>。過程中丟出沒預料到的例外 → <strong>500</strong>。</li>
+      </ol>
+      <p>
+        所以 <code>PATCH /todos/99</code> 帶著壞掉的 JSON,本章的服務回 400,不是 404:本體在第 4 步就被擋下,還輪不到第 6 步去找第 99 筆。
+        別的 API 可以有別的順序;重點是<strong>寫清楚,而且每個端點都一樣</strong>。
+      </p>
+
+      <h3>驗證:400 還是 422</h3>
+      <p>這兩個最常被混用。本書用一句話分:<strong>400 是「我讀不懂」,422 是「我讀懂了,但內容不對」</strong>。</p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>請求(都是 <code>POST /todos</code>)</th><th>狀態碼</th><th>為什麼</th></tr></thead>
+        <tbody>
+          <tr><td>本體 <code>{"title": "x",}</code></td><td>400</td><td>結尾多一個逗號,不是合法的 JSON,根本解析不了</td></tr>
+          <tr><td>本體 <code>["x"]</code></td><td>422</td><td>是合法的 JSON,但規格要的是物件,不是陣列</td></tr>
+          <tr><td>本體 <code>{"title": 42}</code></td><td>422</td><td>型別錯:<code>title</code> 要字串</td></tr>
+          <tr><td>本體 <code>{"title": "   "}</code></td><td>422</td><td>去掉空白後是空字串</td></tr>
+          <tr><td>本體 <code>{"title": "a", "color": "red"}</code></td><td>422</td><td>不認得的欄位(多半是客戶端打錯字,例如把 <code>title</code> 拼成 <code>titel</code>)</td></tr>
+          <tr><td><code>Content-Type: text/plain</code>,本體 <code>buy milk</code></td><td>415</td><td>根本不是 JSON,連解析都不用試</td></tr>
+          <tr><td><code>GET /todos?limit=abc</code></td><td>422</td><td>query 讀得到,但值不是整數</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">常見陷阱:同一個 API 前後不一致</span>
+          <p>有些 API 把所有輸入錯誤都回 400,這也說得通。真正的錯誤是<strong>同一個 API 裡有時回 400、有時回 422</strong>,
+          客戶端就沒辦法寫判斷。本書的範例和借書 Lab 一律用上面這張表的分法。</p>
+        </div>
+      </div>
+
+      <h3>409 和 422 怎麼分</h3>
+      <p>
+        問自己:<strong>「同一個請求,換一個時間送,會不會成功?」</strong>
+        <code>{"days": 0}</code>(借 0 天)什麼時候送都不對,是 422。
+        「借第 1 本書」本身沒錯,只是現在最後一本剛被借走;等別人還了再送,就會成功,所以是 409。
+        409 是「和目前的狀態衝突」,422 是「這個請求本身就不合規則」。
+      </p>
+
+      <h2>標頭:回應的說明書</h2>
+      <p>本體是內容,標頭是「關於內容的說明」。JSON API 最常用的是這幾個:</p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>標頭</th><th>出現在</th><th>意思</th><th>本章怎麼用</th></tr></thead>
+        <tbody>
+          <tr><td><code>Content-Type</code></td><td>請求、回應</td><td>本體是什麼格式</td><td>回應一律 <code>application/json; charset=utf-8</code>;請求不是 JSON 就回 415</td></tr>
+          <tr><td><code>Content-Length</code></td><td>請求、回應</td><td>本體有幾個<strong>位元組</strong>(不是幾個字)</td><td>「寫」是 1 個字、3 個位元組(UTF-8);204 和 304 不送</td></tr>
+          <tr><td><code>Location</code></td><td>201 回應</td><td>新資源的 URL</td><td><code>Location: /todos/1</code></td></tr>
+          <tr><td><code>Allow</code></td><td>405 回應</td><td>這個路徑支援哪些方法</td><td><code>Allow: GET, POST</code></td></tr>
+          <tr><td><code>Cache-Control</code></td><td>回應</td><td>可以怎麼快取</td><td><code>no-cache</code>:可以存,但每次用之前要先問伺服器</td></tr>
+          <tr><td><code>ETag</code></td><td>回應</td><td>這個版本的「指紋」</td><td>本體的 SHA-256 取前 16 個十六進位數字,加上雙引號</td></tr>
+          <tr><td><code>If-None-Match</code></td><td>請求</td><td>「我手上是這個 ETag,有變才給我」</td><td>一樣 → 304,沒有本體;不一樣 → 200 和新的本體</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <h3>ETag 與 If-None-Match:沒變就不用再傳一次</h3>
+      <p>
+        App 每次打開都要 <code>GET /todos/1</code>。如果那筆待辦根本沒變,伺服器每次都送一樣的 52 個位元組,很浪費。
+        解法是條件式請求:第一次的回應帶 <code>ETag: "3160ff4792ad8839"</code>,App 把本體和 ETag 一起存起來;
+        下一次請求帶 <code>If-None-Match: "3160ff4792ad8839"</code>。伺服器算一下現在的 ETag,一樣就回 <strong>304 Not Modified</strong>,沒有本體,
+        App 直接用手上那份。下一節的 <code>curl -v</code> 會讓你親眼看到這段對話。
+      </p>
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">看起來對但其實錯:no-cache 就是「不要快取」</span>
+          <p>名字很像,意思不是。<code>Cache-Control: no-cache</code> 是「可以存起來,但每次用之前都要先問伺服器(重新驗證)」,正好配合 ETag 用。
+          真正的「不准存」是 <code>no-store</code>,用在密碼、個資這種不該留在任何快取裡的回應。快取的完整故事留給後面的快取主題(bookapi 任務線的第 3 個檢查點)。</p>
+        </div>
+      </div>
+
+      <h2>JSON 本體與一致的錯誤格式</h2>
+      <p>JSON 只有六種型別,Python 的 <code>json</code> 模組會自動對應:</p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>JSON</th><th>Python</th><th>例子</th></tr></thead>
+        <tbody>
+          <tr><td>物件 object</td><td><code>dict</code></td><td><code>{"id": 1, "done": false}</code></td></tr>
+          <tr><td>陣列 array</td><td><code>list</code></td><td><code>[1, 2, 3]</code></td></tr>
+          <tr><td>字串 string</td><td><code>str</code></td><td><code>"買牛奶"</code>(一定是雙引號)</td></tr>
+          <tr><td>數字 number</td><td><code>int</code> 或 <code>float</code></td><td><code>42</code>、<code>3.5</code></td></tr>
+          <tr><td><code>true</code>、<code>false</code></td><td><code>True</code>、<code>False</code></td><td>小寫</td></tr>
+          <tr><td><code>null</code></td><td><code>None</code></td><td>還沒還的借閱,<code>returned_at</code> 是 <code>null</code></td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>
+        <code>json.dumps(data, ensure_ascii=False)</code> 讓中文直接以 UTF-8 送出;不加這個參數,中文會變成 <code>\u5beb</code>(「寫」)這種跳脫寫法。兩種都是合法的 JSON,只是前者比較好讀。
+        還有一個 Python 特有的陷阱:<code>bool</code> 是 <code>int</code> 的子類別,<code>isinstance(True, int)</code> 是 <code>True</code>。檢查「要整數」的欄位時,要先排除布林。
+      </p>
+      <p>錯誤也要用 JSON 回,而且<strong>每一個錯誤都用同一個形狀</strong>:</p>
+<pre><code class="language-text">{"error": {"code": "validation_error", "message": "title 必須是 1 到 100 個字的字串"}}</code></pre>
+      <ul>
+        <li><code>code</code> 給程式判斷:固定的英文代碼,永遠不改。</li>
+        <li><code>message</code> 給人看:可以改寫、可以翻譯,客戶端不應該拿它來判斷。</li>
+      </ul>
+      <p>本書的 API(待辦範例和借書 Lab)用同一張代碼表,一個狀態碼對一個代碼:</p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>狀態碼</th><th>400</th><th>404</th><th>405</th><th>409</th><th>415</th><th>422</th><th>500</th></tr></thead>
+        <tbody>
+          <tr><td><code>code</code></td><td><code>bad_request</code></td><td><code>not_found</code></td><td><code>method_not_allowed</code></td><td><code>conflict</code></td><td><code>unsupported_media_type</code></td><td><code>validation_error</code></td><td><code>internal</code></td></tr>
+        </tbody>
+      </table>
+      </div>
+      <div class="callout danger">
+        <div class="ico">⛔</div>
+        <div class="body">
+          <span class="c-title">500 不要把程式細節送出去</span>
+          <p>出錯時把 Python 的 traceback 原封不動送給客戶端,等於把檔案路徑、SQL、函式庫版本告訴攻擊者。
+          細節寫進伺服器自己的日誌;回應只說 <code>{"error": {"code": "internal", "message": "伺服器內部錯誤"}}</code>。
+          為什麼這很重要,見<a href="36-secure-coding.html">{{ch:36-secure-coding}}</a>與<a href="52-web-security.html">{{ch:52-web-security}}</a>。</p>
+        </div>
+      </div>
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">有標準的錯誤格式嗎?</span>
+          <p>有:RFC 9457「Problem Details for HTTP APIs」,型別是 <code>application/problem+json</code>,欄位有 <code>type</code>、<code>title</code>、<code>status</code>、<code>detail</code>。
+          本書用比較小的自訂格式,方便你先把「一致」這件事做好;之後換成標準格式,只要改一個函式。</p>
+        </div>
+      </div>
+
+      <h2>手算:把請求分類成狀態碼與冪等性</h2>
+      <p>
+        一台全新的待辦服務(還沒有任何資料),依序收到 12 個請求。每一列寫出狀態碼,再判斷「這個方法安全嗎、冪等嗎」。
+        方法的性質只看方法,和這一次成功或失敗無關。表格每一格都用本章後面的服務實際跑過。
+        (送 JSON 的請求都帶 <code>Content-Type: application/json</code>,第 7 列例外。)
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>#</th><th>請求</th><th>狀態碼</th><th>安全</th><th>冪等</th><th>說明</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td><code>GET /todos</code></td><td>200</td><td>是</td><td>是</td><td>空列表 <code>{"items": [], "limit": 20, "offset": 0}</code></td></tr>
+          <tr><td>2</td><td><code>POST /todos {"title": "讀 RFC"}</code></td><td>201</td><td>否</td><td>否</td><td>建立 id 1,<code>Location: /todos/1</code></td></tr>
+          <tr><td>3</td><td>第 2 列原封不動再送一次</td><td>201</td><td>否</td><td>否</td><td>又建立了 id 2,<code>Location: /todos/2</code>:POST 不冪等</td></tr>
+          <tr><td>4</td><td><code>PUT /todos/1 {"title": "讀 RFC 9110", "done": false}</code></td><td>200</td><td>否</td><td>是</td><td>整筆取代</td></tr>
+          <tr><td>5</td><td>第 4 列原封不動再送一次</td><td>200</td><td>否</td><td>是</td><td>狀態和第 4 列之後一模一樣</td></tr>
+          <tr><td>6</td><td><code>PATCH /todos/2 {"done": "yes"}</code></td><td>422</td><td>否</td><td>不一定</td><td>JSON 合法,但 <code>done</code> 要布林</td></tr>
+          <tr><td>7</td><td><code>POST /todos</code>,<code>Content-Type: text/plain</code>,本體 <code>buy milk</code></td><td>415</td><td>否</td><td>否</td><td>不是 JSON</td></tr>
+          <tr><td>8</td><td><code>POST /todos {"title": "x",}</code></td><td>400</td><td>否</td><td>否</td><td>多一個逗號,解析失敗</td></tr>
+          <tr><td>9</td><td><code>DELETE /todos/2</code></td><td>204</td><td>否</td><td>是</td><td>刪掉,沒有本體</td></tr>
+          <tr><td>10</td><td><code>DELETE /todos/2</code></td><td>404</td><td>否</td><td>是</td><td>已經不在了;狀態和第 9 列之後一樣</td></tr>
+          <tr><td>11</td><td><code>GET /todos/9</code></td><td>404</td><td>是</td><td>是</td><td>路徑格式對,但第 9 筆不存在</td></tr>
+          <tr><td>12</td><td><code>PUT /todos {"title": "x", "done": true}</code></td><td>405</td><td>否</td><td>是</td><td><code>/todos</code> 只支援 GET、POST:<code>Allow: GET, POST</code></td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>12 個請求之後,<code>GET /todos</code> 得到 <code>{"items": [{"id": 1, "title": "讀 RFC 9110", "done": false}], "limit": 20, "offset": 0}</code>。</p>
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 {{num:129-http-rest-api}}.1 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>另一台全新的待辦服務,依序收到下面 10 個請求(第 6 列以外都帶 <code>Content-Type: application/json</code>)。寫出每一列的狀態碼;遇到 405,也寫出 <code>Allow</code>。最後 <code>GET /todos</code> 的 <code>items</code> 是什麼?</p>
+          <ol>
+            <li><code>POST /todos {"title": "掃地"}</code></li>
+            <li><code>PATCH /todos/1 {"done": true}</code></li>
+            <li>第 2 列再送一次</li>
+            <li><code>POST /todos {"title": "   "}</code></li>
+            <li><code>POST /todos ["掃地"]</code></li>
+            <li><code>GET /todos?limit=abc</code></li>
+            <li><code>PATCH /todos/1 {"title": "拖地", "color": "red"}</code></li>
+            <li><code>DELETE /todos/1</code></li>
+            <li><code>PATCH /todos/1 {"done": false}</code></li>
+            <li><code>POST /todos/1 {"title": "x"}</code></li>
+          </ol>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <div class="table-wrap">
+              <table>
+                <thead><tr><th>#</th><th>狀態碼</th><th>安全/冪等</th><th>說明</th></tr></thead>
+                <tbody>
+                  <tr><td>1</td><td>201</td><td>否/否</td><td>建立 id 1,<code>Location: /todos/1</code></td></tr>
+                  <tr><td>2</td><td>200</td><td>否/這一個是</td><td><code>{"id": 1, "title": "掃地", "done": true}</code></td></tr>
+                  <tr><td>3</td><td>200</td><td>否/這一個是</td><td>回應和狀態都和第 2 列一樣:「設成 true」的 PATCH 是冪等的</td></tr>
+                  <tr><td>4</td><td>422</td><td>否/否</td><td>去掉空白後是空字串</td></tr>
+                  <tr><td>5</td><td>422</td><td>否/否</td><td>合法 JSON,但不是物件</td></tr>
+                  <tr><td>6</td><td>422</td><td>是/是</td><td><code>limit 必須是整數</code></td></tr>
+                  <tr><td>7</td><td>422</td><td>否/不一定</td><td>不認得的欄位 <code>color</code>;整個請求被拒絕,<code>title</code> 也<strong>沒有</strong>改</td></tr>
+                  <tr><td>8</td><td>204</td><td>否/是</td><td>刪掉</td></tr>
+                  <tr><td>9</td><td>404</td><td>否/不一定</td><td>第 1 筆已經不在了</td></tr>
+                  <tr><td>10</td><td>405</td><td>否/否</td><td><code>Allow: GET, PUT, PATCH, DELETE</code>:單筆不支援 POST</td></tr>
+                </tbody>
+              </table>
+              </div>
+              <p>最後 <code>items</code> 是 <code>[]</code>。第 7 列值得記住:驗證失敗時「全部不改」,不會改一半。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>用 curl -v 讀一段 HTTP 對話</h2>
+      <p>
+        <code>curl</code> 是終端機裡的 HTTP 客戶端。加 <code>-v</code>(verbose)會把整段對話印出來,是除錯 API 最好用的工具。
+        先記住幾個參數:<code>-H</code> 加一個請求標頭;<code>-d</code> 帶本體(有 <code>-d</code> 時預設方法是 POST);<code>-X</code> 指定方法;
+        <code>-s</code> 不顯示進度條;<code>-i</code> 只把回應的標頭印在本體前面。
+        下面每一段都是對本章後面的待辦服務(跑在 8741 埠)實際執行的輸出。
+      </p>
+      <p>第一段:建立一筆待辦。</p>
+<pre><code class="language-bash">curl -sv -H 'Content-Type: application/json' -d '{"title": "寫 HTTP 作業"}' http://127.0.0.1:8741/todos</code></pre>
+<pre><code class="language-text">*   Trying 127.0.0.1:8741...
+* Connected to 127.0.0.1 (127.0.0.1) port 8741
+&gt; POST /todos HTTP/1.1
+&gt; Host: 127.0.0.1:8741
+&gt; User-Agent: curl/8.5.0
+&gt; Accept: */*
+&gt; Content-Type: application/json
+&gt; Content-Length: 28
+&gt; 
+} [28 bytes data]
+&lt; HTTP/1.1 201 Created
+&lt; Server: BaseHTTP/0.6 Python/3.12.3
+&lt; Date: Sun, 25 Oct 2026 16:15:48 GMT
+&lt; Content-Type: application/json; charset=utf-8
+&lt; Location: /todos/1
+&lt; Content-Length: 52
+&lt; 
+{ [52 bytes data]
+* Connection #0 to host 127.0.0.1 left intact
+{"id": 1, "title": "寫 HTTP 作業", "done": false}</code></pre>
+      <p>讀法:</p>
+      <ul>
+        <li><code>*</code> 開頭是 curl 自己的說明(正在連線、連上了、連線保留著)。</li>
+        <li><code>&gt;</code> 開頭是<strong>送出去的請求</strong>:請求列 <code>POST /todos HTTP/1.1</code>,接著是標頭,最後一個只有 <code>&gt;</code> 的行就是標頭結束的空行。</li>
+        <li><code>&lt;</code> 開頭是<strong>收到的回應</strong>:狀態列 <code>HTTP/1.1 201 Created</code>,接著是標頭和空行。</li>
+        <li><code>}</code> 和 <code>{</code> 開頭的行說送出、收到了幾個位元組的本體;最後一行是本體本身。</li>
+        <li><code>Server</code> 和 <code>Date</code> 是 <code>http.server</code> 自動加的。<code>Date</code> 每次執行都不一樣。</li>
+      </ul>
+      <p>第二段:讀這一筆,再帶著 ETag 讀一次。</p>
+<pre><code class="language-bash">curl -sv http://127.0.0.1:8741/todos/1
+curl -sv -H 'If-None-Match: "3160ff4792ad8839"' http://127.0.0.1:8741/todos/1</code></pre>
+<pre><code class="language-text">*   Trying 127.0.0.1:8741...
+* Connected to 127.0.0.1 (127.0.0.1) port 8741
+&gt; GET /todos/1 HTTP/1.1
+&gt; Host: 127.0.0.1:8741
+&gt; User-Agent: curl/8.5.0
+&gt; Accept: */*
+&gt; 
+&lt; HTTP/1.1 200 OK
+&lt; Server: BaseHTTP/0.6 Python/3.12.3
+&lt; Date: Sun, 25 Oct 2026 16:15:48 GMT
+&lt; Content-Type: application/json; charset=utf-8
+&lt; ETag: "3160ff4792ad8839"
+&lt; Cache-Control: no-cache
+&lt; Content-Length: 52
+&lt; 
+{ [52 bytes data]
+* Connection #0 to host 127.0.0.1 left intact
+{"id": 1, "title": "寫 HTTP 作業", "done": false}
+
+*   Trying 127.0.0.1:8741...
+* Connected to 127.0.0.1 (127.0.0.1) port 8741
+&gt; GET /todos/1 HTTP/1.1
+&gt; Host: 127.0.0.1:8741
+&gt; User-Agent: curl/8.5.0
+&gt; Accept: */*
+&gt; If-None-Match: "3160ff4792ad8839"
+&gt; 
+&lt; HTTP/1.1 304 Not Modified
+&lt; Server: BaseHTTP/0.6 Python/3.12.3
+&lt; Date: Sun, 25 Oct 2026 16:15:48 GMT
+&lt; ETag: "3160ff4792ad8839"
+&lt; Cache-Control: no-cache
+&lt; 
+* Connection #0 to host 127.0.0.1 left intact</code></pre>
+      <p>第二次請求帶的 ETag 和現在的一樣,所以伺服器回 <strong>304</strong>,沒有本體,也沒有 <code>Content-Length</code>。</p>
+      <p>第三段:同一筆刪兩次(第二次用 <code>-i</code>,只看回應)。</p>
+<pre><code class="language-bash">curl -sv -X DELETE http://127.0.0.1:8741/todos/1
+curl -si -X DELETE http://127.0.0.1:8741/todos/1</code></pre>
+<pre><code class="language-text">*   Trying 127.0.0.1:8741...
+* Connected to 127.0.0.1 (127.0.0.1) port 8741
+&gt; DELETE /todos/1 HTTP/1.1
+&gt; Host: 127.0.0.1:8741
+&gt; User-Agent: curl/8.5.0
+&gt; Accept: */*
+&gt; 
+&lt; HTTP/1.1 204 No Content
+&lt; Server: BaseHTTP/0.6 Python/3.12.3
+&lt; Date: Sun, 25 Oct 2026 16:15:48 GMT
+&lt; 
+* Connection #0 to host 127.0.0.1 left intact
+
+HTTP/1.1 404 Not Found
+Server: BaseHTTP/0.6 Python/3.12.3
+Date: Sun, 25 Oct 2026 16:15:48 GMT
+Content-Type: application/json; charset=utf-8
+Content-Length: 65
+
+{"error": {"code": "not_found", "message": "待辦 1 不存在"}}</code></pre>
+      <p>第一次 204(沒有本體、沒有 <code>Content-Type</code>);第二次 404,本體是統一的錯誤格式。注意 <code>Content-Length: 65</code>:本體只有 55 個字,但其中 5 個中文字各佔 3 個位元組,55 + 5 × 2 = 65。</p>
+
+      <h3>手算:讀一段原始的 HTTP 對話</h3>
+      <p>拿第一段(建立待辦)的輸出,回答下面每一格。這種「從原始對話讀出欄位」的能力,就是你之後替自己的 API 除錯時最常做的事。</p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>問題</th><th>答案</th><th>從哪一行看出來</th></tr></thead>
+        <tbody>
+          <tr><td>方法、路徑、HTTP 版本</td><td><code>POST</code>、<code>/todos</code>、<code>HTTP/1.1</code></td><td><code>&gt; POST /todos HTTP/1.1</code></td></tr>
+          <tr><td>連到哪台主機、哪個埠</td><td><code>127.0.0.1</code> 的 8741</td><td><code>&gt; Host: 127.0.0.1:8741</code></td></tr>
+          <tr><td>請求本體幾個位元組?為什麼</td><td>28。<code>{"title": "寫 HTTP 作業"}</code> 有 22 個字,其中「寫」「作」「業」3 個中文字各 3 位元組:22 + 3 × 2 = 28</td><td><code>&gt; Content-Length: 28</code>、<code>} [28 bytes data]</code></td></tr>
+          <tr><td>如果少送 <code>Content-Type</code>,會怎樣</td><td>curl 的 <code>-d</code> 預設送 <code>application/x-www-form-urlencoded</code>,服務會回 415</td><td>(請求標頭裡的 <code>Content-Type</code> 是我們用 <code>-H</code> 加的)</td></tr>
+          <tr><td>狀態碼與意思</td><td>201,建立了新資源</td><td><code>&lt; HTTP/1.1 201 Created</code></td></tr>
+          <tr><td>新資源在哪</td><td><code>/todos/1</code></td><td><code>&lt; Location: /todos/1</code></td></tr>
+          <tr><td>回應本體幾個位元組</td><td>52(46 個字,3 個中文字各多 2 位元組)</td><td><code>&lt; Content-Length: 52</code></td></tr>
+          <tr><td>連線關了嗎</td><td>沒有,HTTP/1.1 預設保留連線(keep-alive)</td><td><code>* Connection #0 to host 127.0.0.1 left intact</code></td></tr>
+        </tbody>
+      </table>
+      </div>
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 {{num:129-http-rest-api}}.2 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>下面是另一段實際的對話。回答:(1) 方法與路徑;(2) 請求本體幾個位元組;(3) 狀態碼與意思;(4) 這個路徑支援哪些方法;(5) 回應本體 76 個位元組,本體有幾個字?(6) 要讓這個請求成功,該怎麼改?</p>
+<pre><code class="language-text">*   Trying 127.0.0.1:8741...
+* Connected to 127.0.0.1 (127.0.0.1) port 8741
+&gt; PUT /todos HTTP/1.1
+&gt; Host: 127.0.0.1:8741
+&gt; User-Agent: curl/8.5.0
+&gt; Accept: */*
+&gt; Content-Type: application/json
+&gt; Content-Length: 28
+&gt; 
+} [28 bytes data]
+&lt; HTTP/1.1 405 Method Not Allowed
+&lt; Server: BaseHTTP/0.6 Python/3.12.3
+&lt; Date: Sun, 25 Oct 2026 16:15:48 GMT
+&lt; Content-Type: application/json; charset=utf-8
+&lt; Allow: GET, POST
+&lt; Content-Length: 76
+&lt; 
+{ [76 bytes data]
+* Connection #0 to host 127.0.0.1 left intact
+{"error": {"code": "method_not_allowed", "message": "/todos 不支援 PUT"}}</code></pre>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <ol>
+                <li><code>PUT /todos</code>(看 <code>&gt; PUT /todos HTTP/1.1</code>)。</li>
+                <li>28 個位元組。<code>{"title": "x", "done": true}</code> 全是 ASCII,28 個字就是 28 個位元組。</li>
+                <li>405 Method Not Allowed:路徑存在,但不支援 PUT。</li>
+                <li><code>Allow: GET, POST</code>。</li>
+                <li>70 個字。本體裡「不支援」3 個中文字各 3 位元組:76 − 3 × 2 = 70。</li>
+                <li><code>PUT</code> 要對著單筆:<code>PUT /todos/1</code>(第 1 筆要存在);想新增一筆,就用 <code>POST /todos</code>。</li>
+              </ol>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>分頁:limit 與 offset</h2>
+      <p>
+        待辦只有 5 筆時,<code>GET /todos</code> 全部送回去沒問題;有 10 萬筆時,一次送完會拖垮伺服器、網路和客戶端。
+        所以列表一律<strong>分頁(pagination)</strong>:<code>GET /todos?limit=10&amp;offset=20</code> 是「跳過前 20 筆,給我接下來的 10 筆」,
+        對應 SQL 的 <code>ORDER BY id LIMIT 10 OFFSET 20</code>。本書 API 的規則:
+      </p>
+      <ul>
+        <li><code>limit</code>:1 到 100 的整數,沒給就是 20。<code>offset</code>:0 以上的整數,沒給就是 0。不是整數或超出範圍 → 422。</li>
+        <li><code>offset</code> 超過結尾不是錯誤:回 200,<code>items</code> 是空陣列。</li>
+        <li>一定要 <code>ORDER BY</code>。SQL 沒有寫排序時,不保證每次的順序一樣,分頁就沒有意義。本書的列表一律照 <code>id</code> 由小到大。</li>
+        <li>回應的形狀:<code>{"items": [...], "limit": 10, "offset": 20}</code>。</li>
+      </ul>
+      <p>總共 $N$ 筆、每頁 $L$ 筆(頁和筆都從 1 開始算)時:</p>
+      <ul>
+        <li>頁數 $= \lceil N / L \rceil$;第 $p$ 頁的 <code>offset</code> $= (p-1) \times L$。</li>
+        <li>第 $k$ 筆在第 $\lfloor (k-1)/L \rfloor + 1$ 頁,那一頁的 <code>offset</code> 是 $\lfloor (k-1)/L \rfloor \times L$。</li>
+        <li>最後一頁有 $N - (\lceil N/L \rceil - 1) \times L$ 筆。</li>
+        <li>任何 <code>offset</code> $= o$ 的請求,拿到的是第 $o+1$ 到第 $\min(o+L, N)$ 筆;$o \ge N$ 時是空的。</li>
+      </ul>
+
+      <h3>手算:分頁要翻幾頁、第 k 筆在哪一頁</h3>
+      <p>服務裡有 47 筆待辦(id 1 到 47,沒有刪過),客戶端用 <code>limit=10</code> 一頁一頁翻。每一列是一次請求;表格用服務實際跑過。</p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>頁</th><th>請求</th><th>拿到的 id</th><th>筆數</th><th>說明</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td><code>?limit=10&amp;offset=0</code></td><td>1–10</td><td>10</td><td></td></tr>
+          <tr><td>2</td><td><code>?limit=10&amp;offset=10</code></td><td>11–20</td><td>10</td><td></td></tr>
+          <tr><td>3</td><td><code>?limit=10&amp;offset=20</code></td><td>21–30</td><td>10</td><td>第 23 筆在這頁:$\lfloor 22/10 \rfloor + 1 = 3$</td></tr>
+          <tr><td>4</td><td><code>?limit=10&amp;offset=30</code></td><td>31–40</td><td>10</td><td>第 40 筆在這頁:$\lfloor 39/10 \rfloor + 1 = 4$(不是第 5 頁)</td></tr>
+          <tr><td>5</td><td><code>?limit=10&amp;offset=40</code></td><td>41–47</td><td>7</td><td>最後一頁:$47 - 4 \times 10 = 7$;頁數 $\lceil 47/10 \rceil = 5$</td></tr>
+          <tr><td>—</td><td><code>?limit=10&amp;offset=50</code></td><td>(空)</td><td>0</td><td>200,<code>items</code> 是 <code>[]</code>;客戶端看到空頁就知道翻完了</td></tr>
+          <tr><td>—</td><td><code>?limit=5&amp;offset=7</code></td><td>8–12</td><td>5</td><td><code>offset</code> 不必是 <code>limit</code> 的倍數</td></tr>
+          <tr><td>—</td><td><code>?limit=10&amp;offset=45</code></td><td>46–47</td><td>2</td><td>只剩 2 筆</td></tr>
+          <tr><td>—</td><td><code>?limit=101</code></td><td>—</td><td>—</td><td>422:<code>limit 必須在 1 到 100 之間</code></td></tr>
+          <tr><td>—</td><td><code>?offset=-1</code></td><td>—</td><td>—</td><td>422</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 {{num:129-http-rest-api}}.3 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>服務裡有 23 筆待辦(id 1 到 23)。(1) <code>limit=5</code> 要翻幾頁?寫出每一頁的 <code>offset</code> 和拿到的 id。(2) 第 12 筆和第 20 筆各在第幾頁?(3) <code>?limit=5&amp;offset=22</code> 拿到什麼?(4) <code>?limit=4&amp;offset=3</code> 拿到什麼?(5) <code>?limit=5&amp;offset=25</code> 呢?</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <ol>
+                <li>$\lceil 23/5 \rceil = 5$ 頁:offset 0 → 1–5;5 → 6–10;10 → 11–15;15 → 16–20;20 → 21–23(最後一頁 $23 - 4 \times 5 = 3$ 筆)。</li>
+                <li>第 12 筆:$\lfloor 11/5 \rfloor + 1 = 3$,第 3 頁(offset 10)。第 20 筆:$\lfloor 19/5 \rfloor + 1 = 4$,第 4 頁(offset 15)。</li>
+                <li>只有第 23 筆(1 筆)。</li>
+                <li>第 4 到第 7 筆(4 筆)。</li>
+                <li>200,<code>items</code> 是空陣列。</li>
+              </ol>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h3>offset 的陷阱:翻頁翻到一半,有人新增或刪除</h3>
+      <p>上面的公式有一個隱藏的假設:<strong>翻頁的過程中,資料沒有變。</strong>真實的服務一直有人在寫入。下面的程式在兩頁之間插入或刪除一筆,看看會發生什麼事:</p>
+<pre><code class="language-python"># offset_drift.py — 翻頁翻到一半,有人新增或刪除資料
+import sqlite3
+
+conn = sqlite3.connect(":memory:")
+conn.execute("CREATE TABLE posts (id INTEGER PRIMARY KEY)")
+conn.executemany("INSERT INTO posts VALUES (?)", [(i,) for i in range(1, 8)])  # 1..7
+
+
+def page(offset, limit=3, order="DESC"):
+    sql = f"SELECT id FROM posts ORDER BY id {order} LIMIT ? OFFSET ?"
+    return [r[0] for r in conn.execute(sql, (limit, offset))]
+
+
+# 情況一:最新的排前面(DESC),翻頁途中有人新增一篇
+print("第 1 頁:", page(0))
+conn.execute("INSERT INTO posts VALUES (8)")
+print("第 2 頁:", page(3), "← 5 又出現一次")
+
+# 情況二:舊的排前面(ASC),翻頁途中有人刪掉一篇
+conn.execute("DELETE FROM posts WHERE id = 8")
+print("第 1 頁:", page(0, order="ASC"))
+conn.execute("DELETE FROM posts WHERE id = 2")
+print("第 2 頁:", page(3, order="ASC"), "← 4 被跳過了")
+
+# 修法:keyset(游標)分頁——記住「上一頁最後一個 id」,從它之後接著拿
+conn.execute("INSERT INTO posts VALUES (2)")       # 還原成 1..7
+first = page(0, order="ASC")
+conn.execute("DELETE FROM posts WHERE id = 2")
+after = first[-1]
+rest = [r[0] for r in conn.execute(
+    "SELECT id FROM posts WHERE id &gt; ? ORDER BY id LIMIT 3", (after,))]
+print("keyset:", first, "→", rest, "← 沒有重複也沒有跳過")</code></pre>
+      <p>輸出:</p>
+<pre><code class="language-text">第 1 頁: [7, 6, 5]
+第 2 頁: [5, 4, 3] ← 5 又出現一次
+第 1 頁: [1, 2, 3]
+第 2 頁: [5, 6, 7] ← 4 被跳過了
+keyset: [1, 2, 3] → [4, 5, 6] ← 沒有重複也沒有跳過</code></pre>
+      <p>
+        情況一:最新的排前面時,新增的第 8 篇把所有東西往後推一格,原本在第 1 頁最後的 5 被推到第 2 頁的開頭,<strong>看到兩次</strong>。
+        情況二:刪掉第 2 篇,後面的往前補一格,原本該在第 2 頁開頭的 4 被擠到第 1 頁(而第 1 頁早就讀過了),<strong>從來沒看到</strong>。
+        <code>offset</code> 數的是「第幾個位置」,位置會跟著資料移動。
+      </p>
+      <p>
+        修法是 <strong>keyset 分頁</strong>(也叫游標分頁):不說「跳過幾筆」,而說「給我 id 大於 3 的接下來 3 筆」(<code>WHERE id &gt; ? ORDER BY id LIMIT ?</code>)。
+        id 不會因為別人新增或刪除而移動。代價是不能直接跳到「第 37 頁」。本書的 API 用 <code>offset</code>(簡單、Lab 的規格就是它);練習 {{num:129-http-rest-api}}.6 會讓你寫 keyset 版本。
+      </p>
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">看起來對但其實錯:「offset 分頁不會漏資料,也不會重複」</span>
+          <p>沒有人同時寫入時,上面的手算表每一頁都剛好接起來,看起來永遠對。但只要翻頁途中有一次新增或刪除,就會重複或漏掉。
+          例子都對 ≠ 敘述為真;測試分頁時,要故意在兩頁之間改資料。</p>
+        </div>
+      </div>
+
+      <h2>版本:API 改了,舊的客戶端怎麼辦</h2>
+      <p>
+        網頁改版,使用者重新整理就拿到新版。API 不一樣:已經裝在幾萬支手機上的舊 App,不會馬上更新。
+        所以改 API 之前,先分清楚這個改動<strong>相容</strong>還是<strong>不相容</strong>:
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>改動</th><th>舊客戶端會不會壞</th></tr></thead>
+        <tbody>
+          <tr><td>回應多一個欄位(例如待辦多了 <code>created_at</code>)</td><td>不會,只要客戶端忽略不認得的欄位</td></tr>
+          <tr><td>請求多一個<strong>可選</strong>的欄位</td><td>不會,舊客戶端不送,伺服器用預設值</td></tr>
+          <tr><td>欄位改名(<code>title</code> → <code>name</code>)、改型別、刪掉</td><td><strong>會</strong></td></tr>
+          <tr><td>可選欄位改成必填</td><td><strong>會</strong>,舊客戶端沒送,突然收到 422</td></tr>
+          <tr><td>同一種情況改用別的狀態碼(404 改成 410)</td><td><strong>會</strong>,客戶端的 <code>if</code> 判斷失效</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>不相容的改動要開新版本。常見做法有三種:</p>
+      <ul>
+        <li><strong>放在路徑</strong>:<code>/v1/todos</code>、<code>/v2/todos</code>。最直觀,用 curl 一眼看得出版本;最常見。</li>
+        <li><strong>放在標頭</strong>:例如 <code>Accept: application/vnd.example.v2+json</code>。URL 不變,但除錯時要記得看標頭。</li>
+        <li><strong>放在 query</strong>:<code>/todos?version=2</code>。簡單,但容易和篩選參數混在一起。</li>
+      </ul>
+      <p>
+        不管哪一種,原則都一樣:<strong>能用相容的方式改,就不要開新版本</strong>(加欄位,不要改欄位);真的要改,新舊版並存一段時間,先公告舊版什麼時候停用。
+        本章的待辦服務和借書 Lab 都只有一個版本,所以路徑沒有 <code>/v1</code>。
+      </p>
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">嚴格驗證的代價</span>
+          <p>本書的服務遇到不認得的請求欄位就回 422。好處是客戶端打錯字(<code>titel</code>)時馬上知道;
+          代價是新版客戶端多送一個欄位給舊版伺服器,會被拒絕。這是設計上的取捨,沒有標準答案,但一定要寫進規格。</p>
+        </div>
+      </div>
+
+      <h2>用標準函式庫寫一個 JSON 服務</h2>
+      <p>
+        設計講完了,來寫程式。整個服務只用 Python 標準函式庫,分成三個檔案、三層。
+        分層的理由在圖 {{num:129-http-rest-api}}-1 已經看到了:中間那層 app 不認識任何伺服器,所以可以直接拿來測試,也可以換伺服器。
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>檔案</th><th>層</th><th>負責</th><th>用到的標準函式庫</th></tr></thead>
+        <tbody>
+          <tr><td><code>todo_store.py</code></td><td>資料層</td><td>在 SQLite 裡讀寫待辦;找不到就丟 <code>NotFound</code></td><td><code>sqlite3</code>、<code>threading</code></td></tr>
+          <tr><td><code>todo_app.py</code></td><td>核心</td><td>路由表、讀 JSON、驗證、把例外變成狀態碼與錯誤格式</td><td><code>json</code>、<code>re</code>、<code>hashlib</code></td></tr>
+          <tr><td><code>todo_server.py</code></td><td>轉接層</td><td>把 <code>http.server</code> 收到的請求交給 app,把結果寫回連線</td><td><code>http.server</code>、<code>urllib.parse</code></td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>三個檔案放在同一個資料夾。每一段都可以直接複製執行(Python 3.7 以上;本章用 3.12 測試)。</p>
+
+      <h3>資料層:todo_store.py</h3>
+<pre><code class="language-python"># todo_store.py — 待辦事項的資料層(sqlite3)
+import sqlite3
+import threading
+
+
+class NotFound(Exception):
+    """找不到這筆待辦。"""
+
+
+# 能改的欄位只有這兩個;每個欄位一條固定的 SQL(不用字串拼接組 SQL)
+UPDATE_SQL = {
+    "title": "UPDATE todos SET title = ? WHERE id = ?",
+    "done": "UPDATE todos SET done = ? WHERE id = ?",
+}
+
+
+class TodoStore:
+    def __init__(self, db_path=":memory:"):
+        # 多個執行緒共用一個連線:關掉 sqlite3 的執行緒檢查,改用自己的鎖保護
+        self.conn = sqlite3.connect(db_path, check_same_thread=False)
+        self.conn.row_factory = sqlite3.Row
+        self.lock = threading.Lock()
+        with self.lock, self.conn:
+            self.conn.execute(
+                "CREATE TABLE IF NOT EXISTS todos ("
+                " id INTEGER PRIMARY KEY,"
+                " title TEXT NOT NULL,"
+                " done INTEGER NOT NULL DEFAULT 0)"
+            )
+
+    @staticmethod
+    def _to_dict(row):
+        return {"id": row["id"], "title": row["title"], "done": bool(row["done"])}
+
+    def _get(self, todo_id):
+        row = self.conn.execute(
+            "SELECT * FROM todos WHERE id = ?", (todo_id,)).fetchone()
+        if row is None:
+            raise NotFound(todo_id)
+        return self._to_dict(row)
+
+    def add(self, title, done=False):
+        with self.lock, self.conn:        # with conn:成功就 commit,出錯就 rollback
+            cur = self.conn.execute(
+                "INSERT INTO todos (title, done) VALUES (?, ?)", (title, int(done)))
+            return self._get(cur.lastrowid)
+
+    def get(self, todo_id):
+        with self.lock:
+            return self._get(todo_id)
+
+    def list(self, limit=20, offset=0, done=None):
+        sql, args = "SELECT * FROM todos", []
+        if done is not None:
+            sql += " WHERE done = ?"
+            args.append(int(done))
+        sql += " ORDER BY id LIMIT ? OFFSET ?"   # 一定要排序,分頁才有意義
+        args += [limit, offset]
+        with self.lock:
+            return [self._to_dict(r) for r in self.conn.execute(sql, args)]
+
+    def update(self, todo_id, **fields):
+        with self.lock, self.conn:
+            self._get(todo_id)                   # 不存在就丟 NotFound
+            for name, value in fields.items():
+                self.conn.execute(UPDATE_SQL[name], (value, todo_id))
+            return self._get(todo_id)
+
+    def delete(self, todo_id):
+        with self.lock, self.conn:
+            cur = self.conn.execute("DELETE FROM todos WHERE id = ?", (todo_id,))
+            if cur.rowcount == 0:
+                raise NotFound(todo_id)</code></pre>
+      <ul>
+        <li><strong><code>with self.lock, self.conn:</code></strong>:先拿鎖,再進交易。<code>sqlite3</code> 連線的 <code>with</code> 區塊正常結束就 commit,丟例外就 rollback(<a href="37-databases.html">{{ch:37-databases}}</a>的交易與 ACID)。</li>
+        <li><strong>為什麼要鎖</strong>:伺服器會用好幾條執行緒同時處理請求,它們共用這一個連線。<code>check_same_thread=False</code> 只是關掉 <code>sqlite3</code> 的檢查,保護要靠自己的鎖。</li>
+        <li><strong><code>UPDATE_SQL</code></strong>:要改哪個欄位,從固定的兩條 SQL 裡挑一條,值一律用 <code>?</code> 傳。不要用字串拼出 <code>SET {name} = ...</code>,那是 SQL injection 的入口。</li>
+        <li><strong><code>ORDER BY id</code></strong>:分頁的前提。</li>
+      </ul>
+
+      <h3>核心:路由表、驗證與錯誤</h3>
+<pre><code class="language-python"># todo_app.py — 待辦事項 JSON API 的核心(不綁任何伺服器)
+import hashlib
+import json
+import re
+import traceback
+
+from todo_store import NotFound
+
+# 一個狀態碼對一個固定的錯誤代碼:客戶端用 code 判斷,message 給人看
+ERROR_CODES = {
+    400: "bad_request",
+    404: "not_found",
+    405: "method_not_allowed",
+    409: "conflict",
+    415: "unsupported_media_type",
+    422: "validation_error",
+    500: "internal",
+}
+
+
+class ApiError(Exception):
+    def __init__(self, status, message, headers=None):
+        super().__init__(message)
+        self.status = status
+        self.message = message
+        self.headers = headers or {}
+
+
+def json_response(status, data, headers=None):
+    body = json.dumps(data, ensure_ascii=False).encode("utf-8")
+    h = {"Content-Type": "application/json; charset=utf-8"}
+    h.update(headers or {})
+    return status, h, body
+
+
+def error_response(err):
+    data = {"error": {"code": ERROR_CODES[err.status], "message": err.message}}
+    return json_response(err.status, data, err.headers)
+
+
+def read_json(headers, body):
+    """讀請求本體:先看 Content-Type(415),再解析(400),最後要求是物件(422)。"""
+    ctype = headers.get("content-type", "").split(";")[0].strip().lower()
+    if ctype != "application/json":
+        raise ApiError(415, "Content-Type 必須是 application/json")
+    try:
+        data = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise ApiError(400, "本體不是合法的 JSON")
+    if not isinstance(data, dict):
+        raise ApiError(422, "本體必須是 JSON 物件")
+    return data
+
+
+def validate(data, required):
+    """欄位檢查:讀得懂、但內容不合規則 → 422。"""
+    unknown = sorted(set(data) - {"title", "done"})
+    if unknown:
+        raise ApiError(422, "不認得的欄位:" + ", ".join(unknown))
+    for name in required:
+        if name not in data:
+            raise ApiError(422, "缺少欄位:" + name)
+    if "title" in data:
+        t = data["title"]
+        if not isinstance(t, str) or not t.strip() or len(t.strip()) &gt; 100:
+            raise ApiError(422, "title 必須是 1 到 100 個字的字串")
+        data["title"] = t.strip()
+    if "done" in data and not isinstance(data["done"], bool):
+        raise ApiError(422, "done 必須是 true 或 false")
+    return data
+
+
+def int_param(query, name, default, lo, hi):
+    raw = query.get(name)
+    if raw is None:
+        return default
+    if not re.fullmatch(r"-?[0-9]+", raw):
+        raise ApiError(422, f"{name} 必須是整數")
+    value = int(raw)
+    if not lo &lt;= value &lt;= hi:
+        raise ApiError(422, f"{name} 必須在 {lo} 到 {hi} 之間")
+    return value
+
+
+def etag_of(payload):
+    return '"' + hashlib.sha256(payload).hexdigest()[:16] + '"'
+
+
+def make_app(store):
+    # ── 處理函式:每個都收 (query, headers, body, 路徑裡的 id...) ──
+    def list_todos(query, headers, body):
+        limit = int_param(query, "limit", 20, 1, 100)
+        offset = int_param(query, "offset", 0, 0, 10**9)
+        done = query.get("done")
+        if done not in (None, "true", "false"):
+            raise ApiError(422, "done 只能是 true 或 false")
+        items = store.list(limit, offset, None if done is None else done == "true")
+        return json_response(200, {"items": items, "limit": limit, "offset": offset})
+
+    def create_todo(query, headers, body):
+        data = validate(read_json(headers, body), required=["title"])
+        todo = store.add(data["title"], data.get("done", False))
+        return json_response(201, todo, {"Location": f"/todos/{todo['id']}"})
+
+    def get_todo(query, headers, body, todo_id):
+        status, h, payload = json_response(200, store.get(todo_id))
+        tag = etag_of(payload)
+        cache = {"ETag": tag, "Cache-Control": "no-cache"}
+        if headers.get("if-none-match") == tag:
+            return 304, cache, b""             # 你手上那份還是新的
+        h.update(cache)
+        return status, h, payload
+
+    def replace_todo(query, headers, body, todo_id):      # PUT:整筆取代
+        data = validate(read_json(headers, body), required=["title", "done"])
+        return json_response(200, store.update(todo_id, **data))
+
+    def patch_todo(query, headers, body, todo_id):        # PATCH:只改給的欄位
+        data = validate(read_json(headers, body), required=[])
+        return json_response(200, store.update(todo_id, **data))
+
+    def delete_todo(query, headers, body, todo_id):
+        store.delete(todo_id)
+        return 204, {}, b""                    # 204:成功,而且沒有本體
+
+    # ── 路由表:(方法, 路徑樣式, 處理函式) ──
+    routes = [
+        ("GET",    r"/todos",          list_todos),
+        ("POST",   r"/todos",          create_todo),
+        ("GET",    r"/todos/([0-9]+)", get_todo),
+        ("PUT",    r"/todos/([0-9]+)", replace_todo),
+        ("PATCH",  r"/todos/([0-9]+)", patch_todo),
+        ("DELETE", r"/todos/([0-9]+)", delete_todo),
+    ]
+    compiled = [(m, re.compile(p), f) for m, p, f in routes]
+
+    def app(method, path, query, headers, body):
+        """回傳 (狀態碼, 標頭 dict, 本體 bytes)。headers 的鍵是小寫。"""
+        try:
+            allowed = []
+            for m, pattern, func in compiled:
+                match = pattern.fullmatch(path)
+                if match is None:
+                    continue
+                if m == method:
+                    ids = [int(g) for g in match.groups()]
+                    return func(query, headers, body, *ids)
+                allowed.append(m)
+            if allowed:                        # 路徑對、方法錯 → 405 + Allow
+                raise ApiError(405, f"{path} 不支援 {method}",
+                               {"Allow": ", ".join(allowed)})
+            raise ApiError(404, "沒有這個路徑:" + path)
+        except ApiError as e:
+            return error_response(e)
+        except NotFound as e:
+            return error_response(ApiError(404, f"待辦 {e.args[0]} 不存在"))
+        except Exception:
+            traceback.print_exc()              # 細節寫進伺服器日誌,不送給客戶端
+            return error_response(ApiError(500, "伺服器內部錯誤"))
+
+    return app</code></pre>
+      <p>幾個值得停下來看的地方:</p>
+      <ul>
+        <li><strong>路由表</strong>是一張 <code>(方法, 路徑樣式, 處理函式)</code> 的表。<code>app</code> 由上往下比對;路徑對、方法也對,就呼叫那個函式,路徑裡括號抓到的 id 轉成 <code>int</code> 當參數。
+          路徑對、方法不對,就把方法收集進 <code>allowed</code>,最後回 405 和 <code>Allow</code>。新增一個端點,只要在表裡加一列。</li>
+        <li><strong><code>fullmatch</code></strong>:整條路徑都要符合。用 <code>match</code> 的話,<code>/todos/1/whatever</code> 也會被當成 <code>/todos/1</code>。</li>
+        <li><strong><code>[0-9]+</code> 而不是 <code>\d+</code></strong>:Python 的 <code>\d</code> 也會比對阿拉伯-印度數字「٣」這類 Unicode 數字。路徑裡的 id 只接受 ASCII 數字。</li>
+        <li><strong><code>read_json</code> 的順序</strong>就是「判斷順序」的第 3、4、5 步:先看 <code>Content-Type</code>(415),再解析(400),最後要求是物件(422)。</li>
+        <li><strong><code>validate</code> 先全部檢查完,才交給資料層</strong>。手算 {{num:129-http-rest-api}}.1 第 7 列的「全部不改」就是這樣來的。</li>
+        <li><strong>例外變成回應</strong>:<code>ApiError</code> 帶著自己的狀態碼;資料層的 <code>NotFound</code> 變成 404;其他沒預料到的例外變成 500,細節用 <code>traceback.print_exc()</code> 印到伺服器的 stderr。</li>
+        <li><strong>304 的時候</strong>,只回 <code>ETag</code> 與 <code>Cache-Control</code>,本體是空的。</li>
+        <li><strong><code>If-None-Match</code> 只做字串相等</strong>:這是簡化版。RFC 9110 的規則還包括弱比較(<code>W/"…"</code>)、用逗號分開的多個 ETag、以及 <code>*</code>;這個範例都不處理。</li>
+      </ul>
+
+      <h3>掛上 http.server:BaseHTTPRequestHandler 與 ThreadingHTTPServer</h3>
+<pre><code class="language-python"># todo_server.py — 把 app 掛到標準函式庫的 http.server 上
+import re
+import sys
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qsl, urlsplit
+
+from todo_app import ApiError, error_response, make_app
+from todo_store import TodoStore
+
+
+def make_handler_class(app):
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"   # 持續連線:每個有本體的回應都要有 Content-Length
+
+        def _send(self, status, headers, body):
+            self.send_response(status)          # 會自動加 Server 與 Date
+            for name, value in headers.items():
+                self.send_header(name, value)
+            if status not in (204, 304):        # 204/304 不能有本體,也不送 Content-Length
+                self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _dispatch(self):
+            parts = urlsplit(self.path)
+            query = dict(parse_qsl(parts.query))     # 同名參數取最後一個
+            headers = {k.lower(): v for k, v in self.headers.items()}
+            raw_len = headers.get("content-length", "0")
+            if not re.fullmatch(r"[0-9]+", raw_len):   # 不是非負整數 → 400
+                status, h, body = error_response(ApiError(400, "Content-Length 不合法"))
+                h["Connection"] = "close"            # 本體有多長不知道,只好斷線
+                self.close_connection = True
+                return self._send(status, h, body)
+            body = self.rfile.read(int(raw_len))
+            self._send(*app(self.command, parts.path, query, headers, body))
+
+        do_GET = do_POST = do_PUT = do_PATCH = do_DELETE = _dispatch
+
+        def log_message(self, fmt, *args):           # 存取日誌寫到 stderr
+            sys.stderr.write("[log] " + fmt % args + "\n")
+
+    return Handler
+
+
+def make_server(port=8000, db=":memory:"):
+    app = make_app(TodoStore(db))
+    return ThreadingHTTPServer(("127.0.0.1", port), make_handler_class(app))
+
+
+if __name__ == "__main__":
+    port = int(sys.argv[1]) if len(sys.argv) &gt; 1 else 8000
+    server = make_server(port)
+    print(f"serving on http://127.0.0.1:{server.server_address[1]}", flush=True)
+    server.serve_forever()</code></pre>
+      <ul>
+        <li><strong><code>BaseHTTPRequestHandler</code></strong> 已經幫你讀好請求列和標頭:<code>self.command</code> 是方法,<code>self.path</code> 是路徑加 query,<code>self.headers</code> 是標頭,<code>self.rfile</code> 是還沒讀的本體。
+          收到 <code>PATCH</code> 時它會呼叫 <code>do_PATCH</code>;這裡讓五個方法都指向同一個 <code>_dispatch</code>。沒定義的方法(例如 <code>OPTIONS</code>)它會自己回 501。<code>HEAD</code> 也沒定義,所以這個範例對 <code>HEAD</code> 回 501;一般的伺服器應該支援 <code>HEAD</code>(回 GET 的標頭、不送本體),這裡是為了簡單而省略。</li>
+        <li><strong><code>self.rfile.read(n)</code></strong> 剛好讀 <code>Content-Length</code> 個位元組。不能「讀到沒有為止」:連線是保留著的,沒有「結尾」。</li>
+        <li><strong><code>protocol_version = "HTTP/1.1"</code></strong>:預設是 HTTP/1.0(每個回應後就斷線)。改成 1.1 之後連線會保留,客戶端完全靠 <code>Content-Length</code> 知道本體在哪裡結束,所以每個有本體的回應都要送它。
+          <code>Content-Length</code> 不合法時不知道本體有多長,只好回 400 並斷線。</li>
+        <li><strong>204 與 304 不送 <code>Content-Length</code></strong>:RFC 9110 規定 204 回應不能帶這個標頭,這兩種回應也一定沒有本體。</li>
+        <li><strong><code>ThreadingHTTPServer</code></strong>(Python 3.7 起)替每條連線開一條執行緒,所以一個慢的客戶端不會擋住別人。這也是資料層要上鎖的原因。</li>
+        <li><strong><code>make_server(port=0)</code></strong>:埠號給 0,作業系統會挑一個空的埠,測試時很好用;實際的埠在 <code>server.server_address[1]</code>。</li>
+      </ul>
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">http.server 適合學習與測試,不適合直接上線</span>
+          <p>Python 官方文件明白寫著:<code>http.server</code> 只做了基本的安全檢查,不建議用在正式環境。
+          它沒有逾時(一個只連線不送資料的客戶端會一直佔著一條執行緒)、沒有請求大小上限、沒有 HTTPS。本章的 Handler 也只看 <code>Content-Length</code>,不支援 <code>Transfer-Encoding: chunked</code> 的請求本體。
+          學習 HTTP、寫測試、在本機跑小工具都很好;正式上線時,前面要有反向代理和正式的應用伺服器。
+          逾時和執行緒池正好是 <a href="24-operating-system.html#lab-srv-pool"><code>srv/pool</code></a> 那一站要你自己做的事。</p>
+        </div>
+      </div>
+
+      <h3>跑起來:用 urllib 當客戶端</h3>
+      <p>終端機 A 啟動伺服器:</p>
+<pre><code class="language-bash">python3 todo_server.py 8741</code></pre>
+<pre><code class="language-text">serving on http://127.0.0.1:8741</code></pre>
+      <p>終端機 B 用 <code>urllib</code>(標準函式庫的 HTTP 客戶端)走一遍:</p>
+<pre><code class="language-python"># client_demo.py — 用 urllib 當客戶端,走一遍待辦 API
+import json
+import sys
+import urllib.error
+import urllib.request
+
+BASE = "http://127.0.0.1:" + sys.argv[1]
+
+
+def call(method, path, data=None, headers=None):
+    body = None if data is None else json.dumps(data).encode("utf-8")
+    req = urllib.request.Request(BASE + path, data=body, method=method,
+                                 headers=headers or {})
+    if data is not None:
+        req.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(req) as resp:
+            status, h, raw = resp.status, resp.headers, resp.read()
+    except urllib.error.HTTPError as e:      # 4xx/5xx 會變成例外,一樣讀出來
+        status, h, raw = e.code, e.headers, e.read()
+    text = raw.decode("utf-8")
+    print(method, path, "→", status, text if text else "(沒有本體)")
+    return status, h, text
+
+
+call("POST", "/todos", {"title": "寫 HTTP 作業"})
+call("POST", "/todos", {"title": "買牛奶", "done": True})
+call("GET", "/todos?limit=1&amp;offset=1")
+call("PATCH", "/todos/1", {"done": True})
+call("PUT", "/todos/2", {"title": "買豆漿"})
+call("DELETE", "/todos/2")
+call("DELETE", "/todos/2")
+call("GET", "/todos/abc")
+call("DELETE", "/todos")
+call("GET", "/todos?limit=0")</code></pre>
+<pre><code class="language-bash">python3 client_demo.py 8741</code></pre>
+<pre><code class="language-text">POST /todos → 201 {"id": 1, "title": "寫 HTTP 作業", "done": false}
+POST /todos → 201 {"id": 2, "title": "買牛奶", "done": true}
+GET /todos?limit=1&amp;offset=1 → 200 {"items": [{"id": 2, "title": "買牛奶", "done": true}], "limit": 1, "offset": 1}
+PATCH /todos/1 → 200 {"id": 1, "title": "寫 HTTP 作業", "done": true}
+PUT /todos/2 → 422 {"error": {"code": "validation_error", "message": "缺少欄位:done"}}
+DELETE /todos/2 → 204 (沒有本體)
+DELETE /todos/2 → 404 {"error": {"code": "not_found", "message": "待辦 2 不存在"}}
+GET /todos/abc → 404 {"error": {"code": "not_found", "message": "沒有這個路徑:/todos/abc"}}
+DELETE /todos → 405 {"error": {"code": "method_not_allowed", "message": "/todos 不支援 DELETE"}}
+GET /todos?limit=0 → 422 {"error": {"code": "validation_error", "message": "limit 必須在 1 到 100 之間"}}</code></pre>
+      <p>同時,終端機 A 的存取日誌(<code>log_message</code> 寫到 stderr):</p>
+<pre><code class="language-text">[log] "POST /todos HTTP/1.1" 201 -
+[log] "POST /todos HTTP/1.1" 201 -
+[log] "GET /todos?limit=1&amp;offset=1 HTTP/1.1" 200 -
+[log] "PATCH /todos/1 HTTP/1.1" 200 -
+[log] "PUT /todos/2 HTTP/1.1" 422 -
+[log] "DELETE /todos/2 HTTP/1.1" 204 -
+[log] "DELETE /todos/2 HTTP/1.1" 404 -
+[log] "GET /todos/abc HTTP/1.1" 404 -
+[log] "DELETE /todos HTTP/1.1" 405 -
+[log] "GET /todos?limit=0 HTTP/1.1" 422 -</code></pre>
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">小技巧:urllib 遇到 4xx/5xx 會丟例外</span>
+          <p><code>urllib.request.urlopen</code> 收到 4xx 或 5xx 會丟 <code>HTTPError</code>。對 API 來說,錯誤回應也是正常的回應,
+          所以 <code>call</code> 把例外接住,照樣讀出狀態碼、標頭與本體。<code>e.read()</code> 就是錯誤格式的 JSON。</p>
+        </div>
+      </div>
+
+      <h2>同一個 app,換一個插頭:跑在你自己的 srv/http 上</h2>
+      <p>
+        在<a href="25-networking.html#lab-srv-http">{{ch:25-networking}}的 Lab</a>,你寫了自己的 <code>srv/http.py</code>:
+        <code>serve(port, handler)</code> 收連線、解析請求,把一個 <code>Request</code>(有 <code>method</code>、<code>path</code>、<code>query</code>、小寫鍵的 <code>headers</code>、<code>body</code>)交給 <code>handler</code>,
+        再把 <code>handler</code> 回傳的 <code>(status, headers, body)</code> 組成回應送出。
+      </p>
+      <p>
+        這和 app 要的東西幾乎一樣。所以轉接層只要一個三行的函式。先不開任何伺服器,手做一個長得像 <code>Request</code> 的物件來試:
+      </p>
+<pre><code class="language-python"># srv_adapter_demo.py — 同一個 app,換一種伺服器的「插頭」
+from types import SimpleNamespace
+
+from todo_app import make_app
+from todo_store import TodoStore
+
+app = make_app(TodoStore())
+
+
+def srv_handler(req):
+    """srv/http 的 handler:收 Request,回 (status, headers, body)。"""
+    return app(req.method, req.path, req.query, req.headers, req.body)
+
+
+# 不開任何伺服器,手做一個長得像 srv.http.Request 的物件來試
+req = SimpleNamespace(method="POST", path="/todos", query={},
+                      headers={"content-type": "application/json"},
+                      body='{"title": "插頭測試"}'.encode())
+status, headers, body = srv_handler(req)
+print(status, headers, body.decode())
+req = SimpleNamespace(method="GET", path="/todos", query={"limit": "5"},
+                      headers={}, body=b"")
+status, headers, body = srv_handler(req)
+print(status, headers, body.decode())</code></pre>
+<pre><code class="language-text">201 {'Content-Type': 'application/json; charset=utf-8', 'Location': '/todos/1'} {"id": 1, "title": "插頭測試", "done": false}
+200 {'Content-Type': 'application/json; charset=utf-8'} {"items": [{"id": 1, "title": "插頭測試", "done": false}], "limit": 5, "offset": 0}</code></pre>
+      <p>真的要跑在你的伺服器上,把 <code>srv/</code> 所在的資料夾(<code>~/零件庫</code>)放進 <code>PYTHONPATH</code>:</p>
+<pre><code class="language-python"># run_on_srv.py — 用你自己的 srv/http 當伺服器
+import sys
+
+from srv.http import serve        # 你在網路那一章的 Lab 寫的零件
+from todo_app import make_app
+from todo_store import TodoStore
+
+app = make_app(TodoStore())
+
+
+def srv_handler(req):
+    return app(req.method, req.path, req.query, req.headers, req.body)
+
+
+serve(int(sys.argv[1]) if len(sys.argv) &gt; 1 else 8080, srv_handler)</code></pre>
+<pre><code class="language-bash">PYTHONPATH=~/零件庫 python3 run_on_srv.py 8080</code></pre>
+      <p>
+        之後用 <code>curl -si -H 'Content-Type: application/json' -d '{"title": "跑在 srv/http 上"}' http://127.0.0.1:8080/todos</code>,
+        應該拿到 <code>201</code>、<code>Location: /todos/1</code> 和那筆待辦的 JSON;標頭的細節(例如有沒有 <code>Connection: close</code>)看你的 <code>make_response</code> 怎麼寫。
+        (本書用一個照 <code>srv/http</code> 介面寫的替身測過這支程式;你的版本要等你的零件寫好才能跑。)
+        做完 <a href="24-operating-system.html#lab-srv-pool"><code>srv/pool</code></a> 之後,把最後一行換成 <code>serve_threaded(8080, srv_handler, workers=8)</code>,就變成多執行緒的伺服器,app 一行都不用改。
+      </p>
+      <div class="callout key">
+        <div class="ico">🔑</div>
+        <div class="body">
+          <span class="c-title">核心觀念</span>
+          <p>轉接層越薄越好。所有的規則(路由、驗證、狀態碼、錯誤格式)都在 app 裡,所以換伺服器時不用改規則,也不用重寫測試。
+          這就是<a href="11-software-architecture.html">{{ch:11-software-architecture}}</a>說的「依賴往內指」:核心不認識外面的框架,外面的框架來配合核心。</p>
+        </div>
+      </div>
+
+      <h2>寫成可以測試的服務</h2>
+      <p>
+        因為 app 只是一個函式,測試可以分兩層:大部分的測試直接呼叫 app(不碰網路,幾毫秒跑完);
+        少數幾條真的開一台伺服器,確認轉接層也沒問題。<code>make_server(port=0)</code> 讓作業系統挑一個空的埠,所以測試不會和別的程式搶埠。
+      </p>
+<pre><code class="language-python"># test_todo.py — 兩層測試:直接呼叫 app(快),以及真的開一台伺服器(慢但真實)
+import json
+import threading
+import unittest
+import urllib.request
+
+from todo_app import make_app
+from todo_server import make_server
+from todo_store import TodoStore
+
+JSON = {"content-type": "application/json"}
+
+
+class AppTest(unittest.TestCase):
+    def setUp(self):
+        self.app = make_app(TodoStore())          # 每個測試一個全新的記憶體資料庫
+
+    def call(self, method, path, data=None, query=None, headers=JSON):
+        body = b"" if data is None else json.dumps(data).encode()
+        status, h, raw = self.app(method, path, query or {}, headers, body)
+        return status, h, (json.loads(raw) if raw else None)
+
+    def test_create_returns_201_and_location(self):
+        status, h, todo = self.call("POST", "/todos", {"title": "a"})
+        self.assertEqual(status, 201)
+        self.assertEqual(h["Location"], "/todos/1")
+        self.assertEqual(todo, {"id": 1, "title": "a", "done": False})
+
+    def test_delete_twice(self):
+        self.call("POST", "/todos", {"title": "a"})
+        self.assertEqual(self.call("DELETE", "/todos/1")[0], 204)
+        status, _, err = self.call("DELETE", "/todos/1")
+        self.assertEqual(status, 404)
+        self.assertEqual(err["error"]["code"], "not_found")
+
+    def test_bad_json_is_400_wrong_type_is_422(self):
+        status, _, _ = self.app("POST", "/todos", {}, JSON, b"{oops")
+        self.assertEqual(status, 400)
+        status, _, err = self.call("POST", "/todos", {"title": 42})
+        self.assertEqual((status, err["error"]["code"]), (422, "validation_error"))
+
+    def test_patch_changes_only_given_fields(self):
+        self.call("POST", "/todos", {"title": "a"})
+        _, _, todo = self.call("PATCH", "/todos/1", {"done": True})
+        self.assertEqual(todo, {"id": 1, "title": "a", "done": True})
+
+    def test_pagination(self):
+        for i in range(5):
+            self.call("POST", "/todos", {"title": f"t{i}"})
+        _, _, page = self.call("GET", "/todos", query={"limit": "2", "offset": "4"})
+        self.assertEqual([t["id"] for t in page["items"]], [5])
+
+
+class ServerTest(unittest.TestCase):
+    def test_real_http_round_trip(self):
+        server = make_server(port=0)              # port 0:讓作業系統挑一個空的埠
+        port = server.server_address[1]
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{port}/todos", method="POST",
+                data=b'{"title": "x"}', headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req) as resp:
+                self.assertEqual(resp.status, 201)
+                self.assertTrue(resp.headers["Content-Type"].startswith("application/json"))
+        finally:
+            server.shutdown()
+            server.server_close()
+
+
+if __name__ == "__main__":
+    unittest.main()</code></pre>
+<pre><code class="language-bash">python3 -m unittest -v test_todo</code></pre>
+<pre><code class="language-text">test_bad_json_is_400_wrong_type_is_422 (test_todo.AppTest.test_bad_json_is_400_wrong_type_is_422) ... ok
+test_create_returns_201_and_location (test_todo.AppTest.test_create_returns_201_and_location) ... ok
+test_delete_twice (test_todo.AppTest.test_delete_twice) ... ok
+test_pagination (test_todo.AppTest.test_pagination) ... ok
+test_patch_changes_only_given_fields (test_todo.AppTest.test_patch_changes_only_given_fields) ... ok
+test_real_http_round_trip (test_todo.ServerTest.test_real_http_round_trip) ... [log] "POST /todos HTTP/1.1" 201 -
+ok
+
+----------------------------------------------------------------------
+Ran 6 tests in 0.516s
+
+OK</code></pre>
+      <p>
+        中間那行 <code>[log] ...</code> 是伺服器的存取日誌(stderr),剛好夾在 unittest 的輸出裡。
+        總時間大約 0.5 秒,幾乎都花在 <code>server.shutdown()</code>:<code>serve_forever()</code> 每 0.5 秒才檢查一次要不要停。
+        直接呼叫 app 的五條測試加起來只要幾毫秒。
+      </p>
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">小技巧:測規格,不要測文字</span>
+          <p>斷言狀態碼、<code>Location</code>、<code>error.code</code>、資料的值;不要斷言 <code>message</code> 的文字。
+          訊息改寫一個字,測試就不應該壞。替借書 API 寫一整套測試,是<a href="46-debugging-testing.html#lab-bookapi-tests">{{ch:46-debugging-testing}}的 Lab</a>(<code>bookapi/tests</code>):你的測試要能抓出 8 個故意埋了 bug 的版本。</p>
+        </div>
+      </div>
+
+      <h2>兩個人借最後一本:併發與 409</h2>
+      <p>
+        圖書館的《小王子》只剩一本。小明和小華在同一秒按下「借」。兩個 <code>POST /loans</code> 分別在兩條執行緒裡處理
+        (<code>ThreadingHTTPServer</code> 或你的 <code>srv/pool</code> 都會這樣)。如果借書的程式寫成「先查還有幾本,有的話再扣一本」,就可能發生這件事:
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>時間</th><th>小明的執行緒</th><th>小華的執行緒</th><th>資料庫裡的剩餘本數</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td>查:剩 1 本</td><td></td><td>1</td></tr>
+          <tr><td>2</td><td></td><td>查:剩 1 本</td><td>1</td></tr>
+          <tr><td>3</td><td>有剩,扣一本,回 201</td><td></td><td>0</td></tr>
+          <tr><td>4</td><td></td><td>(它在時間 2 看到的是 1)有剩,扣一本,回 201</td><td><strong>−1</strong></td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>
+        兩個人都拿到 201,書卻只有一本:<strong>超借</strong>。這種「先查再做」(check-then-act)的錯誤叫<strong>競態條件(race condition)</strong>,
+        <a href="24-operating-system.html">{{ch:24-operating-system}}</a>和<a href="43-parallel.html">{{ch:43-parallel}}</a>談過它的一般形式。
+        下面的程式讓 10 條執行緒同時搶最後 1 個名額,比較三種寫法。每條執行緒用自己的連線,就像每個請求在不同的執行緒,甚至不同的伺服器上:
+      </p>
+<pre><code class="language-python"># last_seat.py — 10 個人同時搶「最後 1 個名額」
+import os
+import sqlite3
+import tempfile
+import threading
+import time
+
+DB = os.path.join(tempfile.mkdtemp(), "seats.db")
+
+
+def setup():
+    conn = sqlite3.connect(DB)
+    conn.execute("DROP TABLE IF EXISTS seats")
+    conn.execute("CREATE TABLE seats (id INTEGER PRIMARY KEY, remaining INTEGER NOT NULL)")
+    conn.execute("INSERT INTO seats VALUES (1, 1)")        # 只剩 1 個名額
+    conn.commit()
+    conn.close()
+
+
+def take_naive(conn):
+    """先查再扣(check-then-act):查和扣之間別人可以插隊。"""
+    (left,) = conn.execute("SELECT remaining FROM seats WHERE id = 1").fetchone()
+    if left &lt;= 0:
+        return False
+    time.sleep(0.05)                     # 模擬「查完」到「扣掉」之間的空檔
+    conn.execute("UPDATE seats SET remaining = remaining - 1 WHERE id = 1")
+    conn.commit()
+    return True
+
+
+def take_atomic(conn):
+    """把「檢查」寫進 UPDATE 的 WHERE:檢查和扣掉是同一個動作。"""
+    cur = conn.execute(
+        "UPDATE seats SET remaining = remaining - 1 WHERE id = 1 AND remaining &gt; 0")
+    conn.commit()
+    return cur.rowcount == 1             # 真的扣到了才算成功
+
+
+def take_tx(conn):
+    """BEGIN IMMEDIATE:一開始就拿寫入鎖,查和扣之間沒人能寫。"""
+    conn.execute("BEGIN IMMEDIATE")
+    (left,) = conn.execute("SELECT remaining FROM seats WHERE id = 1").fetchone()
+    if left &lt;= 0:
+        conn.execute("ROLLBACK")
+        return False
+    time.sleep(0.05)
+    conn.execute("UPDATE seats SET remaining = remaining - 1 WHERE id = 1")
+    conn.execute("COMMIT")
+    return True
+
+
+def race(take, n=10):
+    setup()
+    wins = []
+    start = threading.Barrier(n)          # 讓 n 個執行緒同時起跑
+
+    def worker():
+        # 每個執行緒自己的連線,就像每個請求在不同的執行緒(或不同的伺服器)
+        if take is take_tx:
+            conn = sqlite3.connect(DB, timeout=10, isolation_level=None)
+        else:
+            conn = sqlite3.connect(DB, timeout=10)
+        start.wait()
+        if take(conn):
+            wins.append(1)                # list.append 在 CPython 是執行緒安全的
+        conn.close()
+
+    threads = [threading.Thread(target=worker) for _ in range(n)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    conn = sqlite3.connect(DB)
+    (left,) = conn.execute("SELECT remaining FROM seats WHERE id = 1").fetchone()
+    conn.close()
+    return len(wins), left
+
+
+if __name__ == "__main__":
+    for take in (take_naive, take_atomic, take_tx):
+        wins, left = race(take)
+        print(f"{take.__name__:12} 成功 {wins:2} 人,剩下 {left:3} 個名額", end="  ")
+        # 兩個不變式:名額不能是負的;成功人數 + 剩下名額 = 原本的 1 個
+        print("remaining &gt;= 0:", left &gt;= 0, " wins + remaining == 1:", wins + left == 1)</code></pre>
+      <p>輸出(連跑三次都一樣):</p>
+<pre><code class="language-text">take_naive   成功 10 人,剩下  -9 個名額  remaining &gt;= 0: False  wins + remaining == 1: True
+take_atomic  成功  1 人,剩下   0 個名額  remaining &gt;= 0: True  wins + remaining == 1: True
+take_tx      成功  1 人,剩下   0 個名額  remaining &gt;= 0: True  wins + remaining == 1: True</code></pre>
+      <ul>
+        <li><strong><code>take_naive</code></strong>:10 個人都成功,剩下 −9。<code>time.sleep(0.05)</code> 只是把「查完到扣掉」的空檔放大,讓問題每次都出現;真實的伺服器沒有 sleep,問題一樣在,只是比較少見,更難抓。</li>
+        <li><strong><code>take_atomic</code></strong>:把檢查寫進 <code>UPDATE</code> 的 <code>WHERE remaining &gt; 0</code>。檢查和扣掉是<strong>同一個敘述</strong>,資料庫保證它不會被別人插隊。<code>rowcount</code> 是 1 就是借到了,是 0 就是沒得借,API 回 <strong>409</strong>。</li>
+        <li><strong><code>take_tx</code></strong>:<code>BEGIN IMMEDIATE</code> 讓 SQLite 在交易一開始就拿寫入鎖,別的連線要寫入就得等(<code>timeout=10</code> 是最多等幾秒)。查和扣都在鎖裡,中間沒有人能改。查和扣之間有好幾步(查書、查會員、算可借本數、新增借閱)時,用這種寫法。</li>
+      </ul>
+      <p>
+        程式最後印的兩個檢查,是這個問題的<strong>不變式(invariant)</strong>:任何時候都必須成立的性質。
+        注意 <code>take_naive</code> 只打破了第一個:「成功人數 + 剩下名額 = 1」還是成立(10 + (−9) = 1),但名額變成負的。
+        <strong>只檢查一個不變式,可能看不出錯。</strong>
+      </p>
+      <p>借書 API 的不變式,寫成每一本書都要一直成立的兩句話:</p>
+<pre><code class="language-text">0 &lt;= available &lt;= copies
+available == copies - (這本書還沒還的借閱筆數)</code></pre>
+      <p>
+        隱藏檢定「資料一致」與「借還負載」會讓很多客戶端同時借還,再檢查這兩句話。
+        在 Lab 的資料表裡,<code>available</code> 不是一個欄位,而是算出來的(<code>copies</code> 減掉未還的借閱數),所以沒辦法只靠一句 <code>UPDATE books ...</code>;
+        你要用 <code>BEGIN IMMEDIATE</code> 把「算可借本數」和「新增借閱」包在同一個交易裡,或者把檢查寫進新增借閱的那一句 SQL。
+      </p>
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">常見陷阱:Python 的鎖只管得到同一個行程</span>
+          <p>本章的 <code>TodoStore</code> 用一把 <code>threading.Lock</code> 保護共用的連線,在一個行程裡確實不會出事。
+          但同一個資料庫只要被兩個行程(例如開了兩台伺服器)使用,Python 的鎖就管不到了。
+          把正確性放在資料庫這一層(原子 UPDATE、交易、<code>CHECK</code> 約束),不管幾個行程、幾台伺服器都成立。</p>
+        </div>
+      </div>
+
+      <h2>借書 API 規格:你要自己寫的服務</h2>
+      <p>
+        這一節是本章 Lab 的題目:任務線 <code>bookapi</code>(借書 API:從 socket 到上線)裡的任務「借書 REST API」,零件檔是 <code>~/零件庫/bookapi/api.py</code>。
+        它用你在<a href="37-databases.html#lab-bookapi-repo">{{ch:37-databases}}的 Lab</a>寫的 <code>LibraryRepo</code> 存資料,
+        跑在你的 <code>srv/http</code> 或 <code>srv/pool</code> 上。這個任務和組隊副本 R1「圖書館借書 API」是同一個題目。
+      </p>
+      <h3>入口與資源</h3>
+      <p><code>make_app(repo)</code> 回傳一個 <code>handler(Request) -&gt; (status, headers, body)</code>,可以直接交給 <code>srv.http.serve</code> 或 <code>srv.pool.serve_threaded</code>。三種資源的 JSON 長這樣:</p>
+<pre><code class="language-text">書   {"id": 1, "title": "小王子", "author": "聖修伯里", "isbn": "9789570000001", "copies": 1, "available": 1}
+會員 {"id": 1, "name": "小明", "email": "ming@example.com"}
+借閱 {"id": 1, "book_id": 1, "member_id": 1, "loaned_at": "2026-10-01T09:00:00",
+      "due_at": "2026-10-15T09:00:00", "returned_at": null}</code></pre>
+      <h3>端點</h3>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>方法與路徑</th><th>做什麼</th><th>成功</th><th>可能的錯誤</th></tr></thead>
+        <tbody>
+          <tr><td><code>GET /books</code></td><td>列出書。<code>?q=</code> 找書名或作者(子字串,英文不分大小寫,只限 ASCII;照字面找,<code>%</code>、<code>_</code>、引號都是普通字元);<code>?limit=</code>、<code>?offset=</code> 分頁</td><td>200 <code>{"items", "limit", "offset"}</code></td><td>422</td></tr>
+          <tr><td><code>POST /books</code></td><td>新增書。<code>title</code>、<code>author</code>、<code>isbn</code> 必填;<code>copies</code> 選填,預設 1</td><td>201,<code>Location: /books/{id}</code>,本體是書</td><td>400、415、422、409(isbn 重複)</td></tr>
+          <tr><td><code>GET /books/{id}</code></td><td>一本書,含 <code>available</code></td><td>200</td><td>404</td></tr>
+          <tr><td><code>PATCH /books/{id}</code></td><td>只改給的欄位(<code>title</code>、<code>author</code>、<code>isbn</code>、<code>copies</code>)</td><td>200,本體是改完的書</td><td>400、404、415、422、409(isbn 重複,或 <code>copies</code> 比借出中的本數少)</td></tr>
+          <tr><td><code>DELETE /books/{id}</code></td><td>刪書</td><td>204,沒有本體</td><td>404、409(還有沒還的借閱)</td></tr>
+          <tr><td><code>POST /members</code></td><td>新增會員。<code>name</code>、<code>email</code> 必填</td><td>201,<code>Location: /members/{id}</code>,本體是會員</td><td>400、415、422、409(email 重複)</td></tr>
+          <tr><td><code>POST /loans</code></td><td>借書。<code>book_id</code>、<code>member_id</code> 必填;<code>days</code> 選填(1–365,預設 14)</td><td>201,<code>Location: /loans/{id}</code>,本體是借閱</td><td>400、415、422、404(書或會員不存在)、409(沒有可借的本數)</td></tr>
+          <tr><td><code>POST /loans/{id}/return</code></td><td>還書(沒有本體;不讀本體,所以不檢查 <code>Content-Type</code>,也不會回 415)</td><td>200,本體是還完的借閱(<code>returned_at</code> 有值)</td><td>404、409(已經還過)</td></tr>
+          <tr><td><code>GET /loans/overdue</code></td><td>逾期的借閱。<code>?now=</code> 指定「現在」(ISO 8601),沒給就用伺服器的時間</td><td>200 <code>{"items": [...]}</code></td><td>422(<code>now</code> 不是合法的時間)</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <h3>規則細節</h3>
+      <ul>
+        <li><strong>字串欄位</strong>(<code>title</code>、<code>author</code>、<code>isbn</code>、<code>name</code>、<code>email</code>):必須是字串,去掉頭尾空白後不能是空的,存的是去掉空白後的值;<code>email</code> 還要含 <code>@</code>。</li>
+        <li><strong>整數欄位</strong>(<code>copies</code>、<code>book_id</code>、<code>member_id</code>、<code>days</code>):必須是 JSON 整數,<code>true</code> 和 <code>"1"</code> 都不算;<code>copies</code> 小於 0 → 422(欄位驗證在資料層之前,所以走不到 <code>LibraryRepo</code> 的 <code>Conflict</code>)。</li>
+        <li><strong>不認得的欄位</strong> → 422。<code>PATCH</code> 送 <code>{}</code> 是合法的:什麼都不改,回 200。</li>
+        <li><strong>分頁</strong>同本章:<code>limit</code> 1–100(預設 20),<code>offset</code> 0 以上(預設 0),否則 422;<code>offset</code> 超過結尾回空的 <code>items</code>。列表一律照 <code>id</code> 由小到大。</li>
+        <li><strong>時間</strong>:ISO 8601,到秒,不帶時區,例如 <code>2026-10-01T09:00:00</code>(和 <code>bookapi/repo</code> 的 <code>now</code> 同一種格式)。<code>due_at</code> = <code>loaned_at</code> + <code>days</code> 天。
+          逾期的意思是 <code>returned_at</code> 是 <code>null</code>,而且 <code>due_at</code> 早於 <code>now</code>;剛好等於 <code>now</code> 不算逾期。</li>
+        <li><strong>借書的檢查順序</strong>:欄位(422)→ 書存在嗎(404)→ 會員存在嗎(404)→ 還有可借的本數嗎(409)。檢查本數和新增借閱必須在同一個交易裡。</li>
+        <li><strong>回應</strong>:有本體的回應一律 <code>Content-Type: application/json; charset=utf-8</code>;204 沒有本體。</li>
+        <li><strong>錯誤</strong>:格式、代碼表、判斷順序都和本章的待辦服務一樣;路徑對、方法錯回 405 加 <code>Allow</code>;要讀本體的請求(<code>POST /books</code>、<code>PATCH /books/{id}</code>、<code>POST /members</code>、<code>POST /loans</code>),<code>Content-Type</code> 不對回 415;<code>POST /loans/{id}/return</code> 不讀本體,不檢查 <code>Content-Type</code>;沒預料到的例外回 500,不送程式細節。</li>
+      </ul>
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">借一本不存在的書:404 還是 422?</span>
+          <p><code>POST /loans</code> 的路徑本身存在,不存在的是本體裡指到的那本書。有人主張這該回 422(「本體的內容不對」)。
+          本書的規格選 404,因為「找不到那一筆」對客戶端最好懂,而且你的 <code>LibraryRepo.borrow</code> 本來就丟 <code>NotFound</code>。兩種都有人用,規格寫清楚最重要。</p>
+        </div>
+      </div>
+      <h3>和待辦範例不同的地方</h3>
+      <p>可以參考本章的待辦服務,但介面和要求不同,要自己改寫:</p>
+      <ul>
+        <li>入口是 <code>make_app(repo)</code> 回傳<strong>只收一個 <code>Request</code></strong> 的 handler,不是範例那個收五個參數的 <code>app</code>。</li>
+        <li>三種資源,加上一個動作子資源(<code>/loans/{id}/return</code>)和一個檢視(<code>/loans/overdue</code>);範例只有一種。</li>
+        <li>資料層是你自己的 <code>LibraryRepo</code>:它的 <code>NotFound</code> 要變成 404,<code>Conflict</code> 要變成 409。範例沒有 409。</li>
+        <li><code>available</code> 是算出來的,而且借書必須防超借;範例沒有併發的資料一致問題。</li>
+        <li>有 <code>?q=</code> 搜尋和 <code>?now=</code>;沒有 <code>PUT</code>,也不要求 <code>ETag</code>。</li>
+      </ul>
+      <h3>隱藏檢定會檢查的四類</h3>
+      <p>
+        用地下城的說法:公開的任務目標(約 12 條,書目 CRUD、會員、借書、還書、逾期查詢的正常流程)用 <code>test</code> 自己跑;
+        <code>submit</code> 時跑<strong>隱藏檢定</strong>,失敗時只看得到類別和名稱,看不到測資。
+        這個任務過關,就接近 bookapi 任務線第 2 個檢查點的 Boss 戰;組隊副本 R1 也用同樣的四類(另一組約 16 條隱藏測試):
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>類別</th><th>一行說明</th></tr></thead>
+        <tbody>
+          <tr><td>⚠ 邊界</td><td>分頁的極端值、空字串、本數 0 的書、Unicode 書名</td></tr>
+          <tr><td>⚠ 錯誤處理</td><td>壞 JSON、型別錯、找不到、不能借時的狀態碼與錯誤格式</td></tr>
+          <tr><td>⚠ 資料一致</td><td>借還之後的可借本數、重複還書、刪除有人借的書;同時借最後一本只能成功一次</td></tr>
+          <tr><td>⚠ 規格細節</td><td>201/204 的用法、<code>Content-Type</code>、列表排序與分頁、PATCH 只改給的欄位</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>另外還有一個效能門檻「借還負載」:掛在 <code>serve_threaded</code> 上,100 個客戶端同時各借還 10 次,零錯誤、沒有超借,10 秒內。</p>
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">小技巧:自己想出隱藏檢定</span>
+          <p>隱藏檢定的每一類,都能從上面的規格推出來。把規格的每一句話改寫成「如果……,就應該……」,再替每一句寫一個請求:
+          「如果 <code>offset</code> 超過結尾,就應該回 200 和空的 <code>items</code>」「如果同一筆還兩次,第二次就應該回 409」。
+          這也是<a href="46-debugging-testing.html#lab-bookapi-tests">{{ch:46-debugging-testing}}</a>寫 <code>bookapi/tests</code> 的方法。</p>
+        </div>
+      </div>
+
+      <h3>手算:照規格追一串借書請求</h3>
+      <p>
+        一台全新的借書服務,假設伺服器的時間固定是 <code>2026-10-01T09:00:00</code>。依序送出 12 個請求,寫出狀態碼,以及之後第 1 本書的 <code>copies</code>/<code>available</code>。
+        (這張表是用一個照規格寫的參考版本跑出來的;參考版本不在書裡。)
+        這是時鐘固定的參考版本,下面的手算 {{num:129-http-rest-api}}.4 也一樣。拿你自己的版本對照時,時間欄位要比相對的值(<code>due_at</code> = <code>loaned_at</code> + 天數),不要比絕對的時刻;測試裡要固定「現在」,就用 <code>?now=</code> 或 repo 的 <code>now=</code> 參數。
+      </p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>#</th><th>請求</th><th>狀態碼</th><th>書 1:copies/available</th><th>說明</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td><code>POST /books {"title": "小王子", "author": "聖修伯里", "isbn": "9789570000001", "copies": 1}</code></td><td>201</td><td>1/1</td><td><code>Location: /books/1</code></td></tr>
+          <tr><td>2</td><td><code>POST /members {"name": "小明", "email": "ming@example.com"}</code></td><td>201</td><td>1/1</td><td><code>Location: /members/1</code></td></tr>
+          <tr><td>3</td><td><code>POST /members {"name": "小華", "email": "hua@example.com"}</code></td><td>201</td><td>1/1</td><td><code>Location: /members/2</code></td></tr>
+          <tr><td>4</td><td><code>POST /loans {"book_id": 1, "member_id": 1}</code></td><td>201</td><td>1/0</td><td><code>Location: /loans/1</code>;<code>due_at</code> 是 <code>2026-10-15T09:00:00</code>(預設 14 天)</td></tr>
+          <tr><td>5</td><td><code>POST /loans {"book_id": 1, "member_id": 2}</code></td><td>409</td><td>1/0</td><td>沒有可借的本數:請求沒錯,只是「現在」不行</td></tr>
+          <tr><td>6</td><td><code>DELETE /books/1</code></td><td>409</td><td>1/0</td><td>還有沒還的借閱</td></tr>
+          <tr><td>7</td><td><code>POST /loans/1/return</code></td><td>200</td><td>1/1</td><td><code>returned_at</code> 是 <code>2026-10-01T09:00:00</code></td></tr>
+          <tr><td>8</td><td><code>POST /loans/1/return</code></td><td>409</td><td>1/1</td><td>已經還過;本數<strong>沒有</strong>再加 1</td></tr>
+          <tr><td>9</td><td><code>POST /loans {"book_id": 1, "member_id": 2, "days": 0}</code></td><td>422</td><td>1/1</td><td><code>days</code> 要 1–365:什麼時候送都不對</td></tr>
+          <tr><td>10</td><td><code>POST /loans {"book_id": 9, "member_id": 2}</code></td><td>404</td><td>1/1</td><td>第 9 本書不存在</td></tr>
+          <tr><td>11</td><td><code>PATCH /books/1 {"copies": 2}</code></td><td>200</td><td>2/2</td><td>只改 <code>copies</code>,其他欄位不動</td></tr>
+          <tr><td>12</td><td><code>GET /books?limit=0</code></td><td>422</td><td>2/2</td><td><code>limit</code> 要 1–100</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>看第 5 列和第 9 列:一個 409、一個 422。用「換個時間送會不會成功」來分,就不會搞混。第 8 列則是不變式的守門員:重複還書如果又加回一本,<code>available</code> 就會比 <code>copies</code> 還大。</p>
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 {{num:129-http-rest-api}}.4 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>另一台全新的借書服務,伺服器時間一樣固定是 <code>2026-10-01T09:00:00</code>。寫出每一列的狀態碼和之後書 1 的 <code>copies</code>/<code>available</code>;第 10、11 列再寫出 <code>items</code> 裡有哪些借閱。</p>
+          <ol>
+            <li><code>POST /books {"title": "三體", "author": "劉慈欣", "isbn": "9789570000002", "copies": 2}</code></li>
+            <li><code>POST /books {"title": "三體 II", "author": "劉慈欣", "isbn": "9789570000002"}</code></li>
+            <li><code>POST /members {"name": "阿哲", "email": "zhe@example.com"}</code></li>
+            <li><code>POST /members {"name": "小美", "email": "zhe@example.com"}</code></li>
+            <li><code>POST /members {"name": "小美", "email": "mei@example.com"}</code></li>
+            <li><code>POST /loans {"book_id": 1, "member_id": 1, "days": 7}</code></li>
+            <li><code>POST /loans {"book_id": 1, "member_id": 2, "days": 30}</code></li>
+            <li><code>POST /loans {"book_id": 1, "member_id": 2}</code></li>
+            <li><code>PATCH /books/1 {"copies": 1}</code></li>
+            <li><code>GET /loans/overdue?now=2026-10-08T09:00:00</code></li>
+            <li><code>GET /loans/overdue?now=2026-10-08T09:00:01</code></li>
+            <li><code>POST /loans/2/return</code></li>
+            <li><code>PATCH /books/1 {"copies": 1}</code></li>
+            <li><code>POST /loans {"book_id": "1", "member_id": 1}</code></li>
+          </ol>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <div class="table-wrap">
+              <table>
+                <thead><tr><th>#</th><th>狀態碼</th><th>書 1</th><th>說明</th></tr></thead>
+                <tbody>
+                  <tr><td>1</td><td>201</td><td>2/2</td><td><code>Location: /books/1</code></td></tr>
+                  <tr><td>2</td><td>409</td><td>2/2</td><td>isbn 重複</td></tr>
+                  <tr><td>3</td><td>201</td><td>2/2</td><td>會員 1</td></tr>
+                  <tr><td>4</td><td>409</td><td>2/2</td><td>email 重複</td></tr>
+                  <tr><td>5</td><td>201</td><td>2/2</td><td>會員 2(第 4 列失敗,沒有用掉 id)</td></tr>
+                  <tr><td>6</td><td>201</td><td>2/1</td><td>借閱 1,<code>due_at</code> 是 <code>2026-10-08T09:00:00</code></td></tr>
+                  <tr><td>7</td><td>201</td><td>2/0</td><td>借閱 2,<code>due_at</code> 是 <code>2026-10-31T09:00:00</code></td></tr>
+                  <tr><td>8</td><td>409</td><td>2/0</td><td>沒有可借的本數</td></tr>
+                  <tr><td>9</td><td>409</td><td>2/0</td><td>借出中 2 本,<code>copies</code> 不能改成 1</td></tr>
+                  <tr><td>10</td><td>200</td><td>2/0</td><td><code>items</code> 是空的:借閱 1 剛好在這一秒到期,不算逾期</td></tr>
+                  <tr><td>11</td><td>200</td><td>2/0</td><td><code>items</code> 只有借閱 1</td></tr>
+                  <tr><td>12</td><td>200</td><td>2/1</td><td>還掉借閱 2</td></tr>
+                  <tr><td>13</td><td>200</td><td>1/0</td><td>現在只借出 1 本,可以改成 1</td></tr>
+                  <tr><td>14</td><td>422</td><td>1/0</td><td><code>book_id</code> 是字串 <code>"1"</code>,不是整數</td></tr>
+                </tbody>
+              </table>
+              </div>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h3 id="lab-bookapi-api">本章 Lab:借書 REST API bookapi/api.py</h3>
+      <div class="callout lab" data-task="bookapi/api">
+        <div class="ico">🧪</div>
+        <div class="body">
+          <span class="c-title">本章 Lab · 任務線「bookapi」· 任務「借書 REST API」</span>
+          <p><strong>對應地下城任務:</strong>任務「借書 REST API」(任務線:bookapi 借書 API:從 socket 到上線,第 4 個任務;先做完{{ch:25-networking}}的任務「HTTP 伺服器」、{{ch:24-operating-system}}的任務「執行緒池」和{{ch:37-databases}}的任務「借書資料庫」)。零件檔:<code>~/零件庫/bookapi/api.py</code>。</p>
+          <p><strong>要做的零件:</strong>照上面「借書 API 規格:你要自己寫的服務」寫出 <code>make_app(repo)</code>:路由、讀 JSON、驗證欄位、把 <code>LibraryRepo</code> 的例外變成狀態碼與一致的錯誤格式。資料層用你在<a href="37-databases.html#lab-bookapi-repo">{{ch:37-databases}}</a>寫的 <code>LibraryRepo</code>,伺服器用你的 <code>srv/http</code> 或 <code>srv/pool</code>。</p>
+          <p><strong>介面:</strong></p>
+<pre><code class="language-python"># ~/零件庫/bookapi/api.py
+from bookapi.repo import Conflict, LibraryRepo, NotFound
+
+
+def make_app(repo: LibraryRepo):
+    """回傳 handler(Request) -&gt; (status, headers, body),可以直接交給
+    srv.http.serve 或 srv.pool.serve_threaded。
+    端點、欄位規則、狀態碼與錯誤格式照本章「借書 API 規格:你要自己寫的服務」。"""</code></pre>
+          <p><strong>公開範例:</strong></p>
+          <p>不開任何伺服器,手做一個長得像 <code>Request</code> 的物件直接呼叫 handler(在 <code>~/零件庫</code> 裡執行 <code>python3</code>):</p>
+<pre><code class="language-python">&gt;&gt;&gt; import json
+&gt;&gt;&gt; from types import SimpleNamespace
+&gt;&gt;&gt; from bookapi.api import make_app
+&gt;&gt;&gt; from bookapi.repo import LibraryRepo
+&gt;&gt;&gt; handler = make_app(LibraryRepo(":memory:"))
+&gt;&gt;&gt; def call(method, path, payload=None, query=None):
+...     """手做一個長得像 srv.http.Request 的物件交給 handler,回傳 (狀態碼, JSON)。"""
+...     body = b"" if payload is None else json.dumps(payload).encode()
+...     req = SimpleNamespace(method=method, path=path, query=query or {},
+...                           headers={"content-type": "application/json"}, body=body)
+...     status, headers, out = handler(req)
+...     return status, (json.loads(out) if out else None)
+...
+&gt;&gt;&gt; status, book = call("POST", "/books", {"title": "小王子", "author": "聖修伯里", "isbn": "9789570000001"})
+&gt;&gt;&gt; status, book["id"], book["copies"], book["available"]
+(201, 1, 1, 1)
+&gt;&gt;&gt; call("POST", "/members", {"name": "小明", "email": "ming@example.com"})[0]
+201
+&gt;&gt;&gt; status, loan = call("POST", "/loans", {"book_id": 1, "member_id": 1, "days": 7})
+&gt;&gt;&gt; status, loan["returned_at"]
+(201, None)
+&gt;&gt;&gt; status, err = call("POST", "/loans", {"book_id": 1, "member_id": 1})
+&gt;&gt;&gt; status, err["error"]["code"]
+(409, 'conflict')
+&gt;&gt;&gt; call("GET", "/loans/overdue", query={"now": loan["due_at"]})
+(200, {'items': []})
+&gt;&gt;&gt; call("POST", "/loans/1/return")[1]["returned_at"] is not None
+True
+&gt;&gt;&gt; call("GET", "/books/1")[1]["available"]
+1
+&gt;&gt;&gt; call("DELETE", "/books/1")
+(204, None)
+&gt;&gt;&gt; call("GET", "/books", query={"limit": "0"})[0]
+422</code></pre>
+          <p>真的跑起來(判題時的啟動檔做的也是這件事,只是資料庫在 <code>/tmp/app.db</code>):<code>PYTHONPATH=~/零件庫 python3 run_api.py</code>,再用 curl 或 <code>urllib</code> 連 <code>http://127.0.0.1:8080/books</code>。</p>
+<pre><code class="language-python"># run_api.py —— 自己的借書 API 跑在自己的多執行緒伺服器上(和判題的啟動檔做的是同一件事,判題用的參數不同)
+import sys
+
+from bookapi.api import make_app
+from bookapi.repo import LibraryRepo
+from srv.pool import serve_threaded
+
+db = sys.argv[1] if len(sys.argv) &gt; 1 else "library.db"
+serve_threaded(8080, make_app(LibraryRepo(db)), workers=8)</code></pre>
+          <p><strong>和本章範例不同的地方:</strong>可以參考本章的範例,但介面和要求不同,要自己改寫。</p>
+          <p>完整的清單在上面的「和待辦範例不同的地方」。最要緊的三點:</p>
+          <ul>
+            <li>handler 只收一個 <code>Request</code>(<code>req.method</code>、<code>req.path</code>、<code>req.query</code>、<code>req.headers</code>、<code>req.body</code>),不是待辦範例那個收五個參數的 <code>app</code>。</li>
+            <li>資料層的 <code>NotFound</code> 要變成 404、<code>Conflict</code> 要變成 409;待辦範例沒有 409,也沒有 <code>?q=</code>、<code>?now=</code>。</li>
+            <li>借書要防超借:檢查本數和新增借閱在同一個交易裡;待辦範例沒有併發的資料一致問題。</li>
+          </ul>
+          <p><strong>任務目標</strong>(公開的用 <code>test</code> 自己跑;隱藏檢定在 <code>submit</code> 時跑,只看得到名稱和一行說明):</p>
+          <ul class="lab-goals">
+            <li data-group="api.public">☐ <strong>公開 API 測試</strong>〔公開〕約 12 條:每個端點的正常流程與狀態碼。</li>
+            <li data-group="api.edge">☐ <strong>邊界</strong>〔隱藏檢定〕limit 要 1–100(預設 20)、offset 要 0 以上,limit=0、負數或太大回 422;offset 超過結尾回空的 items;只有空白的書名回 422;本數 0 的書借不到;Unicode 書名;剛好到期的借閱不算逾期(用 ?now= 查)。</li>
+            <li data-group="api.errors">☐ <strong>錯誤處理</strong>〔隱藏檢定〕壞 JSON 回 400;要讀本體的請求 Content-Type 不對回 415;頂層不是 JSON 物件(例如陣列)、型別錯(true 和 "1" 都不算整數)、缺欄位、days 不在 1–365、copies 小於 0、email 沒有 @ 回 422(欄位驗證在資料層之前);找不到(包括借不存在的書或會員)回 404;路徑對、方法錯回 405 加 Allow;不能借回 409;借書的檢查順序是欄位、書、會員、本數;錯誤一律是 {"error": {"code", "message"}}。</li>
+            <li data-group="api.consistency">☐ <strong>資料一致</strong>〔隱藏檢定〕借還之後 available 正確、重複還書回 409、刪除有人借的書回 409、copies 改得比借出中的本數少回 409、PATCH 只改給的欄位。</li>
+            <li data-group="api.spec">☐ <strong>規格細節</strong>〔隱藏檢定〕201 回傳新資源並帶 Location、204 沒有 body、Content-Type 是 application/json; charset=utf-8、列表照 id 排序、未知欄位回 422、PATCH {} 什麼都不改並回 200、?now= 指定逾期查詢的「現在」。</li>
+            <li data-group="api.perf">☐ <strong>併發借還</strong>〔隱藏檢定〕(服務模式)借書要在同一個交易裡檢查並扣本數。效能:掛在 serve_threaded 上,100 個客戶端同時各借還 10 次:零錯誤、沒有超借,10 秒內。這個門檻來自檢查點 2 的 Boss 戰「借還負載」(同樣的負載,10 秒內)與「資料一致」(同時借最後一本只能成功一次)。</li>
+          </ul>
+          <p>標「服務模式」的任務目標:判題時你的服務在沙盒裡的 8080 埠跑(以學生的身分),我們的測試客戶端用另一個使用者從外面連進來,你的程式碰不到它。</p>
+          <p><strong>之後會用在:</strong><a href="46-debugging-testing.html#lab-bookapi-tests">{{ch:46-debugging-testing}}的測試借書 API</a>(替這個 API 寫一整套測試);檢查點 2 的 Boss 戰(公開 API 測試、邊界、錯誤處理、資料一致、規格細節、借還負載);組隊副本 R1「圖書館借書 API」(同一個題目,另一組隱藏測試);之後檢查點 3 的認證與授權 <code>bookapi/auth</code>、快取層 <code>bookapi/cache</code>(那兩章還沒寫);資安任務線 S3「Web 修補:攻防自己的借書 API」也拿你的這份 <code>api.py</code> 當靶子。</p>
+          <p class="lab-rule">這個零件過關之後,後面的專題一律用你自己的版本。規則見<a href="00-about.html#lab-rules">零件庫規則</a>。</p>
+        </div>
+      </div>
+
+      <h2>動手練習</h2>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 {{num:129-http-rest-api}}.1 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>判斷每個請求的方法是否安全、是否冪等,並說明這一個請求實際上是不是冪等:(a) <code>HEAD /todos/1</code>;(b) <code>PATCH /todos/1 {"done": true}</code>;(c) <code>PATCH /counters/1 {"op": "add", "value": 1}</code>;(d) <code>POST /loans/7/return</code>;(e) <code>PUT /todos/5</code>,而第 5 筆原本不存在、伺服器會用這個 id 建立它。</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <ul>
+                <li>(a) 安全、冪等。</li>
+                <li>(b) PATCH 方法本身不保證冪等,但這個請求是「設成 true」,做幾次狀態都一樣,所以這一個是冪等的。</li>
+                <li>(c) 不冪等:做兩次加了 2。</li>
+                <li>(d) POST 方法不保證冪等。但在借書規格裡,第一次 200、第二次 409,狀態都是「借閱 7 已還」,所以這個端點的效果是冪等的。
+                  方法的表格是「預設的保證」;個別端點可以比預設更強,但客戶端只能依靠寫進規格的保證。</li>
+                <li>(e) 不安全、冪等:第一次建立,第二次用一樣的內容取代,狀態一樣。PUT 可以用在「客戶端決定 id」的建立,本章的服務選擇不支援(第 5 筆不存在就回 404)。</li>
+              </ul>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 {{num:129-http-rest-api}}.2 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>照本書的規格與判斷順序,下面每個請求回什麼狀態碼?(1) <code>GET /todos/abc</code>;(2) <code>PATCH /todos/99</code>,本體 <code>{oops</code>;(3) <code>PATCH /todos/99 {"color": 1}</code>;(4) <code>PATCH /todos/99 {"done": true}</code>;(5) 同 (4) 但沒有 <code>Content-Type</code>;(6) <code>PUT /todos/1/</code>(結尾多一個斜線);(7) 借書時書和會員都存在,但最後一本剛被借走;(8) <code>POST /members</code> 的 <code>email</code> 是 <code>42</code>。</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p>(1)–(6) 都用本章的服務實際跑過:</p>
+              <ol>
+                <li>404:<code>abc</code> 不符合 <code>[0-9]+</code>,這個路徑根本不存在。</li>
+                <li>400:先檢查本體,還輪不到找第 99 筆。</li>
+                <li>422:不認得的欄位,一樣在找資料之前。</li>
+                <li>404:本體沒問題,第 99 筆不存在。</li>
+                <li>415:<code>Content-Type</code> 比 JSON 解析更早檢查。</li>
+                <li>404:<code>fullmatch</code> 不接受多出來的斜線。(有些框架會自動導向沒有斜線的版本;本書的規格不這樣做。)</li>
+                <li>409。</li>
+                <li>422:型別錯。</li>
+              </ol>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 {{num:129-http-rest-api}}.3 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>把「冪等」寫成測試:對同一個請求做一次,記下伺服器狀態;再做一次,比較狀態。替 PUT、DELETE、POST 各寫一條,POST 那一條要斷言「不冪等」。</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+<pre><code class="language-python"># test_idempotent.py — 用測試檢查「做一次和做兩次,伺服器的狀態一樣」
+import json
+import unittest
+
+from todo_app import make_app
+from todo_store import TodoStore
+
+JSON = {"content-type": "application/json"}
+
+
+def state(app):
+    """伺服器狀態的快照:目前所有的待辦。"""
+    return json.loads(app("GET", "/todos", {"limit": "100"}, {}, b"")[2])["items"]
+
+
+class IdempotencyTest(unittest.TestCase):
+    def setUp(self):
+        self.app = make_app(TodoStore())
+        self.app("POST", "/todos", {}, JSON, b'{"title": "a"}')
+
+    def twice(self, method, path, body=b""):
+        self.app(method, path, {}, JSON, body)
+        once = state(self.app)
+        self.app(method, path, {}, JSON, body)
+        return once, state(self.app)
+
+    def test_put_is_idempotent(self):
+        once, again = self.twice("PUT", "/todos/1", b'{"title": "b", "done": true}')
+        self.assertEqual(once, again)
+
+    def test_delete_is_idempotent(self):
+        once, again = self.twice("DELETE", "/todos/1")
+        self.assertEqual(once, again)        # 回應不同(204、404),狀態一樣
+
+    def test_post_is_not_idempotent(self):
+        once, again = self.twice("POST", "/todos", b'{"title": "c"}')
+        self.assertNotEqual(once, again)     # 多了一筆
+
+
+if __name__ == "__main__":
+    unittest.main()</code></pre>
+<pre><code class="language-text">test_delete_is_idempotent (test_idempotent.IdempotencyTest.test_delete_is_idempotent) ... ok
+test_post_is_not_idempotent (test_idempotent.IdempotencyTest.test_post_is_not_idempotent) ... ok
+test_put_is_idempotent (test_idempotent.IdempotencyTest.test_put_is_idempotent) ... ok
+
+----------------------------------------------------------------------
+Ran 3 tests in 0.001s
+
+OK</code></pre>
+              <p>重點在 <code>state()</code>:比較的是伺服器的狀態,不是回應。DELETE 的兩次回應是 204 和 404,測試照樣通過。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 {{num:129-http-rest-api}}.4 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>POST 不冪等,但付款、借書這種請求又很需要「網路斷了可以重送」。常見的做法是 <code>Idempotency-Key</code> 標頭:客戶端替每個「動作」產生一把金鑰,重送時帶同一把;伺服器看到用過的金鑰,就直接回上一次的回應。
+          寫一個包裝函式 <code>with_idempotency(app)</code>,不改 <code>todo_app.py</code> 就讓 POST 支援這個標頭。</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+<pre><code class="language-python"># 練習:用 Idempotency-Key 讓 POST 可以安全重送
+import json
+import threading
+
+from todo_app import make_app
+from todo_store import TodoStore
+
+
+def with_idempotency(app):
+    seen = {}                       # 金鑰 → 第一次的回應
+    lock = threading.Lock()
+
+    def wrapped(method, path, query, headers, body):
+        key = headers.get("idempotency-key")
+        if method != "POST" or key is None:
+            return app(method, path, query, headers, body)
+        with lock:                  # 同一把金鑰同時進來兩次,也只做一次
+            if key not in seen:
+                seen[key] = app(method, path, query, headers, body)
+            return seen[key]
+
+    return wrapped
+
+
+app = with_idempotency(make_app(TodoStore()))
+h = {"content-type": "application/json", "idempotency-key": "k-001"}
+body = json.dumps({"title": "繳學費"}).encode()
+for _ in range(3):                  # 網路不穩,客戶端重送了三次
+    status, headers, raw = app("POST", "/todos", {}, h, body)
+    print(status, headers.get("Location"), raw.decode())
+print(app("GET", "/todos", {}, {}, b"")[2].decode())</code></pre>
+<pre><code class="language-text">201 /todos/1 {"id": 1, "title": "繳學費", "done": false}
+201 /todos/1 {"id": 1, "title": "繳學費", "done": false}
+201 /todos/1 {"id": 1, "title": "繳學費", "done": false}
+{"items": [{"id": 1, "title": "繳學費", "done": false}], "limit": 20, "offset": 0}</code></pre>
+              <p>三次都回同一個 201 和同一個 <code>Location</code>,資料庫裡只有一筆。真實的系統還要做兩件事:金鑰要和使用者綁在一起(別人不能用你的金鑰拿到你的回應),而且要有期限(不能永遠存著)。
+              這個包裝函式和 app 有一樣的簽名,所以可以一層一層套上去,這種寫法叫中介層(middleware)。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 {{num:129-http-rest-api}}.5 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>(1) 有 20 篇文章(id 1 到 20),照 id 由小到大、<code>limit=5</code> 翻頁。讀完第 1、2 頁之後,有人刪掉 id 3、又新增了 id 21。第 3 頁(<code>offset=10</code>)拿到哪些 id?哪一篇永遠看不到?(2) 同樣 20 篇,改成由大到小。讀完第 1、2 頁之後,有人新增了 id 21、22。第 3 頁拿到什麼?</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <ol>
+                <li>刪掉 3、加上 21 之後,順序是 1, 2, 4, 5, …, 21。第 11 到 15 個位置是 12–16。第 2 頁讀到 6–10,第 3 頁從 12 開始,<strong>11 永遠看不到</strong>。新增的 21 排在最後,不影響前面。</li>
+                <li>第 1 頁 20–16、第 2 頁 15–11。新增兩篇後順序是 22, 21, 20, …,第 11 到 15 個位置是 12, 11, 10, 9, 8:<strong>12 和 11 重複出現</strong>。</li>
+              </ol>
+              <p>兩題都用 SQLite 實際跑過(同上面的 <code>offset_drift.py</code>,只是數字不同)。由小到大時,新增的資料排在最後,所以只有刪除會出事;由大到小時,新增的排在最前面,新增也會出事。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 {{num:129-http-rest-api}}.6 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>寫 keyset 分頁 <code>list_after(store, after, limit)</code>:回傳 id 大於 <code>after</code> 的前 <code>limit</code> 筆,以及下一頁要用的 <code>after</code>(沒有下一頁就是 <code>None</code>)。在兩頁之間刪掉一筆、新增一筆,確認沒有重複也沒有漏掉。</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+<pre><code class="language-python"># 練習:keyset 分頁 ?after=&lt;上一頁最後一個 id&gt;
+from todo_store import TodoStore
+
+
+def list_after(store, after=0, limit=3):
+    with store.lock:
+        rows = store.conn.execute(
+            "SELECT * FROM todos WHERE id &gt; ? ORDER BY id LIMIT ?", (after, limit))
+        items = [store._to_dict(r) for r in rows]
+    next_after = items[-1]["id"] if len(items) == limit else None   # None:沒有下一頁了
+    return items, next_after
+
+
+store = TodoStore()
+for i in range(1, 8):
+    store.add(f"t{i}")
+page1, nxt = list_after(store)
+print([t["id"] for t in page1], "next after =", nxt)
+store.delete(2)                      # 翻頁途中有人刪掉一筆
+store.add("t8")                      # 也有人新增一筆
+page2, nxt = list_after(store, nxt)
+print([t["id"] for t in page2], "next after =", nxt)
+page3, nxt = list_after(store, nxt)
+print([t["id"] for t in page3], "next after =", nxt)</code></pre>
+<pre><code class="language-text">[1, 2, 3] next after = 3
+[4, 5, 6] next after = 6
+[7, 8] next after = None</code></pre>
+              <p>刪掉的 2 已經讀過,不影響;新增的 8 在最後一頁出現。判斷「還有沒有下一頁」用的是「這一頁有沒有滿」:剛好滿頁時會多問一次、拿到空的一頁,這是 keyset 分頁常見的小代價。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 {{num:129-http-rest-api}}.7 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>新建一筆待辦 <code>{"title": "a"}</code>,<code>GET /todos/1</code> 拿到 ETag A。接著:(1) 帶 <code>If-None-Match: A</code> 再 GET;(2) <code>PATCH {"done": true}</code> 後帶 A 再 GET;(3) 再 <code>PATCH {"done": false}</code> 後帶 A 再 GET。各回什麼狀態碼?第 (3) 步是不是 bug?</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p>實際跑出來的 ETag:A 是 <code>"f2127c73966b0520"</code>。</p>
+              <ol>
+                <li>304,沒有本體。</li>
+                <li>200,新的 ETag <code>"7b42848c8debf8f0"</code>,本體是 <code>{"id": 1, "title": "a", "done": true}</code>。</li>
+                <li>304,ETag 又是 <code>"f2127c73966b0520"</code>。</li>
+              </ol>
+              <p>第 (3) 步不是 bug。本章的 ETag 是從本體算出來的,改了又改回去,本體和最初一模一樣,指紋也就一樣;客戶端手上那份確實是最新的。
+              如果 ETag 改用「版本號,每改一次加 1」,第 (3) 步就會回 200。兩種都正確,前者省流量,後者算起來比較便宜。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 {{num:129-http-rest-api}}.8 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>給 <code>seats</code> 表加上 <code>CHECK (remaining &gt;= 0)</code>,再讓 10 條執行緒用 <code>take_naive</code> 搶。會發生什麼事?失敗的執行緒要怎麼處理,API 該回什麼?只靠 <code>CHECK</code> 夠嗎?</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+<pre><code class="language-python"># 練習:幫 seats 表加上 CHECK,再跑一次「先查再扣」
+import sqlite3
+
+import last_seat                      # 沿用 last_seat.py 的 race() 與 take_naive()
+
+
+def setup_with_check():
+    conn = sqlite3.connect(last_seat.DB)
+    conn.execute("DROP TABLE IF EXISTS seats")
+    conn.execute("CREATE TABLE seats (id INTEGER PRIMARY KEY,"
+                 " remaining INTEGER NOT NULL CHECK (remaining &gt;= 0))")
+    conn.execute("INSERT INTO seats VALUES (1, 1)")
+    conn.commit()
+    conn.close()
+
+
+def take_naive_checked(conn):
+    try:
+        return last_seat.take_naive(conn)
+    except sqlite3.IntegrityError:    # 資料庫拒絕把名額扣成負的 → API 該回 409
+        conn.rollback()
+        return False
+
+
+last_seat.setup = setup_with_check    # race() 一開始會呼叫 setup()
+wins, left = last_seat.race(take_naive_checked)
+print("成功", wins, "人,剩下", left, "個名額")</code></pre>
+<pre><code class="language-text">成功 1 人,剩下 0 個名額</code></pre>
+              <p>第一個扣到 0 的成功;其他 9 個的 <code>UPDATE</code> 會讓 <code>remaining</code> 變負,資料庫丟 <code>sqlite3.IntegrityError</code>,交易被撤銷,API 回 409。
+              <code>CHECK</code> 是最後一道防線:就算程式的邏輯寫錯,資料也不會壞。但它不能取代原子 UPDATE 或交易:
+              借書時要檢查的「可借本數」是算出來的,不是一個欄位,<code>CHECK</code> 管不到;而且靠例外來判斷「沒得借」,很難區分是哪一種衝突。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 {{num:129-http-rest-api}}.9 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>產品經理要把待辦的 <code>title</code> 改名成 <code>name</code>,而且要新增必填欄位 <code>priority</code>。已經有很多舊 App 在用。你會怎麼做?</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p>兩個都是不相容的改動。一種做法:開 <code>/v2/todos</code>,用 <code>name</code> 和必填的 <code>priority</code>;<code>/v1/todos</code> 繼續用 <code>title</code>,伺服器在背後把兩個名字對到同一個欄位,v1 建立的待辦給 <code>priority</code> 一個預設值。
+              公告 v1 的停用日期,觀察存取日誌,等 v1 的流量降到夠低再關掉。
+              另一種做法是不開新版:<code>priority</code> 先做成<strong>選填</strong>(有預設值),回應同時送 <code>title</code> 和 <code>name</code>。這樣完全相容,代價是一段時間內有重複的欄位。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 {{num:129-http-rest-api}}.10 <span class="badge">挑戰</span></div>
+        <div class="ex-body">
+          <p>不看規格裡的表,只看「判斷順序」那一節,說明為什麼判斷順序必須寫進規格。舉一個請求,讓「先找資料、再驗證本體」和「先驗證本體、再找資料」的兩個服務回不同的狀態碼。這對隱藏檢定有什麼影響?</p>
+          <details class="solution"><summary>看解答</summary>
+            <div class="sol-body">
+              <p>例子:<code>PATCH /todos/99</code>,本體 <code>{oops</code>,而第 99 筆不存在。先驗證本體的服務回 400(本章的服務就是這樣,練習 {{num:129-http-rest-api}}.2 的第 2 題);先找資料的服務回 404。
+              兩個都「合理」,但一個請求只能有一個正確答案,否則測試沒辦法寫。所以規格要定下順序,而所有端點都要照同一個順序。
+              隱藏檢定的「錯誤處理」類會送這種同時有兩個毛病的請求;照本書的順序寫,就不會因為順序不同而失敗。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <h2>把這一章串起來</h2>
+      <ul>
+        <li><strong>資源與 URL</strong>:名詞當資源,方法當動作。不是增刪改查的動作,變成「建立一筆紀錄」(借書 = <code>POST /loans</code>)或子資源(還書 = <code>POST /loans/{id}/return</code>)。</li>
+        <li><strong>方法的語意</strong>:安全 = 只讀;冪等 = 做一次和做 N 次,伺服器狀態一樣。冪等看的是狀態,不是回應:第二次 DELETE 回 404 完全沒問題。POST 不冪等,要安全重送就用 <code>Idempotency-Key</code>。</li>
+        <li><strong>狀態碼</strong>:201 加 <code>Location</code>、204 沒有本體、400 讀不懂、422 讀懂了但不合規則、409 和目前的狀態衝突、405 加 <code>Allow</code>、415 不是 JSON、500 不洩漏細節。判斷順序由外往內,而且要寫進規格。</li>
+        <li><strong>標頭</strong>:<code>Content-Length</code> 數的是位元組;<code>ETag</code> 加 <code>If-None-Match</code> 讓沒變的資料回 304;<code>no-cache</code> 不是 <code>no-store</code>。</li>
+        <li><strong>錯誤格式</strong>:每一個錯誤都是 <code>{"error": {"code", "message"}}</code>,程式看 code,人看 message。</li>
+        <li><strong>分頁與版本</strong>:<code>limit</code>/<code>offset</code> 一定要配 <code>ORDER BY</code>;翻頁途中有寫入會重複或漏掉,keyset 分頁可以解決。不相容的改動才開新版本。</li>
+        <li><strong>程式結構</strong>:資料層、核心 app、轉接層三層。app 是一個純函式,可以直接測試,也可以掛在 <code>http.server</code> 或你自己的 <code>srv/http</code> 上。</li>
+        <li><strong>併發</strong>:先查再做會超借。把檢查放進原子 UPDATE 或交易裡,沒得借就回 409;用不變式 <code>0 &lt;= available &lt;= copies</code> 檢查結果。</li>
+      </ul>
+      <p>
+        下一步就是把這些用在借書 API 上:先做 <code>bookapi/api</code>,再到<a href="46-debugging-testing.html#lab-bookapi-tests">{{ch:46-debugging-testing}}</a>替它寫一整套測試。
+        之後的認證、快取與上線,是 bookapi 任務線的第 3 個檢查點。
+      </p>
+
+      <div class="callout note">
+        <div class="ico">ℹ️</div>
+        <div class="body">
+          <span class="c-title">延伸資源</span>
+          <ul>
+            <li>MDN Web Docs:<a href="https://developer.mozilla.org/en-US/docs/Web/HTTP">HTTP</a>、<a href="https://developer.mozilla.org/en-US/docs/Web/HTTP/Status">狀態碼一覽</a>、<a href="https://developer.mozilla.org/en-US/docs/Web/HTTP/Caching">HTTP 快取</a>。</li>
+            <li>RFC 9110《HTTP Semantics》:<a href="https://www.rfc-editor.org/rfc/rfc9110">全文</a>;方法的安全與冪等在 <a href="https://www.rfc-editor.org/rfc/rfc9110#section-9.2">§9.2</a>。PATCH:<a href="https://www.rfc-editor.org/rfc/rfc5789">RFC 5789</a>。錯誤格式的標準:<a href="https://www.rfc-editor.org/rfc/rfc9457">RFC 9457</a>。</li>
+            <li>Roy Fielding 的博士論文:<a href="https://ics.uci.edu/~fielding/pubs/dissertation/top.htm">Architectural Styles and the Design of Network-based Software Architectures</a>(REST 在論文的 Chapter 5)。</li>
+            <li>Python 官方文件:<a href="https://docs.python.org/3/library/http.server.html">http.server</a>、<a href="https://docs.python.org/3/library/json.html">json</a>、<a href="https://docs.python.org/3/library/sqlite3.html">sqlite3</a>、<a href="https://docs.python.org/3/library/urllib.request.html">urllib.request</a>。</li>
+            <li>curl 手冊:<a href="https://curl.se/docs/manpage.html">curl.se/docs/manpage.html</a>。</li>
+            <li>免費書單:<a href="https://github.com/EbookFoundation/free-programming-books">free-programming-books</a>(找「Web Services」「REST」)。</li>
+          </ul>
+        </div>
+      </div>

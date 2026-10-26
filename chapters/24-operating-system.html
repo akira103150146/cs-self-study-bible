@@ -575,7 +575,7 @@ int main(void) {
         最後這點就是<strong>換頁(swapping / paging to disk)</strong>:把暫時不用的分頁挪去磁碟,騰出實體記憶體;
         等行程真的要存取那一頁時,才觸發一次「缺頁(page fault)」,作業系統再把它從磁碟搬回來。
         這讓你能在 16 GB 的機器上,跑出「彷彿有更多記憶體」的效果——代價是搬進搬出很慢。
-        (換頁與快取的細節,我們留到<strong>第十一部第 48 章「計算機結構」</strong>再深入。)
+        (換頁與快取的細節,我們留到<strong>第十一部第 49 章「計算機結構」</strong>再深入。)
       </p>
 
       <div class="callout tip">
@@ -844,6 +844,239 @@ int main(void) {
     return 0;
 }</code></pre>
 
+      <h3>手算:兩條執行緒的 count += 1 怎麼交錯</h3>
+      <p>
+        前面說 <code>counter++</code> 是讀、加、寫三步。現在把「交錯」全部列出來。兩條執行緒 A、B 各做一次 <code>count += 1</code>,
+        <code>count</code> 一開始是 0。每條執行緒有自己的暫存器(rA、rB);每條自己的三步順序不會變,作業系統只決定「下一步輪到誰」。
+        6 步裡挑 3 個位置給 A,所以一共 $\binom{6}{3} = 20$ 種交錯。
+      </p>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">為什麼要學</span>
+          <p>本章 Lab 的執行緒池讓很多個連線同時跑同一段程式。之後借書 API 的「可借本數」(第 37 章)就是一個共享的 <code>count</code>:
+          兩個人同時借最後一本,掉一次更新就是超借。檢查點 2 的驗收「借還負載」會讓 100 個客戶端同時借還,檢查有沒有超借。</p>
+        </div>
+      </div>
+
+      <p>先一步一步追其中一種壞的交錯:</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>步</th><th>誰</th><th>動作</th><th>rA</th><th>rB</th><th>count</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td>A</td><td>讀:rA ← count</td><td>0</td><td>—</td><td>0</td></tr>
+          <tr><td>2</td><td>B</td><td>讀:rB ← count</td><td>0</td><td>0</td><td>0</td></tr>
+          <tr><td>3</td><td>A</td><td>加:rA ← rA + 1</td><td>1</td><td>0</td><td>0</td></tr>
+          <tr><td>4</td><td>A</td><td>寫:count ← rA</td><td>1</td><td>0</td><td>1</td></tr>
+          <tr><td>5</td><td>B</td><td>加:rB ← rB + 1</td><td>1</td><td>1</td><td>1</td></tr>
+          <tr><td>6</td><td>B</td><td>寫:count ← rB</td><td>1</td><td>1</td><td><strong>1</strong></td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        第 6 步 B 寫回的 1,是用第 2 步讀到的「舊的 0」算出來的,把 A 在第 4 步的更新蓋掉了。
+        20 種交錯全部列出來(程式在後面),結果只有兩種:
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>交錯的樣子</th><th>幾種</th><th>最後的 count</th></tr></thead>
+        <tbody>
+          <tr><td>A 的三步全部在 B 讀之前(<code>A讀 A加 A寫 B讀 B加 B寫</code>),或反過來</td><td>2</td><td>2</td></tr>
+          <tr><td>其他:兩條都在對方寫之前就讀了</td><td>18</td><td>1</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        規則是:<strong>最後是 2,若且唯若其中一條的「寫」在另一條的「讀」之前</strong>。結果不可能是 0(至少有一條會寫),也不可能是 3。
+      </p>
+      <p>
+        <strong>加上鎖。</strong>每條執行緒變成「上鎖、讀、加、寫、解鎖」5 步,排法有 $\binom{10}{5} = 252$ 種。
+        可是鎖被 A 拿著時,B 的「上鎖」會卡住,所以「B 上鎖」只能出現在「A 解鎖」之後(或反過來)。252 種裡真的可能發生的只剩 2 種:
+        A 整段做完再換 B,或 B 整段做完再換 A。兩種的結果都是 2。鎖沒有讓程式變快,它做的事是<strong>把會出錯的 250 種交錯變成不可能發生</strong>。
+      </p>
+<pre><code class="language-python"># interleave.py —— 列出兩條執行緒各做一次 count += 1 的所有交錯,算出每一種的結果
+from collections import Counter
+
+def interleavings(plans):
+    """plans = {"A": [步驟...], "B": [...]};每條自己的順序不變,只決定「下一步輪到誰」。"""
+    names = sorted(plans)
+    def rec(pos):
+        if all(pos[n] == len(plans[n]) for n in names):
+            yield []
+            return
+        for n in names:
+            if pos[n] &lt; len(plans[n]):
+                step = (n, plans[n][pos[n]])
+                pos[n] += 1
+                for rest in rec(pos):
+                    yield [step] + rest
+                pos[n] -= 1
+    yield from rec({n: 0 for n in names})
+
+def run(order):
+    """照順序執行;每條執行緒有自己的暫存器。違反鎖的規則(鎖被別人拿著還上鎖)回傳 None。"""
+    count, reg, holder = 0, {}, None
+    for who, op in order:
+        if op == "上鎖":
+            if holder is not None:
+                return None            # 這種交錯不可能發生:會卡在上鎖那一步
+            holder = who
+        elif op == "解鎖":
+            holder = None
+        elif op == "讀":
+            reg[who] = count
+        elif op == "加":
+            reg[who] += 1
+        elif op == "寫":
+            count = reg[who]
+    return count
+
+inc = ["讀", "加", "寫"]
+orders = list(interleavings({"A": inc, "B": inc}))
+for o in orders:
+    print(" ".join(w + op for w, op in o), "→", run(o))
+print("沒有鎖:", len(orders), "種交錯,結果", dict(Counter(run(o) for o in orders)))
+
+locked = ["上鎖"] + inc + ["解鎖"]
+orders = list(interleavings({"A": locked, "B": locked}))
+possible = [o for o in orders if run(o) is not None]
+print("有鎖:", len(orders), "種排法,真的可能發生的", len(possible), "種,結果",
+      dict(Counter(run(o) for o in possible)))</code></pre>
+<pre><code class="language-text">A讀 A加 A寫 B讀 B加 B寫 → 2
+A讀 A加 B讀 A寫 B加 B寫 → 1
+A讀 A加 B讀 B加 A寫 B寫 → 1
+A讀 A加 B讀 B加 B寫 A寫 → 1
+A讀 B讀 A加 A寫 B加 B寫 → 1
+A讀 B讀 A加 B加 A寫 B寫 → 1
+A讀 B讀 A加 B加 B寫 A寫 → 1
+A讀 B讀 B加 A加 A寫 B寫 → 1
+A讀 B讀 B加 A加 B寫 A寫 → 1
+A讀 B讀 B加 B寫 A加 A寫 → 1
+B讀 A讀 A加 A寫 B加 B寫 → 1
+B讀 A讀 A加 B加 A寫 B寫 → 1
+B讀 A讀 A加 B加 B寫 A寫 → 1
+B讀 A讀 B加 A加 A寫 B寫 → 1
+B讀 A讀 B加 A加 B寫 A寫 → 1
+B讀 A讀 B加 B寫 A加 A寫 → 1
+B讀 B加 A讀 A加 A寫 B寫 → 1
+B讀 B加 A讀 A加 B寫 A寫 → 1
+B讀 B加 A讀 B寫 A加 A寫 → 1
+B讀 B加 B寫 A讀 A加 A寫 → 2
+沒有鎖: 20 種交錯,結果 {2: 2, 1: 18}
+有鎖: 252 種排法,真的可能發生的 2 種,結果 {2: 2}</code></pre>
+      <p>
+        用真的執行緒也看得到。下面把 <code>count += 1</code> 拆開寫,在讀和寫中間呼叫 <code>time.sleep(0)</code> 讓出 CPU,掉更新就很容易出現。
+        加鎖的版本在鎖裡面放了一個 <code>assert</code>:<strong>不變式「count 等於已經做完的 +1 次數」</strong>。
+        這就是上面「只剩 2 種交錯」的程式版本:鎖讓臨界區一次只有一個人,所以每做完一次,這條等式都成立。
+      </p>
+<pre><code class="language-python"># race.py —— 把 count += 1 拆開寫,讀和寫中間讓出 CPU,掉更新就很容易看到
+import threading, time
+
+N = 2000
+count = 0
+done = 0                     # 已經做完的「+1」次數(只在鎖裡改)
+lock = threading.Lock()
+
+def unsafe():
+    global count
+    for _ in range(N):
+        tmp = count          # 讀
+        time.sleep(0)        # 讓出 CPU:剛好在讀完之後被切換
+        count = tmp + 1      # 加、寫
+
+def safe():
+    global count, done
+    for _ in range(N):
+        with lock:           # 讀、加、寫整段在鎖裡
+            tmp = count
+            time.sleep(0)
+            count = tmp + 1
+            done += 1
+            assert count == done     # 不變式:count 永遠等於做完的次數
+
+for worker in (unsafe, safe):
+    count = done = 0
+    ts = [threading.Thread(target=worker) for _ in range(2)]
+    for t in ts: t.start()
+    for t in ts: t.join()
+    print(f"{worker.__name__}: count = {count},應該是 {2 * N}")</code></pre>
+<pre><code class="language-text">unsafe: count = 2000,應該是 4000
+safe: count = 4000,應該是 4000
+# unsafe 的數字每次可能不同(我跑出過 2000 和 2001)</code></pre>
+
+      <div class="callout warn">
+        <div class="ico">⚠️</div>
+        <div class="body">
+          <span class="c-title">看起來對但其實錯:「Python 有 GIL,count += 1 跑了 5 次都對,所以它是執行緒安全的」</span>
+          <p>下面 4 條執行緒各加 100 萬次,在這台機器的 CPython 3.12 上跑 5 次,5 次都是 4000000。可是 <code>dis</code> 印出來,
+          <code>count += 1</code> 還是 <code>LOAD_GLOBAL</code>、<code>BINARY_OP</code>、<code>STORE_GLOBAL</code> 三個指令,讀和寫是分開的。
+          這個版本的 CPython 大致上只在少數幾種指令(例如函式呼叫、迴圈跳回去)才檢查要不要切換執行緒,所以切換點沒有落在讀和寫中間;
+          只要中間多一個函式呼叫(像上面的 <code>time.sleep(0)</code>),或換成比較舊的 CPython(3.9 以前)、沒有 GIL 的 free-threaded 版本,就可能掉更新。
+          <strong>例子都對 ≠ 敘述為真。</strong>共享的變數要自己上鎖。</p>
+        </div>
+      </div>
+<pre><code class="language-python"># gil_test.py —— 「跑了 5 次都對」能不能證明 count += 1 是安全的?
+import dis, sys, threading
+
+count = 0
+
+def work():
+    global count
+    for _ in range(1_000_000):
+        count += 1
+
+for trial in range(5):
+    count = 0
+    ts = [threading.Thread(target=work) for _ in range(4)]
+    for t in ts: t.start()
+    for t in ts: t.join()
+    print(f"第 {trial + 1} 次:{count}")
+print(sys.version.split()[0])
+
+def inc():
+    global count
+    count += 1
+dis.dis(inc)                            # 看 CPython 把 count += 1 拆成哪幾個指令</code></pre>
+<pre><code class="language-text">第 1 次:4000000
+第 2 次:4000000
+第 3 次:4000000
+第 4 次:4000000
+第 5 次:4000000
+3.12.3
+ 19           0 RESUME                   0
+
+ 21           2 LOAD_GLOBAL              0 (count)
+             12 LOAD_CONST               1 (1)
+             14 BINARY_OP               13 (+=)
+             18 STORE_GLOBAL             0 (count)
+             20 RETURN_CONST             0 (None)</code></pre>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 24.1 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>三條執行緒 A、B、C 各做一次 <code>count += 1</code>(各自讀、加、寫),<code>count</code> 從 0 開始。
+          (a) 一共有幾種交錯?(b) 最後的 <code>count</code> 可能是哪些值?(c) 有幾種交錯會得到 3?(d) 寫出一種得到 1 的交錯。</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <p>(a) 9 步分給三條,每條 3 步:$\frac{9!}{3!\,3!\,3!} = 1680$ 種。</p>
+            <p>(b) 1、2、3。(c) 6 種:三條的三步都不重疊,只能是某一條整段做完再換下一條,順序有 $3! = 6$ 種。</p>
+            <p>(d) 三條都先讀,再各自加、寫:<code>A讀 B讀 C讀 A加 A寫 B加 B寫 C加 C寫</code>。三條都讀到 0,都寫回 1。</p>
+            <p>用 <code>interleave.py</code> 檢查:<code>interleavings({"A": inc, "B": inc, "C": inc})</code> 有 1680 種,結果是 <code>{1: 1404, 2: 270, 3: 6}</code>。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 24.2 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>兩條執行緒各做<strong>兩次</strong> <code>count += 1</code>。(a) 最後的 <code>count</code> 可能是哪些值?(b) 寫出一種得到 2 的交錯。
+          (c) 用 <code>interleave.py</code> 把 924 種交錯全部跑一次,看看有沒有 1。沒有的話,說明為什麼不可能。</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <p>(a) 2、3、4。程式跑出來是 <code>{2: 702, 3: 216, 4: 6}</code>。得到 4 的 6 種,是四次 +1 都沒有重疊、只決定 AABB 怎麼排:$\binom{4}{2} = 6$。</p>
+            <p>(b) <code>A讀 B讀 B加 B寫 B讀 B加 B寫 A加 A寫 A讀 A加 A寫</code>:A 讀到 0;B 做完兩次,count = 2;A 寫回 1,蓋掉 B 的兩次;A 第二次讀到 1,寫回 2。</p>
+            <p>(c) 924 種裡沒有 1。這 924 種就是「兩條執行緒各做兩次」的<strong>全部</strong>交錯,全部跑過,對這個題目來說就是窮舉證明。下面的論證把它推廣到每條執行緒做兩次以上、任意條執行緒(這時就沒辦法窮舉了)。<strong>證明(參考):</strong>
+            每一次「寫」寫進去的值都是「讀到的值 + 1」,至少是 1,所以第一次寫之後 count 一直 ≥ 1。
+            看全部最後一次「寫」,假設它是 A 的第二次寫。A 的第二次讀發生在 A 的第一次寫之後,那時 count ≥ 1,所以 A 寫進去的值 ≥ 2。B 也一樣。</p>
+          </div></details>
+        </div>
+      </div>
+
       <h3>條件變數與號誌</h3>
       <p>
         鎖解決「不要同時改」,但並行還有另一類需求:「<strong>等某個條件成立再繼續</strong>」。
@@ -903,6 +1136,295 @@ int main(void) {
           <p>實務上對付死結,最簡單有效的就是破壞「循環等待」:替所有鎖排個全域順序,規定<strong>每條執行緒都一律按同樣的順序上鎖</strong>。
           這樣就不可能出現「A 拿了 1 等 2、B 拿了 2 等 1」的環——因為大家都會「先拿 1 再拿 2」。
           一個簡單的約定,就讓整類 bug 消失。並行的世界裡,紀律往往比聰明更重要。</p>
+        </div>
+      </div>
+
+      <h3>手算:執行緒池怎麼分工作,工作壞掉時會怎樣</h3>
+      <p>
+        每來一個連線就開一條新執行緒,連線一多,光是開執行緒就很貴,記憶體也撐不住。<strong>執行緒池(thread pool)</strong>的做法是:
+        先開好固定的 $n$ 條<strong>工作執行緒(worker thread)</strong>,讓它們一直從一個佇列拿工作來做。這就是上面的生產者-消費者:
+        <code>submit(fn, *args)</code> 是生產者,把工作放進佇列;每條工作執行緒是消費者,不斷 <code>q.get()</code>、做完、再拿下一個。
+        要關掉時,放 $n$ 個「下班」訊號(<code>None</code>)進佇列,每條拿到一個就結束。
+      </p>
+
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">為什麼要學</span>
+          <p>本章 Lab 要做的 <code>srv/pool</code> 就是這個:<code>ThreadPool(n)</code> 加上 <code>serve_threaded</code>,讓 HTTP 伺服器同時服務 100 個連線。
+          它的隱藏檢定「錯誤處理」會故意讓工作丟例外,檢查工作執行緒沒有死;「慢客戶端」會檢查一個不送資料的連線擋不住別人。下面兩張表就是這兩件事的手算版。</p>
+        </div>
+      </div>
+
+      <p>
+        手算規則:佇列先進先出;哪一條工作執行緒先空下來,就由它拿下一個工作;同一刻有好幾條空著時,編號小的先拿
+        (真的執行緒在「同時」的時候誰先拿不一定;這個例子只有 t = 0 有同時的情況,拿到 A 的那條就叫 W1)。
+        2 條工作執行緒,依序 submit 六個工作,括號裡是要花幾格時間,B 和 D 做到最後會丟例外:
+        A(2.5)、B(1,丟例外)、C(1)、D(1,丟例外)、E(1)、F(1)。
+      </p>
+      <p><strong>情況一:工作執行緒有接住例外</strong>(<code>try: fn(*args) except Exception: 記下來</code>,然後繼續拿下一個)。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>時間</th><th>W1</th><th>W2</th><th>佇列(還沒人拿)</th></tr></thead>
+        <tbody>
+          <tr><td>0</td><td>拿 A,做到 2.5</td><td>拿 B,做到 1</td><td>C D E F</td></tr>
+          <tr><td>1</td><td>A 做到一半</td><td>B 丟例外,接住;拿 C,做到 2</td><td>D E F</td></tr>
+          <tr><td>2</td><td>A 做到一半</td><td>拿 D,做到 3</td><td>E F</td></tr>
+          <tr><td>2.5</td><td>拿 E,做到 3.5</td><td>D 做到一半</td><td>F</td></tr>
+          <tr><td>3</td><td>E 做到一半</td><td>D 丟例外,接住;拿 F,做到 4</td><td>(空)</td></tr>
+          <tr><td>4</td><td>等下一個工作</td><td>F 做完</td><td>(空),六個工作都做過一次</td></tr>
+        </tbody>
+      </table></div>
+      <p><strong>情況二:沒有接住例外</strong>(直接 <code>fn(*args)</code>)。例外一路往上丟,這條執行緒的迴圈就結束了。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>時間</th><th>W1</th><th>W2</th><th>佇列(還沒人拿)</th></tr></thead>
+        <tbody>
+          <tr><td>0</td><td>拿 A,做到 2.5</td><td>拿 B,做到 1</td><td>C D E F</td></tr>
+          <tr><td>1</td><td>A 做到一半</td><td>B 丟例外 → <strong>W2 死掉</strong></td><td>C D E F</td></tr>
+          <tr><td>2.5</td><td>拿 C,做到 3.5</td><td>(死了)</td><td>D E F</td></tr>
+          <tr><td>3.5</td><td>拿 D,做到 4.5</td><td>(死了)</td><td>E F</td></tr>
+          <tr><td>4.5</td><td>D 丟例外 → <strong>W1 死掉</strong></td><td>(死了)</td><td>E F,永遠沒人拿</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        執行緒池的不變式:<strong>任何時刻,已 submit 的工作數 = 做完的 + 正在做的 + 還在佇列的</strong>,而且只要池子還沒關,活著的工作執行緒就是 $n$ 條。
+        <code>shutdown(wait=True)</code> 回來時,正在做的和佇列的都是 0,所以<strong>每個 submit 的工作恰好跑了一次</strong>(丟例外也算跑過)。
+        情況二打破了「活著的是 $n$ 條」,E 和 F 就永遠留在佇列裡;如果 <code>shutdown(wait=True)</code> 是在等佇列清空,它就永遠回不來。
+      </p>
+      <p>用真的執行緒跑同一組工作(1 格時間 = 0.2 秒),最後用 <code>assert</code> 檢查「每個工作恰好跑一次」:</p>
+<pre><code class="language-python"># pool_real.py —— 用真的執行緒跑同一組工作,對照手算表(1 格時間 = 0.2 秒)
+import queue, threading, time
+from collections import Counter
+
+UNIT = 0.2
+jobs = [("A", 2.5, False), ("B", 1, True), ("C", 1, False),
+        ("D", 1, True), ("E", 1, False), ("F", 1, False)]
+
+def run(n, survive):
+    q = queue.Queue()
+    log, log_lock = [], threading.Lock()
+    t0 = time.monotonic()
+
+    def job(name, units, boom):
+        with log_lock:
+            log.append((round((time.monotonic() - t0) / UNIT, 1),
+                        threading.current_thread().name, name))
+        time.sleep(units * UNIT)
+        if boom:
+            raise ValueError(f"工作 {name} 壞掉了")
+
+    def worker():
+        while True:
+            item = q.get()
+            if item is None:                 # 收到「下班」訊號
+                return
+            fn, args = item
+            if survive:
+                try:
+                    fn(*args)
+                except Exception as e:       # 接住:記下來,迴圈繼續
+                    print("    接住:", e)
+            else:
+                fn(*args)                    # 沒接住:例外讓這條執行緒結束
+
+    threading.excepthook = lambda a: print("    執行緒死掉:", a.exc_value)
+    ts = [threading.Thread(target=worker, name=f"T{i}") for i in range(n)]
+    for t in ts: t.start()
+    for name, units, boom in jobs:
+        q.put((job, (name, units, boom)))
+    for _ in ts: q.put(None)                 # 每條執行緒一個下班訊號
+    for t in ts: t.join(timeout=3)
+
+    first = {log[0][1]: "W1"}                # 拿到 A 的那條叫 W1
+    for _, tname, _ in log:
+        first.setdefault(tname, f"W{len(first) + 1}")
+    for start, tname, name in log:
+        print(f"  t={start:&lt;4} {first[tname]} 拿 {name}")
+    ran = Counter(name for _, _, name in log)
+    missing = [name for name, _, _ in jobs if ran[name] == 0]
+    print("  沒跑到:", missing)
+    assert all(ran[name] == 1 for name in ran), "有工作跑了兩次"
+    return missing
+
+print("接住例外:"); assert run(2, True) == []
+print("沒有接住例外:"); print("  每個工作恰好跑一次?", run(2, False) == [])</code></pre>
+<pre><code class="language-text">接住例外:
+    接住: 工作 B 壞掉了
+    接住: 工作 D 壞掉了
+  t=0.0  W1 拿 A
+  t=0.0  W2 拿 B
+  t=1.0  W2 拿 C
+  t=2.0  W2 拿 D
+  t=2.5  W1 拿 E
+  t=3.0  W2 拿 F
+  沒跑到: []
+沒有接住例外:
+    執行緒死掉: 工作 B 壞掉了
+    執行緒死掉: 工作 D 壞掉了
+  t=0.0  W1 拿 A
+  t=0.0  W2 拿 B
+  t=2.5  W1 拿 C
+  t=3.5  W1 拿 D
+  沒跑到: ['E', 'F']
+  每個工作恰好跑一次? False</code></pre>
+      <p>
+        印出來的開始時間和兩張表一樣(時間是用 <code>sleep</code> 做出來的,機器很忙時可能差零點幾格)。
+        這段程式還不是 Lab 要的 <code>ThreadPool</code>:Lab 還要求 <code>n &lt; 1</code> 時丟 <code>ValueError</code>、<code>shutdown</code> 之後再 <code>submit</code> 要丟 <code>RuntimeError</code>、
+        <code>shutdown(wait=False)</code> 要立刻回來,以及接上 HTTP 伺服器的 <code>serve_threaded</code>。
+      </p>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 24.3 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>只有 1 條工作執行緒,依序 submit P(2)、Q(1,丟例外)、R(3)、S(1)。分別畫出「有接住例外」和「沒有接住例外」的表:每個工作幾點開始、幾點做完?哪些工作沒跑到?</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <div class="table-wrap"><table>
+              <thead><tr><th>工作</th><th>有接住:開始 → 做完</th><th>沒有接住:開始 → 做完</th></tr></thead>
+              <tbody>
+                <tr><td>P(2)</td><td>0 → 2</td><td>0 → 2</td></tr>
+                <tr><td>Q(1,丟例外)</td><td>2 → 3,接住</td><td>2 → 3,W1 死掉</td></tr>
+                <tr><td>R(3)</td><td>3 → 6</td><td>沒跑到</td></tr>
+                <tr><td>S(1)</td><td>6 → 7</td><td>沒跑到</td></tr>
+              </tbody>
+            </table></div>
+            <p>只有 1 條工作執行緒時,一個沒接住的例外就讓整個池子停擺:後面每個工作都不會跑,也不會有任何錯誤訊息告訴呼叫 <code>submit</code> 的人。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 24.4 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>(a) 100 個客戶端同時開始,各依序連 10 次(每次送 1 個請求),每個請求要處理 10 ms。單執行緒的伺服器一個一個處理,最快要幾秒?8 條工作執行緒的池子,理想上要幾秒?
+          (b) 池子只有 2 條工作執行緒。t = 0 時,兩個慢客戶端 S1、S2 連進來,連上之後什麼都不送;接著一個正常的請求 R1 進來(處理 10 ms)。
+          每條工作執行緒拿到連線後就一直 <code>recv()</code> 等資料。沒有逾時、逾時 5 秒、或是改成 8 條工作執行緒(逾時 5 秒),R1 各在什麼時候做完?</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <p>(a) 一共 100 × 10 = 1000 個請求。單執行緒:1000 × 10 ms = <strong>10 秒</strong>。8 條同時做:10 ÷ 8 = <strong>1.25 秒</strong>。
+            實際還有開連線、解析的時間,所以會比 1.25 秒多一點。Lab 的效能門檻是 5 秒內:一個一個處理要 10 秒,一定超過;真的同時處理才過得了。</p>
+            <div class="table-wrap"><table>
+              <thead><tr><th>設定</th><th>W1</th><th>W2</th><th>R1 做完</th></tr></thead>
+              <tbody>
+                <tr><td>2 條,沒有逾時</td><td>S1,永遠等下去</td><td>S2,永遠等下去</td><td>永遠不會</td></tr>
+                <tr><td>2 條,逾時 5 秒</td><td>S1,5 秒後關掉;再拿 R1</td><td>S2,5 秒後關掉</td><td>5.01 秒</td></tr>
+                <tr><td>8 條,逾時 5 秒</td><td>S1</td><td>S2</td><td>0.01 秒(W3 立刻拿 R1)</td></tr>
+              </tbody>
+            </table></div>
+            <p>(b) 多開幾條執行緒只是把問題往後推:8 個慢客戶端就又全部卡住了。真正的解法是逾時:<code>conn.settimeout(timeout)</code>,
+            <code>recv()</code> 等太久就丟 <code>TimeoutError</code>(舊名 <code>socket.timeout</code>),接住它、把連線關掉,工作執行緒回去拿下一個。這就是 Lab 的「慢客戶端」檢定。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <h3 id="lab-srv-pool">本章 Lab:執行緒池 srv/pool.py</h3>
+      <div class="callout lab" data-task="srv/pool">
+        <div class="ico">🧪</div>
+        <div class="body">
+          <span class="c-title">本章 Lab · 任務線「bookapi」· 任務「執行緒池」</span>
+          <p><strong>對應地下城任務:</strong>任務「執行緒池」(任務線:bookapi 借書 API:從 socket 到上線,第 2 個任務;先做完第 33 章的任務「HTTP 伺服器」:那一章在本章後面,任務線的順序是 HTTP 伺服器第 1、執行緒池第 2,可以先跳過去做)。零件檔:<code>~/零件庫/srv/pool.py</code>。</p>
+          <p><strong>要做的零件:</strong>一個可以一直 <code>submit</code> 工作的執行緒池 <code>ThreadPool</code>,再用它寫 <code>serve_threaded</code>:主執行緒只負責 accept,每條連線交給池子裡的工作執行緒處理,讓 <a href="25-networking.html#lab-srv-http">第 33 章</a>的 HTTP 伺服器同時服務很多連線。上面兩張手算表(接住例外、慢客戶端)就是它的隱藏檢定在檢查的事。</p>
+          <p><strong>介面:</strong></p>
+<pre><code class="language-python"># ~/零件庫/srv/pool.py
+from srv.http import parse_request, make_response   # 用你自己的 srv/http
+
+
+class ThreadPool:
+    def __init__(self, n):
+        """開 n 條工作執行緒;n &lt; 1 → ValueError。"""
+
+    def submit(self, fn, *args) -&gt; None:
+        """把 fn(*args) 放進佇列,馬上回來。shutdown 之後 → RuntimeError。
+        工作丟例外時要接住(可以印到 stderr),工作執行緒繼續拿下一個。"""
+
+    def shutdown(self, wait=True) -&gt; None:
+        """不再收新工作。wait=True:等已經 submit 的工作全部做完才回來;
+        wait=False:立刻回來。"""
+
+
+def serve_threaded(port, handler, workers=8, timeout=5.0, host="127.0.0.1") -&gt; None:
+    """多執行緒伺服器,一直跑下去。主執行緒 accept,把每條連線交給 ThreadPool(workers);
+    解析請求與組回應用 srv.http;一條連線超過 timeout 秒沒有送資料,就關掉它。"""</code></pre>
+          <p><strong>公開範例:</strong></p>
+          <p><code>PYTHONPATH=~/零件庫 python3 pool_demo.py</code>(<code>broken</code> 的例外訊息會印在 stderr,下面沒有列出):</p>
+<pre><code class="language-python"># pool_demo.py —— 公開範例:ThreadPool 與 serve_threaded
+import socket, threading, time
+
+from srv.pool import ThreadPool, serve_threaded
+
+# ── 1. ThreadPool:8 個工作、4 條工作執行緒,其中一個工作會丟例外 ──
+done, lock = [], threading.Lock()
+
+def job(i):
+    time.sleep(0.2)
+    with lock:
+        done.append(i)
+
+def broken():
+    raise ValueError("這個工作壞掉了")       # 例外的訊息可以印在 stderr
+
+pool = ThreadPool(4)
+t0 = time.monotonic()
+pool.submit(broken)
+for i in range(8):
+    pool.submit(job, i)
+pool.shutdown(wait=True)                     # 等全部做完才回來
+print("做完:", sorted(done), "| 不到 1 秒:", time.monotonic() - t0 &lt; 1.0)
+try:
+    pool.submit(job, 99)
+except RuntimeError:
+    print("shutdown 之後不能再 submit")
+
+# ── 2. serve_threaded:一個慢客戶端擋不住別人 ──
+def handler(req):
+    time.sleep(0.1)                          # 假裝每個請求要處理 0.1 秒
+    return 200, {"Content-Type": "text/plain"}, req.path.encode()
+
+threading.Thread(target=serve_threaded, args=(8080, handler),
+                 kwargs={"workers": 8, "timeout": 2.0}, daemon=True).start()
+time.sleep(0.3)
+
+def get(path):
+    with socket.create_connection(("127.0.0.1", 8080), timeout=5) as c:
+        c.sendall(f"GET {path} HTTP/1.1\r\nHost: localhost\r\n\r\n".encode())
+        data = b""
+        while chunk := c.recv(4096):
+            data += chunk
+    return data.split(b"\r\n\r\n", 1)[1].decode()
+
+slow = socket.create_connection(("127.0.0.1", 8080))   # 連上之後什麼都不送
+t_slow = time.monotonic()
+results = []
+t0 = time.monotonic()
+ts = [threading.Thread(target=lambda i=i: results.append(get(f"/{i}"))) for i in range(8)]
+for t in ts:
+    t.start()
+for t in ts:
+    t.join()
+print("8 個請求:", sorted(results), "| 不到 0.5 秒:", time.monotonic() - t0 &lt; 0.5)
+slow.settimeout(10)
+while slow.recv(4096):                       # 等到伺服器把它關掉(關之前送不送 400 都可以)
+    pass
+print("慢客戶端在 2 秒左右被關掉:", 1.5 &lt; time.monotonic() - t_slow &lt; 3.0)</code></pre>
+<pre><code class="language-text">做完: [0, 1, 2, 3, 4, 5, 6, 7] | 不到 1 秒: True
+shutdown 之後不能再 submit
+8 個請求: ['/0', '/1', '/2', '/3', '/4', '/5', '/6', '/7'] | 不到 0.5 秒: True
+慢客戶端在 2 秒左右被關掉: True</code></pre>
+          <p><strong>和本章範例不同的地方:</strong>可以參考本章的範例,但介面和要求不同,要自己改寫。</p>
+          <ul>
+            <li>範例 <code>pool_real.py</code> 是一個 <code>run(n, survive)</code> 函式:工作清單寫死,跑完就收;Lab 是一個類別,可以隨時 <code>submit</code>,直到 <code>shutdown</code>。</li>
+            <li>範例用 <code>survive=False</code> 示範「沒接住例外,工作執行緒就死掉」;Lab 一律要接住,工作執行緒不能死。</li>
+            <li>範例只有一種收工方式(每條一個 <code>None</code>,再 <code>join</code>);Lab 要分 <code>shutdown(wait=True)</code> 與 <code>wait=False</code>,而且 shutdown 之後再 submit 要 <code>RuntimeError</code>、<code>n &lt; 1</code> 要 <code>ValueError</code>。</li>
+            <li>範例沒有網路;Lab 還要 <code>serve_threaded</code>:用你的 <code>srv.http</code> 解析與回應,每條連線設 <code>timeout</code>,慢客戶端不能把工作執行緒佔住。</li>
+          </ul>
+          <p><strong>任務目標</strong>(公開的用 <code>test</code> 自己跑;隱藏檢定在 <code>submit</code> 時跑,只看得到名稱和一行說明):</p>
+          <ul class="lab-goals">
+            <li data-group="pool.basic">☐ <strong>基本操作</strong>〔公開〕submit 的工作全部跑完;shutdown(wait=True) 等工作做完才回來。</li>
+            <li data-group="pool.concurrency">☐ <strong>同時服務</strong>〔公開〕(服務模式)serve_threaded 能同時服務兩個連線(一個慢的不擋住另一個)。</li>
+            <li data-group="pool.errors">☐ <strong>錯誤處理</strong>〔隱藏檢定〕工作丟例外時工作執行緒不能死;shutdown 之後再 submit 要 RuntimeError;n &lt; 1 要 ValueError;shutdown(wait=False) 立刻回來。</li>
+            <li data-group="pool.slow-client">☐ <strong>慢客戶端</strong>〔隱藏檢定〕(服務模式)只連線不送資料的客戶端不能擋住別人,timeout 秒後被關掉。</li>
+            <li data-group="pool.perf">☐ <strong>併發</strong>〔隱藏檢定〕(服務模式)工作真的同時進行(一個一個處理要 10 秒)。效能:100 個客戶端同時開始,各依序連 10 次(每次 1 個請求;srv/http 回應完就關連線,沒有 keep-alive)、每個請求處理 10 ms;8 個工作執行緒,零錯誤,5 秒內。這個門檻來自檢查點 1 的 Boss 戰「100 個併發連線」(同樣的負載,5 秒內),以及檢查點 2 的「借還負載」(100 個客戶端同時各借還 10 次,10 秒內)。</li>
+          </ul>
+          <p>標「服務模式」的任務目標:判題時你的服務在沙盒裡的 8080 埠跑(以學生的身分),我們的測試客戶端用另一個使用者從外面連進來,你的程式碰不到它。</p>
+          <p><strong>之後會用在:</strong><a href="129-http-rest-api.html#lab-bookapi-api">第 41 章的借書 REST API</a>(判題時跑在你的 <code>serve_threaded</code> 上);檢查點 1 的 Boss 戰「100 個併發連線」「慢客戶端」;檢查點 2 的 Boss 戰「資料一致」「借還負載」。</p>
+          <p class="lab-rule">這個零件過關之後,後面的專題一律用你自己的版本。規則見<a href="00-about.html#lab-rules">零件庫規則</a>。</p>
         </div>
       </div>
 
@@ -1376,7 +1898,7 @@ int main(void) {
         </div>
       </div>
 
-      <div class="callout note"><div class="ico">🧭</div><div class="body"><span class="c-title">延伸:新軌道</span><p>本章的作業系統概念有三條延伸軌道。<a href="90-rust-os-kernel.html">第 84 章「用 Rust 手寫迷你作業系統核心」</a>讓你親手從零建構核心;再往上一層,<a href="91-virt-landscape.html">第 85 章「虛擬化全景:行程隔離到 VM 與容器」</a>展示行程隔離如何演進為 VM 與容器;而<a href="93-container-internals.html">第 87 章「容器的真相:namespaces、cgroups 與 OverlayFS」</a>揭開 Linux namespaces 與 cgroups 如何在核心層面實現容器隔離——正是本章行程與檔案系統隔離的直接延伸。</p></div></div>
+      <div class="callout note"><div class="ico">🧭</div><div class="body"><span class="c-title">延伸:新軌道</span><p>本章的作業系統概念有三條延伸軌道。<a href="90-rust-os-kernel.html">第 85 章「用 Rust 手寫迷你作業系統核心」</a>讓你親手從零建構核心;再往上一層,<a href="91-virt-landscape.html">第 86 章「虛擬化全景:行程隔離到 VM 與容器」</a>展示行程隔離如何演進為 VM 與容器;而<a href="93-container-internals.html">第 88 章「容器的真相:namespaces、cgroups 與 OverlayFS」</a>揭開 Linux namespaces 與 cgroups 如何在核心層面實現容器隔離——正是本章行程與檔案系統隔離的直接延伸。</p></div></div>
 
       <h2>深掘:虛擬記憶體的完整旅程</h2>
       <p>

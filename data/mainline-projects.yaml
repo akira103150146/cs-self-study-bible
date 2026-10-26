@@ -37,7 +37,6 @@ version: 1
 date: 2026-10-25
 
 planned_chapters:
-  129-http-rest-api: {gap: G15, title: HTTP 與 REST API}
   131-security-law-ethics: {gap: G55, title: 動手之前:資安的法律與倫理}
   132-numpy-pandas: {gap: G21, title: NumPy 與 pandas}
   133-c-deep-dive: {gap: G43, title: C 深入}
@@ -646,7 +645,7 @@ mainlines:
     - {id: boss.json, name: JSON 回應, visibility: public, checkpoint: proj-be-http-server, consumes: [srv/http, srv/pool], description: "GET 一個 JSON 端點,回傳的 JSON 與 Content-Type 都對。"}
     - {id: boss.not-found, name: 找不到, visibility: public, checkpoint: proj-be-http-server, consumes: [srv/http], description: "不存在的路徑回 404,伺服器繼續服務。"}
     - {id: boss.bad-request, name: 畸形請求, visibility: public, checkpoint: proj-be-http-server, consumes: [srv/http], description: "畸形的請求回 400,伺服器不能當掉。"}
-    - {id: boss.concurrency, name: 100 個併發連線, visibility: hidden, checkpoint: proj-be-http-server, consumes: [srv/http, srv/pool], description: "很多客戶端同時連線也不出錯。", perf: {statement: "100 個連線同時各送 10 個請求(每個請求處理 10 ms),零錯誤,5 秒內", seconds: 5, n: 1000}}
+    - {id: boss.concurrency, name: 100 個併發連線, visibility: hidden, checkpoint: proj-be-http-server, consumes: [srv/http, srv/pool], description: "很多客戶端同時連線也不出錯。", perf: {statement: "100 個客戶端同時開始,各依序連 10 次(每次 1 個請求,處理 10 ms),零錯誤,5 秒內", seconds: 5, n: 1000}}
     - {id: boss.slow-client, name: 慢客戶端, visibility: hidden, checkpoint: proj-be-http-server, consumes: [srv/http, srv/pool], description: "只連線不送資料的客戶端不能擋住別人,逾時後被關掉。"}
     - {id: cp2.public, name: 公開 API 測試, visibility: public, checkpoint: proj-be-todo-api, consumes: [bookapi/repo, bookapi/api], description: "約 12 條公開測試:書目 CRUD、會員、借書、還書、逾期查詢的正常流程。"}
     - {id: cp2.edge, name: 邊界, visibility: hidden, checkpoint: proj-be-todo-api, consumes: [bookapi/repo, bookapi/api], description: "隱藏測試類別「邊界」:分頁的極端值、空字串、本數 0 的書、Unicode 書名。"}
@@ -720,7 +719,7 @@ mainlines:
           visibility: hidden
           runner: service
           description: "工作真的同時進行(一個一個處理要 10 秒)。"
-          perf: {statement: "100 個連線同時各送 10 個請求、每個請求處理 10 ms;8 個工作執行緒,零錯誤,5 秒內", seconds: 5, n: 1000}
+          perf: {statement: "100 個客戶端同時開始,各依序連 10 次(每次 1 個請求;srv/http 回應完就關連線,沒有 keep-alive)、每個請求處理 10 ms;8 個工作執行緒,零錯誤,5 秒內", seconds: 5, n: 1000}
           perf_ref: "1.28 秒"
           requiredBy: [boss.concurrency, cp2.load]
     - id: bookapi/repo
@@ -736,16 +735,17 @@ mainlines:
       used_by: [bookapi/api]
       interface:
         - "資料表:books(id, title, author, isbn UNIQUE, copies >= 0)、members(id, name, email UNIQUE)、loans(id, book_id → books, member_id → members, loaned_at, due_at, returned_at NULL)"
-        - "class NotFound(Exception);class Conflict(Exception)   # Conflict:沒有可借本數、重複 isbn、已經還過、刪除有人借的書"
+        - "class NotFound(Exception);class Conflict(Exception)   # Conflict:沒有可借本數、重複 isbn 或 email、本數小於 0、copies 改得比借出中的本數少、已經還過、刪除有人借的書"
         - "class LibraryRepo(db_path=':memory:')"
         - "add_book(title, author, isbn, copies=1) -> int;get_book(book_id) -> dict(含 available);list_books(q=None, limit=20, offset=0) -> list[dict]"
-        - "update_book(book_id, **fields) -> dict;delete_book(book_id) -> None;add_member(name, email) -> int"
-        - "borrow(book_id, member_id, days=14, now=None) -> int;return_loan(loan_id, now=None) -> None;overdue(now=None) -> list[dict]   # now 是 ISO 8601 字串"
+        - "update_book(book_id, **fields) -> dict(只收 title、author、isbn、copies;沒給欄位就什麼都不改);delete_book(book_id) -> None;add_member(name, email) -> int;get_member(member_id) -> dict"
+        - "borrow(book_id, member_id, days=14, now=None) -> int(先查書、再查會員,都在才查本數);get_loan(loan_id) -> dict;return_loan(loan_id, now=None) -> None;overdue(now=None) -> list[dict]   # now 是 ISO 8601 字串"
       groups:
         - {id: repo.crud, name: 基本操作, kind: function, visibility: public, requiredBy: [cp2.public], description: "書與會員的新增、查詢、更新、刪除,借書、還書、逾期查詢的公開範例(now 固定)。"}
-        - {id: repo.constraints, name: 約束, kind: error, visibility: hidden, requiredBy: [cp2.errors, cp2.consistency], description: "重複的 isbn、本數小於 0、找不到的 id、沒有可借本數、還過的再還、刪除有人借的書,都要丟對的例外(NotFound 或 Conflict)。"}
+        - {id: repo.constraints, name: 約束, kind: error, visibility: hidden, requiredBy: [cp2.errors, cp2.consistency], description: "重複的 isbn 或 email、本數小於 0、copies 改得比借出中的本數少、找不到的 id、沒有可借本數、還過的再還、刪除有人借的書,都要丟對的例外(NotFound 或 Conflict);書和會員都不存在時,丟的是書的 NotFound。"}
         - {id: repo.time, name: 時間邊界, kind: edge, visibility: hidden, requiredBy: [cp2.edge], description: "剛好到期不算逾期、已還的不算、days 參數、跨月跨年的日期。"}
-        - {id: repo.search, name: 搜尋與分頁, kind: spec, visibility: hidden, requiredBy: [cp2.spec, cp3.attack-suite], description: "q 用部分符合找書名與作者、offset 超過結尾回傳空列表、q 裡有引號或 % 要照字面找(參數化查詢)。"}
+        - {id: repo.search, name: 搜尋與分頁, kind: spec, visibility: hidden, requiredBy: [cp2.spec, cp3.attack-suite], description: "q 用子字串找書名與作者(英文不分大小寫,只限 ASCII)、列表照 id 排序、offset 超過結尾回傳空列表、q 裡有引號、% 或 _ 要照字面找(參數化查詢)。"}
+        - {id: repo.threads, name: 多執行緒借還, kind: spec, visibility: hidden, requiredBy: [cp2.consistency, cp2.load], description: "同一個 LibraryRepo(:memory:)給 8 條執行緒同時借還同一本書:不能丟 ProgrammingError 或 OperationalError,借出中的本數不超過 copies,最後的 available 對參考模型。"}
         - id: repo.perf
           name: 效能
           kind: perf
@@ -764,19 +764,18 @@ mainlines:
       consumes: [srv/http, srv/pool, bookapi/repo]
       lab_no: L4
       anchor: lab-bookapi-api
-      gap: G15
       also_chapters: [07-design-recipe, 08-oop, 11-software-architecture]
       used_by: [bookapi/tests, bookapi/auth, bookapi/cache, webfix/boss.regression-attacks]
       interface:
         - "make_app(repo) -> handler   # 掛在 srv.http.serve 或 srv.pool.serve_threaded 上"
         - "端點:GET/POST /books、GET/PATCH/DELETE /books/{id}、POST /members、POST /loans、POST /loans/{id}/return、GET /loans/overdue;分頁 ?limit=&offset="
-        - "錯誤格式 {\"error\": {\"code\": \"...\", \"message\": \"...\"}};狀態碼 200／201／204／400／404／409／422"
+        - "錯誤格式 {\"error\": {\"code\": \"...\", \"message\": \"...\"}};狀態碼 200／201／204／400／404／405／409／415／422／500"
       groups:
         - {id: api.public, name: 公開 API 測試, kind: function, visibility: public, requiredBy: [cp2.public], description: "約 12 條:每個端點的正常流程與狀態碼。"}
-        - {id: api.edge, name: 邊界, kind: edge, visibility: hidden, requiredBy: [cp2.edge], description: "limit=0、limit 很大或是負數、offset 超過結尾、空書名、本數 0 的書、Unicode 書名。"}
-        - {id: api.errors, name: 錯誤處理, kind: error, visibility: hidden, requiredBy: [cp2.errors], description: '壞 JSON 回 400、型別或欄位錯回 422、找不到回 404、不能借回 409;錯誤一律是 {"error": {"code", "message"}}。'}
-        - {id: api.consistency, name: 資料一致, kind: spec, visibility: hidden, requiredBy: [cp2.consistency], description: "借還之後 available 正確、重複還書回 409、刪除有人借的書回 409、PATCH 只改給的欄位。"}
-        - {id: api.spec, name: 規格細節, kind: spec, visibility: hidden, requiredBy: [cp2.spec], description: "201 回傳新資源、204 沒有 body、Content-Type 是 application/json、列表照 id 排序、未知欄位回 422。"}
+        - {id: api.edge, name: 邊界, kind: edge, visibility: hidden, requiredBy: [cp2.edge], description: "limit 要 1–100(預設 20)、offset 要 0 以上,limit=0、負數或太大回 422;offset 超過結尾回空的 items;只有空白的書名回 422;本數 0 的書借不到;Unicode 書名;剛好到期的借閱不算逾期(用 ?now= 查)。"}
+        - {id: api.errors, name: 錯誤處理, kind: error, visibility: hidden, requiredBy: [cp2.errors], description: '壞 JSON 回 400;要讀本體的請求 Content-Type 不對回 415;頂層不是 JSON 物件(例如陣列)、型別錯(true 和 "1" 都不算整數)、缺欄位、days 不在 1–365、copies 小於 0、email 沒有 @ 回 422(欄位驗證在資料層之前);找不到(包括借不存在的書或會員)回 404;路徑對、方法錯回 405 加 Allow;不能借回 409;借書的檢查順序是欄位、書、會員、本數;錯誤一律是 {"error": {"code", "message"}}。'}
+        - {id: api.consistency, name: 資料一致, kind: spec, visibility: hidden, requiredBy: [cp2.consistency], description: "借還之後 available 正確、重複還書回 409、刪除有人借的書回 409、copies 改得比借出中的本數少回 409、PATCH 只改給的欄位。"}
+        - {id: api.spec, name: 規格細節, kind: spec, visibility: hidden, requiredBy: [cp2.spec], description: "201 回傳新資源並帶 Location、204 沒有 body、Content-Type 是 application/json; charset=utf-8、列表照 id 排序、未知欄位回 422、PATCH {} 什麼都不改並回 200、?now= 指定逾期查詢的「現在」。"}
         - id: api.perf
           name: 併發借還
           kind: perf
@@ -796,12 +795,10 @@ mainlines:
       consumes: [bookapi/api]
       lab_no: L5
       anchor: lab-bookapi-tests
-      gap: G16
-      gap_title: unittest、測一個 HTTP 服務
       used_by: [cp2.mutation]
-      note: "學生自寫測試的突變模式(9Jang 設計 §5.3)不在第一個切片。"
+      note: "學生自寫測試的突變模式(9Jang 設計 §5.3)不在第一個切片。判題時只換掉 bookapi/api.py、repo.py、schema.sql,學生的 bookapi/tests/ 留著。bookapi/__init__.py 與 bookapi/tests/__init__.py 是套件的系統檔(空檔,任務資料夾的起始碼附上,判題不換),不算零件檔,所以不列在 files。"
       groups:
-        - {id: tests.green, name: 參考解全過, kind: function, visibility: public, requiredBy: [cp2.mutation], description: "你的測試在參考解上全部通過(python3 -m unittest)。"}
+        - {id: tests.green, name: 參考解全過, kind: function, visibility: public, requiredBy: [cp2.mutation], description: "你的測試在參考解上全部通過(在 ~/零件庫 執行 python3 -m unittest discover -s bookapi/tests -t .)。"}
         - {id: tests.mutants, name: 抓突變, kind: spec, visibility: hidden, requiredBy: [cp2.mutation], description: "8 個隱藏突變版(例:逾期少算一天、還書沒有加回本數),每個都至少一條測試失敗。"}
         - id: tests.perf
           name: 跑得夠快

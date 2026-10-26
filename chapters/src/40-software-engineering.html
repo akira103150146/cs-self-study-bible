@@ -715,6 +715,298 @@ jobs:
         </div>
       </div>
 
+
+      <h2>持續整合:從 push 到綠燈</h2>
+      <p>
+        上面的 YAML 只有四步。真實專案的 CI 要回答更多問題:什麼事件會啟動它?先跑哪一關?哪些結果一定要綠燈才能合併?失敗的時候留下什麼線索?
+        CI 機器上的環境,怎麼保證和你的電腦一樣?金鑰放哪裡?怎麼讓它不要慢到沒人想等?這一節把「推上去之後的那幾分鐘」拆開來看。
+      </p>
+      <ol>
+        <li>你把分支 <code>git push</code> 上去,開一個 PR。</li>
+        <li>GitHub 收到 <code>pull_request</code> 這個<strong>事件</strong>,找出 <code>.github/workflows/</code> 裡 <code>on:</code> 有列這個事件的每一個 workflow。</li>
+        <li>每個 <strong>job</strong> 分到一台全新的 <strong>runner</strong>(一台用完就丟的虛擬機)。它從零開始:取出程式碼、裝 Python、裝套件。</li>
+        <li>job 照 <code>needs</code> 的先後跑。job 裡的 step 一個接一個執行;任何一個 step 的結束狀態碼不是 0,這個 job 就失敗。</li>
+        <li>每個 job 的結果,變成 PR 頁面上的一個 <strong>check</strong>(✓ 或 ✗)。</li>
+        <li>被設成 <strong>required</strong> 的 check 全部是 ✓,合併按鈕才能按。</li>
+      </ol>
+
+      <h3>觸發與階段:先跑便宜的,再跑貴的</h3>
+      <p>
+        <strong>觸發(trigger)</strong>寫在 <code>on:</code>。最常用的是 <code>pull_request</code>(PR 開啟、推了新 commit)與 <code>push</code>(通常只對 <code>main</code>,確認合併後的結果也是綠的)。
+        另外還有 <code>workflow_dispatch</code>(在網頁上手動按)和 <code>schedule</code>(用 cron 語法定時跑,例如每天晚上跑一次很慢的完整測試)。
+      </p>
+      <p>
+        <strong>階段(stage)</strong>的原則是<strong>先跑便宜、快、最常壞的</strong>。格式和語法錯誤幾秒鐘就查得出來,沒有理由讓它等十分鐘的整合測試跑完才告訴你。
+        所以典型的順序是 lint(靜態檢查)→ 單元測試 → 整合測試。前一關失敗,後一關就不開始。這叫 <strong>fail-fast(快速失敗)</strong>:越早給回饋越好,也省下機器時間。
+      </p>
+      <p>
+        下面是一個完整一點的 workflow。它的骨架(<code>on</code> → <code>permissions</code> → <code>jobs</code> → <code>steps</code>,以及最後用 <code>gh pr comment</code> 在 PR 留言的那一步)
+        改寫自 GitHub Skills 的入門課程 <em>hello-github-actions</em>;階段、矩陣、快取、artifact 是這裡加上的:
+      </p>
+      <pre><code class="language-text"># .github/workflows/ci.yml
+# 結構改寫自 GitHub, skills/hello-github-actions(MIT 授權)的 welcome workflow
+name: CI
+
+on:                                  # 觸發:什麼事件會啟動這條管線
+  push:
+    branches: [main]                 # 合進 main 之後再跑一次
+  pull_request:                      # 開 PR、PR 推了新 commit 都會跑
+  workflow_dispatch:                 # 也可以在網頁上手動按「Run workflow」
+
+permissions:
+  contents: read                     # 預設只給讀權限(最小權限原則)
+
+concurrency:                         # 同一條分支推了新的 commit,就取消還在跑的舊那次
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}   # main 上的每一次都跑完,不取消
+
+jobs:
+  lint:                              # 第一關:最便宜、最快,先擋掉明顯的錯
+    runs-on: ubuntu-24.04            # 釘住作業系統版本,不用 ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip                              # 依鎖定檔的雜湊值快取下載的套件
+          cache-dependency-path: requirements-dev.txt
+      - run: pip install -r requirements-dev.txt  # 裡面每一行都是 名稱==版本
+      - run: ruff check .
+      - run: python -m compileall -q app tests     # 每個檔案至少要能編譯
+
+  unit:                              # 第二關:單元測試,在三個 Python 版本上同時跑
+    needs: lint                      # lint 沒過,這一關根本不開始
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: true                # 任何一個版本失敗,就取消其他版本
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: python -m unittest discover -s tests/unit -t . -v
+
+  integration:                       # 第三關:真的開服務、真的走 HTTP
+    needs: unit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run integration tests
+        shell: bash                  # 明寫 bash 才有 -o pipefail:tee 不會吞掉測試的失敗
+        run: python -m unittest discover -s tests/integration -t . -v 2&gt;&amp;1 | tee integration.log
+      - uses: actions/upload-artifact@v4
+        if: always()                 # 失敗時更要留下紀錄
+        with:
+          name: integration-log
+          path: integration.log
+          retention-days: 7
+
+  report:                            # 全部通過之後,在 PR 留言(就是 hello-github-actions 教的那一步)
+    needs: [unit, integration]
+    # 只在同一個 repo 開的 PR 留言:fork 來的 PR 拿到的 token 是唯讀的,留言一定失敗
+    if: github.event_name == 'pull_request' &amp;&amp; github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    permissions:
+      pull-requests: write           # 只有這個 job 拿得到「寫 PR 留言」的權限
+    steps:
+      - run: gh pr comment "$PR_URL" --body "CI 全部通過:lint → unit → integration"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}</code></pre>
+      <p>出處:GitHub, <a href="https://github.com/skills/hello-github-actions">skills/hello-github-actions</a>,MIT 授權。原課程的 workflow 只在 PR 開啟時留一則歡迎留言;這裡保留它的結構與留言步驟,改成 CI 管線。</p>
+      <p>對照上面每一段:</p>
+      <ul>
+        <li><strong><code>needs</code></strong> 把 job 串成階段:<code>unit</code> 等 <code>lint</code>,<code>integration</code> 等 <code>unit</code>,<code>report</code> 等前兩個。沒有 <code>needs</code> 的 job 會同時開始。</li>
+        <li><strong><code>strategy.matrix</code></strong> 把同一個 job 複製成三份,在三個 Python 版本上同時跑。<code>fail-fast: true</code>(預設值)表示其中一份失敗,就取消其他還在跑的。</li>
+        <li><strong><code>timeout-minutes</code></strong>:一個卡住的測試不能讓 runner 空轉好幾個小時。設一個比平常多幾倍的上限。</li>
+        <li><strong><code>concurrency</code></strong>:同一個 PR 連推三次,只有最後一次的結果有意義,舊的就取消。<code>main</code> 通常不取消:每個合進去的 commit 都要有自己的結果,出事時才知道是哪一個壞的。所以 <code>cancel-in-progress</code> 寫成運算式,只有不是 <code>main</code> 的時候才是 <code>true</code>。</li>
+        <li><strong><code>shell: bash</code></strong>:沒寫 <code>shell</code> 時,step 用 <code>bash -e</code> 執行;明寫 <code>bash</code> 才會加上 <code>-o pipefail</code>。差別在管線 <code>|</code>:沒有 pipefail,<code>... | tee integration.log</code> 的結束狀態碼是 <code>tee</code> 的(永遠是 0),測試失敗也會變成綠燈。作者實測:同一個會失敗的測試,<code>bash -e</code> 的結束狀態碼是 0,加上 <code>-o pipefail</code> 是 1。</li>
+      </ul>
+      <p><code>lint</code> 裝的工具清單也要釘死版本:</p>
+      <pre><code class="language-text"># requirements-dev.txt ─ 開發與 CI 用的工具,每一個都釘死版本
+ruff==0.6.9</code></pre>
+
+      <h3>可重現的環境:釘版本、鎖定檔、快取</h3>
+      <p>
+        CI 的價值在於「結果可信」。如果同一個 commit 今天綠、明天紅,而程式根本沒改,大家很快就不看它了。結果會變,通常是因為<strong>環境偷偷變了</strong>:
+      </p>
+      <ul>
+        <li><strong>作業系統</strong>:<code>ubuntu-latest</code> 會在某一天從一個版本換成下一個版本。寫 <code>ubuntu-24.04</code>,升級就變成你自己決定的事。</li>
+        <li><strong>語言版本</strong>:寫 <code>"3.12"</code>,而不是「裝最新的」。要支援多個版本,就用矩陣明確列出來。</li>
+        <li><strong>套件</strong>:<code>pip install requests</code> 今天裝到的版本和下個月不同。用<strong>鎖定檔(lockfile)</strong>把每一個套件(包括間接相依)的確切版本記下來:Python 的 <code>名稱==版本</code> 清單(可以用 <code>pip freeze</code> 或 pip-tools 產生),Node 的 <code>package-lock.json</code>、<code>pnpm-lock.yaml</code>。CI 只照鎖定檔安裝(<code>npm ci</code> 就是做這件事)。</li>
+        <li><strong>actions 本身</strong>:<code>actions/checkout@v4</code> 釘在一個大版本;最嚴格的寫法是釘在一個完整的 commit 雜湊值,因為標籤可以被移動。</li>
+      </ul>
+      <p>
+        每一個 job 都從一台乾淨的機器開始,每次都重新下載套件會很慢。<strong>快取(cache)</strong>把下載過的東西存起來,下次直接拿。
+        上面 <code>setup-python</code> 的 <code>cache: pip</code> 用鎖定檔的雜湊值當鑰匙:鎖定檔沒變,就用舊的快取;一改版本,鑰匙跟著變,自動重新下載。
+        快取只是加速,不能影響結果:沒命中的時候,只是慢一點,答案要一模一樣。這和 <strong>artifact</strong> 不同:
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th></th><th>快取(cache)</th><th>產出物(artifact)</th></tr></thead>
+        <tbody>
+          <tr><td>放什麼</td><td>下載的套件、編譯的中間檔</td><td>這次執行的結果:測試紀錄、覆蓋率報告、打包好的程式</td></tr>
+          <tr><td>給誰用</td><td>下一次的 CI</td><td>人(從 Actions 頁面下載)或後面的 job</td></tr>
+          <tr><td>不見了會怎樣</td><td>只是變慢</td><td>線索不見了,要重跑才知道為什麼失敗</td></tr>
+        </tbody>
+      </table></div>
+
+      <h3>祕密:不進程式碼、不進 log</h3>
+      <p>
+        部署金鑰、資料庫密碼、第三方 API 的 token,這些<strong>祕密(secret)</strong>絕對不能寫進程式碼或 YAML。存在 repo 設定的 Secrets 裡,workflow 用 <code>${{ secrets.名稱 }}</code> 取用。幾條規則:
+      </p>
+      <ul>
+        <li><strong>只給需要的 step。</strong>用 <code>env:</code> 掛在那一個 step 上,不要掛在整個 workflow。</li>
+        <li><strong>不要印出來。</strong>GitHub 會把 log 裡和祕密一模一樣的字串遮成 <code>***</code>,但祕密經過轉換(例如 base64 編碼、只印一部分)之後就遮不到了。</li>
+        <li><strong>最小權限。</strong>每次執行自動附的 <code>GITHUB_TOKEN</code> 能做什麼,由 <code>permissions:</code> 決定。預設只給 <code>contents: read</code>,需要留言的 job 才另外給 <code>pull-requests: write</code>(上面的 <code>report</code>)。fork 來的 PR 例外:它的 <code>GITHUB_TOKEN</code> 預設是唯讀的,<code>permissions:</code> 寫了 <code>write</code> 也一樣,所以 <code>report</code> 的 <code>if</code> 只讓同一個 repo 開的 PR 執行。</li>
+        <li><strong>別人 fork 來的 PR 拿不到祕密。</strong>這是故意的:PR 的程式碼是陌生人寫的,如果它能讀到你的金鑰,改一行就能把金鑰寄走。不要為了拿到祕密,改用 <code>pull_request_target</code> 去執行 PR 裡的程式碼。</li>
+        <li><strong>外洩了就換。</strong>祕密一旦進了 commit,就算刪掉,它還在 git 歷史裡。唯一的補救是立刻到發行的地方作廢它,換一把新的。</li>
+      </ul>
+
+      <h3>required checks 與 artifacts:綠燈才能合併,紅燈要留線索</h3>
+      <p>
+        CI 跑了,但如果 PR 紅燈也能按合併,它就只是建議。在 repo 的分支保護規則(branch protection 或 ruleset)裡,把某些 check 設成 <strong>required</strong>:它們沒有全部變綠,<code>main</code> 就合不進去。幾個常見的坑:
+      </p>
+      <ul>
+        <li><strong>required 認的是 check 的名字。</strong>check 的名字來自 job 名稱;矩陣的 job 每一份各有名字,例如 <code>unit (3.12)</code>。有人把 job 從 <code>test</code> 改名成 <code>unit</code>,required 的 <code>test</code> 就永遠等不到結果,所有 PR 都卡住。</li>
+        <li><strong>被 <code>if</code> 跳過的 job 會回報成功。</strong>所以 required 要選每次都真的會跑的 job;條件很多的時候,常見做法是加一個最後的彙總 job,只 require 它。</li>
+        <li><strong>PR 綠不代表合併後綠。</strong>兩個 PR 各自都是綠的,合在一起卻可能壞掉。可以要求「分支必須是 <code>main</code> 的最新版才能合併」,或用 merge queue(合併佇列)讓每一個 PR 在合併前,先在「最新的 main 加上它」上面再跑一次。</li>
+      </ul>
+      <p>
+        紅燈的時候,第一個問題是「為什麼」。runner 用完就丟,沒存下來的東西就沒了。所以失敗時要留的東西(測試紀錄、覆蓋率報告、截圖)用 <code>actions/upload-artifact</code> 上傳,
+        並且加 <code>if: always()</code>:前面的 step 失敗了,這一步照樣執行。<code>retention-days</code> 決定保留幾天。
+      </p>
+
+      <h3>手算:這條管線多久變綠燈</h3>
+      <p>
+        CI 慢,大家就會想辦法不等它。所以設計管線時要能估出「推上去之後多久看到結果」。假設 runner 夠多(不用排隊),每個 job 的分鐘數如下(已經含取出程式碼、裝套件):
+        一個 job 等到它所有的 <code>needs</code> 都結束才開始,開始時間 = 它的 <code>needs</code> 裡最晚的結束時間。
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>job</th><th>分鐘</th><th>needs</th><th>同時跑幾份</th><th>開始</th><th>結束</th></tr></thead>
+        <tbody>
+          <tr><td>lint</td><td>1</td><td>(無)</td><td>1</td><td>0</td><td>1</td></tr>
+          <tr><td>unit</td><td>3</td><td>lint</td><td>3(矩陣)</td><td>1</td><td>4</td></tr>
+          <tr><td>docs</td><td>2</td><td>lint</td><td>1</td><td>1</td><td>3</td></tr>
+          <tr><td>integration</td><td>4</td><td>unit</td><td>1</td><td>4</td><td>8</td></tr>
+        </tbody>
+      </table></div>
+      <ul>
+        <li><strong>牆上時間(從 push 到全部結束)</strong>= 最晚的結束時間 = 8 分。決定它的是最長的那條依賴鏈 lint → unit → integration(1 + 3 + 4),叫做<strong>關鍵路徑(critical path)</strong>。docs 在旁邊同時跑,不影響總時間。</li>
+        <li><strong>runner 用掉的時間(付費的帳單看這個)</strong>= 每個 job 的分鐘 × 份數加總 = 1 + 3×3 + 2 + 4 = 16 分。</li>
+        <li><strong>快取沒命中</strong>,每個 job(每一份)多 2 分裝套件:牆上時間 = (1+2) + (3+2) + (4+2) = 14 分;runner 時間 = 16 + 2×6 = 28 分(6 份 job:lint、unit 三份、docs、integration)。快取在關鍵路徑上的每一個 job 都省時間。</li>
+        <li><strong>fail-fast</strong>:如果 <code>unit (3.11)</code> 跑到第 2 分鐘失敗(也就是第 1 + 2 = 3 分),矩陣的另外兩份立刻被取消,<code>integration</code> 不會開始。
+          你在第 3 分鐘就看到紅燈。runner 時間 = lint 1 + docs 2 + unit 三份各 2 = 9 分;沒有 fail-fast 的話另外兩份會跑滿 3 分,是 11 分。如果把所有檢查塞進同一個 job 依序跑,這個錯要等前面每一步都做完才會出現。</li>
+      </ul>
+      <p>用程式對答案(這支程式假設 runner 夠多,只看依賴關係):</p>
+      <pre><code class="language-python"># pipeline_time.py ─ 算一條管線多久變綠燈(假設 runner 夠多,沒有排隊)
+def schedule(jobs):
+    """jobs: {名字: (分鐘, [needs...], 並行份數)};回傳每個 job 的 (開始, 結束)"""
+    times = {}
+    def finish(name):
+        if name not in times:
+            minutes, needs, _ = jobs[name]
+            start = max((finish(n) for n in needs), default=0)   # 等最慢的 needs
+            times[name] = (start, start + minutes)
+        return times[name][1]
+    for name in jobs:
+        finish(name)
+    return times
+
+def report(jobs):
+    times = schedule(jobs)
+    for name, (start, end) in times.items():
+        print(f"{name:12} {start:&gt;3} → {end:&gt;3}")
+    wall = max(end for _, end in times.values())
+    runner = sum(minutes * copies for minutes, _, copies in jobs.values())
+    print(f"牆上時間 {wall} 分;runner 用掉 {runner} 分")
+
+jobs = {
+    "lint":        (1, [],              1),
+    "unit":        (3, ["lint"],        3),   # 3 個 Python 版本同時跑,各 3 分
+    "docs":        (2, ["lint"],        1),
+    "integration": (4, ["unit"],        1),
+}
+report(jobs)
+print("--- 快取沒命中:每個 job 多 2 分裝套件")
+report({k: (m + 2, n, c) for k, (m, n, c) in jobs.items()})</code></pre>
+      <pre><code class="language-text">$ python3 pipeline_time.py
+lint           0 →   1
+unit           1 →   4
+docs           1 →   3
+integration    4 →   8
+牆上時間 8 分;runner 用掉 16 分
+--- 快取沒命中:每個 job 多 2 分裝套件
+lint           0 →   3
+unit           3 →   8
+docs           3 →   7
+integration    8 →  14
+牆上時間 14 分;runner 用掉 28 分</code></pre>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 手算 40.1 <span class="badge">手算</span></div>
+        <div class="ex-body">
+          <p>另一條管線:<code>lint</code> 2 分(無 needs);<code>unit</code> 5 分,needs lint,矩陣 2 份;<code>scan</code>(安全掃描)4 分,needs lint;
+          <code>e2e</code> 6 分,needs unit;<code>preview</code>(部署預覽環境)1 分,needs e2e 和 scan。</p>
+          <p>(1) 每個 job 的開始與結束時間、牆上時間、關鍵路徑、runner 時間各是多少?(2) 快取全部沒命中,每個 job(每一份)多 3 分,牆上時間與 runner 時間變成多少?
+          (3) 想把牆上時間縮短,把 <code>scan</code> 從 4 分優化到 1 分,有用嗎?把 <code>e2e</code> 從 6 分優化到 3 分呢?</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <div class="table-wrap"><table>
+              <thead><tr><th>job</th><th>開始</th><th>結束</th></tr></thead>
+              <tbody>
+                <tr><td>lint</td><td>0</td><td>2</td></tr>
+                <tr><td>unit</td><td>2</td><td>7</td></tr>
+                <tr><td>scan</td><td>2</td><td>6</td></tr>
+                <tr><td>e2e</td><td>7</td><td>13</td></tr>
+                <tr><td>preview</td><td>13(等 e2e 的 13 和 scan 的 6,取晚的)</td><td>14</td></tr>
+              </tbody>
+            </table></div>
+            <p>(1) 牆上時間 14 分;關鍵路徑 lint → unit → e2e → preview(2 + 5 + 6 + 1);runner 時間 = 2 + 5×2 + 4 + 6 + 1 = 23 分。</p>
+            <p>(2) 牆上時間 = (2+3) + (5+3) + (6+3) + (1+3) = 26 分;runner 時間 = 23 + 3×6 = 41 分(6 份:lint、unit 兩份、scan、e2e、preview)。
+            用上面的 <code>report()</code> 跑這兩組數字,印出的就是 14 / 23 與 26 / 41。</p>
+            <p>(3) 優化 <code>scan</code> 沒用:它不在關鍵路徑上(第 6 分就結束了,preview 本來就要等到第 13 分),牆上時間還是 14 分,只省 3 分 runner 時間。
+            優化 <code>e2e</code> 有用:e2e 變成 7 → 10,preview 等 max(10, 6) = 10,結束在 11,牆上時間 11 分。<strong>要讓管線變快,先找關鍵路徑。</strong></p>
+          </div></details>
+        </div>
+      </div>
+
+      <h3>PR review 怎麼用 CI 的結果</h3>
+      <p>
+        前面講過 code review 的價值與文化。有了 CI,review 的分工更清楚:<strong>機器檢查得了的,交給機器;人只看機器看不出來的。</strong>
+        格式、lint、型別、既有的測試,CI 每次都會檢查,審查者不用再花力氣挑縮排。審查者的時間要花在:這個設計對不對?命名看得懂嗎?錯誤的情況處理了嗎?<strong>缺了哪些測試?</strong>
+      </p>
+      <p>一次 review 的順序大概是這樣:</p>
+      <ol>
+        <li><strong>先看 check。</strong>紅燈的 PR 先不要細看,請作者修好(需要幫忙的話,下載 artifact 裡的紀錄一起看)。綠燈的才開始讀程式。</li>
+        <li><strong>讀 PR 說明。</strong>這個 PR 要解決什麼問題?怎麼驗證的?說明寫不清楚,程式也很難審。</li>
+        <li><strong>先看測試,再看實作。</strong>測試就是這次改動的規格。問自己:如果實作裡有一個差一錯誤,哪一條測試會變紅?答不出來,就是少了一條測試({{ch:46-debugging-testing}}的變異測試在問的正是這個問題)。</li>
+        <li><strong>CI 綠 ≠ 程式對。</strong>CI 只跑已經存在的測試。新的行為沒有測試,CI 當然是綠的。</li>
+      </ol>
+      <p>很多團隊把審查清單放在 <code>.github/pull_request_template.md</code>,每個新的 PR 說明都會自動帶出來。一個例子:</p>
+      <pre><code class="language-text">## 審查清單
+- [ ] CI 全綠;有被跳過(skip)的測試,說明原因
+- [ ] 這個 PR 只做一件事,標題說清楚做了什麼
+- [ ] 新的行為有測試;修 bug 的 PR 有一條「修之前會紅」的回歸測試
+- [ ] 錯誤的情況:壞輸入、找不到、沒有權限,回應都對
+- [ ] 沒有祕密(金鑰、密碼、token)進到程式碼、設定檔或 log
+- [ ] 改了介面或資料表:有遷移步驟,文件也更新了
+- [ ] 下一個人看得懂:命名、註解寫「為什麼」</code></pre>
+      <p>留言時標出它的份量,作者才知道哪些一定要改。一種常見的寫法:</p>
+      <pre><code class="language-text">[必須改] overdue() 用 due &lt;= now,剛好到期的那一刻就算逾期了,和規格「剛好到期不算」不一致。
+         請改成 due &lt; now,並加一條 due == now 的測試(修之前它應該是紅的)。
+[建議]   _parse 這個名字看不出在解析什麼,改成 parse_due_date 會比較清楚。不改也可以合併。
+[問題]   integration 這次跑了 4 分鐘,上週是 1 分鐘。是新加的測試比較慢,還是 setUp 裡有 sleep?</code></pre>
+      <p>
+        地下城的組隊副本(raid)之後也會有自己的 <code>.dungeon-ci.yml</code>。想法和這一節一樣:推上去,自動跑檢查,全綠才能合併。
+      </p>
+
       <h2>Web 與 API 實務:讓系統互相對話</h2>
       <p>
         今天絕大多數的軟體,都不是孤島,而要透過<strong>API(應用程式介面)</strong>互相溝通。
@@ -744,6 +1036,13 @@ jobs:
         為什麼?因為這樣整套 API 有<em>一致、可預測</em>的結構——你只要知道資源叫什麼,就能猜到所有操作怎麼呼叫。
       </p>
 
+      <div class="callout tip">
+        <div class="ico">💡</div>
+        <div class="body">
+          <span class="c-title">想親手寫一個 REST API?</span>
+          <p>這一節只講設計原則。<a href="129-http-rest-api.html">{{ch:129-http-rest-api}}</a>用 Python 標準函式庫從頭寫一個 JSON 服務:方法的語意與冪等、狀態碼、錯誤格式、分頁,還有怎麼替它寫測試。</p>
+        </div>
+      </div>
       <h3>狀態碼:伺服器用數字回答「結果如何」</h3>
       <p>
         每個 HTTP 回應都帶一個<strong>狀態碼(status code)</strong>,用數字告訴呼叫方「發生什麼事」。
@@ -1062,6 +1361,135 @@ jobs:
         </div>
       </div>
 
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 40.7 <span class="badge">除錯</span></div>
+        <div class="ex-body">
+          <p>同學交來一份 workflow,說「CI 一直都是綠的」。找出至少五個問題(可重現、祕密、階段順序、會吞掉失敗的寫法、權限、逾時),並改寫成一份合理的版本。</p>
+          <pre><code class="language-text">name: CI
+on: push
+jobs:
+  all:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@main
+      - run: pip install requests ruff
+      - run: echo "用 $API_KEY 測試付款"
+        env:
+          API_KEY: ${{ secrets.API_KEY }}
+      - run: python -m unittest discover -s tests/integration -t . 2&gt;&amp;1 | tee integration.log
+      - run: python -m unittest discover -s tests/unit -t .
+      - run: ruff check .</code></pre>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <ul>
+              <li><strong>吞掉失敗:</strong>整合測試那一步沒寫 <code>shell: bash</code>,用的是 <code>bash -e</code>,沒有 pipefail。<code>| tee</code> 讓整行的結束狀態碼變成 <code>tee</code> 的 0,整合測試失敗也是綠燈。「一直都是綠的」很可能就是這個原因。</li>
+              <li><strong>祕密:</strong><code>echo</code> 把 <code>API_KEY</code> 印進 log。就算 GitHub 會遮掉一模一樣的字串,也不應該印;而且祕密要掛在真正需要它的那一步,不是一個只負責印字的步驟。</li>
+              <li><strong>不可重現:</strong><code>ubuntu-latest</code> 會換版本;<code>actions/checkout@main</code> 追的是一條一直在動的分支;<code>pip install requests ruff</code> 沒有版本。改成 <code>ubuntu-24.04</code>、<code>@v4</code>(或 commit 雜湊值)、照鎖定檔安裝。</li>
+              <li><strong>階段順序反了:</strong>最慢的整合測試排第一,最快的 lint 排最後;而且全部在同一個 job 裡,lint 錯了也要等整合測試跑完才知道。拆成 lint → unit → integration 三個 job,用 <code>needs</code> 串起來。</li>
+              <li><strong>沒有逾時、沒有權限設定:</strong>加 <code>timeout-minutes</code>;加 <code>permissions: contents: read</code>,讓 <code>GITHUB_TOKEN</code> 只有讀權限。</li>
+              <li><strong>觸發:</strong>只有 <code>on: push</code>,別人從 fork 開來的 PR 不會在你的 repo 跑檢查。加上 <code>pull_request</code>。</li>
+              <li><strong>失敗沒留線索:</strong>寫了 <code>integration.log</code> 卻沒上傳。加 <code>upload-artifact</code> 與 <code>if: always()</code>。</li>
+            </ul>
+            <p>改寫後(PyYAML 檢查過格式;整合測試的 <code>API_KEY</code> 只給那一步):</p>
+            <pre><code class="language-text">name: CI
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - run: pip install -r requirements-dev.txt     # requests、ruff 都寫成 名稱==版本
+      - run: ruff check .
+  unit:
+    needs: lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
+      - run: python -m unittest discover -s tests/unit -t .
+  integration:
+    needs: unit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
+      - name: Run integration tests
+        shell: bash                                   # 有 pipefail,tee 不會吞掉失敗
+        run: python -m unittest discover -s tests/integration -t . 2&gt;&amp;1 | tee integration.log
+        env:
+          API_KEY: ${{ secrets.API_KEY }}             # 只給需要它的這一步,而且不印出來
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: integration-log
+          path: integration.log</code></pre>
+          </div></details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 40.8 <span class="badge">思考</span></div>
+        <div class="ex-body">
+          <p>兩個 CI 的怪事,各說明原因與修法:</p>
+          <p>(1) 同事把 workflow 裡的 job <code>test</code> 改名成 <code>unit</code>,加上三個 Python 版本的矩陣,PR 上三個 check 都是綠的,可是合併按鈕還是灰的,畫面寫著 <code>test</code> 在「等待回報狀態」。</p>
+          <p>(2) PR A 把函式 <code>parse_date</code> 改名成 <code>parse_due_date</code>,並改好所有呼叫的地方;PR B 新增了一個檔案,裡面呼叫 <code>parse_date</code>。兩個 PR 各自的 CI 都是綠的,依序合併之後,<code>main</code> 紅了。</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <p>(1) 分支保護規則裡 required 的是名字叫 <code>test</code> 的 check。改名之後,再也沒有 job 會回報 <code>test</code> 這個名字,所以永遠在等;新的 check 叫 <code>unit (3.11)</code>、<code>unit (3.12)</code>、<code>unit (3.13)</code>,它們不在 required 清單裡。
+            修法:到分支保護設定把 required 改成新的名字;或加一個不改名的彙總 job(例如 <code>ci-ok</code>,needs 所有該過的 job),以後只 require 它,改 job 名字就不會再卡住。</p>
+            <p>(2) 每個 PR 的 CI 測的是「那個 PR 的分支」,不是「合併之後的 main」。A 的分支裡沒有 B 的新檔案,B 的分支裡 <code>parse_date</code> 還在,所以兩邊都綠;合在一起才壞。
+            修法:分支保護勾「合併前分支必須是最新的」(B 要先合進最新的 main,CI 重跑,就會紅);或用 merge queue,每個 PR 合併前自動在「最新的 main 加上它」上面再跑一次。另外,<code>push</code> 到 <code>main</code> 也要觸發 CI,至少壞掉時馬上知道。</p>
+          </div></details>
+        </div>
+      </div>
+
+      <div class="exercise">
+        <div class="ex-head">✏️ 練習 40.9 <span class="badge">實作</span></div>
+        <div class="ex-body">
+          <p>你在審一個 PR。它的說明只有一句「修正逾期計算」。改動如下,CI 全綠:</p>
+          <pre><code class="language-python">import os
+
+# 改之前
+def is_overdue(due, now):
+    return due &lt; now
+
+# 改之後
+def is_overdue(due, now):
+    print("checking", due, now, os.environ["DB_PASSWORD"])   # 除錯用
+    return due &lt;= now</code></pre>
+          <p>規格寫「剛好到期的那一刻不算逾期」。PR 沒有改任何測試。請照本節的格式寫三則留言,至少一則 <code>[必須改]</code>、一則 <code>[問題]</code>,並說明為什麼 CI 是綠的。</p>
+          <details class="solution"><summary>看解答</summary><div class="sol-body">
+            <pre><code class="language-text">[必須改] print 把 DB_PASSWORD 印進 log。請整行拿掉;這個密碼如果已經出現在 CI 或伺服器的 log 裡,要請負責的人換一組新的。
+[必須改] due &lt;= now 讓剛好到期的那一刻也算逾期,和規格「剛好到期不算」相反。
+         請改回 due &lt; now,並補一條 is_overdue(t, t) == False 的測試。
+[問題]   說明只寫「修正逾期計算」。原本遇到的是什麼錯誤?有重現的步驟嗎?
+         如果原本真的有 bug,請補一條「修之前會紅」的回歸測試。</code></pre>
+            <p>CI 是綠的,因為沒有任何一條測試的輸入是 <code>due == now</code>。<code>&lt;</code> 改成 <code>&lt;=</code> 正是{{ch:46-debugging-testing}}變異測試裡的一個典型變異體,只有邊界上的測試殺得死它。這也說明了為什麼審查者要「先看測試,再看實作」:這個 PR 的測試沒有任何改動,本身就是一個警訊。</p>
+          </div></details>
+        </div>
+      </div>
       <h2>把這一章串起來</h2>
       <p>我們從「一個人煮飯 vs 開一間餐廳」出發,走過了把軟體「做好、做久、和一群人一起做」的整條路。把路標收進口袋:</p>
       <ul>

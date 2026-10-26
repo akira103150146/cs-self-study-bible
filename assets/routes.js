@@ -90,6 +90,7 @@ window.BOOK_ROUTES = [
     "pages": [],
     "chapters": [
       "25-networking",
+      "129-http-rest-api",
       "37-databases",
       "07-design-recipe",
       "08-oop",
