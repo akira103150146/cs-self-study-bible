@@ -1352,37 +1352,55 @@ print(dijkstra(graph, 'A'))
       </p>
       <p>
         把證明寫成程式:下面的版本在兩個地方放 <code>assert</code>,都是 $O(1)$ 的檢查。第一,彈出的距離不會比上一個小;
-        第二,鬆弛到已定案的點時,一定不會更短。優先佇列直接用本章前面的 <code>heapq</code> 寫法(距離變短就再 push 一筆,
-        舊的那筆彈出時跳過),只多一個 <code>done</code> 集合記下哪些點已經定案。手算表裡「每點一筆、decrease_key」的寫法,
-        是 Lab 要你自己用 <code>PriorityQueue</code> 寫的,這裡不寫:
+        第二,鬆弛到已定案的點時,一定不會更短。優先佇列先用一個慢的替身 <code>SlowPQ</code>(方法和 decrease_key 寫法要用的一樣,
+        但 <code>pop_min</code> 是 $O(n)$),只拿來對手算的答案:
       </p>
-      <pre><code class="language-python">import heapq
+      <pre><code class="language-python">class SlowPQ:
+    """和 Lab 的優先佇列同樣的幾個方法,但 pop_min 是 O(n):只拿來對答案。"""
+    def __init__(self):
+        self.pri = {}                          # item → priority
+    def push(self, item, priority):
+        self.pri[item] = priority
+    def pop_min(self):
+        item = min(self.pri, key=self.pri.get)
+        return item, self.pri.pop(item)
+    def decrease_key(self, item, priority):
+        assert priority &lt;= self.pri[item]      # 只能改小
+        self.pri[item] = priority
+    def __contains__(self, item):
+        return item in self.pri
+    def __len__(self):
+        return len(self.pri)
 
 def dijkstra_checked(graph, start):
-    dist, done = {start: 0}, set()
-    pq = [(0, start)]
+    dist, prev, done = {start: 0}, {start: None}, set()
+    pq = SlowPQ()
+    pq.push(start, 0)
     last = 0
     while pq:
-        d, u = heapq.heappop(pq)
-        if u in done:                          # 舊的一筆(後來找到更短的路):跳過
-            continue
+        u, d = pq.pop_min()
         assert d &gt;= last, '定案的距離要由小到大'
         last = d
-        done.add(u)                            # 第一次彈出 = 定案
+        done.add(u)                            # 彈出 = 定案
         for v, w in graph[u]:
             nd = d + w
             if v in done:                      # 已定案的點不能再變短
                 assert nd &gt;= dist[v], f'{v} 已定案,卻找到更短的路'
                 continue
-            if nd &lt; dist.get(v, float('inf')):
-                dist[v] = nd
-                heapq.heappush(pq, (nd, v))
-    return dist
+            if v not in pq:                    # 第一次碰到 v
+                dist[v], prev[v] = nd, u
+                pq.push(v, nd)
+            elif nd &lt; dist[v]:                 # 找到更短的路:改佇列裡那一筆
+                dist[v], prev[v] = nd, u
+                pq.decrease_key(v, nd)
+    return dist, prev
 
 g = {'A': [('B', 7), ('C', 2)], 'B': [('D', 1)],
      'C': [('B', 3), ('D', 8), ('E', 5)], 'D': [('F', 3)],
      'E': [('D', 2), ('F', 6)], 'F': []}
-print(dijkstra_checked(g, 'A'))   # {'A': 0, 'B': 5, 'C': 2, 'D': 6, 'E': 7, 'F': 9}</code></pre>
+dist, prev = dijkstra_checked(g, 'A')
+print(dist)   # {'A': 0, 'B': 5, 'C': 2, 'D': 6, 'E': 7, 'F': 9}
+print(prev)   # {'A': None, 'B': 'C', 'C': 'A', 'D': 'B', 'E': 'C', 'F': 'D'}</code></pre>
 
       <div class="exercise">
         <div class="ex-head">✏️ 手算 30.6 <span class="badge">手算</span></div>
@@ -1405,7 +1423,7 @@ print(dijkstra_checked(g, 'A'))   # {'A': 0, 'B': 5, 'C': 2, 'D': 6, 'E': 7, 'F'
             <code>assert nd &gt;= dist[v]</code> 失敗:<code>AssertionError: B 已定案,卻找到更短的路</code>。證明裡斷掉的就是這一步:
             從 C 到 B 的那段路權重是負的,δ(y) ≤ δ(u) 不成立。</p>
             <p>例子都對 ≠ 敘述為真:這張圖如果把 −2 改成 +2,Dijkstra 就完全正確,只試幾張正權的圖是看不出問題的。
-            另外,本章前面那個 <code>dijkstra</code>(沒有 <code>done</code> 集合)沒有「定案後不再更新」這條規則,B 變短時會再丟一筆進堆積、重新處理 B,
+            另外,本章上面用 <code>heapq</code> 的版本沒有「定案後不再更新」這條規則,B 變短時會再丟一筆進堆積、重新處理 B,
             所以在這張小圖上碰巧算對;代價是同一個點可能被處理很多次,最壞情況會慢到指數級。要處理負權邊,請用 Bellman-Ford。</p>
           </div></details>
         </div>
@@ -1463,7 +1481,7 @@ None</code></pre>
           <p><strong>和本章範例不同的地方:</strong></p>
           <ul>
             <li>本章的範例是一組函式,吃 dict 形式的鄰接串列;Lab 是 <code>Graph</code> 類別,用 <code>add_edge</code> 建圖。</li>
-            <li>本章的 <code>dijkstra</code> 與 <code>dijkstra_checked</code> 都是函式,用 <code>heapq</code>,距離變短時再 push 一筆新的(舊的跳過),只回傳 <code>dist</code>;「每點一筆、<code>decrease_key</code>」的寫法只出現在手算表裡。Lab 的 <code>dijkstra</code> 是方法,不能用 <code>heapq</code>,必須用你的 <code>PriorityQueue</code> 與 <code>decrease_key</code>,而且要回傳 <code>prev</code>。</li>
+            <li>本章的 <code>dijkstra</code> 用 <code>heapq</code>,距離變短時再 push 一筆新的(舊的跳過);Lab 不能用 <code>heapq</code>,必須用你的 <code>PriorityQueue</code> 與 <code>decrease_key</code>。</li>
             <li>本章的 <code>dfs</code> 是遞迴版;Lab 的 <code>dfs_order</code> 不能用遞迴(10<sup>5</sup> 個點的鏈不能 <code>RecursionError</code>),順序要和遞迴版一樣。</li>
             <li>本章的 <code>topo_sort_kahn</code> 用 <code>deque</code>,有環時丟 <code>ValueError</code>;Lab 每次取最小的點,有環回傳 <code>None</code>,無向圖才丟 <code>ValueError</code>。</li>
             <li>Lab 要擋負權邊(<code>ValueError</code>),並且要有 <code>shortest_path</code>。</li>
@@ -1478,7 +1496,7 @@ None</code></pre>
             <li data-group="graph.errors">☐ <strong>錯誤處理</strong>〔隱藏檢定〕負權邊要 ValueError;起點不在圖上要 KeyError;無向圖做 topo_sort 要 ValueError。</li>
             <li data-group="graph.deep">☐ <strong>很深的圖</strong>〔隱藏檢定〕10<sup>5</sup> 個點連成一條鏈:dfs_order 不能 RecursionError。</li>
             <li data-group="graph.uses-heap">☐ <strong>用自己的優先佇列</strong>〔隱藏檢定〕dijkstra 與 topo_sort 必須用 libds.heap 的 PriorityQueue;dijkstra 要用 decrease_key 更新距離(檢定會檢查呼叫的順序)。</li>
-            <li data-group="graph.perf">☐ <strong>效能</strong>〔隱藏檢定〕走訪 O(n+m)、Dijkstra O(m log n)。門檻:n=10<sup>5</sup>、m=3×10<sup>5</sup>:dijkstra 3 秒內;bfs、dfs_order、topo_sort 各 1 秒內。這個門檻來自之後的整合題「路網導航」(dijkstra 一次 3 秒內＋10<sup>4</sup> 筆路線查詢 0.5 秒內,合計 3.5 秒)、任務線 puzzle「解謎 AI」的 Boss 戰「十五數碼」、面試 Boss 的「全套檢定:圖與最短路徑」。</li>
+            <li data-group="graph.perf">☐ <strong>效能</strong>〔隱藏檢定〕走訪 O(n+m)、Dijkstra O(m log n)。門檻:n=10<sup>5</sup>、m=3×10<sup>5</sup>:dijkstra 3 秒內;bfs、dfs_order、topo_sort 各 1 秒內。這個門檻來自任務線 puzzle「解謎 AI」的任務「狀態空間 BFS」的任務目標「效能」(3×3 的 distance_table,全部 181,440 個狀態,3 秒內)、面試 Boss 的「全套檢定:圖與最短路徑」。</li>
           </ul>
           <p><strong>規則:</strong>必須 <code>from libds.heap import PriorityQueue</code>(用你自己的優先佇列);不能 <code>import heapq</code>。<code>dijkstra</code> 更新距離時要呼叫 <code>decrease_key</code>,檢定會檢查呼叫的順序。</p>
           <p><strong>之後會用在:</strong>任務線 puzzle 的任務「狀態空間 BFS」(這個任務的 Lab 之後會補在本章);任務線 agent 的任務「PageRank」(<a href="126-capstone-search-engine.html">第 121 章</a>;這個任務的 Lab 之後會補在那一章);面試 Boss 的「全套檢定:圖與最短路徑」(連同它用到的 <code>heap.py</code>)。之後的整合題「路網導航」「選課排程」也會用它(還不是 Boss 戰)。</p>
@@ -1873,10 +1891,10 @@ print(inversions((1, 2, 3, 5, 4, 0)), (1, 2, 3, 5, 4, 0) in reach)   # 1 False</
 <pre><code class="language-text">puzzle(任務線):解謎 AI
 ├─ Boss 戰 🏆 解謎 AI
 │    十五數碼:10 個 4×4 盤面(最短 32–42 步)＋2 個無解盤面,步數最短,
-│              每盤 3 秒、展開 ≤ 1.5×10^5 個節點          ← 用任務 1、2
+│              每盤 9 秒、展開 ≤ 1.5×10^5 個節點          ← 用任務 1、2
 │    數獨:20 題隱藏題,每題 solve 與 count_sudoku 各 2 秒   ← 用任務 3
-│    不敗棋手:5 欄×4 列的四子棋 20 局,每一步都是最佳著,
-│              每局 4 秒                                   ← 用任務 4
+│    不敗棋手:5 欄×4 列的四子棋 20 局(開局都挑你不會輸的),
+│              每一步都是最佳著,每局 9 秒                  ← 用任務 4
 ├─ 任務 1 狀態空間 BFS  puzzle/bfs.py      ← 第 29 章 Lab(本章)
 │    公開:盤面與移動、最少步數、整個狀態空間、有沒有解
 │    隱藏:奇偶規則全對、邊界、錯誤處理、不先建圖、用自己的圖、
@@ -1885,14 +1903,14 @@ print(inversions((1, 2, 3, 5, 4, 0)), (1, 2, 3, 5, 4, 0) in reach)   # 1 False</
 ├─ 任務 2 A* 搜尋       puzzle/astar.py    ← 第 105 章 Lab
 │    公開:Manhattan 距離、通用 A*、最短解、啟發式不高估
 │    隱藏:重新打開、邊界、無解的盤面、錯誤處理、用自己的優先佇列、
-│          展開的節點數、效能(4×4 每盤 3 秒內)
+│          展開的節點數、效能(4×4 每盤 6 秒內)
 │    用到:任務 1、libds 的優先佇列 libds/heap.py(第 28 章 Lab)
 ├─ 任務 3 CSP 回溯      puzzle/csp.py      ← 第 105 章 Lab
 │    公開:一般的 CSP、數獨、數解
 │    隱藏:邊界、錯誤處理、先選最難的變數、效能(每題 2 秒內)
 └─ 任務 4 minimax       puzzle/minimax.py  ← 第 52 章 Lab
      公開:四子棋規則、局面的分數、最佳著
-     隱藏:真的有剪枝、邊界、錯誤處理、效能(每個局面 2 秒內)</code></pre>
+     隱藏:真的有剪枝、邊界、錯誤處理、效能(每個局面 3 秒內)</code></pre>
           <p><strong>A* 要用你自己的優先佇列:</strong>任務 2 必須 <code>from libds.heap import PriorityQueue</code>,用的是第 28 章的 Lab「優先佇列」(要有 <code>decrease_key</code>)。那個任務還沒過,A* 的任務不會出現。</p>
           <p><strong>順序:</strong>任務 1 → 2 要照順序(A* 用任務 1 的盤面與 <code>distance_table</code>);任務 3、4 不用前面的零件,可以先做。章的順序是第 29 章 → 第 105 章 → 第 52 章。每個任務目標的一行說明,在<a href="route-ai.html#mainline-puzzle">AI 路線導讀</a>。</p>
         </div>
@@ -1994,7 +2012,7 @@ True
             <li data-group="bfs.errors">☐ <strong>錯誤處理</strong>〔隱藏檢定〕rows 或 cols 小於 2、apply 出界或不認得的字、is_solvable 收到不是排列的 state(數字重複、缺數字、長度不對),都要 ValueError。</li>
             <li data-group="bfs.implicit">☐ <strong>不先建圖</strong>〔隱藏檢定〕bfs 不能先建整張圖:4×4 盤面(10<sup>13</sup> 個狀態)上最短 15 步以內的盤面要 1 秒內解出。</li>
             <li data-group="bfs.uses-graph">☐ <strong>用自己的圖</strong>〔隱藏檢定〕state_graph 回傳 libds.graph 的 Graph(無向);distance_table 呼叫它的 bfs(檢定會檢查)。</li>
-            <li data-group="bfs.perf">☐ <strong>效能</strong>〔隱藏檢定〕每個狀態只進佇列一次(visited 在入列時標記);建圖 O(狀態數＋邊數)。門檻:3×3 的 distance_table(全部 181,440 個狀態)3 秒內;3×3 最難的盤面(31 步)bfs 1 秒內;4×4 上 15 步的盤面 bfs 1 秒內。這個門檻來自任務「A* 搜尋」的任務目標「啟發式不高估」:它要用你的 distance_table 算出 3×3 每一個盤面的真實步數,拿來檢查你的啟發式。</li>
+            <li data-group="bfs.perf">☐ <strong>效能</strong>〔隱藏檢定〕每個狀態只進佇列一次(visited 在入列時標記);建圖 O(狀態數＋邊數)。門檻:3×3 的 distance_table(全部 181,440 個狀態)3 秒內;3×3 最難的盤面(31 步)bfs 1 秒內;4×4 上 15 步的盤面 bfs 1 秒內。這個門檻來自任務「A* 搜尋」的任務目標「啟發式不高估」:它要用你的 distance_table 算出 3×3 每一個盤面的真實步數,拿來檢查你的啟發式;也來自 Boss 戰「十五數碼」(每盤 9 秒):distance_table 呼叫 <code>neighbors</code> 181,440 次,Boss 每盤最多 1.5×10<sup>5</sup> 次,所以這 3 秒也管住了你的 <code>neighbors</code> 有多快。</li>
           </ul>
           <p><strong>規則:</strong>必須 <code>from libds.graph import Graph</code>(<code>state_graph</code> 用你自己的圖);佇列可以用 <code>collections.deque</code>。</p>
           <p><strong>之後會用在:</strong><a href="110-classical-ai.html#lab-puzzle-astar">第 105 章的 A* 搜尋</a>(用你的 <code>SlidingPuzzle</code>,拿你的 <code>distance_table</code> 檢查啟發式);Boss 戰「十五數碼」(用你的 <code>SlidingPuzzle</code> 與 <code>is_solvable</code>)。</p>
