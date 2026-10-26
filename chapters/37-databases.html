@@ -1706,6 +1706,80 @@ borrow_immediate
         </div>
       </div>
 
+      <h3 id="sqlite-shared-connection">一條連線給好幾條執行緒用:check_same_thread 與鎖</h3>
+      <p>
+        <code>borrow_race.py</code> 是「每個人一條連線、連到同一個檔案」。下面的 Lab 不一樣:API 掛在多執行緒的伺服器上,
+        <strong>同一個</strong> <code>LibraryRepo</code> 物件會被好幾條執行緒同時呼叫,而公開範例用的是 <code>":memory:"</code>。
+        這時有三件事要知道:
+      </p>
+      <ul>
+        <li><strong><code>":memory:"</code> 不能每條執行緒各開一條連線。</strong>每開一條 <code>":memory:"</code> 連線,就是一個全新的、空的資料庫;別的連線看不到你建的表。</li>
+        <li><strong>預設的 <code>check_same_thread=True</code></strong>:連線只准建立它的那條執行緒用,別的執行緒拿來用會丟 <code>sqlite3.ProgrammingError</code>。要共用,就在 <code>connect</code> 時寫 <code>check_same_thread=False</code>。</li>
+        <li><strong>共用一條連線,交易也是共用的。</strong>A 執行緒 <code>BEGIN</code> 還沒 <code>COMMIT</code>,B 執行緒又 <code>BEGIN</code>,會得到
+        <code>OperationalError: cannot start a transaction within a transaction</code>;就算沒出錯,B 的 SQL 也會混進 A 的交易裡。
+        所以要用一把 <code>threading.Lock</code> 包住<strong>整個交易</strong>(從 <code>BEGIN</code> 到 <code>COMMIT</code> 或 <code>ROLLBACK</code>),不是只包住某一行 SQL。</li>
+      </ul>
+<pre><code class="language-python"># shared_conn.py —— 好幾條執行緒共用「一條」SQLite 連線
+import sqlite3, threading
+
+# 1) :memory: 每開一條連線,就是一個全新的、空的資料庫
+a = sqlite3.connect(":memory:")
+a.execute("CREATE TABLE books (id INTEGER PRIMARY KEY, copies INTEGER)")
+b = sqlite3.connect(":memory:")
+print("另一條連線看得到 books 嗎?",
+      b.execute("SELECT COUNT(*) FROM sqlite_master WHERE name = 'books'").fetchone()[0] == 1)
+
+# 2) 預設 check_same_thread=True:別的執行緒拿這條連線來用會被擋
+def use_from_worker():
+    try:
+        a.execute("SELECT 1")
+    except sqlite3.ProgrammingError:
+        print("工作執行緒用主執行緒的連線:ProgrammingError")
+t = threading.Thread(target=use_from_worker); t.start(); t.join()
+
+# 3) 修好的寫法:一條連線(check_same_thread=False)+ 一把鎖包住「整個交易」
+class Shelf:
+    def __init__(self, copies):
+        self.conn = sqlite3.connect(":memory:", check_same_thread=False, isolation_level=None)
+        self.lock = threading.Lock()
+        self.conn.execute("CREATE TABLE books (id INTEGER PRIMARY KEY, copies INTEGER)")
+        self.conn.execute("CREATE TABLE loans (id INTEGER PRIMARY KEY, book_id INTEGER)")
+        self.conn.execute("INSERT INTO books VALUES (1, ?)", (copies,))
+
+    def borrow(self, gate):
+        gate.wait()                          # 大家同時開始
+        with self.lock:                      # BEGIN 到 COMMIT 之間只有一條執行緒
+            self.conn.execute("BEGIN")
+            try:
+                (avail,) = self.conn.execute(
+                    "SELECT copies - (SELECT COUNT(*) FROM loans WHERE book_id = 1) "
+                    "FROM books WHERE id = 1").fetchone()
+                if avail &lt;= 0:
+                    self.conn.execute("ROLLBACK")
+                    return False
+                self.conn.execute("INSERT INTO loans (book_id) VALUES (1)")
+                self.conn.execute("COMMIT")
+                return True
+            except BaseException:
+                self.conn.execute("ROLLBACK")
+                raise
+
+shelf = Shelf(copies=2)
+gate = threading.Barrier(5)
+ok = []
+ts = [threading.Thread(target=lambda: ok.append(shelf.borrow(gate))) for _ in range(5)]
+for t in ts: t.start()
+for t in ts: t.join()
+print("5 個人同時借 2 本:借到", ok.count(True), "人,沒借到", ok.count(False), "人")</code></pre>
+<pre><code class="language-text">另一條連線看得到 books 嗎? False
+工作執行緒用主執行緒的連線:ProgrammingError
+5 個人同時借 2 本:借到 2 人,沒借到 3 人</code></pre>
+      <p>
+        鎖讓「查本數、新增借閱」整段一次只有一條執行緒在做,效果和 <code>BEGIN IMMEDIATE</code> 一樣是把交錯排除掉;差別是
+        <code>BEGIN IMMEDIATE</code> 擋的是<strong>不同連線</strong>,鎖擋的是<strong>同一條連線上的不同執行緒</strong>。
+        連到檔案、每條執行緒各開一條連線也可以(那時就回到 <code>borrow_race.py</code> 的寫法);Lab 用一條連線加一把鎖,是因為 <code>":memory:"</code> 只能這樣。
+      </p>
+
       <h3 id="lab-bookapi-repo">本章 Lab:借書資料庫 bookapi/repo.py</h3>
       <div class="callout lab" data-task="bookapi/repo">
         <div class="ico">🧪</div>
@@ -1744,7 +1818,7 @@ class LibraryRepo:
         available = copies - 還沒還的借閱數,每次算出來。"""
 
     def list_books(self, q=None, limit=20, offset=0) -&gt; list[dict]:
-        """照 id 由小到大;q:書名或作者包含 q(照字面比對)。"""
+        """照 id 由小到大;q:書名或作者包含 q(英文不分大小寫,只限 ASCII;%、_、引號照字面)。"""
 
     def update_book(self, book_id, **fields) -&gt; dict:
         """只收 title、author、isbn、copies;沒給欄位就什麼都不改。回傳改完的書。"""
@@ -1811,7 +1885,7 @@ class LibraryRepo:
             <li>本章的 <code>library.sql</code> 是一份建表加塞資料的腳本;Lab 的 <code>schema.sql</code> 只建表(和你決定要建的索引),由 <code>LibraryRepo</code> 建立時執行,要能重複執行;資料一律經過方法新增。</li>
             <li>本章直接下 SQL,錯誤是 <code>sqlite3.IntegrityError</code>;Lab 要把它換成 <code>NotFound</code> 或 <code>Conflict</code>,呼叫的人看不到 SQLite。</li>
             <li>本章的 <code>constraints.py</code> 示範了外鍵檢查預設是關的;Lab 的每一條連線都要打開它。</li>
-            <li>本章的 <code>borrow_race.py</code> 每個人一條連線、時間寫死;Lab 的 <code>borrow</code> 要自己算 <code>due_at</code>,在同一個交易裡檢查本數,而且同一個 <code>LibraryRepo</code> 會被好幾條執行緒同時呼叫。</li>
+            <li>本章的 <code>borrow_race.py</code> 每個人一條連線、時間寫死;Lab 的 <code>borrow</code> 要自己算 <code>due_at</code>,在同一個交易裡檢查本數,而且同一個 <code>LibraryRepo</code> 會被好幾條執行緒同時呼叫:照<a href="#sqlite-shared-connection">「一條連線給好幾條執行緒用」</a>的寫法,只開一條連線(<code>check_same_thread=False</code>),每個方法用 <code>threading.Lock</code> 包住整個交易;<code>":memory:"</code> 不能每條執行緒各開一條。</li>
             <li>本章的 schema 沒有索引;Lab 有效能門檻,要你想想哪些欄位要建索引。</li>
             <li>Lab 多了本章沒有的操作:搜尋與分頁(<code>list_books</code>)、只改給的欄位(<code>update_book</code>)、刪書時檢查有沒有人借。</li>
           </ul>
@@ -1820,7 +1894,8 @@ class LibraryRepo:
             <li data-group="repo.crud">☐ <strong>基本操作</strong>〔公開〕書與會員的新增、查詢、更新、刪除,借書、還書、逾期查詢的公開範例(now 固定)。</li>
             <li data-group="repo.constraints">☐ <strong>約束</strong>〔隱藏檢定〕重複的 isbn 或 email、本數小於 0、copies 改得比借出中的本數少、找不到的 id、沒有可借本數、還過的再還、刪除有人借的書,都要丟對的例外(NotFound 或 Conflict);書和會員都不存在時,丟的是書的 NotFound。</li>
             <li data-group="repo.time">☐ <strong>時間邊界</strong>〔隱藏檢定〕剛好到期不算逾期、已還的不算、days 參數、跨月跨年的日期。</li>
-            <li data-group="repo.search">☐ <strong>搜尋與分頁</strong>〔隱藏檢定〕q 比對書名與作者(子字串;不考英文大小寫)、列表照 id 排序、offset 超過結尾回傳空串列、q 裡有引號、% 或 _ 要照字面比對(參數化查詢)。</li>
+            <li data-group="repo.search">☐ <strong>搜尋與分頁</strong>〔隱藏檢定〕q 用子字串找書名與作者(英文不分大小寫,只限 ASCII)、列表照 id 排序、offset 超過結尾回傳空列表、q 裡有引號、% 或 _ 要照字面找(參數化查詢)。</li>
+            <li data-group="repo.threads">☐ <strong>多執行緒借還</strong>〔隱藏檢定〕同一個 LibraryRepo(:memory:)給 8 條執行緒同時借還同一本書:不能丟 ProgrammingError 或 OperationalError,借出中的本數不超過 copies,最後的 available 對參考模型。</li>
             <li data-group="repo.perf">☐ <strong>效能</strong>〔隱藏檢定〕想想哪些欄位要建索引。效能:1 萬本書、10 萬筆借閱的資料庫上:連續 1,000 次 get_book 1 秒內、overdue() 0.5 秒內。這個門檻來自檢查點 2 的 Boss 戰「借還負載」:100 個客戶端同時各借還 10 次要在 10 秒內做完,每一次借還都要查好幾次資料層。</li>
           </ul>
           <p><strong>之後會用在:</strong><a href="129-http-rest-api.html#lab-bookapi-api">第 41 章的借書 REST API</a>(<code>NotFound</code> 變成 404、<code>Conflict</code> 變成 409);檢查點 2 的 Boss 戰「公開 API 測試」「邊界」「錯誤處理」「資料一致」「規格細節」「借還負載」;組隊副本 R1「圖書館借書 API」;檢查點 3 的「攻擊套件」(SQL injection 擋不擋得住,就看這裡的參數化查詢;那一章還沒寫)。</p>
