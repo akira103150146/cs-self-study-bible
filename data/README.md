@@ -60,9 +60,9 @@ mainlines:
 | mainline | `steps` | 不產生零件的關卡或答題(例:CTF 的終端機尋寶) |
 | acceptance | `visibility` | `public`/`hidden`(預設)/`teacher`(老師核可) |
 | acceptance | `perf`、`perf_ref`、`checkpoint` | 驗收檢查的效能需求與參考解實測值;屬於哪個檢查點 |
-| acceptance、task、future_acceptance | `requires_layer` | 判題映像要多裝的「層」(目前只有 `numpy`,見待決事項 12);沒寫＝一般沙盒就能判 |
+| acceptance、task、future_acceptance | `requires_layer` | 判題映像要多裝的「層」(目前只有 `numpy`,見待決事項 13);沒寫＝一般沙盒就能判 |
 | task | `lab_no`、`anchor`、`gap`、`gap_title`、`also_chapters`、`optional`、`status`、`used_by`、`note` | Lab 編號、h3 的 id、缺口、參考章、選修、覆寫狀態、誰接著用 |
-| task | `interface`、`internal` | **書端定的介面**(章的 Lab 方框照抄;9Jang 的 `task.yaml` `interface` 應一致)、規格規定的內部表示法 |
+| task | `interface`、`internal`、`provided` | **書端定的介面**(章的 Lab 方框照抄;9Jang 的 `task.yaml` `interface` 應一致)、規格規定的內部表示法、C 任務的規格標頭(起始碼給,判題用規格版;見待決事項 17) |
 | task | `forbid`、`forbid_calls`、`forbidAttrTypes`、`require` | import 規則與限制(對應 9Jang `task.yaml` 的 `imports`) |
 | task | `invariants` | 不變式(9Jang 設計 §3.3b):`{name, kind, symbol, sabotage?{attr, breaks}}`;`name` 也是一個 `kind: invariant` 的測試組 |
 | group | `perf_ref`、`perf_basis`、`runner` | 參考解實測值;`estimate`＝還沒量;`py-io`/`service`(借書 API 一個任務有兩種 runner) |
@@ -97,6 +97,10 @@ mainlines:
 14. **A1 的資料與判題時間**:v1 用 UCI 8×8 手寫數字(CC BY 4.0,出處寫在 yaml 的 nn `note`;書與任務 README 都要附出處)。公開 4,000 張放任務資料夾,隱藏 1,620 張只在 9Jang 的任務套件,切法的 seed 不寫進書。限制:這份資料整份在網路上公開,有心的人可以拿全部資料扣掉公開的 4,000 張、把答案寫死在程式裡;隱藏測試集只擋「不小心看到答案」,擋不住刻意查表。可以考慮:AST 檢查大型常數表、老師抽查,或改用老師班上收集的手寫數字(同樣的 8×8 前處理)當隱藏集。另外 `boss.mnist` 一個案例要在沙盒裡訓練(時限 180 秒 CPU,參考解 15 個 epoch 約 20 秒;時限照「每個 epoch 卡在 mlp.perf 的 6 秒 × 15 個 epoch ≤ 時限的一半」推出來),比一般案例長很多,請 9Jang 確認單一案例的時限上限(§5.4 的牆鐘是 2×tl+1)。tree.yaml 的專題名稱「只用 NumPy 手刻神經網路辨識手寫數字」與 verify「隱藏測試集準確率 ≥ 97%」:v1 不用 NumPy,門檻改成 96.5%(理由見 yaml nn 的 `note`:固定切法上參考 MLP 100 個 seed 最低 97.16%,原本的 97% 在隨機切法上有 8–21% 的組合過不了),**tree.yaml 的 verify 要同步改成 ≥ 96.5%(9Jang 的檔,要老師／9Jang 改)**;9Jang 的 `lab:verify` 請在實際的隱藏切法上用參考解跑多個 seed,確認最差的 seed 也比 96.5% 高 0.3 個百分點以上;建議 9Jang 改名「不用框架手刻神經網路辨識手寫數字」,或等 AI 層定案後用 `mnist-28`。
 15. 理論任務線(hzip)的考卷:tree.yaml 專題 `verify` 裡的「英文參數化考卷」不判零件,寫成 `visibility: teacher` 的驗收檢查(`hzip/boss.exam`),由手算卡的考場出題;9Jang 有考卷型 Boss 之後改成自動。可以自動判的理論驗收(蒙地卡羅對公式、Huffman 對熵)照一般 Boss 寫(`hzip/boss.prob-final`)。
 16. 零件檔不能和它的零件庫資料夾同名(例:`hzip/hzip.py`):用 `python3 hzip/hzip.py` 執行時,`import hzip` 會找到檔案自己而不是套件。命令列零件一律叫 `<資料夾>/cli.py`,用 `python3 -m <資料夾>.cli` 執行。
+17. C 任務(emu 任務線)的規格標頭:任務多一個書端欄位 `provided`(例 `emu/bus.h`、`chip8/chip8.h`),是規格的一部分。起始碼給這些檔,判題一律用規格版(學生改了也不算);`files` 只列學生要寫的檔(`emu/bits.h`、`emu/bus.c`、`chip8/cpu.c`、`chip8/display.c`)。`require: ["emu/bus.h"]` 的意思是「必須 include 這個標頭,記憶體存取經過 emu/bus」(實際由 MMIO 探針的測試組 `cpu.uses-bus` 判斷)。
+18. `bus.ub` 測試組要 9Jang 的 `c-io` runner 支援「同一組案例用 `-fsanitize=undefined,address -fno-sanitize-recover=all` 另外編譯一次」(task.yaml 的組設定加編譯參數);做不到之前,這組先標成只在 `lab:verify` 跑、或暫時拿掉。
+19. `chip8/cpu` 的判題連結我們的參考 `display.c`(00E0、DXYN、按鍵事件),因為 `chip8/display` 是下一個任務;`chip8/display` 判題才換成學生的。9Jang 的 `compileSources` 要能放「上游元件以外的參考檔」(或把參考 display 併進驅動程式)。
+20. tree.yaml 的 `em-emu-chip8` 先修沒有 `em-c-pointers`,`lab` 說學生用 Python 或 C++;書端定成 C 並且用到 `emu/bus`(同任務線的 order 檢查是過的)。建議 9Jang 把 `em-c-pointers` 加進 `em-emu-chip8` 的先修,並把 `lab` 改成 C。
 
 ## 檢查
 

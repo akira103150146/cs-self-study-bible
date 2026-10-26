@@ -9,7 +9,7 @@
 # 書端多加的欄位(9Jang 不讀,data/README.md 有完整清單):頂層 date、planned_chapters、node_extra、exam_lines;
 #   mainline 的 code、also_tracks、checkpoints、level、status、summary、note、future_acceptance(perf.budget)、steps;
 #   acceptance 的 visibility、perf、checkpoint;task 的 lab_no、anchor、gap、gap_title、also_chapters、optional、status、
-#   used_by、note、interface、internal、forbid、forbid_calls、forbidAttrTypes、require、invariants;group 的 perf_ref、perf_basis、runner。
+#   used_by、note、interface、internal、provided、forbid、forbid_calls、forbidAttrTypes、require、invariants;group 的 perf_ref、perf_basis、runner。
 #
 # 對照(老師 2026-10-25):主線專題＝任務線;零件＝任務;測試組＝任務目標;公開＝test／F5;隱藏檢定＝submit;
 #   整合測試＝Boss 戰。由上而下:先定 Boss 戰,再拆零件;每組測試寫 requiredBy(是哪個 Boss 或下游測試組需要它)。
@@ -38,8 +38,6 @@ date: 2026-10-25
 
 planned_chapters:
   131-security-law-ethics: {gap: G55, title: 動手之前:資安的法律與倫理}
-  133-c-deep-dive: {gap: G43, title: C 深入}
-  134-chip8-emulator: {gap: G49-1, title: CHIP-8 模擬器}
   135-riscv-assembly: {gap: G32, title: RV32I 組合語言}
   136-verilog: {gap: G34, title: Verilog}
   137-verification-cocotb: {gap: G35, title: cocotb 驗證}
@@ -561,6 +559,7 @@ mainlines:
       anchor: lab-hack-emulator
       optional: true
       used_by: []
+      note: "選修。原本 requiredBy 指到 emu/boss.chip8-rom,但那個 Boss 沒有 consumes 它(這是 Python 選修任務,C 版的 CHIP-8 連結不到),2026-10-26 改指到 hack 自己的 boss.own-program(用自己的模擬器跑、除錯互動程式);used_by 不列 boss.own-program:那個 Boss 沒有 consumes 這個選修零件(書上的「之後會用在」寫成「可以用它跑、除錯」);和 CHIP-8 的關係只是「主迴圈可以參考」,寫在 chip8/cpu 的 note 與 also_chapters。"
       groups:
         - {id: emulator.public, name: 公開程式, kind: function, visibility: public, requiredBy: [boss.own-program], description: "跑公開的 .hack 程式,最後的 RAM 對參考模擬器。"}
         - {id: emulator.full, name: 指令全集, kind: edge, visibility: hidden, requiredBy: [boss.own-program], description: "所有 28 種 comp、8 種跳躍、螢幕與鍵盤的記憶體映射;隱藏程式最後的 RAM 與執行步數對參考模擬器。"}
@@ -1491,6 +1490,7 @@ mainlines:
           perf_ref: "distance_table 0.78 秒(建圖 0.57＋Graph.bfs 0.13,約 100 MB);31 步 bfs 0.22 秒;4×4 15 步 bfs 0.10 秒。distance_table 呼叫 neighbors 181,440 次;Boss 十五數碼每盤最多 1.5×10^5 次(0.83 倍),所以這裡的 3 秒也管住了 neighbors 的速度"
           requiredBy: [astar.admissible, boss.solve-15]
 
+# ═════════════════════════════ E1 emu(CHIP-8 段詳細;GB／GBA 還是 outline) ═════════════════════════════
     - id: puzzle/astar
       order: 2
       name: A* 搜尋
@@ -1613,20 +1613,172 @@ mainlines:
   project: proj-em-chip8
   checkpoints: [proj-em-chip8, proj-em-gameboy, proj-em-gba]
   level: CHIP-8 高中可,其餘大學
-  status: outline
-  summary: "用 C 寫 CHIP-8、Game Boy、GBA 三個模擬器,共用同一套記憶體匯流排。純軟體,不用板子。"
-  note: "chip8/cpu、gb/cpu、gba/cpu 的測試組 id 之後要用不同的前綴(例 chip8cpu.*),同一條任務線內不能重複。"
+  status: detailed
+  summary: "用 C 寫 CHIP-8、Game Boy、GBA 三個模擬器,共用同一套記憶體匯流排。純軟體,不用板子。第一段先做 emu/bits.h＋emu/bus.c,再用它們蓋 CHIP-8 的 CPU 與畫面;判題用我們的無頭驅動程式跑自寫的測試 ROM,比對暫存器、記憶體與畫面 hash。"
+  note: "只有 CHIP-8 段(emu/bus、chip8/cpu、chip8/display 與三個 CHIP-8 驗收檢查)是詳細的;gb/cpu、gb/system、gba/cpu 是任務層的 status: outline。測試組 id 的前綴由檢查器規定成任務 id 斜線後面那段,所以 chip8/cpu 用 cpu.<名>;之後 gb/cpu、gba/cpu 要用 cpu.gb-<名>、cpu.gba-<名>,同一條任務線內不能重複。全部用 C(c-io,編譯參數 -std=c17 -Wall -Werror -O2,9Jang 設計 §4.3),檔頭 emu/bus.h、chip8/chip8.h 是規格的一部分(provided:起始碼給,判題用規格版)。測試 ROM 全部自寫,不用第三方 ROM;社群測試組(例:Timendus chip8-test-suite)採 GPL-3.0,不收錄、不拿來判題,只放連結。"
   acceptance:
-    - {id: boss.chip8-rom, name: CHIP-8 隱藏 ROM, checkpoint: proj-em-chip8, consumes: [chip8/cpu, chip8/display], description: "無頭介面跑自寫的隱藏 ROM N 個週期,對照暫存器、記憶體與畫面 hash;面板上能玩。"}
+    - id: boss.chip8-rom
+      name: CHIP-8 隱藏 ROM
+      visibility: hidden
+      checkpoint: proj-em-chip8
+      consumes: [emu/bus, chip8/cpu, chip8/display]
+      description: "我們的無頭驅動程式(c8run)用你的 emu/bus.c、chip8/cpu.c、chip8/display.c 跑 8 支自寫、沒公開過的 ROM(每類指令一支,VIP 與 MODERN 兩種設定都有);每支跑到「跳到自己」(1NNN 跳回同一個位址)或 10^6 個週期,比對 V0–VF、I、PC、SP、堆疊、DT、ST、週期數與 4 KiB 記憶體傾印。"
+      perf: {statement: "8 支 ROM 合計最多 8×10^6 個週期,批改 2 秒內", seconds: 2, n: 8000000}
+    - id: boss.chip8-screen
+      name: CHIP-8 畫面重播
+      visibility: hidden
+      checkpoint: proj-em-chip8
+      consumes: [emu/bus, chip8/cpu, chip8/display]
+      description: "4 支自寫的畫面 ROM(含一支自寫小遊戲配腳本化的按鍵重播),每支用固定的每幀指令數跑 3,600 幀(60 Hz 下 1 分鐘),每 60 幀比對一次 framebuffer hash、VF 與 DT/ST。"
+      perf: {statement: "4 支 ROM 各 3,600 幀、每幀 30 條指令,批改 2 秒內", seconds: 2, n: 14400}
+    - id: boss.chip8-play
+      name: 面板上玩
+      visibility: teacher
+      checkpoint: proj-em-chip8
+      consumes: [emu/bus, chip8/cpu, chip8/display]
+      description: "在終端旁的側邊面板玩一支 ROM(畫面串流、鍵盤從終端送),老師看過核可。ROM 用自寫的,或老師核可、授權清楚(公眾領域/CC0/MIT 之類)的 homebrew;不用授權不明的第三方 ROM。"
     - {id: cp2.gb-rom, name: Game Boy 測試 ROM, checkpoint: proj-em-gameboy, consumes: [gb/cpu, gb/system], description: "CPU、計時器、中斷測試 ROM 印出 Passed;畫面 hash 正確。"}
     - {id: cp3.gba-tests, name: GBA 測試, checkpoint: proj-em-gba, consumes: [gba/cpu], description: "ARM、Thumb、記憶體測試全過(solo 版;完整版是組隊副本)。"}
   tasks:
-    - {id: emu/bus, order: 1, name: 位元與記憶體匯流排, files: [emu/bits.h, emu/bus.c], language: c, chapter: "133-c-deep-dive:本章 Lab:位元與記憶體匯流排 emu/bus.c", evidenceFor: [em-c-pointers], consumes: [], groups: [], lab_no: L1, anchor: lab-emu-bus, also_chapters: [bridge-read-c], used_by: [chip8/cpu, gb/cpu]}
-    - {id: chip8/cpu, order: 2, name: CHIP-8 CPU, files: [chip8/cpu.c], language: c, chapter: "134-chip8-emulator:本章 Lab:CHIP-8 CPU chip8/cpu.c", evidenceFor: [em-emu-chip8], consumes: [emu/bus], groups: [], lab_no: L2, anchor: lab-chip8-cpu, used_by: [chip8/display]}
-    - {id: chip8/display, order: 3, name: CHIP-8 畫面與按鍵, files: [chip8/display.c], language: c, chapter: "134-chip8-emulator:本章 Lab:CHIP-8 畫面與按鍵 chip8/display.c", evidenceFor: [em-emu-chip8], consumes: [chip8/cpu], groups: [], lab_no: L3, anchor: lab-chip8-display, used_by: [boss.chip8-rom]}
-    - {id: gb/cpu, order: 4, name: SM83 CPU, files: [gb/cpu.c], language: c, chapter: "G49-2:本章 Lab:SM83 CPU gb/cpu.c", evidenceFor: [em-emu-gb-cpu], consumes: [emu/bus], groups: [], lab_no: L4, anchor: lab-gb-cpu, gap: G49-2, gap_title: SM83 CPU, used_by: [gb/system]}
-    - {id: gb/system, order: 5, name: Game Boy 系統, files: [gb/mmu.c, gb/ppu.c], language: c, chapter: "G49-3:本章 Lab:Game Boy 系統 gb/mmu.c", evidenceFor: [em-emu-gb-system], consumes: [gb/cpu], groups: [], lab_no: L5, anchor: lab-gb-system, gap: G49-3, gap_title: Game Boy 系統(MMU、計時器、中斷、PPU), used_by: [cp2.gb-rom]}
-    - {id: gba/cpu, order: 6, name: ARM7TDMI, files: [gba/cpu.c], language: c, chapter: "G49-4:本章 Lab:ARM7TDMI gba/cpu.c", evidenceFor: [em-emu-gba], consumes: [emu/bus], groups: [], lab_no: L6, anchor: lab-gba-cpu, gap: G49-4, gap_title: ARM7TDMI, used_by: [cp3.gba-tests]}
+    - id: emu/bus
+      order: 1
+      name: 位元與記憶體匯流排
+      files: [emu/bits.h, emu/bus.c]
+      provided: [emu/bus.h]
+      language: c
+      chapter: "133-c-deep-dive:本章 Lab:位元與記憶體匯流排 emu/bus.c"
+      evidenceFor: [em-c-pointers]
+      consumes: []
+      lab_no: L1
+      anchor: lab-emu-bus
+      also_chapters: [bridge-read-c]
+      used_by: [chip8/cpu, chip8/display, gb/cpu, gba/cpu, pwn/boss.uni-ctf]
+      interface:
+        - "// emu/bits.h:header-only;每個都是 static inline 函式(不是巨集),每個參數只求值一次;寬度 0..32、位置 0..31 都不能有未定義行為"
+        - "uint32_t mask(unsigned width)                         // 低 width 位全是 1;mask(0)=0、mask(32)=0xFFFFFFFF"
+        - "uint32_t bit_get(uint32_t x, unsigned n)              // 第 n 位,回傳 0 或 1"
+        - "uint32_t bit_set(uint32_t x, unsigned n, int v)       // 第 n 位設成 v(非 0 當 1),回傳新值"
+        - "uint32_t bits_get(uint32_t x, unsigned lo, unsigned width)                 // 取出 [lo, lo+width) 這段;lo 0..31,lo+width 超過 32 時超出第 31 位的部分當成不存在(上面補 0)"
+        - "uint32_t bits_set(uint32_t x, unsigned lo, unsigned width, uint32_t v)     // 把那段換成 v 的低 width 位,其他位不變;lo+width 超過 32 時只改 [lo, 32),v 多出來的位元丟掉"
+        - "int32_t  sign_extend(uint32_t x, unsigned width)      // 把低 width 位當二補數;width 1..32"
+        - "uint32_t rotr32(uint32_t x, unsigned n)               // 右旋;n 取 n % 32"
+        - "uint16_t load16_le/load16_be(const uint8_t *p);uint32_t load32_le/load32_be(const uint8_t *p)"
+        - "void store16_le/store16_be(uint8_t *p, uint16_t v);void store32_le/store32_be(uint8_t *p, uint32_t v)"
+        - "// emu/bus.h(規格給的標頭):typedef struct Bus Bus(不透明,struct 在你的 bus.c 裡定義)"
+        - "typedef uint8_t (*bus_read_fn)(void *ctx, uint32_t offset);typedef void (*bus_write_fn)(void *ctx, uint32_t offset, uint8_t value)"
+        - "Bus *bus_new(uint32_t size)        // RAM 0..size-1 全是 0;size 是 0 或大於 2^24 → NULL"
+        - "void bus_free(Bus *b)              // b 是 NULL 時什麼都不做;uint32_t bus_size(const Bus *b)"
+        - "int bus_map(Bus *b, uint32_t base, uint32_t len, bus_read_fn rd, bus_write_fn wr, void *ctx)   // 0 成功;len 是 0、超出 [0, size)、和已經註冊的區段重疊、已經有 16 段 → -1,什麼都不改(base+len 超過 uint32_t 也算超出範圍,不能讓它溢位繞回);rd 是 NULL 時讀回 0xFF,wr 是 NULL 時寫入被忽略"
+        - "uint8_t bus_read8(Bus *b, uint32_t addr);void bus_write8(Bus *b, uint32_t addr, uint8_t v)   // 落在區段裡 → 呼叫 rd/wr(ctx, addr - base);超出 [0, size) → 讀回 0xFF(open bus)、寫入忽略,而且 bus_faults 加 1"
+        - "uint16_t bus_read16le/bus_read16be(Bus *b, uint32_t addr);void bus_write16le/bus_write16be(Bus *b, uint32_t addr, uint16_t v)"
+        - "uint32_t bus_read32le(Bus *b, uint32_t addr);void bus_write32le(Bus *b, uint32_t addr, uint32_t v)   // 多位元組存取一律拆成 read8/write8,依位址由小到大(addr, addr+1, …;uint32_t 自然進位)"
+        - "int bus_load(Bus *b, uint32_t addr, const uint8_t *data, uint32_t n)   // 直接寫進 RAM(不經過 MMIO 區段);超出範圍(含 addr+n 溢位)→ -1,一個位元組都不寫,也不算進 bus_faults"
+        - "uint32_t bus_faults(const Bus *b)  // 到目前為止超出範圍的存取次數(只算 bus_read*/bus_write*,bus_load 失敗不算)"
+      note: "和 133-c-deep-dive 章內範例刻意不同(章作者請不要把下面這些寫完整):章裡的範例可以用全域的 uint8_t mem[] 與 BIT() 這類巨集;Lab 要的是不透明的 Bus*、帶 ctx 與 offset 的 MMIO 處理函式登錄(拒絕重疊、最多 16 段)、open bus 0xFF 與 bus_faults 計數、多位元組存取依位址順序拆成單一位元組(MMIO 副作用的順序是規格)、32 位元 LE 與 rotr32/sign_extend(給之後的 GB/GBA),以及 bits.h 一律 static inline、參數只求值一次、寬度 0/32 沒有未定義行為。bits.h 之後也給 fw/*(暫存器位元操作)與 pwn 用。"
+      groups:
+        - {id: bus.bits, name: 位元操作, kind: function, visibility: public, requiredBy: [boss.chip8-rom, cpu.alu], description: "mask、bit_get、bit_set、bits_get、bits_set、sign_extend、rotr32 對公開範例。"}
+        - {id: bus.endian, name: 大小端, kind: function, visibility: public, requiredBy: [boss.chip8-rom, cp2.gb-rom, cp3.gba-tests], description: "load/store 16、32 位元的 LE 與 BE 對位元組陣列;bus_read16be/le、bus_write16be/le、bus_read32le/bus_write32le 對 RAM。"}
+        - {id: bus.mmio, name: MMIO 區段, kind: function, visibility: public, requiredBy: [boss.chip8-rom, cpu.uses-bus, cp2.gb-rom], description: "bus_map 註冊之後,區段裡的讀寫交給你的處理函式,帶回登錄時的 ctx 與 offset(addr - base);區段外照常讀寫 RAM。"}
+        - {id: bus.edge, name: 邊界, kind: edge, visibility: hidden, requiredBy: [boss.chip8-rom, cpu.edge, pwn/boss.uni-ctf], description: "寬度 0、1、31、32;位置 0 與 31;rotr32 旋轉 0 與 32;最後一個位元組上的 16 位元存取(後半超出範圍);位址 0xFFFFFFFF 的進位;size 1 與 2^24 的匯流排;剛好相鄰(不重疊)的兩個區段。"}
+        - {id: bus.errors, name: 錯誤處理, kind: error, visibility: hidden, requiredBy: [boss.chip8-rom, cpu.errors, pwn/boss.uni-ctf], description: "bus_new 的 size 不合法回 NULL;bus_map 重疊、超出範圍、len 0、第 17 段都回 -1 而且之前的區段照常運作;超出範圍的讀寫回 0xFF、寫入被忽略、bus_faults 正確;bus_load 超出範圍回 -1 而且一個位元組都沒寫;rd/wr 是 NULL 的區段。"}
+        - {id: bus.order, name: 存取順序, kind: spec, visibility: hidden, requiredBy: [boss.chip8-rom, cp2.gb-rom], description: "16、32 位元的存取落在 MMIO 區段時,處理函式被呼叫的次數剛好是 2 或 4 次,而且依位址由小到大(LE 與 BE 都一樣);bus_load 不呼叫處理函式。"}
+        - {id: bus.inline, name: 只求值一次, kind: spec, visibility: hidden, requiredBy: [boss.chip8-rom], description: "bits.h 的每個函式,參數有副作用(例如 a[i++])時只發生一次;兩個 .c 檔同時 include bits.h 也能連結(static inline)。"}
+        - {id: bus.ub, name: 沒有未定義行為, kind: edge, visibility: hidden, requiredBy: [boss.chip8-rom, pwn/boss.uni-ctf], description: "用 -fsanitize=undefined,address -fno-sanitize-recover=all 重新編譯,跑一遍邊界與錯誤處理的案例:不能有超過寬度的位移、有號數溢位或越界存取。"}
+        - id: bus.perf
+          name: 效能
+          kind: perf
+          visibility: hidden
+          description: "RAM 讀寫要 O(1);找 MMIO 區段只能和區段數成正比(最多 16 段),不能和區段的長度成正比。"
+          perf: {statement: "10^7 次 RAM 讀寫＋2×10^6 次 MMIO 存取(16 段、每段 4 KiB)＋2×10^6 次 16 位元存取,1 秒內", seconds: 1, n: 14000000}
+          perf_ref: "0.10 秒(線性找 16 段的直覺式參考解,gcc 13 -O2,i7-12700KF;ASan＋UBSan 版 0.4 秒)"
+          requiredBy: [boss.chip8-rom, cpu.perf]
+
+    - id: chip8/cpu
+      order: 2
+      name: CHIP-8 CPU
+      files: [chip8/cpu.c]
+      provided: [chip8/chip8.h]
+      language: c
+      chapter: "134-chip8-emulator:本章 Lab:CHIP-8 CPU chip8/cpu.c"
+      evidenceFor: [em-emu-chip8]
+      consumes: [emu/bus]
+      require: ["emu/bus.h"]
+      lab_no: L2
+      anchor: lab-chip8-cpu
+      also_chapters: [21-cpu-machine-language]
+      used_by: [chip8/display, boss.chip8-rom]
+      interface:
+        - "// chip8/chip8.h(規格給的標頭):typedef struct { uint8_t v[16]; uint16_t i, pc; uint8_t sp; uint16_t stack[16]; uint8_t dt, st; uint8_t keys[16]; uint8_t waiting, released; uint8_t fb[32][64]; uint32_t quirks, rng; uint64_t cycles; Bus *bus; } Chip8;(欄位是規格,驅動程式直接讀它們傾印)"
+        - "// quirks 旗標:C8_Q_SHIFT_VY、C8_Q_LOAD_INC_I、C8_Q_JUMP_V0、C8_Q_VF_RESET、C8_Q_CLIP;C8_PROFILE_VIP＝全部打開(預設)、C8_PROFILE_MODERN＝0"
+        - "// 回傳碼:C8_OK=0、C8_WAIT=1(FX0A 等按鍵)、C8_BAD_OPCODE=-1、C8_STACK_OVERFLOW=-2、C8_STACK_UNDERFLOW=-3"
+        - "int  chip8_init(Chip8 *c, Bus *bus, uint32_t quirks, uint32_t seed)   // 全部清 0、PC=0x200、字型寫進 0x050–0x09F(C8_FONT)、rng=seed(seed 是 0 時用 1)、released=0xFF;bus 是 NULL 或小於 4096 → -1"
+        - "int  chip8_load(Chip8 *c, const uint8_t *rom, size_t n)   // 從 0x200 寫進去;n > 3584 → -1,什麼都不寫"
+        - "int  chip8_step(Chip8 *c)          // 取指(PC、PC+1,大端)→ 解碼 → 執行 35 條標準指令;錯誤時狀態完全不變(PC 不動、cycles 不加);C8_WAIT 也算一個週期"
+        - "void chip8_tick_timers(Chip8 *c)   // DT、ST 大於 0 就減 1(60 Hz 一次);int chip8_sound_on(const Chip8 *c) → ST > 0"
+        - "void chip8_dump(const Chip8 *c, FILE *out)   // 三行:「PC=%03X I=%04X SP=%X DT=%02X ST=%02X」「V=」16 個 %02X 用空白隔開、「S=」堆疊裡的 sp 個 %03X(從 stack[0] 印起,用一個空白隔開,= 後面不空格,例 S=204 20C;空堆疊整行就是 S=,行尾沒有空白)"
+        - "// 規則:位址一律 & 0xFFF(PC、I+k 都在 4 KiB 裡繞回);I 是 16 位元暫存器(FX1E 不改 VF);所有記憶體存取都經過 c->bus;0NNN(00E0、00EE 以外)當成不做事"
+        - "// VF:8XY4/5/6/7/E 先算結果、最後才寫 VF(X 是 F 時 VF 是旗標);CXNN:rng 做一次 xorshift32(x^=x<<13; x^=x>>17; x^=x<<5),VX=(rng & 0xFF) & NN"
+        - "// FX0A:第一次執行時 waiting=1、released=0xFF 並回 C8_WAIT(PC 不動);之後每步檢查 released(由 chip8_key_event 在按鍵放開時填),有值就 VX=那個鍵、waiting=0、released=0xFF,PC 往下走"
+      note: "怪癖(quirk)的選擇:預設照 COSMAC VIP 原機(8XY6/8XYE 先把 VY 搬進 VX 再移位、FX55/FX65 之後 I 加 X+1、BNNN 跳到 NNN+V0、8XY1/2/3 之後 VF=0、畫面邊緣裁切),但旗標都要能切換(cpu.c 處理其中四個,C8_Q_CLIP 由 display.c 處理),MODERN(全關:只移 VX、I 不變、BXNN 跳到 XNN+VX、VF 不重設、畫面繞回)由隱藏檢定 cpu.quirks 檢查。和 134-chip8-emulator 章內範例刻意不同(章作者請不要把下面這些寫完整):章的範例可以只做一種怪癖、用自己的陣列當記憶體、亂數用 rand();Lab 要能切換怪癖旗標、固定的 xorshift32、錯誤回傳碼且錯誤時狀態不變、FX0A 等「放開」、所有存取經過自己的 emu/bus(隱藏檢定會在記憶體上掛 MMIO 探針)、固定格式的 chip8_dump。cpu 任務判題時,00E0／DXYN／chip8_key_event 用我們的參考 display.c 連結(chip8/display 還沒做);display 任務才換成你的。主迴圈可以參考 H1 的 hack/emulator(選修),但不 consumes:它是 Python 的選修任務,C 版連結不到;先修閉包上 hw-machine-lang 在 em-emu-chip8 的先修裡,之後真的要接也合法。"
+      groups:
+        - {id: cpu.alu, name: 算術與邏輯, kind: function, visibility: public, requiredBy: [boss.chip8-rom], description: "公開 ROM:6XNN、7XNN、8XY0–8XY7、8XYE 之後的 V0–VF(VIP 設定),含進位與借位旗標。"}
+        - {id: cpu.flow, name: 跳躍、呼叫與跳過, kind: function, visibility: public, requiredBy: [boss.chip8-rom], description: "公開 ROM:1NNN、2NNN、00EE、BNNN 與 3XNN、4XNN、5XY0、9XY0 的跳過,看 PC、SP 與堆疊。"}
+        - {id: cpu.memory, name: 記憶體指令, kind: function, visibility: public, requiredBy: [boss.chip8-rom], description: "公開 ROM:ANNN、FX1E、FX29、FX33、FX55、FX65 之後的 I 與記憶體傾印。"}
+        - {id: cpu.timers, name: 計時器, kind: function, visibility: public, requiredBy: [boss.chip8-rom, display.frames], description: "FX07、FX15、FX18;chip8_tick_timers 減到 0 就停;chip8_sound_on。"}
+        - {id: cpu.dump, name: 狀態傾印, kind: spec, visibility: public, requiredBy: [boss.chip8-rom], description: "chip8_dump 的三行格式(大寫十六進位、位數、空白)對公開範例逐字相同。"}
+        - {id: cpu.flags, name: 旗標的先後, kind: spec, visibility: hidden, requiredBy: [boss.chip8-rom], description: "VF 本身當運算元(X 或 Y 是 F)時,先算結果再寫旗標;7XNN 溢位不改 VF;FX1E 不改 VF。"}
+        - {id: cpu.quirks, name: 怪癖設定, kind: spec, visibility: hidden, requiredBy: [boss.chip8-rom], description: "同一批 ROM 在 MODERN 設定與只開單一旗標的設定下,結果各自正確(移位用 VX 或 VY、FX55/FX65 改不改 I、BNNN 或 BXNN、VF 重不重設)。"}
+        - {id: cpu.edge, name: 邊界, kind: edge, visibility: hidden, requiredBy: [boss.chip8-rom], description: "PC 與 I+k 在 0xFFF 繞回;剛好 16 層呼叫;FX33 的 0 與 255;X 是 F 的 FX55/FX65;0NNN 不做事;CXNN 的 NN 是 00 與 FF;seed 0;同一個 seed 的亂數序列。"}
+        - {id: cpu.errors, name: 錯誤處理, kind: error, visibility: hidden, requiredBy: [boss.chip8-rom], description: "不認得的 opcode(5XY1、8XY8、EX00、FX00…)回 C8_BAD_OPCODE;第 17 層呼叫回 C8_STACK_OVERFLOW;空堆疊 00EE 回 C8_STACK_UNDERFLOW;三種錯誤之後狀態完全不變;chip8_load 太大、chip8_init 的 bus 太小回 -1。"}
+        - {id: cpu.wait, name: 等按鍵, kind: function, visibility: hidden, requiredBy: [boss.chip8-rom, display.keys], description: "FX0A:按住不放不會繼續、放開才繼續,VX＝放開的鍵;等的時候 PC 不動、週期照算(這裡的週期＝一次 chip8_step,也就是 cycles 加 1)、計時器照常倒數;FX0A 之前就放開的鍵不算。"}
+        - {id: cpu.uses-bus, name: 經過自己的匯流排, kind: spec, visibility: hidden, requiredBy: [boss.chip8-rom], description: "驅動程式在 4 KiB 的某一段掛 MMIO 探針,在那裡取指、FX33、FX55、FX65,探針都要看到正確的位址與順序(不能另外用自己的陣列當記憶體)。"}
+        - id: cpu.perf
+          name: 效能
+          kind: perf
+          visibility: hidden
+          description: "每一步 O(1):不能每步複製記憶體或掃整個指令表。"
+          perf: {statement: "一支迴圈 ROM 跑 2×10^7 條指令(算術、跳躍、呼叫、FX55/FX65 混合),1 秒內", seconds: 1, n: 20000000}
+          perf_ref: "0.10 秒(switch 解碼的直覺式參考解,gcc 13 -O2,i7-12700KF)"
+          requiredBy: [boss.chip8-rom, display.perf]
+
+    - id: chip8/display
+      order: 3
+      name: CHIP-8 畫面與按鍵
+      files: [chip8/display.c]
+      language: c
+      chapter: "134-chip8-emulator:本章 Lab:CHIP-8 畫面與按鍵 chip8/display.c"
+      evidenceFor: [em-emu-chip8]
+      consumes: [emu/bus, chip8/cpu]
+      lab_no: L3
+      anchor: lab-chip8-display
+      used_by: [boss.chip8-rom, boss.chip8-screen, boss.chip8-play]
+      interface:
+        - "void chip8_cls(Chip8 *c)           // 00E0:fb 全部清 0"
+        - "int  chip8_draw(Chip8 *c, uint8_t x, uint8_t y, uint16_t addr, uint8_t n)   // DXYN 的本體(cpu.c 呼叫它並把回傳值寫進 VF):從 (x % 64, y % 32) 開始畫 n 列、每列讀 bus 的 (addr + 列) & 0xFFF,XOR 進 fb;有任何一格由 1 變 0 回傳 1,否則 0;n 是 0 什麼都不畫、回傳 0"
+        - "// 邊緣:C8_Q_CLIP 打開(VIP)時超出右邊或下面的格子丟掉(不算碰撞);關掉(MODERN)時繞回另一邊"
+        - "void chip8_key_event(Chip8 *c, uint8_t key, int down)   // 更新 keys[key];key > 15 忽略;waiting 時由按下變放開 → released=key(只記第一個)"
+        - "int  chip8_run_frame(Chip8 *c, unsigned ipf)   // 一幀:最多 ipf 次 chip8_step(C8_WAIT 也算一次);遇到負的回傳碼就停並回傳它(這一幀不減計時器);否則做滿 ipf 次之後 chip8_tick_timers 一次,回 C8_OK"
+        - "uint32_t chip8_fb_hash(const Chip8 *c)   // FNV-1a 32 位元:h=2166136261,對 fb 的 2048 個位元組(列優先、值 0/1)每個 h ^= b; h *= 16777619"
+        - "void chip8_fb_text(const Chip8 *c, char *out)   // out 至少 C8_TEXT_SIZE(2081):32 列、每列 64 個 '#'(亮)或 '.' 加 '\\n',最後補 '\\0'"
+      note: "和 134-chip8-emulator 章內範例刻意不同(章作者請不要把下面這些寫完整):章的範例可以只示範繞回或只示範裁切、一律用 while 迴圈直接跑;Lab 要依 C8_Q_CLIP 兩種邊緣規則都對、DXY0 不畫、裁掉的格子不算碰撞、按鍵事件與 FX0A 的「放開」、固定的一幀(ipf 次 step＋一次計時器)、FNV-1a 畫面 hash 與文字畫面。驅動程式 c8run 是公開的(不是秘密),可以在本機跑 --rom x.ch8 --frames N --ipf 30 --keys 腳本 --dump 看結果。"
+      groups:
+        - {id: display.draw, name: 畫 sprite, kind: function, visibility: public, requiredBy: [boss.chip8-screen], description: "公開 ROM:00E0、DXYN 的 XOR 與碰撞旗標(同一個 sprite 畫兩次會擦掉、VF=1)、FX29 的字型。"}
+        - {id: display.text, name: 畫面 hash 與文字, kind: spec, visibility: public, requiredBy: [boss.chip8-screen, boss.chip8-play], description: "chip8_fb_hash 對公開範例的數值;chip8_fb_text 的格式逐字相同。"}
+        - {id: display.keys, name: 按鍵, kind: function, visibility: public, requiredBy: [boss.chip8-screen, boss.chip8-play], description: "chip8_key_event 之後 EX9E/EXA1 的跳過;FX0A 在放開時繼續;key > 15 被忽略。"}
+        - {id: display.clip, name: 邊緣, kind: edge, visibility: hidden, requiredBy: [boss.chip8-screen], description: "起點座標超過 63/31 先取餘數;sprite 跨右邊或下面時,VIP 設定裁切、MODERN 設定繞回;DXY0;sprite 位址在 0xFFF 附近繞回;sprite 經過你的 emu/bus 讀(探針看得到)。"}
+        - {id: display.collision, name: 碰撞旗標, kind: spec, visibility: hidden, requiredBy: [boss.chip8-screen], description: "只有亮變暗才算碰撞,暗變亮不算;被裁掉的格子不算;X 或 Y 是 VF 時先讀座標再寫旗標。"}
+        - {id: display.frames, name: 一幀一幀跑, kind: function, visibility: hidden, requiredBy: [boss.chip8-screen], description: "chip8_run_frame:ipf 次 step 之後計時器只減一次;中途錯誤就停並回傳錯誤碼;等按鍵時照樣用掉週期;腳本化的按鍵序列跑 N 幀之後,每 60 幀的畫面 hash 對參考。"}
+        - id: display.perf
+          name: 效能
+          kind: perf
+          visibility: hidden
+          description: "DXYN 只動 sprite 碰到的格子(不能每次重畫或複製整個畫面);hash 一次 O(2048)。"
+          perf: {statement: "3×10^6 條指令(4 成是 DXYF)＋36,000 幀(每幀 30 條指令、每幀算一次 hash),1 秒內", seconds: 1, n: 3000000}
+          perf_ref: "0.20 秒(逐格的直覺式參考解,兩段各 0.10 秒,gcc 13 -O2,i7-12700KF)"
+          requiredBy: [boss.chip8-screen]
+    - {id: gb/cpu, order: 4, name: SM83 CPU, files: [gb/cpu.c], language: c, chapter: "G49-2:本章 Lab:SM83 CPU gb/cpu.c", evidenceFor: [em-emu-gb-cpu], consumes: [emu/bus], groups: [], lab_no: L4, anchor: lab-gb-cpu, gap: G49-2, gap_title: SM83 CPU, status: outline, used_by: [gb/system]}
+    - {id: gb/system, order: 5, name: Game Boy 系統, files: [gb/mmu.c, gb/ppu.c], language: c, chapter: "G49-3:本章 Lab:Game Boy 系統 gb/mmu.c", evidenceFor: [em-emu-gb-system], consumes: [gb/cpu], groups: [], lab_no: L5, anchor: lab-gb-system, gap: G49-3, gap_title: Game Boy 系統(MMU、計時器、中斷、PPU), status: outline, used_by: [cp2.gb-rom]}
+    - {id: gba/cpu, order: 6, name: ARM7TDMI, files: [gba/cpu.c], language: c, chapter: "G49-4:本章 Lab:ARM7TDMI gba/cpu.c", evidenceFor: [em-emu-gba], consumes: [emu/bus], groups: [], lab_no: L6, anchor: lab-gba-cpu, gap: G49-4, gap_title: ARM7TDMI, status: outline, used_by: [cp3.gba-tests]}
 
 - id: fw
   code: E2

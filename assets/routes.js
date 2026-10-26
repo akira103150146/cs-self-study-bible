@@ -160,9 +160,11 @@ window.BOOK_ROUTES = [
       "bridge-read-c",
       "21-cpu-machine-language",
       "36-secure-coding",
+      "133-c-deep-dive",
       "19-boolean-logic",
       "23-vm-compiler",
       "42-compilers",
+      "134-chip8-emulator",
       "24-operating-system",
       "90-rust-os-kernel"
     ]
