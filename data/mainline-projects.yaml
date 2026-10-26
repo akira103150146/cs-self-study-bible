@@ -474,7 +474,7 @@ mainlines:
       lab_no: L1
       anchor: lab-hack-gates
       also_chapters: [47-digital-circuits, 130-hack-hdl-reference]
-      used_by: [hack/alu, hack/memory, rtl/gates]
+      used_by: [hack/alu, hack/memory, hack/cpu, rtl/gates]
       groups:
         - {id: gates.public, name: 公開向量, kind: function, visibility: public, requiredBy: [boss.structure], description: "test 跑每個晶片真值表的前 16 列,顯示第一個不一致的列。"}
         - {id: gates.full, name: 完整真值表, kind: edge, visibility: hidden, requiredBy: [boss.structure, boss.hidden-programs], description: "輸入不超過 8 位元的晶片窮舉;16 位元晶片用邊界值(0、1、-1、0x7FFF、0x8000、交替位元)＋每人 seed 決定的 200 組隨機向量。"}
@@ -497,7 +497,7 @@ mainlines:
       consumes: [hack/gates]
       lab_no: L2
       anchor: lab-hack-alu
-      used_by: [hack/cpu, rtl/alu]
+      used_by: [hack/memory, hack/cpu, rtl/alu]
       groups:
         - {id: alu.public, name: 公開向量, kind: function, visibility: public, requiredBy: [boss.hidden-programs], description: "test 跑 HalfAdder、FullAdder、Add16、Inc16、ALU 的前 16 列。"}
         - {id: alu.flags, name: 控制位元與旗標, kind: edge, visibility: hidden, requiredBy: [boss.hidden-programs], description: "ALU 的 18 種控制位元組合 × 邊界值(0、1、-1、0x7FFF、0x8000)的 out、zr、ng;加法溢位要照二補數繞回。"}
@@ -563,16 +563,16 @@ mainlines:
       optional: true
       used_by: []
       groups:
-        - {id: emulator.public, name: 公開程式, kind: function, visibility: public, requiredBy: [emu/boss.chip8-rom], description: "跑公開的 .hack 程式,最後的 RAM 對參考模擬器。"}
-        - {id: emulator.full, name: 指令全集, kind: edge, visibility: hidden, requiredBy: [emu/boss.chip8-rom], description: "所有 28 種 comp、8 種跳躍、螢幕與鍵盤的記憶體映射;隱藏程式最後的 RAM 與執行步數對參考模擬器。"}
+        - {id: emulator.public, name: 公開程式, kind: function, visibility: public, requiredBy: [boss.own-program], description: "跑公開的 .hack 程式,最後的 RAM 對參考模擬器。"}
+        - {id: emulator.full, name: 指令全集, kind: edge, visibility: hidden, requiredBy: [boss.own-program], description: "所有 28 種 comp、8 種跳躍、螢幕與鍵盤的記憶體映射;隱藏程式最後的 RAM 與執行步數對參考模擬器。"}
         - id: emulator.perf
           name: 效能
           kind: perf
           visibility: hidden
-          description: "主迴圈要夠快,之後才能當 CHIP-8 模擬器的骨架。"
+          description: "主迴圈要夠快,才能拿來流暢地跑、除錯自己的互動程式(之後寫 CHIP-8 模擬器時也可以參考同一種主迴圈)。選修時的門檻:用自己的模擬器跑自己的互動程式要跟得上按鍵(按鍵塗滿整個螢幕一次最多 2×10^5 條指令)。"
           perf: {statement: "10^6 條指令,2 秒內", seconds: 2, n: 1000000}
           perf_ref: "0.2 秒(簡單參考解)"
-          requiredBy: [emu/boss.chip8-rom]
+          requiredBy: [boss.own-program]
     - id: hack/cpu
       order: 6
       name: CPU 與電腦
@@ -580,7 +580,7 @@ mainlines:
       language: hdl
       chapter: "21-cpu-machine-language:本章 Lab:CPU 與電腦 hack/*.hdl"
       evidenceFor: [hw-computer]
-      consumes: [hack/alu, hack/memory]
+      consumes: [hack/gates, hack/alu, hack/memory]
       lab_no: L5
       anchor: lab-hack-cpu
       used_by: [boss.hidden-programs, boss.structure]
@@ -608,10 +608,15 @@ mainlines:
       anchor: lab-hack-assembler
       used_by: [boss.rain, boss.own-program]
       interface:
-        - "python3 hack/assembler.py Prog.asm   # 產生同目錄的 Prog.hack;符號表可以用 libds/hashmap(選用)"
+        - "python3 hack/assembler.py Prog.asm             # 產生同目錄的 Prog.hack;符號表可以用 libds/hashmap(選用)"
+        - "python3 hack/assembler.py Prog.asm --symbols   # 另外寫出 Prog.sym:先列標籤(依原始碼順序)「label <名稱> <ROM 位址>」,再列變數(依配置順序)「var <名稱> <RAM 位址>」;不列預先定義的符號"
+        - "錯誤:只報行號最小的那個錯誤,stderr 印一行「<檔名>:<行號>: <原因>」(檔名照命令列參數原樣;行號是原始檔的行號,從 1 起算;原因的文字不規定),結束狀態碼 1,不寫出 .hack 與 .sym(已經有的舊檔不動);合法的符號由英文字母、數字、_ . $ : 組成,不能以數字開頭"
+      note: "書上的 assemble() 接上練習 22.6 的解答(讀標準輸入、寫標準輸出)不讀檔名參數、沒有 --symbols、也丟掉了行號,所以在 assembler.public、assembler.symfile(公開)與 assembler.errors(隱藏)都會失敗:9Jang lab:verify 的書本突變版(mutants/book-*)至少一組失敗。symfile 與 errors 只由 boss.own-program(自己寫程式時要看得懂錯誤與變數位址)需要;boss.rain 只要求組譯結果逐行相同,這是刻意的取捨。"
       groups:
         - {id: assembler.public, name: 公開程式, kind: function, visibility: public, requiredBy: [boss.rain], description: "公開的 .asm(沒有符號、有符號)組出來的 .hack 逐行對參考組譯器。"}
-        - {id: assembler.symbols, name: 符號與格式, kind: edge, visibility: hidden, requiredBy: [boss.rain], description: "標籤先用後定義、變數從 RAM[16] 依第一次出現的順序配置、預先定義的符號(SP、R0–R15、SCREEN、KBD)、行尾註解、空白與空行、@32767。"}
+        - {id: assembler.symbols, name: 符號與格式, kind: edge, visibility: hidden, requiredBy: [boss.rain], description: "標籤先用後定義、變數從 RAM[16] 依第一次出現的順序配置、預先定義的符號(SP、LCL、ARG、THIS、THAT、R0–R15、SCREEN、KBD)、行尾註解、空白與空行、@32767。"}
+        - {id: assembler.symfile, name: 符號表檔, kind: function, visibility: public, requiredBy: [boss.own-program], description: "--symbols 寫出 Prog.sym:先列標籤「label 名稱 ROM 位址」(依原始碼順序),再列變數「var 名稱 RAM 位址」(依配置順序),不列預先定義的符號;沒給 --symbols 就不寫。"}
+        - {id: assembler.errors, name: 錯誤回報, kind: error, visibility: hidden, requiredBy: [boss.own-program], description: "不認得的 comp、dest、jump,@ 後面的數字超過 32767 或不是合法的符號,標籤和前面的標籤或預先定義的符號同名,括號沒有關:只報行號最小的那個錯誤,stderr 印「檔名:行號:」開頭的一行(原始檔的行號),結束狀態碼 1,不寫出 .hack 與 .sym。"}
         - {id: assembler.runs, name: 組出來的程式會動, kind: spec, visibility: hidden, requiredBy: [boss.rain], description: "5 支隱藏 .asm 組完再丟給 CPU 模擬器跑,結果要對。"}
         - id: assembler.perf
           name: 效能

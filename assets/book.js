@@ -329,7 +329,7 @@ const BOOK = {
       ],
     },
     {
-      part: "附錄 · 完整題庫",
+      part: "附錄 · 題庫與速查",
       icon: "📚",
       blurb: "依章節收錄 AP325、APCS、TOI 全部題目與解答,當你的刷題地圖;附G 是 Hack 晶片語言與測試腳本的速查。",
       chapters: [
