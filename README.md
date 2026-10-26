@@ -81,7 +81,31 @@ _book_headings.py        上面兩支工具共用:讀 book.js、各章 h2/h3 錨
   OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
   SOFTWARE.
   ```
-- **ML-For-Beginners**(NumPy 與 pandas 一章改寫了 `2-Regression` 的資料整理範例):<https://github.com/microsoft/ML-For-Beginners>,Copyright (c) Microsoft Corporation,MIT 授權(條文同上,著作權人換成 Microsoft Corporation)。
+- **ML-For-Beginners**(NumPy 與 pandas 一章改寫了 `2-Regression` 的資料整理範例):<https://github.com/microsoft/ML-For-Beginners>,Copyright (c) Microsoft Corporation,MIT 授權:
+
+  ```text
+  MIT License
+
+  Copyright (c) Microsoft Corporation.
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in all
+  copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
+  ```
 - **Optical Recognition of Handwritten Digits**(任務線 nn 的 Boss 戰資料):E. Alpaydin、C. Kaynak,UCI Machine Learning Repository,doi:[10.24432/C50P49](https://doi.org/10.24432/C50P49),授權 [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)。改動:把原本的 `optdigits.tra` 與 `optdigits.tes` 合併成 5,620 張,再用固定的亂數重新切成公開的 4,000 張與隱藏的 1,620 張。程式地下城的任務資料夾 `data/` 也附同樣的出處說明。
 
 以 ❤️ 與大量 `while True:` 寫成。
