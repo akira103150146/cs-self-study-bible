@@ -53,3 +53,28 @@ test("checkAnswer: accepts within tolerance, rejects outside it, never throws on
   assert.equal(NetCalc.checkAnswer("", 500000, 0.02), false);
   assert.equal(NetCalc.checkAnswer("   ", 500000, 0.02), false);
 });
+
+test("c4-packet-delay: pinned example L=2MB N=2 R=10Mbps Dprop=5ms -> 4815 ms", () => {
+  const g = byKey("c4-packet-delay");
+  const { answer } = g.solve({ L: 2, N: 2, R: 10, Dprop: 5 });
+  assert.ok(Math.abs(answer - 4815) < 1e-6);
+});
+
+test("c5-bdp: pinned example R=10Mbps RTT=50ms -> 500000 bits", () => {
+  const g = byKey("c5-bdp");
+  const { answer } = g.solve({ R: 10, RTT: 50 });
+  assert.ok(Math.abs(answer - 500000) < 1e-6);
+});
+
+test("c6-tcp-window: pinned main example RTT=100ms W=64KB R=10Mbps -> 5.12 Mbps, window IS the bottleneck", () => {
+  const g = byKey("c6-tcp-window");
+  const { answer, isBottleneck } = g.solve({ variant: "window", RTT: 100, W: 64, R: 10 });
+  assert.ok(Math.abs(answer - 5.12) < 1e-6);
+  assert.equal(isBottleneck, true);
+});
+
+test("c6-tcp-window: pinned stop-and-wait example packet=1500B R=10Mbps RTT=100ms -> efficiency ~0.01186", () => {
+  const g = byKey("c6-tcp-window");
+  const { answer } = g.solve({ variant: "stopwait", packetBytes: 1500, R: 10, RTT: 100 });
+  assert.ok(Math.abs(answer - 0.011857) < 1e-5);
+});
