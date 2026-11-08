@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { NetCalc, mod2Divide } from "./net-calc.js";
+import { NetCalc, mod2Divide, ipToInt, intToIp } from "./net-calc.js";
 
 function byKey(key) { return NetCalc.generators.find(g => g.key === key); }
 
@@ -113,5 +113,47 @@ test("c2-crc sample(): D/T length always 8-12 bits and G from the fixed 3-option
     const bits = p.mode === "encode" ? p.D : p.T;
     assert.ok(bits.length >= 8 && bits.length <= 12 + 3); // T includes the r appended check bits
     assert.ok(["1001", "1011", "1101"].includes(p.G));
+  }
+});
+
+test("ipToInt/intToIp round-trip", () => {
+  assert.equal(ipToInt("192.168.17.0"), ipToInt("192.168.16.0") + 256);
+  assert.equal(intToIp(ipToInt("10.0.0.1")), "10.0.0.1");
+});
+
+test("c3-cidr: pinned example base=192.168.16.0/22 n=8 k=3 -> 192.168.17.0, 126 usable hosts", () => {
+  const g = byKey("c3-cidr");
+  const { answer } = g.solve({ base: "192.168.16.0", prefix: 22, n: 8, k: 3 });
+  assert.equal(answer.networkAddress, "192.168.17.0");
+  assert.equal(answer.usableHosts, 126);
+});
+
+test("c3-cidr: k=1 (first subnet) equals the base address exactly (Review Focus boundary)", () => {
+  const g = byKey("c3-cidr");
+  const { answer } = g.solve({ base: "192.168.16.0", prefix: 22, n: 8, k: 1 });
+  assert.equal(answer.networkAddress, "192.168.16.0");
+});
+
+test("c3-cidr: k=n (last subnet) stays inside the original block (Review Focus boundary)", () => {
+  const g = byKey("c3-cidr");
+  const { answer } = g.solve({ base: "192.168.16.0", prefix: 22, n: 8, k: 8 });
+  assert.equal(answer.networkAddress, "192.168.19.128");
+  const blockEnd = ipToInt("192.168.16.0") + 2 ** (32 - 22) - 1; // last address of the original /22
+  assert.ok(ipToInt(answer.networkAddress) + 128 - 1 <= blockEnd);
+});
+
+test("c3-cidr: all n subnets from sample() are contiguous, non-overlapping, and within the base block", () => {
+  const g = byKey("c3-cidr");
+  for (let trial = 0; trial < 50; trial++) {
+    const p = g.sample();
+    const subnetSize = 2 ** (32 - (p.prefix + Math.log2(p.n)));
+    let prevEnd = ipToInt(p.base) - 1;
+    for (let k = 1; k <= p.n; k++) {
+      const { answer } = g.solve({ ...p, k });
+      const start = ipToInt(answer.networkAddress);
+      assert.equal(start, prevEnd + 1); // contiguous, no gap or overlap
+      prevEnd = start + subnetSize - 1;
+    }
+    assert.ok(prevEnd <= ipToInt(p.base) + 2 ** (32 - p.prefix) - 1); // stays inside the /prefix block
   }
 });

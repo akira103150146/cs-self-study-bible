@@ -404,6 +404,73 @@
     }
   };
 
+  // ---- C3: CIDR subnetting -------------------------------------------------
+
+  // Standard dotted-quad <-> 32-bit unsigned int. Plain arithmetic (no bitwise
+  // ops) so values above 2^31 never go negative.
+  function ipToInt(ip) {
+    var parts = ip.split(".").map(Number);
+    return ((parts[0] * 256 + parts[1]) * 256 + parts[2]) * 256 + parts[3];
+  }
+
+  function intToIp(n) {
+    return [
+      Math.floor(n / 16777216) % 256,
+      Math.floor(n / 65536) % 256,
+      Math.floor(n / 256) % 256,
+      n % 256
+    ].join(".");
+  }
+
+  var C3_PREFIXES = [16, 20, 22, 24];
+  var C3_SUBNET_COUNTS = [2, 4, 8, 16];
+  var C3_OCTET1 = [10, 172, 192];
+
+  var c3 = {
+    key: "c3-cidr",
+    label: "C3 CIDR 子網路劃分",
+    bonus: false,
+    sample: function (rand) {
+      rand = rand || Math.random;
+      var prefix = pick(C3_PREFIXES, rand);
+      var n = pick(C3_SUBNET_COUNTS, rand);
+      var k = 1 + Math.floor(rand() * n); // uniform in [1, n]
+      // Random address in a private range, then mask off every host bit so
+      // base lands exactly on a /prefix boundary (otherwise the problem is ambiguous).
+      var raw = pick(C3_OCTET1, rand) * 16777216 + Math.floor(rand() * 16777216);
+      var blockSize = Math.pow(2, 32 - prefix);
+      var baseInt = raw - (raw % blockSize);
+      return { base: intToIp(baseInt), prefix: prefix, n: n, k: k };
+    },
+    solve: function (p) {
+      var newPrefix = p.prefix + Math.log2(p.n);
+      var subnetSize = Math.pow(2, 32 - newPrefix);
+      var networkInt = ipToInt(p.base) + (p.k - 1) * subnetSize;
+      return {
+        answer: {
+          networkAddress: intToIp(networkInt),
+          broadcastAddress: intToIp(networkInt + subnetSize - 1),
+          newPrefix: newPrefix,
+          usableHosts: subnetSize - 2
+        },
+        unit: "",
+        tolerance: 0
+      };
+    },
+    render: function (p, s) {
+      var a = s.answer;
+      return {
+        promptHTML: "基底區塊 " + p.base + "/" + p.prefix + ",平均切成 n = " + p.n +
+          " 個等大小子網路。求第 k = " + p.k + " 個子網路的網路位址與可用主機數。",
+        stepsHTML: "新前綴 = " + p.prefix + " + log₂" + p.n + " = /" + a.newPrefix +
+          ";每個子網路大小 = 2^(32-" + a.newPrefix + ") = " + Math.pow(2, 32 - a.newPrefix) +
+          ";網路位址 = base + (k-1) × 大小 = " + p.base + " + " + (p.k - 1) + " × " +
+          Math.pow(2, 32 - a.newPrefix) + " = " + a.networkAddress +
+          ";可用主機 = 大小 - 2 = " + a.usableHosts
+      };
+    }
+  };
+
   var NetCalc = {
     pick: pick,
     checkAnswer: checkAnswer,
@@ -412,9 +479,10 @@
 
   NetCalc.generators.push(c4, c5, c6);
   NetCalc.generators.push(c2);
+  NetCalc.generators.push(c3);
 
   if (typeof module !== "undefined" && module.exports) {
-    module.exports = { NetCalc: NetCalc, mod2Divide: mod2Divide };
+    module.exports = { NetCalc: NetCalc, mod2Divide: mod2Divide, ipToInt: ipToInt, intToIp: intToIp };
   } else {
     global.NetCalc = NetCalc;
     document.addEventListener("DOMContentLoaded", function () {
