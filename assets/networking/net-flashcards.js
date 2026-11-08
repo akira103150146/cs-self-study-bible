@@ -138,7 +138,118 @@
     document.addEventListener("DOMContentLoaded", function () {
       var app = document.getElementById("net-flashcards-app");
       if (!app) return;
-      // DOM mount implemented in Task 7.
+
+      function esc(s) {
+        return (s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      }
+
+      var LAYERS = [
+        { key: "all", label: "全部" },
+        { key: "physical", label: "實體層" },
+        { key: "link", label: "資料鏈結層" },
+        { key: "network", label: "網路層" },
+        { key: "transport", label: "傳輸層" },
+        { key: "app", label: "應用層" }
+      ];
+
+      function buildQueue(layer) {
+        return NetFlashcards.createQueue(NetFlashcards.filterByLayer(NET_TERMS, layer));
+      }
+
+      // state.queue is always rebuilt from scratch (never mutated in place) so
+      // switching the layer filter or hitting shuffle can never leave stale
+      // cards from a previous filter/round behind.
+      var state = { layer: "all", queue: buildQueue("all"), flipped: false };
+
+      var bar = document.createElement("div");
+      bar.className = "net-toolbar";
+      bar.innerHTML =
+        '<div class="net-row">' +
+        LAYERS.map(function (l) {
+          return '<button class="net-chip' + (l.key === "all" ? " active" : "") +
+            '" data-layer="' + l.key + '">' + esc(l.label) + "</button>";
+        }).join("") +
+        '<button class="net-chip net-shuffle-btn" data-action="shuffle">🔀 洗牌 / 重新開始</button>' +
+        "</div>";
+      app.appendChild(bar);
+
+      var body = document.createElement("div");
+      body.className = "net-fc-body";
+      app.appendChild(body);
+
+      function renderBody() {
+        var queue = state.queue;
+        var total = queue.pending.length + queue.mastered.length;
+        var html;
+
+        if (total === 0) {
+          body.innerHTML = '<div class="net-progress">這個分層目前沒有卡片。</div>';
+          return;
+        }
+
+        var progressN = Math.min(queue.mastered.length + 1, total);
+        html = '<div class="net-progress">第 ' + progressN + ' 題 / 共 ' + total + ' 題</div>';
+
+        if (NetFlashcards.isRoundComplete(queue)) {
+          html += '<div class="net-complete">🎉 這輪刷完了!按上面的「🔀 洗牌 / 重新開始」再刷一輪。</div>';
+          body.innerHTML = html;
+          return;
+        }
+
+        var cur = NetFlashcards.current(queue);
+        html +=
+          '<div class="net-card' + (state.flipped ? " flipped" : "") + '">' +
+          '<div class="front"><div class="net-term">' + esc(cur.term) + "</div></div>" +
+          '<div class="back"><div class="net-def">' + esc(cur.definition) + "</div></div>" +
+          "</div>" +
+          '<div class="net-fc-actions">' +
+          '<button class="net-flip-btn" data-action="flip">🔄 翻卡</button>' +
+          '<button class="net-know-btn" data-action="known">✅ 會了</button>' +
+          '<button class="net-unknown-btn" data-action="unknown">😵 不熟</button>' +
+          "</div>";
+        body.innerHTML = html;
+      }
+
+      renderBody();
+
+      bar.querySelectorAll(".net-chip[data-layer]").forEach(function (c) {
+        c.addEventListener("click", function () {
+          bar.querySelectorAll(".net-chip[data-layer]").forEach(function (x) { x.classList.remove("active"); });
+          c.classList.add("active");
+          state.layer = c.dataset.layer;
+          // Full rebuild from the freshly filtered term list: no reference to
+          // the old queue is kept, so no stale/leaked cards from the previous
+          // filter can appear in this round.
+          state.queue = buildQueue(state.layer);
+          state.flipped = false;
+          renderBody();
+        });
+      });
+
+      bar.querySelector('[data-action="shuffle"]').addEventListener("click", function () {
+        // Same full rebuild, usable mid-round (not gated on round completion).
+        state.queue = buildQueue(state.layer);
+        state.flipped = false;
+        renderBody();
+      });
+
+      body.addEventListener("click", function (e) {
+        var btn = e.target.closest("button");
+        if (!btn) return;
+        var action = btn.dataset.action;
+        if (action === "flip") {
+          state.flipped = !state.flipped;
+          renderBody();
+        } else if (action === "known") {
+          state.queue = NetFlashcards.markKnown(state.queue);
+          state.flipped = false;
+          renderBody();
+        } else if (action === "unknown") {
+          state.queue = NetFlashcards.markUnknown(state.queue);
+          state.flipped = false;
+          renderBody();
+        }
+      });
     });
   }
 })(typeof window !== "undefined" ? window : globalThis);

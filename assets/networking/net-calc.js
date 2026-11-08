@@ -488,7 +488,200 @@
     document.addEventListener("DOMContentLoaded", function () {
       var app = document.getElementById("net-calc-app");
       if (!app) return;
-      // DOM mount implemented in Task 7.
+
+      // fmt/pick/checkAnswer below are the same functions the generators
+      // themselves use (ordinary lexical closure access, not window globals).
+
+      function esc(s) {
+        return (s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      }
+
+      var generators = NetCalc.generators;
+
+      function newProblem(gen) {
+        var params = gen.sample();
+        var solved = gen.solve(params);
+        var rendered = gen.render(params, solved);
+        return { gen: gen, params: params, solved: solved, rendered: rendered, choice: null };
+      }
+
+      var state = { current: newProblem(generators[0]) };
+
+      var bar = document.createElement("div");
+      bar.className = "net-toolbar";
+      bar.innerHTML =
+        '<div class="net-row">' +
+        generators.map(function (g, i) {
+          return '<button class="net-chip' + (i === 0 ? " active" : "") +
+            '" data-gen="' + g.key + '">' + esc(g.label) + (g.bonus ? " (加分)" : "") + "</button>";
+        }).join("") +
+        "</div>";
+      app.appendChild(bar);
+
+      var body = document.createElement("div");
+      body.className = "net-calc-body";
+      app.appendChild(body);
+
+      // ---- answer-input layout, one branch per answer shape -------------
+
+      function inputRowHTML(cur) {
+        var key = cur.gen.key;
+        if (key === "c7-tdm") {
+          // Two-part answer: [R_Mbps, slot_us].
+          return '<div class="net-answer-row">' +
+            '<label>頻寬是多少?(Mbps)<input type="text" class="net-answer-input" id="net-ans-0"></label>' +
+            '<label>time slot 長度是多少?(µs)<input type="text" class="net-answer-input" id="net-ans-1"></label>' +
+            "</div>";
+        }
+        if (key === "c2-crc") {
+          if (cur.params.mode === "encode") {
+            // String answer: exact remainder bits.
+            return '<div class="net-answer-row">' +
+              '<label>CRC 餘數 R(bits)<input type="text" class="net-answer-input" id="net-ans-0" placeholder="例如 011"></label>' +
+              "</div>";
+          }
+          // Boolean answer: yes/no choice, not a free-text input.
+          return '<div class="net-answer-row net-choice-row">' +
+            '<button class="net-choice-btn" data-choice="true">有錯</button>' +
+            '<button class="net-choice-btn" data-choice="false">沒有錯</button>' +
+            "</div>";
+        }
+        if (key === "c3-cidr") {
+          // Object answer: {networkAddress, usableHosts}.
+          return '<div class="net-answer-row">' +
+            '<label>網路位址<input type="text" class="net-answer-input" id="net-ans-0" placeholder="例如 10.0.0.0"></label>' +
+            '<label>可用主機數<input type="text" class="net-answer-input" id="net-ans-1"></label>' +
+            "</div>";
+        }
+        // C1, C4, C5, C6, C8: plain-number answer, single input.
+        return '<div class="net-answer-row">' +
+          '<input type="text" class="net-answer-input" id="net-ans-0" placeholder="輸入答案">' +
+          "</div>";
+      }
+
+      // ---- correct-answer text shown in the feedback banner -------------
+
+      function answerText(cur) {
+        var gen = cur.gen, solved = cur.solved;
+        if (gen.key === "c7-tdm") {
+          return "正確答案:頻寬 " + fmt(solved.answer[0]) + " Mbps,time slot " +
+            fmt(solved.answer[1]) + " µs";
+        }
+        if (gen.key === "c2-crc") {
+          if (typeof solved.answer === "string") return "正確答案:R = " + solved.answer;
+          return "正確答案:" + (solved.answer ? "有錯" : "沒有錯");
+        }
+        if (gen.key === "c3-cidr") {
+          return "正確答案:網路位址 " + solved.answer.networkAddress + ",可用主機 " +
+            solved.answer.usableHosts;
+        }
+        return "正確答案:" + fmt(solved.answer) + (solved.unit ? " " + solved.unit : "");
+      }
+
+      function renderBody() {
+        var cur = state.current;
+        var stepsInner = cur.gen.key === "c2-crc"
+          ? "<pre>" + cur.rendered.stepsHTML + "</pre>"
+          : cur.rendered.stepsHTML;
+        body.innerHTML =
+          '<div class="net-prompt">' + cur.rendered.promptHTML + "</div>" +
+          inputRowHTML(cur) +
+          '<div class="net-calc-actions">' +
+          '<button class="net-check-btn" data-action="check">檢查答案</button>' +
+          '<button class="net-next-btn" data-action="next">🎲 換一題</button>' +
+          "</div>" +
+          '<div class="net-feedback-slot"></div>' +
+          '<details class="solution"><summary>看逐步詳解</summary><div class="sol-body">' +
+          stepsInner + "</div></details>";
+        // Mirrors toi-render.js: csAddCopy only matters when a <pre> was just
+        // inserted (the CRC step trace); it's a no-op otherwise. Deliberately
+        // not calling csObserveMath/csObserveHL (not wired for this mount id,
+        // no LaTeX/code blocks here).
+        if (window.csAddCopy) window.csAddCopy(body);
+      }
+
+      renderBody();
+
+      function val(id) {
+        var el = document.getElementById(id);
+        return el ? el.value : "";
+      }
+
+      function showFeedback(ok, extra) {
+        var slot = body.querySelector(".net-feedback-slot");
+        if (!slot) return;
+        slot.innerHTML = '<div class="net-feedback ' + (ok ? "correct" : "wrong") + '">' +
+          (ok ? "✅ 答對了!" : "❌ 答錯了,再檢查一下。") +
+          (extra ? " " + extra : "") + "</div>";
+      }
+
+      function doCheck() {
+        var cur = state.current;
+        var gen = cur.gen;
+        var solved = cur.solved;
+        var ok, extra;
+
+        if (gen.key === "c7-tdm") {
+          var ok0 = NetCalc.checkAnswer(val("net-ans-0"), solved.answer[0], solved.tolerance);
+          var ok1 = NetCalc.checkAnswer(val("net-ans-1"), solved.answer[1], solved.tolerance);
+          ok = ok0 && ok1;
+          extra = "(頻寬 " + (ok0 ? "✓" : "✗") + "、time slot " + (ok1 ? "✓" : "✗") + ") " + answerText(cur);
+        } else if (gen.key === "c2-crc") {
+          if (cur.params.mode === "encode") {
+            var raw = val("net-ans-0");
+            var normalized = (typeof raw === "string" ? raw : "").trim().replace(/\s+/g, "").toLowerCase();
+            ok = normalized === String(solved.answer).toLowerCase();
+          } else {
+            // cur.choice is null until the student clicks a 有錯/沒有錯
+            // button; null never equals the boolean answer, so an unanswered
+            // check is just "wrong", never a throw.
+            ok = cur.choice !== null && cur.choice === solved.answer;
+          }
+          extra = answerText(cur);
+        } else if (gen.key === "c3-cidr") {
+          var addrRaw = val("net-ans-0");
+          var addrOk = (typeof addrRaw === "string" ? addrRaw : "").trim().toLowerCase() ===
+            solved.answer.networkAddress.toLowerCase();
+          var hostsOk = NetCalc.checkAnswer(val("net-ans-1"), solved.answer.usableHosts, 0);
+          ok = addrOk && hostsOk;
+          extra = "(網路位址 " + (addrOk ? "✓" : "✗") + "、可用主機 " + (hostsOk ? "✓" : "✗") + ") " + answerText(cur);
+        } else {
+          // C1, C4, C5, C6 (both variants), C8: checkAnswer already handles
+          // empty/non-numeric input safely, never throws.
+          ok = NetCalc.checkAnswer(val("net-ans-0"), solved.answer, solved.tolerance);
+          extra = answerText(cur);
+        }
+
+        showFeedback(ok, extra);
+      }
+
+      bar.querySelectorAll(".net-chip[data-gen]").forEach(function (c) {
+        c.addEventListener("click", function () {
+          bar.querySelectorAll(".net-chip[data-gen]").forEach(function (x) { x.classList.remove("active"); });
+          c.classList.add("active");
+          var gen = generators.filter(function (g) { return g.key === c.dataset.gen; })[0];
+          state.current = newProblem(gen);
+          renderBody();
+        });
+      });
+
+      body.addEventListener("click", function (e) {
+        var btn = e.target.closest("button");
+        if (!btn) return;
+        if (btn.classList.contains("net-choice-btn")) {
+          body.querySelectorAll(".net-choice-btn").forEach(function (b) { b.classList.remove("active"); });
+          btn.classList.add("active");
+          state.current.choice = btn.dataset.choice === "true";
+          return;
+        }
+        var action = btn.dataset.action;
+        if (action === "check") {
+          doCheck();
+        } else if (action === "next") {
+          state.current = newProblem(state.current.gen);
+          renderBody();
+        }
+      });
     });
   }
 })(typeof window !== "undefined" ? window : globalThis);
