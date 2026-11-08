@@ -1,8 +1,7 @@
 /*
  * NetCalc: calculation-drill generators for the networking exam-prep appendix.
  *
- * Units (global constraint, applies to every generator in this file, including
- * ones appended by later tasks):
+ * Units (global constraint, applies to every generator in this file):
  *   1 KB = 1,000 bytes, 1 MB = 1,000,000 bytes, 1 Mbps = 1,000,000 bits/sec.
  *   Decimal, not binary, throughout.
  *
@@ -15,8 +14,9 @@
  *   `answer` is per-generator. c7-tdm is the one generator with a two-part
  *   answer: `answer` is [R_Mbps, slot_us] and `unit` is ["Mbps", "µs"].
  *
- * NetCalc.generators is a plain array; later tasks append with .push().
- * Do not freeze it.
+ * NetCalc.generators is a plain array, declared once in C1->C8 numeric order
+ * (the order the chip row renders in). Tests look generators up by `key` via
+ * a byKey() helper, not by array position.
  */
 (function (global) {
   "use strict";
@@ -27,6 +27,15 @@
 
   function fmt(x, digits) {
     return String(Number(x.toFixed(digits === undefined ? 3 : digits)));
+  }
+
+  // Like fmt(), but rounds to significant figures instead of a fixed decimal
+  // place count. Used wherever a generator's final numeric answer is shown
+  // to the student as "the correct answer": some answers (e.g. stop-and-wait
+  // efficiency) are small enough that a fixed 3-decimal round displays "0" or
+  // a value that itself fails checkAnswer() against the real answer.
+  function fmtAnswer(x) {
+    return String(Number(x.toPrecision(4)));
   }
 
   // Relative tolerance check. Never throws; any empty or non-numeric input is false.
@@ -157,9 +166,9 @@
     render: function (p, s) {
       return {
         promptHTML: "Slotted ALOHA,N = " + p.N + " 個站台,每個站台每個 slot 傳送機率 p = " +
-          fmt(p.p, 4) + "。求成功傳送的效率(每個 slot 成功機率)。",
+          fmt(p.p, 4) + "。求成功傳送的效率(每個 slot 成功機率,請以小數表示答案,例如 0.42)。",
         stepsHTML: "效率 = N·p·(1-p)^(N-1) = " + p.N + " × " + fmt(p.p, 4) +
-          " × (1-" + fmt(p.p, 4) + ")^" + (p.N - 1) + " = " + fmt(s.answer, 4)
+          " × (1-" + fmt(p.p, 4) + ")^" + (p.N - 1) + " = " + fmtAnswer(s.answer)
       };
     }
   };
@@ -286,32 +295,38 @@
           tTransMs: tTransMs
         };
       }
-      var throughputMbps = (p.W * 1000 * 8) / (p.RTT / 1000) / 1e6;
+      var windowThroughputMbps = (p.W * 1000 * 8) / (p.RTT / 1000) / 1e6;
       return {
-        answer: throughputMbps,
+        // The window can only push data as fast as the link beneath it will
+        // carry it: the real max throughput is whichever of the two is
+        // smaller, never the uncapped window-only figure.
+        answer: Math.min(windowThroughputMbps, p.R),
         unit: "Mbps",
         tolerance: 0.02,
-        isBottleneck: throughputMbps < p.R
+        isBottleneck: windowThroughputMbps < p.R,
+        windowThroughputMbps: windowThroughputMbps
       };
     },
     render: function (p, s) {
       if (p.variant === "stopwait") {
         return {
           promptHTML: "Stop-and-wait,封包大小 = " + p.packetBytes + " bytes,鏈路頻寬 R = " +
-            p.R + " Mbps,RTT = " + p.RTT + " ms。求傳送效率(有效傳輸時間佔比)。",
+            p.R + " Mbps,RTT = " + p.RTT + " ms。求傳送效率(有效傳輸時間佔比,請以小數表示答案,例如 0.42)。",
           stepsHTML: "T_trans = 8L/R = " + p.packetBytes + " × 8 / (" + p.R + " × 10⁶) = " +
             fmt(s.tTransMs, 4) + " ms;效率 = T_trans / (T_trans + RTT) = " + fmt(s.tTransMs, 4) +
-            " / (" + fmt(s.tTransMs, 4) + " + " + p.RTT + ") = " + fmt(s.answer, 5)
+            " / (" + fmt(s.tTransMs, 4) + " + " + p.RTT + ") = " + fmtAnswer(s.answer)
         };
       }
       var bottleneckText = s.isBottleneck
-        ? "吞吐量 < 鏈路頻寬,視窗大小是瓶頸"
-        : "吞吐量 ≥ 鏈路頻寬,鏈路頻寬是瓶頸";
+        ? "視窗吞吐量 < 鏈路頻寬,視窗大小是瓶頸,最大吞吐量 = 視窗吞吐量"
+        : "視窗吞吐量 ≥ 鏈路頻寬,鏈路頻寬是瓶頸,最大吞吐量 = 鏈路頻寬";
       return {
         promptHTML: "TCP 視窗 W = " + p.W + " KB,RTT = " + p.RTT + " ms,鏈路頻寬 R = " +
           p.R + " Mbps。求最大吞吐量(Mbps),並判斷瓶頸在視窗還是鏈路。",
-        stepsHTML: "吞吐量 = W / RTT = " + p.W + " KB × 8 × 1000 / (" + p.RTT + " ms / 1000) = " +
-          fmt(s.answer) + " Mbps;" + bottleneckText
+        stepsHTML: "視窗吞吐量 = W / RTT = " + p.W + " KB × 8 × 1000 / (" + p.RTT + " ms / 1000) = " +
+          fmt(s.windowThroughputMbps) + " Mbps;鏈路頻寬 R = " + p.R + " Mbps;" + bottleneckText +
+          ";最大吞吐量 = min(視窗吞吐量, R) = min(" + fmt(s.windowThroughputMbps) + ", " + p.R +
+          ") = " + fmtAnswer(s.answer) + " Mbps"
       };
     }
   };
@@ -474,15 +489,18 @@
   var NetCalc = {
     pick: pick,
     checkAnswer: checkAnswer,
-    generators: [c1, c7, c8]
+    generators: [c1, c2, c3, c4, c5, c6, c7, c8]
   };
 
-  NetCalc.generators.push(c4, c5, c6);
-  NetCalc.generators.push(c2);
-  NetCalc.generators.push(c3);
-
   if (typeof module !== "undefined" && module.exports) {
-    module.exports = { NetCalc: NetCalc, mod2Divide: mod2Divide, ipToInt: ipToInt, intToIp: intToIp };
+    module.exports = {
+      NetCalc: NetCalc,
+      mod2Divide: mod2Divide,
+      ipToInt: ipToInt,
+      intToIp: intToIp,
+      fmt: fmt,
+      fmtAnswer: fmtAnswer
+    };
   } else {
     global.NetCalc = NetCalc;
     document.addEventListener("DOMContentLoaded", function () {
@@ -575,7 +593,7 @@
           return "正確答案:網路位址 " + solved.answer.networkAddress + ",可用主機 " +
             solved.answer.usableHosts;
         }
-        return "正確答案:" + fmt(solved.answer) + (solved.unit ? " " + solved.unit : "");
+        return "正確答案:" + fmtAnswer(solved.answer) + (solved.unit ? " " + solved.unit : "");
       }
 
       function renderBody() {

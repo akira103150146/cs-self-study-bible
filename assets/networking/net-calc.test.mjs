@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { NetCalc, mod2Divide, ipToInt, intToIp } from "./net-calc.js";
+import { NetCalc, mod2Divide, ipToInt, intToIp, fmt, fmtAnswer } from "./net-calc.js";
 
 function byKey(key) { return NetCalc.generators.find(g => g.key === key); }
 
@@ -77,6 +77,55 @@ test("c6-tcp-window: pinned stop-and-wait example packet=1500B R=10Mbps RTT=100m
   const g = byKey("c6-tcp-window");
   const { answer } = g.solve({ variant: "stopwait", packetBytes: 1500, R: 10, RTT: 100 });
   assert.ok(Math.abs(answer - 0.011857) < 1e-5);
+});
+
+test("c6-tcp-window: when the LINK is the bottleneck, answer is capped at R, not the uncapped window-only throughput (Review Focus, Critical item 1)", () => {
+  const g = byKey("c6-tcp-window");
+  // W=64KB, RTT=20ms -> uncapped window throughput is 25.6 Mbps, but the link
+  // can only carry R=1 Mbps. The real max throughput is min(25.6, 1) = 1.
+  const { answer, isBottleneck, windowThroughputMbps } = g.solve({ variant: "window", W: 64, RTT: 20, R: 1 });
+  assert.ok(Math.abs(windowThroughputMbps - 25.6) < 1e-6); // the uncapped window figure, for reference
+  assert.ok(Math.abs(answer - 1) < 1e-9); // answer must equal R, never the uncapped 25.6
+  assert.equal(isBottleneck, false); // link, not window, is the bottleneck here
+});
+
+test("c6-tcp-window: the originally-pinned window example (RTT=100,W=64,R=10 -> 5.12) is unaffected by the min() cap since the window was already the bottleneck", () => {
+  const g = byKey("c6-tcp-window");
+  const { answer, isBottleneck } = g.solve({ variant: "window", RTT: 100, W: 64, R: 10 });
+  assert.ok(Math.abs(answer - 5.12) < 1e-6);
+  assert.equal(isBottleneck, true);
+});
+
+test("display precision (Review Focus, Important item 2): every generator's own 'correct answer' display round-trips through checkAnswer at its own tolerance", () => {
+  const TRIALS = 500;
+  for (const g of NetCalc.generators) {
+    for (let i = 0; i < TRIALS; i++) {
+      const params = g.sample();
+      const solved = g.solve(params);
+      if (g.key === "c7-tdm") {
+        // c7's two-part answer is displayed with fmt() (3 decimals), which
+        // the C7 parameter pools never shrink small enough to break.
+        assert.ok(
+          NetCalc.checkAnswer(fmt(solved.answer[0]), solved.answer[0], solved.tolerance),
+          `c7 bandwidth part displayed-as-${fmt(solved.answer[0])} should pass checkAnswer against ${solved.answer[0]}`
+        );
+        assert.ok(
+          NetCalc.checkAnswer(fmt(solved.answer[1]), solved.answer[1], solved.tolerance),
+          `c7 slot-time part displayed-as-${fmt(solved.answer[1])} should pass checkAnswer against ${solved.answer[1]}`
+        );
+      } else if (typeof solved.answer === "number") {
+        // Every other numeric-answer generator (C1, C4, C5, C6 both variants,
+        // C8) is displayed via fmtAnswer() in answerText().
+        assert.ok(
+          NetCalc.checkAnswer(fmtAnswer(solved.answer), solved.answer, solved.tolerance),
+          `${g.key} displayed-as-${fmtAnswer(solved.answer)} should pass checkAnswer against ${solved.answer}`
+        );
+      }
+      // c2-crc (string/boolean answer) and c3-cidr (object answer) are
+      // checked by exact string match in the UI, not NetCalc.checkAnswer's
+      // numeric tolerance, so they're outside this guard's scope.
+    }
+  }
 });
 
 test("mod2Divide: pinned textbook example D=101110 G=1001 -> remainder 011", () => {

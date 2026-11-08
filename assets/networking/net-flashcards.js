@@ -152,6 +152,18 @@
         { key: "app", label: "應用層" }
       ];
 
+      // Same Chinese labels as the filter chips above, plus "cross" (跨層),
+      // which has no filter chip of its own but does appear on card data
+      // (t61-t64). Used to show each card's layer on its front face.
+      var LAYER_LABELS = {
+        physical: "實體層",
+        link: "資料鏈結層",
+        network: "網路層",
+        transport: "傳輸層",
+        app: "應用層",
+        cross: "跨層"
+      };
+
       function buildQueue(layer) {
         return NetFlashcards.createQueue(NetFlashcards.filterByLayer(NET_TERMS, layer));
       }
@@ -199,7 +211,8 @@
         var cur = NetFlashcards.current(queue);
         html +=
           '<div class="net-card' + (state.flipped ? " flipped" : "") + '">' +
-          '<div class="front"><div class="net-term">' + esc(cur.term) + "</div></div>" +
+          '<div class="front"><div class="net-card-layer">' + esc(LAYER_LABELS[cur.layer] || cur.layer) +
+          '</div><div class="net-term">' + esc(cur.term) + "</div></div>" +
           '<div class="back"><div class="net-def">' + esc(cur.definition) + "</div></div>" +
           "</div>" +
           '<div class="net-fc-actions">' +
