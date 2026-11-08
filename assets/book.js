@@ -347,6 +347,7 @@ const BOOK = {
         { id: "78-bank-apcs-mock", num: "附E", title: "APCS 模擬考卷(3 卷)", en: "APCS Mock Exams", done: true },
         { id: "79-bank-toi", num: "附F", title: "TOI 題庫(337 題,全文)", en: "TOI Problem Bank", done: true },
         { id: "130-hack-hdl-reference", num: "附G", title: "Hack HDL 與測試腳本速查", en: "Hack HDL & Test Script Reference", done: true },
+        { id: "138-bank-networking", num: "附H", title: "計算機網路概論期中考互動練習", en: "Networking Midterm Interactive Practice", done: true },
       ],
     },
   ],
