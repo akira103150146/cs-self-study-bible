@@ -316,6 +316,94 @@
     }
   };
 
+  // ---- C2: CRC remainder / verify (bit-serial GF(2) long division) --------
+  //
+  // Generator pool is fixed to three r = 3 polynomials. The design doc allows
+  // r = 3 or 4; the plan narrows this to r = 3 for the drill.
+
+  var G_CRC = ["1001", "1011", "1101"];
+
+  // Bit-serial GF(2) long division. `bits` and `generator` are "0"/"1" strings.
+  // Returns the remainder (last generator.length - 1 chars of the result) and
+  // a stepsHTML trace of every XOR performed.
+  function mod2Divide(bits, generator) {
+    var work = bits.split("");
+    var lines = [];
+    for (var i = 0; i <= work.length - generator.length; i++) {
+      if (work[i] !== "1") continue;
+      var before = work.join("");
+      for (var j = 0; j < generator.length; j++) {
+        work[i + j] = work[i + j] === generator[j] ? "0" : "1";
+      }
+      lines.push("位置 " + i + ":" + before + " XOR G → " + work.join(""));
+    }
+    var remainder = work.slice(work.length - (generator.length - 1)).join("");
+    return {
+      remainder: remainder,
+      stepsHTML: lines.length ? lines.join("<br>") : "(被除數開頭皆為 0,無 XOR 步驟)"
+    };
+  }
+
+  var c2 = {
+    key: "c2-crc",
+    label: "C2 CRC 餘數 / 檢查",
+    bonus: false,
+    sample: function (rand) {
+      rand = rand || Math.random;
+      var mode = rand() < 0.5 ? "encode" : "verify";
+      var G = pick(G_CRC, rand);
+      var len = 8 + Math.floor(rand() * 5); // 8..12 data bits
+      var D = "";
+      for (var i = 0; i < len; i++) D += rand() < 0.5 ? "1" : "0";
+      if (mode === "encode") return { mode: mode, D: D, G: G };
+      // Verify: build a correct codeword T = D + R, then flip one random bit half the time.
+      var R = mod2Divide(D + "0".repeat(G.length - 1), G).remainder;
+      var T = D + R;
+      if (rand() < 0.5) {
+        var pos = Math.floor(rand() * T.length);
+        T = T.slice(0, pos) + (T[pos] === "0" ? "1" : "0") + T.slice(pos + 1);
+      }
+      return { mode: mode, T: T, G: G };
+    },
+    solve: function (p) {
+      var zeros = "0".repeat(p.G.length - 1);
+      if (p.mode === "encode") {
+        var enc = mod2Divide(p.D + zeros, p.G);
+        return {
+          answer: enc.remainder,
+          unit: "",
+          tolerance: 0,
+          remainder: enc.remainder,
+          stepsHTML: enc.stepsHTML
+        };
+      }
+      var check = mod2Divide(p.T, p.G);
+      return {
+        answer: check.remainder !== zeros, // true = 有錯
+        unit: "",
+        tolerance: 0,
+        remainder: check.remainder,
+        stepsHTML: check.stepsHTML
+      };
+    },
+    render: function (p, s) {
+      var r = p.G.length - 1;
+      if (p.mode === "encode") {
+        return {
+          promptHTML: "資料 D = " + p.D + ",生成多項式 G = " + p.G + "(r = " + r +
+            ")。求 CRC 餘數 R(" + r + " 位)。",
+          stepsHTML: "先在 D 後補 " + r + " 個 0 得 " + p.D + "0".repeat(r) +
+            ";做 mod-2 長除法:<br>" + s.stepsHTML + "<br>餘數 R = " + s.remainder
+        };
+      }
+      return {
+        promptHTML: "收到的 T = " + p.T + ",生成多項式 G = " + p.G + "。有沒有錯?",
+        stepsHTML: "T 除以 G:<br>" + s.stepsHTML + "<br>餘數 = " + s.remainder +
+          (s.answer ? ",不為全 0 → 有錯" : ",為全 0 → 沒有錯")
+      };
+    }
+  };
+
   var NetCalc = {
     pick: pick,
     checkAnswer: checkAnswer,
@@ -323,9 +411,10 @@
   };
 
   NetCalc.generators.push(c4, c5, c6);
+  NetCalc.generators.push(c2);
 
   if (typeof module !== "undefined" && module.exports) {
-    module.exports = { NetCalc: NetCalc };
+    module.exports = { NetCalc: NetCalc, mod2Divide: mod2Divide };
   } else {
     global.NetCalc = NetCalc;
     document.addEventListener("DOMContentLoaded", function () {

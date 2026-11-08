@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { NetCalc } from "./net-calc.js";
+import { NetCalc, mod2Divide } from "./net-calc.js";
 
 function byKey(key) { return NetCalc.generators.find(g => g.key === key); }
 
@@ -77,4 +77,41 @@ test("c6-tcp-window: pinned stop-and-wait example packet=1500B R=10Mbps RTT=100m
   const g = byKey("c6-tcp-window");
   const { answer } = g.solve({ variant: "stopwait", packetBytes: 1500, R: 10, RTT: 100 });
   assert.ok(Math.abs(answer - 0.011857) < 1e-5);
+});
+
+test("mod2Divide: pinned textbook example D=101110 G=1001 -> remainder 011", () => {
+  const { remainder } = mod2Divide("101110" + "000", "1001");
+  assert.equal(remainder, "011");
+});
+
+test("c2-crc encode mode: pinned example produces R=011", () => {
+  const g = byKey("c2-crc");
+  const { answer } = g.solve({ mode: "encode", D: "101110", G: "1001" });
+  assert.equal(answer, "011");
+});
+
+test("c2-crc verify mode: an untouched codeword always verifies clean", () => {
+  const g = byKey("c2-crc");
+  const { answer } = g.solve({ mode: "verify", T: "101110011", G: "1001" });
+  assert.equal(answer, false); // false = 沒有錯
+});
+
+test("c2-crc verify mode: flipping ANY single bit of the codeword is always detected (Review Focus)", () => {
+  const g = byKey("c2-crc");
+  const codeword = "101110011";
+  for (let i = 0; i < codeword.length; i++) {
+    const flipped = codeword.slice(0, i) + (codeword[i] === "0" ? "1" : "0") + codeword.slice(i + 1);
+    const { answer } = g.solve({ mode: "verify", T: flipped, G: "1001" });
+    assert.equal(answer, true, `bit ${i} flip should have been detected`);
+  }
+});
+
+test("c2-crc sample(): D/T length always 8-12 bits and G from the fixed 3-option pool", () => {
+  const g = byKey("c2-crc");
+  for (let i = 0; i < 100; i++) {
+    const p = g.sample();
+    const bits = p.mode === "encode" ? p.D : p.T;
+    assert.ok(bits.length >= 8 && bits.length <= 12 + 3); // T includes the r appended check bits
+    assert.ok(["1001", "1011", "1101"].includes(p.G));
+  }
 });
